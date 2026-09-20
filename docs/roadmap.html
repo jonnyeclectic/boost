@@ -2456,7 +2456,7 @@ DEDUPE — clean, not carded. I read <code>long-hints-overflow-narrow-panes.md</
       </article>
 
       <article class="cap rcard" id="search-relevance-meter-is-constant-on-default-page">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">UX · Bug</span></div>
         <h3>The relevance meter and its "one gradient moment" are constant on the default result page: 138/150 rows full bars, 150/150 the same colour</h3>
         <p><b>Measured.</b> Over 10 real queries at the default <code>--limit 15</code> against the 10,152-entry eval corpus, 138 of 150 rendered rows draw an identical full <code>▰▰▰▰</code> bar and 150 of 150 land in the same cyan band — 8 of the 10 queries render a byte-identical meter on every single row — because <code>frac = score / max(shown score)</code> needs <code>frac &lt; 0.875</code> to drop one of four bars while BM25's top-15 spread is only 2.2%-19.8% (min/top ratio 0.802-0.978).
 

@@ -2,14 +2,14 @@
 id: search-relevance-meter-is-constant-on-default-page
 board: code
 section: planned
-status: planned
+status: inflight
 category: UX · Bug
 complexity: M
 impact: Med
 wow: 3
 note: format_search_row renders aurora(meter(frac), meter_hue(frac)) with frac = score / ma…
 order: 233
-owner:
+owner: loop/search-meter
 pr:
 title: The relevance meter and its "one gradient moment" are constant on the default result page: 138/150 rows full bars, 150/150 the same colour
 ---
