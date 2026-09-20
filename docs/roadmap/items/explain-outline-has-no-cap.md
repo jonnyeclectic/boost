@@ -2,7 +2,7 @@
 id: explain-outline-has-no-cap
 board: code
 section: planned
-status: inflight
+status: shipped
 category: UX · Bug
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: cmd_explain asks the model for "4-6 sentences, no markdown" (info.py:800-803), but th…
 order: 212
 owner: loop/explain-outline-cap
-pr:
+pr: 892
 title: <code>boost explain</code>'s heuristic fallback prints every heading in the file — 541 lines for one skill — while the sibling list in the same function caps at 12
 ---
 <b>Measured.</b> <code>BOOST_NO_AI=1 boost explain fpf-agent</code> prints 541 lines / 27,699 bytes, 521 of them an uncapped outline emitted by the unsliced <code>for hashes, title in headings</code> at info.py:844, while <code>for rule in rules[:12]</code> nineteen lines below at info.py:859 caps the sibling list in the same function — and 2,861 of 10,152 eval-corpus entries (28.2%) exceed 25 outline lines.
