@@ -438,6 +438,26 @@ class TestInstructionsCoverAllThreeKinds:
                 for s in configuration.REGISTRY.specs()}["boost_install"]
         assert "rule" in desc.lower()
 
+    def test_install_description_names_each_default_agent_by_its_mechanism(
+            self):
+        # Written when boost had four targets, and Antigravity CLI — a fifth,
+        # and a linking one — went unnamed for weeks after it landed. It is
+        # also an MCP host (`agy`), so it reads this very string. Derived from
+        # the defaults, so a sixth target fails here instead of going unsaid.
+        from boost_cli.commands import configuration
+        from boost_cli.core import agents, config
+        desc = {s["name"]: s["description"]
+                for s in configuration.REGISTRY.specs()}["boost_install"]
+        linked, rest = desc.split(" by symlink, ", 1)
+        native = rest.split(" by reading that same store directly", 1)[0]
+        for name, spec in config.DEFAULTS["agents"].items():
+            if not spec.get("enabled", True):
+                continue
+            links = spec.get("links_skills", True)
+            side, other = (linked, native) if links else (native, linked)
+            label = agents.display_name(name)
+            assert label in side and label not in other, (name, desc)
+
 
 class TestInstructionsBoundIsATestNotAFeeling:
     """"Non-trivial" is only usable if it decides itself.
