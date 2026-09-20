@@ -2,14 +2,14 @@
 id: bare-boost-never-names-an-entry-point
 board: code
 section: planned
-status: planned
+status: shipped
 category: Onboarding · Bug
 complexity: M
 impact: Med
 wow: 3
 note: A newcomer's first screen is 103 lines of 81 commands that is byte-for-byte the same …
 order: 241
-owner:
+owner: loop/first-run-pointer
 pr:
 title: Nothing boost prints ever names an entry point: bare <code>./boost</code> is byte-identical on a virgin machine and a working one, and the one command its failure-hints route you to is the only setup …
 ---

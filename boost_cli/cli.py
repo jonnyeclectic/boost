@@ -199,6 +199,7 @@ def print_help() -> None:
     print(out.c(
         "Options:  -V/--version   -v/--verbose   --debug   -q/--quiet",
         out.DIM))
+    _print_first_run_line(cols)
 
     width = max(len(n) for n, _, _, _ in COMMANDS)
     for idx, (gkey, (_icon, title, desc)) in enumerate(GROUPS.items()):
@@ -221,6 +222,35 @@ def print_help() -> None:
                   + out.truncate(s, max(0, cols - width - 4)))
     print()
     print(out.c("%d commands · %d groups" % (len(COMMANDS), len(GROUPS)), out.DIM))
+
+
+def _print_first_run_line(cols: int) -> None:
+    """Name where setup lives, but only on a machine that has none.
+
+    This screen read no state at all, so it was byte-for-byte identical on a
+    virgin machine and a working one — measured md5 a8da6daf on both — and a
+    newcomer met 81 commands with `quickstart` sitting at line 80, in the same
+    dim body type as the other 80. The pointer is one line, it appears only
+    while `registry.first_run()` holds, and it disappears the moment there is
+    a tap: a permanent banner would be noise for every user past their first
+    minute, which is the reason there wasn't one.
+
+    Local import so `boost --help` keeps its lazy-import budget (config and
+    registry are stdlib-only, but the rule here is that help imports nothing
+    it does not need), and any failure is swallowed — a broken config must
+    cost the user a hint, never their help screen.
+    """
+    with contextlib.suppress(Exception):
+        from .core import registry
+        if not registry.first_run():
+            return
+        print()
+        # Wrap, then colour: `out.role` brackets its argument with a start code
+        # and a reset, so colouring first and splitting after leaves line one
+        # unterminated. The backtick span stays one atomic token, because a
+        # `boost quickstart` folded across two lines is not copy-pasteable.
+        for line in out.wrap(registry.FIRST_RUN_HINT, max(cols, 20)):
+            print(out.role(line, "muted"))
 
 
 def print_command_help(name: str) -> int:
