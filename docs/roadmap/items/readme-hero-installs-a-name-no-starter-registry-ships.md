@@ -10,7 +10,7 @@ wow: 4
 note: The first code block in README.md (lines 21-26) is the four-command get-started seque…
 order: 225
 owner: loop/readme-hero
-pr:
+pr: 903
 title: README's hero block ends in exit 1: <code>boost install tdd-workflow</code> names a skill no starter registry ships
 ---
 <b>Measured.</b> In a virgin HOME after <code>boost tap --defaults</code> (the identical 7 registries <code>boost quickstart</code> taps, 962 items), the README's fourth hero line <code>boost install tdd-workflow</code> exits 1 with "no skill named 'tdd-workflow' in any tap" while <code>boost install test-driven-development</code> exits 0 from those same 7 taps — the README is wrong by one word, and its error's three close-match hints (eas-workflows, python-llm-ml-workflow-cursorrules-prompt-file, secure-workflow-guide) all steer away from the skill that would have worked.
