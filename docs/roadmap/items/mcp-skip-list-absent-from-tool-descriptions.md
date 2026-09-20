@@ -2,14 +2,14 @@
 id: mcp-skip-list-absent-from-tool-descriptions
 board: code
 section: planned
-status: planned
+status: inflight
 category: Interop
 complexity: M
 impact: Med
 wow: 3
 note: boost's agent-facing surface duplicates six of its seven load-bearing elements from I…
 order: 218
-owner:
+owner: loop/mcp-skip-list
 pr:
 title: The skip list — the one bound on boost's triggers — ships in INSTRUCTIONS only, in zero of the seven tool descriptions
 ---
