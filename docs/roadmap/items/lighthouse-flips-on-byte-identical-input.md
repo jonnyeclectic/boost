@@ -10,7 +10,7 @@ wow: 4
 note: the same roadmap.html scored 0.78 and passed, then 0.78 and failed — the gate now decides on runner noise
 order: 314
 owner: loop/lighthouse-stable
-pr:
+pr: 906
 title: The performance gate flips on byte-identical input
 ---
 <code>lighthouse</code> asserts <code>categories.performance &ge; 0.80</code> on
