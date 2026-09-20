@@ -135,6 +135,18 @@ def _report(results: list[dict]) -> None:
                  "`boost reindex --dense`")
 
 
+def _muted(msg: str) -> None:
+    """An indented muted line, wrapped to the pane.
+
+    Wrap first, colour each line after: `out.role` brackets its argument with
+    a start code and a reset, so colouring first and folding after leaves
+    line 1 unterminated and the rest unstyled (CLAUDE.md's wrap rule). `- 2`
+    pays for the indent `out.info` adds.
+    """
+    for line in out.wrap(msg, max(out.term_width() - 2, 20)):
+        out.info(out.role(line, "muted"))
+
+
 def cmd_quickstart(argv) -> int:
     """boost quickstart [--catalog] [--no-vectors] [--dry-run]"""
     p = cliparse.parser(
@@ -169,7 +181,7 @@ def cmd_quickstart(argv) -> int:
             out.warn("could not read the shard manifest: %s" % exc.message,
                      wrap=True)
             if exc.hint:
-                out.info(out.role(exc.hint, "muted"), wrap=True)
+                _muted(exc.hint)
             manifest = None
 
     selection = _selection(args.catalog)
@@ -192,12 +204,11 @@ def cmd_quickstart(argv) -> int:
                          "\"boost-skill-cli[rag]\"` — keyword search works "
                          "without it", wrap=True)
             elif manifest is None:
-                out.info(out.role("(0 because the shard manifest could not be "
-                                  "read — keyword search is unaffected)",
-                                  "muted"), wrap=True)
+                _muted("(0 because the shard manifest could not be read — "
+                       "keyword search is unaffected)")
             else:
-                out.info(out.role("(0 because none of these registries have a "
-                                  "published shard yet)", "muted"), wrap=True)
+                _muted("(0 because none of these registries have a "
+                       "published shard yet)")
         return 0
 
     with spin.Spinner("building the keyword index"):
@@ -227,10 +238,9 @@ def cmd_quickstart(argv) -> int:
         # The whole vector step was skipped, and the only word about it was a
         # warning many screens back. Without this the run ends "✓ ready" as
         # though vectors had been imported.
-        out.info(out.role("no vectors imported — the shard manifest could not "
-                          "be read; `boost update --shards` retries it, and "
-                          "`boost reindex --dense` builds them locally",
-                          "muted"), wrap=True)
+        _muted("no vectors imported — the shard manifest could not be read; "
+               "`boost update --shards` retries it, and `boost reindex "
+               "--dense` builds them locally")
 
     complete.refresh_names()
     out.ok("ready — try `boost search brainstorming`")

@@ -162,6 +162,26 @@ class TestEveryZeroShardReasonNamesItself:
         # The reassurance is the point: the tapping half still worked.
         assert "keyword search is unaffected" in out
 
+    def test_a_wrapped_muted_line_terminates_its_colour_on_every_line(
+            self, capsys, monkeypatch):
+        # Colour first, fold after, and line 1 ends inside an open dim span
+        # while the rest carry none — CLAUDE.md's wrap rule. Wrap first.
+        from boost_cli.commands import quickstart
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        monkeypatch.setenv("COLUMNS", "40")
+        capsys.readouterr()
+        quickstart._muted("the shard manifest could not be read; "
+                          "`boost update --shards` retries it, and "
+                          "`boost reindex --dense` builds them locally")
+        lines = capsys.readouterr().out.splitlines()
+        assert len(lines) > 1                       # it really did fold
+        for line in lines:
+            assert line.startswith("  \033[2m") and line.endswith("\033[0m")
+        # A backticked command is one token: never split across lines.
+        for cmd in ("`boost update --shards`", "`boost reindex --dense`"):
+            assert any(cmd in ln for ln in lines)
+
     def test_a_manifest_error_keeps_its_hint_and_names_the_real_cause(
             self, boost, monkeypatch):
         # "no published shards" said the project has none; the cause is
