@@ -170,7 +170,19 @@ def source_dir_for(entry: dict) -> Path:
     is there and reports success. Every consumer of a tap's real files — both
     install paths, `sha256_dir`, `boost info` — comes through here, so this is
     the one place that has to get it right.
+
+    Only a skill has a source directory. A rule or workflow is one file, read
+    through ``entry["skill_md"]`` by its own installer, so it is refused here
+    before the tap is cloned or widened: `boost info` and `boost deps` ask
+    about every not-installed entry, and checking SKILL.md after materializing
+    had them write ``/rules/*`` into the sparse cone for a dir they discarded.
+    An entry with no ``kind`` (an old cache, or one `quality` builds by hand)
+    is a skill.
     """
+    kind = entry.get("kind") or catalog.KIND_SKILL
+    if kind != catalog.KIND_SKILL:
+        raise BoostError("%s is a %s, not a skill: it has no source directory"
+                         % (entry["name"], kind))
     tap = registry.get(entry["tap"])
     if not tap.is_cloned:
         gitutil.clone_shallow(tap.url, tap.path)
