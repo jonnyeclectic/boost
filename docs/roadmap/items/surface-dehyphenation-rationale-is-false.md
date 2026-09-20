@@ -2,7 +2,7 @@
 id: surface-dehyphenation-rationale-is-false
 board: code
 section: planned
-status: inflight
+status: shipped
 category: Quality · Retrieval eval
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: surface() (rag.py:200-208) indexes the name, a de-hyphenated copy of the name, and th…
 order: 236
 owner: loop/surface-rationale
-pr:
+pr: 898
 title: <code>rag.surface</code>'s de-hyphenated name copy is justified by two claims that are both false, and its real effect — an undocumented 3x name / 2x description field weight — is guarded by a test …
 ---
 <b>Measured.</b> Deleting the "obviously redundant" de-hyphenated copy passes the ENTIRE required gate silently: zero new failures across the full unit + functional suite (the 10 functional failures are a pre-existing <code>dashboard-design</code> CWD leak, identical with and without the ablation), and all four eval floors clear with room to spare (ablated 0.8407 / 0.4725 / 0.6021 / 0.6523 against floors 0.78 / 0.40 / 0.52 / 0.58) — while it silently moves 23 of 141 golden rankings, flips one top-1 result, and drops <code>go-backend-scalability</code> out of the top 10 for the golden query "go backend scalability best practices for microservices and apis", costing exactly 1/91 = 0.011 recall@10.
