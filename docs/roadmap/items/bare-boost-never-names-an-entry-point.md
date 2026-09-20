@@ -10,7 +10,7 @@ wow: 3
 note: A newcomer's first screen is 103 lines of 81 commands that is byte-for-byte the same …
 order: 241
 owner: loop/first-run-pointer
-pr:
+pr: 904
 title: Nothing boost prints ever names an entry point: bare <code>./boost</code> is byte-identical on a virgin machine and a working one, and the one command its failure-hints route you to is the only setup …
 ---
 <b>Measured.</b> Bare <code>./boost</code> is md5-identical (dd3c84b8d6510df1871bea5f1518fff4) on a machine with 0 taps and on the same machine with 7 taps and 1 installed skill, because <code>print_help</code> (cli.py:165-223) reads no state at all — and the command every newcomer-facing hint routes to, <code>boost tap --defaults</code>, produces exactly 7 lines whose last is a <code>✓ tapped …</code> row with no summary, while <code>boost install</code> through the same pipe closes with a framed "next: boost info brainstorming" box.
