@@ -2,14 +2,14 @@
 id: eval-gate-scores-a-body-less-corpus
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Retrieval eval
 complexity: M
 impact: Med
 wow: 3
 note: The Tier 1 required gate has no check that the corpus it scores actually contains the…
 order: 211
-owner:
+owner: loop/eval-corpus-bodies
 pr:
 title: <code>make eval</code> scores a corpus with every SKILL.md body missing, reports all four floors PASS, and scores HIGHER than the real corpus
 ---

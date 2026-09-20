@@ -17,11 +17,22 @@
 # is the same class of bug as the unpinned list this whole area exists to fix,
 # one directory further along. Keying on the digest makes an edit a cache miss.
 #
+# THE SENTINEL ALSO HAS TO SEE THE CLONES, for the same reason. It records that
+# a corpus was built for this tap list; it cannot record that the corpus is
+# still there. Reclaim the 265 MB `repos/` tree by hand and the sentinel and the
+# per-tap catalog caches both survive, so this script skips, `rag.build` finds
+# every entry and none of their files, and the gate scores a frontmatter index
+# under the "BM25 full-content" label — passing all four floors, by a wider
+# margin than the real corpus. An empty `repos/` is a cache miss, which turns
+# that state into a re-tap instead of a false green.
+#
 # The tap list carries a commit SHA and an entry count per repo, and the loop
 # that reads it lives in scripts/eval_corpus.py rather than here: the format
 # needs parsing, the pin needs a fetch-then-checkout, and the count needs
 # verifying — none of which a shell loop can be unit-tested on. This file keeps
-# what it is good at, the sentinel and the environment.
+# what it is good at, the sentinel and the environment. Per-repo presence is
+# checked there too (`--ensure` re-pins every row); what belongs here is only
+# the cheap "is there a corpus at all" that decides whether to call it.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -34,8 +45,11 @@ digest=$("$py" -c 'import hashlib,sys
 print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$taps")
 
 if [ -z "${FORCE:-}" ] && [ -f "$sentinel" ] && [ "$(cat "$sentinel")" = "$digest" ]; then
-  echo "eval corpus already tapped for this taps.txt — skipping (FORCE=1 to re-tap)"
-  exit 0
+  if [ -d "$home/repos" ] && [ -n "$(ls -A "$home/repos" 2>/dev/null)" ]; then
+    echo "eval corpus already tapped for this taps.txt — skipping (FORCE=1 to re-tap)"
+    exit 0
+  fi
+  echo "eval corpus sentinel is present but $home/repos is empty — re-tapping" >&2
 fi
 
 PYTHONPATH="$root" "$py" "$root/scripts/eval_corpus.py" --ensure

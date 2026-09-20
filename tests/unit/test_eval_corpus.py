@@ -511,19 +511,24 @@ class TestTheSentinelIsKeyedOnTheTapList:
             _ENSURE.read_text(encoding="utf-8"), encoding="utf-8")
         # The wrapper calls the interpreter twice — once with `-c` to digest the
         # tap list, once to run --ensure. The stub delegates the first to real
-        # Python and records the second, so no corpus is materialised.
+        # Python and records the second, so no corpus is materialised. It does
+        # create the clone directory a real --ensure would, because the sentinel
+        # is honoured only over a non-empty `repos/` — see
+        # test_eval_corpus_bodies.TestTheSentinelDoesNotOutliveTheClones.
+        home = tmp_path / "home"
         stub = tmp_path / "stub.py"
         stub.write_text(
             "#!%s\n"
-            "import subprocess, sys\n"
+            "import os, subprocess, sys\n"
             "a = sys.argv[1:]\n"
             "if a and a[0] == '-c':\n"
             "    sys.exit(subprocess.run([sys.executable] + a).returncode)\n"
-            "open(%r, 'a').write('ensure\\n')\n" % (sys.executable, str(calls)),
+            "open(%r, 'a').write('ensure\\n')\n"
+            "os.makedirs(%r, exist_ok=True)\n"
+            % (sys.executable, str(calls), str(home / "repos" / "owner__repo")),
             encoding="utf-8")
         stub.chmod(0o755)
-        env = dict(os.environ, BOOST_HOME=str(tmp_path / "home"),
-                   PYTHON=str(stub))
+        env = dict(os.environ, BOOST_HOME=str(home), PYTHON=str(stub))
         env.pop("FORCE", None)
         res = subprocess.run(
             ["bash", str(root / "scripts" / "ensure_eval_corpus.sh")],

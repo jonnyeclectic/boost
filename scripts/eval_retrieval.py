@@ -24,7 +24,11 @@ the math, this asks "does the right skill actually come back for a real question
   gate      --fail-under floors mean recall@k; --floor NAME=VALUE floors any
             metric and is repeatable. recall alone could not fail a build for a
             ranker scoring recall@10 1.000 with hit@1 0.000 — always finding the
-            answer, never ranking it first (a `make eval` target).
+            answer, never ranking it first (a `make eval` target). Before any
+            of that, the corpus itself is checked: an index whose documents
+            carry no body is refused (exit 75) rather than scored, because the
+            floors are calibrated on the pinned corpus's full text and a
+            body-less run clears them by MORE. See `corpus_refusal`.
 
 Tier 1b (opt-in, offline): --stats runs a paired Student's t-test between the
 engines with `ranx`, so a metric gap is reported as statistically *significant*
@@ -530,6 +534,63 @@ def check_floors(result: dict, floors: dict[str, float]) -> list[str]:
     return breaches
 
 
+EX_TEMPFAIL = 75   # sysexits.h, the code scripts/eval_corpus.py already uses
+
+
+def corpus_refusal(completeness: dict | None) -> str | None:
+    """Why this index may not be scored, or ``None`` when it may.
+
+    THE GATE HAD NO CHECK THAT THE CORPUS CONTAINED THE CORPUS. A catalog
+    cache outlives the clone it was built from — ``catalog.load_tap`` serves a
+    stale cache when the clone is gone, deliberately, so a missing repository
+    costs a catalogue entry's *body* and not the entry — and ``rag.read_body``
+    then degrades that entry to its name and description, also deliberately.
+    Both degradations are right on their own. Stacked under a gate that reads
+    neither, they let ``make eval`` index the identical entry count across the
+    identical tap count under the identical "BM25 full-content" label and floor
+    four metrics on a corpus that is frontmatter only.
+
+    Measured on the pinned 20-tap corpus, with ``$BOOST_HOME/repos`` moved
+    aside and the cache and sentinel intact: 10,731 of 10,731 documents carry
+    no body, mean document length falls 862.2 -> 41.4 tokens (95.2% of the
+    scored text absent) — and all four floors PASS, at 0.852 / 0.582 / 0.684 /
+    0.717 against the intact corpus's 0.841 / 0.484 / 0.607 / 0.655. The
+    body-less run scores HIGHER, so the loss reads as an improvement. It is not
+    mysterious: BM25 normalises by ``avg_len``, which falls with the documents,
+    so a corpus that shrinks uniformly nearly keeps its rank *set* — recall@10
+    moves by one query (0.841 -> 0.852) while hit@1 moves by nine (0.484 ->
+    0.582). What the loss really costs is the ordering, which is the half the
+    floors were extended to cover.
+
+    Gated on the DOCUMENT count, not on ``body_share``: that is a share of the
+    tokens this index does hold, and it reads 0.0 for an empty index as well as
+    for a body-less one (see ``rag.index_completeness``). "How many documents
+    could not be read" is the question, and it has one honest answer.
+
+    Strict — any missing body refuses. The pinned corpus measures exactly zero,
+    because every entry was scanned out of a clone that is still on disk, so
+    there is no tolerance to spend and a tolerance would only decide how much
+    of the corpus may go missing unnoticed.
+    """
+    if not completeness:
+        return None                      # no index at all — downstream says so
+    missing = int(completeness.get("metadata_only") or 0)
+    if not missing:
+        return None
+    docs = int(completeness.get("docs") or 0)
+    return (
+        "CORPUS INCOMPLETE — refusing to score.\n"
+        "  %d of %d indexed documents carry no body: their catalog entries\n"
+        "  name files that are not on disk, so each was indexed as its name\n"
+        "  and description alone (%.1f%% of the indexed tokens are body text).\n"
+        "  The floors are calibrated against the full text of the pinned\n"
+        "  corpus; over frontmatter they attest to nothing, and they come out\n"
+        "  HIGHER, so the loss reads as an improvement.\n"
+        "  Fix: FORCE=1 bash scripts/ensure_eval_corpus.sh"
+        % (missing, docs,
+           100.0 * float(completeness.get("body_share") or 0.0)))
+
+
 def check_regressions(results: list[dict], eps: float,
                       golden: Path) -> list[str]:
     base = baseline_for(golden)
@@ -688,8 +749,12 @@ def main(argv: list[str] | None = None) -> int:
             print("building BM25 index over the tapped catalog ...", flush=True)
         stats = rag.build(catalog.all_entries(), force=args.build)
         if not args.json:
+            # Flushed like the line above it: piped (CI, `make eval | tail`)
+            # stdout is block-buffered while stderr is not, so an unflushed
+            # build line lands *after* a refusal written to stderr — the log
+            # then reads as though the corpus check ran before the build.
             print("  indexed %d entries -> %d chunks across %d taps"
-                  % (stats["entries"], stats["docs"], stats["taps"]))
+                  % (stats["entries"], stats["docs"], stats["taps"]), flush=True)
 
     if args.worksheet:
         sheet = exemplar_worksheet(rows, catalog.all_entries(), rag.content_hashes())
@@ -706,6 +771,16 @@ def main(argv: list[str] | None = None) -> int:
                     print("          %s" % cand["description"][:96])
             print()
         return 0
+
+    # Before anything is scored, and with no flag of its own: a flag is a way
+    # for `make eval` and ci.yml to disagree about what the required gate
+    # checks, which is the failure `tests/unit/test_eval_corpus.py` already
+    # exists to catch on the floors. Placed after `--worksheet`, which reads
+    # identities rather than text and is a developer tool, not a gate.
+    refusal = corpus_refusal(rag.index_completeness())
+    if refusal is not None:
+        print("\n" + refusal, file=sys.stderr)
+        return EX_TEMPFAIL
 
     if args.rerank:
         return run_rerank_lift(rows, args.k, args.json)
