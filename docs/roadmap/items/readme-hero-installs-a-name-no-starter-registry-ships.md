@@ -2,14 +2,14 @@
 id: readme-hero-installs-a-name-no-starter-registry-ships
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Docs
 complexity: L
 impact: High
 wow: 4
 note: The first code block in README.md (lines 21-26) is the four-command get-started seque…
 order: 225
-owner:
+owner: loop/readme-hero
 pr:
 title: README's hero block ends in exit 1: <code>boost install tdd-workflow</code> names a skill no starter registry ships
 ---

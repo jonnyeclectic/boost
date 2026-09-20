@@ -2,7 +2,8 @@
 # Copyright the boost contributors.
 # SPDX-License-Identifier: Apache-2.0
 # End-to-end smoke test for boost, fully sandboxed under a throwaway HOME.
-# Usage: bash tests/smoke.sh [--online]   (--online also taps anthropics/skills)
+# Usage: bash tests/smoke.sh [--online]   (--online also taps the 7 starter
+# registries and installs the skill the README's hero block names)
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -262,6 +263,16 @@ if [ "${1:-}" = "--online" ]; then
   run "tap --defaults"       0 ./boost tap --defaults
   run "search pdf"           0 ./boost search pdf
   run "count (online)"       0 ./boost count
+  # The README's hero block is the first thing a new user copies, and its
+  # install line has to resolve from exactly these seven taps. Nothing offline
+  # can prove that — registries.json records repos and item counts, not item
+  # names — so this is the check that falsifies it. The name is read out of
+  # README.md rather than hardcoded, so editing the hero block re-points the
+  # check at whatever it now tells people to run.
+  # (tests/unit/test_marketing_counts.py::TestHeroBlock pins that this `head
+  # -1` and the hero fence pick the same name.)
+  HERO="$(sed -n 's/^boost install \([^ ]*\).*/\1/p' README.md | head -1)"
+  run "README hero install ($HERO)" 0 ./boost install "$HERO"
 fi
 
 echo

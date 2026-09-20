@@ -20,9 +20,9 @@ Antigravity CLI (`agy`) is wired up the same way: skills link into
 
 ```bash
 pipx install boost-skill-cli
-boost quickstart              # taps the 7 starter registries, loads prebuilt vectors
-boost search tdd              # keyword + semantic, fused
-boost install tdd-workflow    # → every agent, version-pinned, one lock file
+boost quickstart                       # taps the 7 starter registries, builds the index
+boost search tdd                       # ranked by full-content BM25
+boost install test-driven-development  # → every agent, version-pinned, one lock file
 ```
 
 (No `pipx` yet? macOS ships neither it nor a new enough Python — run the
