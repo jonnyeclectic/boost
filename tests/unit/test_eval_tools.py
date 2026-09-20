@@ -150,10 +150,22 @@ class TestBothDirectionsAreScored:
         _row("n1", "no-call"), _row("n2", "no-call")]
 
     def test_a_perfect_host_passes(self):
-        obs = {"c1": [True], "c2": [True], "n1": [False], "n2": [False]}
+        """And passes `verdict()`, which this test used never to call.
+
+        It asserted the two rates and stopped, so it went on passing while
+        `verdict()` returned TWO failures for this very observation — the
+        ceiling was unreachable at n=2, and the test named "a perfect host
+        passes" would have failed if it had asserted the thing its name claims.
+        Enough runs to make both bounds reachable, then assert the verdict.
+        """
+        runs = MOD.min_n_for_ceiling(0.25)          # per half, across 2 rows
+        obs = {"c1": [True] * runs, "c2": [True] * runs,
+               "n1": [False] * runs, "n2": [False] * runs}
         m = MOD.score_host(self.ROWS, obs)
         assert m["call_rate"]["rate"] == 1.0
         assert m["false_call_rate"]["rate"] == 0.0
+        assert MOD.verdict(m, 0.60, 0.25) == []
+        assert MOD.unjudgeable(m, 0.25) is None
 
     def test_a_host_that_never_calls_fails_the_floor(self):
         obs = {"c1": [False], "c2": [False], "n1": [False], "n2": [False]}
@@ -163,7 +175,13 @@ class TestBothDirectionsAreScored:
     def test_a_host_that_always_calls_fails_the_CEILING(self):
         # The whole reason this tier has two halves. Call rate is a perfect
         # 1.00 here — scoring that alone would report a triumph.
-        obs = {"c1": [True], "c2": [True], "n1": [True], "n2": [True]}
+        #
+        # Eight runs, not one: the ceiling is judged against an upper bound
+        # that one run per row cannot reach, so at n=2 this now reads as an
+        # undecided sample rather than a failing host. The assertion is about
+        # the host, so the sample has to be big enough to make one.
+        obs = {"c1": [True] * 8, "c2": [True] * 8,
+               "n1": [True] * 8, "n2": [True] * 8}
         m = MOD.score_host(self.ROWS, obs)
         assert m["call_rate"]["rate"] == 1.0
         reasons = MOD.verdict(m, 0.60, 0.20)
@@ -205,6 +223,99 @@ class TestTheVerdictJudgesTheInterval:
     def test_no_observations_is_reported_rather_than_passed(self):
         # Silence must never read as success.
         assert MOD.verdict(MOD.score_host(self.ROWS, {}), 0.60, 0.20)
+
+
+class TestTheCeilingMustBeReachable:
+    """A bound judged against an upper bound needs enough N to be clearable.
+
+    At k=0 the Wilson upper bound is z^2/(n+z^2), a function of N alone, so
+    below a certain N the ceiling reports FAIL for every possible host. At the
+    old `--runs 1` default that was the shipped state: 8 no-call observations,
+    best achievable bound 0.3244, ceiling 0.20 — an unsatisfiable gate that
+    told its reader the tier was broken.
+    """
+
+    ROWS: ClassVar[list[dict]] = [_row("c1", "call"), _row("n1", "no-call")]
+
+    @pytest.mark.parametrize("ceiling,need", [(0.20, 16), (0.25, 12),
+                                              (0.10, 35), (0.50, 4)])
+    def test_the_minimum_n_is_the_wilson_algebra(self, ceiling, need):
+        assert MOD.min_n_for_ceiling(ceiling) == need
+        # and it is exactly the boundary, from both sides
+        assert MOD.wilson(0, need)[1] <= ceiling
+        assert MOD.wilson(0, need - 1)[1] > ceiling
+
+    def test_a_ceiling_of_zero_is_never_judgeable(self):
+        assert MOD.min_n_for_ceiling(0.0) == 0
+        m = MOD.score_host(self.ROWS, {"c1": [True] * 30, "n1": [False] * 30})
+        assert "any sample size" in (MOD.unjudgeable(m, 0.0) or "")
+
+    def test_too_small_a_sample_is_inconclusive_not_a_failure(self):
+        # The defect, inverted: a flawless host used to be told it FAILED.
+        obs = {"c1": [True] * 8, "n1": [False] * 8}
+        m = MOD.score_host(self.ROWS, obs)
+        assert not [r for r in MOD.verdict(m, 0.60, 0.20) if "false-call" in r]
+        note = MOD.unjudgeable(m, 0.20)
+        assert note and "at least 16" in note and "--runs" in note
+
+    def test_a_reachable_sample_still_judges_the_ceiling(self):
+        # The fix must not turn the ceiling off: a host that always calls
+        # still fails it once the sample is big enough to say so.
+        obs = {"c1": [True] * 16, "n1": [True] * 16}
+        m = MOD.score_host(self.ROWS, obs)
+        assert MOD.unjudgeable(m, 0.20) is None
+        assert any("false-call" in r for r in MOD.verdict(m, 0.60, 0.20))
+
+    def test_the_shipped_defaults_can_actually_pass(self):
+        """The parity that was missing: the two defaults against the algebra.
+
+        `--runs` and `--ceiling-false-call` were set independently and nothing
+        checked that the first produces a sample the second can clear. Read
+        off the shipped parser, never restated here — a test that restates a
+        default cannot catch it drifting.
+        """
+        defaults = _defaults()
+        rows = MOD.load_set(MOD.DEFAULT_SET)
+        _call, no_call = MOD.halves(rows)
+        n = len(no_call) * defaults["runs"]
+        need = MOD.min_n_for_ceiling(defaults["ceiling_false_call"])
+        assert n >= need, (
+            "the default --runs %d gives %d no-call observations, but the "
+            "default ceiling %.2f needs %d — a flawless host would be "
+            "reported as failing"
+            % (defaults["runs"], n, defaults["ceiling_false_call"], need))
+
+    def test_the_ceiling_tolerates_one_slip_at_the_default_sample(self):
+        # Stated tolerance, not an accident: the floor absorbs four misses in
+        # 24, so a ceiling that fails on the first false call is not the same
+        # kind of measurement.
+        rows = MOD.load_set(MOD.DEFAULT_SET)
+        call, no_call = MOD.halves(rows)
+        defaults = _defaults()
+        runs, ceiling = defaults["runs"], defaults["ceiling_false_call"]
+        obs = {r["id"]: [True] * runs for r in call}
+        obs.update({r["id"]: [False] * runs for r in no_call})
+        obs[no_call[0]["id"]] = [True] + [False] * (runs - 1)
+        assert MOD.verdict(MOD.score_host(rows, obs), 0.60, ceiling) == []
+        obs[no_call[1]["id"]] = [True] + [False] * (runs - 1)
+        assert MOD.verdict(MOD.score_host(rows, obs), 0.60, ceiling)
+
+
+class TestTheExitCodeSaysWhichKind:
+    def test_a_clean_run_is_zero(self):
+        assert MOD.exit_code([], None) == 0
+
+    def test_an_undecided_ceiling_is_two(self):
+        assert MOD.exit_code([], "too few observations") == 2
+
+    def test_a_failure_outranks_an_undecided_ceiling(self):
+        # A floor miss is a real answer whatever the other half could not say.
+        assert MOD.exit_code(["call rate under floor"], "too few") == 1
+
+
+def _defaults() -> dict:
+    """Every shipped default, from the parser itself."""
+    return vars(MOD.build_parser().parse_args([]))
 
 
 def _assistant_call(name: str) -> str:

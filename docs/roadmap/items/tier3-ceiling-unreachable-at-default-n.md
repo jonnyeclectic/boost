@@ -2,14 +2,14 @@
 id: tier3-ceiling-unreachable-at-default-n
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Retrieval eval
 complexity: M
 impact: Med
 wow: 3
 note: eval_tools.py judges the should-NOT-call ceiling against the Wilson UPPER bound, but …
 order: 238
-owner:
+owner: loop/tier3-ceiling
 pr:
 title: Tier 3's false-call ceiling is unreachable at its own default N, and tolerates zero false calls at the N <code>make eval-tools</code> uses
 ---
