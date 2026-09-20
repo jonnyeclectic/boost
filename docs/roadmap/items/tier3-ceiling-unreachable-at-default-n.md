@@ -10,7 +10,7 @@ wow: 3
 note: eval_tools.py judges the should-NOT-call ceiling against the Wilson UPPER bound, but …
 order: 238
 owner: loop/tier3-ceiling
-pr:
+pr: 907
 title: Tier 3's false-call ceiling is unreachable at its own default N, and tolerates zero false calls at the N <code>make eval-tools</code> uses
 ---
 <b>Measured.</b> At the argparse default <code>--runs 1</code> (scripts/eval_tools.py:388), a flawless host — 8/8 should-call, 0/8 false-call — is reported <code>FAIL: false-call rate 0.00 [0.00-0.32] over ceiling 0.20 (0/8)</code>, because the Wilson upper bound at k=0 is z²/(n+z²) = 3.8416/(8+3.8416) = 0.3244 and cannot fall under the 0.20 ceiling until n ≥ 16, i.e. <code>--runs ≥ 2</code> over this 8-row half.
