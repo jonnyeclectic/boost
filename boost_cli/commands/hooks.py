@@ -93,7 +93,11 @@ def _list(scope, host, event=None, as_json=False) -> int:
         headers=("host", "scope", "event", "name", "matcher", "command"),
         # A hook's command is what the user came to read — a clipped one
         # cannot be compared against what they registered, or copied back.
-        keep=("command",))
+        # `name` is kept for the other reason: it is the argument `boost hooks
+        # remove -n <name>` takes, and it sits in the MIDDLE of this table, so
+        # the drop order (right to left, chrome last) would reach it before
+        # the `host` column that prints the same word on every row.
+        keep=("command", "name"))
     return 0
 
 

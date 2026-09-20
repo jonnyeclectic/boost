@@ -832,23 +832,43 @@ def _fit_widths(widths, numeric, avail: int, sep: int = 2, floor: int = 1,
     return widths
 
 
-#: Narrowest a column may be squeezed to and still say anything. Below it
-#: `_clip_visible` spends most of the cell on the ellipsis, and at 1 the cell
-#: *is* the ellipsis — a column of "…" under a header of "…". Matches
-#: :func:`search_layout`'s description floor, the same judgement one surface
-#: over.
+#: The width a squeezed column is *preferred* to keep: `search_layout`'s own
+#: description floor, the same judgement one surface over.
 _MIN_COL = 8
+
+#: …and the least it may keep before the column goes instead: exactly one
+#: cell under the preferred floor.
+#:
+#: Two numbers rather than one, because collapsing them cost a column that was
+#: doing its job. With `_MIN_COL` as a hard floor, `boost hooks list` at
+#: COLUMNS=66 dropped `matcher` — 8 wide, exactly at the floor, carrying real
+#: data — although the same six columns fit at 7, and the row then measured 61
+#: into a 66-wide pane. Spending a whole 10-wide column to buy one cell is the
+#: cure being worse than the disease.
+#:
+#: One cell, and no more, because the slack is what re-admits the defect: at 5
+#: or 6 `boost taps` keeps a date column rendering "2 ho…" and a URL column
+#: rendering "http…" instead of dropping them, which is the placeholder
+#: column this whole function exists to stop printing.
+_HARD_FLOOR = _MIN_COL - 1
 
 
 def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=()):
     """Choose which columns an `avail`-wide pane shows, and how wide.
 
-    Shrinking first (:func:`_fit_widths`, floored at :data:`_MIN_COL`), then
-    dropping: a column that cannot be shown at the floor is removed **with its
-    separator**, which is the only move that recovers the width when the dead
-    columns are leading ones — `rstrip` cannot reach a gutter that has data to
-    its right, so shrinking alone left `boost hooks list` 7 columns over an
-    80-column pane having already destroyed five of its six columns.
+    Shrinking first (:func:`_fit_widths`), then dropping: a column that cannot
+    be shown at a legible width is removed **with its separator**, which is
+    the only move that recovers the width when the dead columns are leading
+    ones — `rstrip` cannot reach a gutter that has data to its right, so
+    shrinking alone left `boost hooks list` 7 columns over an 80-column pane
+    having already destroyed five of its six columns.
+
+    The floor is searched, not fixed: :data:`_MIN_COL` down to
+    :data:`_HARD_FLOOR`, and only then is a column dropped. A single floor
+    made the cure worse than the disease on panes where one cell was all that
+    was missing — at COLUMNS=66 `hooks list` fit on six columns at floor 7,
+    and a hard floor of 8 dropped `matcher` instead, spending a whole 10-wide
+    column to buy one cell and leaving five columns of the pane unused.
 
     Drop order is right to left, skipping `protected` (:func:`table`'s
     ``keep``), which is never dropped: these tables put the identifier the
@@ -871,10 +891,15 @@ def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=()):
                            protected=[j for j, i in enumerate(show)
                                       if i in protected])
 
-    while order and len(show) > 1:
-        fitted = fit(_MIN_COL)
-        if sum(fitted) + sep * (len(fitted) - 1) <= avail:
-            return show, fitted
+    while True:
+        # Preferred floor first, then down: a row that fits at 7 must not cost
+        # a column, and one that fits at 8 must not be squeezed to 4.
+        for floor in range(_MIN_COL, _HARD_FLOOR - 1, -1):
+            fitted = fit(floor)
+            if sum(fitted) + sep * (len(fitted) - 1) <= avail:
+                return show, fitted
+        if not order or len(show) <= 1:
+            break
         show.remove(order.pop(0))
     return show, fit(1)
 
