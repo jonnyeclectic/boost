@@ -10,7 +10,7 @@ wow: 3
 note: CLAUDE.md tells every contributor and agent to open a new source file with GPL-3.0-o…
 order: 326
 owner: loop/spdx-licence-drift
-pr:
+pr: 905
 title: CLAUDE.md instructs the wrong licence: every new source file is told to carry <code>GPL-3.0-only</code> in a repo whose 373 headers, LICENSE and pyproject all say Apache-2.0
 ---
 <b>Measured.</b> <code>CLAUDE.md:296</code> reads "Every <code>.py</code>/<code>.sh</code> under <code>boost_cli</code>, <code>boost_langchain</code>, <code>evals</code>, <code>scripts</code>, <code>tests</code> plus <code>./boost</code> and <code>noxfile.py</code> opens with <code># Copyright the boost contributors.</code> and <code># SPDX-License-Identifier: GPL-3.0-only</code>". Nothing in the repo agrees: <code>scripts/add_spdx_headers.py:40</code> is <code>SPDX_ID = "Apache-2.0"</code>, all <b>373</b> existing headers are <code>Apache-2.0</code> (counted across boost_cli, scripts, tests, ./boost and noxfile.py — zero GPL), <code>LICENSE</code> is the Apache License, and <code>pyproject.toml:27</code> is <code>license = "Apache-2.0"</code>.
