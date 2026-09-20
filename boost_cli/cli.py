@@ -118,7 +118,7 @@ COMMANDS = [
     ("health",      "chk", "quality", "Dashboard of skill-environment health"),
     ("trust",       "chk", "quality", "Manage signing keys & verify tap provenance"),
     # Configuration (13)
-    ("quickstart",  "cfg", "quickstart", "Tap the starter registries and load prebuilt vectors"),
+    ("quickstart",  "cfg", "quickstart", "Tap the starter registries and index them for search"),
     ("config",      "cfg", "configuration", "Display or modify boost configuration"),
     ("clean",       "cfg", "configuration", "Clear stale caches & broken symlinks"),
     ("compact",     "cfg", "configuration", "Shrink tap clones to the files boost indexes"),

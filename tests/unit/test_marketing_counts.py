@@ -16,6 +16,7 @@ that lies about what it proves.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -134,9 +135,34 @@ SMOKE = (ROOT / "tests" / "smoke.sh").read_text(encoding="utf-8")
 ONLINE_VERIFIED_FIXTURE_NAMES: set[str] = set()
 
 
+#: The hero fence is identified by what it DOES, not by where it sits. "the
+#: first bash fence" and smoke.sh's "the first `boost install` in the file" are
+#: two spellings of the same guess, so a decoy fence added above the hero moved
+#: both at once and the pin between them stayed green while the online check
+#: verified a skill nobody is told to install. Anchoring on the install command
+#: the block prescribes is the one property that cannot drift.
+HERO_ANCHOR = "pipx install boost-skill-cli"
+
+
 def _hero_block() -> str:
-    m = re.search(r"```bash\n(.*?)```", README, re.S)
-    assert m, "README no longer opens with a bash code fence"
+    for body in re.findall(r"```bash\n(.*?)```", README, re.S):
+        if HERO_ANCHOR in body:
+            return body
+    raise AssertionError(
+        "no bash fence in README.md runs %r — the hero block is gone, or it "
+        "no longer prescribes the install it is meant to demonstrate"
+        % HERO_ANCHOR)
+
+
+def _smoke_hero_pipeline() -> str:
+    """The shell smoke.sh actually runs to pick the name, lifted verbatim.
+
+    Lifted rather than re-implemented: a Python copy of the extraction would
+    agree with itself forever, which is exactly the tautology this pin
+    replaced.
+    """
+    m = re.search(r'^\s*HERO="\$\((.*)\)"\s*$', SMOKE, re.M)
+    assert m, "tests/smoke.sh no longer extracts a hero name"
     return m.group(1)
 
 
@@ -162,13 +188,36 @@ class TestHeroBlock:
         assert len(names) == 1, \
             "the hero block installs %d skills: %s" % (len(names), names)
 
-    def test_the_install_name_is_the_first_one_in_the_file(self):
-        # tests/smoke.sh reads the name with `sed ... | head -1` over the whole
-        # README rather than parsing fences. The two extractions have to agree,
-        # or the online check verifies a different skill than the one a reader
-        # copies out of the hero block.
-        first = re.search(r"^boost install (\S+)", README, re.M)
-        assert first and first.group(1) == _hero_install_name()
+    def test_smoke_extracts_the_same_name_this_test_does(self):
+        """Run smoke.sh's own extraction and compare, rather than re-spelling it.
+
+        The previous version of this test compared "the first `boost install`
+        in the file" against "the first `boost install` in the first bash
+        fence" — two spellings of the same guess, so a decoy fence above the
+        hero satisfied both while pointing the online check at a skill nobody
+        is told to install. Executing the shell pipeline is the only
+        comparison that catches drift in either direction.
+        """
+        pipeline = _smoke_hero_pipeline()
+        got = subprocess.run(["bash", "-c", pipeline], cwd=ROOT,
+                             capture_output=True, text=True, check=True)
+        assert got.stdout.strip() == _hero_install_name(), (
+            "smoke.sh reads %r, the hero fence installs %r"
+            % (got.stdout.strip(), _hero_install_name()))
+
+    def test_a_decoy_install_line_cannot_steal_the_check(self, tmp_path):
+        """The regression this pin exists for, executed rather than asserted."""
+        decoy = README.replace(
+            "```bash\n" + HERO_ANCHOR,
+            "```bash\nboost install code-review\n```\n\n```bash\n" + HERO_ANCHOR, 1)
+        assert decoy != README
+        readme = tmp_path / "README.md"
+        readme.write_text(decoy, encoding="utf-8")
+        got = subprocess.run(["bash", "-c", _smoke_hero_pipeline()], cwd=tmp_path,
+                             capture_output=True, text=True, check=True)
+        assert got.stdout.strip() != "code-review", (
+            "smoke.sh followed a decoy `boost install` line instead of the "
+            "fence that prescribes %r" % HERO_ANCHOR)
 
     def test_the_online_smoke_check_verifies_that_name(self):
         # The only real falsification of "installable from the shipped
@@ -185,9 +234,11 @@ class TestHeroBlock:
             "smoke.sh --online no longer installs the name it read from README"
 
     def test_the_name_is_not_a_test_fixture_identifier(self):
-        # The defect's mechanism: `tdd-workflow` exists only in boost's own
-        # offline fixture, and it reached the marketing surface because the
-        # demo tape was verified against that fixture.
+        # The defect's mechanism: `tdd-workflow` is a name boost's own offline
+        # fixture defines and no STARTER registry ships — four unrelated
+        # registries elsewhere in the catalog do ship one, which is why the
+        # bad line looked plausible — and it reached the marketing surface
+        # because the demo tape was verified against that fixture.
         name = _hero_install_name()
         assert name not in _fixture_skill_names() - ONLINE_VERIFIED_FIXTURE_NAMES, (
             "the README's hero block installs %r, which only "
@@ -199,9 +250,11 @@ class TestHeroBlockPromises:
 
     def test_it_does_not_promise_semantic_search_it_never_installs(self):
         # Measured in a virgin HOME: with the plain `pipx install
-        # boost-skill-cli` the block itself prescribes, `boost quickstart`
-        # imports 0 shard(s) ("0 because semantic search needs the extra") and
-        # `boost search` prints "semantic search is off".
+        # boost-skill-cli` the block itself prescribes, `dense.have_backend()`
+        # is False, so the shard manifest is never fetched, `quickstart` prints
+        # "semantic search needs the extra" and `boost search` reports "ranked
+        # by full-content BM25". (The "0 because …" wording belongs to
+        # `--dry-run`, which is not what a reader runs.)
         block = _hero_block()
         installs_extra = "[rag]" in block
         claims = [w for w in ("semantic", "vector", "fused")
