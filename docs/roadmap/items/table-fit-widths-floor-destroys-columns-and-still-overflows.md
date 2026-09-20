@@ -2,14 +2,14 @@
 id: table-fit-widths-floor-destroys-columns-and-still-overflows
 board: code
 section: planned
-status: planned
+status: shipped
 category: UX · Bug
 complexity: M
 impact: Med
 wow: 3
 note: out.table's _fit_widths has floor=1, and _clip_visible(cell, 1) returns just the elli…
 order: 237
-owner:
+owner: loop/table-fit-drop
 pr:
 title: _fit_widths shrinks data columns to a bare "…" and still overflows: <code>boost taps</code> is 54 columns wide on every terminal narrower than 54
 ---

@@ -875,16 +875,23 @@ class TestTableColor:
 
     def test_separator_width_counts_in_fit_budget(self, capsys, monkeypatch):
         import re
-        # 3 columns of visible width 4 + two 3-wide separators = 18 > 17,
-        # so exactly one text column must shrink; with the old 2-wide gutter
-        # (total 16) nothing would shrink. Proves sep=3 reaches _fit_widths.
+        # 3 columns of visible width 4 + two 3-wide separators = 18 > 17, so
+        # the row does not fit and — none of the columns being wide enough to
+        # give a cell away above the readable floor — the last one goes. With
+        # the 2-wide gutter (total 16) all three stay. Proves sep=3 reaches
+        # the fit budget.
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
         monkeypatch.setenv("COLUMNS", "17")
         output.table([("aaaa", "bbbb", "cccc")])
         vis = re.sub(r"\x1b\[[0-9;]*m", "",
                      capsys.readouterr().out.splitlines()[0])
         assert len(vis.rstrip()) <= 17
-        assert "…" in vis                            # a cell was clipped
+        assert "cccc" not in vis                     # a column was dropped
+        assert "aaaa" in vis and "bbbb" in vis
+        monkeypatch.delenv("CLICOLOR_FORCE")
+        monkeypatch.setenv("NO_COLOR", "1")
+        output.table([("aaaa", "bbbb", "cccc")])
+        assert capsys.readouterr().out == "aaaa  bbbb  cccc\n"
 
 
 class TestTable:
