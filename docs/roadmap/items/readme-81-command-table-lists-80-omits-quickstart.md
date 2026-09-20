@@ -2,15 +2,15 @@
 id: readme-81-command-table-lists-80-omits-quickstart
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Docs
 complexity: S
 impact: Low
 wow: 2
 note: README.md:389 heads a table "## 81 commands, organized into 8 groups", but the eight …
 order: 224
-owner:
-pr:
+owner: loop/readme-command-table
+pr: 876
 title: README's "81 commands" table enumerates only 80 — the missing one is <code>quickstart</code>, the README's own first command
 ---
 <b>Measured.</b> Commit dd2fba07 (PR #594, "publish prebuilt vectors where a new user can reach them") added <code>("quickstart", "cfg", ...)</code> to cli.py's COMMANDS and changed README.md:389 from "## 80 commands" to "## 81 commands" — and left README.md:404's Configuration row at its 13 names, so the README has advertised 81 commands while listing 80 ever since, with the whole test suite green, because <code>test_marketing_counts.py</code> asserts the integer and <code>test_docsite_chrome.py:63-71</code> pins the enumeration only for <code>docs/index.html</code>.
@@ -41,7 +41,6 @@ The defect itself reproduces exactly as stated — README.md:389 heads "81 comma
 
 2. SOFT — "the one <code>docs/semantic-search.md</code> points at three times". Three is only right if you count fenced-code invocations (lines 30, 63, 64). The string <code>boost quickstart</code> appears 4 times (30, 33, 63, 64) and <code>quickstart</code> appears on 7 lines (+1, 83, 89). Say "four <code>boost quickstart</code> references across seven mentions" or drop the number.
 
-3.
 
 <b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
 
@@ -51,6 +50,6 @@ WHY Low, not Med. The finder's Med overstates it. <code>quickstart</code> is nam
 
 WHY IT IS STILL WORTH A CARD. The value is structural, not the symptom: of the three enumerations of the command surface, <code>docs/index.html</code> is pinned name-by-name against COMMANDS (test_docsite_chrome.py:63-71), <code>docs/commands.html</code> is generated from COMMANDS and gated by <code>build_command_reference.py --check</code>, and README's table is hand-maintained with only its integer asserted. PR #594 is the proof that the gap is live rather than theoretical.
 
-<b>Why it is worth doing.</b> The README table is the only place a reader browses the command surface without running the CLI, and the one command it drops is the one the same file's hero block makes step 2 of onboarding. A user who reads the table sees no quickstart, and a user who reads the hero sees a command the table says does not exist. The count and the list also contradict each other in the same heading, which is exactly the class of drift test_marketing_counts.py was written for — it just guards the integer and not the enumeration.
+<b>Why it is worth doing.</b> The README table is the command surface a reader browses in-file, and the one enumeration of the three that nothing pinned; the one command it dropped is the one the same file's hero block makes step 2 of onboarding. A user who reads the table sees no quickstart, and a user who reads the hero sees a command the table says does not exist. The count and the list also contradict each other in the same heading, which is exactly the class of drift test_marketing_counts.py was written for — it just guards the integer and not the enumeration.
 
 <em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em>
