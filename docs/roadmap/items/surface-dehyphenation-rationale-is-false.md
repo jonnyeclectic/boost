@@ -2,14 +2,14 @@
 id: surface-dehyphenation-rationale-is-false
 board: code
 section: planned
-status: planned
+status: inflight
 category: Quality · Retrieval eval
 complexity: M
 impact: Med
 wow: 3
 note: surface() (rag.py:200-208) indexes the name, a de-hyphenated copy of the name, and th…
 order: 236
-owner:
+owner: loop/surface-rationale
 pr:
 title: <code>rag.surface</code>'s de-hyphenated name copy is justified by two claims that are both false, and its real effect — an undocumented 3x name / 2x description field weight — is guarded by a test …
 ---

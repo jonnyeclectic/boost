@@ -2590,7 +2590,7 @@ NOT ALREADY CARDED — I re-checked independently. The PR 739 card (<code>audit-
       </article>
 
       <article class="cap rcard" id="surface-dehyphenation-rationale-is-false">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Retrieval eval</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Quality · Retrieval eval</span></div>
         <h3><code>rag.surface</code>'s de-hyphenated name copy is justified by two claims that are both false, and its real effect — an undocumented 3x name / 2x description field weight — is guarded by a test …</h3>
         <p><b>Measured.</b> Deleting the "obviously redundant" de-hyphenated copy passes the ENTIRE required gate silently: zero new failures across the full unit + functional suite (the 10 functional failures are a pre-existing <code>dashboard-design</code> CWD leak, identical with and without the ablation), and all four eval floors clear with room to spare (ablated 0.8407 / 0.4725 / 0.6021 / 0.6523 against floors 0.78 / 0.40 / 0.52 / 0.58) — while it silently moves 23 of 141 golden rankings, flips one top-1 result, and drops <code>go-backend-scalability</code> out of the top 10 for the golden query "go backend scalability best practices for microservices and apis", costing exactly 1/91 = 0.011 recall@10.
 
