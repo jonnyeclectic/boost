@@ -10,7 +10,7 @@ wow: 3
 note: out.table's _fit_widths has floor=1, and _clip_visible(cell, 1) returns just the elli…
 order: 237
 owner: loop/table-fit-drop
-pr:
+pr: 902
 title: _fit_widths shrinks data columns to a bare "…" and still overflows: <code>boost taps</code> is 54 columns wide on every terminal narrower than 54
 ---
 <b>Measured.</b> At COLUMNS=80 — a default terminal width, not a narrow split — <code>boost hooks list</code> renders 5 of its 6 columns (host, scope, event, name, matcher) as a bare "…" for every row INCLUDING the header, so the table no longer says what its own columns are, and the row is still 89 columns wide (94 on a color TTY) against a natural 142: five columns of data destroyed, 15 columns of ink spent on placeholders, and the fit still not achieved — dropping those five columns outright would have measured 74 and fit.
