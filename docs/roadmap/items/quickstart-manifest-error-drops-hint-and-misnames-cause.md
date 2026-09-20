@@ -2,14 +2,14 @@
 id: quickstart-manifest-error-drops-hint-and-misnames-cause
 board: code
 section: planned
-status: planned
+status: inflight
 category: Onboarding · Bug
 complexity: M
 impact: Med
 wow: 3
 note: cmd_quickstart catches every BoostError from shards.fetch_manifest() and prints exc.m…
 order: 221
-owner:
+owner: loop/quickstart-manifest-hint
 pr:
 title: A local manifest read error is reported as "no published shards", and the BoostError's hint — the only actionable line — is discarded
 ---

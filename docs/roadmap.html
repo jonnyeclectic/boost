@@ -1943,7 +1943,7 @@ CARD-AUTHOR WARNINGS: - Do NOT fix this by appending <code>("incompatible", …)
       </article>
 
       <article class="cap rcard" id="quickstart-manifest-error-drops-hint-and-misnames-cause">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Onboarding · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Onboarding · Bug</span></div>
         <h3>A local manifest read error is reported as "no published shards", and the BoostError's hint — the only actionable line — is discarded</h3>
         <p><b>Measured.</b> 4 of the 9 <code>BoostError</code> raises reachable from <code>shards.fetch_manifest()</code> carry a <code>hint</code>, and all three transport-shaped failures are among them — scheme refusal, "cannot reach" (hint: "shards are optional — <code>boost reindex --dense</code> embeds locally instead"), and truncation (hint: "a proxy or a dropped connection cut the stream — retry") — so the one line quickstart.py:164 throws away is precisely the line that fires on the real-world failures, while a live run with an unreadable manifest still ends <code>✓ ready</code> at exit 0 with all seven taps unpinned and no word about vectors.
 
