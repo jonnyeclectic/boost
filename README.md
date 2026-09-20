@@ -522,7 +522,7 @@ Four test layers are enforced, and `make check` runs all of them:
 | Layer | Gate |
 |---|---|
 | `make test` | ≥90% coverage of `boost_cli`, statements and branches |
-| `make smoke` | 176 checks through the actual `./boost` shim |
+| `make smoke` | 183 checks through the actual `./boost` shim |
 | `make mutation` | ≥80% of ~9,900 mutants in `boost_cli/core` killed |
 | `make evals` | metric floors on the search ranker, plus no significant regression |
 
