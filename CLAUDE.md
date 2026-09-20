@@ -293,10 +293,12 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   adding to the vale list.** Every `.py`/`.sh` under `boost_cli`,
   `boost_langchain`, `evals`, `scripts`, `tests` plus `./boost` and
   `noxfile.py` opens with `# Copyright the boost contributors.` and
-  `# SPDX-License-Identifier: GPL-3.0-only`. Run
+  `# SPDX-License-Identifier: Apache-2.0`. Run
   `python3 scripts/add_spdx_headers.py` (idempotent) — the file list and the
-  expression live there, so changing `-only` to `-or-later` is one edit rather
-  than 314. Separately, `prose-lint.yml` names the Markdown files vale checks
+  expression live there (`SPDX_ID`), so a relicence is one edit rather than
+  384, and `tests/unit/test_spdx_headers.py` pins this paragraph to that
+  constant: #587 relicensed the tree from `GPL-3.0-only` and left this
+  sentence naming the old expression for every agent that read it since. Separately, `prose-lint.yml` names the Markdown files vale checks
   **explicitly**: a new doc that is not added to that list is never linted, and
   `make lint` will not tell you.
 
