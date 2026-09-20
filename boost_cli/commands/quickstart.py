@@ -161,7 +161,15 @@ def cmd_quickstart(argv) -> int:
                 manifest = shards.fetch_manifest()
             pins = shards.rows(manifest)
         except BoostError as exc:
-            out.warn("no published shards: %s" % exc.message)
+            # "no published shards" named the wrong cause — the project's
+            # shards are fine; this machine could not read the manifest (a
+            # proxy, a dropped connection, a BOOST_SHARD_MANIFEST typo, an
+            # air-gapped mirror). And the hint was the actionable half: every
+            # transport-shaped failure raised here carries one.
+            out.warn("could not read the shard manifest: %s" % exc.message,
+                     wrap=True)
+            if exc.hint:
+                out.info(out.role(exc.hint, "muted"), wrap=True)
             manifest = None
 
     selection = _selection(args.catalog)
@@ -215,6 +223,14 @@ def cmd_quickstart(argv) -> int:
         out.info("semantic search needs the extra: "
                  "`pipx inject boost-skill-cli \"boost-skill-cli[rag]\"`, "
                  "then `boost quickstart` again")
+    elif want_vectors:
+        # The whole vector step was skipped, and the only word about it was a
+        # warning many screens back. Without this the run ends "✓ ready" as
+        # though vectors had been imported.
+        out.info(out.role("no vectors imported — the shard manifest could not "
+                          "be read; `boost update --shards` retries it, and "
+                          "`boost reindex --dense` builds them locally",
+                          "muted"), wrap=True)
 
     complete.refresh_names()
     out.ok("ready — try `boost search brainstorming`")

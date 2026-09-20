@@ -162,6 +162,26 @@ class TestEveryZeroShardReasonNamesItself:
         # The reassurance is the point: the tapping half still worked.
         assert "keyword search is unaffected" in out
 
+    def test_a_manifest_error_keeps_its_hint_and_names_the_real_cause(
+            self, boost, monkeypatch):
+        # "no published shards" said the project has none; the cause is
+        # local. And the hint — the only actionable line, carried by every
+        # transport-shaped failure — was thrown away.
+        from boost_cli.core import dense, shards
+        from boost_cli.errors import BoostError
+
+        def boom(*_a, **_k):
+            raise BoostError("cannot reach the manifest",
+                             hint="a proxy or a dropped connection cut the "
+                                  "stream — retry")
+
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        monkeypatch.setattr(shards, "fetch_manifest", boom)
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "could not read the shard manifest: cannot reach" in out
+        assert "a proxy or a dropped connection cut the stream — retry" in out
+        assert "no published shards" not in out
+
     def test_a_manifest_with_no_matching_shard_says_so(self, boost,
                                                        monkeypatch):
         # The one branch where zero really does mean "none published for
@@ -223,6 +243,25 @@ class TestQuickstartTapping:
         assert "repository not found" in both
         assert both.count("tapped ") >= 2
         assert "ready" in both
+
+    def test_a_live_run_says_the_vector_step_was_skipped(
+            self, boost, fake_taps, monkeypatch):
+        # The whole vector step is skipped when the manifest cannot be read,
+        # and the run used to end "✓ ready" with nothing said about it after
+        # one warning many lines earlier.
+        from boost_cli.core import dense, shards
+        from boost_cli.errors import BoostError
+
+        def boom(*_a, **_k):
+            raise BoostError("cannot reach the manifest")
+
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        monkeypatch.setattr(shards, "fetch_manifest", boom)
+        res = boost("quickstart")
+        both = _flat(res.out + res.err)
+        assert "no vectors imported" in both
+        assert "boost update --shards" in both and "reindex --dense" in both
+        assert "ready" in both              # still not fatal
 
     def test_shard_commits_are_passed_as_pins(self, boost, fake_taps,
                                               manifest, monkeypatch):

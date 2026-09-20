@@ -2,7 +2,7 @@
 id: quickstart-manifest-error-drops-hint-and-misnames-cause
 board: code
 section: planned
-status: inflight
+status: shipped
 category: Onboarding · Bug
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: cmd_quickstart catches every BoostError from shards.fetch_manifest() and prints exc.m…
 order: 221
 owner: loop/quickstart-manifest-hint
-pr:
+pr: 899
 title: A local manifest read error is reported as "no published shards", and the BoostError's hint — the only actionable line — is discarded
 ---
 <b>Measured.</b> 4 of the 9 <code>BoostError</code> raises reachable from <code>shards.fetch_manifest()</code> carry a <code>hint</code>, and all three transport-shaped failures are among them — scheme refusal, "cannot reach" (hint: "shards are optional — <code>boost reindex --dense</code> embeds locally instead"), and truncation (hint: "a proxy or a dropped connection cut the stream — retry") — so the one line quickstart.py:164 throws away is precisely the line that fires on the real-world failures, while a live run with an unreadable manifest still ends <code>✓ ready</code> at exit 0 with all seven taps unpinned and no word about vectors.
