@@ -608,9 +608,15 @@ upgrade rather than the entry fee. When both engines are built, `retrieve_any`
 fuses them with reciprocal rank fusion (`rag.rrf_fuse`, `RRF_K = 60`) and
 reports `hybrid RRF`; it degrades to whichever single engine is ready, and to
 BM25 alone otherwise. `dense.status()` names which of the three links (extra,
-backend, built store) is missing, and `dense.fix_hint()` maps that to the one
-next action — both `boost doctor` and `boost search` read that same table, so
-they can't give contradictory advice.
+backend, built store) is missing — or `disabled`, a fourth state that is no
+missing link at all but the `BOOST_NO_EMBED` kill switch, which sits **first**
+in the ladder (`embed.provider()` reads it before any key, so every other
+remedy is a measured no-op under it) and is excluded from `degraded`, so a
+deliberate opt-out never moves doctor's exit code. `dense.fix_hint()` maps
+whichever state it is to the one next action — `boost doctor`, `boost search`,
+the MCP `SEARCH ENGINE` line and both shard surfaces (`reindex --fetch-shards`,
+`update --shards`) all read that same table, so they can't give contradictory
+advice.
 
 **The dense store ranks twice, and `vec0` is why.** `sqlite-vec` has no ANN
 index: a float32 `MATCH` scores *every* vector in the store, which on a real

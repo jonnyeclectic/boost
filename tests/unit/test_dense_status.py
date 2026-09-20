@@ -83,7 +83,7 @@ def keyed(monkeypatch):
 # ------------------------------------------------------- nothing configured
 
 def test_nothing_available_at_all_reports_no_key(sandbox, monkeypatch):
-    """No key AND no local backend — in practice a partial install or BOOST_NO_EMBED.
+    """No key AND no local backend — in practice a partial install.
 
     `local_available()` is forced off rather than left to the ambient
     interpreter on purpose. This test used to assert "no-key" unconditionally,
@@ -261,12 +261,57 @@ def test_status_reports_the_recorded_model_without_the_extra(sandbox, keyed,
     assert st["chunks"] == 3
 
 
-def test_kill_switch_reads_as_no_key(sandbox, keyed, monkeypatch):
-    """BOOST_NO_EMBED short-circuits `provider()`, so dense cannot run."""
+def test_kill_switch_is_its_own_reason(sandbox, keyed, monkeypatch):
+    """BOOST_NO_EMBED is a decision, not a missing link — and used to read as one.
+
+    It short-circuits `provider()` before any key is looked at, so it landed on
+    `no-key`, whose remedy is an API key. Measured on a 5-chunk voyage-4 store:
+    exporting the key the hint named left the status dict byte-identical.
+    """
     monkeypatch.setenv("BOOST_NO_EMBED", "1")
     st = dense.status()
     assert st["ready"] is False
-    assert st["reason"] == "no-key"
+    assert st["reason"] == "disabled"
+    assert "BOOST_NO_EMBED" in dense.fix_hint(st["reason"], st)
+
+
+def test_kill_switch_outranks_a_missing_backend(sandbox, keyed, monkeypatch):
+    # Ladder order is the claim: with the switch set, installing the extra
+    # changes nothing, so naming the extra would be a remedy that cannot work.
+    monkeypatch.setenv("BOOST_NO_EMBED", "1")
+    monkeypatch.setattr(dense, "_load", lambda: None)
+    st = dense.status()
+    assert st["reason"] == "disabled"
+    assert st["backend"] is False       # still reported truthfully
+
+
+def test_kill_switch_over_a_built_store_is_not_degraded(sandbox, keyed, monkeypatch):
+    """A store idle behind the user's own switch is not a fault.
+
+    `degraded` is what moves doctor's exit code, and counting this state left
+    `boost doctor` returning 1 on every run for anyone who opted out after
+    building — which breaks it as a CI gate for exactly that user.
+    """
+    _write_store(model="voyage-4", chunks=5)
+    monkeypatch.setenv("BOOST_NO_EMBED", "1")
+    st = dense.status()
+    assert st["reason"] == "disabled"
+    assert st["degraded"] is False
+    assert st["store_exists"] is True
+    assert st["built_model"] == "voyage-4"      # the vectors are still legible
+
+
+def test_kill_switch_hint_is_identical_with_and_without_a_key(sandbox, monkeypatch):
+    # The defect in one assertion: the remedy must not vary with a key the
+    # switch never reads, and must not BE that key.
+    _write_store(model="voyage-4", chunks=5)
+    monkeypatch.setenv("BOOST_NO_EMBED", "1")
+    monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+    unkeyed = dense.fix_hint(dense.status()["reason"], dense.status())
+    monkeypatch.setenv("VOYAGE_API_KEY", "vk-test")
+    keyed_hint = dense.fix_hint(dense.status()["reason"], dense.status())
+    assert unkeyed == keyed_hint
+    assert "VOYAGE_API_KEY" not in unkeyed
 
 
 def test_corrupt_store_degrades_instead_of_raising(sandbox, keyed):
@@ -324,6 +369,49 @@ def test_doctor_stays_healthy_when_dense_is_simply_unconfigured(boost, sandbox):
 
 
 # --------------------------------------------------- the log is only ✓ if usable
+
+def test_doctor_stays_green_under_the_kill_switch(boost, sandbox, keyed, monkeypatch):
+    """The CI job that sets BOOST_NO_EMBED is the one that most needs exit 0."""
+    _write_store(model="voyage-4", chunks=5)
+    monkeypatch.setenv("BOOST_NO_EMBED", "1")
+    res = boost("doctor", expect=None)
+    assert res.rc == 0
+    assert "BOOST_NO_EMBED" in res.out
+    # and does not send the user to a remedy the switch makes inert
+    assert "export VOYAGE_API_KEY" not in res.out
+    assert "pip install" not in res.out.split("semantic search")[-1].split("\n")[0]
+
+
+def test_doctor_says_the_vectors_are_still_there_under_the_kill_switch(
+        boost, sandbox, keyed, monkeypatch):
+    # The user deciding whether to switch it back on is the one who needs to
+    # know the store did not go anywhere.
+    _write_store(model="voyage-4", chunks=5)
+    monkeypatch.setenv("BOOST_NO_EMBED", "1")
+    res = boost("doctor", expect=None)
+    assert "5-chunk vector store is still on disk" in res.out
+
+
+def test_doctor_under_the_kill_switch_with_no_store_claims_no_vectors(
+        boost, sandbox, keyed, monkeypatch):
+    # The other arm of the same branch: nothing was ever built, so there is
+    # nothing on disk to promise, and the line must not say there is.
+    monkeypatch.setenv("BOOST_NO_EMBED", "1")
+    res = boost("doctor", expect=None)
+    assert res.rc == 0
+    assert "BOOST_NO_EMBED" in res.out
+    assert "on disk" not in res.out
+
+
+def test_a_falsy_looking_kill_switch_still_disables(sandbox, keyed, monkeypatch):
+    # `enabled()` is `not os.environ.get(...)`, so BOOST_NO_EMBED=0 disables
+    # too. That is the surprising spelling, and it is the one where naming the
+    # switch matters most — the user who wrote 0 meaning "off" is the user
+    # least likely to guess why dense is quiet.
+    monkeypatch.setenv("BOOST_NO_EMBED", "0")
+    st = dense.status()
+    assert st["reason"] == "disabled"
+
 
 def test_doctor_flags_a_log_it_cannot_write(boost, sandbox):
     """Existence is not health.
