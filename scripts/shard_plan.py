@@ -4,8 +4,8 @@
 """Pack the registry catalogue into a bounded, balanced Actions matrix.
 
 WHY THIS EXISTS. `shards.yml` ran one job per registry, which is fine for the
-20-repo eval corpus and impossible for the 463-registry catalogue: **GitHub
-caps a matrix at 256 jobs per workflow run**, so 463 rows do not start at all.
+20-repo eval corpus and impossible for the ~460-registry catalogue: **GitHub
+caps a matrix at 256 jobs per workflow run**, so ~460 rows do not start at all.
 Chunking is therefore not an optimisation, it is the difference between the
 workflow running and not.
 

@@ -293,10 +293,10 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   adding to the vale list.** Every `.py`/`.sh` under `boost_cli`,
   `boost_langchain`, `evals`, `scripts`, `tests` plus `./boost` and
   `noxfile.py` opens with `# Copyright the boost contributors.` and
-  `# SPDX-License-Identifier: GPL-3.0-only`. Run
+  `# SPDX-License-Identifier: Apache-2.0`. Run
   `python3 scripts/add_spdx_headers.py` (idempotent) — the file list and the
-  expression live there, so changing `-only` to `-or-later` is one edit rather
-  than 314. Separately, `prose-lint.yml` names the Markdown files vale checks
+  expression live there, so changing the licence expression is one edit rather
+  than hundreds. Separately, `prose-lint.yml` names the Markdown files vale checks
   **explicitly**: a new doc that is not added to that list is never linted, and
   `make lint` will not tell you.
 
@@ -517,7 +517,7 @@ each agent's skills dir, and updating the lock file.
 
 - **The shard matrix is packed, not sliced, and 256 is a hard ceiling.**
   GitHub runs at most 256 matrix jobs per workflow, so `shards.yml` cannot take
-  one job per registry once the scope is the 463-registry catalogue — the run
+  one job per registry once the scope is the ~460-registry catalogue — the run
   fails before a job starts. `scripts/shard_plan.py` bin-packs by the measured
   `est_items` (longest-processing-time-first), which matters because cost is
   uneven: the largest catalogued registry is 880 items against a median of 30,
