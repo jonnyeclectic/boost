@@ -397,6 +397,18 @@ def linked_agents(name: str) -> list[str]:
             if (adir / name).is_symlink()]
 
 
+def refusing_dir(path: Path) -> Path:
+    """The directory to make writable so a write under ``path`` can succeed.
+
+    ``path`` itself when it exists; otherwise its nearest existing ancestor,
+    which is the one that refused to create it. Naming a missing directory in
+    a `chmod u+w` remedy hands the user a command that fails.
+    """
+    while not path.exists() and path.parent != path:
+        path = path.parent
+    return path
+
+
 def _untouched_materializations(existing: dict | None,
                                 linked: list[str]) -> list[dict]:
     """Recorded materializations for agents a run did not write to.
@@ -411,6 +423,45 @@ def _untouched_materializations(existing: dict | None,
     """
     return [m for m in (existing or {}).get("materializations") or []
             if m.get("agent") not in linked]
+
+
+def unwritable_agent_dirs() -> list[Path]:
+    """Existing user-scope agent dirs boost writes into and may not.
+
+    The linking agents' skills dirs, where an install symlinks, and each
+    materializing agent's rule and workflow dirs — derived from the same
+    target functions the installers write through, so this cannot drift from
+    them: ``~/.cursor/rules``, ``~/.cursor/commands``, and ``~/.claude`` itself,
+    which holds the ``CLAUDE.md`` a rule merges into. A dir that does not exist
+    yet is not reported: the install creates it, so it refuses nothing.
+    """
+    from . import rules, workflows
+    dirs = list(agents.linking_agents().values())
+    for agent, sdir in agents.materializing_agents().items():
+        dirs.append(rules.rule_target(agent, sdir, "x")[1].parent)
+        dirs.extend(workflows.workflow_target(sdir, slot, "x", agent=agent).parent
+                    for slot in (workflows.SLOT_COMMANDS, workflows.SLOT_AGENTS))
+    return [d for d in dict.fromkeys(dirs)
+            if d.is_dir() and not os.access(str(d), os.W_OK)]
+
+
+def _refused_materializations(existing: dict | None, linked: list[str],
+                              refused: list[dict]) -> list[dict]:
+    """The rows to record beside this run's writes: refused, then untouched.
+
+    An agent whose directory refused the write is still recorded, as a row
+    marked ``unwritable``. Rules and workflows derive their re-install scope
+    from these rows (:func:`preserved_agent_scope`), so an agent with no row
+    silently dropped out of every later `sync`, `reinstall` and `update`: the
+    first refusal became permanent. The row keeps it in scope, and
+    :func:`sync_plan` reads it as a materialization still to write.
+
+    A refused row replaces that agent's old one. The old file, if any, is
+    still on disk at the same path, and the new row still names that path, so
+    uninstall removes it.
+    """
+    done = linked + [r["agent"] for r in refused]
+    return refused + _untouched_materializations(existing, done)
 
 
 def _copy_skill(src: Path, dest: Path) -> None:
@@ -1057,6 +1108,8 @@ def _install_rule(entry: dict, force: bool = False,
     paths.ensure_dirs()
     materializations: list[dict] = []
     linked: list[str] = []
+    unwritable: list[str] = []
+    refused: list[dict] = []
     for agent, skills_dir in agents.materializing_agents(resolved_base).items():
         if only_agents and agent not in only_agents:
             continue
@@ -1066,16 +1119,22 @@ def _install_rule(entry: dict, force: bool = False,
         # into the user's own ~/.claude, which they control — nothing to guard.
         if resolved_base is not None:
             scopes.ensure_in_base(resolved_base, path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if mode == rules.MODE_CLAUDE:
-            current = path.read_text(encoding="utf-8") if path.exists() else ""
-            util.atomic_write_text(path, rules.merge_block(current, name, claude_body))
-            # Hash what `rules.read_block` will read back (the stripped body),
-            # so `boost verify` can tell an edited managed block from ours.
-            written = claude_body.strip("\n")
-        else:
-            util.atomic_write_text(path, raw)
-            written = raw
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if mode == rules.MODE_CLAUDE:
+                current = path.read_text(encoding="utf-8") if path.exists() else ""
+                util.atomic_write_text(path, rules.merge_block(current, name, claude_body))
+                # Hash what `rules.read_block` will read back (the stripped
+                # body), so `boost verify` can tell an edited block from ours.
+                written = claude_body.strip("\n")
+            else:
+                util.atomic_write_text(path, raw)
+                written = raw
+        except PermissionError:
+            unwritable.append(str(refusing_dir(path.parent)))
+            refused.append({"agent": agent, "mode": mode, "path": str(path),
+                            "unwritable": True})
+            continue
         materializations.append({
             "agent": agent, "mode": mode, "path": str(path),
             "sha256": hashlib.sha256(written.encode("utf-8")).hexdigest()})
@@ -1087,7 +1146,7 @@ def _install_rule(entry: dict, force: bool = False,
     # every session (~/.claude/CLAUDE.md); dropping the record does not drop
     # the block, and `_uninstall_rule` is record-driven, so an unrecorded block
     # could never be removed by any boost command again.
-    materializations.extend(_untouched_materializations(existing, linked))
+    materializations.extend(_refused_materializations(existing, linked, refused))
 
     now = util.now_iso()
     lockfile.set_rule(name, {
@@ -1115,9 +1174,26 @@ def _install_rule(entry: dict, force: bool = False,
         dest=Path(materializations[0]["path"]) if materializations else paths.store_dir(),
         kind="rule", scan_text=raw)
     res.linked = linked
+    res.unwritable = unwritable
     res.upgraded = existing is not None
     res.scope = scope
     return res
+
+
+@contextlib.contextmanager
+def _refused_removal(name: str, path: Path):
+    """Turn a locked agent dir into a named refusal, before the lock is touched.
+
+    Uninstall removes what the lock records and then drops the record. A dir
+    that refuses the removal used to escape as exit 70; raising here keeps
+    the record, so running uninstall again after the `chmod` finishes it.
+    """
+    try:
+        yield
+    except PermissionError:
+        where = paths.tilde(str(refusing_dir(path.parent)))
+        raise BoostError("cannot uninstall %s: %s is not writable" % (name, where),
+                         hint="`chmod u+w %s`, then uninstall again" % where) from None
 
 
 def _uninstall_rule(name: str, rule: dict) -> dict:
@@ -1126,15 +1202,19 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
     removed: list[str] = []
     for m in rule.get("materializations", []):
         path = Path(m.get("path", ""))
-        if m.get("mode") == rules.MODE_CLAUDE:
-            if path.exists():
-                stripped = rules.strip_block(path.read_text(encoding="utf-8"), name)
-                if stripped:
-                    util.atomic_write_text(path, stripped)
-                else:
-                    path.unlink()  # file held only our block — boost created it
-        elif path.is_file() or path.is_symlink():
-            path.unlink()
+        with _refused_removal(name, path):
+            if m.get("mode") == rules.MODE_CLAUDE:
+                if path.exists():
+                    text = path.read_text(encoding="utf-8")
+                    stripped = rules.strip_block(text, name)
+                    if stripped == text:
+                        pass  # no block of ours (a refused write): no rewrite
+                    elif stripped:
+                        util.atomic_write_text(path, stripped)
+                    else:
+                        path.unlink()  # file held only our block — boost created it
+            elif path.is_file() or path.is_symlink():
+                path.unlink()
         if m.get("agent"):
             removed.append(m["agent"])
     lockfile.remove_rule(name)
@@ -1308,6 +1388,8 @@ def _install_workflow(entry: dict, force: bool = False,
     paths.ensure_dirs()
     materializations: list[dict] = []
     linked: list[str] = []
+    unwritable: list[str] = []
+    refused: list[dict] = []
     for agent, skills_dir in agents.materializing_agents(resolved_base).items():
         if only_agents and agent not in only_agents:
             continue
@@ -1318,9 +1400,15 @@ def _install_workflow(entry: dict, force: bool = False,
         # the user's own ~/.claude, which they control — nothing to guard.
         if resolved_base is not None:
             scopes.ensure_in_base(resolved_base, path)
-        path.parent.mkdir(parents=True, exist_ok=True)
         rendered = workflows.render(agent, slot, name, raw)
-        util.atomic_write_text(path, rendered)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            util.atomic_write_text(path, rendered)
+        except PermissionError:
+            unwritable.append(str(refusing_dir(path.parent)))
+            refused.append({"agent": agent, "slot": slot, "path": str(path),
+                            "unwritable": True})
+            continue
         materializations.append({
             "agent": agent, "slot": slot, "path": str(path),
             "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest()})
@@ -1328,7 +1416,7 @@ def _install_workflow(entry: dict, force: bool = False,
 
     # As for rules: an unrecorded materialization is a live slash command that
     # `_uninstall_workflow` — driven by this list — can never remove.
-    materializations.extend(_untouched_materializations(existing, linked))
+    materializations.extend(_refused_materializations(existing, linked, refused))
 
     now = util.now_iso()
     lockfile.set_workflow(name, {
@@ -1356,6 +1444,7 @@ def _install_workflow(entry: dict, force: bool = False,
         dest=Path(materializations[0]["path"]) if materializations else paths.store_dir(),
         kind="workflow", scan_text=raw)
     res.linked = linked
+    res.unwritable = unwritable
     res.upgraded = existing is not None
     res.scope = scope
     return res
@@ -1366,8 +1455,9 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
     removed: list[str] = []
     for m in workflow.get("materializations", []):
         path = Path(m.get("path", ""))
-        if path.is_file() or path.is_symlink():
-            path.unlink()
+        with _refused_removal(name, path):
+            if path.is_file() or path.is_symlink():
+                path.unlink()
         if m.get("agent"):
             removed.append(m["agent"])
     lockfile.remove_workflow(name)
@@ -1854,13 +1944,13 @@ def sync_plan() -> dict[str, list]:
         # disarmed, making `boost sync` an accidental release.
         if entry.get("quarantined"):
             continue
-        if any(not _rule_materialization_ok(name, m)
+        if any(m.get("unwritable") or not _rule_materialization_ok(name, m)
                for m in entry.get("materializations") or []):
             plan["missing_materializations"].append(("rule", name))
     for name, entry in lockfile.installed_workflows().items():
         if entry.get("quarantined"):
             continue
-        if any(not Path(m.get("path", "")).is_file()
+        if any(m.get("unwritable") or not Path(m.get("path", "")).is_file()
                for m in entry.get("materializations") or []):
             plan["missing_materializations"].append(("workflow", name))
     return plan
@@ -2218,11 +2308,17 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
             continue
         if mat.cat_entry is not None:
             try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
-                install(mat.cat_entry, force=True, scope=mat.scope, base=mat.base)
-                actions.append(mat.applied)
-                continue
+                res = install(mat.cat_entry, force=True, scope=mat.scope,
+                              base=mat.base)
             except BoostError:
                 pass
+            else:
+                # A directory still refusing the write is not a repair, so it
+                # is not reported as one; the caller names the dir itself
+                # (`unwritable_agent_dirs`), with its remedy.
+                if not res.unwritable:
+                    actions.append(mat.applied)
+                continue
         actions.append(_GONE % (kind, name))
     if actions:
         journal.log("sync", "%d fixes" % len(actions))

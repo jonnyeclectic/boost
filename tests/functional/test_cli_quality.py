@@ -306,6 +306,18 @@ class TestDoctor:
         assert "not linked: ~/.cursor/skills is not writable" in r.out.replace(
             "\n    ", " ")
 
+    def test_reinstall_names_a_conflict_it_left_in_place(self, boost,
+                                                         installed):
+        # reinstall discarded the install result, so a real directory
+        # squatting the link path went unmentioned under "reinstalled".
+        link = paths.home() / ".cursor" / "skills" / "brainstorming"
+        link.unlink()
+        link.mkdir()
+        r = boost("reinstall", "brainstorming")
+        assert ("not linked: ~/.cursor/skills/brainstorming exists and is not "
+                "managed by boost") in " ".join(r.out.split())
+        assert link.is_dir() and not link.is_symlink()
+
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")
     def test_a_native_store_agents_dir_is_not_boosts_to_write(self, boost,
@@ -321,6 +333,57 @@ class TestDoctor:
         finally:
             gemini.chmod(0o700)
         assert "agent dir" not in doc
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unwritable_rules_or_commands_dir_is_skipped_with_a_remedy(
+            self, boost, fixture_tap_src, tmp_path):
+        # Rules and workflows are written, not linked: an unwritable
+        # ~/.cursor/rules crashed the install at exit 70, left a CLAUDE.md
+        # block the lock never recorded, and doctor stayed healthy.
+        dst = tmp_path / "rw-tap"
+        shutil.copytree(fixture_tap_src, dst)
+        (dst / "rules").mkdir()
+        (dst / "rules" / "house.mdc").write_text(
+            "---\nname: house\n---\n\nAlways write tests first.\n",
+            encoding="utf-8")
+        (dst / "commands").mkdir()
+        (dst / "commands" / "ship-it.md").write_text(
+            "---\nname: ship-it\ndescription: release helper\n---\n\nShip.\n",
+            encoding="utf-8")
+        subprocess.run(["git", "-C", str(dst), "add", "-A"], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(dst), "commit", "-qm", "rw"],
+                       check=True, capture_output=True)
+        boost("tap", str(dst))
+        cursor = paths.home() / ".cursor"
+        dirs = [cursor / "rules", cursor / "commands"]
+        for d in dirs:
+            d.mkdir(parents=True)
+            d.chmod(0o500)
+        try:
+            rule = boost("install", "house").out.replace("\n    ", " ")
+            wf = boost("install", "ship-it").out.replace("\n    ", " ")
+            doc = boost("doctor", expect=1).out.replace("\n    ", " ")
+            heal = boost("heal", expect=1).out.replace("\n    ", " ")
+        finally:
+            for d in dirs:
+                d.chmod(0o700)
+        assert ("not written: ~/.cursor/rules is not writable — "
+                "`chmod u+w ~/.cursor/rules`, then `boost sync` writes it") in rule
+        assert "not written: ~/.cursor/commands is not writable" in wf
+        for d in ("rules", "commands"):
+            assert "agent dir ~/.cursor/%s is not writable" % d in doc
+            assert "`chmod u+w ~/.cursor/%s`" % d in heal
+        assert "rule house was not written for cursor" in doc
+        assert "nothing to heal" not in heal
+        boost("sync")                                # now it may
+        assert (cursor / "rules" / "house.mdc").is_file()
+        assert (cursor / "commands" / "ship-it.md").is_file()
+        boost("doctor")                              # rc 0 again
+        boost("uninstall", "house")                  # the lock knows it
 
     def test_an_untapped_machine_is_still_rc0(self, boost):
         # Reported, never fatal. The exit code turns on real issues only, so
