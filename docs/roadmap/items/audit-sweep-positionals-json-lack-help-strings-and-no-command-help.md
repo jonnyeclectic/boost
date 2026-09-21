@@ -58,9 +58,15 @@ cannot fall out of date. The <code>list</code> summary says "skills, rules and w
 
 <code>build_command_reference.py --check</code> now also fails on any argument with no help text,
 and <code>tests/unit/test_command_reference_fresh.py</code> walks every command's parser for the
-same thing, so the gap cannot come back.
+same thing, and pins that the walk reaches the last command in <code>cli.COMMANDS</code>, so the gap
+cannot come back. The generator also renders <code>parser.epilog</code> now, after the options as
+<code>--help</code> prints it, so <code>cohort</code>'s note that membership is a deterministic hash
+of user and cohort now appears on <code>docs/commands.html</code>. <code>explain</code> and
+<code>preview</code> say they take a skill, rule or workflow, which is what they resolve: both were
+run on a rule and a workflow in a sandbox, installed and from the tap.
 
 <b>Not done: Examples blocks.</b> No command has one to follow. The only <code>epilog=</code> is
 <code>cohort</code>'s paragraph about membership hashing, which is a note, not examples, so
 there is no convention to extend. Adding one is a style choice for the whole CLI and belongs in its
-own change; the generator also still drops <code>epilog</code>, which would need rendering first.
+own change. Since the generator now renders the epilog, an Examples epilog added later reaches the
+page with no further work.

@@ -751,8 +751,8 @@ def _render_markdown(body: str) -> None:
 def cmd_preview(argv):
     ap = cliparse.parser(prog="boost preview",
                                  description="Render a SKILL.md with rich formatting")
-    ap.add_argument("name", help="skill: the installed copy, else the tap's "
-                                 "(raw text when piped)")
+    ap.add_argument("name", help="skill, rule or workflow: the installed copy, "
+                                 "else the tap's (raw text when piped)")
     args = ap.parse_args(argv)
     text, _kind, lock, cat = _resolve_text(args.name)
     meta, body = frontmatter.parse(text)
@@ -807,7 +807,7 @@ def _explanation_is_faithful(reply: str, source: str) -> bool:
 def cmd_explain(argv):
     ap = cliparse.parser(prog="boost explain",
                                  description="Explain what a skill does in plain English")
-    ap.add_argument("name", help="skill, installed or in a tap")
+    ap.add_argument("name", help="skill, rule or workflow, installed or in a tap")
     args = ap.parse_args(argv)
     _qualifier, _bare = catalog.split_name(args.name)
     text, _kind, _lock, _cat = _resolve_text(args.name)

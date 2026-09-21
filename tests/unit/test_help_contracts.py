@@ -35,6 +35,12 @@ def _help(name: str, capsys) -> str:
     ("discover", "searches GitHub live"),
     ("conflict", "exits 1 when any conflict is found"),
     ("test", "exits 1 when any skill fails"),
+    ("verify", "exits 1 when any item fails"),
+    ("attest", "exits 1 on a failure"),
+    # Both resolve the name through info._resolve_text, which serves every
+    # kind, installed or from a tap; the help used to say "skill".
+    ("explain", "skill, rule or workflow"),
+    ("preview", "skill, rule or workflow"),
     ("cohort", "status is the same as list"),
     ("cohort", "default: list"),
     ("profile", "default: list"),

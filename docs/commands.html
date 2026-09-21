@@ -63,6 +63,7 @@
             border: 1px solid var(--line); overflow-x: auto; font-size: 12.5px; color: var(--cyan);
             white-space: pre-wrap; word-break: break-word; }
   .desc { margin: 0 0 12px; color: var(--text-2); font-size: 13.5px; }
+  .epilog { margin: 12px 0 0; color: var(--text-2); font-size: 13.5px; }
   .args-h { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .14em;
             text-transform: uppercase; color: var(--text-2); margin: 12px 0 6px; }
   .args { display: grid; gap: 6px; }
@@ -572,7 +573,7 @@
         <pre class="syn">boost preview name</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>name</code><span>skill: the installed copy, else the tap&#x27;s (raw text when piped)</span></div>
+          <div class="arg"><code>name</code><span>skill, rule or workflow: the installed copy, else the tap&#x27;s (raw text when piped)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-explain" data-search="explain explain what a skill does in plain english  name">
@@ -581,7 +582,7 @@
         <pre class="syn">boost explain name</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>name</code><span>skill, installed or in a tap</span></div>
+          <div class="arg"><code>name</code><span>skill, rule or workflow, installed or in a tap</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-log" data-search="log git log for a skill, or boost&#x27;s activity log  -n, --limit n --diagnostics --crashes --json name">
@@ -1236,6 +1237,7 @@
           <div class="arg"><code>--percent PERCENT</code><span>rollout percentage (default 100)</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
+        <p class="epilog">Membership is a deterministic hash of user+cohort, so a 50% rollout lands on the same half of the team every time. This machine evaluates its own membership locally.</p>
       </section>
       <section class="cmd" id="cmd-profile" data-search="profile named skill profiles for context switching  --prune --json {list,save,use,show,diff,delete} name">
         <h3><span class="cname">profile</span><span class="gtag">team</span></h3>

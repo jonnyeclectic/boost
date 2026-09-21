@@ -213,6 +213,10 @@ def _extract(name: str, group: str, module: str, summary: str) -> dict:
     parser = _capture_parser(name, module)
     prog = parser.prog if parser else "boost %s" % name
     description = (parser.description or "").strip() if parser else ""
+    # argparse prints the epilog after the options, and --help is what this
+    # page mirrors; cohort's note that membership is a deterministic hash was
+    # in `boost cohort --help` and nowhere on the page.
+    epilog = (parser.epilog or "").strip() if parser else ""
     pos, opt = _visible_actions(parser) if parser else ([], [])
 
     syn = [prog, *_opt_syn_parts(parser, opt)]
@@ -237,6 +241,7 @@ def _extract(name: str, group: str, module: str, summary: str) -> dict:
         "synopsis": " ".join(syn),
         "positionals": rows(pos, False),
         "options": rows(opt, True),
+        "epilog": epilog,
     }
 
 
@@ -296,6 +301,8 @@ def render() -> str:
                 sec.append('        <div class="args">')
                 sec.append(_rows_html(c["options"]))
                 sec.append('        </div>')
+            if c["epilog"]:
+                sec.append('        <p class="epilog">%s</p>' % html.escape(c["epilog"]))
             sec.append('      </section>')
             body.append("\n".join(sec))
         nav.append('    </div>')
@@ -373,6 +380,7 @@ _PAGE = """<!DOCTYPE html>
             border: 1px solid var(--line); overflow-x: auto; font-size: 12.5px; color: var(--cyan);
             white-space: pre-wrap; word-break: break-word; }
   .desc { margin: 0 0 12px; color: var(--text-2); font-size: 13.5px; }
+  .epilog { margin: 12px 0 0; color: var(--text-2); font-size: 13.5px; }
   .args-h { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .14em;
             text-transform: uppercase; color: var(--text-2); margin: 12px 0 6px; }
   .args { display: grid; gap: 6px; }

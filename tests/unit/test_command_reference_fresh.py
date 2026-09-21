@@ -180,6 +180,61 @@ def test_every_argument_has_help_text():
 
 
 @_skip
+def test_missing_help_walks_every_command(monkeypatch):
+    # The sweep above passes just as green if missing_help() stops early
+    # (`cli.COMMANDS[:40]`), so pin the walk itself: every command is visited,
+    # in order, and a bare argument on the last one is still reported.
+    builder = _load_builder()
+    from boost_cli import cli
+
+    names = [name for name, _group, _module, _summary in cli.COMMANDS]
+    walked: list[str] = []
+
+    def spy(name, _module):
+        walked.append(name)
+        if name != names[-1]:
+            return []
+        p = argparse.ArgumentParser(prog="boost %s" % name)
+        p.add_argument("--bare", action="store_true")
+        return [p]
+
+    monkeypatch.setattr(builder, "_capture_parsers", spy)
+    assert builder.missing_help() == ["boost %s: --bare" % names[-1]]
+    assert walked == names
+
+
+@_skip
+def test_epilog_is_rendered_after_the_options():
+    # `boost cohort --help` ends with a note that membership is a deterministic
+    # hash; the page used to drop parser.epilog, so the note was not on it.
+    builder = _load_builder()
+    rec = builder._extract("cohort", "team", "team",
+                           "Controlled skill rollouts & team A/B testing")
+    assert rec["epilog"].startswith("Membership is a deterministic hash")
+    page = builder.render()
+    section = page.split('id="cmd-cohort"', 1)[1].split("</section>", 1)[0]
+    assert section.rstrip().endswith(
+        '<p class="epilog">%s</p>' % builder.html.escape(rec["epilog"]))
+
+
+@_skip
+def test_no_epilog_renders_no_paragraph():
+    builder = _load_builder()
+    rec = builder._extract("install", "pkg", "pkg", "Install a skill from a tap registry")
+    assert rec["epilog"] == ""
+    assert '<p class="epilog"></p>' not in builder.render()
+
+
+@_skip
+def test_epilog_is_escaped(monkeypatch):
+    builder = _load_builder()
+    p = argparse.ArgumentParser(prog="boost cohort", epilog="  a < b & c  ")
+    monkeypatch.setattr(builder, "_capture_parser",
+                        lambda name, module: p if name == "cohort" else None)
+    assert '<p class="epilog">a &lt; b &amp; c</p>' in builder.render()
+
+
+@_skip
 def test_check_fails_when_an_argument_has_no_help(monkeypatch, capsys):
     builder = _load_builder()
     monkeypatch.setattr(builder, "missing_help", lambda: ["boost x: NAME"])
