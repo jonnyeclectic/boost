@@ -1995,7 +1995,7 @@ MITIGATIONS (why Med and not High): every failure path recovers in one command. 
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
-          <span class="m">Doctor's tap check is elif not tap.cache_file.exists(): (quality.py:420) — existence …</span>
+          <span class="m">fixed by #889 (the cache is replaced, not rewritten in place: search/browse/info/update/heal 70 → 0 for mode 400 and 000) and the #909 train (b1b1bca, eeb2c76: doctor and heal both name an unwritable cache dir; heal no longer claims a rebuild it did not do) — re-measured on a316c6b</span>
         </div>
       </article>
 
