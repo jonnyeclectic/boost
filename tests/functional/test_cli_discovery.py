@@ -2160,9 +2160,12 @@ class TestReindex:
                                                                tapped):
         # search, browse, info and update degrade in a cache dir boost cannot
         # write; reindex exited 70 with a PermissionError crash report.
+        from boost_cli.core import rag
+        boost("reindex")
+        before = rag.index_path().read_bytes()
         paths.cache_dir().chmod(0o500)
         try:
-            r = boost("reindex", expect=1)
+            r = boost("reindex", "--force", expect=1)
         finally:
             paths.cache_dir().chmod(0o700)
         assert r.err.splitlines() == [
@@ -2170,7 +2173,11 @@ class TestReindex:
             "(Permission denied)",
             "  hint: run `chmod u+w ~/.boost/cache`"]
         assert not list(paths.logs_dir().glob("crash-*.log"))
-        boost("reindex")                          # and once it is writable
+        # The index already there is untouched, and search still reads it.
+        assert rag.index_path().read_bytes() == before
+        assert rag.ready() is True
+        assert not list(paths.cache_dir().glob(".rag_postings.sqlite.*.tmp"))
+        boost("reindex", "--force")               # and once it is writable
 
     def test_json_stats(self, boost, tapped):
         r = boost("reindex", "--json")

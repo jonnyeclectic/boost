@@ -582,11 +582,16 @@ class TestAnIndexBoostCannotSave:
 
     def test_an_error_with_no_path_names_the_cache_dir(self, corpus,
                                                         monkeypatch):
+        # No filename and no errno: the cache dir is still the place to look,
+        # and the error's own text stands in for a strerror it does not have.
         _root, entries = corpus
-        self._refuse(monkeypatch, PermissionError(13, "Permission denied"))
+        self._refuse(monkeypatch, OSError("disk went away"))
         with pytest.raises(BoostError) as ei:
             rag.build(entries=entries, force=True)
-        assert paths.tilde(paths.cache_dir()) in ei.value.message
+        assert ei.value.message == ("could not save the search index in %s "
+                                    "(disk went away)"
+                                    % paths.tilde(paths.cache_dir()))
+        assert ei.value.hint is None
 
 
 class TestBuildAndRetrieve:
