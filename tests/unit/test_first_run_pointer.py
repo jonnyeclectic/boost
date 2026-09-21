@@ -103,7 +103,7 @@ class TestHelpScreen:
                                                    monkeypatch):
         """Only the pointer is added — every command row still prints."""
         # An exported COLUMNS is a pane even without a TTY (out.pane_width),
-        # and below ~95 it wraps the hint, which this exact-text check reads
+        # and below ~85 it wraps the hint, which this exact-text check reads
         # as a changed index.
         monkeypatch.delenv("COLUMNS", raising=False)
         cli.print_help()

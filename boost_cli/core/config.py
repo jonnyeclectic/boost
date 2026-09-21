@@ -127,7 +127,7 @@ DEFAULT_TAPS = [
 # and none of the newcomer-plausible surfaces (search, doctor, taps, browse,
 # list) named quickstart at all.
 FIRST_RUN_HINT = ("new here? `boost quickstart` taps the starter registries "
-                  "and loads their vectors in one pass")
+                  "and indexes them for search")
 
 
 def first_run() -> bool:

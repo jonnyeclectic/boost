@@ -122,6 +122,43 @@ class TestDoctor:
         finally:
             paths.cache_dir().chmod(0o700)
         assert "is not writable" in r.out
+        # ...and nothing beneath it still claims the taps are cached.
+        assert "1 tap cloned & cached" not in r.out
+        assert "1 tap cloned" in r.out
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_heal_names_an_unwritable_cache_dir_doctor_flags(self, boost,
+                                                             tapped):
+        # doctor calls it an issue; heal answering "nothing to heal" under it
+        # is the contradiction #888 removed for config.json.
+        paths.cache_dir().chmod(0o500)
+        try:
+            r = boost("heal", expect=1)
+        finally:
+            paths.cache_dir().chmod(0o700)
+        out = r.out.replace("\n    ", " ")
+        assert "is not writable — heal does not change permissions" in out
+        assert "nothing to heal" not in out
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_heal_does_not_claim_a_cache_it_could_not_write(self, boost,
+                                                            tapped):
+        for f in paths.cache_dir().glob("*.json"):
+            if f.name not in paths.INTERNAL_CACHE_FILES:
+                f.unlink()
+        paths.cache_dir().chmod(0o500)
+        try:
+            r = boost("heal", expect=1)
+        finally:
+            paths.cache_dir().chmod(0o700)
+        assert "could not save the catalog cache" in r.out + r.err
+        assert "rebuilt catalog cache" not in r.out
 
     @pytest.mark.skipif(sys.platform == "win32",
                         reason="chmod can't make a directory unwritable on Windows")

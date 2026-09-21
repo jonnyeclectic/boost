@@ -441,12 +441,15 @@ def cmd_doctor(argv):
     # and warning that it could not keep the result (catalog.rebuild_tap), so
     # "cloned & cached" below would be the one line on the screen claiming
     # otherwise.
-    if taps and not os.access(paths.cache_dir(), os.W_OK):
+    cache_writable = os.access(paths.cache_dir(), os.W_OK)
+    if taps and not cache_writable:
         bad("cache", "%s is not writable — every command rescans its taps and "
             "cannot keep the result; make it writable"
             % _tilde(paths.cache_dir()), wrap=True)
     if taps and tap_ok == len(taps):
-        rep.ok("taps", "%d tap%s cloned & cached" % (len(taps), _s(len(taps))))
+        rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
+                                              " & cached" if cache_writable
+                                              else ""))
     elif not taps and not cfg_err:
         # `boost tap --defaults` leads, and it is the same command in the same
         # order that `boost search`'s error, `mcp.no_results` and the MCP
@@ -1201,7 +1204,10 @@ def cmd_heal(argv):
                 actions.append("cache %s" % tap.name)
         else:
             catalog.rebuild_tap(tap)
-            if not had_cache:
+            # rebuild_tap survives a cache it cannot write and warns; claiming
+            # the rebuild under that warning would certify a file that is
+            # still missing, and every later run would claim it again.
+            if not had_cache and tap.cache_file.exists():
                 out.ok("rebuilt catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
 
@@ -1231,6 +1237,14 @@ def cmd_heal(argv):
         out.warn("agent dir %s is not writable — heal does not change "
                  "permissions; run `chmod u+w %s`, then `boost sync`"
                  % (_tilde(adir), _tilde(adir)), wrap=True)
+    # The same rule for the cache dir doctor flags: heal cannot make it
+    # writable, so it must not answer "nothing to heal" beneath the problem.
+    cache_dir = paths.cache_dir()
+    if registry.list_taps() and not os.access(cache_dir, os.W_OK):
+        stuck.append(cache_dir)
+        out.warn("%s is not writable — heal does not change permissions; "
+                 "run `chmod u+w %s`" % (_tilde(cache_dir), _tilde(cache_dir)),
+                 wrap=True)
     if not actions and not stuck and not cfg_err:
         # A duplicate this run declined to prune is something `heal` saw, can
         # fix, and deliberately left. A bare "nothing to heal" printed under

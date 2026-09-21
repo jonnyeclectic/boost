@@ -413,7 +413,8 @@ class TestACacheBoostCannotWrite:
 
     @pytest.mark.skipif(sys.platform == "win32",
                         reason="Windows refuses to replace a read-only file, so "
-                               "the stale cache is served rather than replaced")
+                               "the on-disk cache stays stale (the fresh scan "
+                               "is still returned, with a warning)")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")
     def test_a_read_only_stale_cache_file_is_replaced_not_refused(
