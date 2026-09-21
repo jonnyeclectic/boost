@@ -433,6 +433,30 @@ class TestACacheBoostCannotWrite:
         fresh = json.loads(tap.cache_file.read_text(encoding="utf-8"))
         assert fresh["format"] == catalog.CACHE_FORMAT
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't remove the owner's own read access "
+                               "on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unreadable_cache_file_is_replaced_not_refused(
+            self, sandbox, fixture_tap_src):
+        # The card's own repro (unreadable-tap-cache-healthy-doctor-crashing-
+        # heal): a cache left at mode 000 by one `sudo boost` run was exit 70
+        # on search, browse, info, update and heal. A read that fails is a
+        # cache miss, and the rescan replaces the file with one boost owns.
+        tap = registry.add(str(fixture_tap_src))
+        catalog.rebuild_tap(tap)
+        tap.cache_file.chmod(0o000)
+        try:
+            entries = catalog.load_tap(tap)
+        finally:
+            if not os.access(tap.cache_file, os.R_OK):
+                tap.cache_file.chmod(0o600)
+        assert [e["name"] for e in entries] == FIXTURE_NAMES
+        assert os.access(tap.cache_file, os.R_OK | os.W_OK)
+        fresh = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        assert fresh["format"] == catalog.CACHE_FORMAT
+
     def test_a_read_only_dir_falls_back_to_the_in_place_write(
             self, sandbox, fixture_tap_src, monkeypatch, capsys):
         # A replace needs the directory writable; the old in-place write did
