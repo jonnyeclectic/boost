@@ -113,7 +113,7 @@
       <a class="cmd-link" href="#cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json -y, --yes {save,list,restore} label|id">snapshot</a>
       <a class="cmd-link" href="#cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip --force name">export</a>
       <a class="cmd-link" href="#cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk, langgraph) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">adapt</a>
-      <a class="cmd-link" href="#cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent --model m --print -o, --out file name target">run</a>
+      <a class="cmd-link" href="#cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent. running needs the openai agents sdk (`pip install &quot;openai-agents[litellm]&quot;`) and the model provider&#x27;s api key (anthropic_api_key for a bare model id); --print needs neither. --model m --print -o, --out file name target">run</a>
     </div>
     <div class="group" data-group="find">
       <div class="group-h">Find &amp; search</div>
@@ -129,7 +129,7 @@
     </div>
     <div class="group" data-group="info">
       <div class="group-h">Inspect &amp; explain</div>
-      <a class="cmd-link" href="#cmd-list" data-search="list list installed skills list installed skills, rules and workflows --kind {skill,rule,workflow} --tag tag --local --json">list</a>
+      <a class="cmd-link" href="#cmd-list" data-search="list list installed skills, rules and workflows  --kind {skill,rule,workflow} --tag tag --local --json">list</a>
       <a class="cmd-link" href="#cmd-info" data-search="info show detailed info about a skill  --json name">info</a>
       <a class="cmd-link" href="#cmd-cat" data-search="cat print a skill or rule&#x27;s contents  --raw name">cat</a>
       <a class="cmd-link" href="#cmd-edit" data-search="edit open a skill&#x27;s skill.md in your editor  name">edit</a>
@@ -165,14 +165,14 @@
       <a class="cmd-link" href="#cmd-doctor" data-search="doctor check installation health &amp; report issues  --json">doctor</a>
       <a class="cmd-link" href="#cmd-lint" data-search="lint validate skill.md frontmatter &amp; quality  --tap tap --min n --json name">lint</a>
       <a class="cmd-link" href="#cmd-audit" data-search="audit check installed skills against a safety blocklist check installed skills against a safety blocklist (scans skill.md plus .js/.md/.ps1/.py/.rb/.sh/.ts files under each skill; materialized rules/workflows are scanned whole) --json --skills">audit</a>
-      <a class="cmd-link" href="#cmd-verify" data-search="verify validate skill quality &amp; lock-file integrity  --json name">verify</a>
+      <a class="cmd-link" href="#cmd-verify" data-search="verify validate skill quality &amp; lock-file integrity validate skill quality &amp; lock-file integrity (exits 1 when any item fails) --json name">verify</a>
       <a class="cmd-link" href="#cmd-drift" data-search="drift detect installed skills diverging from source  --json name">drift</a>
-      <a class="cmd-link" href="#cmd-test" data-search="test validate installed skills against quality checks  --json name">test</a>
+      <a class="cmd-link" href="#cmd-test" data-search="test validate installed skills against quality checks validate installed skills against quality checks (exits 1 when any skill fails) --json name">test</a>
       <a class="cmd-link" href="#cmd-fingerprint" data-search="fingerprint deterministic hash of the skill environment  --verbose --json">fingerprint</a>
       <a class="cmd-link" href="#cmd-quarantine" data-search="quarantine isolate a problematic skill, rule or workflow without uninstalling  --release name --list --json name">quarantine</a>
       <a class="cmd-link" href="#cmd-decay" data-search="decay flag skills irrelevant to your current stack  --json">decay</a>
       <a class="cmd-link" href="#cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run --prune-duplicates">heal</a>
-      <a class="cmd-link" href="#cmd-conflict" data-search="conflict detect contradictory rules between skills  --json">conflict</a>
+      <a class="cmd-link" href="#cmd-conflict" data-search="conflict detect contradictory rules between skills detect contradictory rules between skills (exits 1 when any conflict is found) --json">conflict</a>
       <a class="cmd-link" href="#cmd-changelog" data-search="changelog show an item&#x27;s upstream change history  -n n --json name">changelog</a>
       <a class="cmd-link" href="#cmd-attest" data-search="attest display/verify the install record for skills  --verify --json name">attest</a>
       <a class="cmd-link" href="#cmd-health" data-search="health dashboard of skill-environment health  --json">health</a>
@@ -238,7 +238,7 @@
         <pre class="syn">boost uninstall [--local] [-y] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>installed skill, rule or workflow (several allowed)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -282,7 +282,7 @@
         <p class="desc">Reinstall an installed skill, rule or workflow (force)</p>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>installed skill, rule or workflow (or pass --all)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -295,7 +295,7 @@
         <pre class="syn">boost bundle [--dry-run] {dump,install} [FILE]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>{dump,install}</code><span></span></div>
+          <div class="arg"><code>{dump,install}</code><span>dump installed skills to a Boostfile, or install from one</span></div>
           <div class="arg"><code>FILE</code><span>Boostfile (dump: default stdout; install: default ./Boostfile, &#x27;-&#x27; = stdin)</span></div>
         </div>
         <div class="args-h">Options</div>
@@ -309,7 +309,7 @@
         <pre class="syn">boost import [--name N | --all] [--agent A] URL_OR_PATH</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>URL_OR_PATH</code><span></span></div>
+          <div class="arg"><code>URL_OR_PATH</code><span>git URL (http(s)://, git@, ssh://) or a local directory</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -324,7 +324,7 @@
         <pre class="syn">boost pin [--commit] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>installed skill, rule or workflow</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -337,7 +337,7 @@
         <pre class="syn">boost unpin NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>pinned skill, rule or workflow</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json -y, --yes {save,list,restore} label|id">
@@ -346,7 +346,7 @@
         <pre class="syn">boost snapshot [--json] [-y] {save,list,restore} [LABEL|ID]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>{save,list,restore}</code><span></span></div>
+          <div class="arg"><code>{save,list,restore}</code><span>save the current environment, list snapshots, or restore one</span></div>
           <div class="arg"><code>LABEL|ID</code><span>label for save, snapshot id for restore</span></div>
         </div>
         <div class="args-h">Options</div>
@@ -386,11 +386,11 @@
           <div class="arg"><code>-o, --out FILE</code><span>write to FILE instead of stdout</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent --model m --print -o, --out file name target">
+      <section class="cmd" id="cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent. running needs the openai agents sdk (`pip install &quot;openai-agents[litellm]&quot;`) and the model provider&#x27;s api key (anthropic_api_key for a bare model id); --print needs neither. --model m --print -o, --out file name target">
         <h3><span class="cname">run</span><span class="gtag">pkg</span></h3>
         <p class="summary">Adapt a skill, wire tools &amp; run it as a live agent</p>
         <pre class="syn">boost run [--model M] [--print] [-o FILE] name [target]</pre>
-        <p class="desc">Adapt a skill, wire default tools &amp; run it as a live agent</p>
+        <p class="desc">Adapt a skill, wire default tools &amp; run it as a live agent. Running needs the OpenAI Agents SDK (`pip install &quot;openai-agents[litellm]&quot;`) and the model provider&#x27;s API key (ANTHROPIC_API_KEY for a bare model id); --print needs neither.</p>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>name</code><span>skill to run</span></div>
@@ -442,7 +442,7 @@
         <p class="desc">Search GitHub for skill repositories you have not tapped yet</p>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>query</code><span>search terms (topic, language, name)</span></div>
+          <div class="arg"><code>query</code><span>search terms (topic, language, name); a query searches GitHub live through `gh`, while none or --local reads the cached index</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -519,11 +519,10 @@
         </div>
       </section>
       <h2 class="group-h" id="grp-info">Inspect &amp; explain</h2>
-      <section class="cmd" id="cmd-list" data-search="list list installed skills list installed skills, rules and workflows --kind {skill,rule,workflow} --tag tag --local --json">
+      <section class="cmd" id="cmd-list" data-search="list list installed skills, rules and workflows  --kind {skill,rule,workflow} --tag tag --local --json">
         <h3><span class="cname">list</span><span class="gtag">info</span></h3>
-        <p class="summary">List installed skills</p>
+        <p class="summary">List installed skills, rules and workflows</p>
         <pre class="syn">boost list [--kind {skill,rule,workflow}] [--tag TAG] [--local] [--json]</pre>
-        <p class="desc">List installed skills, rules and workflows</p>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--kind {skill,rule,workflow}</code><span>only show installed items of this kind</span></div>
@@ -538,7 +537,7 @@
         <pre class="syn">boost info [--json] name</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>name</code><span></span></div>
+          <div class="arg"><code>name</code><span>skill, rule or workflow, installed or in a tap (owner/repo:name picks the tap)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -551,7 +550,7 @@
         <pre class="syn">boost cat [--raw] name</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>name</code><span></span></div>
+          <div class="arg"><code>name</code><span>skill, rule or workflow: the installed copy, else the tap&#x27;s (owner/repo:name picks the tap)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -564,7 +563,7 @@
         <pre class="syn">boost edit name</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>name</code><span></span></div>
+          <div class="arg"><code>name</code><span>installed skill to open in $VISUAL or $EDITOR</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-preview" data-search="preview render a skill.md with rich formatting  name">
@@ -573,7 +572,7 @@
         <pre class="syn">boost preview name</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>name</code><span></span></div>
+          <div class="arg"><code>name</code><span>skill: the installed copy, else the tap&#x27;s (raw text when piped)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-explain" data-search="explain explain what a skill does in plain english  name">
@@ -582,7 +581,7 @@
         <pre class="syn">boost explain name</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>name</code><span></span></div>
+          <div class="arg"><code>name</code><span>skill, installed or in a tap</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-log" data-search="log git log for a skill, or boost&#x27;s activity log  -n, --limit n --diagnostics --crashes --json name">
@@ -607,7 +606,7 @@
         <pre class="syn">boost home [--print] name</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>name</code><span></span></div>
+          <div class="arg"><code>name</code><span>skill, rule or workflow, installed or in a tap</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -746,7 +745,7 @@
         <pre class="syn">boost simulate [--task TEXT] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>skill, installed or in a tap</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -784,7 +783,7 @@
         <pre class="syn">boost evolve --feedback TEXT [--apply] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>installed skill to revise</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -798,7 +797,7 @@
         <pre class="syn">boost context [--json] ACTION</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>ACTION</code><span></span></div>
+          <div class="arg"><code>ACTION</code><span>what to do (default: status)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -817,7 +816,7 @@
         <div class="args">
           <div class="arg"><code>--clear</code><span>end the session and relink everything</span></div>
           <div class="arg"><code>--status</code><span>show current focus</span></div>
-          <div class="arg"><code>--json</code><span></span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-impact" data-search="impact correlate a skill&#x27;s install date with repo activity  --json name">
@@ -830,7 +829,7 @@
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--json</code><span></span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <h2 class="group-h" id="grp-chk">Health &amp; integrity</h2>
@@ -855,7 +854,7 @@
         <div class="args">
           <div class="arg"><code>--tap TAP</code><span>lint every skill in a tap&#x27;s clone</span></div>
           <div class="arg"><code>--min N</code><span>minimum passing score, 0-100 (default 40)</span></div>
-          <div class="arg"><code>--json</code><span></span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-audit" data-search="audit check installed skills against a safety blocklist check installed skills against a safety blocklist (scans skill.md plus .js/.md/.ps1/.py/.rb/.sh/.ts files under each skill; materialized rules/workflows are scanned whole) --json --skills">
@@ -865,21 +864,22 @@
         <p class="desc">Check installed skills against a safety blocklist (scans SKILL.md plus .js/.md/.ps1/.py/.rb/.sh/.ts files under each skill; materialized rules/workflows are scanned whole)</p>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--json</code><span></span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
           <div class="arg"><code>--skills</code><span>trust/staleness report for installed skills instead of the content scan</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-verify" data-search="verify validate skill quality &amp; lock-file integrity  --json name">
+      <section class="cmd" id="cmd-verify" data-search="verify validate skill quality &amp; lock-file integrity validate skill quality &amp; lock-file integrity (exits 1 when any item fails) --json name">
         <h3><span class="cname">verify</span><span class="gtag">chk</span></h3>
         <p class="summary">Validate skill quality &amp; lock-file integrity</p>
         <pre class="syn">boost verify [--json] [NAME ...]</pre>
+        <p class="desc">Validate skill quality &amp; lock-file integrity (exits 1 when any item fails)</p>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>installed item, user or project scope (default: all)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--json</code><span></span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-drift" data-search="drift detect installed skills diverging from source  --json name">
@@ -888,20 +888,21 @@
         <pre class="syn">boost drift [--json] [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>installed skill, rule or workflow (default: all)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--json</code><span></span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-test" data-search="test validate installed skills against quality checks  --json name">
+      <section class="cmd" id="cmd-test" data-search="test validate installed skills against quality checks validate installed skills against quality checks (exits 1 when any skill fails) --json name">
         <h3><span class="cname">test</span><span class="gtag">chk</span></h3>
         <p class="summary">Validate installed skills against quality checks</p>
         <pre class="syn">boost test [--json] [NAME ...]</pre>
+        <p class="desc">Validate installed skills against quality checks (exits 1 when any skill fails)</p>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>installed skill (default: all)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -915,7 +916,7 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--verbose</code><span>show the hashed components</span></div>
-          <div class="arg"><code>--json</code><span></span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-quarantine" data-search="quarantine isolate a problematic skill, rule or workflow without uninstalling  --release name --list --json name">
@@ -924,7 +925,7 @@
         <pre class="syn">boost quarantine [--release NAME] [--list] [--json] [NAME]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>installed skill, rule or workflow to isolate</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -939,7 +940,7 @@
         <pre class="syn">boost decay [--json]</pre>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--json</code><span></span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run --prune-duplicates">
@@ -952,13 +953,14 @@
           <div class="arg"><code>--prune-duplicates</code><span>remove symlinks in a native-store agent&#x27;s skills dir that lead back into the canonical store</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-conflict" data-search="conflict detect contradictory rules between skills  --json">
+      <section class="cmd" id="cmd-conflict" data-search="conflict detect contradictory rules between skills detect contradictory rules between skills (exits 1 when any conflict is found) --json">
         <h3><span class="cname">conflict</span><span class="gtag">chk</span></h3>
         <p class="summary">Detect contradictory rules between skills</p>
         <pre class="syn">boost conflict [--json]</pre>
+        <p class="desc">Detect contradictory rules between skills (exits 1 when any conflict is found)</p>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--json</code><span></span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-changelog" data-search="changelog show an item&#x27;s upstream change history  -n n --json name">
@@ -967,7 +969,7 @@
         <pre class="syn">boost changelog [-n N] [--json] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>skill, rule or workflow, installed or in a tap</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -981,12 +983,12 @@
         <pre class="syn">boost attest [--verify] [--json] [NAME]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>installed skill, rule or workflow (default: all)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--verify</code><span>check sha &amp; journal record for each skill</span></div>
-          <div class="arg"><code>--json</code><span></span></div>
+          <div class="arg"><code>--verify</code><span>check sha &amp; journal record for each skill (exits 1 on a failure)</span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-health" data-search="health dashboard of skill-environment health  --json">
@@ -1090,7 +1092,7 @@
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{list,set,unset,check}</code><span>what to do (default: list)</span></div>
-          <div class="arg"><code>key</code><span>policy key, e.g. min_quality_score</span></div>
+          <div class="arg"><code>key</code><span>policy key: allowed_taps, blocked_skills, blocked_taps, denied_capabilities, enforce_detected_capabilities, max_skills, min_quality_score, pin_only, require_description, require_signed_taps, require_version</span></div>
           <div class="arg"><code>value</code><span>new value (JSON, comma list, or string)</span></div>
         </div>
         <div class="args-h">Options</div>
@@ -1225,7 +1227,7 @@
         <pre class="syn">boost cohort [--skills SKILLS] [--percent PERCENT] [--json] [{list,create,delete,status,apply}] [name]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>{list,create,delete,status,apply}</code><span></span></div>
+          <div class="arg"><code>{list,create,delete,status,apply}</code><span>what to do (default: list; status is the same as list)</span></div>
           <div class="arg"><code>name</code><span>cohort name</span></div>
         </div>
         <div class="args-h">Options</div>
@@ -1241,7 +1243,7 @@
         <pre class="syn">boost profile [--prune] [--json] [{list,save,use,show,diff,delete}] [name]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>{list,save,use,show,diff,delete}</code><span></span></div>
+          <div class="arg"><code>{list,save,use,show,diff,delete}</code><span>what to do (default: list)</span></div>
           <div class="arg"><code>name</code><span>profile name</span></div>
         </div>
         <div class="args-h">Options</div>
@@ -1256,7 +1258,7 @@
         <pre class="syn">boost protocol [{status,register,unregister,open}] [url]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>{status,register,unregister,open}</code><span></span></div>
+          <div class="arg"><code>{status,register,unregister,open}</code><span>what to do (default: status)</span></div>
           <div class="arg"><code>url</code><span>a boost:// URL (for `open`)</span></div>
         </div>
       </section>
@@ -1278,7 +1280,7 @@
         <pre class="syn">boost replay [--json] [{list,show,rollback}] [id]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>{list,show,rollback}</code><span></span></div>
+          <div class="arg"><code>{list,show,rollback}</code><span>what to do (default: list; rollback restores skills only)</span></div>
           <div class="arg"><code>id</code><span>history entry id (from `boost replay list`)</span></div>
         </div>
         <div class="args-h">Options</div>

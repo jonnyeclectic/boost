@@ -1000,7 +1000,10 @@ def cmd_discover(argv):
     p = cliparse.parser(
         prog="boost discover",
         description="Search GitHub for skill repositories you have not tapped yet")
-    p.add_argument("query", nargs="*", help="search terms (topic, language, name)")
+    p.add_argument("query", nargs="*",
+                   help="search terms (topic, language, name); a query searches "
+                        "GitHub live through `gh`, while none or --local reads "
+                        "the cached index")
     p.add_argument("--limit", type=util.positive_int, default=25,
                    help="max rows (default 25)")
     p.add_argument("--json", action="store_true", dest="as_json",

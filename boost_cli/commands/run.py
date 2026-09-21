@@ -33,7 +33,11 @@ def cmd_run(argv: list[str]) -> int:
     """boost run NAME [TARGET] [--model M] [--print] [-o FILE]"""
     ap = cliparse.parser(
         prog="boost run",
-        description="Adapt a skill, wire default tools & run it as a live agent")
+        description="Adapt a skill, wire default tools & run it as a live "
+                    "agent. Running needs the OpenAI Agents SDK "
+                    "(`pip install \"openai-agents[litellm]\"`) and the model "
+                    "provider's API key (ANTHROPIC_API_KEY for a bare model "
+                    "id); --print needs neither.")
     ap.add_argument("name", help="skill to run")
     ap.add_argument("target", nargs="?",
                     help="file or directory for the agent to work on (default: .)")
