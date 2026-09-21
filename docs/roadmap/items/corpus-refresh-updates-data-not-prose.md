@@ -10,7 +10,7 @@ wow: 2
 note: .github/workflows/eval-corpus-refresh.yml regenerates taps.txt's data rows and baseli…
 order: 201
 owner: loop/corpus-refresh-prose
-pr:
+pr: 926
 title: The monthly corpus refresh rewrote the pins and the baseline but left every documented number stale — taps.txt now contradicts its own header, and nothing checks it
 ---
 <b>Measured.</b> tests/eval/taps.txt contradicts itself inside one file: its header at line 25 states the corpus is "<b>10,152 entries</b>", while its own twenty data rows fifty lines below sum to 10,731 (<code>awk '!/^#/ &amp;&amp; NF {s+=$3} END {print s}'</code>), and an independent materialisation at exactly those pinned SHAs measures 10,731 entries across 20 taps with sickn33 at 61.8% - verified at HEAD 5ec7ed75.
