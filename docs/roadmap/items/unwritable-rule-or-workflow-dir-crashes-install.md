@@ -10,7 +10,7 @@ wow: 2
 note: an unwritable ~/.cursor/rules or ~/.cursor/commands still crashes a rule/workflow install at exit 70, leaving files the lock never records
 order: 326
 owner: loop/unwritable-rule-dir
-pr:
+pr: 931
 title: An unwritable agent <code>rules/</code> or <code>commands/</code> dir still crashes a rule or workflow install at exit 70
 ---
 <b>Found while verifying #890</b>, which fixed the <em>skills</em> half of this for
