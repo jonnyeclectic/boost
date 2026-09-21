@@ -3766,6 +3766,118 @@ class TestAnUnwritableAgentDirIsSkipped:
 
 
 @pytest.mark.skipif(sys.platform == "win32",
+                    reason="chmod can't make a directory unwritable on Windows")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root ignores mode bits")
+class TestACorrectLinkInALockedDirIsKept:
+    """``link_agents`` unlinked and re-made every link, even one already
+    leading to the store copy. In a dir that refuses writes the unlink raised,
+    so a reinstall reported "not linked" over a link that was still on disk,
+    still right, and still in the lock
+    (a-correct-link-in-a-locked-dir-reads-as-refused)."""
+
+    @staticmethod
+    def _locked(fn):
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.chmod(0o500)
+        try:
+            return fn()
+        finally:
+            cursor.chmod(0o700)
+
+    def test_a_reinstall_keeps_it_and_counts_it(self, brainstorming):
+        res = self._locked(lambda: store.install(brainstorming, force=True))
+        assert res.unwritable == []
+        assert res.linked == LINKED_AGENTS
+        assert _link("cursor").resolve() == store.skill_store_dir(
+            "brainstorming").resolve()
+        assert "cursor" in lockfile.get_skill("brainstorming")["agents"]
+
+    def test_unsideline_records_it_in_the_lock(self, brainstorming):
+        # unsideline writes `res.linked` straight into `agents`, so a kept
+        # link left out of it was a link the lock said was not there.
+        res = self._locked(lambda: store.unsideline("brainstorming"))
+        assert "cursor" in res.linked and res.unwritable == []
+        assert "cursor" in lockfile.get_skill("brainstorming")["agents"]
+
+    def test_the_store_reached_through_an_alias_counts(self, sandbox, entry,
+                                                        tmp_path):
+        # The link names the store by its nominal path and resolves to the
+        # real one, the shape macOS gives any path under /tmp or /var. Only
+        # resolving both sides sees the two as one.
+        real = tmp_path / "real-agents"
+        real.mkdir()
+        alias = paths.home() / ".agents"
+        if alias.exists():
+            shutil.rmtree(alias)
+        alias.symlink_to(real, target_is_directory=True)
+        store.install(entry)
+        res = self._locked(lambda: store.install(entry, force=True))
+        assert res.unwritable == []
+        assert "cursor" in res.linked
+
+    def test_a_missing_link_is_still_refused(self, brainstorming):
+        _link("cursor").unlink()
+        res = self._locked(lambda: store.install(brainstorming, force=True))
+        assert res.unwritable == [str(_link("cursor").parent)]
+        assert "cursor" not in res.linked
+
+    def test_a_link_to_another_skill_is_still_refused(self, brainstorming,
+                                                     tmp_path):
+        # Into the store is not enough: it must lead to *this* skill's copy.
+        other = paths.store_dir() / "someone-else"
+        other.mkdir()
+        _link("cursor").unlink()
+        _link("cursor").symlink_to(other, target_is_directory=True)
+        res = self._locked(lambda: store.install(brainstorming, force=True))
+        assert res.unwritable == [str(_link("cursor").parent)]
+        assert "cursor" not in res.linked
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="creating a symlink needs a privilege on Windows")
+class TestALinkThatIsAlreadyRightIsNotRewritten:
+    """The writable-dir side of the same rule: a correct link is left as the
+    user or another tool wrote it, and anything else is still replaced."""
+
+    def test_a_relative_link_to_the_store_stays_as_written(self, brainstorming):
+        link = _link("cursor")
+        rel = os.path.relpath(store.skill_store_dir("brainstorming"),
+                              link.parent)
+        link.unlink()
+        link.symlink_to(rel, target_is_directory=True)
+        res = store.install(brainstorming, force=True)
+        assert "cursor" in res.linked
+        assert os.readlink(link) == rel
+
+    def test_a_link_elsewhere_is_replaced(self, brainstorming, tmp_path):
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        link = _link("cursor")
+        link.unlink()
+        link.symlink_to(elsewhere, target_is_directory=True)
+        res = store.install(brainstorming, force=True)
+        assert "cursor" in res.linked
+        assert link.resolve() == store.skill_store_dir("brainstorming").resolve()
+
+    def test_a_dangling_link_is_replaced(self, brainstorming, tmp_path):
+        link = _link("cursor")
+        link.unlink()
+        link.symlink_to(tmp_path / "nowhere", target_is_directory=True)
+        store.install(brainstorming, force=True)
+        assert link.resolve() == store.skill_store_dir("brainstorming").resolve()
+
+    def test_a_link_loop_is_replaced(self, brainstorming):
+        # A loop resolves to nothing: RuntimeError on Python 3.12, OSError
+        # after. Either way it is not linked, and it is boost's to replace.
+        link = _link("cursor")
+        link.unlink()
+        link.symlink_to(link.name)
+        store.install(brainstorming, force=True)
+        assert link.resolve() == store.skill_store_dir("brainstorming").resolve()
+
+
+@pytest.mark.skipif(sys.platform == "win32",
                     reason="creating a symlink needs a privilege on Windows")
 class TestSomethingInTheWayOfAnAgentDirIsSkipped:
     """A dangling symlink or a file where an agent's skills dir belongs made
