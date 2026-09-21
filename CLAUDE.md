@@ -119,8 +119,8 @@ opt-in evals stay out of `check` and all degrade cleanly:
   run. A bound judged that way needs **enough N to be reachable**, and the
   ceiling half is where that bites: at k=0 the Wilson upper bound is
   z²/(n+z²), a function of N alone, so at the old `--runs 1` default a
-  flawless host was told it FAILED (0.3244 against a 0.20 ceiling, unclearable
-  below n=16). `--runs` defaults to 3, `min_n_for_ceiling` computes the
+  flawless host was told it FAILED (0.3244 against a 0.20 ceiling, which no
+  sample below n=16 can clear). `--runs` defaults to 3, `min_n_for_ceiling` computes the
   minimum for any ceiling, and a sample below it reports INCONCLUSIVE with its
   own exit code (2) rather than a red that says nothing about the host —
   unless its Wilson *lower* bound is already over the ceiling. Too small to
@@ -308,10 +308,10 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   `noxfile.py` opens with `# Copyright the boost contributors.` and
   `# SPDX-License-Identifier: Apache-2.0`. Run
   `python3 scripts/add_spdx_headers.py` (idempotent) — the file list and the
-  expression live there (`SPDX_ID`), so relicensing is one edit rather than
-  hundreds, and `tests/unit/test_spdx_headers.py` pins this paragraph to that
-  constant: #587 relicensed the tree from `GPL-3.0-only` and left this
-  sentence naming the old expression for every agent that read it since.
+  expression live there (`SPDX_ID`), so changing the licence is one edit
+  rather than hundreds, and `tests/unit/test_spdx_headers.py` pins this
+  paragraph to that constant: #587 moved the tree off `GPL-3.0-only` and left
+  this sentence naming the old expression for every agent that read it since.
   Separately, `prose-lint.yml` names the Markdown files vale checks
   **explicitly**: a new doc that is not added to that list is never linted, and
   `make lint` will not tell you.
