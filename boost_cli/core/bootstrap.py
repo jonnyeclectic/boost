@@ -135,3 +135,125 @@ def seed_catalog(*, force: bool = False) -> SeedResult:
         journal.log("tap", tap.name)
         res.tapped.append((tap.name, len(entries)))
     return res
+
+
+#: Past this many registries, a line about them reports the count, not the
+#: list. `--catalog` is 463 registries, so naming every one is a wall of text
+#: rather than a report. Both of quickstart's lists obey it: the dry run's
+#: "would tap" preview and the closing note on the registries that failed.
+MAX_NAMED_REGISTRIES = 12
+
+
+@dataclass
+class SetupOutcome:
+    """What one `boost quickstart` run left behind, and whether it worked.
+
+    WHY THIS IS A JUDGEMENT AND NOT A COUNTER. `quickstart` used to end in an
+    unconditional ``out.ok("ready …")`` and ``return 0``, so a machine that
+    could reach no registry at all printed "✓ indexed 0 items for keyword
+    search" and "✓ ready" and exited 0 — while `boost search`, the very next
+    line of README's install snippet, exited 1 with "no taps configured".
+    Every Dockerfile, CI job and setup script recorded a successful install of
+    a boost that cannot answer anything.
+
+    THE CONDITION IS NOT "SOMETHING FAILED". `quickstart` is the first command
+    a new user runs; exiting non-zero because one registry of seven 404'd
+    would be worse than the bug, and it is not even a reliable signal — a
+    rerun on a configured machine carries *zero* ``ok`` results, because
+    ``registry.add_many`` answers ``skipped`` for a registry already tapped.
+    So "no clone succeeded" would fail every successful rerun.
+
+    Two things make a run a failure, and they are different failures:
+
+    * **Every registry it attempted failed.** Nothing was cloned and nothing
+      was already there, so the command did not do its job — even on a machine
+      whose index is full from an earlier run, where the items reported belong
+      to that run and not to this one.
+    * **Nothing is searchable.** The keyword index holds zero items, so
+      `boost search` has nothing to answer with whatever the clones did. This
+      is also what keeps the closing lines from contradicting each other: "✓
+      ready" and "indexed 0 items" can no longer appear together, because the
+      second one is the definition of the first being false.
+
+    Anything else is ready: partial failure is named, loudly, and exits 0.
+    """
+
+    #: Registries cloned and indexed by this run.
+    tapped: list[str] = field(default_factory=list)
+    #: Registries that were already configured, so this run did nothing.
+    already: list[str] = field(default_factory=list)
+    #: Registries that could not be cloned, or could not be indexed once
+    #: cloned. Both spellings are "did not become searchable", which is the
+    #: only distinction the verdict cares about — the per-registry warning
+    #: already told the user which of the two it was.
+    failed: list[str] = field(default_factory=list)
+    #: Items in the keyword index after this run.
+    entries: int = 0
+
+    @property
+    def selected(self) -> int:
+        """How many registries this run set out to handle."""
+        return len(self.tapped) + len(self.already) + len(self.failed)
+
+    @property
+    def searchable(self) -> bool:
+        """True when the keyword index can answer a query at all."""
+        return self.entries > 0
+
+    @property
+    def every_attempt_failed(self) -> bool:
+        """True when something failed and nothing arrived or was already here.
+
+        ``already`` counts: six registries in place and the seventh 404'ing is
+        a top-up that mostly worked, not a run that achieved nothing. And a
+        run that attempted nothing has not failed at anything.
+        """
+        return bool(self.failed) and not self.tapped and not self.already
+
+    @property
+    def ok(self) -> bool:
+        """Whether this run may claim the machine is ready."""
+        return self.searchable and not self.every_attempt_failed
+
+    def failure_note(self) -> str:
+        """One closing line for the registries that did not make it.
+
+        Each failure was already warned about as it happened, and on a first
+        run those scroll past above the closing line — a green tick is the
+        shape that reads as success. This is the same information where the
+        eye lands. When every attempt failed the verdict itself says so, so
+        the note would only repeat it.
+        """
+        if not self.failed or self.every_attempt_failed:
+            return ""
+        line = ("%d of %d registries could not be tapped"
+                % (len(self.failed), self.selected))
+        if len(self.failed) <= MAX_NAMED_REGISTRIES:
+            line += ": %s" % ", ".join(self.failed)
+        return line
+
+    def verdict(self) -> tuple[str, str]:
+        """(message, hint) for the closing line: the ready line, or the cause.
+
+        The hint differs per cause because the remedies do. A dead network is
+        retried by rerunning the command that hit it — not by `boost tap
+        --defaults`, which is a strict subset of what just failed. An empty
+        index behind registries that did arrive is a tap with no clone, no
+        catalog, or nothing boost indexes in it, and `boost doctor` names the
+        first two per tap with the command that fixes each.
+        """
+        if self.ok:
+            return "ready — try `boost search brainstorming`", ""
+        retry = "check the network, then run `boost quickstart` again"
+        if self.every_attempt_failed:
+            if self.searchable:
+                # Don't call a full index empty: these items are real, they
+                # are just not this run's doing.
+                return ("not ready — none of the %d registries could be "
+                        "tapped; the %s items already indexed are unaffected"
+                        % (self.selected, format(self.entries, ",")), retry)
+            return ("not ready — none of the %d registries could be tapped, "
+                    "so nothing is searchable" % self.selected, retry)
+        return ("not ready — the keyword index is empty, so `boost search` "
+                "has nothing to answer with",
+                "`boost doctor` checks every tap's clone and catalog")
