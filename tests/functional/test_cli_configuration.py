@@ -1400,6 +1400,17 @@ class TestMcp:
         assert "healthy — no issues found" not in text
         assert "nothing is searchable yet" in text
 
+    def test_boost_doctor_reads_a_non_list_taps_as_a_broken_config(
+            self, sandbox):
+        # Not "nothing is searchable yet — tap the defaults": the file names
+        # something in `taps`, so this user has set boost up before.
+        from boost_cli.commands import configuration
+        paths.ensure_dirs()
+        paths.config_path().write_text('{"taps": "x"}', encoding="utf-8")
+        text, _is_err = configuration._mcp_tool("boost_doctor", {})
+        assert 'expected "taps" to be a list, found str' in text
+        assert "nothing is searchable yet" not in text
+
     def test_boost_search_marks_the_kind_of_every_hit(self, boost, tapped,
                                                       monkeypatch):
         # boost_install's description tells the caller to check what kind of

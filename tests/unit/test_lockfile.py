@@ -46,6 +46,20 @@ class TestRead:
         assert backup.exists()
         assert backup.read_text(encoding="utf-8") == "{definitely not json"
 
+    # Bytes that are not UTF-8, and JSON that is not an object: the first
+    # escaped the JSONDecodeError guard as a UnicodeDecodeError, the second
+    # reached `.setdefault` on a list. Either took down every command that
+    # reads the lock (list, doctor, sync, heal, install, verify) at exit 70.
+    @pytest.mark.parametrize("raw", [b"\xff\xfe", b"[]", b"null"])
+    def test_an_unusable_file_is_preserved_and_read_as_empty(self, sandbox,
+                                                              raw):
+        paths.ensure_dirs()
+        p = paths.lockfile_path()
+        p.write_bytes(raw)
+        lock = lockfile.read()
+        assert lock["version"] == 3 and lock["skills"] == {}
+        assert p.with_name(p.name + ".corrupt").read_bytes() == raw
+
     def test_missing_file_leaves_no_sidecar(self, sandbox):
         lockfile.read()
         p = paths.lockfile_path()
@@ -101,6 +115,12 @@ class TestCheck:
         integ = lockfile.check()
         assert not integ.ok
         assert integ.problem == "corrupt"
+
+    @pytest.mark.parametrize("raw", [b"\xff\xfe", b"[]"])
+    def test_an_unusable_file_is_corrupt(self, sandbox, raw):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_bytes(raw)
+        assert lockfile.check() == (False, "corrupt", None)
 
     def test_wrong_schema_version(self, sandbox):
         paths.ensure_dirs()
@@ -350,6 +370,30 @@ class TestHistory:
     def test_history_list_default_return_is_unchanged_by_with_skipped(self, sandbox):
         self._seed_history()
         assert lockfile.history_list() == lockfile.history_list(with_skipped=False)
+
+    @pytest.mark.parametrize("raw", [b"\xff\xfe", b"[]"])
+    def test_an_unusable_snapshot_is_skipped_and_unreadable(self, sandbox, raw):
+        paths.ensure_dirs()
+        (paths.lock_history_dir() / "lock-20200101T000000Z.json").write_bytes(raw)
+        assert lockfile.history_list(with_skipped=True) == ([], 1)
+        with pytest.raises(BoostError) as ei:
+            lockfile.history_read("20200101T000000Z")
+        assert ei.value.message.startswith(
+            "lock history entry 20200101T000000Z is unreadable: ")
+        assert ei.value.hint == "list other entries with `boost replay`"
+
+    @pytest.mark.parametrize("raw", [b"\xff\xfe", b"[]"])
+    def test_writing_over_an_unusable_lock_archives_it(self, sandbox, raw):
+        # write() stamps the outgoing lock's history name from its `updated`
+        # field, which meant parsing it: either shape crashed the very write
+        # that would have replaced it.
+        paths.ensure_dirs()
+        paths.lockfile_path().write_bytes(raw)
+        lockfile.write({"skills": {}})
+        assert json.loads(paths.lockfile_path().read_text(
+            encoding="utf-8"))["skills"] == {}
+        [snap] = paths.lock_history_dir().glob("lock-*.json")
+        assert snap.read_bytes() == raw
 
     def test_history_list_skips_corrupt_without_stopping(self, sandbox):
         # a corrupt snapshot that sorts BEFORE a valid one must be skipped, not

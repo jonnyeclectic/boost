@@ -17,7 +17,7 @@ from contextlib import suppress
 from typing import NamedTuple
 
 from ..errors import BoostError
-from . import paths, util
+from . import jsonstate, paths, util
 
 SCHEMA_VERSION = 3
 HISTORY_KEEP = 50
@@ -37,21 +37,21 @@ def _skeleton() -> dict:
 def read() -> dict:
     """Load the lock file, guaranteeing skills/rules/workflows keys.
 
-    Missing file -> empty skeleton; a corrupt file is preserved as
-    ``<lock>.corrupt`` before falling back to the skeleton.
+    Missing file -> empty skeleton; a corrupt file — not UTF-8, not JSON, or
+    JSON that is not an object — is preserved as ``<lock>.corrupt`` before
+    falling back to the skeleton.
     """
     p = paths.lockfile_path()
-    if not p.exists():
-        return _skeleton()          # empty: never installed anything yet
-    try:
-        lock = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    lock, err = jsonstate.read_object(p)
+    if err is not None:
         # Corrupt (present but unparseable) is NOT the same as empty: returning
         # a bare skeleton here would let the next write() overwrite the only
         # record of every prior install. Preserve the bytes for recovery and
         # surface it loudly before falling back to the skeleton.
         _preserve_corrupt(p)
         return _skeleton()
+    if lock is None:
+        return _skeleton()          # empty: never installed anything yet
     lock.setdefault("version", SCHEMA_VERSION)
     lock.setdefault("skills", {})
     lock.setdefault("rules", {})       # rules install alongside skills (v3+)
@@ -99,13 +99,11 @@ def check() -> Integrity:
     fresh install, not a fault; callers that care about that distinction
     combine this with a store-content check of their own.
     """
-    p = paths.lockfile_path()
-    if not p.exists():
-        return Integrity(False, "missing")
-    try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    raw, err = jsonstate.read_object(paths.lockfile_path())
+    if err is not None:
         return Integrity(False, "corrupt")
+    if raw is None:
+        return Integrity(False, "missing")
     version = raw.get("version")
     if version != SCHEMA_VERSION:
         return Integrity(False, "schema", version)
@@ -126,10 +124,7 @@ def _archive_stamp(p) -> str:
     back to now for a lock with no readable ``updated`` (corrupt, or an
     older schema) — there is nothing truthful to stamp it with instead.
     """
-    try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        raw = {}
+    raw = jsonstate.read_object(p)[0] or {}
     updated = raw.get("updated")
     if isinstance(updated, str) and updated:
         return _stamp(updated)
@@ -362,9 +357,8 @@ def history_list(*, with_skipped: bool = False):
     out = []
     skipped = 0
     for p in _history_files():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        data = jsonstate.read_object(p)[0]
+        if data is None:
             skipped += 1
             continue
         out.append({
@@ -381,15 +375,15 @@ def history_read(hist_id: str) -> dict:
     """Return the parsed lock snapshot for history entry ``hist_id``.
 
     Raises BoostError (with a `boost replay` hint) if no such entry, or if
-    the entry exists but is not valid JSON.
+    the entry exists but is not a JSON object.
     """
     from ..errors import BoostError
     p = paths.lock_history_dir() / ("lock-%s.json" % hist_id)
-    if not p.exists():
+    data, err = jsonstate.read_object(p)
+    if err is not None:
+        raise BoostError("lock history entry %s is unreadable: %s" % (hist_id, err),
+                         hint="list other entries with `boost replay`")
+    if data is None:
         raise BoostError("no lock history entry %s" % hist_id,
-                        hint="list entries with `boost replay`")
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        raise BoostError("lock history entry %s is unreadable: %s" % (hist_id, exc),
-                        hint="list other entries with `boost replay`") from exc
+                         hint="list entries with `boost replay`")
+    return data

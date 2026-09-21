@@ -37,6 +37,14 @@ class TestLoad:
         paths.policy_path().write_text("{broken", encoding="utf-8")
         assert policy.load() == policy.DEFAULTS
 
+    @pytest.mark.parametrize("raw", [b"\xff\xfe", b"[1]"])
+    def test_an_unusable_file_gives_defaults_not_a_crash(self, sandbox, raw):
+        # Non-UTF-8 bytes raised past the JSONDecodeError guard and took
+        # `boost install` down at exit 70.
+        paths.ensure_dirs()
+        paths.policy_path().write_bytes(raw)
+        assert policy.load() == policy.DEFAULTS
+
     def test_user_values_override(self, sandbox):
         paths.ensure_dirs()
         paths.policy_path().write_text(json.dumps({"pin_only": True}), encoding="utf-8")

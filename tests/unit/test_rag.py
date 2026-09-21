@@ -1030,6 +1030,17 @@ class TestTapCommitsStates:
         monkeypatch.setattr(rag.gitutil, "head_commit", lambda p: "")
         assert rag._tap_commits() == {"a__b": ""}
 
+    def test_a_cache_that_is_not_utf8_falls_back_to_head(self, monkeypatch,
+                                                         tmp_path):
+        # A failed decode is a ValueError, not an OSError: it used to escape
+        # and take `boost search` down with it.
+        tap = _FakeTap("a/b", is_cloned=True)
+        tap.cache_file = tmp_path / "a__b.json"
+        tap.cache_file.write_bytes(b"\xff\xfe")
+        monkeypatch.setattr(rag.registry, "list_taps", lambda: [tap])
+        monkeypatch.setattr(rag.gitutil, "head_commit", lambda p: "HEAD")
+        assert rag._tap_commits() == {"a__b": "HEAD"}
+
 
 class TestReadBodyHardening:
     def test_missing_name_key_uses_empty_default(self, tmp_path):

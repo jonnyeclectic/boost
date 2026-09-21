@@ -37,7 +37,17 @@ try:  # TypedDict lives in typing on 3.9+, kept optional for safety
 except ImportError:  # pragma: no cover - 3.9+ always has it
     TypedDict = None  # type: ignore
 
-from . import ai, catalog, config, frontmatter, gitutil, paths, registry, util
+from . import (
+    ai,
+    catalog,
+    config,
+    frontmatter,
+    gitutil,
+    jsonstate,
+    paths,
+    registry,
+    util,
+)
 
 # v2: `snip` stores a larger head of the matched chunk (not just SNIP_WIDTH
 # chars) so `retrieve` can window it onto the query terms; bump forces a
@@ -257,11 +267,10 @@ def _tap_commits() -> dict[str, str]:
     commits: dict[str, str] = {}
     for t in registry.list_taps():
         commit = ""
-        try:
+        # ValueError covers both invalid JSON and bytes that are not UTF-8.
+        with contextlib.suppress(OSError, ValueError):
             data = json.loads(t.cache_file.read_text(encoding="utf-8"))
             commit = str(data.get("commit") or "")
-        except (OSError, json.JSONDecodeError):
-            pass
         if not commit and t.is_cloned:
             commit = gitutil.head_commit(t.path)
         commits[t.safe_name] = commit
@@ -789,11 +798,8 @@ def _load_raw() -> dict | None:
     cached = _CACHE.get(key)
     if isinstance(cached, tuple) and cached[0] == stamp:
         return cached[1]  # type: ignore[return-value]
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(data, dict) or data.get("version") != INDEX_VERSION:
+    data = jsonstate.read_object(p)[0]
+    if data is None or data.get("version") != INDEX_VERSION:
         return None
     _CACHE[key] = (stamp, data)
     return data
@@ -1325,11 +1331,7 @@ RERANK_CACHE_CAP = 200
 
 def _rerank_cache_load() -> dict:
     """The cache as a dict, ``{}`` for missing/corrupt — never an error."""
-    try:
-        data = json.loads(rerank_cache_path().read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return jsonstate.read_object(rerank_cache_path())[0] or {}
 
 
 def _rerank_cache_get(key: str) -> list | None:
