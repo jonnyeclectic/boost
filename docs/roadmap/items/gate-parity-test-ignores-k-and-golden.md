@@ -10,7 +10,7 @@ wow: 3
 note: the parity test now parses the whole eval_retrieval.py call in the Makefile, ci.yml and the refresh workflow with the script's own parser; a -k 5 in ci.yml alone fails it
 order: 213
 owner: loop/gate-parity-k
-pr:
+pr: 912
 title: The CI-vs-Makefile floor-parity test compares only the floor VALUES, so changing <code>-k</code> in ci.yml turns a PASS into a FAIL with the test still green
 ---
 <b>Measured.</b> Changing <code>-k 10</code> to <code>-k 5</code> in ci.yml alone leaves <code>TestTheGateIsDefinedOnce</code> at "2 passed" while the required gate flips from exit 0 to exit 1 — recall@k drops 0.852 to 0.753 against the 0.780 floor — and <code>make eval</code> stays green; the same test catches a floor-VALUE edit (hit@1 0.40 -&gt; 0.10) with "1 failed", proving the guard runs and simply cannot see <code>-k</code>.
