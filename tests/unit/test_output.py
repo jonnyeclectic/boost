@@ -1575,9 +1575,16 @@ class TestSearchLayout:
         lay = output.search_layout(100, self.NAMES, self.KINDS, self.TAPS)
         assert lay.name_w == len("commit-messages")
 
-    def test_name_column_caps_at_32(self):
+    def test_name_column_is_whole_when_the_description_keeps_24(self):
+        # 120 cols, a 60-cell name: 120 - 2 - 7 - 62 - 9 - 5 = 35 cells of
+        # prose remain, so the copy target is shown whole, not clipped to 32.
         lay = output.search_layout(120, ["x" * 60], ["skill"], ["a/b"])
-        assert lay.name_w == 32
+        assert (lay.name_w, lay.tap_w, lay.desc_w) == (60, 3, 35)
+
+    def test_name_column_caps_at_32_when_whole_would_starve_the_description(self):
+        # 100 cols: whole, the 60-cell name would leave 15 cells of prose.
+        lay = output.search_layout(100, ["x" * 60], ["skill"], ["a/b"])
+        assert (lay.name_w, lay.desc_w) == (32, 43)
 
     def test_kind_column_fits_the_widest_kind_shown(self):
         lay = output.search_layout(100, self.NAMES, self.KINDS, self.TAPS)
@@ -1629,9 +1636,79 @@ class TestSearchLayout:
         assert output.search_layout(100, [], [], []).tap_w == 0
 
     def test_column_caps_are_exact(self):
-        # kind caps at [workflow]'s 10 even for a stranger kind; tap at 20.
+        # kind caps at [workflow]'s 10 even for a stranger kind; a tap that
+        # cannot be shown whole caps at 20.
         assert output.search_layout(100, ["a"], ["extra-long"], []).kind_w == 10
-        assert output.search_layout(120, ["a"], ["skill"], ["x" * 25]).tap_w == 20
+        assert output.search_layout(100, ["a"], ["skill"], ["x" * 60]).tap_w == 20
+
+    def test_a_tap_over_20_is_whole_on_a_wide_pane(self):
+        # The card's case: `boost info 'sickn33/antigravity…:doc-coauthoring'`
+        # fails, so the qualifier has to be on screen whole to be copied.
+        tap = "sickn33/antigravity-awesome-skills"          # 34 cells
+        for cols in (120, 200, 300, 500):
+            lay = output.search_layout(cols, ["doc-coauthoring"], ["skill"],
+                                       [tap, "anthropics/skills"])
+            assert lay.tap_w == 34, cols
+            row = output.format_search_row(
+                "doc-coauthoring", "d" * 600, "skill", tap, 1.0,
+                curated=False, installed=False, lay=lay)
+            assert tap in row and "sickn33/antigravity…" not in row
+
+    def test_whole_or_capped_boundaries_are_exact(self):
+        # A 54-cell name, `[skill]`, a 47-cell tap. Both whole from the first
+        # pane that leaves the description 24 cells: 2 + 7 + 56 + 9 + 49 + 24
+        # = 147. One column less the tap falls to its cap, not to 46 — a
+        # clipped identifier is clipped at its cap, never in between.
+        names, kinds, taps = ["n" * 54], ["skill"], ["t" * 47]
+        at = output.search_layout(147, names, kinds, taps)
+        assert (at.name_w, at.tap_w, at.desc_w) == (54, 47, 24)
+        below = output.search_layout(146, names, kinds, taps)
+        assert (below.name_w, below.tap_w, below.desc_w) == (54, 20, 50)
+        # The name stays whole down to 2 + 7 + 56 + 9 + 22 + 24 = 120 ...
+        assert output.search_layout(120, names, kinds, taps).name_w == 54
+        # ... and one column less, both identifiers are at their caps.
+        low = output.search_layout(119, names, kinds, taps)
+        assert (low.name_w, low.tap_w, low.desc_w) == (32, 20, 45)
+
+    def test_a_whole_tap_is_kept_when_only_the_name_must_cap(self):
+        # An 80-cell name cannot be whole at 120 columns with any tap, but a
+        # 34-cell tap can: 120 - 2 - 7 - 34 - 9 - 36 = 32 cells of prose.
+        lay = output.search_layout(120, ["n" * 80], ["skill"], ["t" * 34])
+        assert (lay.name_w, lay.tap_w, lay.desc_w) == (32, 34, 32)
+
+    def test_a_dropped_tap_gives_its_room_back_to_the_name(self):
+        # 90 cols, a 40-cell name, a 20-cell tap: the tap goes (it would
+        # leave 16 cells of prose even at the name's cap), and without it the
+        # name is whole with 30 cells to spare.
+        lay = output.search_layout(90, ["n" * 40], ["skill"], ["t" * 20])
+        assert (lay.name_w, lay.tap_w, lay.desc_w) == (40, 0, 30)
+
+    def test_a_name_too_long_to_show_whole_falls_back_to_its_cap(self):
+        # The last step: a 50-cell name will not fit whole even with the tap
+        # gone, so it is capped at 32 and the room goes to the description.
+        lay = output.search_layout(90, ["n" * 50], ["skill"], ["t" * 20])
+        assert (lay.name_w, lay.tap_w, lay.desc_w) == (32, 0, 38)
+
+    def test_capped_content_plans_exactly_as_before(self):
+        # Names within 32 cells and taps within 20: every step of the
+        # whole-or-capped rule is the same plan, so these tuples are the ones
+        # the capped layout produced before the identifiers could grow.
+        expected = {
+            40: (15, 0, 0, 14), 48: (15, 10, 0, 10), 60: (15, 10, 0, 22),
+            80: (15, 10, 0, 42), 84: (15, 10, 17, 27), 98: (15, 10, 17, 41),
+            120: (15, 10, 17, 63), 200: (15, 10, 17, 143),
+            300: (15, 10, 17, 243),
+        }
+        for cols, plan in expected.items():
+            lay = output.search_layout(cols, self.NAMES, self.KINDS, self.TAPS)
+            assert (lay.name_w, lay.kind_w, lay.tap_w, lay.desc_w) == plan, cols
+
+    def test_an_identifier_is_whole_or_at_a_cap_never_between(self):
+        name, tap = "n" * 70, "t" * 50
+        for cols in range(40, 321):
+            lay = output.search_layout(cols, [name], ["workflow"], [tap])
+            assert lay.name_w in (70, 32, 24, 16, 12), cols
+            assert lay.tap_w in (50, 20, 0), cols
 
     def test_desc_gets_every_remaining_cell_when_kind_drops(self):
         # Below 48 columns the kind column costs exactly nothing: at 44 cols
@@ -1667,7 +1744,7 @@ class TestSearchLayout:
             ("commit-messages", "skill", "fixture-tap", "short"),
             ("a", "rule", "", ""),
         ]
-        for cols in range(40, 121):
+        for cols in range(40, 321):
             names = [n for n, _k, _t, _d in extremes]
             kinds = [k for _n, k, _t, _d in extremes]
             taps = [t for _n, _k, t, _d in extremes]
