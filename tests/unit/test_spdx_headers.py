@@ -87,6 +87,31 @@ def test_expression_matches_the_declared_licence() -> None:
     assert "Grant of Patent License" in licence
 
 
+def test_claude_md_names_the_expression_the_sweep_stamps() -> None:
+    """The instruction agents read must name the licence the tree uses.
+
+    CLAUDE.md is not commentary: it is the file every contributor and every
+    agent reads before writing a line, and its header rule quotes the SPDX
+    expression literally. #587 relicensed the tree from `GPL-3.0-only` to
+    Apache-2.0 — LICENSE, pyproject, `SPDX_ID` and every header — and left
+    that sentence behind, so for months the one surface a human reads told
+    them to open a new file with a licence the repository does not ship.
+
+    Pinned to `SPDX_ID` rather than to the string "Apache-2.0", so the next
+    relicence is still one edit and this test moves with it.
+    """
+    path = ROOT / "CLAUDE.md"
+    if not path.is_file():
+        pytest.skip("CLAUDE.md not reachable from this tree")
+    text = path.read_text(encoding="utf-8")
+    assert "SPDX-License-Identifier: %s" % _SPDX.SPDX_ID in text
+    # And names no other: a second expression in the same file is the drift
+    # this test exists to catch, whichever direction it points.
+    others = {m for m in re.findall(r"SPDX-License-Identifier: ([\w.\-+]+)", text)
+              if m != _SPDX.SPDX_ID}
+    assert not others, "CLAUDE.md also names %s" % ", ".join(sorted(others))
+
+
 def test_no_two_package_files_are_byte_identical() -> None:
     """Two identical files in the wheel are a `check-wheel-contents` W002.
 
