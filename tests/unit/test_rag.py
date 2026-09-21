@@ -20,7 +20,8 @@ from unittest import mock
 import pytest
 
 from boost_cli.core import dense as dense_mod
-from boost_cli.core import rag, registry
+from boost_cli.core import paths, rag, registry
+from boost_cli.errors import BoostError
 
 # ------------------------------------------------------------- tokenize
 
@@ -514,6 +515,78 @@ class TestStale:
         rag.build(entries=entries, force=True)
         assert rag.ready() is True
         assert rag.stale() is False
+
+
+class TestAnIndexBoostCannotSave:
+    """`boost reindex` in a cache dir it cannot write was exit 70 with a
+    PermissionError crash report, where every sibling command degrades
+    (cache-writers-that-still-crash-on-a-read-only-cache). Building the index
+    is the whole job there, so it is an error, but one that names the
+    directory and the remedy doctor and heal print."""
+
+    @staticmethod
+    def _refuse(monkeypatch, exc):
+        def refuse(*a, **k):
+            raise exc
+        monkeypatch.setattr(rag.tempfile, "mkstemp", refuse)
+
+    def test_an_unwritable_cache_dir_is_an_error_naming_it(self, corpus,
+                                                            monkeypatch):
+        _root, entries = corpus
+        cache = paths.cache_dir()
+        self._refuse(monkeypatch, PermissionError(
+            13, "Permission denied", str(cache / ".rag_postings.sqlite.x.tmp")))
+        with pytest.raises(BoostError) as ei:
+            rag.build(entries=entries, force=True)
+        where = paths.tilde(cache)
+        assert ei.value.message == ("could not save the search index in %s "
+                                    "(Permission denied)" % where)
+        assert ei.value.hint == "run `chmod u+w %s`" \
+            % where
+        assert isinstance(ei.value.__cause__, PermissionError)
+
+    def test_search_still_degrades_rather_than_raising(self, corpus,
+                                                       monkeypatch):
+        # ensure() is what search calls; a BoostError is an Exception, so it
+        # still answers "no index" and search falls back to frontmatter.
+        monkeypatch.setattr(registry, "list_taps", lambda: ["a-tap"])
+        self._refuse(monkeypatch, PermissionError(13, "Permission denied"))
+        assert rag.ensure() is False
+
+    def test_a_full_disk_is_not_told_to_chmod(self, corpus, monkeypatch):
+        _root, entries = corpus
+        cache = paths.cache_dir()
+        self._refuse(monkeypatch, OSError(
+            28, "No space left on device", str(cache / ".x.tmp")))
+        with pytest.raises(BoostError) as ei:
+            rag.build(entries=entries, force=True)
+        assert ei.value.message == ("could not save the search index in %s "
+                                    "(No space left on device)"
+                                    % paths.tilde(cache))
+        assert ei.value.hint is None
+
+    def test_a_cache_dir_it_cannot_create_names_the_parent(self, corpus,
+                                                            monkeypatch):
+        # ~/.boost read-only and no cache dir yet: the directory to fix is
+        # the one mkdir was refused in, not one that does not exist.
+        _root, entries = corpus
+        cache = paths.cache_dir()
+
+        def refuse():
+            raise PermissionError(13, "Permission denied", str(cache))
+        monkeypatch.setattr(rag.paths, "ensure_dirs", refuse)
+        with pytest.raises(BoostError) as ei:
+            rag.build(entries=entries, force=True)
+        assert ei.value.hint == "run `chmod u+w %s`" \
+            % paths.tilde(cache.parent)
+
+    def test_an_error_with_no_path_names_the_cache_dir(self, corpus,
+                                                        monkeypatch):
+        _root, entries = corpus
+        self._refuse(monkeypatch, PermissionError(13, "Permission denied"))
+        with pytest.raises(BoostError) as ei:
+            rag.build(entries=entries, force=True)
+        assert paths.tilde(paths.cache_dir()) in ei.value.message
 
 
 class TestBuildAndRetrieve:

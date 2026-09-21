@@ -32,12 +32,13 @@ import ast
 import inspect
 import os
 import re
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import BoostError
-from . import catalog, config, lockfile, paths, policy, registry, store
+from . import catalog, config, lockfile, output, paths, policy, registry, store, util
 
 # cli.COMMANDS rows: (name, group, module, summary). Typed here rather than
 # imported so `core` stays the bottom layer.
@@ -63,17 +64,43 @@ def _command_names(commands: Registry) -> list[str]:
     return [n for n, _g, _m, _s in commands]
 
 
-def refresh_names() -> int:
-    """Rebuild the names cache from the tap caches. Returns the count written.
+#: Whether this process already said it could not save the names cache.
+_WARNED_UNSAVED = False
 
-    Called after anything that changes the catalogue (tap, untap, update), and
-    lazily by :func:`_cached_names` when the file is missing, so a user who
-    never runs those still gets completion on their first TAB.
+
+def refresh_names() -> int:
+    """Rebuild the names cache from the tap caches. Returns the name count.
+
+    Called after anything that changes the catalogue (tap, untap, update,
+    heal), and lazily by :func:`_cached_names` when the file is missing, so a
+    user who never runs those still gets completion on their first TAB.
     """
+    global _WARNED_UNSAVED
     names = sorted({str(e.get("name", "")) for e in catalog.all_entries()
                     if e.get("name")})
-    paths.ensure_dirs()
-    names_file().write_text("\n".join(names), encoding="utf-8")
+    text = "\n".join(names)
+    path = names_file()
+    # Replaced, not rewritten in place, for the reason catalog.rebuild_tap is:
+    # a copy one `sudo boost` run left read-only made heal, update, untap and
+    # a repeat tap exit 70 here while doctor said healthy. A replace needs the
+    # directory writable, so a read-only dir holding a writable file falls
+    # back to the in-place write. If neither lands, the completion list is a
+    # convenience, and failing to keep one never fails the command asking.
+    try:
+        paths.ensure_dirs()
+        util.atomic_write_text(path, text)
+    except OSError:
+        try:
+            path.write_text(text, encoding="utf-8")
+        except OSError as e:
+            # Once per process, like rebuild_tap: the fix is the same each time.
+            if not _WARNED_UNSAVED:
+                _WARNED_UNSAVED = True
+                output.warn("could not save the completion list (%s) — tab "
+                            "completion may offer stale names; make %s "
+                            "writable" % (e.strerror or e,
+                                           paths.tilde(path.parent)),
+                            stream=sys.stderr, wrap=True)
     return len(names)
 
 

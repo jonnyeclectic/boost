@@ -183,6 +183,51 @@ class TestDoctor:
         assert "would rebuild catalog cache" not in dry   # the run won't
 
     @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows refuses to replace a read-only file")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_read_only_names_file_crashes_nothing(self, boost, installed,
+                                                    fixture_tap_src):
+        # The card's repro (cache-writers-that-still-crash-on-a-read-only-
+        # cache): doctor said healthy while heal, update, untap and a repeat
+        # tap all exited 70 writing `_names.txt` in place.
+        from boost_cli.core import complete
+        names = complete.names_file()
+        names.chmod(0o444)
+        assert "● healthy" in boost("doctor").out
+        boost("heal")
+        assert os.access(names, os.W_OK)          # replaced, not refused
+        for argv in (("update",), ("untap", "fixture-tap"),
+                     ("tap", fixture_tap_src), ("tap", fixture_tap_src)):
+            names.chmod(0o444)
+            r = boost(*argv)
+            assert "could not save" not in r.out + r.err, argv
+        assert "brainstorming" in names.read_text(encoding="utf-8")
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_names_file_it_cannot_write_or_replace_is_a_warning(
+            self, boost, tapped, monkeypatch):
+        # Read-only file in a read-only dir: neither the replace nor the
+        # in-place write can land, and `update` must still finish.
+        from boost_cli.core import catalog, complete
+        monkeypatch.setattr(complete, "_WARNED_UNSAVED", False, raising=False)
+        monkeypatch.setattr(catalog, "_UNSAVED", set())
+        complete.names_file().chmod(0o444)
+        paths.cache_dir().chmod(0o500)
+        try:
+            r = boost("update")
+        finally:
+            paths.cache_dir().chmod(0o700)
+            complete.names_file().chmod(0o600)
+        err = " ".join(r.err.split())
+        assert "could not save the completion list (Permission denied)" in err
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+
+    @pytest.mark.skipif(sys.platform == "win32",
                         reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")

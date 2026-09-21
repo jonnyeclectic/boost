@@ -8,10 +8,12 @@ asserting exact output shapes, exit codes, and on-disk cache effects.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 import types
 
@@ -2149,6 +2151,26 @@ class TestReindex:
         r = boost("reindex")
         assert "indexed" in r.out and "passages" in r.out
         assert rag.ready() is True
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unwritable_cache_dir_is_one_error_not_a_crash(self, boost,
+                                                               tapped):
+        # search, browse, info and update degrade in a cache dir boost cannot
+        # write; reindex exited 70 with a PermissionError crash report.
+        paths.cache_dir().chmod(0o500)
+        try:
+            r = boost("reindex", expect=1)
+        finally:
+            paths.cache_dir().chmod(0o700)
+        assert r.err.splitlines() == [
+            "Error: could not save the search index in ~/.boost/cache "
+            "(Permission denied)",
+            "  hint: run `chmod u+w ~/.boost/cache`"]
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+        boost("reindex")                          # and once it is writable
 
     def test_json_stats(self, boost, tapped):
         r = boost("reindex", "--json")
