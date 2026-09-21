@@ -1377,13 +1377,9 @@ def cmd_changelog(argv):
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
-    _, bare = catalog.split_name(args.name)
-    entry = lockfile.get_skill(args.name)
-    if entry:
-        tap_name, rel = entry.get("tap", ""), entry.get("source_dir", ".")
-    else:
-        e = catalog.resolve_one(args.name)
-        tap_name, rel = e["tap"], e["rel_dir"]
+    # Lock first, all three kinds. A rule or workflow is logged over its own
+    # file, not the directory it shares with its siblings.
+    bare, _kind, tap_name, rel = store.upstream_source(args.name)
     if tap_name == "local":
         if args.json:
             print(json.dumps({"name": bare, "tap": None, "commits": []},
@@ -1409,7 +1405,9 @@ def cmd_changelog(argv):
         out.info(line)
     if not lines:
         out.warn("no history found for %s in %s" % (rel, tap.name))
-    if len(lines) < 3:
+    # A short log is not evidence of a shallow clone: a local-path tap is
+    # complete, and there `fetch --unshallow` fails.
+    if len(lines) < 3 and gitutil.is_shallow(tap.path):
         note = ("(shallow clone: run `git -C %s fetch --unshallow` "
                 "for full history)" % _tilde(tap.path))
         for line in out.wrap(note, max(out.term_width() - 2, 20)):

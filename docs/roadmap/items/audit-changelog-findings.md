@@ -2,14 +2,14 @@
 id: audit-changelog-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
 note: fetch --unshallow advised on complete clones; rules/workflows logged at directory granularity
 order: 254
-owner:
+owner: loop/changelog-audit
 pr:
 title: "boost changelog: CLI audit findings (2026-08)"
 ---
@@ -42,6 +42,32 @@ installed names with <code>lockfile.find_any</code>, and for <code>kind != skill
 <code>log_for_path</code> and build <code>/blob/HEAD/&lt;file&gt;</code> URLs in <code>cmd_home</code>,
 keeping <code>rel_dir</code> for skills; add a unit test with a two-commit repo touching two rules in
 one directory.
+
+<br><br><b>Shipped.</b> All three findings reproduced on <code>a316c6b9</code>, on a local
+two-commit tap with <code>rules/ci-cd/dotnet-build.mdc</code>, a sibling
+<code>dotnet-test.mdc</code> added in the second commit, and three <code>csharp-reviewer</code>
+workflows. <code>changelog cowboy-coding</code> printed the unshallow hint on a clone with no
+<code>.git/shallow</code>, and the suggested command failed with <em>&ldquo;fatal: --unshallow on
+a complete repository does not make sense&rdquo;</em> (exit 128). <code>changelog dotnet-build</code>
+listed the sibling's commit, installed or not. <code>changelog csharp-reviewer</code>, installed
+with <code>--path plugins/a/agents</code> as the ambiguity hint says, still exited 1 with
+<em>&ldquo;matches 3 different workflows&rdquo;</em>. <code>home --print dotnet-build</code> linked
+<code>/tree/HEAD/rules/ci-cd</code>. The card's claim is slightly narrower than what happened:
+<code>home</code> already read <code>find_any</code>, but only after the catalog, so it linked the
+folder whenever the catalog resolved and the file (still under <code>/tree/</code>) only when the
+catalog refused. Git ignores <code>--depth</code> when the source is a local path, which is why
+every local tap is complete and why the hint was right only for remote taps.
+<br><br>The fix: <code>gitutil.is_shallow</code> checks <code>.git/shallow</code>, and the hint
+needs it as well as the short log. <code>catalog.upstream_path</code> gives the defining file for a
+rule or workflow and the directory for a skill, for lock and catalog entries alike.
+<code>store.upstream_source</code> resolves the lock first, through
+<code>resolve_lock_entry</code>, so tap-qualified names work too, and falls back to the
+catalog. <code>changelog</code> and <code>home</code> both use it, and <code>home</code> links a
+file under <code>/blob/HEAD/</code>. Measured after the fix on the same tap: one commit for
+<code>dotnet-build</code>, exit 0 for <code>csharp-reviewer</code>,
+<code>/blob/HEAD/rules/ci-cd/dotnet-build.mdc</code>, and no hint on a complete clone. The
+<code>home</code>/<code>changelog</code> summaries did not change, so <code>docs/commands.html</code>
+was not regenerated.
 
 <br><br>Found by the 2026-08 CLI audit (clusters <code>changelog-shallow-hint</code>,
 <code>rule-file-vs-directory</code>); repro in the audit log. Regenerate

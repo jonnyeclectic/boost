@@ -1652,11 +1652,53 @@ class TestConflict:
 # ── changelog ────────────────────────────────────────────────────────────
 
 class TestChangelog:
-    def test_fixture_commit_and_shallow_note(self, boost, installed):
+    def test_fixture_commit_and_no_shallow_note_on_a_complete_clone(
+            self, boost, installed):
+        # git ignores --depth when cloning a local path, so the fixture clone
+        # is complete. The note used to fire on any log shorter than three
+        # lines and send the user to `fetch --unshallow`, which fails on a
+        # complete repository.
         r = boost("changelog", "brainstorming")
         assert "changelog for brainstorming (fixture-tap)" in r.out
         assert "fixture skills" in r.out          # the fixture commit subject
-        assert "fetch --unshallow" in r.out       # < 3 entries → shallow note
+        assert not (paths.repos_dir() / "fixture-tap" / ".git" / "shallow").exists()
+        assert "fetch --unshallow" not in r.out
+
+    def test_shallow_note_on_a_shallow_clone(self, boost, installed):
+        # A depth-1 clone writes its tip commit into .git/shallow. Writing it
+        # by hand gives the same state, since `boost tap` cannot make a
+        # shallow clone of a local path.
+        clone = paths.repos_dir() / "fixture-tap"
+        head = subprocess.run(["git", "-C", str(clone), "rev-parse", "HEAD"],
+                              check=True, capture_output=True, text=True)
+        (clone / ".git" / "shallow").write_text(head.stdout, encoding="utf-8")
+        r = boost("changelog", "brainstorming")
+        assert "fetch --unshallow" in " ".join(r.out.split())
+
+    def test_a_rule_is_logged_over_its_file_not_its_directory(
+            self, boost, sibling_rules_tap):
+        # Not installed: resolved from the catalog. The sibling commit only
+        # touches rules/ci-cd/dotnet-test.mdc.
+        r = boost("changelog", "dotnet-build")
+        assert "add dotnet-build and reviewers" in r.out
+        assert "add sibling rule dotnet-test" not in r.out
+        boost("install", "dotnet-build")
+        r = boost("changelog", "dotnet-build")   # installed: resolved from the lock
+        assert "add dotnet-build and reviewers" in r.out
+        assert "add sibling rule dotnet-test" not in r.out
+        data = json.loads(boost("changelog", "dotnet-build", "--json").out)
+        assert [c["subject"] for c in data["commits"]] == [
+            "add dotnet-build and reviewers"]
+
+    def test_an_installed_workflow_resolves_through_the_lock(
+            self, boost, sibling_rules_tap):
+        # The catalog refuses the bare name: three copies in one tap. The
+        # refusal tells the user to install one with --path and retry, so
+        # the retry has to work.
+        boost("install", "csharp-reviewer", "--path", "plugins/a/agents")
+        r = boost("changelog", "csharp-reviewer")
+        assert "changelog for csharp-reviewer" in r.out
+        assert "add dotnet-build and reviewers" in r.out
 
     def test_local_import_message(self, boost, sandbox, tmp_path):
         _import_skill(boost, tmp_path, "local-one", "# Local\n\nBody.\n")

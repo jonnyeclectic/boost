@@ -1033,16 +1033,9 @@ def cmd_home(argv):
     ap.add_argument("--print", dest="print_only", action="store_true",
                     help="print the URL without opening a browser")
     args = ap.parse_args(argv)
-    found = lockfile.find_any(args.name)
-    lock = found[1] if found else None
-    try:
-        entry = catalog.resolve_one(args.name)
-        tap_name, rel = entry["tap"], entry["rel_dir"]
-    except BoostError:
-        if not lock:
-            raise
-        tap_name = lock.get("tap", "local")
-        rel = lock.get("source_dir") or lock.get("source_file") or "."
+    # Lock first: the catalog guesses by name, the lock knows the copy that
+    # was installed. A rule or workflow is linked to its own file.
+    _bare, kind, tap_name, rel = store.upstream_source(args.name)
     try:
         tap = registry.get(tap_name)
     except BoostError:
@@ -1051,7 +1044,9 @@ def cmd_home(argv):
     if not tap.url.startswith(("http://", "https://")):
         out.info(_tilde(Path(tap.url) if rel == "." else Path(tap.url) / rel))
         return 0
-    url = tap.url.rstrip("/") + ("" if rel == "." else "/tree/HEAD/" + rel)
+    # GitHub serves a directory under /tree/ and a file under /blob/.
+    view = "tree" if kind == "skill" else "blob"
+    url = tap.url.rstrip("/") + ("" if rel == "." else "/%s/HEAD/%s" % (view, rel))
     out.info(url)
     if not args.print_only and sys.stdout.isatty():
         webbrowser.open(url)
