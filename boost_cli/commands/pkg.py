@@ -4,6 +4,7 @@
 reinstall, bundle, import, pin, unpin, snapshot, export."""
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
@@ -1379,7 +1380,7 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     """
     if file == "-":
         text, label = sys.stdin.read(), "<stdin>"
-        shown = "stdin"
+        shown = label  # one spelling, in the warning and the journal alike
     else:
         path = paths.expand(file or "./Boostfile")
         # Absolute, not as given: pathlib folds `./Boostfile` to `Boostfile`,
@@ -1425,7 +1426,14 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             if dry_run:
                 # Nothing is cloned, so any skill line naming this tap cannot
                 # be resolved below — said plainly there rather than guessed.
+                # Under both names: the real run names the tap from its URL
+                # (`registry.add` -> `parse_spec`), not from this line's NAME,
+                # so `tap myalias ./x` is tapped as `x`, and a `skill x:…`
+                # line must defer here as it will install there.
                 would_tap.add(tname)
+                # no derivable name: NAME is then all there is to match
+                with contextlib.suppress(BoostError):
+                    would_tap.add(registry.parse_spec(turl or tname)[0])
                 out.info("would tap %s" % tname)
                 taps_added += 1
                 continue
@@ -1445,6 +1453,9 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             if sname in have_installed:
                 kind_here, lk = have_installed[sname]
                 drift = store.lock_drift(lk, tapq, sver)
+                # Before the kind check, on purpose: a rule or workflow
+                # installed from another tap or at another version is drift
+                # just as a skill is, so it counts "differs", not "present".
                 if drift:
                     # A Boostfile is a reproducibility contract, so an install
                     # from another tap or at another version is not "already

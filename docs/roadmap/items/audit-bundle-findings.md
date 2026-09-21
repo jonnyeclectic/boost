@@ -59,7 +59,8 @@ above) gave <em>&ldquo;Installed 0 skills, 2 already present&rdquo;</em>, exit 0
 empty stdin said <em>&ldquo;Installed 0 skills&rdquo;</em>. Now: the dump names <em>&ldquo;2 local
 skills written as comments &mdash; no tap source to reinstall from&rdquo;</em> on both paths, through
 <code>out.warn</code>; each mismatched line warns <em>&ldquo;installed from fixture-tap, Boostfile
-wants nosuch/tap &mdash; kept as installed&rdquo;</em> (or the version form), is not reinstalled, and
+wants nosuch/tap &mdash; kept as installed&rdquo;</em> (or the version form), rules and workflows
+included, is not reinstalled, and
 the summary says <em>&ldquo;2 differ from the Boostfile&rdquo;</em> instead of calling it present;
 the missing-file error shows the absolute path; a file with no directives warns <em>&ldquo;nothing to
 apply&rdquo;</em>. Exit codes unchanged. The tap/version test is <code>store.lock_drift</code>,
@@ -76,8 +77,9 @@ stream). <code>warn</code> now asks the stream it writes to, which also fixes th
 registry in the file, <code>skill fixture-tap:ghost</code> (a tap already present, without that
 skill) printed <em>&ldquo;cannot resolve yet; its tap would be added by this same file&rdquo;</em> and
 exited 0, where the real run says <em>&ldquo;ghost not found in tap fixture-tap &mdash;
-skipped&rdquo;</em> and exits 1. The preview now defers only a line whose tap this file would add (or
-an unqualified one while any would be added), counts those as <em>&ldquo;N unresolved until
+skipped&rdquo;</em> and exits 1. The preview now defers only a line whose tap this file would add, by the
+line&rsquo;s NAME or by the name the run derives from its URL (or an unqualified one while any
+would be added), counts those as <em>&ldquo;N unresolved until
 tapped&rdquo;</em>, says <em>&ldquo;would install that&rdquo;</em> instead of <em>&ldquo;installing
 that&rdquo;</em> on a version mismatch, and uses the same kind-aware noun as the real summary
 (<em>&ldquo;would install 1 skill&rdquo;</em>, not <em>&ldquo;1 item&rdquo;</em>).

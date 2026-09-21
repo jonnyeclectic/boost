@@ -1906,6 +1906,49 @@ class TestBundleAuditFindings:
         assert "2 differ from the Boostfile" in real.out
         assert dry.out.replace("would install", "Installed") == real.out
 
+    @pytest.mark.parametrize("kind, relpath, content, name", [
+        ("rule", "rules/house.mdc",
+         "---\nname: house-style\nversion: 1.0.0\n---\n\nTabs.\n",
+         "house-style"),
+        ("workflow", "commands/ship.md",
+         "---\nname: ship-it\nversion: 1.0.0\ndescription: d\n"
+         "allowed-tools: Bash\n---\n\ngo\n", "ship-it"),
+    ], ids=["rule", "workflow"])
+    def test_an_installed_rule_or_workflow_at_another_tap_is_drift(
+            self, boost, fixture_tap_src, tmp_path, kind, relpath, content,
+            name):
+        # Decided, not incidental: the drift check runs before the kind
+        # check, so a rule or workflow the Boostfile pins to another tap or
+        # version "differs" exactly as a skill does. Before it, such a line
+        # read "already installed as a rule — skipped" / "1 already present"
+        # — the reproducibility hole this card closes, for the most invasive
+        # kinds a Boostfile can reach.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "kind-tap")
+        _add_and_commit(tap_dir, relpath, content, "add " + kind)
+        boost("tap", tap_dir)
+        boost("install", name)
+        entry = lockfile.all_installed()[kind][name]
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill other:%s\nskill kind-tap:%s@9.9.9\n"
+                      % (name, name), encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        flat = _flat(r.out)
+        assert ("%s: installed from kind-tap, Boostfile wants other — kept as "
+                "installed" % name) in flat
+        assert ("%s: installed 1.0.0, Boostfile wants @9.9.9 — kept as "
+                "installed" % name) in flat
+        assert "already installed as a %s" % kind not in r.out
+        assert "Installed 0 skills, 2 differ from the Boostfile" in r.out
+        # kept, not replaced
+        assert lockfile.all_installed()[kind][name] == entry
+        # the control: the exact line is still simply present, as that kind
+        bf.write_text("skill kind-tap:%s@1.0.0\n" % name, encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert "%s is already installed as a %s — skipped" % (name, kind) \
+            in r.out
+        assert "Installed 0 skills, 1 already present" in r.out
+        assert "differ" not in r.out
+
     # -- install: where it looked, and when there was nothing to read ------
 
     def test_a_missing_default_boostfile_names_where_it_looked(
@@ -1928,7 +1971,8 @@ class TestBundleAuditFindings:
                                                             monkeypatch):
         monkeypatch.setattr("sys.stdin", io.StringIO(""))
         r = boost("bundle", "install", "-")
-        assert "nothing to apply: stdin has no tap or skill lines" in r.out
+        # the same spelling the journal records the run under
+        assert "nothing to apply: <stdin> has no tap or skill lines" in r.out
         assert "Installed 0 skills" in r.out
 
     def test_a_comment_only_file_says_so_in_both_modes(self, boost, tapped,
@@ -1975,6 +2019,30 @@ class TestBundleAuditFindings:
         assert r.out.count("cannot resolve yet") == 3
         assert ("would install 0 skills, add 1 tap, 3 unresolved until tapped"
                 in r.out)
+
+    def test_dry_run_defers_a_line_naming_the_tap_by_its_derived_name(
+            self, boost, sandbox, fixture_tap_src, tmp_path):
+        # The real run names a tap from its URL (`parse_spec`), not from the
+        # line's NAME: `tap myalias <dir>` is tapped as the dir's basename.
+        # A preview that only knew "myalias" called the skill line a miss
+        # (exit 1) while the real run installed it (exit 0). Preview and run
+        # cannot print the same summary — one clones, one does not — so
+        # "agree" is: same exit code, and neither calls the line a failure.
+        src = _copy_tap(fixture_tap_src, tmp_path / "newtap-src")
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap myalias %s\nskill newtap-src:brainstorming\n"
+                      % src.as_posix(), encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run")
+        assert "brainstorming — cannot resolve yet" in dry.out
+        assert "not found" not in dry.out
+        assert ("would install 0 skills, add 1 tap, 1 unresolved until tapped"
+                in dry.out)
+        assert "would fail" not in dry.out
+        real = boost("bundle", "install", bf)
+        assert "tapped newtap-src" in real.out
+        assert "installed brainstorming" in real.out
+        assert "failed" not in real.out
+        assert lockfile.installed()["brainstorming"]["tap"] == "newtap-src"
 
     def test_dry_run_remembers_what_it_would_install(self, boost, tapped,
                                                      tmp_path):
