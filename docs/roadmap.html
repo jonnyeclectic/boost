@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>64</b><span>Planned</span></div>
-      <div class="stat"><b>481</b><span>Loop finds</span></div>
+      <div class="stat"><b>65</b><span>Planned</span></div>
+      <div class="stat"><b>482</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1943,18 +1943,14 @@ Floor-margin exposure, with that qualification attached: hit@1 measures 44/91 = 
       </article>
 
       <article class="cap rcard" id="read-only-boost-home-with-no-cache-dir">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
         <h3>Under a read-only <code>~/.boost</code> with no cache dir, <code>update</code>, <code>heal</code> and <code>doctor</code> crash at exit 70, and <code>heal --dry-run</code> says 0 for a run that crashes</h3>
-        <p><b>Measured</b> on the second release train and on <code>a316c6b</code>, where it behaves the same. Setup: tap the fixture, then <code>rm -rf ~/.boost/cache; chmod 500 ~/.boost</code>. <code>search</code>, <code>info</code> and <code>browse</code> now exit 0 (<code>cache-writers-that-still-crash-on-a-read-only-cache</code>), and <code>reindex</code> exits 1 naming <code>~/.boost</code>. But <code>update</code>, <code>heal</code> and <code>doctor</code> exit 70 with crash reports. <code>update</code> dies in <code>journal.log</code>'s <code>ensure_dirs</code>. The command whose job is to name the problem, <code>doctor</code>, is one that crashes.
-
-<code>heal --dry-run</code> exits 0 in that state ("would rebuild catalog cache …") while <code>heal</code> exits 70. The cache-dir check heal and doctor gained in the first release train asks whether an <i>existing</i> directory refuses writes, deliberately, so that a missing one is not called unwritable. A missing cache dir under a parent that refuses the mkdir is a third case that neither branch names.
-
-Likely fix: <code>paths.ensure_dirs</code> callers on the doctor, heal, update and journal paths tolerate a refused mkdir, like <code>rebuild_tap</code> now does. Doctor and heal then name the nearest existing directory that refuses writes, which is what <code>rag._unsaved</code> already does. The preview and the run must agree.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/read-only-boost-home-with-no-cache-dir.md">Write-up &middot; read-only-boost-home-with-no-cache-dir.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">With ~/.boost read-only and no cache dir, update, heal and doctor exit 70; heal --dry-run exits 0 while heal exits 70…</span>
+          <span class="m">fixed: paths.refuses_writes names the directory that stops a write, including the parent of a dir a refused mkdir left missing; doctor and heal create what they can and name ~/.boost (70 → 1), heal --dry-run agrees (0 → 1); journal.log creates only its own dir, so update, compact and install finish (70 → 0); an install checks the store before its first write (a store that refuses stops it at exit 1 with nothing written) and a refused lock-history snapshot is a warning, so none of the measured shapes lands on disk unrecorded; an install skips an agent dir with a file or dangling link in the way, whether a skills, rules or commands dir, records it and says to move it aside (70 → 0), and sync, doctor and heal name it too; untap names ~/.boost (70 → 1)</span>
         </div>
       </article>
 
@@ -2013,6 +2009,51 @@ warnings, with a <code>boost sync</code> remedy that never writes there.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
           <span class="m">a rule or workflow row for an agent later disabled in config makes sync print "re-materialized" on every run and keeps doctor at rc 1</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="agent-dir-shapes-install-still-trips-on">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <h3>Agent-dir shapes boost still trips on: a parent with no search bit, a missing dir under a read-only parent, a dir at a rule's file path, a blocked agent dropped from the lock's scope</h3>
+        <p><b>Found by the third review of <code>read-only-boost-home-with-no-cache-dir</code>.</b> None is a regression.
+Each was measured behaving the same on <code>c7dca95c</code>.
+
+<b>A parent with no search bit.</b> With an agent dir's parent at mode <code>0o600</code>,
+<code>store.install</code> copies the skill into the store. It then crashes at exit 70 in
+<code>linked_agents</code>, where <code>(adir / name).is_symlink()</code> raises
+<code>PermissionError</code> outside <code>link_agents</code>' guard. The store dir is left
+unrecorded. Treating an <code>OSError</code> there as "not linked" would close it.
+
+<b>A missing skills dir under a read-only parent.</b> The install names a <code>chmod</code>
+target that does not exist, and <code>doctor</code> and <code>heal</code> disagree about it.
+<code>link_agents</code>' <code>PermissionError</code> branch should record the block from
+<code>paths.refuses_writes(adir)</code> and word it through <code>link_refusal</code>. doctor's
+agent-dir check should use the same function, so that it agrees with heal.
+
+<b>A blocked agent drops out of the scope.</b> After an install skips an agent as blocked, the lock's
+<code>agents</code> list leaves it out. <code>preserved_agent_scope</code> replays that list, so a
+later <code>install --force</code> never retries the agent and never says so. Only
+<code>boost sync</code> reports and repairs it.
+
+<b>Callers that drop the result.</b> <code>boost import</code> (<code>install_from_path</code>),
+<code>quarantine --release</code> and the unsideline paths (focus, profile, context, team) drop
+<code>res.blocked</code> without a word, as they already drop <code>res.unwritable</code>.
+<code>pkg._warn_unwritable(res)</code> is the existing reporter.
+
+<b>Also found by the reconcile review of #933 with #931</b>, and also measured on both parents: With any agent dotdir at mode <code>600</code>, on Python 3.12 and 3.13 (3.14's <code>Path.exists</code> answers False where they raise), <code>doctor</code>, <code>heal</code> and <code>sync</code>
+exit 70 (<code>PermissionError</code> on <code>~/.cursor/skills</code>). A rule or workflow install in that
+shape is fixed on #933's branch: <code>_refused_target</code> names the dir through
+<code>paths.refuses_writes</code>, which asks <code>lexists</code>. So is uninstall of a rule or workflow there, through <code>store.refusing_dir</code>, which now treats a path it may not look at as not there. The skill install and these three are not fixed. And the remedy is wrong for this shape: <code>chmod u+w</code> leaves a <code>600</code> dir at <code>600</code>, because the missing bit is search, so the wording should say <code>chmod u+wx</code> when <code>X_OK</code> is what fails.<br><br>A <em>directory</em> at a rule's target file path (<code>~/.cursor/rules/house.mdc/</code>) raises
+<code>IsADirectoryError</code>. That is not one of the refusal shapes, so install exits 70 after writing
+the other agents' copies, with no lock entry.<br><br><code>heal --dry-run</code> previews "would re-materialize" a rule whose target dir is still locked or
+blocked. The real run then re-materializes nothing, correctly. The exit codes agree (1 and 1), but the
+wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every install exits 1, naming it, while
+<code>doctor</code> says healthy. <code>doctor</code> could ask <code>paths.refuses_writes(paths.store_dir())</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">Agent-dir shapes install, doctor, heal and sync still mishandle after the read-only-home fix; each behaves the same on c7dca95c…</span>
         </div>
       </article>
 

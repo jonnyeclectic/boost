@@ -2028,6 +2028,10 @@ def cmd_browse(argv):
             out.warn("not %s: %s is not writable — `chmod u+w %s`, then "
                      "`boost sync`" % ("linked" if res.kind == "skill" else "written",
                                        _tilde(adir), _tilde(adir)))
+        for adir, block in res.blocked:
+            out.warn("not %s: %s — %s, then `boost sync`"
+                     % ("linked" if res.kind == "skill" else "written",
+                        *store.link_refusal(adir, block)), wrap=True)
     return 0
 
 

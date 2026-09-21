@@ -298,6 +298,11 @@ def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
     refused = ["%s: %s is not writable — `chmod u+w %s`, then `boost sync` %s"
                % (what[0], _tilde(adir), _tilde(adir), what[1])
                for adir in getattr(res, "unwritable", None) or ()]
+    # Something in the way of the dir: no chmod clears a file or a dangling
+    # link, so the remedy is the move `store.link_refusal` names.
+    refused += ["%s: %s — %s, then `boost sync` %s"
+                % (what[0], *store.link_refusal(adir, block), what[1])
+                for adir, block in getattr(res, "blocked", None) or ()]
     return conflicts, refused
 
 
@@ -806,8 +811,15 @@ def cmd_sync(argv: list[str]) -> int:
     for adir in stuck:
         out.warn("agent dir %s is not writable — `chmod u+w %s`, then re-run "
                  "`boost sync`" % (_tilde(adir), _tilde(adir)), wrap=True)
+    # A file or a dangling link where a rules/ or commands/ dir belongs. A
+    # block the line above already names for a skill link is not named twice.
+    named = {Path(p) for _n, _a, p in blocked}
+    in_way = [(d, b) for d, b in store.blocked_agent_dirs() if b not in named]
+    for adir, block in in_way:
+        out.warn("%s — %s, then re-run `boost sync`"
+                 % store.link_refusal(str(adir), str(block)), wrap=True)
     if (not actions and not pruned and not left and not oos and not blocked
-            and not stuck):
+            and not stuck and not in_way):
         out.ok("everything in sync")
     return 0
 

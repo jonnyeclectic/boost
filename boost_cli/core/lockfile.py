@@ -15,14 +15,19 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from contextlib import suppress
 from typing import NamedTuple
 
 from ..errors import BoostError
-from . import jsonstate, paths, util
+from . import jsonstate, output, paths, util
 
 SCHEMA_VERSION = 3
 HISTORY_KEEP = 50
+
+# Once per process: one command can write the lock several times, and the
+# fix is the same each time.
+_WARNED_UNSAVED = False
 
 # One section per installable kind, in lookup-precedence order. `find_any`
 # resolves a bare name through these left to right, so a skill shadows a rule
@@ -138,23 +143,46 @@ def write(lock: dict) -> None:
 
     Stamps ``version``/``updated`` on ``lock`` in place and prunes
     history to the newest HISTORY_KEEP snapshots.
+
+    The snapshot is a record, not the work, so one that cannot be taken is a
+    warning and the lock is still written. A refused history dir under a
+    read-only ``~/.boost/state`` used to fail here after an install had
+    already copied, linked or written its files, leaving them on disk with no
+    lock entry any boost command could find.
     """
-    paths.ensure_dirs()
-    p = paths.lockfile_path()
+    p = paths.lockfile_path()          # atomic_write_text makes the store
     if p.exists():
+        _snapshot(p)
+    lock["version"] = SCHEMA_VERSION
+    lock["updated"] = util.now_iso()
+    util.atomic_write_text(p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
+
+
+def _snapshot(p) -> None:
+    """Copy the current lock into history; warn once if that is refused."""
+    global _WARNED_UNSAVED
+    hist = paths.lock_history_dir()
+    try:
+        hist.mkdir(parents=True, exist_ok=True)
         stamp = _archive_stamp(p)
-        dest = paths.lock_history_dir() / ("lock-%s.json" % stamp)
+        dest = hist / ("lock-%s.json" % stamp)
         n = 2
         while dest.exists():  # same-second writes each keep their snapshot
-            dest = paths.lock_history_dir() / ("lock-%s-%d.json" % (stamp, n))
+            dest = hist / ("lock-%s-%d.json" % (stamp, n))
             n += 1
         # plain copy: the snapshot's mtime is when it was TAKEN (copy2 would
         # inherit the lock file's older mtime and mis-sort it as oldest)
         shutil.copy(p, dest)
         _prune_history()
-    lock["version"] = SCHEMA_VERSION
-    lock["updated"] = util.now_iso()
-    util.atomic_write_text(p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
+    except OSError as e:
+        if not _WARNED_UNSAVED:
+            _WARNED_UNSAVED = True
+            where = paths.refuses_writes(hist) or hist
+            output.warn("could not keep a history snapshot of the lock file "
+                        "(%s) — `boost replay` will not offer the state before "
+                        "this change; make %s writable"
+                        % (e.strerror or e, paths.tilde(where)),
+                        stream=sys.stderr, wrap=True)
 
 
 def _history_files() -> list:

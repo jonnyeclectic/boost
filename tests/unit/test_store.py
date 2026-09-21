@@ -3,6 +3,7 @@
 """Unit tests: boost_cli/core/store.py — install/uninstall/link/sync (no CLI)."""
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shutil
@@ -3748,6 +3749,136 @@ class TestAnUnwritableAgentDirIsSkipped:
     def test_a_writable_dir_reports_nothing_unwritable(self, tap, entry):
         assert store.install(entry).unwritable == []
 
+    def test_sync_plan_keeps_its_link_missing_not_blocked(self, tap, entry):
+        # A read-only dir is fixed by a chmod, after which sync makes the
+        # link. Calling it blocked would print sync's "move or delete the
+        # path" advice for a directory that must stay where it is.
+        store.install(entry)
+        cursor = paths.home() / ".cursor" / "skills"
+        (cursor / "brainstorming").unlink()
+        cursor.chmod(0o500)
+        try:
+            plan = store.sync_plan()
+        finally:
+            cursor.chmod(0o700)
+        assert ("brainstorming", "cursor") in plan["missing_links"]
+        assert plan["blocked_links"] == []
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="creating a symlink needs a privilege on Windows")
+class TestSomethingInTheWayOfAnAgentDirIsSkipped:
+    """A dangling symlink or a file where an agent's skills dir belongs made
+    the mkdir raise FileExistsError after the store copy, so the install
+    exited 70 and the lock recorded nothing. No chmod clears it, so it is
+    reported apart from `unwritable`, with the move that does."""
+
+    def test_a_dangling_agent_dir(self, tap, entry, tmp_path):
+        cursor = paths.home() / ".cursor" / "skills"
+        if cursor.is_dir():
+            shutil.rmtree(cursor)
+        cursor.parent.mkdir(parents=True, exist_ok=True)
+        cursor.symlink_to(tmp_path / "nowhere")
+        res = store.install(entry)
+        assert res.blocked == [(str(cursor), str(cursor))]
+        assert res.unwritable == []
+        assert set(res.linked) == set(LINKED_AGENTS) - {"cursor"}
+        assert lockfile.get_skill("brainstorming") is not None
+        assert store.link_refusal(*res.blocked[0]) == (
+            "~/.cursor/skills is not a directory",
+            "move ~/.cursor/skills aside")
+
+    def test_a_file_above_the_agent_dir_names_the_file(self, tap, entry):
+        cursor = paths.home() / ".cursor"
+        if cursor.exists():
+            shutil.rmtree(cursor)
+        cursor.write_text("x\n", encoding="utf-8")
+        res = store.install(entry)
+        assert res.blocked == [(str(cursor / "skills"), str(cursor))]
+        assert store.link_refusal(*res.blocked[0]) == (
+            "~/.cursor/skills cannot be created: ~/.cursor is not a directory",
+            "move ~/.cursor aside")
+
+    def test_sync_plan_calls_its_links_blocked_not_missing(self, tap, entry,
+                                                           tmp_path):
+        store.install(entry)
+        cursor = paths.home() / ".cursor" / "skills"
+        shutil.rmtree(cursor)
+        cursor.symlink_to(tmp_path / "nowhere")
+        plan = store.sync_plan()
+        assert plan["blocked_links"] == [
+            ("brainstorming", "cursor", str(cursor))]
+        assert plan["missing_links"] == []
+
+
+class TestALinkFailureNothingExplainsStaysLoud:
+    """Only a path in the way is skipped. Any other OSError from the mkdir is
+    not understood, so it propagates rather than turning into a silent skip."""
+
+    @pytest.mark.parametrize("block", [None, "a real directory"])
+    def test_it_propagates(self, tap, monkeypatch, tmp_path, block):
+        real_mkdir = Path.mkdir
+
+        def mkdir(self, *a, **kw):
+            if self.name == "skills" and self.parent.name == ".cursor":
+                raise OSError(errno.EIO, "I/O error", str(self))
+            return real_mkdir(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "mkdir", mkdir)
+        monkeypatch.setattr(paths, "refuses_writes",
+                            lambda _d: tmp_path if block else None)
+        with pytest.raises(OSError, match="I/O error"):
+            store.link_agents("brainstorming")
+
+
+class TestSyncReportsWhyAMaterializationWasNotRepaired:
+    """The install's own BoostError is the cause sync reports. `_GONE`
+    ("its source is gone") is for a catalogue entry that is really missing."""
+
+    def test_the_error_and_its_hint_are_the_action(self, sandbox, monkeypatch):
+        repair = store.StoreRepair("tap", preview="p", applied="repaired",
+                                   cat_entry={"name": "team-conventions"})
+        monkeypatch.setattr(store, "plan_missing_materialization",
+                            lambda kind, name: repair)
+
+        def refuse(*_a, **_kw):
+            raise BoostError("cannot install team-conventions: X is not "
+                             "writable", hint="run `chmod u+w X`, then re-run")
+
+        monkeypatch.setattr(store, "install", refuse)
+        plan = {"missing_links": [], "stale_links": [], "missing_store": [],
+                "missing_materializations": [("rule", "team-conventions")]}
+        assert store.sync_apply(plan) == [
+            "rule team-conventions was not re-materialized: cannot install "
+            "team-conventions: X is not writable — run `chmod u+w X`, then "
+            "re-run"]
+
+    def test_an_error_with_no_hint_gets_no_dash(self, sandbox, monkeypatch):
+        repair = store.StoreRepair("tap", preview="p", applied="repaired",
+                                   cat_entry={"name": "ship-it"})
+        monkeypatch.setattr(store, "plan_missing_materialization",
+                            lambda kind, name: repair)
+
+        def refuse(*_a, **_kw):
+            raise BoostError("boom")
+
+        monkeypatch.setattr(store, "install", refuse)
+        plan = {"missing_links": [], "stale_links": [], "missing_store": [],
+                "missing_materializations": [("workflow", "ship-it")]}
+        assert store.sync_apply(plan) == [
+            "workflow ship-it was not re-materialized: boom"]
+
+    def test_a_missing_catalogue_entry_is_gone(self, sandbox, monkeypatch):
+        repair = store.StoreRepair("drop", preview="p", applied="a")
+        monkeypatch.setattr(store, "plan_missing_materialization",
+                            lambda kind, name: repair)
+        monkeypatch.setattr(store, "install", lambda *_a, **_kw: pytest.fail(
+            "nothing to install from"))
+        plan = {"missing_links": [], "stale_links": [], "missing_store": [],
+                "missing_materializations": [("rule", "team-conventions")]}
+        assert store.sync_apply(plan) == [
+            "rule team-conventions has a missing materialization but its "
+            "source is gone — run `boost update` or reinstall"]
 
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="chmod can't make a directory unwritable on Windows")
@@ -3806,6 +3937,25 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
         assert not any(m.get("unwritable") for m in
                        self._locked(kind, entry["name"])["materializations"])
         assert store.sync_plan()["missing_materializations"] == []
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_dotdir_with_no_search_bit_is_skipped_not_a_crash(self, tap, kind):
+        # ~/.cursor at 0o600: stat below it raises PermissionError, so naming
+        # the refusing dir by walking `exists()` up from rules/ crashed after
+        # the other agents were written, with nothing in the lock.
+        entry = self._entry(tap, kind)
+        cursor = paths.home() / ".cursor"
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o600)
+        try:
+            res = store.install(entry)
+        finally:
+            cursor.chmod(0o700)
+        assert res.unwritable == [str(cursor)]
+        assert set(res.linked) == {"claude-code", "windsurf", "gemini"}
+        rows = {m["agent"]: m for m in self._locked(kind, entry["name"])
+                ["materializations"]}
+        assert rows["cursor"]["unwritable"] is True
 
     @pytest.mark.parametrize("kind", ["rule", "workflow"])
     def test_a_repeat_refusal_is_one_row_and_keeps_the_scope(self, tap, kind):
@@ -3874,6 +4024,24 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
             assert "boost:rule:team-conventions start" in claude_md.read_text(
                 encoding="utf-8")
         assert self._locked(kind, entry["name"])["materializations"] == rows
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_uninstall_under_a_dotdir_with_no_search_bit_is_refused_by_name(
+            self, tap, kind):
+        # ~/.cursor at 0o600: naming the refusing dir walked `exists()` up
+        # from rules/, which raises there on Python 3.12 and 3.13, so the
+        # named refusal became exit 70 on its way out.
+        entry = self._entry(tap, kind)
+        store.install(entry)
+        cursor = paths.home() / ".cursor"
+        cursor.chmod(0o600)
+        try:
+            with pytest.raises(BoostError) as ei:
+                store.uninstall(entry["name"])
+        finally:
+            cursor.chmod(0o700)
+        assert "%s is not writable" % paths.tilde(cursor) in ei.value.message
+        assert self._locked(kind, entry["name"]) is not None
 
     def test_uninstall_does_not_rewrite_a_context_file_it_never_wrote(self, tap):
         # ~/.claude refused the block, so there is nothing of ours in
@@ -4072,3 +4240,135 @@ class TestUnwritableAgentDirs:
         store.install(_rule_entry(tap))
         assert (paths.home() / ".cursor" / "rules").is_dir()
         assert store.unwritable_agent_dirs() == []
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="creating a symlink needs a privilege on Windows")
+class TestSomethingInTheWayOfARuleOrWorkflowDir:
+    """A file at ``~/.cursor``, or a dangling ``~/.cursor/rules`` link, makes
+    the mkdir raise FileExistsError or NotADirectoryError, which the guard for
+    a read-only dir did not catch: the install exited 70 after the agents
+    before Cursor were written. It is skipped and recorded the same way, and
+    named with the move that clears it, since no chmod does."""
+
+    CURSOR: ClassVar[dict[str, tuple[str, str]]] = {
+        "rule": ("rules", "team-conventions.mdc"),
+        "workflow": ("commands", "ship-it.md")}
+
+    def _entry(self, tap, kind):
+        entry = _rule_entry(tap) if kind == "rule" else _workflow_entry(tap)
+        catalog.rebuild_tap(tap)          # so sync's repair can find it
+        return entry
+
+    def _rows(self, kind, name):
+        get = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+        return {m["agent"]: m for m in get(name)["materializations"]}
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_file_at_the_dotdir(self, tap, kind):
+        entry = self._entry(tap, kind)
+        cursor = paths.home() / ".cursor"
+        if cursor.exists():
+            shutil.rmtree(cursor)
+        cursor.write_text("x\n", encoding="utf-8")
+        target = cursor / self.CURSOR[kind][0]
+        res = store.install(entry)
+        assert res.blocked == [(str(target), str(cursor))]
+        assert res.unwritable == []
+        assert set(res.linked) == {"claude-code", "windsurf", "gemini"}
+        assert store.link_refusal(*res.blocked[0]) == (
+            "%s cannot be created: ~/.cursor is not a directory"
+            % paths.tilde(target), "move ~/.cursor aside")
+        rows = self._rows(kind, entry["name"])
+        assert rows["cursor"]["unwritable"] is True
+        assert rows["cursor"]["path"] == str(target / self.CURSOR[kind][1])
+        # One block, one pair: the skills dir it also stops comes first.
+        assert store.blocked_agent_dirs() == [(cursor / "skills", cursor)]
+        assert store.unwritable_agent_dirs() == []
+        plan = store.sync_plan()
+        assert (kind, entry["name"]) in plan["missing_materializations"]
+        # Still in the way: sync claims no repair.
+        assert store.sync_apply(plan) == []
+        # Moved aside, the same sync writes it.
+        cursor.unlink()
+        actions = store.sync_apply(store.sync_plan())
+        assert any("re-materialized %s %s" % (kind, entry["name"]) in a
+                   for a in actions)
+        assert (target / self.CURSOR[kind][1]).is_file()
+        assert not any(m.get("unwritable")
+                       for m in self._rows(kind, entry["name"]).values())
+        assert store.blocked_agent_dirs() == []
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_dangling_link_at_the_dir(self, tap, kind, tmp_path):
+        entry = self._entry(tap, kind)
+        target = paths.home() / ".cursor" / self.CURSOR[kind][0]
+        if target.is_dir():
+            shutil.rmtree(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(tmp_path / "nowhere")
+        res = store.install(entry)
+        assert res.blocked == [(str(target), str(target))]
+        assert store.link_refusal(*res.blocked[0]) == (
+            "%s is not a directory" % paths.tilde(target),
+            "move %s aside" % paths.tilde(target))
+        assert self._rows(kind, entry["name"])["cursor"]["unwritable"] is True
+        # Only a recorded row names this dir, and `refusing_dir` would walk
+        # past the dangling link to a ~/.cursor that is fine.
+        assert store.blocked_agent_dirs() == [(target, target)]
+        assert store.unwritable_agent_dirs() == []
+
+    def test_a_dir_no_row_names_is_not_reported(self, tap, entry, tmp_path):
+        # Skills only: a dangling ~/.cursor/rules is not boost's to report.
+        store.install(entry)
+        target = paths.home() / ".cursor" / "rules"
+        target.symlink_to(tmp_path / "nowhere")
+        assert store.blocked_agent_dirs() == []
+
+    @pytest.mark.parametrize("block", [None, "a real directory"])
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_failure_nothing_explains_stays_loud(self, tap, monkeypatch,
+                                                   tmp_path, kind, block):
+        entry = self._entry(tap, kind)
+        real = util.atomic_write_text
+
+        def write(path, text, *a, **kw):
+            if ".cursor" in Path(path).parts:
+                raise OSError(errno.EIO, "I/O error", str(path))
+            return real(path, text, *a, **kw)
+
+        monkeypatch.setattr(util, "atomic_write_text", write)
+        # A real directory "refusing" the agent dir, never the store: the
+        # store's own check would refuse the install before any write.
+        monkeypatch.setattr(paths, "refuses_writes", lambda d: tmp_path if (
+            block and ".cursor" in d.parts) else None)
+        with pytest.raises(OSError, match="I/O error"):
+            store.install(entry)
+
+
+class TestRefusingDir:
+    """The dir a `chmod u+w` remedy should name for a write under a path."""
+
+    def test_an_existing_dir_is_itself(self, tmp_path):
+        assert store.refusing_dir(tmp_path) == tmp_path
+
+    def test_a_missing_dir_names_its_nearest_existing_ancestor(self, tmp_path):
+        assert store.refusing_dir(tmp_path / "a" / "b") == tmp_path
+
+    def test_the_walk_stops_at_the_root(self):
+        root = Path(Path.cwd().anchor)
+        assert store.refusing_dir(root) == root
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't remove the search bit on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_parent_with_no_search_bit_is_the_answer(self, tmp_path):
+        dot = tmp_path / "dot"
+        (dot / "rules").mkdir(parents=True)
+        dot.chmod(0o600)
+        try:
+            assert store.refusing_dir(dot / "rules") == dot
+        finally:
+            dot.chmod(0o700)
+

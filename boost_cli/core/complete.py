@@ -95,12 +95,13 @@ def refresh_names() -> int:
             path.write_text(text, encoding="utf-8")
         except OSError as e:
             # Once per process, like rebuild_tap: the fix is the same each time.
+            # A cache dir that could not be created is fixed in its parent.
             if not _WARNED_UNSAVED:
                 _WARNED_UNSAVED = True
+                where = paths.nearest_existing(path.parent)
                 output.warn("could not save the completion list (%s) — tab "
                             "completion may offer stale names; make %s "
-                            "writable" % (e.strerror or e,
-                                           paths.tilde(path.parent)),
+                            "writable" % (e.strerror or e, paths.tilde(where)),
                             stream=sys.stderr, wrap=True)
     return len(names)
 
