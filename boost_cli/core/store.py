@@ -121,6 +121,16 @@ def cloned_source(url: str) -> Iterator[RemoteSource]:
             util.rmtree(tmp)
 
 
+def is_url_import(entry: dict) -> bool:
+    """Whether a lock entry is a `boost import` of a git URL.
+
+    Only a fresh clone can restore one, and sync never touches the network, so
+    its repair is `boost reinstall` where every other skill's is `boost heal`.
+    ``sync``/``heal`` and ``doctor`` both ask here, so they name the same one.
+    """
+    return entry.get("tap") == "local" and bool(entry.get("source_url"))
+
+
 def local_source_dir(entry: dict) -> Path | None:
     """The directory a local import can be read again from, else None.
 
@@ -2124,7 +2134,7 @@ def plan_missing_store(name: str) -> StoreRepair:
     """How `sync` will repair `name`, whose store dir is gone. Read-only."""
     entry = lockfile.get_skill(name) or {}
     tap_name = entry.get("tap")
-    if tap_name == "local" and entry.get("source_url"):
+    if is_url_import(entry):
         # A URL import can be repaired only by cloning its repo again, and sync
         # never touches the network. Dropping the entry instead would throw
         # away the one record of where the skill came from, so keep it and

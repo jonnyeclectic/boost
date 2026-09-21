@@ -951,6 +951,16 @@ class TestStderrWaitsForStdout:
         output.err("boom")
         assert t.text() == "Error: boom\n"
 
+    def test_err_still_prints_when_stdout_was_closed_at_launch(self, monkeypatch):
+        # `boost … >&-` starts Python with fd 1 closed, and Python then sets
+        # sys.stdout to None: there is no stdout to flush, and asking it to
+        # raised AttributeError before the error line was written.
+        t = _Terminal().install(monkeypatch)
+        monkeypatch.setattr(sys, "stdout", None)
+        output.err("boom", hint="try again")
+        output.warn("notice", stream=sys.stderr)
+        assert t.text() == "Error: boom\n  hint: try again\n  ! notice\n"
+
 
 class TestPlain:
     """Control characters are stripped from text boost did not author.

@@ -989,6 +989,18 @@ class TestImportProvenance:
         assert store.local_source_dir(
             {"source_dir": "alpha", "source_url": self.URL}) is None
 
+    # ── is_url_import ────────────────────────────────────────────────────
+    @pytest.mark.parametrize(("entry", "expected"), [
+        ({"tap": "local", "source_url": URL}, True),
+        ({"tap": "local", "source_url": ""}, False),      # a path import
+        ({"tap": "local"}, False),                        # an older lock
+        ({"tap": "fixture-tap", "source_url": URL}, False),
+        ({"tap": "fixture-tap"}, False),
+        ({}, False),
+    ])
+    def test_is_url_import(self, entry, expected):
+        assert store.is_url_import(entry) is expected
+
     # ── cloned_source ────────────────────────────────────────────────────
     def test_cloned_source_asks_for_a_full_checkout_and_cleans_up(
             self, tmp_path, monkeypatch):

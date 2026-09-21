@@ -402,6 +402,40 @@ class TestDoctor:
         assert "1 skill installed · 1 tap synced · 4 broken links" in r.out
         assert "2 issues need attention" in r.out  # plural verb: two bad() calls
 
+    def test_missing_store_of_a_url_import_names_reinstall(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # `boost heal` only keeps a URL import's entry and points onward, since
+        # sync never touches the network — so doctor sending the reader to heal
+        # cost a second command to reach the one that clones it again.
+        src = tmp_path / "url-skill"
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: url-skill\ndescription: a skill imported by URL\n"
+            "version: 0.1.0\n---\n\nBody.\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest, sparse=True: shutil.copytree(src, dest))
+        boost("import", "https://example.invalid/skills.git")
+        shutil.rmtree(paths.store_dir() / "url-skill")
+        r = boost("doctor", expect=1)
+        line = next(ln for ln in r.out.splitlines() if "missing from store" in ln)
+        assert "skill url-skill missing from store — run `boost reinstall url-skill`" in line
+        assert "boost heal" not in line
+
+    def test_missing_store_of_a_path_import_still_names_heal(
+            self, boost, sandbox, tmp_path):
+        # A local-path import has no URL, and heal re-copies it from the path
+        # it recorded — so heal stays the remedy there.
+        src = tmp_path / "path-skill"
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: path-skill\ndescription: a skill imported by path\n"
+            "version: 0.1.0\n---\n\nBody.\n", encoding="utf-8")
+        boost("import", src)
+        shutil.rmtree(paths.store_dir() / "path-skill")
+        r = boost("doctor", expect=1)
+        assert "skill path-skill missing from store — run `boost heal`" in r.out
+
     def test_missing_lock_over_populated_store_rc1(self, boost, installed):
         # The store dir and its agent links from `installed` are still on
         # disk; only the lock record is gone. Doctor used to print

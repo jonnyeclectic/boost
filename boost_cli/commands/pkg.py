@@ -1558,8 +1558,14 @@ def cmd_import(argv: list[str]) -> int:
     return _import_root(root, args.name, args.all, only, args.source)
 
 
-def _warn_import(res: store.InstallResult) -> None:
-    """What an import changed beyond the files: provenance and stray links."""
+def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
+    """What an import changed beyond the files: provenance and stray links.
+
+    ``narrowed`` is whether this run passed ``--agent``. Without it the scope
+    is one an earlier run recorded and this one carried forward, and saying
+    it was "just declared" sends the reader looking for a flag they never
+    passed.
+    """
     if res.replaced_tap:
         out.warn("%s was installed from %s — it is a local import now, so "
                  "`boost update` will not refresh it "
@@ -1567,9 +1573,11 @@ def _warn_import(res: store.InstallResult) -> None:
                  % (res.name, res.replaced_tap, res.replaced_tap, res.name),
                  wrap=True)
     if res.out_of_scope:
-        out.warn("%s is still linked into %s, outside the --agent scope just "
-                 "declared — `boost sync --prune` removes those links"
-                 % (res.name, ", ".join(res.out_of_scope)), wrap=True)
+        out.warn("%s is still linked into %s, outside the --agent scope %s "
+                 "— `boost sync --prune` removes those links"
+                 % (res.name, ", ".join(res.out_of_scope),
+                    "just declared" if narrowed else "an earlier run declared"),
+                 wrap=True)
 
 
 def _import_root(root: Path, name: str | None, do_all: bool,
@@ -1579,7 +1587,7 @@ def _import_root(root: Path, name: str | None, do_all: bool,
         res = store.install_from_path(skill_dir, name=rename, only_agents=only,
                                       remote=remote)
         _report_result(res)
-        _warn_import(res)
+        _warn_import(res, only is not None)
         out.info("Imported %s; quality score %d/100" % (res.name, res.score))
         return 0
 
@@ -1617,7 +1625,7 @@ def _import_root(root: Path, name: str | None, do_all: bool,
                                                        res.score))
             _warn_injection(res)
             _warn_secrets(res)
-            _warn_import(res)
+            _warn_import(res, only is not None)
             imported += 1
         out.info("Imported %s" % _plural(imported, "skill"))
         return 1 if refused else 0

@@ -495,7 +495,9 @@ def cmd_doctor(argv):
     for name, entry in sorted(skills.items()):
         sdir = store.skill_store_dir(name)
         if not sdir.is_dir():
-            bad("skill", "skill %s missing from store — run `boost heal`" % name)
+            fix = ("boost reinstall %s" % name if store.is_url_import(entry)
+                   else "boost heal")
+            bad("skill", "skill %s missing from store — run `%s`" % (name, fix))
             skill_issues += 1
             continue
         if entry.get("quarantined"):

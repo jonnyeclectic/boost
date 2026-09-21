@@ -2096,6 +2096,21 @@ class TestImportAgentScope:
         diff = boost("sync", "--diff")
         assert "linked outside declared scope (3)" in diff.out
 
+    def test_an_inherited_narrowing_does_not_claim_it_was_just_declared(
+            self, boost, sandbox, tmp_path):
+        # A plain re-import keeps the scope an earlier `--agent` recorded, and
+        # the stray links it reports are real — but nothing was declared on
+        # this run, so "just declared" sent the reader looking for a flag
+        # they never passed.
+        d = _skill_dir(tmp_path, "scoped")
+        boost("import", d)
+        boost("import", d, "--agent", "cursor")
+        r = boost("import", d)
+        assert ("scoped is still linked into claude-code, windsurf, antigravity, "
+                "outside the --agent scope an earlier run declared") in _flat(r.out)
+        assert "just declared" not in _flat(r.out)
+        assert "`boost sync --prune` removes those links" in _flat(r.out)
+
     def test_a_fresh_narrow_import_leaves_nothing_to_warn_about(
             self, boost, sandbox, tmp_path):
         r = boost("import", _skill_dir(tmp_path, "scoped"), "--agent", "cursor")

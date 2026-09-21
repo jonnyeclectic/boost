@@ -238,9 +238,11 @@ def _stdout_first(stream) -> None:
     A flush that fails (the reader closed the pipe) is swallowed: the line
     about to be written is usually the error, and losing it to a broken stdout
     helps nobody. The same failure still surfaces at the final flush in
-    ``cli._route``, where it is handled.
+    ``cli._route``, where it is handled. With fd 1 closed at launch
+    (``boost … >&-``) Python sets ``sys.stdout`` to None: nothing is held, so
+    there is nothing to flush.
     """
-    if stream is None or stream is sys.stdout:
+    if stream is None or sys.stdout is None or stream is sys.stdout:
         return
     with contextlib.suppress(OSError, ValueError):
         sys.stdout.flush()
