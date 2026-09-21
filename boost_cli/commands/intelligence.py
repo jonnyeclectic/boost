@@ -1294,8 +1294,10 @@ def cmd_chat(argv: list[str]) -> int:
     ap.add_argument("question", nargs="*", metavar="QUESTION",
                     help="ask once and exit; omit for an interactive session")
     ap.add_argument("-k", "--limit", type=util.positive_int, default=chat_engine.TOP_K,
-                    metavar="N", help="candidate skills to consider (default %d)"
-                                      % chat_engine.TOP_K)
+                    metavar="N",
+                    help="candidate skills per search (default %d); a follow-up "
+                         "that points back also keeps the previous list"
+                         % chat_engine.TOP_K)
     ap.add_argument("--no-sources", action="store_true",
                     help="hide the citation block under each answer")
     ap.add_argument("--json", action="store_true", dest="as_json",
@@ -1336,26 +1338,33 @@ def _chat_session(args) -> int:
     assistant, and a long transcript encourages answering from the conversation
     rather than from what retrieval actually returned.
     """
-    if not ai.available():
+    have_ai = ai.available()
+    if not have_ai:
         # Worth saying up front rather than letting every answer look terse for
         # an unexplained reason.
         note = ("no AI configured — answers are the grounded matches "
                 "themselves (%s)" % ai.fallback_note())
         for line in out.wrap(note, max(out.term_width() - 2, 20)):
             out.info(out.role(line, "muted"))
-    out.info(out.role("ask about skills; blank line or Ctrl-D to exit", "muted"))
+    # With stdin piped nobody is typing, so the prompt and the typing hint are
+    # only chrome in the answers a script captures — the same rule
+    # output.confirm applies. A terminal is unchanged.
+    typing = sys.stdin.isatty()
+    if typing:
+        out.info(out.role("ask about skills; blank line or Ctrl-D to exit", "muted"))
     history: list[chat_engine.Turn] = []
     while True:
         try:
-            question = input("\n> ").strip()
+            question = input("\n> " if typing else "").strip()
         except (EOFError, KeyboardInterrupt):
-            out.info("")
+            if typing:
+                out.info("")    # end the prompt line the EOF left open
             return 0
         if not question:
             return 0
         reply = chat_engine.answer(question, history=history, k=args.limit)
         out.info("")
         _print_reply(reply, not args.no_sources)
-        history.append(chat_engine.Turn(question, reply.text))
-        for follow in chat_engine.suggest_followups(reply.skills)[:2]:
+        history.append(chat_engine.Turn(question, reply.text, reply.skills))
+        for follow in chat_engine.suggest_followups(reply.skills, with_ai=have_ai)[:2]:
             out.info(out.role("  try: %s" % follow, "muted"))
