@@ -597,9 +597,22 @@ def cmd_doctor(argv):
     quarantined_rules = len(all_rules) - len(rules)
     quarantined_workflows = len(all_workflows) - len(workflows)
     mat_issues = 0
+    for kind, section in (("rule", rules), ("workflow", workflows)):
+        for name, entry in sorted(section.items()):
+            for m in entry.get("materializations") or []:
+                if m.get("unwritable"):
+                    # Refused at install, so `boost reinstall` would be refused
+                    # too until the dir allows it; the agent-dir line below
+                    # names the `chmod`. Any file there predates the refusal.
+                    bad(kind, "%s %s was not written for %s: its dir was not "
+                        "writable — `boost sync` writes it once it is"
+                        % (kind, name, m.get("agent", "?")), wrap=True)
+                    mat_issues += 1
     for name, entry in sorted(rules.items()):
         for m in entry.get("materializations") or []:
             p = Path(m.get("path", ""))
+            if m.get("unwritable"):
+                continue
             if m.get("mode") == "claude":
                 try:
                     present = p.exists() and ("boost:rule:%s start" % name) in \
@@ -614,7 +627,7 @@ def cmd_doctor(argv):
                 mat_issues += 1
     for name, entry in sorted(workflows.items()):
         for m in entry.get("materializations") or []:
-            if not Path(m.get("path", "")).is_file():
+            if not m.get("unwritable") and not Path(m.get("path", "")).is_file():
                 bad("workflow", "workflow %s missing its %s file — run `boost reinstall %s`"
                     % (name, m.get("agent", "?"), name))
                 mat_issues += 1
@@ -689,16 +702,16 @@ def cmd_doctor(argv):
             % (dup.name, agents.display_name(dup.agent), _tilde(dup.path),
                _tilde(dup.target)), wrap=True)
 
-    # Linking agents only: a native-store agent's skills dir (Gemini's) is
-    # never written, so its permissions are not boost's problem and `boost
-    # sync` could not act on them.
-    for adir in agents.linking_agents().values():
-        if adir.is_dir() and not os.access(str(adir), os.W_OK):
-            # A next action, like the log line below it: without one this was
-            # the only issue doctor names that nothing can act on.
-            bad("agent-dir", "agent dir %s is not writable — `chmod u+w %s`, "
-                "then `boost sync` relinks what it missed"
-                % (_tilde(adir), _tilde(adir)), wrap=True)
+    # Every dir boost writes into: the linking agents' skills dirs, and the
+    # rules/ and commands/ dirs rules and workflows materialize into. Not a
+    # native-store agent's skills dir (Gemini's): boost never writes it, and
+    # `boost sync` could not act on it.
+    for adir in store.unwritable_agent_dirs():
+        # A next action, like the log line below it: without one this was
+        # the only issue doctor names that nothing can act on.
+        bad("agent-dir", "agent dir %s is not writable — `chmod u+w %s`, "
+            "then `boost sync` writes what it missed"
+            % (_tilde(adir), _tilde(adir)), wrap=True)
 
     rotation = journal.rotation_healthy()
     if not rotation:
@@ -1254,8 +1267,7 @@ def cmd_heal(argv):
                  % cfg_err, wrap=True)
     # Permissions are the user's to change, not heal's; but a dir heal saw and
     # cannot fix must not sit under an all-clear.
-    stuck = [adir for adir in agents.linking_agents().values()
-             if adir.is_dir() and not os.access(str(adir), os.W_OK)]
+    stuck = store.unwritable_agent_dirs()
     for adir in stuck:
         out.warn("agent dir %s is not writable — heal does not change "
                  "permissions; run `chmod u+w %s`, then `boost sync`"

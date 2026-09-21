@@ -1594,9 +1594,10 @@ def _tool_install(args: dict):
     if res.conflicts:
         lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
     if res.unwritable:
-        lines.append("not linked, directory not writable: %s — ask the user to "
+        lines.append("not %s, directory not writable: %s — ask the user to "
                      "`chmod u+w` it, then `boost sync`"
-                     % ", ".join(res.unwritable))
+                     % ("linked" if res.kind == "skill" else "written",
+                        ", ".join(res.unwritable)))
     # The same prompt-injection and secret scan `boost install` runs. This path
     # needs it more, not less: nobody is watching a terminal here, and the skill
     # was chosen and installed by an agent acting on its own. The install still
@@ -2059,13 +2060,21 @@ def _offer_boost_first(hosts: list[str]) -> None:
     try:
         builtin.ensure_tap()
         catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
-        store.install(catalog.resolve_one(builtin.BUILTIN_RULES[0]),
-                     only_agents=[a for a in scoped_agents if a])
+        res = store.install(catalog.resolve_one(builtin.BUILTIN_RULES[0]),
+                            only_agents=[a for a in scoped_agents if a])
     except (BoostError, OSError) as exc:
         out.warn("could not install %s: %s" % (builtin.BUILTIN_RULES[0], exc))
         return
-    out.ok("installed %s — remove it with `boost uninstall %s`"
-           % (builtin.BUILTIN_RULES[0], builtin.BUILTIN_RULES[0]))
+    from .pkg import _warn_unwritable
+    if not res.linked:
+        # Every file it was offered for refused the write. The lock records
+        # the refusal so `boost sync` can finish it, but "installed" would be
+        # a success nothing on disk backs.
+        out.warn("%s was not written anywhere yet" % builtin.BUILTIN_RULES[0])
+    else:
+        out.ok("installed %s — remove it with `boost uninstall %s`"
+               % (builtin.BUILTIN_RULES[0], builtin.BUILTIN_RULES[0]))
+    _warn_unwritable(res)
 
 
 def cmd_mcp(argv) -> int:

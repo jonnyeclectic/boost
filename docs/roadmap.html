@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>61</b><span>Planned</span></div>
-      <div class="stat"><b>477</b><span>Loop finds</span></div>
+      <div class="stat"><b>62</b><span>Planned</span></div>
+      <div class="stat"><b>478</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1895,33 +1895,9 @@ Floor-margin exposure, with that qualification attached: hit@1 measures 44/91 = 
       </article>
 
       <article class="cap rcard" id="unwritable-rule-or-workflow-dir-crashes-install">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Onboarding · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Onboarding · Bug</span></div>
         <h3>An unwritable agent <code>rules/</code> or <code>commands/</code> dir still crashes a rule or workflow install at exit 70</h3>
-        <p><b>Found while verifying #890</b>, which fixed the <em>skills</em> half of this for
-<code>unwritable-agent-dir-has-no-remedy</code>. <code>store.link_agents</code> now catches
-<code>PermissionError</code> per agent, and the install names <code>chmod u+w</code> then
-<code>boost sync</code>. Rules and workflows do not go through <code>link_agents</code>. They are
-<em>materialized</em> per agent (<code>_install_rule</code> / <code>_install_workflow</code>), and
-that write path has no guard.
-
-<b>Measured on #890's branch</b>, in a disposable HOME: with <code>chmod 500
-~/.cursor/rules</code> (or <code>~/.cursor/commands</code>), installing a rule (or workflow)
-exits <b>70</b> with a crash report. The agents written before the failure keep their files,
-including a rule block in <code>~/.claude/CLAUDE.md</code>, but the lock records none of it.
-<code>boost uninstall</code> then says the rule "is not installed", and <code>boost doctor</code>
-exits 0 because it never checks those directories. This is the same shape the skills fix
-closed: a partial install nothing can see or undo.
-
-<b>Also seen:</b> <code>boost reinstall</code> and <code>boost update</code> discarded the install
-result. After #890 they name an unwritable skills dir, but they still say nothing about
-<code>conflicts</code> (a real file squatting a link path), which was already true before #890.
-
-<b>Fix direction.</b> Guard the per-agent materialization write the way <code>link_agents</code>
-now does: skip the agent, record it on the result, and let the command layer name the remedy.
-doctor should check the materializing agents' <code>rules/</code> and <code>commands/</code>
-directories, as it checks the linking agents' <code>skills/</code> ones. The remedy has to be
-checked before it is printed: whether <code>boost sync</code> re-materializes a rule or workflow
-for an agent it skipped is not established here.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/unwritable-rule-or-workflow-dir-crashes-install.md">Write-up &middot; unwritable-rule-or-workflow-dir-crashes-install.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -2007,6 +1983,40 @@ the search path: <code>search</code> must not touch the network to word a hint.<
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">On a keyed machine with no vector store, doctor and search say "build it" (paid), while quickstart and update --shards say to unset the key and download free…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="sync-repairs-a-disabled-agents-row-every-run">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <h3>A rule or workflow row for a disabled agent makes <code>boost sync</code> claim the same repair on every run, and <code>doctor</code> never goes healthy</h3>
+        <p><b>Found while verifying</b> <code>unwritable-rule-or-workflow-dir-crashes-install</code>. A rule
+or workflow keeps one materialization row per agent. <code>sync_plan</code> reads every row,
+but the repair it runs is an install, and an install writes only to
+<code>agents.materializing_agents()</code>. A row for an agent that is no longer enabled is never
+written and never cleared, so it is "missing" again on the next run.
+
+<b>Measured</b> in a disposable HOME. Install a rule with <code>~/.cursor/rules</code> at mode 500,
+so the Cursor row is recorded as refused, then set <code>agents.cursor.enabled</code> to false. That
+is a natural response when the dir was locked on purpose. <code>boost sync</code> then prints
+<code>re-materialized rule team-conventions</code> on every run, and <code>boost doctor</code> stays
+at rc 1 with "rule team-conventions was not written for cursor … <code>boost sync</code> writes it
+once it is", a remedy that cannot work. This is not new with that change. On main, install the
+rule, delete the Cursor file, disable Cursor, and run sync twice: it loops the same way for
+any missing file of a disabled agent.
+
+<b>Fix sketch:</b> have <code>sync_plan</code> and doctor skip rows for agents outside
+<code>materializing_agents()</code> for that row's scope (and say once that the row belongs to a
+disabled agent, with <code>boost uninstall</code> or re-enabling as the next step), or have
+<code>sync_apply</code> claim a repair only when the rows it meant to fix are actually clean
+afterwards. A test should run sync twice and assert the second run is "everything in sync".
+The same fix must also cover <code>store.unwritable_agent_dirs()</code>, which reads the same
+rows: a refused row of a disabled agent keeps its locked dir in doctor's issues and in sync's
+warnings, with a <code>boost sync</code> remedy that never writes there.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">a rule or workflow row for an agent later disabled in config makes sync print "re-materialized" on every run and keeps doctor at rc 1</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -5557,42 +5567,14 @@ locally on a real Windows box.
       </article>
 
       <article class="cap rcard" id="audit-chat-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost chat: CLI audit findings (2026-08)</h3>
-        <p><b>Referential follow-ups retrieve unrelated skills — including the suggestions chat itself prints.</b>
-Turn 1 <em>"how do I review a diff?"</em> ranks <code>orch-review</code>; chat then suggests
-<em>"what does orch-review actually do?"</em>, and typing that ranks <code>orch-refine-code</code>
-<em>above</em> <code>orch-review</code>. Its other suggestion <em>"which of these should I install
-first?"</em> returns <code>teach</code>, <code>mercury-mcp</code>, <code>write-concisely</code> —
-nothing from the previous turn, and at 7 words it never even hits <code>expand_query</code>'s
-&le;6-word gate (<code>core/chat.py:111-128</code>). Not AI-dependent: retrieval bounds any answer.
-Fix: resolve referential follow-ups ("the second one", "which of these") against the previous
-reply's retrieved skills instead of re-querying; on the no-AI path boost the previous hit set or
-stop printing <code>suggest_followups()</code> questions the extractive path cannot answer
-(<code>core/chat.py:266-288</code>, <code>:380</code>); rank an exactly-named skill first.
-Found by the 2026-08 CLI audit (cluster <code>chat-followup-retrieval</code>); repro in the audit log.
-
-<br><br><b>The interactive "&gt; " prompt is written to stdout when stdin is piped.</b> Verified with
-streams separated: three <code>"&gt; "</code> lines in the stdout capture, stderr empty, and
-<code>chat &lt; /dev/null</code> ends <code>"…Ctrl-D to exit\n\n&gt; \n"</code> — so a script
-capturing answers gets prompt chrome mixed in. <code>_chat_session</code> calls
-<code>input("\n&gt; ")</code> unconditionally (<code>boost_cli/commands/intelligence.py:1211</code>);
-gate it on <code>sys.stdin.isatty()</code> and add a functional test asserting no
-<code>"&gt; "</code> in piped stdout. Found by the 2026-08 CLI audit (cluster
-<code>chat-prompt-echo</code>); repro in the audit log.
-
-<br><br><b>chat is the only command that accepts <code>-k</code>.</b> <code>search "…" -k 5</code>
-fails with <em>"Error: unrecognized arguments: -k 5"</em> while <code>chat -k 5</code> works
-(<code>intelligence.py:1157</code>); every other retrieval-limit sibling takes <code>--limit</code>
-only. Add <code>-k</code> as an alias of <code>--limit</code> to <code>cmd_search</code>
-(<code>discovery.py:97</code>) — and optionally the other limit commands — then regenerate
-<code>docs/commands.html</code> and update <code>docs/chat.html</code>. Found by the 2026-08 CLI
-audit (cluster <code>search-k-alias</code>); repro in the audit log.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-chat-findings.md">Write-up &middot; audit-chat-findings.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">chat's own printed suggestion retrieves the wrong skill; its "&gt; " prompt leaks into piped stdout</span>
+          <span class="m">chat follow-ups like "which of these" lead with the previous turn; no "&gt; " prompt on piped stdin; search takes -k</span>
         </div>
       </article>
 

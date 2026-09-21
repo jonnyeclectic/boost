@@ -231,6 +231,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         where = " (this repo)" if res.scope == "project" else ""
         out.ok("materialized%s → %s"
                % (where, " · ".join(res.linked) or "(no enabled agents)"))
+        _warn_unwritable(res)
         out.ok("lock updated (.skill-lock.json)")
         _warn_injection(res)
         _warn_secrets(res)
@@ -258,8 +259,6 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
     if res.native:
         out.ok("available to %s (reads the store directly)"
                % " · ".join(agents.display_name(a) for a in res.native))
-    for path in res.conflicts:
-        out.warn("not linked: %s exists and is not managed by boost" % _tilde(path))
     _warn_unwritable(res)
     out.ok("lock updated (.skill-lock.json)")
     _warn_injection(res)
@@ -268,13 +267,20 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
 
 
 def _warn_unwritable(res) -> None:
-    """Name the remedy for each agent skills dir an install could not link
-    into — every path that installs, reinstall and update included, so none
-    reports success over a link it silently skipped."""
+    """Name what an install skipped, and the remedy — every path that
+    installs, reinstall and update included, so none reports success over an
+    agent it silently left out.
+
+    A conflict is a real file squatting a skill's link path. An unwritable dir
+    refused a link, or a rule or workflow file; the refused agent is still
+    recorded, so `boost sync` writes it once the dir allows it."""
+    for path in res.conflicts:
+        out.warn("not linked: %s exists and is not managed by boost" % _tilde(path))
+    what = ("not linked", "adds the link") if res.kind == "skill" else (
+        "not written", "writes it")
     for adir in res.unwritable:
-        out.warn("not linked: %s is not writable — `chmod u+w %s`, then "
-                 "`boost sync` adds the link" % (_tilde(adir), _tilde(adir)),
-                 wrap=True)
+        out.warn("%s: %s is not writable — `chmod u+w %s`, then `boost sync` %s"
+                 % (what[0], _tilde(adir), _tilde(adir), what[1]), wrap=True)
 
 
 def _boostfile_text(skills: dict[str, dict], via: str = "boost bundle dump") -> str:
@@ -776,7 +782,14 @@ def cmd_sync(argv: list[str]) -> int:
                  % (_plural(len(blocked), "agent link"),
                     ", ".join("%s → %s (%s in the way)"
                               % (n, a, _tilde(Path(p))) for n, a, p in blocked)))
-    if not actions and not pruned and not left and not oos and not blocked:
+    # A dir that refused a link or a file: sync wrote what it could and says
+    # what it could not, rather than "everything in sync" over it.
+    stuck = store.unwritable_agent_dirs()
+    for adir in stuck:
+        out.warn("agent dir %s is not writable — `chmod u+w %s`, then re-run "
+                 "`boost sync`" % (_tilde(adir), _tilde(adir)), wrap=True)
+    if (not actions and not pruned and not left and not oos and not blocked
+            and not stuck):
         out.ok("everything in sync")
     return 0
 
@@ -917,8 +930,10 @@ def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
             continue
         try:
             # keep the item where it was installed (user vs a specific repo).
-            store.install(entry, force=True,
-                          scope=lk.get("scope", "user"), base=lk.get("base"))
+            # A dir that refused the refresh is named here, as for a skill.
+            _warn_unwritable(store.install(
+                entry, force=True,
+                scope=lk.get("scope", "user"), base=lk.get("base")))
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             continue
@@ -1540,13 +1555,14 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 installed_n += 1
                 continue
             try:
-                store.install(entry)
+                res = store.install(entry)
             except BoostError as err:
                 out.warn("%s: %s" % (sname, err.message))
                 failed += 1
                 continue
             out.ok("installed %s v%s (%s)" % (sname, entry.get("version"),
                                               entry["tap"]))
+            _warn_unwritable(res)
             have_installed[sname] = (entry_kind, entry)
             installed_kinds.add(entry_kind)
             installed_n += 1

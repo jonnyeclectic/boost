@@ -3747,3 +3747,328 @@ class TestAnUnwritableAgentDirIsSkipped:
 
     def test_a_writable_dir_reports_nothing_unwritable(self, tap, entry):
         assert store.install(entry).unwritable == []
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="chmod can't make a directory unwritable on Windows")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root ignores mode bits")
+class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
+    """Rules and workflows are materialized, not linked, and that write had no
+    guard: one unwritable ``~/.cursor/rules`` or ``~/.cursor/commands``
+    crashed the install at exit 70 after the other agents' files were written,
+    and the lock recorded none of them
+    (unwritable-rule-or-workflow-dir-crashes-install)."""
+
+    CURSOR: ClassVar[dict[str, tuple[str, str]]] = {
+        "rule": ("rules", "team-conventions.mdc"),
+        "workflow": ("commands", "ship-it.md")}
+
+    def _entry(self, tap, kind):
+        entry = _rule_entry(tap) if kind == "rule" else _workflow_entry(tap)
+        catalog.rebuild_tap(tap)          # so sync's repair can find it
+        return entry
+
+    def _locked(self, kind, name):
+        return (lockfile.get_rule if kind == "rule" else lockfile.get_workflow)(name)
+
+    def _cursor_dir(self, kind):
+        d = paths.home() / ".cursor" / self.CURSOR[kind][0]
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_the_other_agents_are_written_and_the_skip_recorded(self, tap, kind):
+        entry = self._entry(tap, kind)
+        cursor = self._cursor_dir(kind)
+        cursor.chmod(0o500)
+        try:
+            res = store.install(entry)
+            plan = store.sync_plan()
+        finally:
+            cursor.chmod(0o700)
+        assert res.unwritable == [str(cursor)]
+        assert set(res.linked) == {"claude-code", "windsurf", "gemini"}
+        assert not (cursor / self.CURSOR[kind][1]).exists()
+        rows = {m["agent"]: m for m in self._locked(kind, entry["name"])
+                ["materializations"]}
+        # The refused agent keeps a row, so it stays in scope and sync sees it
+        # as still to write; the written ones carry no marker.
+        assert rows["cursor"]["unwritable"] is True
+        assert rows["cursor"]["path"] == str(cursor / self.CURSOR[kind][1])
+        assert not any(rows[a].get("unwritable") for a in res.linked)
+        assert (kind, entry["name"]) in plan["missing_materializations"]
+        # chmod, then sync: the remedy every surface names, measured.
+        actions = store.sync_apply(store.sync_plan())
+        assert any("re-materialized %s %s" % (kind, entry["name"]) in a
+                   for a in actions)
+        assert (cursor / self.CURSOR[kind][1]).is_file()
+        assert not any(m.get("unwritable") for m in
+                       self._locked(kind, entry["name"])["materializations"])
+        assert store.sync_plan()["missing_materializations"] == []
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_repeat_refusal_is_one_row_and_keeps_the_scope(self, tap, kind):
+        entry = self._entry(tap, kind)
+        cursor = self._cursor_dir(kind)
+        cursor.chmod(0o500)
+        try:
+            store.install(entry)
+            store.install(entry, force=True)
+        finally:
+            cursor.chmod(0o700)
+        locked = self._locked(kind, entry["name"])
+        agents_ = [m["agent"] for m in locked["materializations"]]
+        assert agents_.count("cursor") == 1
+        assert "cursor" in store.preserved_agent_scope(None, locked)
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_sync_does_not_claim_a_repair_the_dir_still_refuses(self, tap, kind):
+        entry = self._entry(tap, kind)
+        cursor = self._cursor_dir(kind)
+        cursor.chmod(0o500)
+        try:
+            store.install(entry)
+            actions = store.sync_apply(store.sync_plan())
+        finally:
+            cursor.chmod(0o700)
+        assert actions == []
+        assert not (cursor / self.CURSOR[kind][1]).exists()
+
+    def test_uninstall_over_a_locked_dir_is_refused_and_keeps_the_lock(self, tap):
+        entry = self._entry(tap, "rule")
+        store.install(entry)
+        cursor = self._cursor_dir("rule")
+        cursor.chmod(0o500)
+        try:
+            with pytest.raises(BoostError) as ei:
+                store.uninstall("team-conventions")
+        finally:
+            cursor.chmod(0o700)
+        assert "%s is not writable" % paths.tilde(cursor) in ei.value.message
+        assert lockfile.get_rule("team-conventions") is not None
+        store.uninstall("team-conventions")        # after the chmod, it may
+        assert not (cursor / "team-conventions.mdc").exists()
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_refused_uninstall_removes_nothing(self, tap, kind):
+        # Cursor's row sits after Claude Code's and Windsurf's; removing
+        # those first and then refusing left a lock that `boost sync` would
+        # write straight back. The check runs before the first removal.
+        entry = self._entry(tap, kind)
+        store.install(entry)
+        rows = self._locked(kind, entry["name"])["materializations"]
+        cursor = self._cursor_dir(kind)
+        cursor.chmod(0o500)
+        try:
+            with pytest.raises(BoostError) as ei:
+                store.uninstall(entry["name"])
+        finally:
+            cursor.chmod(0o700)
+        assert "%s is not writable" % paths.tilde(cursor) in ei.value.message
+        assert [m["agent"] for m in rows].index("cursor") > 0
+        for m in rows:
+            assert Path(m["path"]).is_file(), m["agent"]
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        if kind == "rule":
+            assert "boost:rule:team-conventions start" in claude_md.read_text(
+                encoding="utf-8")
+        assert self._locked(kind, entry["name"])["materializations"] == rows
+
+    def test_uninstall_does_not_rewrite_a_context_file_it_never_wrote(self, tap):
+        # ~/.claude refused the block, so there is nothing of ours in
+        # CLAUDE.md; rewriting it anyway crashed on the same locked dir.
+        entry = self._entry(tap, "rule")
+        claude = paths.home() / ".claude"
+        claude.mkdir(parents=True, exist_ok=True)
+        (claude / "CLAUDE.md").write_text("# my notes\n", encoding="utf-8")
+        claude.chmod(0o500)
+        try:
+            store.install(entry)
+            store.uninstall("team-conventions")
+        finally:
+            claude.chmod(0o700)
+        assert (claude / "CLAUDE.md").read_text(encoding="utf-8") == "# my notes\n"
+        assert lockfile.get_rule("team-conventions") is None
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_an_update_refused_over_an_old_file_is_still_to_write(self, tap,
+                                                                  kind):
+        # The old file survives the refusal, so "is the file there" alone
+        # would call it healthy and sync would never write the new one.
+        entry = self._entry(tap, kind)
+        store.install(entry)
+        cursor = self._cursor_dir(kind)
+        cursor.chmod(0o500)
+        try:
+            store.install(entry, force=True)
+        finally:
+            cursor.chmod(0o700)
+        assert (cursor / self.CURSOR[kind][1]).is_file()
+        assert (kind, entry["name"]) in \
+            store.sync_plan()["missing_materializations"]
+
+    def test_a_dir_that_cannot_be_created_names_its_parent(self, tap):
+        # `chmod u+w ~/.cursor/rules` fails when that dir does not exist; the
+        # one that refused is ~/.cursor.
+        entry = self._entry(tap, "rule")
+        cursor = paths.home() / ".cursor"
+        shutil.rmtree(cursor / "rules", ignore_errors=True)
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o500)
+        try:
+            res = store.install(entry)
+        finally:
+            cursor.chmod(0o700)
+        assert res.unwritable == [str(cursor)]
+
+    def test_uninstall_reverses_what_a_refused_install_wrote(self, tap):
+        entry = self._entry(tap, "rule")
+        cursor = self._cursor_dir("rule")
+        cursor.chmod(0o500)
+        try:
+            store.install(entry)
+        finally:
+            cursor.chmod(0o700)
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        assert "boost:rule:team-conventions start" in claude_md.read_text(
+            encoding="utf-8")
+        store.uninstall("team-conventions")
+        assert not claude_md.exists()
+        assert lockfile.get_rule("team-conventions") is None
+
+
+class TestTwoAgentsOnOneDotdir:
+    """Two enabled agents whose dirs resolve to one path write one file, and
+    the lock records two rows naming it. Uninstall planned every removal
+    while the file still existed, then removed it twice: the second raised
+    ``FileNotFoundError``, so the command exited 70 with the files gone and
+    the lock still naming them."""
+
+    def _share_windsurfs_dotdir(self, how):
+        dotdir = "~/.windsurf"
+        if how == "symlink":
+            # A second spelling of one dir: the rows differ, the file does not.
+            (paths.home() / ".windsurf").mkdir(parents=True, exist_ok=True)
+            (paths.home() / ".windsurf-alias").symlink_to(
+                paths.home() / ".windsurf", target_is_directory=True)
+            dotdir = "~/.windsurf-alias"
+        cfg = config.load()
+        cfg["agents"]["windsurf-next"] = {"dir": dotdir + "/skills",
+                                          "enabled": True}
+        config.save(cfg)
+
+    @pytest.mark.parametrize("how", [
+        "same-dir",
+        pytest.param("symlink", marks=pytest.mark.skipif(
+            sys.platform == "win32", reason="symlinks need privilege on Windows")),
+    ])
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_uninstall_removes_the_shared_file_once(self, tap, kind, how):
+        self._share_windsurfs_dotdir(how)
+        entry = (_rule_entry if kind == "rule" else _workflow_entry)(tap)
+        get = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+        store.install(entry)
+        rows = get(entry["name"])["materializations"]
+        shared = {m["agent"]: Path(m["path"]) for m in rows
+                  if m["agent"] in ("windsurf", "windsurf-next")}
+        assert len(shared) == 2
+        assert os.path.samefile(shared["windsurf"], shared["windsurf-next"])
+        store.uninstall(entry["name"])
+        assert get(entry["name"]) is None
+        for m in rows:
+            assert not os.path.lexists(m["path"]), m["agent"]
+
+    def test_a_file_already_gone_is_already_removed(self, tmp_path):
+        # The plan is made in one pass and applied in the next; a file gone
+        # in between (another agent's row, another process) is the end state
+        # the removal wanted, not an error.
+        store._remove_all_or_nothing("x", [(tmp_path / "gone.md", "")])
+        assert not (tmp_path / "gone.md").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="chmod can't make a directory unwritable on Windows")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root ignores mode bits")
+class TestUnwritableAgentDirs:
+    """The dirs doctor, heal and sync check are the dirs boost writes into:
+    every linking agent's skills dir, and each dir a recorded rule or
+    workflow row materializes into — not every dir some rule could."""
+
+    def _locked(self, *dirs):
+        for d in dirs:
+            d.mkdir(parents=True, exist_ok=True)
+            d.chmod(0o500)
+
+    def _unlock(self, *dirs):
+        for d in dirs:
+            d.chmod(0o700)
+
+    def test_names_skills_dirs_and_the_dirs_rows_write_into(self, tap):
+        store.install(_rule_entry(tap))
+        store.install(_workflow_entry(tap))
+        store.install(_workflow_entry(tap, name="reviewer",
+                                      rel="agents/reviewer.md"))
+        home = paths.home()
+        dirs = [home / ".cursor" / "skills", home / ".cursor" / "rules",
+                home / ".windsurf" / "commands", home / ".claude" / "agents"]
+        self._locked(*dirs)
+        try:
+            found = store.unwritable_agent_dirs()
+        finally:
+            self._unlock(*dirs)
+        assert sorted(found) == sorted(dirs)
+
+    def test_the_claude_md_dir_is_checked(self, tap):
+        store.install(_rule_entry(tap))
+        claude = paths.home() / ".claude"
+        self._locked(claude)
+        try:
+            found = store.unwritable_agent_dirs()
+        finally:
+            self._unlock(claude)
+        assert found == [claude]
+
+    def test_a_dir_no_row_writes_into_is_not(self, tap, entry):
+        # Skills only: nothing boost installed writes a rules/, commands/ or
+        # agents/ dir, so a read-only one belongs to whoever locked it.
+        store.install(entry)
+        home = paths.home()
+        dirs = [home / ".cursor" / "rules", home / ".claude" / "commands",
+                home / ".claude" / "agents"]
+        self._locked(*dirs)
+        try:
+            found = store.unwritable_agent_dirs()
+        finally:
+            self._unlock(*dirs)
+        assert found == []
+
+    def test_a_refused_row_names_the_dir_that_refused_it(self, tap):
+        # ~/.cursor could not create rules/, and the install said so; the
+        # dir to name afterwards is the same one, not a rules/ that does not
+        # exist.
+        cursor = paths.home() / ".cursor"
+        shutil.rmtree(cursor / "rules", ignore_errors=True)
+        self._locked(cursor)
+        try:
+            store.install(_rule_entry(tap))
+            found = store.unwritable_agent_dirs()
+        finally:
+            self._unlock(cursor)
+        assert found == [cursor]
+
+    def test_a_native_store_skills_dir_and_a_missing_dir_are_not(self, sandbox):
+        gemini = paths.home() / ".gemini" / "skills"
+        self._locked(gemini)
+        try:
+            found = store.unwritable_agent_dirs()
+        finally:
+            self._unlock(gemini)
+        assert found == []
+        assert not (paths.home() / ".cursor" / "rules").exists()
+
+    def test_writable_dirs_are_not(self, tap):
+        store.install(_rule_entry(tap))
+        assert (paths.home() / ".cursor" / "rules").is_dir()
+        assert store.unwritable_agent_dirs() == []

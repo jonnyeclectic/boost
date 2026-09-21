@@ -28,7 +28,7 @@ from ..core import (
 from ..core import output as out
 from ..errors import BoostError
 from ._common import _s
-from .pkg import _report_result
+from .pkg import _report_result, _warn_unwritable
 
 _tilde = paths.tilde
 
@@ -202,6 +202,7 @@ def cmd_cohort(argv) -> int:
                 res = store.install(entry)
                 if not args.json:
                     out.ok("installed %s → %s" % (skill, " · ".join(res.linked)))
+                    _warn_unwritable(res)
                 installed_here.append(skill)
                 applied += 1
             per_cohort.append({"cohort": cname, "member": True,
@@ -462,6 +463,7 @@ def cmd_profile(argv) -> int:
         res = store.install(entry)
         if not args.json:
             out.ok("installed %s → %s" % (n, " · ".join(res.linked)))
+            _warn_unwritable(res)
         installed_now.append(n)
     for n in changed:
         # Mirrors `diff`'s "~ NAME (version differs)" — `use` used to discard
@@ -880,6 +882,8 @@ def cmd_replay(argv) -> int:
                          % (n, entry.get("version"), want.get("version")))
         elif not args.json:
             out.ok("restored %s → %s" % (n, " · ".join(res.linked)))
+        if not args.json:
+            _warn_unwritable(res)
         restored.append(n)
     for n in changed:
         if not args.json:
