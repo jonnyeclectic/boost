@@ -256,7 +256,14 @@ def pin_clone(path: Path, sha: str) -> None:
             UNAVAILABLE, path.name,
             "commit %s is not reachable — the pin in tests/eval/taps.txt is "
             "stale, or the repository rewrote history" % sha)
-    res = _run(path, "checkout", "--quiet", "--detach", sha)
+    # --force, because the pin names a TREE and not only a commit. Checking
+    # out the commit HEAD already sits on is a no-op for the working tree, so a
+    # SKILL.md deleted by hand stayed deleted, the rescan came up one entry
+    # short, and the run exited DRIFT — from the remedy the eval gate's refusal
+    # prints. Forcing restores tracked files inside the sparse cone and leaves
+    # everything outside it alone; a tap clone is boost's copy of someone
+    # else's tree, not a place work is kept.
+    res = _run(path, "checkout", "--quiet", "--force", "--detach", sha)
     if res.returncode != 0:
         raise CorpusError(UNAVAILABLE, path.name,
                           "could not check out %s: %s" % (sha, res.stderr.strip()))
@@ -281,6 +288,15 @@ def _materialise(rows: Sequence[Row], verify: bool = True
                 tap = registry.get(repo)
             except Exception:  # not yet tapped; add it below
                 tap = registry.add(repo)
+            else:
+                if not tap.is_cloned:
+                    # Configured, with no clone behind it: `repos/` reclaimed
+                    # by hand while config.json survived. Skipping the add and
+                    # pinning anyway ran git in a directory that did not exist,
+                    # and every row read "the pin is stale" — a false red,
+                    # blaming the pins, from the one command meant to repair
+                    # it. `update` is core's own answer to a missing clone.
+                    registry.update(tap.name)
             if sha:
                 pin_clone(tap.path, sha)
         except CorpusError as exc:
