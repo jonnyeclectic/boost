@@ -2,15 +2,15 @@
 id: corrupt-config-reads-as-ready-to-set-up
 board: code
 section: planned
-status: planned
+status: shipped
 category: Onboarding · Bug
 complexity: M
 impact: Med
 wow: 3
 note: Doctor has no config-integrity check. When ~/.boost/config.json fails to parse, confi…
 order: 202
-owner:
-pr:
+owner: loop/corrupt-config
+pr: 888
 title: With a corrupt config.json, doctor reports "no registries tapped" and verdicts "● ready to set up" exit 0 while search is dead; heal says "nothing to heal"
 ---
 <b>Measured.</b> With a corrupt <code>~/.boost/config.json</code> on a machine holding 1 tap clone (<code>repos/verify-30-fix</code>) and its catalog cache (<code>cache/verify-30-fix.json</code>), <code>boost doctor --json</code> returns <code>{"issues": 0, "ok": true, "verdict": "ready to set up — tap a registry to make boost searchable"}</code> with exit 0 and no corruption entry anywhere in its <code>checks</code> array, on the same machine where <code>boost search brainstorm</code> exits 1 with "no taps configured — nothing to search" — because the only notice of the corruption is emitted by <code>config.load()</code> before <code>report.Report</code> exists and is routed to stderr (<code>config.py:205-210</code>), so it can never be counted, never reach <code>--json</code>, and never reach <code>boost doctor &gt; health.log</code>.

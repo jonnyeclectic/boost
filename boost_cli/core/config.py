@@ -247,6 +247,29 @@ def _cached() -> dict:
     return cache
 
 
+def check() -> str | None:
+    """Why config.json cannot be read, or None when it reads or is absent.
+
+    `load()` degrades a corrupt file to DEFAULTS with one stderr warning, which
+    is right for an ordinary command and wrong for `doctor`: with the tap list
+    gone, every check passed and the verdict read "ready to set up" on a
+    machine with clones on disk, while `heal` found "nothing to heal". This
+    reports the raw state instead, as `lockfile.check()` does for the lock.
+    """
+    return jsonstate.read_object(paths.config_path())[1]
+
+
+def unlisted_clones() -> list[str]:
+    """Tap clone directories under `repos/`, by name.
+
+    With config.json unreadable no tap is listed, so these are what `doctor`
+    can still see of the user's registries.
+    """
+    root = paths.repos_dir()
+    return sorted(d.name for d in root.iterdir() if d.is_dir()) \
+        if root.is_dir() else []
+
+
 def load() -> dict:
     """Return a deep copy of the merged config, safe for callers to mutate."""
     # A defensive copy so callers can mutate the result (set_value/unset do)
