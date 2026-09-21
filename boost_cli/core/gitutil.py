@@ -429,6 +429,19 @@ def remote_url(repo: Path) -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
+def is_shallow(repo: Path) -> bool:
+    """True when ``repo`` is a shallow clone, i.e. its history is cut short.
+
+    ``.git/shallow`` lists the graft points and exists only in a shallow
+    clone: git itself checks this file. A short log is not the same thing.
+    A tap cloned from a local path is complete, because git ignores
+    ``--depth`` there, and a path with one commit has a one-line history in
+    any clone. Using the log's length made ``boost changelog`` recommend
+    ``fetch --unshallow``, which fails on a complete repository.
+    """
+    return (Path(repo) / ".git" / "shallow").is_file()
+
+
 def log_for_path(repo: Path, rel_path: str = ".", n: int = 20) -> list[str]:
     """Formatted one-line log entries for a path inside a repo."""
     proc = run(["-C", str(repo), "log", "--date=short", "-n", str(n),

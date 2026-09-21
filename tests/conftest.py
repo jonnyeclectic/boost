@@ -310,3 +310,48 @@ def rival_tap(boost, tapped, tmp_path):
     run("git", "commit", "-qm", "rival skills")
     boost("tap", root)
     return "rival-tap"
+
+
+@pytest.fixture()
+def sibling_rules_tap(boost, tmp_path):
+    """A real tap whose rules share a directory and whose workflow name repeats.
+
+    Two commits: the first adds ``rules/ci-cd/dotnet-build.mdc`` and three
+    differently-worded ``csharp-reviewer`` workflows. The second adds only
+    the sibling ``rules/ci-cd/dotnet-test.mdc``. The second commit is not
+    part of ``dotnet-build``'s history, so a log over the shared directory
+    shows the mistake. The three reviewers make the catalog refuse the bare
+    name, so only the lock can tell which one was installed.
+    Returns the source repo path.
+    """
+    root = tmp_path / "sibling-tap"
+    files = {
+        "rules/ci-cd/dotnet-build.mdc":
+            "---\nname: dotnet-build\ndescription: Build dotnet projects\n---\n"
+            "Use dotnet build.\n",
+        "agents/csharp-reviewer.md":
+            "---\nname: csharp-reviewer\ndescription: Reviews C# (top)\n---\n"
+            "Review it.\n",
+        "plugins/a/agents/csharp-reviewer.md":
+            "---\nname: csharp-reviewer\ndescription: Reviews C# (plugin a)\n"
+            "---\nReview it, A.\n",
+        "plugins/b/agents/csharp-reviewer.md":
+            "---\nname: csharp-reviewer\ndescription: Reviews C# (plugin b)\n"
+            "---\nReview it, B.\n",
+    }
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "sib@boost.test")
+    run("git", "config", "user.name", "Sibling Tap")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "add dotnet-build and reviewers")
+    (root / "rules" / "ci-cd" / "dotnet-test.mdc").write_text(
+        "---\nname: dotnet-test\ndescription: Test dotnet projects\n---\n"
+        "Use dotnet test.\n", encoding="utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "add sibling rule dotnet-test")
+    boost("tap", root)
+    return root

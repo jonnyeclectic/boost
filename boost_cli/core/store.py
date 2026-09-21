@@ -133,6 +133,31 @@ def resolve_lock_entry(name: str) -> tuple[str, str | None, dict | None]:
     return bare, kind, entry
 
 
+def upstream_source(name: str) -> tuple[str, str, str, str]:
+    """``(bare, kind, tap, rel)``: where item ``name`` lives in its tap.
+
+    The installed copy comes first. The lock records exactly which file or
+    directory was installed, while the catalog can only guess from a name.
+    A registry that ships ``csharp-reviewer`` three times makes
+    :func:`catalog.resolve_one` refuse, telling the user to install one copy
+    with ``--path`` and retry. Asking the catalog first meant that retry
+    failed the same way. Only a name that is not installed, or whose tap
+    qualifier names another tap, falls through to the catalog.
+
+    ``rel`` is :func:`catalog.upstream_path`: the defining file for a rule or
+    workflow, the directory for a skill. A lock entry with no ``tap`` counts
+    as ``local``, an import with no upstream.
+    """
+    bare, kind, lk = resolve_lock_entry(name)
+    if lk is not None:
+        # `kind` is always set when an entry is: it names the lock section.
+        return (bare, str(kind), str(lk.get("tap") or "local"),
+                catalog.upstream_path(lk))
+    entry = catalog.resolve_one(name)
+    return (bare, str(entry.get("kind") or "skill"), str(entry["tap"]),
+            catalog.upstream_path(entry))
+
+
 def installed() -> dict:
     """Return the lock file's installed skills as {name: entry}.
 
