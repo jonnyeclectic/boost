@@ -322,6 +322,13 @@ class TestInfo:
         (repo / "shared" / "b.md").write_text(body, encoding="utf-8")
         (repo / "skills" / "b").mkdir(parents=True)
         (repo / "skills" / "b" / "SKILL.md").symlink_to("../../shared/b.md")
+        # A linked directory, and a name install skips.
+        (repo / "shared" / "docs").mkdir()
+        (repo / "shared" / "docs" / "y.md").write_text("y" * 800,
+                                                      encoding="utf-8")
+        (repo / "skills" / "b" / "docs").symlink_to("../../shared/docs")
+        (repo / "skills" / "b" / "__pycache__").mkdir()
+        (repo / "skills" / "b" / "__pycache__" / "x.pyc").write_bytes(b"c" * 900)
         for cmd in (["init", "-q", "-b", "main"], ["add", "-A"],
                     ["-c", "user.email=t@example.test", "-c", "user.name=T",
                      "-c", "commit.gpgsign=false", "commit", "-qm", "init"]):
@@ -330,7 +337,8 @@ class TestInfo:
         before = json.loads(boost("info", "bee", "--json").out)
         boost("install", "bee")
         after = json.loads(boost("info", "bee", "--json").out)
-        assert before["size"] == after["size"] == len(body.encode("utf-8"))
+        assert before["size"] == after["size"] == len(body.encode("utf-8")) + 800
+        assert before["files"] == after["files"] == 2
 
     def test_info_reports_sidelined_by(self, boost, tapped):
         boost("install", "brainstorming", "jira-integration", "--no-deps")

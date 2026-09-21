@@ -201,11 +201,6 @@ def _skill_meta(name: str):
     return frontmatter.parse(_read(p))[0]
 
 
-def _file_count(d: Path) -> int:
-    return sum(1 for p in Path(d).rglob("*")
-               if p.is_file() and not any(part in util.IGNORED for part in p.parts))
-
-
 def _mark(installed: bool) -> str:
     return (out.role("✓ installed", "success") if installed
             else out.role("✗ not installed", "danger"))
@@ -498,10 +493,12 @@ def cmd_info(argv):
     score = size = files = None
     if skill_dir:
         score, _notes = util.score_skill(skill_dir)
-        # What an install will copy (links dereferenced), the same set
-        # _file_count counts, rather than what the tap's tree occupies.
-        size = util.dir_size(skill_dir, follow_links=True)
-        files = _file_count(skill_dir)
+        # What an install will copy, not what the tap's tree occupies: links
+        # dereferenced (a skill a tap ships as links arrives as their
+        # targets) and IGNORED names skipped, one set for both numbers.
+        copied = util.copied_files(skill_dir)
+        size = sum(f.stat().st_size for f in copied)
+        files = len(copied)
 
     if args.json:
         print(json.dumps({

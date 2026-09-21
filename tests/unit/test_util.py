@@ -334,9 +334,55 @@ class TestDirSize:
         (tree / "outer").symlink_to(outside)
         (tree / "dangling").symlink_to("gone.txt")
         assert util.dir_size(tree) == 10
-        # What a copy (install's copytree, symlinks=False) will hold instead:
-        # every live link as its target's bytes; the dangling one as nothing.
-        assert util.dir_size(tree, follow_links=True) == 10 + 10 + 1000
+
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="symlinks need a privilege on Windows")
+class TestCopiedFiles:
+    """What install will copy — checked against install's own copytree."""
+
+    @staticmethod
+    def _tree(tmp_path):
+        shared = tmp_path / "shared"
+        (shared / "docs").mkdir(parents=True)
+        (shared / "docs" / "y.md").write_bytes(b"y" * 800)
+        (shared / "b.md").write_bytes(b"b" * 300)
+        skill = tmp_path / "skill"
+        (skill / "real").mkdir(parents=True)
+        (skill / "real" / "x.md").write_bytes(b"x" * 600)
+        (skill / "SKILL.md").symlink_to(shared / "b.md")      # file link
+        (skill / "docs").symlink_to(shared / "docs")           # dir link out
+        (skill / "alias").symlink_to("real")                   # dir link in
+        (skill / "__pycache__").mkdir()
+        (skill / "__pycache__" / "x.pyc").write_bytes(b"c" * 900)
+        (skill / "real" / ".DS_Store").write_bytes(b"d" * 400)  # IGNORED, deep
+        return skill
+
+    def test_matches_what_install_copies(self, tmp_path):
+        import shutil
+        skill = self._tree(tmp_path)
+        dest = tmp_path / "copy"
+        shutil.copytree(skill, dest,
+                        ignore=shutil.ignore_patterns(*util.IGNORED))
+        want = {p.relative_to(dest): p.stat().st_size
+                for p in dest.rglob("*") if p.is_file()}
+        got = {p.relative_to(skill): p.stat().st_size
+               for p in util.copied_files(skill)}
+        assert got == want
+        assert sum(got.values()) == 300 + 800 + 600 + 600
+
+    def test_a_dangling_link_copies_nothing(self, tmp_path):
+        (tmp_path / "SKILL.md").write_bytes(b"s" * 5)
+        (tmp_path / "gone").symlink_to("nowhere.txt")
+        assert util.copied_files(tmp_path) == [tmp_path / "SKILL.md"]
+
+    def test_a_link_cycle_is_walked_once(self, tmp_path):
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "f.md").write_bytes(b"f")
+        (tmp_path / "a" / "loop").symlink_to("..")
+        files = util.copied_files(tmp_path)
+        assert [p.name for p in files] == ["f.md"]
 
 
 class TestSemver:

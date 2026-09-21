@@ -375,27 +375,50 @@ def sha256_dir(path: Path) -> str:
     return h.hexdigest()
 
 
-def dir_size(path: Path, follow_links: bool = False) -> int:
+def dir_size(path: Path) -> int:
     """Sum the byte size of every regular file under ``path``, recursively.
 
-    By default a symlink is not a regular file, whatever it points at, which
-    is what the tree occupies on disk: following links counted a target's
-    bytes a second time, or bytes outside the tree, or nothing once it
-    dangled. ``compact`` reports freed space as this before minus this after,
-    and a link whose target the narrow removed made its live figure overstate
-    the run.
-
-    ``follow_links=True`` answers a different question: what a copy of the
-    tree will hold. ``install`` copies with ``symlinks=False``, so a skill a
-    tap ships as links arrives as their targets' bytes, and ``info`` sizing
-    that skill from the tap must count them (it said 0B for a SKILL.md that
-    installs as 3 KB).
+    A symlink is not a regular file, whatever it points at: this is what the
+    tree occupies on disk. Following links counted a target's bytes a second
+    time, or bytes outside the tree, or nothing once it dangled, and
+    ``compact`` reports freed space as this before minus this after, so a
+    link whose target the narrow removed made its live figure overstate the
+    run. What a *copy* of the tree will hold is :func:`copied_files`.
     """
-    if follow_links:
-        return sum(p.stat().st_size for p in Path(path).rglob("*")
-                   if p.is_file())
     return sum(p.lstat().st_size for p in Path(path).rglob("*")
                if p.is_file() and not p.is_symlink())
+
+
+def copied_files(path: Path) -> list[Path]:
+    """The files ``install`` will copy out of ``path``, in walk order.
+
+    ``store`` installs with ``shutil.copytree(symlinks=False, ignore=
+    ignore_patterns(*IGNORED))``: every link is copied as what it points at,
+    a linked *directory* included, and an ``IGNORED`` name is skipped at any
+    depth. ``Path.rglob`` does not descend through a directory link, so sizing
+    a skill from the tap that way said 61 B and 1 file for a skill that
+    installs as 861 B and 2. A dangling link copies nothing (copytree fails on
+    it, and the failure belongs to install, not to a size estimate). Two
+    paths to one directory are two copies, as they are to copytree; only a
+    directory that resolves to one of its own ancestors — a link cycle — is
+    not descended, so the walk cannot hang.
+    """
+    top = Path(path)
+    files: list[Path] = []
+    for root, dirs, names in os.walk(path, followlinks=True):
+        here = Path(root)
+        real = os.path.realpath(here)
+        if here != top and any(os.path.realpath(p) == real
+                               for p in here.parents
+                               if p == top or top in p.parents):
+            dirs.clear()
+            continue
+        dirs[:] = [d for d in dirs if d not in IGNORED]
+        for name in names:
+            f = Path(root) / name
+            if name not in IGNORED and f.is_file():
+                files.append(f)
+    return files
 
 
 def semver_tuple(v: str):
