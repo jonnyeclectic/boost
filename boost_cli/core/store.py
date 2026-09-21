@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
+import stat
 import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -590,11 +591,9 @@ def refusing_dir(path: Path) -> Path:
     wording into exit 70.
     """
     while path.parent != path:
-        try:
+        with contextlib.suppress(PermissionError):
             if path.exists():
                 break
-        except PermissionError:
-            pass
         path = path.parent
     return path
 
@@ -1510,6 +1509,24 @@ def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> None:
                 path.unlink(missing_ok=True)
 
 
+def _present(path: Path) -> bool:
+    """Whether a recorded file is there to remove, asked the same way on every
+    Python.
+
+    ``os.lstat`` raises PermissionError under a parent with no search bit, and
+    the caller's :func:`_refused_removal` turns that into a named refusal.
+    ``Path.exists`` and ``is_file`` raise there on 3.12 and 3.13 but answer
+    False on 3.14, where uninstall then planned nothing, dropped the lock row
+    and reported success over a file it never removed. A directory at the path
+    is not a file boost wrote, so it is not one to remove.
+    """
+    try:
+        st = os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return not stat.S_ISDIR(st.st_mode)
+
+
 def _uninstall_rule(name: str, rule: dict) -> dict:
     """Reverse every materialization recorded for an installed rule."""
     from . import rules
@@ -1519,14 +1536,14 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
         path = Path(m.get("path", ""))
         with _refused_removal(name, path):
             if m.get("mode") == rules.MODE_CLAUDE:
-                if path.exists():
+                if _present(path) and path.exists():
                     text = path.read_text(encoding="utf-8")
                     stripped = rules.strip_block(text, name)
                     # No block of ours (a refused write): no rewrite. An
                     # empty result held only our block: boost created it.
                     if stripped != text:
                         plan.append((path, stripped))
-            elif path.is_file() or path.is_symlink():
+            elif _present(path):
                 plan.append((path, ""))
         if m.get("agent"):
             removed.append(m["agent"])
@@ -1776,7 +1793,7 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
     for m in workflow.get("materializations", []):
         path = Path(m.get("path", ""))
         with _refused_removal(name, path):
-            if path.is_file() or path.is_symlink():
+            if _present(path):
                 plan.append((path, ""))
         if m.get("agent"):
             removed.append(m["agent"])
