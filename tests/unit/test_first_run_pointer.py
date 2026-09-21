@@ -43,7 +43,9 @@ class TestFirstRun:
         boost("tap", fixture_tap_src)
         assert config.first_run() is False
 
-    @pytest.mark.parametrize("text", ["{ not json", "[]", "null"])
+    @pytest.mark.parametrize("text", ["{ not json", "[]", "null",
+                                      '{"taps": "x"}', '{"taps": null}',
+                                      '{"taps": {}}'])
     def test_a_config_that_cannot_be_parsed_is_not_a_first_run(self, sandbox,
                                                                text):
         # Unknown state is not a first run. The file is there, so boost has
@@ -52,6 +54,12 @@ class TestFirstRun:
         from boost_cli.core import paths
         paths.ensure_dirs()
         paths.config_path().write_text(text, encoding="utf-8")
+        assert config.first_run() is False
+
+    def test_a_config_that_is_not_utf8_is_not_a_first_run(self, sandbox):
+        from boost_cli.core import paths
+        paths.ensure_dirs()
+        paths.config_path().write_bytes(b"\xff\xfe")
         assert config.first_run() is False
 
     def test_a_config_that_names_no_taps_is_still_a_first_run(self, sandbox):
@@ -134,6 +142,18 @@ class TestHelpScreen:
         text = _plain(capsys.readouterr().out)
         assert "%d commands" % len(cli.COMMANDS) in text
         assert "new here?" not in text
+
+    def test_a_config_that_is_not_utf8_still_prints_help(self, boost):
+        # The decode failure escaped `logs.configure`, which runs before the
+        # crash handler, so `boost --help` was a traceback and exit 1.
+        from boost_cli.core import paths
+        paths.ensure_dirs()
+        paths.config_path().write_bytes(b"\xff\xfe")
+        r = boost("--help")
+        text = _plain(r.out)
+        assert "%d commands" % len(cli.COMMANDS) in text
+        assert "new here?" not in text
+        assert "not valid UTF-8" in r.err
 
     def test_every_wrapped_line_carries_its_own_colour(self, sandbox, capsys,
                                                        monkeypatch):

@@ -509,6 +509,12 @@ class TestCheckReportsTheRawState:
         paths.config_path().write_text("[]", encoding="utf-8")
         assert "expected a JSON object" in config.check()
 
+    def test_invalid_utf8_names_the_file_instead_of_crashing(self, sandbox):
+        paths.ensure_dirs()
+        paths.config_path().write_bytes(b"\xff\xfe")
+        err = config.check()
+        assert err.startswith(str(paths.config_path()) + ": not valid UTF-8")
+
     def test_unlisted_clones_are_the_directories_under_repos(self, sandbox):
         assert config.unlisted_clones() == []           # no repos/ at all
         paths.ensure_dirs()
@@ -516,3 +522,71 @@ class TestCheckReportsTheRawState:
             (paths.repos_dir() / name).mkdir()
         (paths.repos_dir() / "stray.txt").write_text("x", encoding="utf-8")
         assert config.unlisted_clones() == ["a__one", "b__two"]
+
+
+# `boost tap` appends to `taps`, and crashed with AttributeError on every one of
+# these. Meanwhile `first_run` read the truthy ones as a configured machine and
+# `list_taps` read all of them as no taps, so doctor said "ready to set up".
+NOT_A_LIST = [('"x"', "str"), ("null", "NoneType"), ("{}", "dict"),
+              ('{"a/b": {}}', "dict"), ("5", "int"), ("true", "bool"),
+              ('""', "str")]
+
+
+class TestTapsThatIsNotAList:
+    """A `taps` boost cannot read is the same broken file as invalid JSON, on
+    every surface: check() names it, load() reads DEFAULTS, save() moves it
+    aside, and first_run() does not call the machine new."""
+
+    def _write(self, text):
+        paths.ensure_dirs()
+        paths.config_path().write_text(text, encoding="utf-8")
+
+    @pytest.mark.parametrize("taps,found", NOT_A_LIST)
+    def test_check_names_the_key_and_what_it_holds(self, sandbox, taps, found):
+        self._write('{"taps": %s}' % taps)
+        assert config.check() == ('%s: expected "taps" to be a list, found %s'
+                                  % (paths.config_path(), found))
+
+    @pytest.mark.parametrize("text", ['{"taps": []}', '{"telemetry": true}'])
+    def test_a_list_or_no_taps_key_is_fine(self, sandbox, text):
+        self._write(text)
+        assert config.check() is None
+
+    @pytest.mark.parametrize("taps,_found", NOT_A_LIST)
+    def test_it_is_never_a_first_run(self, sandbox, taps, _found):
+        self._write('{"taps": %s}' % taps)
+        assert config.first_run() is False
+
+    def test_the_whole_file_reads_as_defaults_with_one_warning(self, sandbox,
+                                                                capsys):
+        # The same degrade as invalid JSON, so every message that describes
+        # that state ("running on defaults", "the next write moves it aside")
+        # is true of this one too.
+        self._write('{"taps": "x", "telemetry": true}')
+        assert config.load() == config.DEFAULTS
+        err = capsys.readouterr().err
+        assert err.count(str(paths.config_path())) == 1
+        assert 'expected "taps" to be a list' in err
+
+    def test_list_taps_still_reads_it_as_none(self, sandbox):
+        from boost_cli.core import registry
+        self._write('{"taps": {"a/b": {"url": "u"}}}')
+        assert registry.list_taps() == []
+
+    def test_the_next_write_moves_it_aside(self, sandbox):
+        # What doctor promises. Before, save() only quarantined a file that
+        # failed to parse, so this one was written back with "taps": "x"
+        # intact and `boost tap` crashed appending to it.
+        original = '{"taps": "x", "telemetry": true}'
+        self._write(original)
+        config.set_value("ai.enabled", "false")
+        quarantined = paths.config_path().with_name("config.json.corrupt")
+        assert quarantined.read_text(encoding="utf-8") == original
+        fresh = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        assert fresh["taps"] == [] and fresh["ai"]["enabled"] is False
+        assert config.check() is None
+
+    def test_unset_reads_no_overrides_from_it(self, sandbox):
+        self._write('{"taps": "x"}')
+        assert config.unset("taps") is False
+        assert paths.config_path().read_text(encoding="utf-8") == '{"taps": "x"}'

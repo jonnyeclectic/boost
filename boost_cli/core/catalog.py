@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, frontmatter, gitutil, output, paths, registry, util
+from . import config, frontmatter, gitutil, jsonstate, output, paths, registry, util
 
 # Bumped whenever a scan starts recording something the previous scan did not,
 # so 460 caches on a real machine invalidate on read instead of needing a
@@ -323,9 +323,8 @@ def _cached_tap(tap: registry.Tap) -> tuple[list[dict], bool] | None:
     cached = _ENTRY_CACHE.get(key)
     if cached is not None and cached[0] == stamp:
         return cached[1], cached[2]
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    data = jsonstate.read_object(p)[0]
+    if data is None:
         _ENTRY_CACHE.pop(key, None)
         return None
     skills = data.get("skills", [])

@@ -25,7 +25,7 @@ import json
 from contextlib import suppress
 from pathlib import Path
 
-from . import util
+from . import jsonstate, util
 
 SCHEMA_VERSION = 1
 LOCK_DIRNAME = ".boost"
@@ -58,12 +58,8 @@ def read(base) -> dict:
     p = lock_path(base)
     if not p.is_file():
         return _skeleton()
-    try:
-        lock = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        _preserve_corrupt(p)
-        return _skeleton()
-    if not isinstance(lock, dict):
+    lock, _err = jsonstate.read_object(p)
+    if lock is None:
         _preserve_corrupt(p)
         return _skeleton()
     lock.setdefault("version", SCHEMA_VERSION)

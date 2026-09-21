@@ -7,10 +7,9 @@ Consulted by store.install() (when config policy_enforce is true) and by
 """
 from __future__ import annotations
 
-import contextlib
 import json
 
-from . import config, paths, typedvalue
+from . import config, jsonstate, paths, typedvalue
 
 DEFAULTS = {
     "blocked_skills": [],      # names never allowed
@@ -54,15 +53,8 @@ def parse_value(key: str, raw: str):
 
 
 def _read_file() -> dict:
-    """The raw contents of policy.json; ``{}`` when missing or unparseable."""
-    p = paths.policy_path()
-    if not p.exists():
-        return {}
-    with contextlib.suppress(json.JSONDecodeError, OSError):
-        data = json.loads(p.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return data
-    return {}
+    """The raw contents of policy.json; ``{}`` when missing or unusable."""
+    return jsonstate.read_object(paths.policy_path())[0] or {}
 
 
 def load() -> dict:
