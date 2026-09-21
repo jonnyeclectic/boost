@@ -8,6 +8,7 @@ import sys
 from copy import deepcopy
 from typing import Any
 
+from ..errors import BoostError
 from . import jsonstate, output, paths, typedvalue, util
 
 DEFAULTS = {
@@ -337,15 +338,29 @@ def save(cfg: dict) -> None:
     quarantined to `config.json.corrupt` first, so this never overwrites bytes
     the read path already warned about with a fresh file built from an
     in-memory view that silently dropped them — see `jsonstate.quarantine`.
+
+    A directory that refuses the write is a :class:`BoostError` naming it.
+    This used ``ensure_dirs``, so a cache dir a read-only ``~/.boost`` would
+    not create failed `boost untap` at exit 70 before its config was even
+    tried, and the config write itself would have failed the same way.
     """
-    paths.ensure_dirs()
+    paths.create_dirs(paths.boost_dirs())
     p = paths.config_path()
-    if _read_file()[1] is not None:
-        dest = jsonstate.quarantine(p)
-        output.warn("%s was corrupt and has been moved to %s before writing "
-                     "the new config" % (p, dest), stream=sys.stderr)
-    util.atomic_write_text(
-        p, json.dumps(cfg, indent=2, sort_keys=False) + "\n")
+    try:
+        if _read_file()[1] is not None:
+            dest = jsonstate.quarantine(p)
+            output.warn("%s was corrupt and has been moved to %s before "
+                        "writing the new config" % (p, dest), stream=sys.stderr)
+        util.atomic_write_text(
+            p, json.dumps(cfg, indent=2, sort_keys=False) + "\n")
+    except OSError as e:
+        block = paths.refuses_writes(p.parent)
+        raise BoostError(
+            "could not save %s (%s)%s"
+            % (paths.tilde(p), e.strerror or e,
+               ": " + paths.not_writable(p.parent, block) if block else ""),
+            hint="%s, then re-run" % paths.write_remedy(block)
+            if block else None) from e
 
 
 def get(dotted: str, default=None):

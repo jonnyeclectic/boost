@@ -223,6 +223,24 @@ class TestTheOfferIsNonFatalByConstruction:
                         reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")
+    def test_a_refused_write_still_names_the_way_back(self, offering, capsys):
+        # The docstring promises the reversal on every branch. The all-refused
+        # one named neither way out of a rule the lock now holds.
+        gemini = paths.home() / ".gemini"
+        gemini.mkdir(parents=True, exist_ok=True)
+        gemini.chmod(0o500)
+        try:
+            configuration._offer_boost_first(["gemini"])
+        finally:
+            gemini.chmod(0o700)
+        out = " ".join(capsys.readouterr().out.split())
+        assert "`boost sync` finishes it" in out
+        assert "`boost uninstall %s` drops it" % RULE in out
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
     def test_a_partly_refused_write_names_the_agent_it_missed(
             self, offering, capsys):
         gemini = paths.home() / ".gemini"

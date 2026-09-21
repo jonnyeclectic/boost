@@ -1093,3 +1093,39 @@ class TestBadgeRailAlignment:
         g = _render(query="rag")
         assert "[rule]" in "\n".join(g)
         assert out.kind_label("rule") == "[rule]"
+
+
+def test_a_status_message_keeps_a_backticked_command_whole():
+    # textwrap split `chmod u+w ~/.cursor/skills` over two lines of the pane,
+    # which leaves a command no one can copy.
+    msg = ("not linked: ~/.cursor/skills is not writable — "
+           "`chmod u+w ~/.cursor/skills`, then `boost sync` adds the link")
+    lines = [t for role, t in browse.detail_lines(
+        {"name": "x", "description": "d"}, width=30, state="ok", message=msg)
+        if "chmod" in t or "sync" in t or "linked" in t]
+    assert any("`chmod u+w ~/.cursor/skills`" in t for t in lines), lines
+    assert all(t.count("`") % 2 == 0 for t in lines), lines
+
+
+def test_a_status_token_wider_than_the_pane_still_fits_it():
+    # output.wrap lets an over-wide token run long; in a curses pane that
+    # drew over the frame and cut the tail off.
+    msg = "installed ~/.agents/skills/" + "a-very-long-skill-name" * 3
+    lines = [t for role, t in browse.detail_lines(
+        {"name": "x"}, width=30, state="ok", message=msg)]
+    assert all(len(t) <= 30 for t in lines), lines
+    assert "".join(lines).count("a-very-long-skill-name") >= 1
+
+
+def test_a_command_exactly_as_wide_as_the_pane_is_not_split_by_its_comma():
+    # "`chmod u+w ~/.windsurf/skills`," is 31 columns for a 30-column pane:
+    # the glued comma sent the span to the textwrap fallback, which split
+    # the command it exists to keep whole.
+    cmd = "`chmod u+w ~/.windsurf/skills`"
+    assert len(cmd) == 30
+    msg = "not linked: ~/.windsurf/skills is not writable — %s, then `boost sync`" % cmd
+    lines = [t for role, t in browse.detail_lines(
+        {"name": "x"}, width=30, state="ok", message=msg)]
+    assert cmd in lines, lines
+    assert all(len(t) <= 30 for t in lines), lines
+

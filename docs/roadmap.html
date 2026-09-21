@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>62</b><span>Planned</span></div>
-      <div class="stat"><b>478</b><span>Loop finds</span></div>
+      <div class="stat"><b>65</b><span>Planned</span></div>
+      <div class="stat"><b>482</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1931,13 +1931,9 @@ Floor-margin exposure, with that qualification attached: hit@1 measures 44/91 = 
       </article>
 
       <article class="cap rcard" id="identifier-columns-shrink-to-a-name-no-command-accepts">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">UX · Bug</span></div>
         <h3>Just before <code>out.table</code> drops a column, it shrinks the widest one with an ellipsis. In <code>hooks list</code> that is often <code>name</code>, and <code>bmad-r…</code> is not a name <code>hooks remove -n</code> accepts.</h3>
-        <p><b>Measured</b> on the branch that moved <code>name</code> to the front of <code>boost hooks list</code>, with the autopilot's hook names (<code>bmad</code>, <code>bmad-route</code>) piped at <code>COLUMNS</code> 40–100. <code>name</code> now shows at 52 widths, where it showed at 27. At 24 of those it is shortened, e.g. <code>bmad-r…</code>, in the widths 49–51, 57–59, 65–67, 74–79 and 83–91, the card's own width of 65 included. Before the reorder the same happened at 13 of 27.
-
-The cause is the fitter's shrink-before-drop rule (<code>output._fit_columns</code>). Before it drops a column, it shrinks the widest one that can still shrink, down to <code>_MIN_COL</code>. For prose that is the right trade. For an identifier, a clipped value is worse than an absent one, because it reads like data and is not: <code>boost hooks remove -n bmad-r…</code> removes nothing. <code>keep=</code> cannot express "may drop, never shrink". It means never drop and never shrink, and two such columns together can outgrow the pane, the overflow PR 902 closed.
-
-Likely fix: <code>out.table</code> takes a third class of column, <i>whole or absent</i>. The fitter never shrinks it and drops it in right-to-left order like any other column. <code>hooks list</code> would mark <code>name</code>, and <code>taps</code> and <code>list</code> would mark their NAME columns, the other arguments people copy. Measure every caller before and after: wide panes must stay byte-identical.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/identifier-columns-shrink-to-a-name-no-command-accepts.md">Write-up &middot; identifier-columns-shrink-to-a-name-no-command-accepts.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -1947,18 +1943,14 @@ Likely fix: <code>out.table</code> takes a third class of column, <i>whole or ab
       </article>
 
       <article class="cap rcard" id="read-only-boost-home-with-no-cache-dir">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
         <h3>Under a read-only <code>~/.boost</code> with no cache dir, <code>update</code>, <code>heal</code> and <code>doctor</code> crash at exit 70, and <code>heal --dry-run</code> says 0 for a run that crashes</h3>
-        <p><b>Measured</b> on the second release train and on <code>a316c6b</code>, where it behaves the same. Setup: tap the fixture, then <code>rm -rf ~/.boost/cache; chmod 500 ~/.boost</code>. <code>search</code>, <code>info</code> and <code>browse</code> now exit 0 (<code>cache-writers-that-still-crash-on-a-read-only-cache</code>), and <code>reindex</code> exits 1 naming <code>~/.boost</code>. But <code>update</code>, <code>heal</code> and <code>doctor</code> exit 70 with crash reports. <code>update</code> dies in <code>journal.log</code>'s <code>ensure_dirs</code>. The command whose job is to name the problem, <code>doctor</code>, is one that crashes.
-
-<code>heal --dry-run</code> exits 0 in that state ("would rebuild catalog cache …") while <code>heal</code> exits 70. The cache-dir check heal and doctor gained in the first release train asks whether an <i>existing</i> directory refuses writes, deliberately, so that a missing one is not called unwritable. A missing cache dir under a parent that refuses the mkdir is a third case that neither branch names.
-
-Likely fix: <code>paths.ensure_dirs</code> callers on the doctor, heal, update and journal paths tolerate a refused mkdir, like <code>rebuild_tap</code> now does. Doctor and heal then name the nearest existing directory that refuses writes, which is what <code>rag._unsaved</code> already does. The preview and the run must agree.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/read-only-boost-home-with-no-cache-dir.md">Write-up &middot; read-only-boost-home-with-no-cache-dir.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">With ~/.boost read-only and no cache dir, update, heal and doctor exit 70; heal --dry-run exits 0 while heal exits 70…</span>
+          <span class="m">fixed: paths.refuses_writes names the directory that stops a write, including the parent of a dir a refused mkdir left missing; doctor and heal create what they can and name ~/.boost (70 → 1), heal --dry-run agrees (0 → 1); journal.log creates only its own dir, so update, compact and install finish (70 → 0); an install checks the store before its first write (a store that refuses stops it at exit 1 with nothing written) and a refused lock-history snapshot is a warning, so none of the measured shapes lands on disk unrecorded; an install skips an agent dir with a file or dangling link in the way, whether a skills, rules or commands dir, records it and says to move it aside (70 → 0), and sync, doctor and heal name it too; untap names ~/.boost (70 → 1)</span>
         </div>
       </article>
 
@@ -2017,6 +2009,86 @@ warnings, with a <code>boost sync</code> remedy that never writes there.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
           <span class="m">a rule or workflow row for an agent later disabled in config makes sync print "re-materialized" on every run and keeps doctor at rc 1</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="agent-dir-shapes-install-still-trips-on">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <h3>Agent-dir shapes boost still trips on: a parent with no search bit, a missing dir under a read-only parent, a dir at a rule's file path, a blocked agent dropped from the lock's scope</h3>
+        <p><b>Found by the third review of <code>read-only-boost-home-with-no-cache-dir</code>.</b> None is a regression.
+Each was measured behaving the same on <code>c7dca95c</code>.
+
+<b>A parent with no search bit.</b> With an agent dir's parent at mode <code>0o600</code>,
+<code>store.install</code> copies the skill into the store. It then crashes at exit 70 in
+<code>linked_agents</code>, where <code>(adir / name).is_symlink()</code> raises
+<code>PermissionError</code> outside <code>link_agents</code>' guard. The store dir is left
+unrecorded. Treating an <code>OSError</code> there as "not linked" would close it.
+
+<b>A missing skills dir under a read-only parent.</b> The install names a <code>chmod</code>
+target that does not exist, and <code>doctor</code> and <code>heal</code> disagree about it.
+<code>link_agents</code>' <code>PermissionError</code> branch should record the block from
+<code>paths.refuses_writes(adir)</code> and word it through <code>link_refusal</code>. doctor's
+agent-dir check should use the same function, so that it agrees with heal.
+
+<b>A blocked agent drops out of the scope.</b> After an install skips an agent as blocked, the lock's
+<code>agents</code> list leaves it out. <code>preserved_agent_scope</code> replays that list, so a
+later <code>install --force</code> never retries the agent and never says so. Only
+<code>boost sync</code> reports and repairs it.
+
+<b>Callers that drop the result.</b> <code>boost import</code> (<code>install_from_path</code>),
+<code>quarantine --release</code> and the unsideline paths (focus, profile, context, team) drop
+<code>res.blocked</code> without a word, as they already drop <code>res.unwritable</code>.
+<code>pkg._warn_unwritable(res)</code> is the existing reporter.
+
+<b>Also found by the reconcile review of #933 with #931</b>, and also measured on both parents: With any agent dotdir at mode <code>600</code>, on Python 3.12 and 3.13 (3.14's <code>Path.exists</code> answers False where they raise), <code>doctor</code>, <code>heal</code> and <code>sync</code>
+exit 70 (<code>PermissionError</code> on <code>~/.cursor/skills</code>). A rule or workflow install in that
+shape is fixed on #933's branch: <code>_refused_target</code> names the dir through
+<code>paths.refuses_writes</code>, which asks <code>lexists</code>. So is uninstall of a rule or workflow there, through <code>store.refusing_dir</code>, which now treats a path it may not look at as not there. The skill install and these three are not fixed. And the remedy is wrong for this shape: <code>chmod u+w</code> leaves a <code>600</code> dir at <code>600</code>, because the missing bit is search, so the wording should say <code>chmod u+wx</code> when <code>X_OK</code> is what fails.<br><br>A <em>directory</em> at a rule's target file path (<code>~/.cursor/rules/house.mdc/</code>) raises
+<code>IsADirectoryError</code>. That is not one of the refusal shapes, so install exits 70 after writing
+the other agents' copies, with no lock entry.<br><br><code>heal --dry-run</code> previews "would re-materialize" a rule whose target dir is still locked or
+blocked. The real run then re-materializes nothing, correctly. The exit codes agree (1 and 1), but the
+wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every install exits 1, naming it, while
+<code>doctor</code> says healthy. <code>doctor</code> could ask <code>paths.refuses_writes(paths.store_dir())</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">Agent-dir shapes install, doctor, heal and sync still mishandle after the read-only-home fix; each behaves the same on c7dca95c…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="install-paths-that-still-drop-the-result">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
+        <h3>Six install paths still printed success over an agent dir that refused the link</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/install-paths-that-still-drop-the-result.md">Write-up &middot; install-paths-that-still-drop-the-result.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">six more install paths printed success over an agent dir that refused the link, because they threw the install result away</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="a-correct-link-in-a-locked-dir-reads-as-refused">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <h3>A reinstall into a locked skills dir says "not linked" over a link that is already there and correct</h3>
+        <p><b>Found by the review of <code>install-paths-that-still-drop-the-result</code>.</b>
+<code>store.link_agents</code> unlinks and re-creates every symlink it manages, even one that already
+resolves to the store copy. In a skills dir that refuses writes, the unlink raises
+<code>PermissionError</code>, so the agent goes into <code>res.unwritable</code>. <code>boost reinstall</code>
+then prints <em>not linked: ~/.cursor/skills is not writable</em> while the old link is still on disk,
+still points into the store, and the lock still records the agent in <code>agents</code>. The tap
+branch of reinstall has done this since #931. The local and URL branches say it now too, because they
+report the result at all.
+
+<b>Fix direction.</b> In <code>link_agents</code>, treat an existing symlink that already resolves to the
+target as linked, and skip the unlink and re-create. A link that points elsewhere, or no link, still
+needs the write and is still refused.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">A reinstall into a locked skills dir says "not linked" while the right link is still on disk and the lock records the agent…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -5663,40 +5735,9 @@ locally on a real Windows box.
       </article>
 
       <article class="cap rcard" id="audit-evolve-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost evolve</code>: CLI audit findings (2026-08)</h3>
-        <p><b>evolve accepts empty <code>--feedback</code> and has no stdin/file form.</b>
-<code>evolve brainstorming --feedback ""</code> exits 0 and diffs in
-<code>+## Feedback (2026-08-31)</code> followed by nothing, plus a bump to
-<code>version: 0.0.1</code> &mdash; with <code>--apply</code> that empty section lands in the store
-and the lock. <code>--feedback -</code> becomes the literal bullet <code>+- -.</code> and
-<code>--feedback @/dev/null</code> becomes <code>+- @/dev/null.</code>. In <code>cmd_evolve</code>
-(<code>intelligence.py:663-713</code>) raise <code>BoostError</code> when
-<code>args.feedback.strip()</code> is empty before calling the AI or heuristic; treat
-<code>-</code> as read-from-stdin and <code>@path</code> as read-from-file, documented in
-<code>--help</code> (then regenerate <code>docs/commands.html</code>).
-
-<br><br><b>evolve <code>--apply</code> leaves the revision unpinned, so a later
-<code>boost update</code> can silently overwrite it.</b> After <code>--apply</code> the lock holds
-the evolved sha and <code>pinned: false</code>, and evolve prints only
-<em>&ldquo;&#10003; evolved brainstorming&rdquo;</em>; <code>pkg.py</code>'s update loop
-(<code>pkg.py:1035-1039</code>) skips only pinned/quarantined/local entries, so once the tap moves,
-<code>store.install(entry, force=True)</code> (<code>pkg.py:1063-1067</code>) replaces the revision
-with no warning. On <code>--apply</code> set <code>entry["pinned"] = True</code> (or a
-<code>local_revision</code> flag the update loop honours) &mdash; at minimum print
-<em>&ldquo;boost pin &lt;name&gt; to keep this across boost update&rdquo;</em> after the success line.
-
-<br><br><b>After evolve, <code>info</code> claims an update to a lower version while
-<code>outdated</code> says up to date.</b> With the lock at 0.0.1 and the tap at 0.0.0,
-<code>info</code> prints <em>&ldquo;[update available] &hellip; version 0.0.1 / latest 0.0.0 (update
-available)&rdquo;</em> &mdash; <code>info.py:477-479</code> and <code>498-501</code> test
-<code>latest != inst_v</code> (string inequality) where <code>cmd_outdated</code>
-(<code>taps.py:285</code>, <code>340</code>) correctly uses <code>util.semver_gt</code> for the same
-decision. Replace both checks with <code>util.semver_gt(latest, inst_v)</code> and label the
-locally-ahead case (e.g. <em>local revision, tap has an older 0.0.0</em>).
-
-<br><br>Found by the 2026-08 CLI audit (clusters evolve-feedback-input, evolve-revision-unpinned,
-naive-version-comparison); repro in the audit log.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-evolve-findings.md">Write-up &middot; audit-evolve-findings.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -5919,13 +5960,9 @@ larger change, and belongs in its own card rather than folded into a bugfix PR.<
       </article>
 
       <article class="cap rcard" id="audit-quickstart-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost quickstart: CLI audit findings (2026-08)</h3>
-        <p><b>Without the <code>[rag]</code> extra, quickstart taps unpinned at HEAD &mdash; and the rerun it promises cannot fix it.</b> <code>cmd_quickstart</code> only fetches the manifest (the source of pins) when <code>want_vectors</code> is true (<code>boost_cli/commands/quickstart.py:145-152</code>), so on a machine without a dense backend the six new taps land with <code>pin: null</code> while the output ends <em>&ldquo;&hellip;install the extra&hellip;, then <code>boost quickstart</code> again&rdquo;</em>. The second run prints <code>&lt;tap&gt; already tapped</code> for all seven (<code>registry.add_many</code> skips existing taps, never re-pins), and once the extra is present <code>shards.sync</code> refuses every mismatched commit: <code>refused (tap is at X, shard is for Y)</code>. That contradicts the module's own docstring &mdash; &ldquo;Pinning is the whole point&rdquo;. Fix: fetch the manifest and pin regardless of <code>dense.have_backend()</code> (pinning is a network-and-config operation, not an embedding one), and on rerun retarget already-tapped registries via <code>shards.ingest</code> instead of skipping them. Update README.md (quickstart section, ~line 145) and docs/semantic-search.md (~line 63).
-
-<b>The <code>[rag]</code> install hint has three different wordings.</b> quickstart says <code>pipx inject boost-skill-cli "boost-skill-cli[rag]"</code> (hard-coded at <code>quickstart.py:175-177</code> and <code>202-204</code>); reindex's <code>embed.fallback_note</code> (<code>boost_cli/core/embed.py:170-179</code>) says unquoted <code>pip install boost-skill-cli[rag]</code>, which fails in zsh (<code>no matches found</code>); doctor and search say quoted <code>pip install 'boost-skill-cli[rag]'</code> via <code>dense.fix_hint()</code>. CLAUDE.md's rule is that doctor and search read one table so they cannot contradict &mdash; these two surfaces bypass it. Fix: have <code>embed.fallback_note()</code> and both quickstart paths call <code>dense.fix_hint()</code>; if pipx wording is wanted, put install-method detection inside <code>fix_hint</code> so every caller inherits it. docs/semantic-search.md is already quoted &mdash; keep it as the reference.
-
-Found by the 2026-08 CLI audit (clusters <code>quickstart-pinning</code>, <code>rag-hint-drift</code>); repro in the audit log.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-quickstart-findings.md">Write-up &middot; audit-quickstart-findings.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -6325,6 +6362,18 @@ with the two swapped, the <code>Error:</code> prefix is coloured.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
           <span class="m">boost … 2&gt;log on a terminal writes escape codes into the log, while boost … &gt;out prints the error line plain</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="quickstart-rerun-retargets-tapped-registries">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <h3>boost quickstart: a rerun could move already-tapped registries to their vectors</h3>
+        <p><b>A rerun of quickstart still leaves an already-tapped registry at the commit it was tapped at.</b> <code>registry.add_many</code> skips a configured tap (<code>already tapped</code>), so a registry first tapped before quickstart pinned anything, or overtaken by a weekly republish, stays where it is, and <code>shards.sync</code> then refuses its shard (<code>tap is at X, shard is for Y</code>). The <code>audit-quickstart-findings</code> fix flags that refusal and names <code>boost update --shards</code>, which already moves such taps through <code>shards.ingest</code> (download and verify first, then move the tap). That was the smaller half of the card; its other half was to have quickstart do the move itself. Fix: on a rerun, hand the configured taps the manifest publishes to <code>shards.ingest</code> instead of <code>shards.sync</code>, so the vectors land in one command. Decide first whether quickstart may move a tap the user tapped on purpose at another commit: <code>boost update</code> treats a pin as a promise, and a tap pinned with <code>boost tap --at</code> should keep it. Pin that choice in <code>tests/functional/test_cli_quickstart.py</code> beside the <code>commit_moved</code> tests.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">a rerun leaves an already-tapped registry where it is, even when the manifest names another commit</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

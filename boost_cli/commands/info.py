@@ -38,6 +38,7 @@ from ..core import (
     registry,
     rules,
     scopes,
+    staleness,
     store,
     util,
 )
@@ -251,7 +252,8 @@ def _kind_table(heading, items, extra=None):
     if extra:
         headers = (headers[0], headers[1], headers[2], headers[3], extra[0],
                    headers[4])
-    out.table(rows, headers=headers)
+    # NAME is what `uninstall`/`update`/`cat` take: shown whole or dropped.
+    out.table(rows, headers=headers, whole=("NAME",))
     noun = heading.split()[-1][:-1]  # "installed rules" -> "rule"
     print("  " + out.aurora("%d %s%s installed"
                             % (len(rows), noun, "" if len(rows) == 1 else "s"),
@@ -334,7 +336,10 @@ def cmd_list(argv):
             rows.append((name, e.get("version", "?"), e.get("tap", "?"),
                          "·".join(a.split("-")[0] for a in e.get("agents") or []),
                          " ".join(flags)))
-        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"))
+        # NAME is what `uninstall`/`update`/`cat` take: `brainstorm…` is not
+        # a name any of them accepts, so it is shown whole or dropped.
+        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"),
+                  whole=("NAME",))
         print("  " + out.aurora("%d skill%s installed%s"
                                 % (len(rows), "" if len(rows) == 1 else "s",
                                    " with tag #%s" % args.tag.lstrip("#")
@@ -344,7 +349,8 @@ def cmd_list(argv):
         rows = [(name, e.get("version", "?"), e.get("tap", "?"),
                  "·".join(a.split("-")[0] for a in e.get("agents") or []))
                 for name, e in sorted(project.items())]
-        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS"))
+        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS"),
+                  whole=("NAME",))
         print("  " + out.role("committed with the repo — %s/%s"
                               % (projectlock.LOCK_DIRNAME,
                                  projectlock.LOCK_FILENAME), "muted"))
@@ -518,6 +524,11 @@ def cmd_info(argv):
     # Identity-card badges: a scannable status strip beneath the name, echoing
     # the web .badge pills. The detailed kv rows below still carry the specifics.
     badges = []
+    # One decision for the badge and the "latest" row, compared as versions:
+    # string inequality called a tap still at 1.4.0 an update to 1.4.1.
+    relation = (staleness.catalog_relation(
+        str(lock.get("version", "?")), str((cat or {}).get("version") or ""))
+        if lock and cat else None)
     if lock:
         badges.append(out.badge("installed", "green"))
         if lock.get("pinned"):
@@ -526,9 +537,10 @@ def cmd_info(argv):
             badges.append(out.badge("quarantined", "pink"))
         if lock.get("sidelined_by"):
             badges.append(out.badge("sidelined by %s" % lock["sidelined_by"], "cyan"))
-        latest = str((cat or {}).get("version") or "")
-        if cat and latest != str(lock.get("version", "?")):
+        if relation == staleness.BEHIND:
             badges.append(out.badge("update available", "yellow"))
+        elif relation == staleness.AHEAD:
+            badges.append(out.badge("ahead of tap", "cyan"))
     elif plock:
         badges.append(out.badge("installed in this project", "green"))
     else:
@@ -555,9 +567,14 @@ def cmd_info(argv):
         inst_v = str(lock.get("version", "?"))
         out.kv("version", inst_v)
         latest = str((cat or {}).get("version") or "")
-        if cat and latest != inst_v:
+        if relation == staleness.BEHIND:
             out.kv("latest", out.role(latest, "warn", bold=True)
                    + out.role("  (update available)", "muted"))
+        elif relation == staleness.AHEAD:
+            # Kept short: kv does not wrap by default, and the long form ran
+            # this row to 71 columns, past a 60-column pane.
+            out.kv("latest", latest + out.role("  (older than installed)",
+                                               "muted"))
     else:
         out.kv("latest", str((cat or {}).get("version", "?")))
     out.kv("tap", (lock or cat or {}).get("tap", "?"))
@@ -1255,7 +1272,7 @@ def cmd_tag(argv):
             out.info(out.role("hint: boost tag <skill> +mytag", "muted"))
             return 0
         out.table([("#" + t, ", ".join(mapping[t])) for t in sorted(mapping)],
-                  headers=("TAG", "SKILLS"))
+                  headers=("TAG", "SKILLS"), whole=("TAG",))  # `list --tag`
         return 0
 
     if not args.name:

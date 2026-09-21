@@ -274,13 +274,36 @@ def _warn_unwritable(res) -> None:
     A conflict is a real file squatting a skill's link path. An unwritable dir
     refused a link, or a rule or workflow file; the refused agent is still
     recorded, so `boost sync` writes it once the dir allows it."""
-    for path in res.conflicts:
-        out.warn("not linked: %s exists and is not managed by boost" % _tilde(path))
-    what = ("not linked", "adds the link") if res.kind == "skill" else (
-        "not written", "writes it")
-    for adir in res.unwritable:
-        out.warn("%s: %s is not writable — `chmod u+w %s`, then `boost sync` %s"
-                 % (what[0], _tilde(adir), _tilde(adir), what[1]), wrap=True)
+    conflicts, refused = _skipped_agent_lines(res)
+    for line in conflicts:
+        out.warn(line)
+    for line in refused:
+        out.warn(line, wrap=True)
+
+
+def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
+    """What :func:`_warn_unwritable` prints, as text: the conflict lines and
+    the refused-dir lines, apart because only the second kind is wrapped.
+
+    Text so a caller that cannot print — the browse TUI's install worker,
+    whose report is a status message in the detail pane — says the same
+    thing in the same words. ``getattr`` because that worker also takes a
+    caller's own ``install`` callable, whose result need not carry every
+    field of an ``InstallResult``.
+    """
+    conflicts = ["not linked: %s exists and is not managed by boost" % _tilde(path)
+                 for path in getattr(res, "conflicts", None) or ()]
+    what = ("not linked", "adds the link") \
+        if getattr(res, "kind", "skill") == "skill" else ("not written", "writes it")
+    refused = ["%s: %s is not writable — `chmod u+w %s`, then `boost sync` %s"
+               % (what[0], _tilde(adir), _tilde(adir), what[1])
+               for adir in getattr(res, "unwritable", None) or ()]
+    # Something in the way of the dir: no chmod clears a file or a dangling
+    # link, so the remedy is the move `store.link_refusal` names.
+    refused += ["%s: %s — %s, then `boost sync` %s"
+                % (what[0], *store.link_refusal(adir, block), what[1])
+                for adir, block in getattr(res, "blocked", None) or ()]
+    return conflicts, refused
 
 
 def _boostfile_text(skills: dict[str, dict], via: str = "boost bundle dump") -> str:
@@ -788,8 +811,15 @@ def cmd_sync(argv: list[str]) -> int:
     for adir in stuck:
         out.warn("agent dir %s is not writable — `chmod u+w %s`, then re-run "
                  "`boost sync`" % (_tilde(adir), _tilde(adir)), wrap=True)
+    # A file or a dangling link where a rules/ or commands/ dir belongs. A
+    # block the line above already names for a skill link is not named twice.
+    named = {Path(p) for _n, _a, p in blocked}
+    in_way = [(d, b) for d, b in store.blocked_agent_dirs() if b not in named]
+    for adir, block in in_way:
+        out.warn("%s — %s, then re-run `boost sync`"
+                 % store.link_refusal(str(adir), str(block)), wrap=True)
     if (not actions and not pruned and not left and not oos and not blocked
-            and not stuck):
+            and not stuck and not in_way):
         out.ok("everything in sync")
     return 0
 
@@ -1280,15 +1310,18 @@ def cmd_reinstall(argv: list[str]) -> int:
             if warning:
                 out.warn(warning)
             try:
-                _warn_unwritable(store.install(
-                    entry, force=True,
-                    scope=lk.get("scope", "user"), base=lk.get("base")))
+                res = store.install(entry, force=True,
+                                    scope=lk.get("scope", "user"),
+                                    base=lk.get("base"))
             except BoostError as err:
                 out.warn("%s: %s" % (name, err.message))
                 failed += 1
                 continue
+            # Success first, then what it skipped: the same order as every
+            # other branch, so a `--all` run reads the same line to line.
             out.ok("reinstalled %s %s v%s"
                    % (kind, name, entry.get("version", "0.0.0")))
+            _warn_unwritable(res)
             done += 1
             done_kinds.add(kind)
             continue
@@ -1307,12 +1340,12 @@ def cmd_reinstall(argv: list[str]) -> int:
             # the remaining names are never attempted.
             try:
                 if src is not None:
-                    store.install_from_path(src, name=name, force=True)
+                    res = store.install_from_path(src, name=name, force=True)
                     how = "local, from %s" % _tilde(src)
                 else:
                     # A URL import's clone was deleted when the import
                     # returned; the lock kept the URL so it can be cloned again.
-                    store.reinstall_from_url(name, lk)
+                    res = store.reinstall_from_url(name, lk)
                     commit = str((lockfile.get_skill(name) or {}).get("commit") or "")
                     how = ("from %s at %s" % (url, commit[:7]) if commit
                            else "from %s" % url)
@@ -1321,6 +1354,7 @@ def cmd_reinstall(argv: list[str]) -> int:
                 failed += 1
                 continue
             out.ok("reinstalled %s (%s)" % (name, how))
+            _warn_unwritable(res)
             done += 1
             done_kinds.add("skill")
             continue
@@ -1335,12 +1369,13 @@ def cmd_reinstall(argv: list[str]) -> int:
         if warning:
             out.warn(warning)
         try:
-            _warn_unwritable(store.install(entry, force=True))
+            res = store.install(entry, force=True)
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             failed += 1
             continue
         out.ok("reinstalled %s v%s" % (name, entry.get("version", "0.0.0")))
+        _warn_unwritable(res)
         done += 1
         done_kinds.add("skill")
     # Name the kind when only one was touched; a mixed run says "items".
@@ -1713,6 +1748,7 @@ def _import_root(root: Path, name: str | None, do_all: bool,
                 continue
             out.ok("imported %s v%s (score %d/100)" % (res.name, e["version"],
                                                        res.score))
+            _warn_unwritable(res)
             _warn_injection(res)
             _warn_secrets(res)
             _warn_import(res, only is not None)
@@ -1725,7 +1761,8 @@ def _import_root(root: Path, name: str | None, do_all: bool,
     # One line each, and no control bytes — this is a foreign repo's frontmatter.
     out.table([(e["name"], "v" + e["version"],
                 " ".join(out.plain(e["description"] or "").split()))
-               for e in entries])
+               for e in entries],
+              whole=(0,))  # the NAME the hint's `--name NAME` takes
     raise BoostError("multiple skills found — pick one or import all",
                     hint="add `--name NAME` or `--all`")
 

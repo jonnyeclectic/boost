@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import shutil
+import sys
 
 import pytest
 
 from boost_cli.core import config, paths, typedvalue
+from boost_cli.errors import BoostError
 
 
 class TestLoadDefaults:
@@ -107,6 +111,44 @@ class TestSaveRoundtrip:
         raw = paths.config_path().read_text(encoding="utf-8")
         assert '\n  "zeta": 1' in raw                 # 2-space indent, not compact
         assert raw.index('"zeta"') < raw.index('"alpha"')   # insertion, not sorted
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="chmod can't make a directory unwritable on Windows")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root ignores mode bits")
+class TestSaveUnderAReadOnlyBoostHome:
+    """`boost untap` exited 70 here: ensure_dirs raised on a cache dir a
+    read-only ~/.boost would not create, and the config write behind it would
+    have failed the same way."""
+
+    def test_names_the_directory_and_leaves_the_file_alone(self, sandbox):
+        config.save({"a": 1})
+        shutil.rmtree(paths.cache_dir(), ignore_errors=True)
+        home = paths.boost_home()
+        home.chmod(0o500)
+        try:
+            with pytest.raises(BoostError) as e:
+                config.save({"a": 2})
+        finally:
+            home.chmod(0o700)
+        assert e.value.message == ("could not save ~/.boost/config.json "
+                                   "(Permission denied): ~/.boost is not "
+                                   "writable")
+        assert e.value.hint == "run `chmod u+w ~/.boost`, then re-run"
+        raw = paths.config_path().read_text(encoding="utf-8")
+        assert json.loads(raw) == {"a": 1}
+
+    def test_a_failure_that_is_not_a_permission_has_no_chmod_hint(
+            self, sandbox, monkeypatch):
+        def full(*a, **k):
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(config.util, "atomic_write_text", full)
+        with pytest.raises(BoostError) as e:
+            config.save({"a": 1})
+        assert e.value.message == ("could not save ~/.boost/config.json "
+                                   "(No space left on device)")
+        assert e.value.hint is None
 
 
 class TestCaching:

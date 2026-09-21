@@ -649,7 +649,24 @@ def detail_lines(entry: dict, width: int = 60,
 
     if installed is not None or state:
         role, text = status_line(state, message, installed)
-        add(role, text)
+        # output.wrap, not textwrap: the message can carry a backticked
+        # command (`chmod u+w ~/.cursor/skills`), and a command split across
+        # two lines is not one a user can copy.
+        # A token wider than the pane is the one thing output.wrap lets run
+        # long, which a terminal soft-wraps and a curses pane draws over its
+        # own frame; only that chunk is broken, so a command that fits stays
+        # whole and nothing leaves the pane.
+        from . import output  # stdlib-only too; lazy to keep this module light
+        for chunk in output.wrap(text, width) or [""]:
+            parts = [chunk]
+            if output.visible_len(chunk) > width:
+                # output.wrap glues trailing punctuation to a code span, so a
+                # command exactly as wide as the pane arrives one column over.
+                # Drop the comma, not the command.
+                bare = chunk.rstrip(",.;:")
+                parts = ([bare] if output.visible_len(bare) <= width
+                         else textwrap.wrap(chunk, width))
+            lines.extend((role, part) for part in parts)
         lines.append(("blank", ""))
 
     add("head", "SOURCE")

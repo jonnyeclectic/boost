@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import difflib
 import json
+import sys
 from collections.abc import Sequence
 
-from . import paths, util
+from . import output, paths, util
 
 ROTATE_AT = 5000
 ROTATE_KEEP = 2500
+
+# Once per process: a command can log more than once, and the fix is the same.
+_WARNED_UNSAVED = False
 
 PULSE_EMPTY = "no activity yet — events appear as you install and manage skills"
 WHO_EMPTY = ("no journal activity yet — expertise builds as people install, "
@@ -35,14 +39,31 @@ def log(action: str, subject: str = "", **fields) -> None:
     """Append one event line to the pulse feed, rotating when oversized.
 
     None-valued keyword fields are dropped from the record.
+
+    Only the feed's own directory is created. This called ``ensure_dirs``,
+    so a cache dir that a read-only ``~/.boost`` refused to create failed
+    `update` and `compact` at exit 70 after their work was done. The feed is
+    a record, not the work: one it cannot write is a warning, not a failure.
     """
-    paths.ensure_dirs()
+    global _WARNED_UNSAVED
     event = {"ts": util.now_iso(), "user": util.user(), "action": action,
              "subject": subject}
     event.update({k: v for k, v in fields.items() if v is not None})
     p = paths.pulse_path()
-    with p.open("a") as f:
-        f.write(json.dumps(event) + "\n")
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a") as f:
+            f.write(json.dumps(event) + "\n")
+    except OSError as e:
+        if not _WARNED_UNSAVED:
+            _WARNED_UNSAVED = True
+            # The dir that refuses, or else the feed file itself does.
+            where = paths.refuses_writes(p.parent) or p
+            output.warn("could not record this in the activity feed (%s) — "
+                        "`boost pulse` will not show it; make %s writable"
+                        % (e.strerror or e, paths.tilde(where)),
+                        stream=sys.stderr, wrap=True)
+        return
     _maybe_rotate()
 
 

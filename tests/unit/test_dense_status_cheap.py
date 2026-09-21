@@ -222,7 +222,8 @@ def test_fix_hint_drops_the_number_when_it_is_unknown():
 def test_fix_hint_still_routes_an_empty_store_to_build():
     """A genuinely empty store is a different case and keeps its old answer."""
     st = {"built_provider": "voyage", "chunks": 0, "chunks_exact": True}
-    assert dense.fix_hint("no-key", st) == dense._FIX["no-key"]
+    table = dense._FIX["no-key"].replace(dense._INSTALL, dense.install_extra())
+    assert dense.fix_hint("no-key", st) == table
 
 
 # --------------------------------------------------------------- build

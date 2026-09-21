@@ -40,6 +40,30 @@ def upstream_reason(installed_version: str, latest_version: str,
     return None
 
 
+# ── catalog_relation: installed version against the catalog's ─────────────
+BEHIND = "behind"  # the catalog advertises a newer version: an update exists
+AHEAD = "ahead"    # the installed copy is newer, as after `evolve --apply`
+
+
+def catalog_relation(installed_version: str, latest_version: str
+                     ) -> str | None:
+    """Where the installed version sits against the catalog's, else ``None``.
+
+    Compared as versions, never as strings: ``1.4.1`` against a tap still at
+    ``1.4.0`` differs as a string, and `boost info` used to call that an
+    "update available" to a lower version while `boost outdated` (which uses
+    ``semver_gt``) said up to date. An empty ``latest_version`` means the
+    catalog declares none, so there is nothing to compare.
+    """
+    if not latest_version:
+        return None
+    if util.semver_gt(latest_version, installed_version):
+        return BEHIND
+    if util.semver_gt(installed_version, latest_version):
+        return AHEAD
+    return None
+
+
 # ── drift_state: how an installed skill's store copy relates to lock+tap ───
 IN_SYNC = "in-sync"
 LOCAL_EDITS = "local-edits"

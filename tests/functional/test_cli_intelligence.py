@@ -8,8 +8,12 @@ boost_cli.core.ai monkeypatched to canned replies.
 """
 from __future__ import annotations
 
+import io
 import json
+import os
+import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -365,6 +369,25 @@ class TestInfer:
         lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["project-conventions"]["tap"] == "local"
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_install_names_an_agent_dir_that_refused_the_link(
+            self, boost, sandbox, py_project):
+        # _install_generated backs distill, infer and absorb --install, and
+        # printed only the agents it reached.
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o500)
+        try:
+            r = boost("infer", "--path", py_project, "--install")
+        finally:
+            cursor.chmod(0o700)
+        out = " ".join(r.out.split())
+        assert "installed project-conventions" in out
+        assert "not linked: ~/.cursor/skills is not writable" in out
+
     def test_ai_path(self, boost, sandbox, py_project, ai_on):
         ai_on(ask_author="---\nname: project-conventions\ndescription: AI says\n"
                          "version: 1.0.0\n---\n\n# Rules\n\n- Use ruff always.\n")
@@ -565,6 +588,164 @@ class TestEvolve:
         text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(encoding="utf-8")
         assert "Never exceed 5 ideas." in text
         assert frontmatter.parse(text)[0]["version"] == "1.4.1"
+
+    # ---- the 2026-08 CLI audit: feedback input, pin on apply, info wording
+
+    def _lock_entry(self):
+        return json.loads(paths.lockfile_path().read_text(encoding="utf-8"))[
+            "skills"]["brainstorming"]
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_empty_feedback_is_refused_before_anything_is_written(
+            self, boost, installed, value):
+        skill_md = paths.store_dir() / "brainstorming" / "SKILL.md"
+        before = skill_md.read_text(encoding="utf-8")
+        r = boost("evolve", "brainstorming", "--apply", "--feedback", value,
+                  expect=1)
+        assert "--feedback is empty" in r.err
+        assert "evolving brainstorming" not in r.out
+        assert "## Feedback" not in r.out
+        assert skill_md.read_text(encoding="utf-8") == before
+        assert self._lock_entry()["version"] == "1.4.0"
+        assert journal.events(action="evolve") == []
+
+    def test_empty_feedback_is_refused_before_the_ai_is_asked(
+            self, boost, installed, ai_on, monkeypatch):
+        from boost_cli.core import ai
+        calls = []
+        monkeypatch.setattr(ai, "ask_author",
+                            lambda *a, **k: calls.append(a) or None)
+        r = boost("evolve", "brainstorming", "--feedback", " ", expect=1)
+        assert "--feedback is empty" in r.err
+        assert calls == []
+
+    def test_feedback_dash_reads_stdin(self, boost, installed, monkeypatch):
+        monkeypatch.setattr("sys.stdin",
+                            io.StringIO("Cap ideas at 5.\nPrefer bullets\n"))
+        r = boost("evolve", "brainstorming", "--feedback", "-")
+        assert "+- Cap ideas at 5." in r.out
+        assert "+- Prefer bullets." in r.out
+        assert "+- -." not in r.out
+
+    def test_feedback_dash_with_nothing_on_stdin_is_refused(
+            self, boost, installed, monkeypatch):
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
+        r = boost("evolve", "brainstorming", "--feedback", "-", expect=1)
+        assert "--feedback - read nothing from stdin" in r.err
+        assert "+- -." not in r.out
+
+    def _capture_ai_prompt(self, ai_on, monkeypatch):
+        """Turn the AI path on and record every prompt it is handed."""
+        from boost_cli.core import ai
+        ai_on()
+        prompts = []
+        monkeypatch.setattr(ai, "ask_author",
+                            lambda prompt, **k: prompts.append(prompt) or None)
+        return prompts
+
+    def test_ai_is_handed_the_text_read_from_stdin_not_a_dash(
+            self, boost, installed, ai_on, monkeypatch):
+        prompts = self._capture_ai_prompt(ai_on, monkeypatch)
+        monkeypatch.setattr("sys.stdin",
+                            io.StringIO("Cap ideas at 5.\nPrefer bullets\n"))
+        boost("evolve", "brainstorming", "--feedback", "-")
+        assert len(prompts) == 1
+        assert "FEEDBACK: Cap ideas at 5.\nPrefer bullets\n\n" in prompts[0]
+        assert "FEEDBACK: -" not in prompts[0]
+
+    def test_ai_is_handed_the_file_text_not_the_at_path(
+            self, boost, installed, ai_on, monkeypatch, tmp_path):
+        prompts = self._capture_ai_prompt(ai_on, monkeypatch)
+        fb = tmp_path / "feedback.txt"
+        fb.write_text("  Cap ideas at 5.\n", encoding="utf-8")
+        boost("evolve", "brainstorming", "--feedback", "@%s" % fb)
+        assert len(prompts) == 1
+        assert "FEEDBACK: Cap ideas at 5.\n\n" in prompts[0]
+        assert "FEEDBACK: @" not in prompts[0]
+        assert str(fb) not in prompts[0]
+
+    def test_feedback_bare_at_asks_for_a_path(self, boost, installed):
+        r = boost("evolve", "brainstorming", "--feedback", "@", expect=1)
+        assert "--feedback @ needs a file path" in r.err
+        assert "Is a directory" not in r.err
+        assert "evolving brainstorming" not in r.out
+
+    def test_feedback_at_file_reads_the_file(self, boost, installed, tmp_path):
+        fb = tmp_path / "feedback.txt"
+        fb.write_text("Cap ideas at 5; prefer bullet points\n", encoding="utf-8")
+        r = boost("evolve", "brainstorming", "--feedback", "@%s" % fb)
+        assert "+- Cap ideas at 5." in r.out
+        assert "+- prefer bullet points." in r.out
+        assert "+- @" not in r.out
+
+    def test_feedback_at_an_empty_file_is_refused(
+            self, boost, installed, tmp_path):
+        fb = tmp_path / "empty.txt"
+        fb.write_text("", encoding="utf-8")
+        r = boost("evolve", "brainstorming", "--feedback", "@%s" % fb, expect=1)
+        assert "is empty" in r.err
+        assert "+- @" not in r.out
+
+    def test_feedback_at_a_missing_file_is_an_error(
+            self, boost, installed, tmp_path):
+        r = boost("evolve", "brainstorming", "--feedback",
+                  "@%s" % (tmp_path / "nope.txt"), expect=1)
+        assert "can't read --feedback @" in r.err
+
+    def test_help_documents_stdin_and_file_forms(self, boost, sandbox):
+        r = boost("evolve", "--help")
+        assert "`-` reads it from stdin, `@FILE` from a file" in flat(r.out)
+        assert "and pin it, so `boost update` keeps it" in flat(r.out)
+
+    def test_apply_pins_the_revision_and_says_so(self, boost, installed):
+        r = boost("evolve", "brainstorming", "--apply", "--feedback", "cap ideas")
+        assert self._lock_entry()["pinned"] is True
+        assert ("pinned it so `boost update` keeps this revision; "
+                "`boost unpin brainstorming` lets the tap replace it") in flat(r.out)
+        assert [e["subject"] for e in journal.events(action="pin")] == [
+            "brainstorming"]
+
+    def test_apply_on_an_already_pinned_skill_stays_quiet_about_it(
+            self, boost, installed):
+        boost("pin", "brainstorming")
+        r = boost("evolve", "brainstorming", "--apply", "--feedback", "cap ideas")
+        assert self._lock_entry()["pinned"] is True
+        assert "pinned it so" not in r.out
+        assert len(journal.events(action="pin")) == 1
+
+    def test_update_keeps_the_revision_after_the_tap_moves(
+            self, boost, fixture_tap_src, tmp_path):
+        tap = tmp_path / "moving-tap"
+        shutil.copytree(fixture_tap_src, tap)
+        boost("tap", tap)
+        boost("install", "brainstorming")
+        boost("evolve", "brainstorming", "--apply", "--feedback", "cap ideas")
+        md = tap / "skills" / "brainstorming" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8") + "\nupstream edit\n",
+                      encoding="utf-8")
+        _git(tap, "commit", "-aqm", "move brainstorming")
+
+        r = boost("update")
+        assert "refreshed brainstorming" not in r.out
+        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert "- cap ideas." in text
+        assert "upstream edit" not in text
+        assert self._lock_entry()["version"] == "1.4.1"
+        # outdated still shows the tap moved, marked as held by the pin
+        r = boost("outdated")
+        assert "1.4.1 (pinned)" in r.out
+        assert "pinned items stay put" in r.out
+
+    def test_info_after_apply_is_ahead_not_an_update(self, boost, installed):
+        boost("evolve", "brainstorming", "--apply", "--feedback", "cap ideas")
+        r = boost("info", "brainstorming")
+        assert "update available" not in r.out
+        assert "[ahead of tap]" in r.out
+        assert "(older than installed)" in r.out
+        assert "[pinned]" in r.out
+        r = boost("outdated")
+        assert "everything up to date" in r.out
 
 
 # ---------------------------------------------------------------- context

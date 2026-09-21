@@ -1615,6 +1615,42 @@ class TestBrowse:
         discovery._browse_tui(_FakeCurses(keys), entries, install=slow_install)
         assert not overlapped, "installs ran concurrently: %r" % overlapped
 
+    def test_an_in_place_install_names_an_agent_it_skipped(self, boost, tapped):
+        """The detail pane is the only report an in-place install gets, and it
+        showed the store path alone — "installed" over an agent dir that
+        refused the link."""
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+
+        refused = paths.home() / ".cursor" / "skills"
+
+        def install(entry):
+            return types.SimpleNamespace(
+                dest=paths.store_dir() / entry["name"], linked=["claude-code"],
+                conflicts=[], unwritable=[str(refused)], kind="skill")
+
+        class Polls(_FakeCurses):
+            """Enter, then poll ticks until the worker's report is drawn."""
+
+            ticks = 0
+
+            def getch(self):
+                if self.keys:
+                    return self.keys.pop(0)
+                drawn = " ".join(" ".join(self.drawn).split())
+                if "is not writable" not in drawn and self.ticks < 250:
+                    self.ticks += 1
+                    time.sleep(0.02)
+                    return -1                             # redraw, no key
+                return 27
+
+        entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
+        fake = Polls([10], size=(30, 140))
+        discovery._browse_tui(fake, entries, install=install)
+        drawn = " ".join(" ".join(fake.drawn).split())
+        assert ("installed ~/.agents/skills/brainstorming · not linked: "
+                "~/.cursor/skills is not writable") in drawn
+
     def test_space_types_into_the_query_instead_of_selecting(self, boost, tapped):
         """The reported bug: SPACE was bound to select and excluded from the
         printable range, so two words could never be searched for."""

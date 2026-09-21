@@ -985,7 +985,7 @@ def _discover_live(args, tokens):
                 + (" (%d)" % it["files"] if it.get("files", 1) > 1 else ""),
                 out.plain(it.get("path", "")),
                 out.role(out.plain(it.get("url", "")), "muted")) for it in rows],
-              headers=("repo", "path", "url"))
+              headers=("repo", "path", "url"), whole=("repo",))  # `boost tap`
     # "(N)" counts files in THIS page, not the repo's skills — say so, rather
     # than letting a capped sample read as a total.
     out.info(out.role("%d repo(s) across the top %d code-search hits · live "
@@ -1082,7 +1082,7 @@ def cmd_discover(argv):
                 + (" (%d)" % it["files"] if it.get("files", 1) > 1 else ""),
                 out.plain(it.get("path", "")),
                 out.role(out.plain(it.get("url", "")), "muted")) for it in repo_rows],
-              headers=("repo", "path", "url"))
+              headers=("repo", "path", "url"), whole=("repo",))  # `boost tap`
     # `github_total` is the match count for the query `boost index` was built
     # with, which since that command took a query is not "all of GitHub".
     scope = (" matching %r" % data["query"]) if data.get("query") else ""
@@ -1226,7 +1226,9 @@ def _browse_plain(entries, why: str):
         headers.append("")
         for row, e in zip(rows, unique, strict=True):
             row.append("★" if e.get("curated") else "")
-    out.table([tuple(row) for row in rows], headers=tuple(headers))
+    # name is what the footer's `boost install <name>` takes.
+    out.table([tuple(row) for row in rows], headers=tuple(headers),
+              whole=("name",))
     out.info(out.role(
         "%s · install with `boost install <name>` · narrow with `boost search <query>`"
         % browse.plain_footer(unique), "muted"))
@@ -1479,6 +1481,7 @@ def _browse_tui(curses, entries, install=None):
     loading: set = set()
     installed_names = set(store.installed())
     do_install = install or store.install
+    from .pkg import _skipped_agent_lines  # imported here: pkg is large
     # Collapse rows that say the same thing. A registry renders one skill into
     # .claude/, .cursor/, .gemini/ and a plugin root, so 37% of a real 60,047
     # entry catalogue is a duplicate of another row. Kept as (entry, copies) so
@@ -1549,7 +1552,12 @@ def _browse_tui(curses, entries, install=None):
                 else:
                     installed_names.add(nm)
                     done.append(item)
-                    status[nm] = (browse.OK, _tilde(getattr(res, "dest", "")))
+                    # An agent the install skipped rides on the message: the
+                    # pane is the only report an in-place install gets, and a
+                    # bare path there read as every agent reached.
+                    conflicts, refused = _skipped_agent_lines(res)
+                    status[nm] = (browse.OK, " · ".join(
+                        [_tilde(getattr(res, "dest", "")), *conflicts, *refused]))
 
         t = threading.Thread(target=worker, daemon=True)
         workers.append(t)
@@ -2020,6 +2028,10 @@ def cmd_browse(argv):
             out.warn("not %s: %s is not writable — `chmod u+w %s`, then "
                      "`boost sync`" % ("linked" if res.kind == "skill" else "written",
                                        _tilde(adir), _tilde(adir)))
+        for adir, block in res.blocked:
+            out.warn("not %s: %s — %s, then `boost sync`"
+                     % ("linked" if res.kind == "skill" else "written",
+                        *store.link_refusal(adir, block)), wrap=True)
     return 0
 
 
@@ -2067,7 +2079,8 @@ def cmd_trending(argv):
         out.table([(e["name"], "v" + e["version"], e.get("kind", "skill"),
                     out.truncate(e["description"], descw))
                    for e in curated],
-                  headers=("name", "version", "kind", "description"))
+                  headers=("name", "version", "kind", "description"),
+                  whole=("name",))  # `boost install <name>`
         return 0
     agg: dict[str, Any] = {}
     for ev in evs:  # most-recent-first, so first ts per subject is the latest
@@ -2092,7 +2105,8 @@ def cmd_trending(argv):
                 by_name.get(name, {}).get("kind", "skill"),
                 out.truncate(by_name.get(name, {}).get("description", ""), descw))
                for name, rec in ranked[:args.limit]],
-              headers=("name", "installs", "last", "kind", "description"))
+              headers=("name", "installs", "last", "kind", "description"),
+              whole=("name",))  # `boost install <name>`
     out.info(out.role("based on local install activity", "muted"))
     return 0
 

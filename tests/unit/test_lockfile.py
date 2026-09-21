@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import sys
 
 import pytest
 
@@ -597,3 +600,75 @@ class TestAgentNames:
         assert lockfile.agent_names("rule", {"materializations": []}) == []
         assert lockfile.agent_names("skill", {}) == []
         assert lockfile.agent_names("rule", {}) == []
+
+
+_POSIX_MODES = [
+    pytest.mark.skipif(sys.platform == "win32",
+                       reason="chmod can't make a directory unwritable on Windows"),
+    pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                       reason="root ignores mode bits"),
+]
+
+
+class TestHistoryIsARecordNotTheWork:
+    """A refused history snapshot failed the lock write after an install had
+    already copied, linked or written its files, so nothing recorded them."""
+
+    pytestmark = _POSIX_MODES
+
+    @pytest.fixture(autouse=True)
+    def _fresh_warning(self, monkeypatch):
+        # raising=False: the flag is new, so the old code fails on behaviour.
+        monkeypatch.setattr(lockfile, "_WARNED_UNSAVED", False, raising=False)
+
+    @staticmethod
+    def _flat(text):
+        return " ".join(text.split())
+
+    def test_a_history_dir_it_cannot_create_still_writes_the_lock(
+            self, sandbox, capsys):
+        lockfile.set_skill("a", {"version": "1"})
+        shutil.rmtree(paths.lock_history_dir(), ignore_errors=True)
+        state = paths.state_dir()
+        state.mkdir(parents=True, exist_ok=True)
+        state.chmod(0o500)
+        try:
+            lockfile.set_skill("b", {"version": "1"})
+            lockfile.set_skill("c", {"version": "1"})
+        finally:
+            state.chmod(0o700)
+        assert sorted(lockfile.read()["skills"]) == ["a", "b", "c"]
+        err = self._flat(capsys.readouterr().err)
+        assert err.count("could not keep a history snapshot") == 1
+        assert "make ~/.boost/state writable" in err
+        assert not paths.lock_history_dir().exists()
+
+    def test_a_read_only_history_dir_names_itself(self, sandbox, capsys):
+        lockfile.set_skill("a", {"version": "1"})
+        hist = paths.lock_history_dir()
+        hist.mkdir(parents=True, exist_ok=True)
+        kept = sorted(hist.iterdir())
+        hist.chmod(0o500)
+        try:
+            lockfile.set_skill("b", {"version": "1"})
+        finally:
+            hist.chmod(0o700)
+        assert sorted(lockfile.read()["skills"]) == ["a", "b"]
+        assert sorted(hist.iterdir()) == kept
+        err = self._flat(capsys.readouterr().err)
+        assert "make ~/.boost/state/lock-history writable" in err
+
+    def test_a_writable_history_takes_the_snapshot_silently(self, sandbox,
+                                                            capsys):
+        lockfile.set_skill("a", {"version": "1"})
+        lockfile.set_skill("b", {"version": "1"})
+        snaps = list(paths.lock_history_dir().glob("lock-*.json"))
+        assert len(snaps) == 1
+        assert "a" in json.loads(snaps[0].read_text(encoding="utf-8"))["skills"]
+        assert capsys.readouterr().err == ""
+
+    def test_the_lock_needs_only_its_own_dir(self, sandbox):
+        # The first write on a fresh HOME: no ~/.boost at all, and the lock
+        # still lands in the store.
+        lockfile.set_skill("a", {"version": "1"})
+        assert paths.lockfile_path().is_file()
