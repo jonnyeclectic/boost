@@ -311,7 +311,7 @@ class TestCompactPredictsOnlyTrackedFreight:
         row and exit 1 in both — not "0B would be freed" over a clone the live
         run then fails on."""
         clone = paths.repos_dir() / "fixture-tap"
-        shutil.rmtree(clone / ".git")
+        util.rmtree(clone / ".git")   # git objects are read-only on Windows
         # A gitfile to nowhere: fatal to git, and it never searches upward
         # into whatever repository the test's temp dir happens to sit in.
         (clone / ".git").write_text("gitdir: %s\n" % (clone.parent / "gone"),
