@@ -767,7 +767,7 @@ def cmd_policy(argv) -> int:
         out.dim("  not checked: %s" % note)
     if violations:
         out.table([(label, v) for _n, _k, label, v in violations],
-                  headers=("ITEM", "VIOLATION"))
+                  headers=("ITEM", "VIOLATION"), whole=("ITEM",))  # `uninstall`
         print()
         out.err("%d policy violation(s) across %d installed item(s)"
                 % (len(violations), total),

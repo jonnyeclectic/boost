@@ -985,7 +985,7 @@ def _discover_live(args, tokens):
                 + (" (%d)" % it["files"] if it.get("files", 1) > 1 else ""),
                 out.plain(it.get("path", "")),
                 out.role(out.plain(it.get("url", "")), "muted")) for it in rows],
-              headers=("repo", "path", "url"))
+              headers=("repo", "path", "url"), whole=("repo",))  # `boost tap`
     # "(N)" counts files in THIS page, not the repo's skills — say so, rather
     # than letting a capped sample read as a total.
     out.info(out.role("%d repo(s) across the top %d code-search hits · live "
@@ -1082,7 +1082,7 @@ def cmd_discover(argv):
                 + (" (%d)" % it["files"] if it.get("files", 1) > 1 else ""),
                 out.plain(it.get("path", "")),
                 out.role(out.plain(it.get("url", "")), "muted")) for it in repo_rows],
-              headers=("repo", "path", "url"))
+              headers=("repo", "path", "url"), whole=("repo",))  # `boost tap`
     # `github_total` is the match count for the query `boost index` was built
     # with, which since that command took a query is not "all of GitHub".
     scope = (" matching %r" % data["query"]) if data.get("query") else ""
@@ -1226,7 +1226,9 @@ def _browse_plain(entries, why: str):
         headers.append("")
         for row, e in zip(rows, unique, strict=True):
             row.append("★" if e.get("curated") else "")
-    out.table([tuple(row) for row in rows], headers=tuple(headers))
+    # name is what the footer's `boost install <name>` takes.
+    out.table([tuple(row) for row in rows], headers=tuple(headers),
+              whole=("name",))
     out.info(out.role(
         "%s · install with `boost install <name>` · narrow with `boost search <query>`"
         % browse.plain_footer(unique), "muted"))
@@ -2066,7 +2068,8 @@ def cmd_trending(argv):
         out.table([(e["name"], "v" + e["version"], e.get("kind", "skill"),
                     out.truncate(e["description"], descw))
                    for e in curated],
-                  headers=("name", "version", "kind", "description"))
+                  headers=("name", "version", "kind", "description"),
+                  whole=("name",))  # `boost install <name>`
         return 0
     agg: dict[str, Any] = {}
     for ev in evs:  # most-recent-first, so first ts per subject is the latest
@@ -2091,7 +2094,8 @@ def cmd_trending(argv):
                 by_name.get(name, {}).get("kind", "skill"),
                 out.truncate(by_name.get(name, {}).get("description", ""), descw))
                for name, rec in ranked[:args.limit]],
-              headers=("name", "installs", "last", "kind", "description"))
+              headers=("name", "installs", "last", "kind", "description"),
+              whole=("name",))  # `boost install <name>`
     out.info(out.role("based on local install activity", "muted"))
     return 0
 

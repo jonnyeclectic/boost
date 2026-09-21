@@ -41,7 +41,9 @@ def _tap_catalog(args, tapped: list[tuple[str, int]] | None = None) -> int:
         rows = [(e["name"], e["type"], e.get("category", ""),
                  "~%d" % (e.get("est_items") or 0),
                  out.role(e.get("focus", ""), "muted")) for e in selection]
-        out.table(rows, headers=("NAME", "TYPE", "CATEGORY", "EST", "FOCUS"))
+        # NAME is the owner/repo `boost tap` takes.
+        out.table(rows, headers=("NAME", "TYPE", "CATEGORY", "EST", "FOCUS"),
+                  whole=("NAME",))
         print()
         out.dim("%d registries · ~%d items (dry run — nothing tapped)"
                 % (len(selection), sum(e.get("est_items") or 0 for e in selection)))
@@ -57,7 +59,7 @@ def _print_dry_run(pairs: list[tuple[str, str]]) -> int:
     Shares the format of the `--catalog --dry-run` table above so the flag
     reads the same regardless of which branch of `cmd_tap` it modifies.
     """
-    out.table(pairs, headers=("NAME", "URL"))
+    out.table(pairs, headers=("NAME", "URL"), whole=("NAME",))
     print()
     out.dim("%d registries (dry run — nothing tapped)" % len(pairs))
     return 0
@@ -535,7 +537,9 @@ def cmd_outdated(argv) -> int:
     rows = [(r["name"] + ("" if r["kind"] == "skill" else " (%s)" % r["kind"]),
              r["installed"] + (" (pinned)" if r["pinned"] else ""),
              _outdated_display(r), r["tap"]) for r in results]
-    out.table(rows, headers=("NAME", "INSTALLED", "LATEST", "TAP"))
+    # NAME is what `boost update`/`upgrade` take.
+    out.table(rows, headers=("NAME", "INSTALLED", "LATEST", "TAP"),
+              whole=("NAME",))
     print()
     source_missing = sum(1 for r in results
                          if r["reason"] == staleness.SOURCE_MISSING)
