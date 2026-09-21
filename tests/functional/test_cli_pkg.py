@@ -1820,6 +1820,357 @@ class TestImportEdges:
         assert "available: alpha, beta" in r.err
 
 
+# ── import: provenance, agent scope, the multi-skill table ─────────────────
+
+_URL = "https://git.example.test/team/skills.git"
+
+
+def _flat(text):
+    """Output with wrapping undone: the import warnings fold to the pane."""
+    return " ".join(text.split())
+
+
+def _git(repo, *args):
+    return subprocess.run(
+        ["git", "-c", "user.email=t@boost.test", "-c", "user.name=t", *args],
+        cwd=str(repo), check=True, capture_output=True, text=True,
+        encoding="utf-8").stdout.strip()
+
+
+def _commit_all(repo, msg="skills"):
+    if not (repo / ".git").exists():
+        _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", msg)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+@pytest.fixture()
+def url_remote(tmp_path, monkeypatch):
+    """A real git repo that `boost import _URL` clones, standing in for GitHub.
+
+    ``clone_shallow`` is swapped for a plain ``git clone`` of the local repo, so
+    the clone is a genuine checkout with a genuine HEAD — the commit the lock
+    must record — without the test touching the network. Every clone is
+    logged, so a test can pin that import (and reinstall) still ask for a
+    full, non-sparse checkout.
+    """
+    repo = tmp_path / "remote"
+    repo.mkdir()
+    calls = []
+
+    def clone(url, dest, sparse=True):
+        calls.append((url, sparse))
+        assert url == _URL
+        subprocess.run(["git", "clone", "-q", str(repo), str(dest)],
+                       check=True, capture_output=True)
+
+    monkeypatch.setattr("boost_cli.core.gitutil.clone_shallow", clone)
+    return repo, calls
+
+
+class TestImportProvenance:
+    def test_url_import_records_the_url_and_commit_not_the_temp_clone(
+            self, boost, sandbox, url_remote):
+        repo, calls = url_remote
+        _skill_dir(repo, "url-skill")
+        head = _commit_all(repo)
+        boost("import", _URL)
+        entry = _lock()["url-skill"]
+        assert entry["tap"] == "local"
+        assert entry["source_url"] == _URL
+        assert entry["commit"] == head
+        assert entry["source_dir"] == "url-skill"
+        assert "boost-import-" not in json.dumps(entry)
+        assert calls == [(_URL, False)]        # a full checkout, never sparse
+
+    def test_url_import_of_a_repo_root_skill_records_dot(self, boost, sandbox,
+                                                         url_remote):
+        repo, _ = url_remote
+        (repo / "SKILL.md").write_text(
+            "---\nname: rooted\ndescription: a skill at the repo root\n"
+            "version: 0.2.0\n---\n\nBody.\n", encoding="utf-8")
+        _commit_all(repo)
+        boost("import", _URL)
+        assert _lock()["rooted"]["source_dir"] == "."
+
+    def test_info_shows_the_url_a_url_import_came_from(self, boost, sandbox,
+                                                        url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        head = _commit_all(repo)
+        boost("import", _URL)
+        r = boost("info", "url-skill")
+        assert re.search(r"source\s+%s \(url-skill\)" % re.escape(_URL), r.out)
+        assert re.search(r"commit\s+%s" % head[:9], r.out)
+        assert "boost-import-" not in r.out
+
+    def test_home_prints_the_url_of_a_url_import(self, boost, sandbox,
+                                                 url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        r = boost("home", "url-skill", "--print")
+        assert r.out.strip() == _URL
+
+    def test_reinstall_reclones_a_url_import(self, boost, sandbox, url_remote):
+        # The clone is deleted when import returns, so reinstall used to find
+        # nothing at the recorded path: "local source … is gone — skipped /
+        # Reinstalled 0 skills", exit 1.
+        repo, calls = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        md = repo / "url-skill" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8").replace(
+            "version: 0.1.0", "version: 0.2.0"), encoding="utf-8")
+        head = _commit_all(repo, "bump")
+        r = boost("reinstall", "url-skill")
+        assert "reinstalled url-skill (from %s at %s)" % (_URL, head[:7]) in r.out
+        assert "Reinstalled 1 skill" in r.out
+        entry = _lock()["url-skill"]
+        assert (entry["version"], entry["commit"]) == ("0.2.0", head)
+        assert entry["source_url"] == _URL
+        assert "version: 0.2.0" in (paths.store_dir() / "url-skill"
+                                    / "SKILL.md").read_text(encoding="utf-8")
+        assert calls == [(_URL, False), (_URL, False)]
+
+    def test_reinstall_names_the_url_when_the_commit_is_unknown(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # A clone git cannot read a HEAD from records no commit; the line
+        # still says where the skill came from rather than "at " and nothing.
+        src = _skill_dir(tmp_path, "url-skill")
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest, sparse=True: shutil.copytree(src, dest))
+        boost("import", _URL)
+        assert _lock()["url-skill"]["commit"] == ""
+        r = boost("reinstall", "url-skill")
+        assert "reinstalled url-skill (from %s)" % _URL in r.out
+
+    def test_reinstall_keeps_a_url_import_when_the_skill_left_the_repo(
+            self, boost, sandbox, url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _skill_dir(repo, "other")
+        _commit_all(repo)
+        boost("import", _URL, "--name", "url-skill")
+        shutil.rmtree(repo / "url-skill")
+        _commit_all(repo, "drop url-skill")
+        r = boost("reinstall", "url-skill", expect=1)
+        assert "url-skill: %s has no SKILL.md at url-skill" % _URL in r.out
+        assert "Reinstalled 0 skills" in r.out
+        assert _lock()["url-skill"]["source_url"] == _URL
+
+    def test_reinstall_refuses_a_lock_path_that_leaves_the_clone(
+            self, boost, sandbox, url_remote, tmp_path, monkeypatch):
+        # The lock is hand-editable; a source_dir climbing out of the clone
+        # must not make reinstall copy whatever sits beside it.
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        scratch = tmp_path / "scratch"
+        _skill_dir(scratch, "escape", version="6.6.6")
+        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        lock["skills"]["url-skill"]["source_dir"] = "../../escape"
+        paths.lockfile_path().write_text(json.dumps(lock), encoding="utf-8")
+        r = boost("reinstall", "url-skill", expect=1)
+        assert "has no SKILL.md at ../../escape" in r.out
+        assert _lock()["url-skill"]["version"] == "0.1.0"
+
+    def test_url_import_all_records_each_skills_path(self, boost, sandbox,
+                                                     url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo / "skills", "alpha")
+        _skill_dir(repo / "skills", "beta")
+        head = _commit_all(repo)
+        boost("import", _URL, "--all")
+        lock = _lock()
+        assert {n: (lock[n]["source_dir"], lock[n]["source_url"], lock[n]["commit"])
+                for n in ("alpha", "beta")} == {
+            "alpha": ("skills/alpha", _URL, head),
+            "beta": ("skills/beta", _URL, head)}
+
+    def test_url_clone_is_removed_after_import(self, boost, sandbox, url_remote,
+                                               monkeypatch, tmp_path):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+        boost("import", _URL)
+        assert list(scratch.iterdir()) == []
+
+    def test_local_import_records_an_absolute_source(self, boost, sandbox,
+                                                     tmp_path, monkeypatch):
+        # `boost import ./x` recorded "x", which resolves only from the
+        # directory the import ran in — reinstall from anywhere else said the
+        # source was gone.
+        _skill_dir(tmp_path, "rel-skill")
+        monkeypatch.chdir(tmp_path)
+        boost("import", "rel-skill")
+        entry = _lock()["rel-skill"]
+        assert entry["source_dir"] == str(tmp_path / "rel-skill")
+        assert entry["source_url"] == ""
+        assert entry["commit"] == ""
+        monkeypatch.chdir(sandbox)
+        r = boost("reinstall", "rel-skill")
+        assert "reinstalled rel-skill (local, from" in r.out
+
+    def test_reinstall_does_not_read_a_url_imports_path_from_the_cwd(
+            self, boost, sandbox, url_remote, tmp_path, monkeypatch):
+        # A URL import's source_dir is relative to its repo. Read as a local
+        # path it would resolve against the cwd — a different skill that
+        # happens to sit at ./url-skill must not be what reinstall installs.
+        repo, calls = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        decoy = tmp_path / "cwd"
+        _skill_dir(decoy, "url-skill", version="9.9.9")
+        monkeypatch.chdir(decoy)
+        boost("reinstall", "url-skill")
+        assert _lock()["url-skill"]["version"] == "0.1.0"
+        assert len(calls) == 2
+
+    def test_sync_keeps_a_url_import_whose_store_dir_is_missing(
+            self, boost, sandbox, url_remote):
+        # sync never clones, so it cannot repair this — but dropping the lock
+        # entry would throw away the one record of where the skill came from.
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        shutil.rmtree(paths.store_dir() / "url-skill")
+        r = boost("sync")
+        assert ("`boost reinstall url-skill` clones it again from %s" % _URL
+                in _flat(r.out))
+        assert _lock()["url-skill"]["source_url"] == _URL
+
+    def test_import_over_a_tap_install_warns_it_loses_its_update_source(
+            self, boost, installed, tapped, tmp_path):
+        copy = tmp_path / "copy" / "brainstorming"
+        shutil.copytree(tapped / "skills" / "brainstorming", copy)
+        r = boost("import", copy)
+        assert ("brainstorming was installed from fixture-tap — it is a local "
+                "import now, so `boost update` will not refresh it") in _flat(r.out)
+        assert "`boost install fixture-tap:brainstorming --force`" in _flat(r.out)
+        assert _lock()["brainstorming"]["tap"] == "local"
+        # ...and the named remedy really does put the tap's copy back.
+        boost("install", "fixture-tap:brainstorming", "--force")
+        assert _lock()["brainstorming"]["tap"] == "fixture-tap"
+
+    def test_import_all_over_a_tap_install_warns_too(self, boost, installed,
+                                                     tapped, tmp_path):
+        root = tmp_path / "many"
+        shutil.copytree(tapped / "skills" / "brainstorming",
+                        root / "brainstorming")
+        _skill_dir(root, "fresh")
+        r = boost("import", root, "--all")
+        assert _flat(r.out).count("was installed from") == 1
+        assert "brainstorming was installed from fixture-tap" in _flat(r.out)
+
+    def test_reimporting_a_local_skill_does_not_warn(self, boost, sandbox,
+                                                     tmp_path):
+        d = _skill_dir(tmp_path, "mine")
+        boost("import", d)
+        r = boost("import", d)
+        assert "was installed from" not in r.out
+
+
+class TestImportAgentScope:
+    def test_narrowing_names_the_links_it_leaves_behind(self, boost, sandbox,
+                                                        tmp_path):
+        d = _skill_dir(tmp_path, "scoped")
+        boost("import", d)
+        r = boost("import", d, "--agent", "cursor")
+        assert "linked → cursor" in r.out
+        assert ("scoped is still linked into claude-code, windsurf, antigravity, "
+                "outside the --agent scope just declared") in _flat(r.out)
+        assert "`boost sync --prune` removes those links" in _flat(r.out)
+        # What the warning names is exactly what sync --diff then reports.
+        diff = boost("sync", "--diff")
+        assert "linked outside declared scope (3)" in diff.out
+
+    def test_a_fresh_narrow_import_leaves_nothing_to_warn_about(
+            self, boost, sandbox, tmp_path):
+        r = boost("import", _skill_dir(tmp_path, "scoped"), "--agent", "cursor")
+        assert "outside the --agent scope" not in r.out
+
+    def test_an_unnarrowed_reimport_does_not_warn(self, boost, sandbox,
+                                                  tmp_path):
+        d = _skill_dir(tmp_path, "wide")
+        boost("import", d)
+        r = boost("import", d)
+        assert "outside the --agent scope" not in r.out
+
+    def test_import_all_narrowing_warns_per_skill(self, boost, sandbox,
+                                                  tmp_path):
+        root = tmp_path / "many"
+        _skill_dir(root, "alpha")
+        _skill_dir(root, "beta")
+        boost("import", root, "--all")
+        r = boost("import", root, "--all", "--agent", "cursor")
+        assert "alpha is still linked into" in _flat(r.out)
+        assert "beta is still linked into" in _flat(r.out)
+
+
+class TestImportMultiSkillTable:
+    _LONG = ("Use when you need to design and implement an A/B test for a "
+             "product feature, including sample size and guardrail metrics")
+
+    def _root(self, tmp_path):
+        root = tmp_path / "many"
+        for n in ("alpha", "beta"):
+            (root / n).mkdir(parents=True)
+            (root / n / "SKILL.md").write_text(
+                "---\nname: %s\ndescription: %s\nversion: 0.1.0\n---\n\nBody.\n"
+                % (n, self._LONG), encoding="utf-8")
+        return root
+
+    def test_a_wide_pane_shows_the_whole_description(self, boost, sandbox,
+                                                     tmp_path, monkeypatch):
+        # A 60-character pre-slice cut rows mid-word ("an A/B tes") with
+        # ~120 columns of a 200-column pane unused.
+        monkeypatch.setenv("COLUMNS", "200")
+        r = boost("import", self._root(tmp_path), expect=1)
+        assert r.out.count(self._LONG) == 2
+
+    def test_a_narrow_pane_still_fits_the_row(self, boost, sandbox, tmp_path,
+                                              monkeypatch):
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("import", self._root(tmp_path), expect=1)
+        rows = [ln for ln in r.out.splitlines() if ln.startswith(("alpha", "beta"))]
+        assert len(rows) == 2
+        assert all(len(ln) <= 60 and ln.endswith("…") for ln in rows)
+
+
+class TestErrorFollowsItsTable:
+    def test_a_piped_error_lands_after_the_listing_it_refers_to(
+            self, sandbox, tmp_path):
+        # stdout into a pipe is block-buffered and stderr is not, so the
+        # error used to reach a merged capture before the table it follows.
+        root = tmp_path / "many"
+        _skill_dir(root, "alpha")
+        _skill_dir(root, "beta")
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        env = dict(os.environ, PYTHONPATH=repo_root, PYTHONIOENCODING="utf-8")
+        env.pop("COLUMNS", None)
+        proc = subprocess.run(
+            [sys.executable, "-m", "boost_cli", "import", str(root)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, env=env, timeout=120, check=False)
+        text = proc.stdout.decode("utf-8")
+        assert proc.returncode == 1, text
+        assert text.index("==> 2 skills in") < text.index("Error: multiple skills")
+        assert text.index("beta") < text.index("Error: multiple skills")
+
+
 class TestSnapshotEdges:
     def test_restore_without_id_rc1(self, boost, sandbox):
         r = boost("snapshot", "restore", expect=1)

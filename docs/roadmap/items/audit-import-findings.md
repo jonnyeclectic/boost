@@ -2,14 +2,14 @@
 id: audit-import-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
 note: import turns a tap install into "local" silently; a URL import records a deleted temp path
 order: 271
-owner:
+owner: loop/import-audit
 pr:
 title: "<code>boost import</code>: CLI audit findings (2026-08)"
 ---

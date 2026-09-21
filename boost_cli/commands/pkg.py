@@ -10,7 +10,6 @@ import os
 import shutil
 import sys
 import tarfile
-import tempfile
 import zipfile
 from datetime import UTC, datetime
 from itertools import chain
@@ -1269,25 +1268,36 @@ def cmd_reinstall(argv: list[str]) -> int:
             done_kinds.add(kind)
             continue
         if lk.get("tap") == "local":
-            src = Path(str(lk.get("source_dir") or ""))
-            if src.is_dir() and (src / "SKILL.md").exists():
-                # force=True to match the tap branch's `install(..., force=True)`:
-                # reinstalling a pinned skill is the point of the command. Policy
-                # still applies. The try/except mirrors the tap branch too —
-                # without it one policy-blocked skill aborts `--all` mid-run and
-                # the remaining names are never attempted.
-                try:
-                    store.install_from_path(src, name=name, force=True)
-                except BoostError as err:
-                    out.warn("%s: %s" % (name, err.message))
-                    failed += 1
-                    continue
-                out.ok("reinstalled %s (local, from %s)" % (name, _tilde(src)))
-                done += 1
-                done_kinds.add("skill")
-            else:
-                out.warn("%s: local source %s is gone — skipped" % (name, _tilde(src)))
+            src = store.local_source_dir(lk)
+            url = str(lk.get("source_url") or "")
+            if src is None and not url:
+                out.warn("%s: local source %s is gone — skipped"
+                         % (name, _tilde(str(lk.get("source_dir") or ""))))
                 failed += 1
+                continue
+            # force=True to match the tap branch's `install(..., force=True)`:
+            # reinstalling a pinned skill is the point of the command. Policy
+            # still applies. The try/except mirrors the tap branch too —
+            # without it one policy-blocked skill aborts `--all` mid-run and
+            # the remaining names are never attempted.
+            try:
+                if src is not None:
+                    store.install_from_path(src, name=name, force=True)
+                    how = "local, from %s" % _tilde(src)
+                else:
+                    # A URL import's clone was deleted when the import
+                    # returned; the lock kept the URL so it can be cloned again.
+                    store.reinstall_from_url(name, lk)
+                    commit = str((lockfile.get_skill(name) or {}).get("commit") or "")
+                    how = ("from %s at %s" % (url, commit[:7]) if commit
+                           else "from %s" % url)
+            except BoostError as err:
+                out.warn("%s: %s" % (name, err.message))
+                failed += 1
+                continue
+            out.ok("reinstalled %s (%s)" % (name, how))
+            done += 1
+            done_kinds.add("skill")
             continue
         matches = [e for e in catalog.find(name) if e["tap"] == lk.get("tap")]
         if not matches:
@@ -1536,31 +1546,40 @@ def cmd_import(argv: list[str]) -> int:
                     help="link only into this agent (repeatable)")
     args = ap.parse_args(argv)
     only = _check_agents(args.agent)
-    tmp = None
-    try:
-        if args.source.startswith(("http://", "https://", "git@", "ssh://")):
-            tmp = Path(tempfile.mkdtemp(prefix="boost-import-"))
-            root = tmp / "repo"
-            out.info("cloning %s …" % args.source)
-            # Full checkout, not a tap's Markdown cone: import reads whatever the
-            # repo ships and copies it verbatim, assets included.
-            gitutil.clone_shallow(args.source, root, sparse=False)
-        else:
-            root = paths.expand(args.source)
-            if not root.is_dir():
-                raise BoostError("no such directory: %s" % args.source,
-                                hint="pass a local path or a git URL")
-        return _import_root(root, args.name, args.all, only, args.source)
-    finally:
-        if tmp:
-            shutil.rmtree(tmp, ignore_errors=True)
+    if args.source.startswith(("http://", "https://", "git@", "ssh://")):
+        out.info("cloning %s …" % args.source)
+        with store.cloned_source(args.source) as remote:
+            return _import_root(remote.root, args.name, args.all, only,
+                                args.source, remote=remote)
+    root = paths.expand(args.source)
+    if not root.is_dir():
+        raise BoostError("no such directory: %s" % args.source,
+                        hint="pass a local path or a git URL")
+    return _import_root(root, args.name, args.all, only, args.source)
+
+
+def _warn_import(res: store.InstallResult) -> None:
+    """What an import changed beyond the files: provenance and stray links."""
+    if res.replaced_tap:
+        out.warn("%s was installed from %s — it is a local import now, so "
+                 "`boost update` will not refresh it "
+                 "(`boost install %s:%s --force` puts the tap's copy back)"
+                 % (res.name, res.replaced_tap, res.replaced_tap, res.name),
+                 wrap=True)
+    if res.out_of_scope:
+        out.warn("%s is still linked into %s, outside the --agent scope just "
+                 "declared — `boost sync --prune` removes those links"
+                 % (res.name, ", ".join(res.out_of_scope)), wrap=True)
 
 
 def _import_root(root: Path, name: str | None, do_all: bool,
-                 only: list[str] | None, display: str) -> int:
+                 only: list[str] | None, display: str,
+                 remote: store.RemoteSource | None = None) -> int:
     def one(skill_dir: Path, rename: str | None = None) -> int:
-        res = store.install_from_path(skill_dir, name=rename, only_agents=only)
+        res = store.install_from_path(skill_dir, name=rename, only_agents=only,
+                                      remote=remote)
         _report_result(res)
+        _warn_import(res)
         out.info("Imported %s; quality score %d/100" % (res.name, res.score))
         return 0
 
@@ -1588,7 +1607,8 @@ def _import_root(root: Path, name: str | None, do_all: bool,
         imported, refused = 0, 0
         for e in entries:
             try:
-                res = store.install_from_path(dir_of(e), only_agents=only)
+                res = store.install_from_path(dir_of(e), only_agents=only,
+                                              remote=remote)
             except BoostError as err:
                 out.warn("%s: %s" % (e["name"], err.message))
                 refused += 1
@@ -1597,11 +1617,16 @@ def _import_root(root: Path, name: str | None, do_all: bool,
                                                        res.score))
             _warn_injection(res)
             _warn_secrets(res)
+            _warn_import(res)
             imported += 1
         out.info("Imported %s" % _plural(imported, "skill"))
         return 1 if refused else 0
     out.heading("%d skills in %s" % (len(entries), display))
-    out.table([(e["name"], "v" + e["version"], (e["description"] or "")[:60])
+    # Whole descriptions: `out.table` fits the widest column to the pane and
+    # clips it there with an ellipsis, so cutting first only wasted columns.
+    # One line each, and no control bytes — this is a foreign repo's frontmatter.
+    out.table([(e["name"], "v" + e["version"],
+                " ".join(out.plain(e["description"] or "").split()))
                for e in entries])
     raise BoostError("multiple skills found — pick one or import all",
                     hint="add `--name NAME` or `--all`")
