@@ -33,3 +33,6 @@ any missing file of a disabled agent.
 disabled agent, with <code>boost uninstall</code> or re-enabling as the next step), or have
 <code>sync_apply</code> claim a repair only when the rows it meant to fix are actually clean
 afterwards. A test should run sync twice and assert the second run is "everything in sync".
+The same fix must also cover <code>store.unwritable_agent_dirs()</code>, which reads the same
+rows: a refused row of a disabled agent keeps its locked dir in doctor's issues and in sync's
+warnings, with a <code>boost sync</code> remedy that never writes there.

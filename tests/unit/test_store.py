@@ -3649,6 +3649,55 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
         assert lockfile.get_rule("team-conventions") is None
 
 
+class TestTwoAgentsOnOneDotdir:
+    """Two enabled agents whose dirs resolve to one path write one file, and
+    the lock records two rows naming it. Uninstall planned every removal
+    while the file still existed, then removed it twice: the second raised
+    ``FileNotFoundError``, so the command exited 70 with the files gone and
+    the lock still naming them."""
+
+    def _share_windsurfs_dotdir(self, how):
+        dotdir = "~/.windsurf"
+        if how == "symlink":
+            # A second spelling of one dir: the rows differ, the file does not.
+            (paths.home() / ".windsurf").mkdir(parents=True, exist_ok=True)
+            (paths.home() / ".windsurf-alias").symlink_to(
+                paths.home() / ".windsurf", target_is_directory=True)
+            dotdir = "~/.windsurf-alias"
+        cfg = config.load()
+        cfg["agents"]["windsurf-next"] = {"dir": dotdir + "/skills",
+                                          "enabled": True}
+        config.save(cfg)
+
+    @pytest.mark.parametrize("how", [
+        "same-dir",
+        pytest.param("symlink", marks=pytest.mark.skipif(
+            sys.platform == "win32", reason="symlinks need privilege on Windows")),
+    ])
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_uninstall_removes_the_shared_file_once(self, tap, kind, how):
+        self._share_windsurfs_dotdir(how)
+        entry = (_rule_entry if kind == "rule" else _workflow_entry)(tap)
+        get = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+        store.install(entry)
+        rows = get(entry["name"])["materializations"]
+        shared = {m["agent"]: Path(m["path"]) for m in rows
+                  if m["agent"] in ("windsurf", "windsurf-next")}
+        assert len(shared) == 2
+        assert os.path.samefile(shared["windsurf"], shared["windsurf-next"])
+        store.uninstall(entry["name"])
+        assert get(entry["name"]) is None
+        for m in rows:
+            assert not os.path.lexists(m["path"]), m["agent"]
+
+    def test_a_file_already_gone_is_already_removed(self, tmp_path):
+        # The plan is made in one pass and applied in the next; a file gone
+        # in between (another agent's row, another process) is the end state
+        # the removal wanted, not an error.
+        store._remove_all_or_nothing("x", [(tmp_path / "gone.md", "")])
+        assert not (tmp_path / "gone.md").exists()
+
+
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="chmod can't make a directory unwritable on Windows")
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,

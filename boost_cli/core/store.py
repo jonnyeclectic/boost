@@ -1216,16 +1216,23 @@ def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> None:
     first change, because a refusal part-way left some agents' files gone and
     the lock still naming them, so a `boost sync` in between wrote them back.
     The per-file guard stays, for what ``os.access`` cannot foresee.
+
+    Two rows can name one file (two enabled agents whose dirs resolve to one
+    path), so the plan is de-duplicated on the resolved dir, not the resolved
+    file, and a file already gone counts as removed.
     """
-    for path, _text in plan:
+    once: dict[Path, tuple[Path, str]] = {}
+    for path, text in plan:
+        once.setdefault(path.parent.resolve() / path.name, (path, text))
+    for path, _text in once.values():
         if not os.access(str(path.parent), os.W_OK):
             raise _removal_refused(name, path)
-    for path, text in plan:
+    for path, text in once.values():
         with _refused_removal(name, path):
             if text:
                 util.atomic_write_text(path, text)
             else:
-                path.unlink()
+                path.unlink(missing_ok=True)
 
 
 def _uninstall_rule(name: str, rule: dict) -> dict:
