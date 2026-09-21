@@ -583,8 +583,18 @@ def refusing_dir(path: Path) -> Path:
     ``path`` itself when it exists; otherwise its nearest existing ancestor,
     which is the one that refused to create it. Naming a missing directory in
     a `chmod u+w` remedy hands the user a command that fails.
+
+    A path boost may not even look at counts as not there: under a parent with
+    no search bit, ``exists()`` raises PermissionError on Python 3.12 and 3.13
+    (3.14 answers False), and raising here turned the named refusal it was
+    wording into exit 70.
     """
-    while not path.exists() and path.parent != path:
+    while path.parent != path:
+        try:
+            if path.exists():
+                break
+        except PermissionError:
+            pass
         path = path.parent
     return path
 

@@ -4025,6 +4025,24 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
                 encoding="utf-8")
         assert self._locked(kind, entry["name"])["materializations"] == rows
 
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_uninstall_under_a_dotdir_with_no_search_bit_is_refused_by_name(
+            self, tap, kind):
+        # ~/.cursor at 0o600: naming the refusing dir walked `exists()` up
+        # from rules/, which raises there on Python 3.12 and 3.13, so the
+        # named refusal became exit 70 on its way out.
+        entry = self._entry(tap, kind)
+        store.install(entry)
+        cursor = paths.home() / ".cursor"
+        cursor.chmod(0o600)
+        try:
+            with pytest.raises(BoostError) as ei:
+                store.uninstall(entry["name"])
+        finally:
+            cursor.chmod(0o700)
+        assert "%s is not writable" % paths.tilde(cursor) in ei.value.message
+        assert self._locked(kind, entry["name"]) is not None
+
     def test_uninstall_does_not_rewrite_a_context_file_it_never_wrote(self, tap):
         # ~/.claude refused the block, so there is nothing of ours in
         # CLAUDE.md; rewriting it anyway crashed on the same locked dir.
@@ -4326,3 +4344,31 @@ class TestSomethingInTheWayOfARuleOrWorkflowDir:
             block and ".cursor" in d.parts) else None)
         with pytest.raises(OSError, match="I/O error"):
             store.install(entry)
+
+
+class TestRefusingDir:
+    """The dir a `chmod u+w` remedy should name for a write under a path."""
+
+    def test_an_existing_dir_is_itself(self, tmp_path):
+        assert store.refusing_dir(tmp_path) == tmp_path
+
+    def test_a_missing_dir_names_its_nearest_existing_ancestor(self, tmp_path):
+        assert store.refusing_dir(tmp_path / "a" / "b") == tmp_path
+
+    def test_the_walk_stops_at_the_root(self):
+        root = Path(Path.cwd().anchor)
+        assert store.refusing_dir(root) == root
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't remove the search bit on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_parent_with_no_search_bit_is_the_answer(self, tmp_path):
+        dot = tmp_path / "dot"
+        (dot / "rules").mkdir(parents=True)
+        dot.chmod(0o600)
+        try:
+            assert store.refusing_dir(dot / "rules") == dot
+        finally:
+            dot.chmod(0o700)
+

@@ -2044,10 +2044,10 @@ later <code>install --force</code> never retries the agent and never says so. On
 <code>res.blocked</code> without a word, as they already drop <code>res.unwritable</code>.
 <code>pkg._warn_unwritable(res)</code> is the existing reporter.
 
-<b>Also found by the reconcile review of #933 with #931</b>, and also measured on both parents: With any agent dotdir at mode <code>600</code>, <code>doctor</code>, <code>heal</code> and <code>sync</code>
+<b>Also found by the reconcile review of #933 with #931</b>, and also measured on both parents: With any agent dotdir at mode <code>600</code>, on Python 3.12 and 3.13 (3.14's <code>Path.exists</code> answers False where they raise), <code>doctor</code>, <code>heal</code> and <code>sync</code>
 exit 70 (<code>PermissionError</code> on <code>~/.cursor/skills</code>). A rule or workflow install in that
 shape is fixed on #933's branch: <code>_refused_target</code> names the dir through
-<code>paths.refuses_writes</code>, which asks <code>lexists</code>. The skill install and these three are not fixed.<br><br>A <em>directory</em> at a rule's target file path (<code>~/.cursor/rules/house.mdc/</code>) raises
+<code>paths.refuses_writes</code>, which asks <code>lexists</code>. So is uninstall of a rule or workflow there, through <code>store.refusing_dir</code>, which now treats a path it may not look at as not there. The skill install and these three are not fixed. And the remedy is wrong for this shape: <code>chmod u+w</code> leaves a <code>600</code> dir at <code>600</code>, because the missing bit is search, so the wording should say <code>chmod u+wx</code> when <code>X_OK</code> is what fails.<br><br>A <em>directory</em> at a rule's target file path (<code>~/.cursor/rules/house.mdc/</code>) raises
 <code>IsADirectoryError</code>. That is not one of the refusal shapes, so install exits 70 after writing
 the other agents' copies, with no lock entry.<br><br><code>heal --dry-run</code> previews "would re-materialize" a rule whose target dir is still locked or
 blocked. The real run then re-materializes nothing, correctly. The exit codes agree (1 and 1), but the
