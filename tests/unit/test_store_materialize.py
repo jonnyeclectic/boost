@@ -16,6 +16,8 @@ tap's real files goes through (install, project install, ``sha256_dir``,
 """
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from boost_cli.core import gitutil, registry, store
@@ -90,6 +92,97 @@ class TestSourceDirMaterializes:
 
         assert "vanished" not in str(excinfo.value).lower(), (
             "a fetch failure must not be reported as a missing source")
+
+
+class TestASkillAtTheTapRoot:
+    """Backfilled while touching `source_dir_for`: a `rel_dir` of "." is the
+    tap root, and nothing pinned that the literal decides it."""
+
+    def test_the_root_is_the_clone_itself(self, entry, monkeypatch):
+        seen: list = []
+        monkeypatch.setattr(gitutil, "materialize",
+                            lambda repo, rel: seen.append((repo, rel)))
+        tap = registry.get(entry["tap"])
+        (tap.path / "SKILL.md").write_text("---\nname: root\n---\nb\n",
+                                           encoding="utf-8")
+
+        src = store.source_dir_for(dict(entry, name="root", rel_dir="."))
+
+        assert src == tap.path
+        assert seen == [(tap.path, ".")]
+
+
+class TestOnlyASkillHasASourceDir:
+    """A rule or workflow is one file, so it has no skill dir to widen for.
+
+    ``boost info`` and ``boost deps`` ask ``source_dir_for`` about every
+    not-installed catalog entry and swallow the BoostError. For a rule or a
+    workflow the SKILL.md check always fails, but it ran *after*
+    ``materialize``, so two read-only commands wrote ``/rules/*`` or
+    ``/commands/*`` into the tap's sparse-checkout file and then threw the
+    directory away (docs/roadmap/items/
+    info-deps-materialize-a-dir-they-then-reject.md). The kind decides it,
+    before the tap is cloned or widened.
+    """
+
+    @pytest.fixture()
+    def materialized(self, monkeypatch):
+        seen: list = []
+        monkeypatch.setattr(gitutil, "materialize",
+                            lambda repo, rel: seen.append((repo, rel)))
+        return seen
+
+    @pytest.mark.parametrize("kind, rel_dir, skill_md", [
+        ("rule", "rules", "rules/x-item.mdc"),
+        ("workflow", "commands", "commands/x-item.md"),
+    ])
+    def test_a_rule_or_workflow_is_refused_before_materializing(
+            self, entry, materialized, kind, rel_dir, skill_md):
+        other = {"name": "x-item", "kind": kind, "tap": entry["tap"],
+                 "rel_dir": rel_dir, "skill_md": skill_md}
+
+        with pytest.raises(BoostError) as excinfo:
+            store.source_dir_for(other)
+
+        assert materialized == [], "a read-only lookup widened the sparse cone"
+        assert excinfo.value.message == (
+            "x-item is a %s, not a skill: it has no source directory" % kind)
+
+    def test_the_kind_decides_even_when_the_dir_holds_a_skill(
+            self, entry, materialized):
+        """Not the SKILL.md check: a rule beside a skill is still a rule."""
+        rule = dict(entry, name="x-item", kind="rule",
+                    skill_md=entry["rel_dir"] + "/.cursorrules")
+
+        with pytest.raises(BoostError):
+            store.source_dir_for(rule)
+
+        assert materialized == []
+
+    def test_a_rule_does_not_clone_a_tap_that_is_only_registered(
+            self, entry, monkeypatch):
+        tap = registry.get(entry["tap"])
+        shutil.rmtree(tap.path)
+        clones: list = []
+        monkeypatch.setattr(gitutil, "clone_shallow",
+                            lambda *a, **k: clones.append(a))
+        rule = {"name": "x-item", "kind": "rule", "tap": entry["tap"],
+                "rel_dir": "rules", "skill_md": "rules/x-item.mdc"}
+
+        with pytest.raises(BoostError):
+            store.source_dir_for(rule)
+
+        assert clones == [] and not tap.is_cloned
+
+    def test_an_entry_with_no_kind_is_still_a_skill(self, entry, materialized):
+        """`quality._drift_status` builds its entry with no ``kind`` at all."""
+        legacy = {k: v for k, v in entry.items() if k != "kind"}
+        tap = registry.get(entry["tap"])
+
+        src = store.source_dir_for(legacy)
+
+        assert src == tap.path / entry["rel_dir"]
+        assert materialized == [(tap.path, entry["rel_dir"])]
 
 
 class TestInstallFromASparseTapIsComplete:

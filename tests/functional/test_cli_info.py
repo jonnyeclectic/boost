@@ -1265,6 +1265,22 @@ class TestMaterializedKinds:
         data = json.loads(boost("info", "dep-mgmt", "--json").out)
         assert data["kind"] == "rule"
 
+    def test_info_and_deps_on_a_not_installed_rule_leave_the_cone_alone(
+            self, boost, fixture_tap_src, tmp_path):
+        # docs/roadmap/items/info-deps-materialize-a-dir-they-then-reject.md:
+        # both commands used to `sparse-checkout add /rules/*` for a directory
+        # `source_dir_for` then rejected — a git write from a read-only command.
+        from boost_cli.core import registry
+        tap = _git_rule_tap(fixture_tap_src, tmp_path / "rule-tap")
+        boost("tap", str(tap))
+        cone = registry.get("rule-tap").path / ".git" / "info" / "sparse-checkout"
+        before = cone.read_bytes()
+
+        boost("info", "dep-mgmt")
+        boost("deps", "dep-mgmt")
+
+        assert cone.read_bytes() == before
+
     def test_explain_installed_rule_keeps_description_and_a_real_outline(
             self, boost, fixture_tap_src, tmp_path):
         # After install, `explain` used to lose the description entirely

@@ -2,15 +2,15 @@
 id: info-deps-materialize-a-dir-they-then-reject
 board: code
 section: planned
-status: planned
+status: shipped
 category: UX · Bug
 complexity: M
 impact: Med
 wow: 3
 note: cmd_info (info.py:482-486) and _skill_dir_for_deps (info.py:1058-1066) call store.sou…
 order: 215
-owner:
-pr:
+owner: loop/info-deps-no-widen
+pr: 891
 title: <code>boost info</code>/<code>deps</code> on a not-installed rule or workflow widens the tap's sparse cone for a directory <code>source_dir_for</code> immediately rejects
 ---
 <b>Measured.</b> Across all 20 taps of the eval corpus, 0 of the 188 distinct (tap, rel_dir) directories that hold a rule or workflow contains a SKILL.md, and 0 of them have rel_dir == "." — so the existence check at store.py:179 rejects every single one of the 1,493 rule/workflow entries (14.71% of 10,152), and it does so only after store.py:178 has already written a new pattern into the tap's .git/info/sparse-checkout. Two read-only commands, <code>boost info</code> and <code>boost deps</code>, each provably widen a tap's sparse cone and then discard the directory they widened it for.
