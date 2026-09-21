@@ -403,16 +403,21 @@ class TestStatusNamesTheState:
         assert "`boost reindex --dense`" in hint
         assert "huggingface.co" not in hint and "download" not in hint
 
-    def test_callers_without_a_status_get_the_same_answer(self, monkeypatch):
-        # The shard surfaces had only the reason, so a load failure was sent
-        # to download a model already on disk.
+    def test_the_shard_surfaces_get_the_same_answer(self, monkeypatch):
+        # `update --shards` and `reindex --fetch-shards` word a refused
+        # manifest through `shards.remedy`, and had only the reason, so a
+        # load failure was sent to download a model already on disk.
+        from boost_cli.core import shards
         monkeypatch.setattr(dense, "_load", lambda: object())
         monkeypatch.setattr(embed, "local_available", lambda: True)
         _local_store()
         _record_on_disk(stage="load", error="RuntimeError: bad model")
         st = dense.status()
-        assert dense.current_fix() == dense.fix_hint(st["reason"], st)
-        assert "download" not in dense.current_fix()
+        manifest = {"provider": "local", "model": "BAAI/another-model",
+                    "dim": embed.LOCAL_DIM}
+        hint = shards.remedy(manifest)
+        assert hint == dense.fix_hint(st["reason"], st)
+        assert "download" not in hint
 
     def test_the_remedy_retries_rather_than_rebuilds(self):
         hint = dense.fix_hint("model-unavailable")

@@ -592,17 +592,6 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
     return _FIX.get(reason, "see `boost reindex --dense`")
 
 
-def current_fix() -> str:
-    """:func:`fix_hint` for the store as it is now, with the status it needs.
-
-    For callers with no status in hand: passing the reason alone loses the
-    detail some answers turn on (``no-key``'s built provider, a failed model's
-    stage), and the shard surfaces promised a download for a load failure.
-    """
-    st = status()
-    return fix_hint(st.get("reason", ""), st)
-
-
 def status(*, count: bool = False) -> dict:
     """Why dense retrieval is, or is not, serving queries.
 
