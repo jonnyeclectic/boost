@@ -2,15 +2,15 @@
 id: search-relevance-meter-is-constant-on-default-page
 board: code
 section: planned
-status: planned
+status: shipped
 category: UX · Bug
 complexity: M
 impact: Med
 wow: 3
 note: format_search_row renders aurora(meter(frac), meter_hue(frac)) with frac = score / ma…
 order: 233
-owner:
-pr:
+owner: loop/search-meter
+pr: 897
 title: The relevance meter and its "one gradient moment" are constant on the default result page: 138/150 rows full bars, 150/150 the same colour
 ---
 <b>Measured.</b> Over 10 real queries at the default <code>--limit 15</code> against the 10,152-entry eval corpus, 138 of 150 rendered rows draw an identical full <code>▰▰▰▰</code> bar and 150 of 150 land in the same cyan band — 8 of the 10 queries render a byte-identical meter on every single row — because <code>frac = score / max(shown score)</code> needs <code>frac &lt; 0.875</code> to drop one of four bars while BM25's top-15 spread is only 2.2%-19.8% (min/top ratio 0.802-0.978).
