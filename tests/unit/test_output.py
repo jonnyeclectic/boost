@@ -1683,6 +1683,12 @@ class TestSearchLayout:
         lay = output.search_layout(90, ["n" * 40], ["skill"], ["t" * 20])
         assert (lay.name_w, lay.tap_w, lay.desc_w) == (40, 0, 30)
 
+    def test_a_name_too_long_to_show_whole_falls_back_to_its_cap(self):
+        # The last step: a 50-cell name will not fit whole even with the tap
+        # gone, so it is capped at 32 and the room goes to the description.
+        lay = output.search_layout(90, ["n" * 50], ["skill"], ["t" * 20])
+        assert (lay.name_w, lay.tap_w, lay.desc_w) == (32, 0, 38)
+
     def test_capped_content_plans_exactly_as_before(self):
         # Names within 32 cells and taps within 20: every step of the
         # whole-or-capped rule is the same plan, so these tuples are the ones
