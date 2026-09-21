@@ -2,15 +2,15 @@
 id: audit-root-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
 note: EPIPE exits 120 with stderr noise; `help version` suggests verify; launcher gates at 3.9
 order: 245
-owner:
-pr:
+owner: loop/audit-root-closed
+pr: 827
 title: "boost ROOT: CLI audit findings (2026-08)"
 ---
 <b>EPIPE leaks past main's own handler.</b> <code>boost --help | (exec 0&lt;&amp;-; sleep 0.3)</code>
@@ -45,3 +45,13 @@ fixes touches a COMMANDS row, so <code>docs/commands.html</code> is unaffected.
 
 <br><br>Found by the 2026-08 CLI audit (clusters <code>broken-pipe-exit</code>,
 <code>help-routing-aliases</code>, <code>launcher-python-floor</code>); repro in the audit log.
+
+<br><br><b>Shipped in #827</b> (commit <code>22c9193</code>, batch train-17, 2026-09-08). The card
+was never closed. Re-measured on <code>main</code> at <code>bb1229f</code> on 2026-09-18:
+<code>--help</code>, <code>count</code>, <code>taps</code> and <code>--version</code> piped into
+<code>(exec 0&lt;&amp;-; sleep 0.3)</code> exit 0 with empty stderr, 3/3 runs each (<code>_seal_broken_stdout</code>
+plus <code>_route</code>'s <code>finally</code> flush).
+<code>boost help --help</code>, <code>help version</code> and <code>help help</code> all resolve;
+<code>boost --hepl</code> says <em>&ldquo;unknown option&rdquo;</em>, and <code>print_help</code> carries the Options line.
+The launcher gates at <code>(3, 12)</code>, pinned to <code>requires-python</code> by
+<code>tests/unit/test_launcher_python_floor.py</code>.
