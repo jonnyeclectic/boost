@@ -10,7 +10,7 @@ wow: 2
 note: fixed — compact counts only what reapply removes and previews a reclone as one; heal words the branch sync takes and names its directories; onboard marks its cut and checks --pr first
 order: 225
 owner: loop/dry-run-parity
-pr:
+pr: 913
 title: "Dry-runs disagree with the real run: <code>compact</code>, <code>heal</code> and <code>onboard</code> previews mispredict"
 ---
 A dry-run's one job is to say what the real run will do, and five previews demonstrably don't.
