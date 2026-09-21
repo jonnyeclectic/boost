@@ -429,6 +429,23 @@ class TestInstructionsCoverAllThreeKinds:
         low = mcp.INSTRUCTIONS.lower()
         assert "anti-pattern" in low
 
+    def test_the_bound_ships_in_the_description_too(self):
+        # Six of the instructions' seven load-bearing elements were
+        # duplicated into boost_search's description; the seventh — the one
+        # that says when NOT to call — was in none of the seven descriptions.
+        # On a Gemini-family host the description is the only boost text
+        # reliably in context, so the persuasion shipped without the bound.
+        from boost_cli.commands import configuration
+        desc = {s["name"]: s["description"]
+                for s in configuration.REGISTRY.specs()}
+        assert mcp.SKIP_IT in mcp.INSTRUCTIONS      # one sentence, two homes
+        assert mcp.SKIP_IT in desc["boost_search"]
+        # Concrete cases, not a judgement call: asking an agent to rate its
+        # own task over-suppressed when it was tried.
+        assert "non-trivial" not in mcp.SKIP_IT.lower()
+        for case in ("a question", "a one-line edit", "a command you were"):
+            assert case in mcp.SKIP_IT
+
     def test_install_description_still_flags_the_invasive_kind(self):
         # Pre-existing contract, restated here because this change is what
         # makes it actionable: search output now marks kind, so the warning

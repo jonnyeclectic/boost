@@ -1697,7 +1697,14 @@ REGISTRY.register(
     "Coming back empty is a real answer too, not a "
     "wasted turn: it means build it yourself, now knowing nothing already "
     "covers it — and on a machine with nothing tapped yet it says so and names "
-    "the one command that fixes it, rather than reporting a miss.",
+    "the one command that fixes it, rather than reporting a miss. "
+    # The bound, verbatim from `mcp.INSTRUCTIONS`: six of its seven
+    # load-bearing elements were already duplicated into this description and
+    # the seventh — the one that says when not to call — was in none of the
+    # seven. On a Gemini-family host the description is the only boost text
+    # reliably in context, so what shipped there was every persuasive element
+    # and none of the restraint.
+    + mcp.SKIP_IT,
     {"type": "object",
      "properties": {"query": {"type": "string",
                               "description": "what you are trying to do, in "
