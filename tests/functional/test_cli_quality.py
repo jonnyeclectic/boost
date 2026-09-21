@@ -1706,6 +1706,7 @@ class TestChangelog:
                     "fetch --unshallow" in " ".join(r.out.split()))
 
         assert changelog() == (4, True)           # 4 < the default 20
+        assert changelog("-n", "5") == (4, True)   # one short of -n
         assert changelog("-n", "4") == (4, False)  # everything asked for came back
         assert changelog("-n", "2") == (2, False)  # 2 < 3, but not < 2
 
