@@ -10,7 +10,7 @@ wow: 1
 note: mismatched tap/version lines count "already present" — the Boostfile stops being reproducible
 order: 252
 owner: loop/bundle-audit
-pr:
+pr: 923
 title: "boost bundle: CLI audit findings (2026-08)"
 ---
 <b>Local skills vanish into comments with no console notice</b> (cluster
