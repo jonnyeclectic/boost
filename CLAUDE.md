@@ -122,7 +122,11 @@ opt-in evals stay out of `check` and all degrade cleanly:
   flawless host was told it FAILED (0.3244 against a 0.20 ceiling, unclearable
   below n=16). `--runs` defaults to 3, `min_n_for_ceiling` computes the
   minimum for any ceiling, and a sample below it reports INCONCLUSIVE with its
-  own exit code (2) rather than a red that says nothing about the host. The
+  own exit code (2) rather than a red that says nothing about the host —
+  unless its Wilson *lower* bound is already over the ceiling. Too small to
+  pass is not too small to fail: a conclusive red below the minimum is still a
+  red (exit 1), and a no-call half with no observations at all is
+  INCONCLUSIVE, never a pass. The
   ceiling is 0.25 so one slip in 24 passes and two do not — a zero-tolerance
   half beside a floor that absorbs four misses is not the same measurement
   twice. Drives a real host, so it is opt-in, out of `check`, and degrades

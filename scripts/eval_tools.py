@@ -35,8 +35,12 @@ ceiling is judged against the Wilson UPPER bound, which at k=0 is z^2/(n+z^2)
 `FAIL: false-call rate 0.00 [0.00-0.32] over ceiling 0.20`, and no host could
 ever have passed. The default is now 3 runs, which is what the Makefile target
 and this file's own usage lines already used; `min_n_for_ceiling` computes the
-minimum for any ceiling; and a sample below it reports INCONCLUSIVE with its
-own exit code (2) rather than a red that means nothing about the host.
+minimum for any ceiling; and a sample below it that has not already proven
+the host over the ceiling (Wilson LOWER bound above it) reports INCONCLUSIVE
+with its own exit code (2) rather than a red that means nothing about the
+host. A sample too small to clear a host can still convict one, and that is a
+red at any N. A no-call half with zero observations is INCONCLUSIVE too, never
+a pass: nothing observed is nothing cleared.
 
 THE CEILING TOLERATES ONE SLIP, DELIBERATELY. At the default 3 runs the
 no-call half is 24 observations, where 0.20 would fail on a single false call
@@ -82,6 +86,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import TextIO
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SET = ROOT / "tests" / "eval" / "tool_calls.jsonl"
@@ -176,12 +181,24 @@ def min_n_for_ceiling(ceiling: float, z: float = 1.96) -> int:
     Solving z^2/(n + z^2) <= c for n gives n >= z^2 (1 - c) / c: 16 at c=0.20,
     12 at c=0.25. A ceiling of 0 is unreachable at every N and returns 0, which
     callers read as "never judgeable".
+
+    The closed form is exact in real arithmetic and an ulp either side of it in
+    floats, where :func:`verdict` reads :func:`wilson` with a strict ``>``. At
+    the exact boundaries c = z^2/(n + z^2) the two disagreed both ways: for
+    n=3 the closed form answered 4 though 0/3 clears, for n=13 it answered 13
+    though 0/13 sits 2.8e-17 over and fails. So the estimate is settled
+    against ``wilson`` itself.
     """
     if ceiling <= 0:
         return 0
     if ceiling >= 1:
         return 1
-    return max(1, math.ceil(z * z * (1 - ceiling) / ceiling))
+    need = max(1, math.ceil(z * z * (1 - ceiling) / ceiling))
+    while wilson(0, need, z)[1] > ceiling:
+        need += 1
+    while need > 1 and wilson(0, need - 1, z)[1] <= ceiling:
+        need -= 1
+    return need
 
 
 def rate(observations: list[bool]) -> dict:
@@ -207,6 +224,8 @@ def score_host(rows: list[dict], observed: dict[str, list[bool]]) -> dict:
     return {
         "call_rate": rate(seen(call_rows)),
         "false_call_rate": rate(seen(no_call_rows)),
+        # What one more --runs adds to the ceiling's N; `unjudgeable` says it.
+        "no_call_prompts": len(no_call_rows),
         "skipped": skipped,
         "per_row": {r["id"]: rate(observed.get(r["id"], [])) for r in rows},
     }
@@ -230,7 +249,9 @@ def verdict(metrics: dict, floor_call: float, ceiling_false: float) -> list[str]
     # An unreachable ceiling is not a failing host, and calling it one is worse
     # than saying nothing: it is the same red whatever the host did, so a
     # reader learns the tier is broken and stops running it. `unjudgeable`
-    # names that state instead, and main() gives it its own exit code.
+    # names that state instead, and main() gives it its own exit code. It
+    # answers None whenever the LOWER bound is already over the ceiling, and
+    # hi >= lo, so a sample too small to pass still fails a host it convicts.
     if f["n"] and not unjudgeable(metrics, ceiling_false) and f["hi"] > ceiling_false:
         out.append("false-call rate %.2f [%.2f-%.2f] over ceiling %.2f (%d/%d)"
                    % (f["rate"], f["lo"], f["hi"], ceiling_false, f["k"], f["n"]))
@@ -248,6 +269,14 @@ def unjudgeable(metrics: dict, ceiling_false: float) -> str | None:
     f = metrics["false_call_rate"]
     need = min_n_for_ceiling(ceiling_false)
     if not f["n"]:
+        # Every no-call run was skipped (a timeout, a dead host). Nothing was
+        # observed, so nothing was cleared — the call half reports the same
+        # silence as a failure, and this half must not read it as a pass.
+        return ("no should-NOT-call observations — every no-call run was "
+                "skipped, so the false-call ceiling was never tested")
+    if f["lo"] > ceiling_false:
+        # Too small to PASS is not too small to FAIL: the lower bound is over
+        # already, and no larger sample of this host would bring it back.
         return None
     if not need:
         # A ceiling of zero (or below) asks the upper bound to reach a value it
@@ -258,10 +287,11 @@ def unjudgeable(metrics: dict, ceiling_false: float) -> str | None:
     if f["n"] >= need:
         return None
     return ("false-call ceiling %.2f needs at least %d observations and this "
-            "run has %d: at k=0 the Wilson upper bound is %.4f, so every "
-            "possible result would read as FAIL. Raise --runs (the no-call "
+            "run has %d: at k=0 the Wilson upper bound is %.4f, so not even a "
+            "host with no false calls could pass it. Raise --runs (the no-call "
             "half is %d prompt(s) per run) or the ceiling."
-            % (ceiling_false, need, f["n"], wilson(0, f["n"])[1], f["n"]))
+            % (ceiling_false, need, f["n"], wilson(0, f["n"])[1],
+               metrics["no_call_prompts"]))
 
 
 # ----------------------------------------------------------------- probe
@@ -391,7 +421,7 @@ def run_claude(prompt: str, timeout: int,
 
 # ------------------------------------------------------------------ cli
 
-def _print_context() -> None:
+def _print_context(out: TextIO | None = None) -> None:
     """Name the installed RULES, because they are part of what is being scored.
 
     A rule is standing instructions in the agent's own context file, and
@@ -400,21 +430,25 @@ def _print_context() -> None:
     a verdict on the descriptions alone is the mistake this line exists to
     prevent. Printed, never subtracted — the honest move is to say what was in
     scope, not to guess at its share.
+
+    ``out`` is stderr under ``--json``, whose stdout must be the document alone;
+    None is whatever ``sys.stdout`` is at call time.
     """
     try:
         from boost_cli.core import lockfile
         rules = sorted(lockfile.all_installed().get("rule") or {})
     except Exception:      # a context note must never fail the run it annotates
-        print("context: could not read the lock file")
+        print("context: could not read the lock file", file=out)
         return
     print("context: %d rule(s) installed and in scope for every prompt%s"
-          % (len(rules), (" — " + ", ".join(rules)) if rules else ""))
+          % (len(rules), (" — " + ", ".join(rules)) if rules else ""), file=out)
     if rules:
         print("         these are standing instructions; the rates below are "
-              "for rule + descriptions, not descriptions alone.")
+              "for rule + descriptions, not descriptions alone.", file=out)
 
 
-def _report_surface(tools: int, servers: int) -> None:
+def _report_surface(tools: int, servers: int,
+                    out: TextIO | None = None) -> None:
     """How crowded the tool surface was — the other half of the context.
 
     A call rate depends far more on how many tools competed for the slot than
@@ -425,7 +459,7 @@ def _report_surface(tools: int, servers: int) -> None:
     if tools:
         print("         host offered %d tool(s) across %d MCP server(s) this "
               "run; a rate is for that surface, not for boost alone."
-              % (tools, servers))
+              % (tools, servers), file=out)
 
 
 def exit_code(reasons: list[str], undecided: str | None) -> int:
@@ -479,8 +513,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Tier 3: tool-call behaviour, floored in both directions")
     p.add_argument("--set", type=Path, default=DEFAULT_SET)
     p.add_argument("--runs", type=int, default=3,
-                   help="runs per prompt; more narrows the interval (default 3 "
-                        "— below it the false-call ceiling is unreachable, see "
+                   help="runs per prompt; more narrows the interval (default 3; "
+                        "at 1 run the default ceiling is unreachable — it needs "
+                        "n>=12 and the shipped set has 8 no-call prompts, see "
                         "min_n_for_ceiling)")
     p.add_argument("--timeout", type=int, default=120)
     p.add_argument("--floor-call", type=float, default=0.60,
@@ -527,8 +562,12 @@ def main(argv: list[str] | None = None) -> int:
         print("BOOST_NO_AI is set — refusing to spend tokens.")
         return 0
 
+    # Under --json stdout is the document, so the context notes that annotate
+    # it go to stderr: they opened stdout before, and `json.loads` of the
+    # output failed before a single verdict could be read.
+    note = sys.stderr if args.json else None
     if args.report_context:
-        _print_context()
+        _print_context(note)
 
     mcp_config_path = None
     if args.strict_mcp_config:
@@ -539,7 +578,8 @@ def main(argv: list[str] | None = None) -> int:
             json.dump(config, fh)
         mcp_config_path = Path(name)
         print("context: --strict-mcp-config on — this run sees only boost's "
-              "own MCP server, not whatever else is registered on this machine.")
+              "own MCP server, not whatever else is registered on this machine.",
+              file=note)
 
     observed: dict[str, list[bool]] = {}
     surface = (0, 0)
@@ -556,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
         if mcp_config_path is not None:
             mcp_config_path.unlink(missing_ok=True)
     if args.report_context:
-        _report_surface(*surface)
+        _report_surface(*surface, out=note)
 
     metrics = score_host(rows, observed)
     reasons = verdict(metrics, args.floor_call, args.ceiling_false_call)
