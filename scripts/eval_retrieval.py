@@ -815,7 +815,8 @@ def main(argv: list[str] | None = None) -> int:
     # rather than text and is a developer tool, not a gate.
     problem = corpus_refusal(rag.index_completeness())
     if problem is not None:
-        fix = "  Fix: " + corpus_remedy(paths.boost_home(), sys.executable)
+        fix = "  Fix: " + corpus_remedy(paths.boost_home().resolve(),
+                                        sys.executable)
         if floors or args.fail_under is not None or args.save_baseline:
             print("\nCORPUS INCOMPLETE — refusing to score.\n%s\n%s"
                   % (problem, fix), file=sys.stderr)

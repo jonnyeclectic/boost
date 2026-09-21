@@ -228,6 +228,15 @@ def _run(path: Path, *args: str) -> subprocess.CompletedProcess:
                           capture_output=True, text=True)
 
 
+def _is_clone(path: Path) -> bool:
+    """True when ``path`` holds its own repository, not one git finds above it.
+
+    ``.git`` is a directory in a clone and a file in a worktree; either way it
+    is what stops `git -C` from walking up to an enclosing repository.
+    """
+    return (path / ".git").exists()
+
+
 def has_commit(path: Path, sha: str) -> bool:
     """True when ``sha`` names a commit already present in ``path``.
 
@@ -249,6 +258,13 @@ def pin_clone(path: Path, sha: str) -> None:
     the whole repository being gone: the tree the floors were measured on is not
     obtainable here and now, and that is not a statement about this project.
     """
+    if not _is_clone(path):
+        # Without its own .git, `git -C` walks UP to the nearest enclosing
+        # repository. Under `make eval` that is the boost checkout itself
+        # (.eval-home sits inside it), and the forced checkout below would
+        # act on the developer's working tree.
+        raise CorpusError(UNAVAILABLE, path.name,
+                          "%s is not a git clone" % path)
     if not has_commit(path, sha):
         _fetch(path, sha)
     if not has_commit(path, sha):
@@ -289,14 +305,22 @@ def _materialise(rows: Sequence[Row], verify: bool = True
             except Exception:  # not yet tapped; add it below
                 tap = registry.add(repo)
             else:
-                if not tap.is_cloned:
+                if not _is_clone(tap.path):
                     # Configured, with no clone behind it: `repos/` reclaimed
                     # by hand while config.json survived. Skipping the add and
                     # pinning anyway ran git in a directory that did not exist,
                     # and every row read "the pin is stale" — a false red,
                     # blaming the pins, from the one command meant to repair
                     # it. `update` is core's own answer to a missing clone.
-                    registry.update(tap.name)
+                    #
+                    # Asked of `.git`, not `is_cloned` (`is_dir()`): an emptied
+                    # directory read as a clone. An empty one is cleared so the
+                    # update re-clones into it; one holding files is not ours
+                    # to delete, and `pin_clone` refuses it by name below.
+                    if tap.path.is_dir() and not any(tap.path.iterdir()):
+                        tap.path.rmdir()
+                    if not tap.path.exists():
+                        registry.update(tap.name)
             if sha:
                 pin_clone(tap.path, sha)
         except CorpusError as exc:

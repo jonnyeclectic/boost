@@ -35,6 +35,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -42,7 +43,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import catalog, paths, rag, registry
+from boost_cli.core import catalog, rag, registry
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "eval_retrieval.py"
@@ -131,21 +132,32 @@ class TestTheGateRefusesABodylessCorpus:
         assert "CORPUS INCOMPLETE" in err
         assert "2 of 2 indexed documents carry no body" in err
 
-    def test_the_remedy_names_the_home_it_repairs(self, corpus, capsys):
+    # Relative too: the line is for pasting, possibly from another directory.
+    @pytest.mark.parametrize("relative", [False, True])
+    def test_the_remedy_names_the_home_it_repairs(self, corpus, capsys,
+                                                  tmp_path, monkeypatch,
+                                                  relative):
         """`make eval` sets BOOST_HOME inside its recipe and nowhere else.
 
         So a bare `FORCE=1 bash scripts/ensure_eval_corpus.sh` pasted from the
         refusal ran against `~/.boost` — the user's real home — tapping twenty
         pinned repos into it and leaving `.eval-home` exactly as broken. The
         command has to carry the home, and the interpreter the gate ran under.
+        The home is set apart from `$HOME/.boost` before the index is built,
+        or a remedy that named `~/.boost` would print the same string.
         """
         m = _load()
+        home = tmp_path / "eval-home"
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("BOOST_HOME", "eval-home" if relative else str(home))
         golden = corpus(with_bodies=False)
         assert m.main(["--golden", str(golden), "-k", "1", *_GATE]) == 66
+        line = capsys.readouterr().err.splitlines()[-1]
         want = "FORCE=1 BOOST_HOME=%s PYTHON=%s bash %s" % (
-            shlex.quote(str(paths.boost_home())), shlex.quote(sys.executable),
+            shlex.quote(str(home.resolve())), shlex.quote(sys.executable),
             shlex.quote(str(_ENSURE)))
-        assert want in capsys.readouterr().err.splitlines()[-1]
+        assert want in line
+        assert str(Path.home() / ".boost") not in line
 
     def test_nothing_is_scored_before_the_refusal(self, corpus, capsys):
         """A printed GATE table over a body-less corpus is the false green.
@@ -323,9 +335,36 @@ class TestTheRefreshJobKeepsARefusalApartFromAVerdict:
     """
 
     def _steps(self):
-        yaml = pytest.importorskip("yaml")
-        wf = yaml.safe_load(_REFRESH.read_text(encoding="utf-8"))
-        return wf["jobs"]["corpus"]["steps"]
+        """The `corpus` job's steps, read as text rather than through PyYAML.
+
+        PyYAML is in the lint and mutation toolchains but not in the one the
+        required unit job installs, so `importorskip("yaml")` skipped these
+        exactly where they had to run. Each step is a `      - ` item; the
+        scalar keys it needs sit at eight spaces, and `run: |` is everything
+        indented deeper under it.
+        """
+        text = _REFRESH.read_text(encoding="utf-8")
+        body = text.split("\n  corpus:\n", 1)[1].split("\n    steps:\n", 1)[1]
+        steps = []
+        for chunk in re.split(r"^      - ", body, flags=re.M)[1:]:
+            lines = ("        " + chunk).splitlines()
+            step, run = {}, None
+            for ln in lines:
+                if run is not None:
+                    if ln.startswith("          ") or not ln.strip():
+                        run.append(ln[10:])
+                        continue
+                    step["run"], run = "\n".join(run), None
+                m = re.match(r"^        ([\w-]+): ?(.*)$", ln)
+                if m and m.group(2) == "|" and m.group(1) == "run":
+                    run = []
+                elif m:
+                    step[m.group(1)] = m.group(2).strip()
+            if run is not None:
+                step["run"] = "\n".join(run)
+            steps.append(step)
+        assert steps, "no steps parsed from %s" % _REFRESH
+        return steps
 
     def test_the_gate_step_records_its_exit_code(self):
         gate = next(s for s in self._steps() if s.get("id") == "gate")
@@ -341,7 +380,7 @@ class TestTheRefreshJobKeepsARefusalApartFromAVerdict:
                    % m.EX_NOINPUT]
         assert refused, "no step tells a refusal apart from a floor verdict"
         step = steps[refused[0]]
-        assert not step.get("continue-on-error")
+        assert step.get("continue-on-error", "false") != "true"
         assert "exit %d" % m.EX_NOINPUT in step["run"]
         assert refused[0] < names.index("assemble the pull request body")
 

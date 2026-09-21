@@ -440,6 +440,22 @@ class TestTheGateIsDefinedOnce:
 
 
 class TestPinningAClone:
+    def test_a_directory_that_is_not_a_clone_is_refused(self, tmp_path):
+        # Without its own .git, `git -C` walks UP to the nearest enclosing
+        # repository. Under `make eval` that is the boost checkout itself
+        # (.eval-home sits inside it), and the forced checkout would act on
+        # the developer's working tree.
+        m = _load()
+        outer, shas = _repo(tmp_path)
+        inner = outer / "repos" / "owner__repo"
+        inner.mkdir(parents=True)
+        with pytest.raises(m.CorpusError) as exc:
+            m.pin_clone(inner, shas[0])
+        assert exc.value.kind == m.UNAVAILABLE
+        assert "not a git clone" in exc.value.detail
+        assert _git(outer, "rev-parse", "HEAD") == shas[-1], \
+            "pin_clone moved the enclosing repository"
+
     def test_a_sha_already_present_is_checked_out_without_fetching(
             self, tmp_path, monkeypatch):
         m = _load()
@@ -582,6 +598,36 @@ class TestEnsureRepairsWhatTheGateRefuses:
             capsys.readouterr().out
         assert sorted(c.name for c in paths.repos_dir().iterdir()) \
             == sorted(origins)
+
+    def test_an_empty_directory_where_the_clone_was_is_re_cloned(
+            self, pinned_corpus, capsys):
+        # `is_cloned` is `is_dir()`, so an emptied clone directory read as a
+        # clone: the update was skipped and git ran in a directory with no
+        # repository of its own.
+        from boost_cli.core import registry, util
+        m, taps, origins = pinned_corpus
+        name = sorted(origins)[0]
+        tap = registry.get(name)
+        util.rmtree(tap.path)
+        tap.path.mkdir()
+        assert m.main(["--ensure", "--taps", str(taps)]) == 0, \
+            capsys.readouterr().out
+        assert _git(tap.path, "rev-parse", "HEAD") == origins[name][1]
+
+    def test_a_non_clone_directory_with_files_is_not_deleted(
+            self, pinned_corpus, capsys):
+        # Someone else's files are not a clone to be replaced: say so and
+        # leave them, rather than delete them to make room.
+        from boost_cli.core import registry, util
+        m, taps, origins = pinned_corpus
+        name = sorted(origins)[0]
+        tap = registry.get(name)
+        util.rmtree(tap.path)
+        tap.path.mkdir()
+        (tap.path / "notes.txt").write_text("mine\n", encoding="utf-8")
+        assert m.main(["--ensure", "--taps", str(taps)]) != 0
+        assert "not a git clone" in capsys.readouterr().out
+        assert (tap.path / "notes.txt").read_text(encoding="utf-8") == "mine\n"
 
     def test_a_deleted_skill_md_is_restored_rather_than_drifted(
             self, pinned_corpus, capsys):
