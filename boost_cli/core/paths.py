@@ -192,10 +192,17 @@ def launcher() -> Path:
     return Path(found) if found else repo_root() / "boost"
 
 
+def boost_dirs() -> tuple[Path, ...]:
+    """Every directory boost writes into — what :func:`ensure_dirs` creates.
+
+    One list, so `boost heal --dry-run` names exactly the directories the real
+    run's :func:`ensure_dirs` makes rather than a hand-kept copy of them.
+    """
+    return (boost_home(), repos_dir(), cache_dir(), logs_dir(), state_dir(),
+            snapshots_dir(), lock_history_dir(), profiles_dir(), store_dir())
+
+
 def ensure_dirs() -> None:
     """Create every directory boost writes into (idempotent)."""
-    for d in (
-        boost_home(), repos_dir(), cache_dir(), logs_dir(), state_dir(),
-        snapshots_dir(), lock_history_dir(), profiles_dir(), store_dir(),
-    ):
+    for d in boost_dirs():
         d.mkdir(parents=True, exist_ok=True)

@@ -278,10 +278,17 @@ If you tapped heavily before this landed, `boost compact` narrows the clones you
 already have, offline and with no loss of search coverage:
 
 ```bash
-boost compact --dry-run     # what it would reclaim
-boost compact               # narrow every clone in place
-boost compact --reclone     # also drop downloaded git objects (needs network)
+boost compact --dry-run            # what narrowing would reclaim
+boost compact                      # narrow every clone in place
+boost compact --reclone --dry-run  # what a re-clone would remove first
+boost compact --reclone            # also drop downloaded git objects (needs network)
 ```
+
+Narrowing removes only files git tracks. A file you dropped into a clone by
+hand stays where it is, so `--dry-run` does not count it. `--reclone` deletes
+the whole clone, so its preview does count those files, plus the `.git` it
+drops. It gives no net figure, because the size of the fresh clone is up to
+the remote.
 
 boost indexes three item kinds from the same registries, and they install to
 different places. A skill is copied into the canonical store and symlinked out.

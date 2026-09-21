@@ -44,6 +44,9 @@ from ..core import (
     typedvalue,
     util,
 )
+from ..core import (
+    compact as compactplan,
+)
 from ..core import output as out
 from ..errors import BoostError
 from ._common import _s
@@ -284,34 +287,6 @@ def cmd_clean(argv) -> int:
     return 0
 
 
-def _freight_bytes(tap_path: Path, keep_dirs: list[str]) -> int:
-    """Bytes that would leave `tap_path`'s working tree when the cone applies.
-
-    Mirrors what `gitutil.SPARSE_PATTERNS` keeps rather than approximating it,
-    so the dry run does not promise back the provenance files or the assets of
-    an already-installed skill — both of which survive and neither of which is
-    freed.
-    """
-    kept = tuple("%s/" % d.strip("/") for d in keep_dirs)
-    total = 0
-    for f in tap_path.rglob("*"):
-        if not f.is_file():
-            continue
-        # Relative to the tap, never absolute: every clone lives *under*
-        # ~/.boost, so testing the absolute parts for ".boost" excluded every
-        # file in every tap and reported that nothing could be freed.
-        rel = f.relative_to(tap_path)
-        if ".git" in rel.parts or ".boost" in rel.parts:
-            continue
-        if (f.suffix.lower() in (".md", ".mdc")
-                or f.name in catalog.RULE_FILENAMES):
-            continue
-        if kept and rel.as_posix().startswith(kept):
-            continue
-        total += f.stat().st_size
-    return total
-
-
 # `boost doctor`'s wording for the same condition (quality.py), so the two
 # commands describe one missing clone in one sentence.
 _NOT_CLONED = "not cloned — run `boost update`"
@@ -365,20 +340,49 @@ def cmd_compact(argv) -> int:
                 keep.setdefault(entry.get("tap", ""), []).append(entry["source_dir"])
 
     freed = 0
+    removed = 0                 # bytes deleted before any re-download (reclone)
     changed = 0
     broken = 0                  # cloned taps this run failed on
     for tap in taps:
         before = util.dir_size(tap.path)
         if args.dry_run:
-            loose = _freight_bytes(tap.path, keep.get(tap.name, []))
-            if loose:
+            try:
+                plan = compactplan.plan(tap.path, keep.get(tap.name, []),
+                                        reclone=args.reclone)
+            except BoostError as e:
+                # A clone git cannot read fails the real run at `narrow` one
+                # step later, so the preview reports it the same way rather
+                # than answering "nothing to free" for a tap it never read.
+                broken += 1
+                rows.append({"tap": tap.name, "error": str(e)})
+                out.warn("could not predict %s: %s" % (tap.name, e),
+                         stream=sys.stderr if args.json else None)
+                continue
+            # `--reclone` does real work on every tap — it refreshes the clone
+            # and can move it back onto its pin — and the live run counts each
+            # one as changed for exactly that reason. A preview that went
+            # silent for a tap with no freight would under-report the run it
+            # is previewing.
+            if plan.removes or args.reclone:
                 changed += 1
-                freed += loose
-                rows.append({"tap": tap.name, "bytes": loose,
-                             "before": before, "after": before - loose})
-                if not args.json:
+                freed += plan.net or 0
+                removed += plan.removes
+                rows.append({"tap": tap.name, "bytes": plan.freight,
+                             "git_bytes": plan.git_bytes,
+                             "reclone": plan.reclone, "before": before,
+                             # None, not a number: see compactplan.Plan.net —
+                             # the re-download's size is the remote's answer.
+                             "after": None if plan.reclone
+                                      else before - plan.freight})
+                if not args.json and plan.reclone:
+                    out.info("would re-clone %s — removes %s of freight and "
+                             "%s of git objects, then re-downloads a blobless "
+                             "clone (final size set by the remote)"
+                             % (tap.name, util.human_size(plan.freight),
+                                util.human_size(plan.git_bytes)), wrap=True)
+                elif not args.json:
                     out.info("would free %s from %s"
-                             % (util.human_size(loose), tap.name))
+                             % (util.human_size(plan.freight), tap.name))
             continue
         try:
             if args.reclone:
@@ -444,10 +448,17 @@ def cmd_compact(argv) -> int:
     if args.dry_run:
         if args.json:
             print(json.dumps({"taps": rows, "count": changed, "bytes": freed,
+                              "removes": removed, "reclone": args.reclone,
                               "dry_run": True, "ok": not failed}, indent=2))
             return rc
-        out.dim("  %d tap(s) · %s would be freed"
-                % (changed, util.human_size(freed)))
+        if args.reclone:
+            # Deliberately not "would be freed": under `--reclone` that number
+            # is `removed` minus a re-download boost has not made yet.
+            out.dim("  %d tap(s) would be re-cloned · %s removed first"
+                    % (changed, util.human_size(removed)))
+        else:
+            out.dim("  %d tap(s) · %s would be freed"
+                    % (changed, util.human_size(freed)))
         return rc
     journal.log("compact", "%d taps" % changed, freed=util.human_size(freed))
     if args.json:
@@ -769,6 +780,11 @@ def cmd_policy(argv) -> int:
 
 _WORKFLOW_REL = ".github/workflows/boost-skill-inventory.yml"
 _TELEMETRY_REL = ".boost/telemetry.json"
+# Named once: `--dry-run --pr` rehearses the branch the real run creates,
+# and a preview naming a different branch is the defect it exists to fix.
+_PR_BRANCH = "boost/onboard-skill-tracker"
+# Lines of each file the preview shows before saying how many it hid.
+_PREVIEW_LINES = 24
 
 _WORKFLOW_YML = """\
 # generated by `boost onboard` — publishes this repo's AI-skill inventory
@@ -797,6 +813,19 @@ jobs:
 """
 
 
+def _onboard_unchanged(dest: Path, content: str) -> bool:
+    """True when `dest` already holds exactly `content`; the run skips it.
+
+    Shared with the dry run so the preview and the write agree on which files
+    the run leaves alone. An unreadable file counts as different, and the
+    real run asks before it overwrites one.
+    """
+    try:
+        return dest.read_text(encoding="utf-8") == content
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def _write_onboard_file(dest: Path, content: str, force: bool) -> bool:
     """Write one generated onboard file; confirm first if it already exists.
 
@@ -813,11 +842,7 @@ def _write_onboard_file(dest: Path, content: str, force: bool) -> bool:
         dest.write_text(content, encoding="utf-8")
         out.ok("created %s" % _tilde(dest))
         return True
-    try:
-        unchanged = dest.read_text(encoding="utf-8") == content
-    except (OSError, UnicodeDecodeError):
-        unchanged = False   # unreadable: treat as different and ask
-    if unchanged:
+    if _onboard_unchanged(dest, content):
         # Re-running onboard regenerates the workflow byte-for-byte. Prompting
         # to overwrite a file with its own contents is noise, not safety.
         out.info("unchanged %s" % _tilde(dest))
@@ -882,17 +907,12 @@ def cmd_onboard(argv) -> int:
                       json.dumps(lockfile.portable(lockfile.read()),
                                 indent=2, sort_keys=True) + "\n"))
 
-    if args.dry_run:
-        for rel, content in files:
-            dest = repo / rel
-            out.heading("would %s %s"
-                        % ("overwrite" if dest.exists() else "write",
-                           _tilde(dest)))
-            for line in content.splitlines()[:24]:
-                out.dim("    " + line)
-        return 0
-
-    if args.pr:  # check preconditions FIRST so we never leave the repo mid-state
+    # Preconditions FIRST so a real run never leaves the repo mid-state — and
+    # *before* the dry-run return, because all three are read-only and a
+    # preview that skips them is the one shape of dry run that is worse than
+    # none: `--dry-run --pr` outside a git repository exited 0 with no plan and
+    # no failure, so the flag the user was rehearsing was never rehearsed.
+    if args.pr:
         if not gitutil.is_repo(repo):
             raise BoostError("%s is not a git repository" % _tilde(repo),
                             hint="--pr needs a git checkout with a GitHub remote")
@@ -902,6 +922,34 @@ def cmd_onboard(argv) -> int:
         if not shutil.which("gh"):
             raise BoostError("the `gh` CLI is required for --pr",
                             hint="brew install gh, or rerun without --pr")
+
+    if args.dry_run:
+        changes = 0
+        for rel, content in files:
+            dest = repo / rel
+            if dest.exists() and _onboard_unchanged(dest, content):
+                out.info("unchanged %s" % _tilde(dest))
+                continue
+            changes += 1
+            out.heading("would %s %s"
+                        % ("overwrite" if dest.exists() else "write",
+                           _tilde(dest)))
+            shown, hidden = util.head_lines(content, _PREVIEW_LINES)
+            for line in shown:
+                out.dim("    " + line)
+            if hidden:
+                # Say the preview was cut, and by how much. Without this the
+                # lock preview stopped mid-object and read as a malformed file
+                # rather than a shortened view of a well-formed one.
+                out.dim("    … %d more line%s"
+                        % (hidden, "" if hidden == 1 else "s"))
+        if not changes:
+            # The real run's answer on this state, and it opens no PR.
+            out.info("nothing to do — %s already onboarded" % _tilde(repo))
+        elif args.pr:
+            out.info("would commit them on %s and run `gh pr create --fill`"
+                     % _PR_BRANCH)
+        return 0
 
     written = [rel for rel, content in files
                if _write_onboard_file(repo / rel, content,
@@ -915,7 +963,7 @@ def cmd_onboard(argv) -> int:
     journal.log("onboard", _tilde(repo), pr=args.pr or None)
 
     if args.pr:
-        branch = "boost/onboard-skill-tracker"
+        branch = _PR_BRANCH
         gitutil.run(["-C", str(repo), "checkout", "-b", branch])
         gitutil.run(["-C", str(repo), "add", *written])
         gitutil.run(["-C", str(repo), "commit", "-m",

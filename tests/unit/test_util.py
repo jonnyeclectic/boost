@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import re
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -317,6 +318,22 @@ class TestDirSize:
         sub.mkdir()
         (sub / "b.txt").write_bytes(b"y" * 32)
         assert util.dir_size(tmp_path) == 42
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="symlinks need a privilege on Windows")
+    def test_a_symlink_is_not_its_target(self, tmp_path):
+        # du's answer: a link to a file (inside the tree or outside it) is
+        # not that file's bytes again. `compact` measured freed space as
+        # before-minus-after and counted a link's target on one side only.
+        outside = tmp_path / "outside.bin"
+        outside.write_bytes(b"o" * 1000)
+        tree = tmp_path / "tree"
+        tree.mkdir()
+        (tree / "real.txt").write_bytes(b"r" * 10)
+        (tree / "inner").symlink_to("real.txt")
+        (tree / "outer").symlink_to(outside)
+        (tree / "dangling").symlink_to("gone.txt")
+        assert util.dir_size(tree) == 10
 
 
 class TestSemver:

@@ -289,6 +289,19 @@ def human_size(n: int) -> str:
     return str(size)
 
 
+def head_lines(text: str, cap: int) -> tuple[list[str], int]:
+    """The first `cap` lines of `text`, and how many were left out.
+
+    A preview that silently stops is worse than a short one: `onboard
+    --dry-run` cut every file at 24 lines with no marker, so its lock preview
+    ended mid-object and read as a truncated *file* rather than a truncated
+    *view* of one. Callers print the remainder; returning the count rather than
+    a formatted ellipsis keeps the wording with the emitter that owns the pane.
+    """
+    lines = text.splitlines()
+    return lines[:cap], max(len(lines) - cap, 0)
+
+
 def _slug_or_none(name: str) -> str | None:
     return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or None
 
@@ -363,8 +376,16 @@ def sha256_dir(path: Path) -> str:
 
 
 def dir_size(path: Path) -> int:
-    """Sum the byte size of every regular file under ``path``, recursively."""
-    return sum(p.stat().st_size for p in Path(path).rglob("*") if p.is_file())
+    """Sum the byte size of every regular file under ``path``, recursively.
+
+    A symlink is not a regular file, whatever it points at: ``is_file()`` and
+    ``stat()`` follow links, so a link counted its target's bytes a second
+    time, or bytes outside the tree, or nothing once it dangled. ``compact``
+    reports freed space as this before minus this after, and a link whose
+    target the narrow removed made the live figure overstate the run.
+    """
+    return sum(p.lstat().st_size for p in Path(path).rglob("*")
+               if p.is_file() and not p.is_symlink())
 
 
 def semver_tuple(v: str):

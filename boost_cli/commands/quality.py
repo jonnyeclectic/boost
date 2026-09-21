@@ -1116,12 +1116,15 @@ def cmd_heal(argv):
 
     # linking_agents, matching agents.ensure_agent_dirs below: a native-store
     # agent's skills dir is never written to, so it is not a missing directory.
-    wanted = [paths.boost_home(), paths.repos_dir(), paths.cache_dir(), paths.logs_dir(), paths.state_dir(), paths.snapshots_dir(), paths.lock_history_dir(), paths.profiles_dir(), paths.store_dir(), *list(agents.linking_agents().values())]
+    wanted = [*paths.boost_dirs(), *agents.linking_agents().values()]
     missing = [d for d in wanted if not d.is_dir()]
     if missing:
         if dry:
-            out.info("would create %d missing director%s"
-                     % (len(missing), "y" if len(missing) == 1 else "ies"))
+            # Named, like every other repair heal previews: a bare count was
+            # the one line that never said which paths get written — on a
+            # fresh HOME, `~/.agents/skills` and each agent's skills dir.
+            for d in missing:
+                out.info("would create directory %s" % _tilde(d))
         else:
             paths.ensure_dirs()
             agents.ensure_agent_dirs()
@@ -1159,12 +1162,13 @@ def cmd_heal(argv):
                 continue
             out.info("would remove stale link %s" % _tilde(p))
             actions.append("stale %s" % p)
-        for name in plan["missing_store"]:
-            out.info("would restore %s from its tap (or drop it from the lock)" % name)
-            actions.append("restore %s" % name)
-        for name in plan["unrecorded_store"]:
-            out.info("would re-record %s, which the lock file has lost" % name)
-            actions.append("re-record %s" % name)
+        # The branch `sync_apply` will take, worded by the same planner it
+        # uses: this said "would restore X from its tap (or drop it from the
+        # lock)" where the live run reinstalls, and previewed no rule or
+        # workflow repair at all.
+        for msg in store.sync_preview(plan):
+            out.info(msg.replace(str(paths.home()), "~"))
+            actions.append(msg)
     else:
         for msg in store.sync_apply(plan):
             out.ok(msg.replace(str(paths.home()), "~"))
