@@ -137,7 +137,7 @@ def write(lock: dict) -> None:
     Stamps ``version``/``updated`` on ``lock`` in place and prunes
     history to the newest HISTORY_KEEP snapshots.
     """
-    paths.ensure_dirs()
+    paths.create_dirs(paths.boost_dirs())
     p = paths.lockfile_path()
     if p.exists():
         stamp = _archive_stamp(p)

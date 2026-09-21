@@ -206,3 +206,47 @@ def ensure_dirs() -> None:
     """Create every directory boost writes into (idempotent)."""
     for d in boost_dirs():
         d.mkdir(parents=True, exist_ok=True)
+
+
+def create_dirs(dirs) -> list[Path]:
+    """Create each of `dirs` that can be created; return the ones that could not.
+
+    :func:`ensure_dirs` stops at the first refusal, which is right for a
+    caller about to write into the dir it failed on. It is wrong for one that
+    is not: under a read-only ``~/.boost`` with no cache dir, doctor, heal and
+    every journal write exited 70 creating a cache dir none of them needed.
+    """
+    refused = []
+    for d in dirs:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            refused.append(d)
+    return refused
+
+
+def nearest_existing(p: Path) -> Path:
+    """`p` itself if it exists, else its closest ancestor that does.
+
+    ``os.access``, not ``Path.exists``: under a parent without search
+    permission the stat raises, and that parent is the answer, not a crash.
+    """
+    while not os.access(p, os.F_OK) and p != p.parent:
+        p = p.parent
+    return p
+
+
+def refuses_writes(d: Path) -> Path | None:
+    """The directory that stops boost writing into `d`, or None if nothing does.
+
+    An existing `d` answers for itself. A missing one is created from its
+    nearest existing ancestor, so that is the directory that refuses: a
+    missing cache dir under a read-only ``~/.boost`` is blocked by
+    ``~/.boost``, which no check of the cache dir alone can see. Doctor and
+    heal both ask this, so a preview and the run it previews agree. A file
+    where a directory belongs refuses too, since no mkdir gets past it.
+    """
+    here = nearest_existing(d)
+    if here.is_dir() and os.access(here, os.W_OK | os.X_OK):
+        return None
+    return here

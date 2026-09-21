@@ -743,7 +743,7 @@ def install(entry: dict, force: bool = False,
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
     dest = skill_store_dir(name)
-    paths.ensure_dirs()
+    paths.create_dirs(paths.boost_dirs())
     _copy_skill(src, dest)
 
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing))
@@ -1054,7 +1054,7 @@ def _install_rule(entry: dict, force: bool = False,
     meta, body = frontmatter.parse(raw)
     claude_body = rules.render_claude_body(str(meta.get("name") or name), body)
 
-    paths.ensure_dirs()
+    paths.create_dirs(paths.boost_dirs())
     materializations: list[dict] = []
     linked: list[str] = []
     for agent, skills_dir in agents.materializing_agents(resolved_base).items():
@@ -1305,7 +1305,7 @@ def _install_workflow(entry: dict, force: bool = False,
     raw = src.read_text(encoding="utf-8", errors="replace")
     slot = workflows.detect_slot(source_rel)
 
-    paths.ensure_dirs()
+    paths.create_dirs(paths.boost_dirs())
     materializations: list[dict] = []
     linked: list[str] = []
     for agent, skills_dir in agents.materializing_agents(resolved_base).items():
@@ -1413,7 +1413,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
                         hint="inspect with `boost policy list`")
     _enforce_capability_policy(name, src_dir / "SKILL.md")
     dest = skill_store_dir(name)
-    paths.ensure_dirs()
+    paths.create_dirs(paths.boost_dirs())
     _copy_skill(src_dir, dest)
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing))
     res.score, _ = util.score_skill(dest)

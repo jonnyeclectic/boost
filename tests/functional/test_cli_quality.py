@@ -16,7 +16,7 @@ from datetime import datetime
 
 import pytest
 
-from boost_cli.core import paths
+from boost_cli.core import agents, paths
 
 
 def _copy_tap(src, dest):
@@ -1985,3 +1985,97 @@ class TestStateFilesThatAreNotUtf8:
         r = boost("search", "brainstorm")
         assert "brainstorming" in r.out
         boost("info", "brainstorming")
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="chmod can't make a directory unwritable on Windows")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root ignores mode bits")
+class TestReadOnlyBoostHomeWithNoCacheDir:
+    """The card's setup: a tap, no cache dir, and `chmod 500 ~/.boost`.
+    update, heal and doctor exited 70 creating the cache dir, and
+    `heal --dry-run` promised to create it and exited 0."""
+
+    @pytest.fixture()
+    def ro_home(self, boost, tapped):
+        shutil.rmtree(paths.cache_dir())
+        paths.boost_home().chmod(0o500)
+        yield
+        paths.boost_home().chmod(0o700)
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+
+    @staticmethod
+    def _flat(text):
+        return " ".join(text.split())
+
+    def test_doctor_names_the_directory_that_refuses(self, boost, ro_home):
+        out = self._flat(boost("doctor", expect=1).out)
+        assert ("~/.boost/cache cannot be created: ~/.boost is not writable"
+                in out)
+        assert "make ~/.boost writable" in out
+        # `boost update` alone cannot write the cache it is sent to make.
+        assert ("run `boost update fixture-tap` once ~/.boost is writable"
+                in out)
+        assert "cloned & cached" not in out
+
+    def test_heal_and_its_preview_agree(self, boost, ro_home):
+        dry = boost("heal", "--dry-run", expect=1).out
+        run = boost("heal", expect=1).out
+        line = ("! ~/.boost/cache cannot be created: ~/.boost is not writable "
+                "— heal does not change permissions; run `chmod u+w ~/.boost`")
+        assert line in self._flat(dry)
+        assert line in self._flat(run)
+        assert "would create directory ~/.boost/cache" not in dry
+        assert "would rebuild catalog cache" not in dry
+        assert "rebuilt catalog cache" not in run
+        assert "nothing to heal" not in dry + run
+
+    def test_heal_still_creates_the_directories_it_can(self, boost, ro_home):
+        agent_dirs = [d for d in agents.linking_agents().values()
+                      if not d.is_dir()]
+        assert agent_dirs, "the fixture must leave an agent dir to create"
+        dry = boost("heal", "--dry-run", expect=1).out
+        for d in agent_dirs:
+            assert "would create directory %s" % paths.tilde(d) in dry
+        run = boost("heal", expect=1).out
+        assert "created %d missing directories" % len(agent_dirs) in run
+        assert all(d.is_dir() for d in agent_dirs)
+
+    @pytest.mark.parametrize("argv", [("update",), ("compact",),
+                                      ("install", "brainstorming")])
+    def test_commands_that_never_needed_the_cache_dir_finish(self, boost,
+                                                             ro_home, argv):
+        boost(*argv)
+        assert not paths.cache_dir().exists()
+
+    def test_doctor_and_heal_name_any_boost_dir_they_cannot_create(
+            self, boost, tapped):
+        # Not only the cache dir: a missing snapshots dir under a read-only
+        # state dir is what heal previews and fails on, so doctor names it.
+        state = paths.state_dir()
+        shutil.rmtree(paths.snapshots_dir())
+        state.chmod(0o500)
+        try:
+            doc = self._flat(boost("doctor", expect=1).out)
+            dry = self._flat(boost("heal", "--dry-run", expect=1).out)
+            run = self._flat(boost("heal", expect=1).out)
+        finally:
+            state.chmod(0o700)
+        said = ("~/.boost/state/snapshots cannot be created: ~/.boost/state "
+                "is not writable")
+        assert said in doc and said in dry and said in run
+        assert "would create directory ~/.boost/state/snapshots" not in dry
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+
+    def test_with_no_taps_doctor_still_names_what_heal_does(self, boost,
+                                                            sandbox):
+        boost("doctor")                      # creates every boost dir
+        shutil.rmtree(paths.cache_dir())
+        paths.boost_home().chmod(0o500)
+        try:
+            doc = self._flat(boost("doctor", expect=1).out)
+            run = self._flat(boost("heal", expect=1).out)
+        finally:
+            paths.boost_home().chmod(0o700)
+        said = "~/.boost/cache cannot be created: ~/.boost is not writable"
+        assert said in doc and said in run

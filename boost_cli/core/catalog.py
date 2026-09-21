@@ -285,9 +285,7 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
                 # Name the nearest directory that exists: when the cache
                 # dir itself could not be created, it is its parent that
                 # refuses, which is what rag._unsaved names too.
-                where = tap.cache_file.parent
-                while not where.exists() and where != where.parent:
-                    where = where.parent
+                where = paths.nearest_existing(tap.cache_file.parent)
                 output.warn("could not save the catalog cache for %s (%s) — "
                             "this command uses a fresh scan; make %s writable"
                             % (tap.name, e.strerror or e, paths.tilde(where)),

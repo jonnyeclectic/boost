@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import getpass
 import json
+import os
 import re
+import sys
 
 import pytest
 
@@ -382,3 +384,60 @@ class TestWhoEmptyState:
         events = [{"action": "install", "subject": "brainstorming"}]
         msg = journal.who_empty_state("zzznope", events, False, ["brainstorming"])
         assert "did you mean" not in msg
+
+
+_POSIX_MODES = [
+    pytest.mark.skipif(sys.platform == "win32",
+                       reason="chmod can't make a directory unwritable on Windows"),
+    pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                       reason="root ignores mode bits"),
+]
+
+
+class TestLogUnderAReadOnlyBoostHome:
+    """`update` and `compact` exited 70 in journal.log creating a cache dir a
+    read-only ~/.boost refused, after their own work had finished."""
+
+    pytestmark = _POSIX_MODES
+
+    @pytest.fixture(autouse=True)
+    def _fresh_warning(self, monkeypatch):
+        # raising=False: the flag is new, so origin/main fails on behaviour.
+        monkeypatch.setattr(journal, "_WARNED_UNSAVED", False, raising=False)
+
+    def test_a_cache_dir_it_cannot_create_does_not_stop_the_log(
+            self, sandbox):
+        paths.state_dir().mkdir(parents=True)
+        home = paths.boost_home()
+        home.chmod(0o500)
+        try:
+            journal.log("update", "all")
+        finally:
+            home.chmod(0o700)
+        assert not paths.cache_dir().exists()
+        assert [e["action"] for e in journal.events()] == ["update"]
+
+    def test_a_feed_dir_it_cannot_write_is_one_warning(self, sandbox, capsys):
+        state = paths.state_dir()
+        state.mkdir(parents=True)
+        state.chmod(0o500)
+        try:
+            journal.log("update", "all")
+            journal.log("compact", "")
+        finally:
+            state.chmod(0o700)
+        err = " ".join(capsys.readouterr().err.split())
+        assert err.count("could not record this in the activity feed") == 1
+        assert "make ~/.boost/state writable" in err
+        assert journal.events() == []
+
+    def test_a_read_only_feed_file_names_the_file(self, sandbox, capsys):
+        journal.log("install", "x")
+        paths.pulse_path().chmod(0o444)
+        try:
+            journal.log("install", "y")
+        finally:
+            paths.pulse_path().chmod(0o644)
+        err = " ".join(capsys.readouterr().err.split())
+        assert "make ~/.boost/state/pulse.jsonl writable" in err
+        assert [e["subject"] for e in journal.events()] == ["x"]

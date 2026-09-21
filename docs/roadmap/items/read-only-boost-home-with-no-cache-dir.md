@@ -2,14 +2,14 @@
 id: read-only-boost-home-with-no-cache-dir
 board: code
 section: planned
-status: planned
+status: shipped
 category: Robustness · Bug
 complexity: S
 impact: Low
 wow: 2
-note: With ~/.boost read-only and no cache dir, update, heal and doctor exit 70; heal --dry-run exits 0 while heal exits 70…
+note: "fixed: paths.refuses_writes names the directory that stops a write, including the parent of a dir a refused mkdir left missing; doctor and heal create what they can and name ~/.boost (70 → 1), heal --dry-run agrees (0 → 1); journal.log creates only its own dir, so update, compact and install finish (70 → 0)"
 order: 330
-owner:
+owner: loop/readonly-boost-home
 pr:
 title: Under a read-only <code>~/.boost</code> with no cache dir, <code>update</code>, <code>heal</code> and <code>doctor</code> crash at exit 70, and <code>heal --dry-run</code> says 0 for a run that crashes
 ---
