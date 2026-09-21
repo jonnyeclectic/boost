@@ -247,7 +247,7 @@ A second `Retriever` implementation (`engine="dense"`) that:
   Phase-1 BM25 engine. **TF-IDF/BM25 is the always-on floor.**
 
 This is where the vector-database preference is honored — as an opt-in upgrade, not a tax on the default
-install. `pip install boost-skill-cli` stays zero-dependency; `pip install boost-skill-cli[rag]` turns on
+install. `pip install boost-skill-cli` stays zero-dependency; `pip install "boost-skill-cli[rag]"` turns on
 dense retrieval.
 
 ---

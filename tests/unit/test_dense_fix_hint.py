@@ -17,6 +17,16 @@ import pytest
 
 from boost_cli.core import dense
 
+
+def _table(reason: str) -> str:
+    """The table's answer for `reason`, as a user reads it.
+
+    Two rows name the command that installs the extra, which depends on how
+    boost was installed, so the table holds a placeholder for it.
+    """
+    return dense._FIX[reason].replace(dense._INSTALL, dense.install_extra())
+
+
 # Every reason `status()` can assign, read off the branch ladder in that
 # function. Kept as a literal rather than introspected: the point is to fail
 # when the two drift, and a derived list would drift along with it.
@@ -179,24 +189,24 @@ class TestNoKeyReadsTheStore:
         # extra really is the next step, exactly as before.
         hint = dense.fix_hint("no-key", self._status(built_provider=None,
                                                      chunks=0, store_exists=False))
-        assert hint == dense._FIX["no-key"]
+        assert hint == _table("no-key")
 
     def test_a_locally_built_store_still_gets_the_table_answer(self):
         # `local` has no API key to set — this user genuinely dropped the
         # package and needs it back.
         hint = dense.fix_hint("no-key", self._status(built_provider="local",
                                                      built_model="BAAI/bge-small-en-v1.5"))
-        assert hint == dense._FIX["no-key"]
+        assert hint == _table("no-key")
 
     def test_no_status_argument_keeps_the_old_answer(self):
         # Every pre-existing caller passes one argument; none may regress.
-        assert dense.fix_hint("no-key") == dense._FIX["no-key"]
+        assert dense.fix_hint("no-key") == _table("no-key")
 
     @pytest.mark.parametrize("reason", [r for r in ALL_REASONS if r != "no-key"])
     def test_other_reasons_ignore_the_status_dict(self, reason):
         # Only "no-key" is ambiguous. If a status dict started steering the
         # rest, the "these never chain" property would be back in play.
-        assert dense.fix_hint(reason, self._status(reason=reason)) == dense._FIX[reason]
+        assert dense.fix_hint(reason, self._status(reason=reason)) == _table(reason)
 
     def test_the_env_var_names_come_from_embed_not_a_local_copy(self):
         # A second copy of these strings is how the hint would keep naming

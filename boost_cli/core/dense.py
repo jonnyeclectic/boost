@@ -509,6 +509,35 @@ def tap_commits() -> dict[str, str]:
     return {str(k): str(v) for k, v in commits.items() if v}
 
 
+#: The requirement that pulls in the extra. Never shown bare: unquoted, zsh
+#: reads ``[rag]`` as a glob and answers "no matches found" instead of running
+#: the command. Every surface gets it through :func:`install_extra`.
+EXTRA_SPEC = "boost-skill-cli[rag]"
+
+#: Stands in for :func:`install_extra`'s answer inside ``_FIX``, which is data
+#: built at import time and cannot know how this boost was installed.
+_INSTALL = "{install-extra}"
+
+
+def install_extra() -> str:
+    """The one command that adds the ``[rag]`` extra to *this* boost.
+
+    One answer for every surface — quickstart, reindex, doctor, search — because
+    three used to give three: a pipx line, a quoted pip line, and an unquoted
+    pip line that zsh refuses to run. Asked of the install rather than fixed,
+    because the wrong manager is not a style problem: under pipx, `pip install`
+    lands the extra in some other Python, and boost goes on without it.
+
+    Double quotes, as README and docs/semantic-search.md print it: they stop
+    the glob in every POSIX shell and PowerShell, and cmd.exe strips them where
+    it would pass single quotes through to pip.
+    """
+    from . import selfupdate
+    if selfupdate.detect() == selfupdate.PIPX:
+        return 'pipx inject %s "%s"' % (selfupdate.DIST, EXTRA_SPEC)
+    return 'pip install "%s"' % EXTRA_SPEC
+
+
 # Why dense retrieval isn't serving, keyed by the `reason` status() returns.
 # Each names the ONE next action; the reason order in status() guarantees only
 # the first missing link is ever reported, so these never chain.
@@ -524,14 +553,15 @@ _FIX = {
     # Telling that user to install a 133 MB extra, or to export a key, is the
     # failure mode this whole table exists to prevent.
     "disabled": "unset the kill switch: `unset BOOST_NO_EMBED`",
-    "no-backend": "install the extra: `pip install 'boost-skill-cli[rag]'`",
+    "no-backend": "install the extra: `%s`" % _INSTALL,
     # Names the keyless remedy first: since the [rag] extra carries a local
     # embedding model, an API key is the quality ceiling, not the entry fee.
     # This reason means "no key AND no local backend", which in practice is a
     # partial install — the extra present but its model backend not importable.
     # The kill switch is no longer one of these: it has its own rung above.
-    "no-key": ("reinstall the extra: `pip install 'boost-skill-cli[rag]'` "
-               "(or set VOYAGE_API_KEY / OPENAI_API_KEY for a larger model)"),
+    "no-key": ("reinstall the extra: `%s` "
+               "(or set VOYAGE_API_KEY / OPENAI_API_KEY for a larger model)"
+               % _INSTALL),
     "no-store": "build it: `boost reindex --dense`",
     "version-changed": "rebuild it: `boost reindex --dense --force`",
     "provider-changed": "rebuild it: `boost reindex --dense --force`",
@@ -589,7 +619,8 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
         # download here contradicted reindex's own warning, which already
         # leaves the network out for this stage.
         return "retry loading the local model: `boost reindex --dense`"
-    return _FIX.get(reason, "see `boost reindex --dense`")
+    hint = _FIX.get(reason, "see `boost reindex --dense`")
+    return hint.replace(_INSTALL, install_extra()) if _INSTALL in hint else hint
 
 
 def status(*, count: bool = False) -> dict:
@@ -1007,8 +1038,8 @@ def _unreadable_vectors(tap: str, expected: int,
         "%s has %d embedded chunk%s but its vectors cannot be read%s"
         % (tap, expected, "" if expected == 1 else "s", detail),
         hint="reading vectors needs the sqlite-vec extension — install the "
-             "`rag` extra (`pip install 'boost-skill-cli[rag]'`); the rows "
-             "themselves are intact, so no re-embedding is required")
+             "`rag` extra (`%s`); the rows themselves are intact, so no "
+             "re-embedding is required" % install_extra())
 
 
 def import_shard(shard: dict, commit: str) -> tuple[bool, str]:

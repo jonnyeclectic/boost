@@ -143,7 +143,7 @@
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>62</b><span>Planned</span></div>
-      <div class="stat"><b>478</b><span>Loop finds</span></div>
+      <div class="stat"><b>479</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -5884,13 +5884,9 @@ larger change, and belongs in its own card rather than folded into a bugfix PR.<
       </article>
 
       <article class="cap rcard" id="audit-quickstart-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost quickstart: CLI audit findings (2026-08)</h3>
-        <p><b>Without the <code>[rag]</code> extra, quickstart taps unpinned at HEAD &mdash; and the rerun it promises cannot fix it.</b> <code>cmd_quickstart</code> only fetches the manifest (the source of pins) when <code>want_vectors</code> is true (<code>boost_cli/commands/quickstart.py:145-152</code>), so on a machine without a dense backend the six new taps land with <code>pin: null</code> while the output ends <em>&ldquo;&hellip;install the extra&hellip;, then <code>boost quickstart</code> again&rdquo;</em>. The second run prints <code>&lt;tap&gt; already tapped</code> for all seven (<code>registry.add_many</code> skips existing taps, never re-pins), and once the extra is present <code>shards.sync</code> refuses every mismatched commit: <code>refused (tap is at X, shard is for Y)</code>. That contradicts the module's own docstring &mdash; &ldquo;Pinning is the whole point&rdquo;. Fix: fetch the manifest and pin regardless of <code>dense.have_backend()</code> (pinning is a network-and-config operation, not an embedding one), and on rerun retarget already-tapped registries via <code>shards.ingest</code> instead of skipping them. Update README.md (quickstart section, ~line 145) and docs/semantic-search.md (~line 63).
-
-<b>The <code>[rag]</code> install hint has three different wordings.</b> quickstart says <code>pipx inject boost-skill-cli "boost-skill-cli[rag]"</code> (hard-coded at <code>quickstart.py:175-177</code> and <code>202-204</code>); reindex's <code>embed.fallback_note</code> (<code>boost_cli/core/embed.py:170-179</code>) says unquoted <code>pip install boost-skill-cli[rag]</code>, which fails in zsh (<code>no matches found</code>); doctor and search say quoted <code>pip install 'boost-skill-cli[rag]'</code> via <code>dense.fix_hint()</code>. CLAUDE.md's rule is that doctor and search read one table so they cannot contradict &mdash; these two surfaces bypass it. Fix: have <code>embed.fallback_note()</code> and both quickstart paths call <code>dense.fix_hint()</code>; if pipx wording is wanted, put install-method detection inside <code>fix_hint</code> so every caller inherits it. docs/semantic-search.md is already quoted &mdash; keep it as the reference.
-
-Found by the 2026-08 CLI audit (clusters <code>quickstart-pinning</code>, <code>rag-hint-drift</code>); repro in the audit log.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-quickstart-findings.md">Write-up &middot; audit-quickstart-findings.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -6290,6 +6286,18 @@ with the two swapped, the <code>Error:</code> prefix is coloured.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
           <span class="m">boost … 2&gt;log on a terminal writes escape codes into the log, while boost … &gt;out prints the error line plain</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="quickstart-rerun-retargets-tapped-registries">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <h3>boost quickstart: a rerun could move already-tapped registries to their vectors</h3>
+        <p><b>A rerun of quickstart still leaves an already-tapped registry at the commit it was tapped at.</b> <code>registry.add_many</code> skips a configured tap (<code>already tapped</code>), so a registry first tapped before quickstart pinned anything, or overtaken by a weekly republish, stays where it is, and <code>shards.sync</code> then refuses its shard (<code>tap is at X, shard is for Y</code>). The <code>audit-quickstart-findings</code> fix flags that refusal and names <code>boost update --shards</code>, which already moves such taps through <code>shards.ingest</code> (download and verify first, then move the tap). That was the smaller half of the card; its other half was to have quickstart do the move itself. Fix: on a rerun, hand the configured taps the manifest publishes to <code>shards.ingest</code> instead of <code>shards.sync</code>, so the vectors land in one command. Decide first whether quickstart may move a tap the user tapped on purpose at another commit: <code>boost update</code> treats a pin as a promise, and a tap pinned with <code>boost tap --at</code> should keep it. Pin that choice in <code>tests/functional/test_cli_quickstart.py</code> beside the <code>commit_moved</code> tests.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">a rerun leaves an already-tapped registry where it is, even when the manifest names another commit</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

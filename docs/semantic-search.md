@@ -33,7 +33,10 @@ boost quickstart                                     # taps + downloads prebuilt
 `boost quickstart` downloads vectors that were already computed, rather than
 computing them here. On a machine that has never tapped anything it is the only
 command you need; run it again after adding the extra and it fills in the
-vectors it skipped the first time.
+vectors it skipped the first time. That works because the first run pins each
+registry to the commit its vectors describe, with or without the extra. A
+registry that has moved since, or was tapped before quickstart ran, is named,
+and `boost update --shards` moves it to the vectors' commit.
 
 To embed locally instead — for taps nobody has published, or to use your own
 API key — that is `boost reindex --dense`.
@@ -179,7 +182,7 @@ deliberately no vectors, for the same reason.
 
 | What doctor says | What to do |
 |---|---|
-| no backend | `pip install 'boost-skill-cli[rag]'` |
+| no backend | `pip install "boost-skill-cli[rag]"` (`pipx inject boost-skill-cli "boost-skill-cli[rag]"` under pipx) |
 | no store | `boost reindex --dense` |
 | store is empty | `boost reindex --dense --force` |
 | version, model, provider or dimension changed | `boost reindex --dense --force` |
