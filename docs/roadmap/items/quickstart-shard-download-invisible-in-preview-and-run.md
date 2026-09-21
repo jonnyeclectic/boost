@@ -2,14 +2,14 @@
 id: quickstart-shard-download-invisible-in-preview-and-run
 board: code
 section: planned
-status: planned
+status: shipped
 category: Onboarding · Bug
 complexity: M
 impact: Med
 wow: 3
 note: shards.sync() takes an on_event progress callback and both other callers pass one; qu…
 order: 223
-owner:
+owner: loop/quickstart-shard-size
 pr:
 title: The shard download is invisible both before and during: <code>--catalog --dry-run</code> never names the 1,604.8 MB, and the live fetch passes no progress callback and has no spinner
 ---
