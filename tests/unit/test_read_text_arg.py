@@ -85,6 +85,27 @@ class TestFile:
         f.write_bytes("naïve — café".encode())
         assert util.read_text_arg("@%s" % f, "--feedback") == "naïve — café"
 
+    def test_invalid_utf8_is_replaced_not_a_traceback(self, tmp_path):
+        # Strict decoding raises UnicodeDecodeError, which is not an OSError,
+        # so it would escape the BoostError handler as a traceback.
+        f = tmp_path / "fb.txt"
+        f.write_bytes(b"\xff\xfe ok")
+        assert util.read_text_arg("@%s" % f, "--feedback") == \
+            "\ufffd\ufffd ok"
+
+    @pytest.mark.parametrize("value", ["@", "@  "])
+    def test_bare_at_needs_a_path(self, value):
+        with pytest.raises(BoostError) as e:
+            util.read_text_arg(value, "--feedback", stdin=io.StringIO("STDIN"))
+        assert e.value.message == "--feedback @ needs a file path"
+        assert e.value.hint == ("`--feedback @FILE` reads FILE; pass the text "
+                                "itself, or `-` to read stdin")
+
+    def test_one_character_path_is_a_path(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "a").write_text("short name", encoding="utf-8")
+        assert util.read_text_arg("@a", "--feedback") == "short name"
+
     def test_empty_file_is_refused(self, tmp_path):
         f = tmp_path / "empty.txt"
         f.write_text("\n  \n", encoding="utf-8")

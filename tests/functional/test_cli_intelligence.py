@@ -613,6 +613,42 @@ class TestEvolve:
         assert "--feedback - read nothing from stdin" in r.err
         assert "+- -." not in r.out
 
+    def _capture_ai_prompt(self, ai_on, monkeypatch):
+        """Turn the AI path on and record every prompt it is handed."""
+        from boost_cli.core import ai
+        ai_on()
+        prompts = []
+        monkeypatch.setattr(ai, "ask_author",
+                            lambda prompt, **k: prompts.append(prompt) or None)
+        return prompts
+
+    def test_ai_is_handed_the_text_read_from_stdin_not_a_dash(
+            self, boost, installed, ai_on, monkeypatch):
+        prompts = self._capture_ai_prompt(ai_on, monkeypatch)
+        monkeypatch.setattr("sys.stdin",
+                            io.StringIO("Cap ideas at 5.\nPrefer bullets\n"))
+        boost("evolve", "brainstorming", "--feedback", "-")
+        assert len(prompts) == 1
+        assert "FEEDBACK: Cap ideas at 5.\nPrefer bullets\n\n" in prompts[0]
+        assert "FEEDBACK: -" not in prompts[0]
+
+    def test_ai_is_handed_the_file_text_not_the_at_path(
+            self, boost, installed, ai_on, monkeypatch, tmp_path):
+        prompts = self._capture_ai_prompt(ai_on, monkeypatch)
+        fb = tmp_path / "feedback.txt"
+        fb.write_text("  Cap ideas at 5.\n", encoding="utf-8")
+        boost("evolve", "brainstorming", "--feedback", "@%s" % fb)
+        assert len(prompts) == 1
+        assert "FEEDBACK: Cap ideas at 5.\n\n" in prompts[0]
+        assert "FEEDBACK: @" not in prompts[0]
+        assert str(fb) not in prompts[0]
+
+    def test_feedback_bare_at_asks_for_a_path(self, boost, installed):
+        r = boost("evolve", "brainstorming", "--feedback", "@", expect=1)
+        assert "--feedback @ needs a file path" in r.err
+        assert "Is a directory" not in r.err
+        assert "evolving brainstorming" not in r.out
+
     def test_feedback_at_file_reads_the_file(self, boost, installed, tmp_path):
         fb = tmp_path / "feedback.txt"
         fb.write_text("Cap ideas at 5; prefer bullet points\n", encoding="utf-8")
@@ -685,7 +721,7 @@ class TestEvolve:
         r = boost("info", "brainstorming")
         assert "update available" not in r.out
         assert "[ahead of tap]" in r.out
-        assert "(older — the installed copy is ahead of the tap)" in r.out
+        assert "(older than installed)" in r.out
         assert "[pinned]" in r.out
         r = boost("outdated")
         assert "everything up to date" in r.out

@@ -1429,15 +1429,29 @@ class TestInfoVersionRelation:
         r = boost("info", "brainstorming")
         assert "[update available]" in r.out
         assert re.search(r"latest\s+1\.4\.0\s+\(update available\)", r.out)
-        assert "ahead of the tap" not in r.out
+        assert "older than installed" not in r.out
 
     def test_newer_install_is_ahead_not_an_update(self, boost, installed):
         self._set_lock_version("1.4.1")
         r = boost("info", "brainstorming")
         assert "update available" not in r.out
         assert "[ahead of tap]" in r.out
-        assert re.search(r"latest\s+1\.4\.0\s+\(older — the installed copy "
-                         r"is ahead of the tap\)", r.out)
+        assert re.search(r"latest\s+1\.4\.0\s+\(older than installed\)",
+                         r.out)
+
+    def test_ahead_row_fits_a_60_column_pane(self, boost, installed,
+                                             monkeypatch):
+        # kv does not wrap, and the first wording of this row ran it to 71
+        # columns: "(older — the installed copy is ahead of the tap)".
+        self._set_lock_version("1.4.1")
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("info", "brainstorming")
+        row = [ln for ln in r.out.split("\n")
+               if re.match(r"\s+latest\s", ln)]
+        assert len(row) == 1, r.out
+        assert len(row[0]) <= 60, row[0]
+        for ln in r.out.split("\n"):
+            assert len(ln) <= 60, ln
 
     def test_same_version_spelled_differently_is_neither(self, boost, installed):
         self._set_lock_version("1.4")

@@ -452,15 +452,23 @@ def read_text_arg(value: str, flag: str, stdin=None) -> str:
         empty = ("%s - read nothing from stdin" % flag,
                  "pipe the text in, or pass it as the value itself")
     elif value.startswith("@"):
-        path = paths.expand(value[1:])
+        name = value[1:]
+        hint = ("`%s @FILE` reads FILE; pass the text itself, or `-` to read "
+                "stdin" % flag)
+        # A bare `@` is Path(""), the current directory, which read as the
+        # riddle "can't read --feedback @: Is a directory".
+        if not name.strip():
+            raise BoostError("%s @ needs a file path" % flag, hint=hint)
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            # Replaced, not strict: a stray byte would otherwise escape as a
+            # UnicodeDecodeError, which is not an OSError, i.e. a traceback.
+            text = paths.expand(name).read_text(encoding="utf-8",
+                                                errors="replace")
         except OSError as e:
             raise BoostError("can't read %s %s: %s"
                              % (flag, value, e.strerror or e),
-                             hint="`%s @FILE` reads FILE; pass the text "
-                                  "itself, or `-` to read stdin" % flag) from None
-        empty = ("%s %s: %s is empty" % (flag, value, value[1:]),
+                             hint=hint) from None
+        empty = ("%s %s: %s is empty" % (flag, value, name),
                  "write the text into the file, or pass it as the value itself")
     else:
         text = value
