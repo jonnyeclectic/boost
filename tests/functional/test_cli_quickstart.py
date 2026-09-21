@@ -56,6 +56,51 @@ class TestQuickstartDryRun:
             assert str(default["name"]) in res.out
 
 
+class TestQuickstartDryRunListOrCount:
+    """The dry run lists pending registries up to the shared threshold.
+
+    It used a bare 12 while the closing failure note used
+    `bootstrap.MAX_NAMED_REGISTRIES`; they now share the constant, and this
+    pins the dry run's side at the boundary. The second parametrisation moves
+    the constant, so a literal of any value fails one case or the other.
+    """
+
+    @pytest.fixture(params=["shipped", "moved"])
+    def cap(self, request, monkeypatch):
+        from boost_cli.core import bootstrap
+        if request.param == "moved":
+            monkeypatch.setattr(bootstrap, "MAX_NAMED_REGISTRIES", 3)
+        return bootstrap.MAX_NAMED_REGISTRIES
+
+    @staticmethod
+    def _pending(monkeypatch, count):
+        from boost_cli.core import config
+        # Zero-padded, so "reg/p01" is never a substring of "reg/p10".
+        names = ["reg/p%02d" % i for i in range(count)]
+        monkeypatch.setattr(config, "DEFAULT_TAPS",
+                            [{"name": n, "url": "https://example.invalid/%s" % n}
+                             for n in names])
+        return names
+
+    def test_exactly_the_threshold_is_listed_by_name(self, boost, monkeypatch,
+                                                     cap):
+        names = self._pending(monkeypatch, cap)
+        lines = [ln.strip() for ln in boost("quickstart",
+                                            "--dry-run").out.splitlines()]
+        for name in names:
+            assert "would tap %s" % name in lines
+        assert not any(ln.startswith("would tap %d registries" % cap)
+                       for ln in lines)
+
+    def test_one_past_the_threshold_is_counted_instead(self, boost,
+                                                       monkeypatch, cap):
+        names = self._pending(monkeypatch, cap + 1)
+        out = boost("quickstart", "--dry-run").out
+        assert "would tap %d registries (0 pinned" % (cap + 1) in out
+        for name in names:
+            assert name not in out
+
+
 class TestQuickstartCatalog:
     """`--catalog` is the "search everything" entry point."""
 
@@ -216,43 +261,56 @@ class TestEveryZeroShardReasonNamesItself:
         assert "boost-skill-cli[rag]" not in out
 
 
+def _fake_add_many(monkeypatch, outcomes, entries=3, index=None):
+    """Answer `registry.add_many` with one scripted outcome per default tap.
+
+    `outcomes` holds "ok", "fail" or "skip" per registry in
+    `config.DEFAULT_TAPS` order; `entries` is what the keyword index reports
+    afterwards, and `index` replaces `catalog.rebuild_tap`. Returns the dict
+    the fake records its arguments in.
+    """
+    from boost_cli.core import catalog, config, registry
+
+    class FakeTap:
+        def __init__(self, name):
+            self.name = name
+            self.safe_name = name.replace("/", "__")
+
+    names = [str(d["name"]) for d in config.DEFAULT_TAPS]
+    assert len(outcomes) == len(names), "one outcome per default registry"
+    calls: dict = {}
+
+    def add_many(urls, curated=False, pins=None, jobs=None, on_done=None):
+        calls["pins"] = pins
+        calls["urls"] = list(urls)
+        rows = []
+        for name, kind in zip(names, outcomes, strict=True):
+            if kind == "skip":
+                rows.append({"spec": name, "name": name, "ok": False,
+                             "skipped": True, "error": "already tapped"})
+            elif kind == "fail":
+                rows.append({"spec": name, "name": name, "ok": False,
+                             "error": "repository not found"})
+            else:
+                rows.append({"spec": name, "name": name, "ok": True,
+                             "tap": FakeTap(name)})
+        return rows
+
+    monkeypatch.setattr(registry, "add_many", add_many)
+    monkeypatch.setattr(catalog, "rebuild_tap",
+                        index or (lambda tap: [{"name": "x"}]))
+    monkeypatch.setattr("boost_cli.core.rag.build",
+                        lambda *a, **k: {"entries": entries})
+    return calls
+
+
 class TestQuickstartTapping:
     """The real tap path, with the network replaced rather than the command."""
 
     @pytest.fixture()
     def fake_taps(self, monkeypatch):
-        """`add_many` answers with one of each outcome, in order."""
-        from boost_cli.core import catalog, config, registry
-
-        class FakeTap:
-            def __init__(self, name):
-                self.name = name
-                self.safe_name = name.replace("/", "__")
-
-        names = [str(d["name"]) for d in config.DEFAULT_TAPS]
-        calls = {}
-
-        def add_many(urls, curated=False, pins=None, jobs=None, on_done=None):
-            calls["pins"] = pins
-            calls["urls"] = list(urls)
-            out = []
-            for i, name in enumerate(names):
-                if i == 0:
-                    out.append({"spec": name, "name": name, "ok": False,
-                                "skipped": True, "error": "already tapped"})
-                elif i == 1:
-                    out.append({"spec": name, "name": name, "ok": False,
-                                "error": "repository not found"})
-                else:
-                    out.append({"spec": name, "name": name, "ok": True,
-                                "tap": FakeTap(name)})
-            return out
-
-        monkeypatch.setattr(registry, "add_many", add_many)
-        monkeypatch.setattr(catalog, "rebuild_tap", lambda tap: [{"name": "x"}])
-        monkeypatch.setattr("boost_cli.core.rag.build",
-                            lambda *a, **k: {"entries": 3})
-        return calls
+        """`add_many` answers already-tapped, not-found, then five clones."""
+        return _fake_add_many(monkeypatch, ["skip", "fail"] + ["ok"] * 5)
 
     def test_it_reports_each_outcome_and_survives_a_bad_registry(
             self, boost, fake_taps):
@@ -303,6 +361,243 @@ class TestQuickstartTapping:
         from boost_cli.core import config
         boost("quickstart", "--no-vectors")
         assert fake_taps["urls"] == [str(d["url"]) for d in config.DEFAULT_TAPS]
+
+
+class TestQuickstartReadiness:
+    """quickstart may only say "ready" when `boost search` can answer.
+
+    With every registry unreachable it failed 0-for-7, printed "✓ indexed 0
+    items" and "✓ ready — try `boost search brainstorming`", and exited 0 —
+    while that `boost search` exits 1 with "no taps configured". The two traps
+    a fix must dodge are pinned beside it: a rerun where everything is already
+    tapped (zero clones succeed, and it is fine) and one bad registry among
+    good ones (named, never fatal).
+    """
+
+    @pytest.fixture()
+    def seven(self):
+        from boost_cli.core import config
+        return [str(d["name"]) for d in config.DEFAULT_TAPS]
+
+    def test_every_tap_failing_exits_non_zero_and_claims_nothing(
+            self, boost, monkeypatch, seven):
+        _fake_add_many(monkeypatch, ["fail"] * len(seven), entries=0)
+        res = boost("quickstart", "--no-vectors", expect=1)
+        both = _flat(res.out + res.err)
+        assert "not ready — none of the %d registries could be tapped" \
+            % len(seven) in both
+        assert "check the network" in both
+        # The claim has to go, not just the exit code: a human reads the last
+        # green tick, not `$?`.
+        assert "✓ ready" not in both
+        assert "✓ indexed" not in both
+        # The error already says "none of the 7"; a note saying "7 of 7" beside
+        # it would be the same fact twice.
+        assert "of %d registries could not be tapped" % len(seven) not in both
+
+    def test_every_tap_failing_beside_an_existing_index_still_fails(
+            self, boost, monkeypatch, seven):
+        # Items from an earlier run are real — so they are reported, not
+        # called empty — but this run tapped nothing it set out to.
+        _fake_add_many(monkeypatch, ["fail"] * len(seven), entries=500)
+        res = boost("quickstart", "--no-vectors", expect=1)
+        both = _flat(res.out + res.err)
+        assert "✓ indexed 500 items" in both
+        assert "the 500 items already indexed are unaffected" in both
+
+    @staticmethod
+    def _unreadable(tap):
+        from boost_cli.errors import BoostError
+        raise BoostError("catalog unreadable")
+
+    def test_clones_that_cannot_be_indexed_are_not_blamed_on_the_network(
+            self, boost, monkeypatch, seven):
+        # Every clone arrived and add_many configured it; only the index
+        # failed. "Could not be tapped … check the network" was wrong on both
+        # counts, and a rerun would skip every one as already tapped.
+        _fake_add_many(monkeypatch, ["ok"] * len(seven), entries=0,
+                       index=self._unreadable)
+        res = boost("quickstart", "--no-vectors", expect=1)
+        both = _flat(res.out + res.err)
+        assert "could not index %s: catalog unreadable" % seven[0] in both
+        assert ("not ready — none of the %d registries could be indexed, so "
+                "nothing is searchable" % len(seven)) in both
+        assert "configured, so a rerun skips them" in both
+        assert "`boost doctor` names what each one is missing" in both
+        assert "could be tapped" not in both
+        assert "network" not in both
+
+    def test_clones_that_cannot_be_indexed_beside_an_existing_index(
+            self, boost, monkeypatch, seven):
+        _fake_add_many(monkeypatch, ["ok"] * len(seven), entries=500,
+                       index=self._unreadable)
+        res = boost("quickstart", "--no-vectors", expect=1)
+        both = _flat(res.out + res.err)
+        assert ("none of the %d registries could be indexed; the 500 items "
+                "already indexed are unaffected" % len(seven)) in both
+        assert "network" not in both
+
+    def test_clone_and_index_failures_together_name_both_remedies(
+            self, boost, monkeypatch, seven):
+        _fake_add_many(monkeypatch, ["fail"] + ["ok"] * (len(seven) - 1),
+                       entries=0, index=self._unreadable)
+        res = boost("quickstart", "--no-vectors", expect=1)
+        both = _flat(res.out + res.err)
+        assert ("none of the %d registries could be set up: 1 could not be "
+                "tapped and %d could not be indexed"
+                % (len(seven), len(seven) - 1)) in both
+        assert "check the network" in both
+        assert ("`boost doctor` names what each registry that could not be "
+                "indexed is missing") in both
+
+    def test_one_unindexable_registry_is_named_as_such_and_exits_clean(
+            self, boost, monkeypatch, seven):
+        from boost_cli.errors import BoostError
+
+        def first_unreadable(tap):
+            if tap.name == seven[0]:
+                raise BoostError("catalog unreadable")
+            return [{"name": "x"}]
+
+        _fake_add_many(monkeypatch, ["ok"] * len(seven),
+                       index=first_unreadable)
+        res = boost("quickstart", "--no-vectors", expect=0)
+        both = _flat(res.out + res.err)
+        assert ("1 of %d registries could not be indexed: %s"
+                % (len(seven), seven[0])) in both
+        assert "could not be tapped" not in both
+        assert "ready — try `boost search brainstorming`" in both
+
+    def test_one_bad_registry_is_named_at_the_end_and_still_exits_clean(
+            self, boost, monkeypatch, seven):
+        _fake_add_many(monkeypatch, ["fail"] + ["ok"] * (len(seven) - 1))
+        res = boost("quickstart", "--no-vectors", expect=0)
+        both = _flat(res.out + res.err)
+        assert "ready — try `boost search brainstorming`" in both
+        # Named twice: once as it happened, once where the eye lands.
+        assert "could not tap %s: repository not found" % seven[0] in both
+        assert ("1 of %d registries could not be tapped: %s"
+                % (len(seven), seven[0])) in both
+
+    def test_a_rerun_with_everything_already_tapped_exits_clean(
+            self, boost, monkeypatch, seven):
+        # The trap: add_many answers `skipped` for all seven, so zero results
+        # carry ok=True on a machine that is perfectly set up.
+        _fake_add_many(monkeypatch, ["skip"] * len(seven), entries=42)
+        res = boost("quickstart", "--no-vectors", expect=0)
+        both = res.out + res.err
+        assert "ready — try `boost search brainstorming`" in both
+        assert "could not be tapped" not in both
+
+    def test_a_top_up_whose_only_new_registry_fails_exits_clean(
+            self, boost, monkeypatch, seven):
+        # Six already here, the seventh 404s: nothing cloned this run, but the
+        # machine is set up, so this is a partial failure and not a total one.
+        _fake_add_many(monkeypatch, ["skip"] * (len(seven) - 1) + ["fail"])
+        res = boost("quickstart", "--no-vectors", expect=0)
+        both = _flat(res.out + res.err)
+        assert ("1 of %d registries could not be tapped: %s"
+                % (len(seven), seven[-1])) in both
+        assert "ready — try `boost search brainstorming`" in both
+
+    def test_registries_that_arrive_empty_are_not_ready(
+            self, boost, monkeypatch, seven):
+        _fake_add_many(monkeypatch, ["ok"] * len(seven), entries=0)
+        res = boost("quickstart", "--no-vectors", expect=1)
+        both = _flat(res.out + res.err)
+        assert "✓ indexed 0 items" not in both
+        assert "not ready — the keyword index is empty" in both
+        assert "boost doctor" in both
+
+    def test_a_clean_run_prints_exactly_what_it_printed_before(
+            self, boost, monkeypatch, seven):
+        """No failure, no change — the regression guard on the happy path."""
+        _fake_add_many(monkeypatch, ["ok"] * len(seven))
+        res = boost("quickstart", "--no-vectors", expect=0)
+        lines = [ln for ln in (res.out + res.err).splitlines() if ln.strip()]
+        assert lines == (
+            ["  ✓ tapped %s (1 items)" % n for n in seven]
+            + ["  ✓ indexed 3 items for keyword search",
+               "  skipped vectors as asked",
+               "  ✓ ready — try `boost search brainstorming`"])
+
+    def test_a_dry_run_claims_no_readiness_either_way(self, boost):
+        # It changed nothing, so it has nothing to be ready or unready about.
+        res = boost("quickstart", "--dry-run", expect=0)
+        assert "ready" not in res.out + res.err
+
+
+class TestQuickstartReadinessOverRealClones:
+    """The same verdict with nothing faked: real `add_many`, real index.
+
+    The registries are local paths — the fixture tap, and a path that does not
+    exist — so a clone genuinely succeeds or genuinely fails, offline.
+    """
+
+    @pytest.fixture()
+    def registries(self, monkeypatch):
+        from boost_cli.core import config
+
+        def use(*urls):
+            monkeypatch.setattr(config, "DEFAULT_TAPS",
+                                [{"name": "r%d" % i, "url": str(u)}
+                                 for i, u in enumerate(urls)])
+        return use
+
+    def test_no_reachable_registry_exits_one_and_search_agrees(
+            self, boost, registries, tmp_path):
+        registries(tmp_path / "gone-a", tmp_path / "gone-b")
+        res = boost("quickstart", "--no-vectors", expect=1)
+        assert "not ready" in res.out + res.err
+        # The command README runs next reaches the same verdict.
+        boost("search", "brainstorming", expect=1)
+
+    def test_a_reachable_registry_beside_a_dead_one_is_ready(
+            self, boost, registries, fixture_tap_src, tmp_path):
+        registries(fixture_tap_src, tmp_path / "gone")
+        res = boost("quickstart", "--no-vectors", expect=0)
+        both = _flat(res.out + res.err)
+        assert "1 of 2 registries could not be tapped" in both
+        assert "ready — try `boost search brainstorming`" in both
+
+    def test_a_real_clone_that_will_not_index_is_configured_not_offline(
+            self, boost, registries, fixture_tap_src, monkeypatch):
+        # The premise of the index-failure hint, over the real add_many and
+        # the real rebuild_tap. Its one BoostError today is "not cloned", so
+        # the clone is taken away between the two — the clone succeeded, the
+        # registry is in the config, and the network was never the problem.
+        import shutil
+
+        from boost_cli.core import catalog, registry
+        real = catalog.rebuild_tap
+
+        def clone_gone(tap):
+            shutil.rmtree(tap.path)
+            return real(tap)
+
+        registries(fixture_tap_src)
+        monkeypatch.setattr(catalog, "rebuild_tap", clone_gone)
+        res = boost("quickstart", "--no-vectors", expect=1)
+        both = _flat(res.out + res.err)
+        assert "is not cloned" in both
+        assert "the registry could not be indexed" in both
+        assert "none of the 1" not in both
+        assert "`boost doctor` names what it is missing" in both
+        assert "network" not in both
+        # Configured by add_many before the index ran — which is why a rerun
+        # skips it, and why the hint sends the user to doctor instead.
+        assert [t.name for t in registry.list_taps()] == ["fixture-tap"]
+        # And doctor does name the fix, as the hint promises.
+        doctor = _flat(boost("doctor", expect=None).out)
+        assert "tap fixture-tap not cloned — run `boost update`" in doctor
+
+    def test_a_rerun_over_a_working_machine_stays_ready(
+            self, boost, registries, fixture_tap_src):
+        registries(fixture_tap_src)
+        boost("quickstart", "--no-vectors", expect=0)
+        res = boost("quickstart", "--no-vectors", expect=0)
+        assert "already tapped" in res.out + res.err
+        assert "ready — try `boost search brainstorming`" in res.out + res.err
 
 
 class TestFetchShards:
