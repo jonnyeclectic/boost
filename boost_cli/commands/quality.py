@@ -707,7 +707,14 @@ def cmd_doctor(argv):
     # never written, so its permissions are not boost's problem and `boost
     # sync` could not act on them.
     for adir in agents.linking_agents().values():
-        if adir.is_dir() and not os.access(str(adir), os.W_OK):
+        block = paths.refuses_writes(adir)
+        if block is not None and paths.in_the_way(block):
+            # A file or a dangling link where the dir belongs. Heal names it,
+            # install skips the agent, and doctor said nothing and exited 0.
+            bad("agent-dir", "%s — %s, then `boost sync` relinks what it "
+                "missed" % (paths.not_writable(adir, block),
+                            paths.write_remedy(block)), wrap=True)
+        elif adir.is_dir() and not os.access(str(adir), os.W_OK):
             # A next action, like the log line below it: without one this was
             # the only issue doctor names that nothing can act on.
             bad("agent-dir", "agent dir %s is not writable — `chmod u+w %s`, "

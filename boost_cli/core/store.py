@@ -1801,6 +1801,13 @@ def sync_plan() -> dict[str, list]:
     """
     lock = lockfile.installed()
     vouches = lock_vouches()
+    # An agent whose skills dir has a file or a dangling link in the way:
+    # `link_agents` skips it, so listing its links as missing made `boost
+    # sync` print "everything in sync" over the repair it had just skipped.
+    # Its links are blocked, by what is in the way.
+    in_the_way = {a: b for a, d in agents.linking_agents().items()
+                  if (b := paths.refuses_writes(d)) is not None
+                  and paths.in_the_way(b)}
     plan: dict[str, list] = {"missing_store": [], "missing_links": [],
             "blocked_links": [], "stale_links": [], "orphaned_store": [],
             "unrecorded_store": [], "missing_materializations": [],
@@ -1855,6 +1862,10 @@ def sync_plan() -> dict[str, list]:
         linking = agents.linking_agents()
         in_scope = scoped_agents(entry, linking)
         for agent, adir in in_scope.items():
+            if agent in in_the_way:
+                plan["blocked_links"].append(
+                    (name, agent, str(in_the_way[agent])))
+                continue
             link = adir / name
             # A symlink is boost's to replace even when it dangles; anything
             # else that exists is someone else's file and stays put.

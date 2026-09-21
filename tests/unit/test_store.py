@@ -3460,6 +3460,21 @@ class TestAnUnwritableAgentDirIsSkipped:
     def test_a_writable_dir_reports_nothing_unwritable(self, tap, entry):
         assert store.install(entry).unwritable == []
 
+    def test_sync_plan_keeps_its_link_missing_not_blocked(self, tap, entry):
+        # A read-only dir is fixed by a chmod, after which sync makes the
+        # link. Calling it blocked would print sync's "move or delete the
+        # path" advice for a directory that must stay where it is.
+        store.install(entry)
+        cursor = paths.home() / ".cursor" / "skills"
+        (cursor / "brainstorming").unlink()
+        cursor.chmod(0o500)
+        try:
+            plan = store.sync_plan()
+        finally:
+            cursor.chmod(0o700)
+        assert ("brainstorming", "cursor") in plan["missing_links"]
+        assert plan["blocked_links"] == []
+
 
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="creating a symlink needs a privilege on Windows")
@@ -3494,6 +3509,17 @@ class TestSomethingInTheWayOfAnAgentDirIsSkipped:
         assert store.link_refusal(*res.blocked[0]) == (
             "~/.cursor/skills cannot be created: ~/.cursor is not a directory",
             "move ~/.cursor aside")
+
+    def test_sync_plan_calls_its_links_blocked_not_missing(self, tap, entry,
+                                                           tmp_path):
+        store.install(entry)
+        cursor = paths.home() / ".cursor" / "skills"
+        shutil.rmtree(cursor)
+        cursor.symlink_to(tmp_path / "nowhere")
+        plan = store.sync_plan()
+        assert plan["blocked_links"] == [
+            ("brainstorming", "cursor", str(cursor))]
+        assert plan["missing_links"] == []
 
 
 class TestALinkFailureNothingExplainsStaysLoud:

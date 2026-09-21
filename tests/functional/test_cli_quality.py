@@ -2314,6 +2314,34 @@ class TestAnInstallPastSomethingInTheWay:
         assert not (paths.store_dir() / "brainstorming").exists()
         assert lockfile.get_skill("brainstorming") is None
 
+    def test_sync_doctor_and_heal_name_it_until_it_is_moved(
+            self, boost, claude, tmp_path):
+        claude.mkdir()
+        link = claude / "skills"
+        link.symlink_to(tmp_path / "nowhere")
+        boost("install", "brainstorming")
+        blocked = "brainstorming → claude-code (~/.claude/skills in the way)"
+        # sync listed the link as missing, link_agents skipped it, and sync
+        # printed "everything in sync".
+        r = boost("sync")
+        sync = self._flat(r.out + r.err)
+        assert blocked in sync
+        assert "everything in sync" not in sync
+        assert blocked in self._flat(boost("sync", "--diff").out)
+        r = boost("doctor", expect=1)
+        assert ("~/.claude/skills is not a directory — move ~/.claude/skills "
+                "aside, then `boost sync` relinks what it missed"
+                in self._flat(r.out + r.err))
+        heal = self._flat(boost("heal", "--dry-run", expect=1).out)
+        assert "would link brainstorming → claude-code" not in heal
+        assert "move ~/.claude/skills aside" in heal
+        # Moved aside, the same sync makes the link.
+        link.unlink()
+        assert "linked brainstorming → claude-code" in boost("sync").out
+        assert (link / "brainstorming").is_symlink()
+        r = boost("doctor", expect=None)
+        assert "~/.claude/skills is not a directory" not in r.out + r.err
+
 
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="chmod can't make a directory unwritable on Windows")
