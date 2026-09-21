@@ -1465,6 +1465,38 @@ class TestSearchLayout:
     KINDS = ("skill", "workflow", "rule")
     TAPS = ("anthropics/skills", "obra/superpowers", "sdi/agent-rules")
 
+    def test_the_drop_order_boundaries_are_exact(self):
+        # Backfilled while touching search_layout: every threshold below had
+        # a surviving off-by-one mutant. A 32-cell name, `[skill]`, a 20-cell
+        # tap: at 98 columns the description gets exactly the 24 cells that
+        # keep the tap; one column less and the tap goes.
+        names, kinds, taps = ["n" * 32], ["skill"], ["t" * 20]
+        lay = output.search_layout(98, names, kinds, taps)
+        assert (lay.tap_w, lay.desc_w) == (20, 24)
+        assert output.search_layout(99, names, kinds, taps).desc_w == 25
+        assert output.search_layout(97, names, kinds, taps).tap_w == 0
+        # The name cap steps 32 -> 24 -> 16 -> 12 as the pane narrows.
+        assert output.search_layout(40, names, kinds, taps).name_w == 16
+        assert output.search_layout(34, names, kinds, taps).name_w == 12
+
+    def test_no_pane_plans_nothing_to_fit(self):
+        # A pipe (pane_width() is None): the caps and drops exist to fit a
+        # pane, and there is none. The tap and name are grep/info targets.
+        tap = "sickn33/antigravity-awesome-skills"          # 34 cells
+        name = "n" * 40
+        lay = output.search_layout(None, [name, "x"], ["workflow", "skill"],
+                                   [tap, "a/b"])
+        assert (lay.name_w, lay.kind_w, lay.tap_w) == (40, 10, 34)
+        assert lay.desc_w >= 10 ** 6
+        row = output.format_search_row(name, "d" * 500, "skill", tap, 1.0,
+                                       curated=False, installed=False, lay=lay)
+        assert tap in row and name in row and "d" * 500 in row
+        assert "…" not in row
+
+    def test_no_pane_with_nothing_shown_keeps_the_empty_columns_empty(self):
+        lay = output.search_layout(None, [], [], [])
+        assert (lay.name_w, lay.kind_w, lay.tap_w) == (1, 0, 0)
+
     def test_name_column_fits_the_widest_shown_name(self):
         lay = output.search_layout(100, self.NAMES, self.KINDS, self.TAPS)
         assert lay.name_w == len("commit-messages")

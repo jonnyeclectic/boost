@@ -653,6 +653,10 @@ _SEARCH_INDENT = 2
 _CURATED_TAIL_W = 11
 
 
+#: A width no line reaches: what an unfitted plan (a pipe) measures against.
+_UNPANED = 10 ** 6
+
+
 @dataclass(frozen=True)
 class SearchLayout:
     """Column plan for one search-result screen, in visible cells.
@@ -667,9 +671,15 @@ class SearchLayout:
     desc_w: int          # room for an uncurated row's description
 
 
-def search_layout(cols: int, names: Sequence[str], kinds: Sequence[str],
-                  taps: Sequence[str]) -> SearchLayout:
+def search_layout(cols: int | None, names: Sequence[str],
+                  kinds: Sequence[str], taps: Sequence[str]) -> SearchLayout:
     """Plan the search-result columns for a ``cols``-wide terminal.
+
+    ``cols=None`` means there is no pane at all (a pipe — see
+    :func:`pane_width`): nothing is fitted, so no column is dropped, capped or
+    truncated. The name and the tap are what ``grep owner/repo`` and ``boost
+    info owner/repo:name`` need whole, and a 20-cell tap cap left
+    ``sickn33/antigravity…`` in a pipe that has room for anything.
 
     Sizing: the name column fits the widest shown name (capped at 32), the
     kind column the widest shown kind label (capped at ``[workflow]``'s 10),
@@ -685,6 +695,12 @@ def search_layout(cols: int, names: Sequence[str], kinds: Sequence[str],
     measures within ``cols`` (indent included) for any terminal 40 cells wide
     or more.
     """
+    if cols is None:
+        return SearchLayout(
+            cols=_UNPANED, name_w=max((visible_len(n) for n in names), default=1),
+            kind_w=max((visible_len(kind_label(k)) for k in kinds), default=0),
+            tap_w=max((visible_len(t) for t in taps), default=0),
+            desc_w=_UNPANED)
     avail = cols - _SEARCH_INDENT - _SEARCH_FIXED
     name_w = min(max((visible_len(n) for n in names), default=1), 32)
     kind_w = 0

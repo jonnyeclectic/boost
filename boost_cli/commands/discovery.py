@@ -237,7 +237,11 @@ def cmd_search(argv):
     # One column plan for the whole screen (name, kind, tap, description with
     # a stated drop order), one assembler per row — both pure and unit-tested
     # in core.output, so this loop only feeds and prints.
-    lay = out.search_layout(out.term_width(),
+    # Against the *pane*: a pipe has none, and planning for `term_width()`'s
+    # assumed 80 dropped the TAP column (it needs 84), so `boost search x |
+    # grep owner/repo` found nothing the same search shows on a wide pane.
+    # No pane (None) plans nothing to fit — see `search_layout`.
+    lay = out.search_layout(out.pane_width(),
                             [e["name"] for e, _ in shown],
                             [str(e.get("kind") or "skill") for e, _ in shown],
                             [str(e.get("tap") or "") for e, _ in shown])
