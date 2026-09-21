@@ -645,10 +645,12 @@ attempt for an hour (`RETRY_AFTER`): measured on a 5-chunk store, each search
 paid one failed fetch (~3.6 s against 0.1 s) while doctor said "active".
 `boost reindex --dense` retries at once, because it is the remedy the hint
 names. `dense.ready()` still answers for the store alone. `dense.fix_hint()` maps
-whichever state it is to the one next action — `boost doctor`, `boost search`,
-the MCP `SEARCH ENGINE` line and both shard surfaces (`reindex --fetch-shards`,
-`update --shards`) all read that same table, so they can't give contradictory
-advice.
+whichever state it is to the one next action — `boost doctor`, `boost search`
+and the MCP `SEARCH ENGINE` line all read that same table, so they can't give
+contradictory advice. The shard surfaces (`reindex --fetch-shards`, `update
+--shards`, `quickstart` and `boost update`'s vector resync) answer a refused
+manifest through `shards.remedy()`, which hands back to that table, with the
+whole status, whenever the store or a missing provider is the real answer.
 
 **The dense store ranks twice, and `vec0` is why.** `sqlite-vec` has no ANN
 index: a float32 `MATCH` scores *every* vector in the store, which on a real

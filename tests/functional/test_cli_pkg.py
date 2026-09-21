@@ -2126,11 +2126,6 @@ class TestImportEdges:
 _URL = "https://git.example.test/team/skills.git"
 
 
-def _flat(text):
-    """Output with wrapping undone: the import warnings fold to the pane."""
-    return " ".join(text.split())
-
-
 def _git(repo, *args):
     return subprocess.run(
         ["git", "-c", "user.email=t@boost.test", "-c", "user.name=t", *args],
