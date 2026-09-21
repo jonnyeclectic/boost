@@ -2,14 +2,14 @@
 id: dense-ready-but-embedder-cannot-run
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Retrieval eval
 complexity: M
 impact: Med
 wow: 3
 note: localembed.available() (localembed.py:85) tests whether onnxruntime and tokenizers *i…
 order: 205
-owner:
+owner: loop/dense-embedder-cannot-run
 pr:
 title: status() has no state for "ready but the embedder does not work": doctor green-ticks a tier that never ran, the search hint is suppressed, and every search re-pays the failed model fetch
 ---
@@ -51,3 +51,5 @@ PRIOR DISCLOSURE (the finder declared it, and I confirmed it): docs/roadmap/item
 <b>Why it is worth doing.</b> This is the exact silent-BM25 failure <code>prerequisites-and-semantic-search-setup</code> shipped a hint to close, and the hint is blind to it: the user is told dense is active by doctor, told nothing by search, and pays several seconds per query for a download that can never succeed. A user who runs <code>boost reindex --dense</code> on a laptop with the model cached and then searches from a locked-down network or CI runner gets a slower search than if they had never enabled dense at all, with every surface reporting health.
 
 <em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em>
+
+<b>Shipped.</b> <code>dense.status()</code> gains a last rung, <code>model-unavailable</code>, read from a failure record that <code>core/localembed.py</code> now keeps in memory and in <code>cache/models/&lt;rev&gt;/unavailable.json</code> — never probed, since the probe is the fetch. A failed fetch or load holds back the next attempt for an hour; <code>boost reindex --dense</code>, the remedy <code>fix_hint</code> names, retries at once. Re-measured with a proxy that drops every connection after 3.5 s: before, five searches cost 3.63/3.65/3.66 s with one CONNECT each, no hint, and doctor exited 0 with a green tick; after, the first costs 4.02 s and the next four 0.11–0.12 s (one CONNECT in total), every search prints the hint, doctor exits 1 naming the failure, and the MCP engine line says BM25. In one process, three queries went from 3 × 3.5 s to 3.54 s + 0.003 s + 0.003 s.

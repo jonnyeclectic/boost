@@ -32,11 +32,34 @@ state, L2-normalised — *not* a mean over tokens. Using mean pooling here would
 still produce 384 plausible-looking floats and quietly worse retrieval, which
 is the kind of bug an eval catches and a unit test does not, so the choice is
 stated here and asserted against a known-good pair in the tests.
+
+When the model cannot be had
+----------------------------
+A store built on one machine often gets searched on another — a CI runner, a
+laptop behind a proxy — where the fetch fails. Nothing on disk says so, so
+every ``boost search`` used to pay for the attempt again: measured at one
+failed fetch and ~3.5 s per search against 0.1 s with dense switched off, while
+``dense.status()`` still said "ready". A failed fetch or load is therefore
+recorded (:func:`last_failure`): in this process, so a long-lived MCP server
+stops retrying, and in a marker file beside the model, so the next process
+does too. ``dense.status()`` reads that record to name the state.
+
+The record expires for *retries* after :data:`RETRY_AFTER`, not for
+reporting. A permanent record would keep a laptop on BM25 for good after one
+fetch on a captive network, with the hint blaming a network that has since
+recovered; no record at all is the per-search cost above. An hour costs one
+failed attempt per hour on a machine that can never reach the host, and
+``boost reindex --dense`` retries at once (:func:`forget_failure`). A failed
+*fetch* stops holding anything back once the files are on disk — copied in by
+hand, or fetched by another process — because loading them needs no network.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import json
 import shutil
+import time
 from pathlib import Path
 
 from . import paths
@@ -63,8 +86,18 @@ FILES = {
 # matches how the chunker already feeds this.
 MAX_TOKENS = 512
 
+# Seconds a recorded failure holds back the next fetch. See the module
+# docstring for why it is neither zero nor forever.
+RETRY_AFTER = 3600
+
 _session = None
 _tokenizer = None
+# The last failed fetch or load in this process: {"stage", "error", "at"}. Kept
+# beside the marker file, not instead of it, so a process whose cache dir is
+# read-only still stops retrying.
+_failure: dict | None = None
+# Why the last `_fetch` returned False, for the record above.
+_fetch_error = ""
 
 
 def _deps():
@@ -115,8 +148,9 @@ def _fetch(rel: str, dest: Path, size: int, digest: str) -> bool:
 
     Downloads to a temporary name and only renames after the hash matches, so
     an interrupted fetch can never be mistaken for a complete one on the next
-    run.
+    run. The reason for a False is left in ``_fetch_error``.
     """
+    global _fetch_error
     from . import nethttp
     tmp = dest.with_suffix(dest.suffix + ".part")
     try:
@@ -124,17 +158,116 @@ def _fetch(rel: str, dest: Path, size: int, digest: str) -> bool:
         with nethttp.urlopen(_BASE + rel, timeout=600) as resp, \
                 tmp.open("wb") as out:
             shutil.copyfileobj(resp, out, 1 << 20)
-    except Exception:      # network/disk failure degrades to BM25
+    except Exception as exc:      # network/disk failure degrades to BM25
         tmp.unlink(missing_ok=True)
+        _fetch_error = _describe(exc)
         return False
     if not _verified(tmp, size, digest):
         tmp.unlink(missing_ok=True)
+        _fetch_error = "%s did not match its pinned size and sha256" % rel
         return False
     try:
         tmp.replace(dest)
-    except OSError:
+    except OSError as exc:
         tmp.unlink(missing_ok=True)
+        _fetch_error = _describe(exc)
         return False
+    return True
+
+
+def _describe(exc: BaseException) -> str:
+    """One line naming an exception, short enough for a doctor row."""
+    text = ("%s: %s" % (type(exc).__name__, exc)).splitlines()[0]
+    return text[:160]
+
+
+def failure_path() -> Path:
+    """The marker recording a failed fetch or load of the pinned model.
+
+    Inside :func:`model_dir`, so moving the pin to a new revision starts with
+    no record, and outside the ``cache/*.json`` glob that ``boost clean``
+    sweeps.
+    """
+    return model_dir() / "unavailable.json"
+
+
+def last_failure() -> dict | None:
+    """The last failed fetch or load of the model, or None when there is none.
+
+    ``{"stage": "fetch" | "load", "error": str, "at": epoch seconds}``. It
+    stands until a load succeeds or :func:`forget_failure` runs — it is what
+    last happened, whatever its age. Cheap enough for every search: a read of
+    a file that is absent on a healthy machine.
+    """
+    if _failure is not None:
+        return dict(_failure)
+    p = failure_path()
+    try:
+        at = p.stat().st_mtime
+    except OSError:
+        return None
+    try:
+        rec = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # A marker that exists but cannot be read still records a failure;
+        # losing the detail must not lose the fact.
+        rec = {}
+    if not isinstance(rec, dict):
+        rec = {}
+    return {"stage": str(rec.get("stage") or "fetch"),
+            "error": str(rec.get("error") or ""), "at": at}
+
+
+def backing_off(now: float | None = None) -> bool:
+    """True while a recorded failure should stop the next load from trying.
+
+    A record dated in the future (a clock set back) does not count: honouring
+    it would hold the model back for however far ahead the clock was. Nor does
+    a failed fetch whose files have since arrived — see the module docstring.
+    """
+    rec = last_failure()
+    if rec is None:
+        return False
+    age = (time.time() if now is None else now) - rec["at"]
+    if not 0 <= age < RETRY_AFTER:
+        return False
+    return rec["stage"] != "fetch" or not _on_disk()
+
+
+def _note_failure(stage: str, error: str) -> None:
+    """Record a failed fetch or load, here and for the next process."""
+    global _failure
+    _failure = {"stage": stage, "error": error, "at": time.time()}
+    # Best effort: a cache dir that cannot be written still gets the
+    # in-process record, which is what a long-lived MCP server needs.
+    with contextlib.suppress(OSError):
+        p = failure_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"stage": stage, "error": error}),
+                     encoding="utf-8")
+
+
+def forget_failure() -> None:
+    """Drop the recorded failure, so the next load tries the fetch again."""
+    global _failure
+    _failure = None
+    with contextlib.suppress(OSError):
+        failure_path().unlink(missing_ok=True)
+
+
+def _on_disk() -> bool:
+    """True when every pinned file is present at its pinned size.
+
+    Size only, never the hash: this decides whether a load would need the
+    network, and :func:`ensure_model` verifies the bytes before any use.
+    """
+    root = model_dir()
+    for rel, (size, _digest) in FILES.items():
+        try:
+            if (root / rel).stat().st_size != size:
+                return False
+        except OSError:
+            return False
     return True
 
 
@@ -151,7 +284,12 @@ def ensure_model() -> Path | None:
 
 
 def _load():
-    """Build and cache the session and tokenizer. False when unavailable."""
+    """Build and cache the session and tokenizer. False when unavailable.
+
+    A failure is recorded (see :func:`last_failure`), and while it is recent
+    the load is not tried again — a failed fetch was paid once per search
+    before, and inside one MCP server once per query.
+    """
     global _session, _tokenizer
     if _session is not None and _tokenizer is not None:
         return True
@@ -161,8 +299,11 @@ def _load():
     # `tokenizers.Tokenizer` on a None.
     if onnxruntime is None or tokenizers is None:
         return False
+    if backing_off():
+        return False
     root = ensure_model()
     if root is None:
+        _note_failure("fetch", _fetch_error or "the download failed")
         return False
     try:
         opts = onnxruntime.SessionOptions()
@@ -177,17 +318,22 @@ def _load():
         tok = tokenizers.Tokenizer.from_file(str(root / "tokenizer.json"))
         tok.enable_truncation(max_length=MAX_TOKENS)
         tok.enable_padding()
-    except Exception:      # a broken model degrades, never raises
+    except Exception as exc:      # a broken model degrades, never raises
+        _note_failure("load", _describe(exc))
         return False
     _session, _tokenizer = session, tok
+    if last_failure() is not None:
+        forget_failure()
     return True
 
 
 def reset() -> None:
-    """Drop the cached session and tokenizer. For tests."""
-    global _session, _tokenizer
+    """Drop the cached session, tokenizer and in-process failure. For tests."""
+    global _session, _tokenizer, _failure, _fetch_error
     _session = None
     _tokenizer = None
+    _failure = None
+    _fetch_error = ""
 
 
 def encode(texts: list[str]) -> list[list[float]] | None:

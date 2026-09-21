@@ -628,7 +628,15 @@ backend, built store) is missing — or `disabled`, a fourth state that is no
 missing link at all but the `BOOST_NO_EMBED` kill switch, which sits **first**
 in the ladder (`embed.provider()` reads it before any key, so every other
 remedy is a measured no-op under it) and is excluded from `degraded`, so a
-deliberate opt-out never moves doctor's exit code. `dense.fix_hint()` maps
+deliberate opt-out never moves doctor's exit code. `model-unavailable` is the
+**last** rung: the store matches, but the local model could not be fetched or
+loaded. `status()` reads a record of that failure and never probes, because
+the probe *is* the 133 MB fetch. `core/localembed.py` keeps the record in
+memory and in `cache/models/<rev>/unavailable.json`, and holds back the next
+attempt for an hour (`RETRY_AFTER`): measured on a 5-chunk store, each search
+paid one failed fetch (~3.6 s against 0.1 s) while doctor said "active".
+`boost reindex --dense` retries at once, because it is the remedy the hint
+names. `dense.ready()` still answers for the store alone. `dense.fix_hint()` maps
 whichever state it is to the one next action — `boost doctor`, `boost search`,
 the MCP `SEARCH ENGINE` line and both shard surfaces (`reindex --fetch-shards`,
 `update --shards`) all read that same table, so they can't give contradictory
