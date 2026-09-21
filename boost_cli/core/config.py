@@ -119,6 +119,38 @@ DEFAULT_TAPS = [
 ]
 
 
+# The one sentence that names where setup lives, and the command it names is
+# `quickstart` rather than `tap --defaults` on purpose: the two setup paths are
+# not equivalent. `quickstart` pins each registry to the commit its published
+# vectors describe and can import those vectors; `tap --defaults` does neither.
+# README leads with quickstart while ~15 source sites route to tap --defaults
+# and none of the newcomer-plausible surfaces (search, doctor, taps, browse,
+# list) named quickstart at all.
+FIRST_RUN_HINT = ("new here? `boost quickstart` taps the starter registries "
+                  "and loads their vectors in one pass")
+
+
+def first_run() -> bool:
+    """True when config.json names no registry, so nothing is searchable yet.
+
+    Lives here rather than beside `registry.list_taps` because `boost --help`
+    asks it, and help already loads this module for its log level: answering
+    through `registry` pulled gitutil, lockfile, policy and subprocess onto the
+    help path for a question this file can answer alone.
+
+    A config.json that exists but cannot be parsed is **not** a first run.
+    `get` folds it into DEFAULTS, where the tap list is empty, but the file
+    being there means boost was set up here and its clones may still be on
+    disk — unknown state, and "new here?" would be a guess dressed as a fact.
+    Read through `jsonstate` directly, not `_read_raw`, which would print the
+    corrupt-file warning a second time on the same screen.
+    """
+    data, err = jsonstate.read_object(paths.config_path())
+    if err is not None:
+        return False
+    return not (data or {}).get("taps")
+
+
 # Path to the bundled curated registry catalog (skills + rules + workflows).
 REGISTRY_CATALOG = paths.package_root() / "data" / "registries.json"
 

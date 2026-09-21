@@ -228,28 +228,28 @@ def _print_first_run_line(cols: int) -> None:
     """Name where setup lives, but only on a machine that has none.
 
     This screen read no state at all, so it was byte-for-byte identical on a
-    virgin machine and a working one — measured md5 a8da6daf on both — and a
-    newcomer met 81 commands with `quickstart` sitting at line 80, in the same
-    dim body type as the other 80. The pointer is one line, it appears only
-    while `registry.first_run()` holds, and it disappears the moment there is
-    a tap: a permanent banner would be noise for every user past their first
-    minute, which is the reason there wasn't one.
+    virgin machine and a working one, and a newcomer met 81 commands with
+    `quickstart` sitting at line 80, in the same dim body type as the other 80.
+    The pointer is one line, it appears only while `config.first_run()` holds,
+    and it disappears the moment there is a tap: a permanent banner would be
+    noise for every user past their first minute, which is the reason there
+    wasn't one.
 
-    Local import so `boost --help` keeps its lazy-import budget (config and
-    registry are stdlib-only, but the rule here is that help imports nothing
-    it does not need), and any failure is swallowed — a broken config must
-    cost the user a hint, never their help screen.
+    Asked of `config`, which help has already loaded for its log level, so the
+    question costs `boost --help` no module it was not importing anyway. Any
+    failure is swallowed — a broken config must cost the user a hint, never
+    their help screen.
     """
     with contextlib.suppress(Exception):
-        from .core import registry
-        if not registry.first_run():
+        from .core import config
+        if not config.first_run():
             return
         print()
         # Wrap, then colour: `out.role` brackets its argument with a start code
         # and a reset, so colouring first and splitting after leaves line one
         # unterminated. The backtick span stays one atomic token, because a
         # `boost quickstart` folded across two lines is not copy-pasteable.
-        for line in out.wrap(registry.FIRST_RUN_HINT, max(cols, 20)):
+        for line in out.wrap(config.FIRST_RUN_HINT, max(cols, 20)):
             print(out.role(line, "muted"))
 
 

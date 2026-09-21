@@ -244,11 +244,12 @@ def _print_tap_next_step(tapped: list[tuple[str, int]]) -> None:
     command that never named what to do next — while `install`, which a user
     only reaches after finding their way here, closes with a framed box.
 
-    Only what actually landed is summarised: a run where every clone failed
-    prints nothing rather than framing a zero, and the per-tap warnings above
-    stay the report of what went wrong.
+    Only what actually landed is summarised, and a run that added nothing to
+    search prints nothing: when every clone failed the per-tap warnings above
+    stay the report of what went wrong, and when the registries held no items
+    "next: boost search <topic>" would send the user to an empty catalog.
     """
-    if not tapped:
+    if not sum(n for _name, n in tapped):
         return
     print(out.panel([registry.tap_summary(tapped),
                      out.role("next: boost search <topic>", "muted")],

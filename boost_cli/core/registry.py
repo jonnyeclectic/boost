@@ -159,29 +159,6 @@ def parse_specs(specs: list[str]) -> list[tuple[str, str]]:
     return [parse_spec(spec) for spec in specs]
 
 
-# The one sentence that names where setup lives, and the command it names is
-# `quickstart` rather than `tap --defaults` on purpose: the two setup paths are
-# not equivalent. `quickstart` pins each registry to the commit its published
-# vectors describe and can import those vectors; `tap --defaults` does neither.
-# README leads with quickstart while ~15 source sites route to tap --defaults
-# and none of the newcomer-plausible surfaces (search, doctor, taps, browse,
-# list) named quickstart at all.
-FIRST_RUN_HINT = ("new here? `boost quickstart` taps the starter registries "
-                  "and loads their vectors in one pass")
-
-
-def first_run() -> bool:
-    """True when no registry is configured, so nothing is searchable yet.
-
-    Lives here, beside the taps it reads, because two surfaces ask it and a
-    second copy would drift: `boost`'s own first screen and anything else that
-    wants to route a newcomer. `list_taps` already answers a malformed config
-    as "no taps" rather than raising, which is the behaviour this needs — a
-    help screen must render on a machine whose config.json is broken.
-    """
-    return not list_taps()
-
-
 def tap_summary(tapped: list[tuple[str, int]]) -> str:
     """"3 registries · 512 items" — what a tap run actually added.
 
