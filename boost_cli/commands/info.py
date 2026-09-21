@@ -251,7 +251,8 @@ def _kind_table(heading, items, extra=None):
     if extra:
         headers = (headers[0], headers[1], headers[2], headers[3], extra[0],
                    headers[4])
-    out.table(rows, headers=headers)
+    # NAME is what `uninstall`/`update`/`cat` take: shown whole or dropped.
+    out.table(rows, headers=headers, whole=("NAME",))
     noun = heading.split()[-1][:-1]  # "installed rules" -> "rule"
     print("  " + out.aurora("%d %s%s installed"
                             % (len(rows), noun, "" if len(rows) == 1 else "s"),
@@ -334,7 +335,10 @@ def cmd_list(argv):
             rows.append((name, e.get("version", "?"), e.get("tap", "?"),
                          "·".join(a.split("-")[0] for a in e.get("agents") or []),
                          " ".join(flags)))
-        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"))
+        # NAME is what `uninstall`/`update`/`cat` take: `brainstorm…` is not
+        # a name any of them accepts, so it is shown whole or dropped.
+        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"),
+                  whole=("NAME",))
         print("  " + out.aurora("%d skill%s installed%s"
                                 % (len(rows), "" if len(rows) == 1 else "s",
                                    " with tag #%s" % args.tag.lstrip("#")
@@ -344,7 +348,8 @@ def cmd_list(argv):
         rows = [(name, e.get("version", "?"), e.get("tap", "?"),
                  "·".join(a.split("-")[0] for a in e.get("agents") or []))
                 for name, e in sorted(project.items())]
-        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS"))
+        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS"),
+                  whole=("NAME",))
         print("  " + out.role("committed with the repo — %s/%s"
                               % (projectlock.LOCK_DIRNAME,
                                  projectlock.LOCK_FILENAME), "muted"))
@@ -1255,7 +1260,7 @@ def cmd_tag(argv):
             out.info(out.role("hint: boost tag <skill> +mytag", "muted"))
             return 0
         out.table([("#" + t, ", ".join(mapping[t])) for t in sorted(mapping)],
-                  headers=("TAG", "SKILLS"))
+                  headers=("TAG", "SKILLS"), whole=("TAG",))  # `list --tag`
         return 0
 
     if not args.name:

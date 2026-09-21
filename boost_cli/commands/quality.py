@@ -1006,7 +1006,7 @@ def cmd_drift(argv):
                 else "%s (%s)" % (r["name"], r["kind"]),
                 out.role(r["status"], _DRIFT_ROLE[r["status"]]),
                 out.role(r["hint"], "muted")) for r in rows],
-              headers=("NAME", "STATUS", "HINT"))
+              headers=("NAME", "STATUS", "HINT"), whole=("NAME",))
     counts: dict = {}
     for r in rows:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
@@ -1061,7 +1061,8 @@ def cmd_test(argv):
     if not rows:
         out.info("no skills installed")
         return 0
-    out.table(rows, headers=("SKILL", "RESULT", "FAILED CHECKS"))
+    out.table(rows, headers=("SKILL", "RESULT", "FAILED CHECKS"),
+              whole=("SKILL",))
     out.info("%d passed, %d failed" % (len(rows) - failed_count, failed_count))
     return 1 if failed_count else 0
 
@@ -1116,7 +1117,8 @@ def cmd_decay(argv):
     out.table([(r["name"], out.role(r["relevance"], rel_role[r["relevance"]]),
                 util.rel_time(r["last_activity"]) if r["last_activity"] else "never",
                 verdicts[r["verdict"]]) for r in rows],
-              headers=("SKILL", "RELEVANCE", "LAST ACTIVITY", "VERDICT"))
+              headers=("SKILL", "RELEVANCE", "LAST ACTIVITY", "VERDICT"),
+              whole=("SKILL",))  # `boost uninstall <name>`
     n_decay = sum(1 for r in rows if r["verdict"] == "decay")
     n_review = sum(1 for r in rows if r["verdict"] == "review")
     out.info("%d decay candidate%s · %d to review · %d ok"
@@ -1688,7 +1690,10 @@ def cmd_trust(argv) -> int:
         # like a numeric column.
         out.table([(k["name"], k.get("fingerprint", "?")) for k in keys],
                   headers=("NAME", "FINGERPRINT"), keep=("FINGERPRINT",),
-                  text=("FINGERPRINT",))
+                  text=("FINGERPRINT",),
+                  # NAME is what `trust remove` takes; beside a kept
+                  # fingerprint it is dropped rather than clipped.
+                  whole=("NAME",))
     else:
         out.dim("  none — add one with `boost trust add <name> <key>`")
     print()
@@ -1714,4 +1719,4 @@ def _print_provenance(results) -> None:
                      note))
     # The detail cell is the only explanation an invalid status ever gets.
     out.table(rows, headers=("TAP", "PROVENANCE", "KEY / DETAIL"),
-              keep=("KEY / DETAIL",))
+              keep=("KEY / DETAIL",), whole=("TAP",))

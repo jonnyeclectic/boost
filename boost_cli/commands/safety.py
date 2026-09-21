@@ -530,7 +530,9 @@ def cmd_quarantine(argv):
         if not rows:
             out.info("nothing in quarantine")
             return 0
-        out.table(rows, headers=("NAME", "KIND", "VERSION", "TAP", "SINCE"))
+        # NAME is what `quarantine --release` takes.
+        out.table(rows, headers=("NAME", "KIND", "VERSION", "TAP", "SINCE"),
+                  whole=("NAME",))
         return 0
 
     if args.release:
@@ -661,7 +663,8 @@ def cmd_attest(argv):
                 else "%s (%s)" % (r["name"], r["kind"]),
                 r["who"], util.rel_time(r["when"]),
                 r["tap"], r["commit"] or "-", r["sha256"]) for r in records],
-              headers=("NAME", "WHO", "WHEN", "TAP", "COMMIT", "SHA"))
+              headers=("NAME", "WHO", "WHEN", "TAP", "COMMIT", "SHA"),
+              whole=("NAME",))
     if args.verify:
         for r in records:
             if not r["sha_ok"]:

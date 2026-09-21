@@ -1931,13 +1931,9 @@ Floor-margin exposure, with that qualification attached: hit@1 measures 44/91 = 
       </article>
 
       <article class="cap rcard" id="identifier-columns-shrink-to-a-name-no-command-accepts">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">UX · Bug</span></div>
         <h3>Just before <code>out.table</code> drops a column, it shrinks the widest one with an ellipsis. In <code>hooks list</code> that is often <code>name</code>, and <code>bmad-r…</code> is not a name <code>hooks remove -n</code> accepts.</h3>
-        <p><b>Measured</b> on the branch that moved <code>name</code> to the front of <code>boost hooks list</code>, with the autopilot's hook names (<code>bmad</code>, <code>bmad-route</code>) piped at <code>COLUMNS</code> 40–100. <code>name</code> now shows at 52 widths, where it showed at 27. At 24 of those it is shortened, e.g. <code>bmad-r…</code>, in the widths 49–51, 57–59, 65–67, 74–79 and 83–91, the card's own width of 65 included. Before the reorder the same happened at 13 of 27.
-
-The cause is the fitter's shrink-before-drop rule (<code>output._fit_columns</code>). Before it drops a column, it shrinks the widest one that can still shrink, down to <code>_MIN_COL</code>. For prose that is the right trade. For an identifier, a clipped value is worse than an absent one, because it reads like data and is not: <code>boost hooks remove -n bmad-r…</code> removes nothing. <code>keep=</code> cannot express "may drop, never shrink". It means never drop and never shrink, and two such columns together can outgrow the pane, the overflow PR 902 closed.
-
-Likely fix: <code>out.table</code> takes a third class of column, <i>whole or absent</i>. The fitter never shrinks it and drops it in right-to-left order like any other column. <code>hooks list</code> would mark <code>name</code>, and <code>taps</code> and <code>list</code> would mark their NAME columns, the other arguments people copy. Measure every caller before and after: wide panes must stay byte-identical.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/identifier-columns-shrink-to-a-name-no-command-accepts.md">Write-up &middot; identifier-columns-shrink-to-a-name-no-command-accepts.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Low</b></span>

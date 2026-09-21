@@ -1725,7 +1725,8 @@ def _import_root(root: Path, name: str | None, do_all: bool,
     # One line each, and no control bytes — this is a foreign repo's frontmatter.
     out.table([(e["name"], "v" + e["version"],
                 " ".join(out.plain(e["description"] or "").split()))
-               for e in entries])
+               for e in entries],
+              whole=(0,))  # the NAME the hint's `--name NAME` takes
     raise BoostError("multiple skills found — pick one or import all",
                     hint="add `--name NAME` or `--all`")
 

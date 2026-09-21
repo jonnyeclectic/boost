@@ -996,7 +996,8 @@ def _context_status(state: dict, as_json: bool) -> int:
     rows = [(r.get("pattern", "?"), ", ".join(r.get("skills", [])),
              "*" if branch and fnmatch.fnmatch(branch, r.get("pattern", "")) else "")
             for r in rules]
-    out.table(rows, headers=("PATTERN", "SKILLS", "MATCH"))
+    out.table(rows, headers=("PATTERN", "SKILLS", "MATCH"),
+              whole=("PATTERN",))  # `context unmap <pattern>`
     return 0
 
 
@@ -1200,7 +1201,8 @@ def cmd_impact(argv: list[str]) -> int:
         print(json.dumps({"note": note, "git": git.has_git, "skills": data}))
         return 0
     out.heading("impact" + ((" of %s" % args.name) if args.name else ""))
-    out.table(rows, headers=("SKILL", "INSTALLED", "COMMITS SINCE", "EVENTS"))
+    out.table(rows, headers=("SKILL", "INSTALLED", "COMMITS SINCE", "EVENTS"),
+              whole=("SKILL",))  # `boost impact <name>`
     if args.name and in_repo and data[0]["files_touched"] is not None:
         out.kv("files touched", data[0]["files_touched"])
     if args.name:

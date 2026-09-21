@@ -2,15 +2,15 @@
 id: identifier-columns-shrink-to-a-name-no-command-accepts
 board: code
 section: planned
-status: planned
+status: shipped
 category: UX · Bug
 complexity: M
 impact: Low
 wow: 2
 note: In the few columns before out.table drops a column, the widest one that can shrink is squeezed with an ellipsis, and in hooks list that is the name remove -n takes…
 order: 329
-owner:
-pr:
+owner: loop/identifier-columns
+pr: 937
 title: Just before <code>out.table</code> drops a column, it shrinks the widest one with an ellipsis. In <code>hooks list</code> that is often <code>name</code>, and <code>bmad-r…</code> is not a name <code>hooks remove -n</code> accepts.
 ---
 <b>Measured</b> on the branch that moved <code>name</code> to the front of <code>boost hooks list</code>, with the autopilot's hook names (<code>bmad</code>, <code>bmad-route</code>) piped at <code>COLUMNS</code> 40–100. <code>name</code> now shows at 52 widths, where it showed at 27. At 24 of those it is shortened, e.g. <code>bmad-r…</code>, in the widths 49–51, 57–59, 65–67, 74–79 and 83–91, the card's own width of 65 included. Before the reorder the same happened at 13 of 27.

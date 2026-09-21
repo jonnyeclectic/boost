@@ -935,7 +935,8 @@ def _fit_widths(widths, numeric, avail: int, sep: int = 2, floor: int = 1,
     fits `avail` columns (or nothing text-like is left to shrink). Numeric
     columns are never squeezed — a truncated number is a wrong number — and
     neither are the `protected` indexes, whose cells are identifiers rather
-    than prose (see :func:`table`'s ``keep``), so a narrow pane spends its
+    than prose: :func:`table`'s ``keep`` and ``whole`` columns alike, which
+    :func:`_fit_columns` passes in together. A narrow pane spends its
     shrinking on chrome first."""
     widths = list(widths)
     if not widths:
@@ -971,7 +972,8 @@ def _fit_widths(widths, numeric, avail: int, sep: int = 2, floor: int = 1,
 _MIN_COL = 7
 
 
-def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=()):
+def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=(),
+                 whole=()):
     """Choose which columns an `avail`-wide pane shows, and how wide.
 
     Shrinking first (:func:`_fit_widths`, down to :data:`_MIN_COL`), then
@@ -998,9 +1000,17 @@ def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=()):
     always did. When every column is protected the row overflows whole,
     unchanged.
 
+    `whole` columns (:func:`table`'s ``whole``) are the third class: never
+    shrunk, and dropped in the same right-to-left order as any other column,
+    empty ones first. The width a shrink would have taken from one comes off
+    the shrinkable columns, or a column goes. A whole column that is the last
+    one standing overflows rather than clipping, as a protected one does: a
+    clipped identifier reads like data and is not.
+
     Returns the surviving column indexes (ascending) and their widths.
     """
     protected = set(protected)
+    unshrinkable = protected | set(whole)
     show = list(range(len(widths)))
 
     def total(ws) -> int:
@@ -1015,7 +1025,7 @@ def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=()):
                            [numeric[i] for i in show], avail, sep=sep,
                            floor=floor,
                            protected=[j for j, i in enumerate(show)
-                                      if i in protected])
+                                      if i in unshrinkable])
 
     while True:
         fitted = fit(_MIN_COL)
@@ -1043,7 +1053,8 @@ def _keep_indexes(keep, headers, ncols) -> set[int]:
     return out_idx
 
 
-def table(rows, headers=None, stream=None, keep=(), text=()) -> None:
+def table(rows, headers=None, stream=None, keep=(), text=(),
+          whole=()) -> None:
     """Print an aligned table. rows: list of tuples of strings.
 
     Column widths are measured by visible width (ignoring ANSI color codes),
@@ -1058,9 +1069,10 @@ def table(rows, headers=None, stream=None, keep=(), text=()) -> None:
     as a placeholder that costs ink and carries nothing. A column with nothing
     in it goes first; after that the order is right to left, skipping
     ``keep``; the last surviving column is never dropped and clips to the
-    pane instead. See :func:`_fit_columns`, and :func:`search_layout` for the
-    same shape on the search screen. Nothing is announced: a dropped column is
-    a layout decision, not an event.
+    pane instead, unless it is ``keep`` or ``whole``, which overflow. See
+    :func:`_fit_columns`, and :func:`search_layout` for the same shape on the
+    search screen. Nothing is announced: a dropped column is a layout
+    decision, not an event.
 
     On a color terminal, columns are joined by a dim ``│`` separator — the
     terminal cousin of the web stat blocks' hairline borders. Non-color output
@@ -1076,6 +1088,13 @@ def table(rows, headers=None, stream=None, keep=(), text=()) -> None:
     ``keep`` names the columns — by index or header — whose cells are
     identifiers rather than prose (a snapshot ID, a digest, a hook command),
     so a narrow pane shrinks the chrome beside them instead.
+
+    ``whole`` (same resolution) names columns that may be dropped but never
+    shrunk: the handle a later command takes as an argument, like the NAME
+    that `boost uninstall` wants or the hook name `hooks remove -n` wants.
+    ``brainstorm…`` is not a name any command accepts, so such a column is
+    shown whole or not at all. It is not ``keep``: two never-dropped columns
+    together can outgrow the pane with nothing left to give.
 
     ``text`` names columns (same index-or-header resolution as ``keep``) that
     must never right-align as numeric, however their cells look: an all-digit
@@ -1102,7 +1121,9 @@ def table(rows, headers=None, stream=None, keep=(), text=()) -> None:
     if avail is not None:
         show, fitted = _fit_columns(widths, numeric, avail, sep=sep_w,
                                     protected=_keep_indexes(keep, headers,
-                                                            ncols))
+                                                            ncols),
+                                    whole=_keep_indexes(whole, headers,
+                                                        ncols))
         for i, w in zip(show, fitted, strict=True):
             widths[i] = w
 

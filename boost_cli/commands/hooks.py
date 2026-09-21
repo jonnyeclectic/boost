@@ -96,9 +96,12 @@ def _list(scope, host, event=None, as_json=False) -> int:
         headers=("name", "host", "scope", "event", "matcher", "command"),
         # A hook's command is what the user came to read — a clipped one
         # cannot be compared against what they registered, or copied back.
-        # Only it: protecting `name` too let the two outgrow the pane together
-        # with nothing left to drop.
-        keep=("command",))
+        keep=("command",),
+        # `name` is whole or absent: `bmad-r…` reads like a name and is not
+        # one `hooks remove -n` accepts. Not `keep` — two never-dropped
+        # columns outgrew the pane together with nothing left to drop — so
+        # a narrow pane drops it, last, rather than clipping it.
+        whole=("name",))
     return 0
 
 
