@@ -537,10 +537,16 @@ def panel(lines, title: str | None = None, hue: str = "cyan") -> str:
     # itself to its content and sailed past the pane: `boost count` drew 108
     # columns into an 80-column terminal, and a box whose border wraps is the
     # worst-looking overflow the CLI has, because the shape itself breaks.
-    room = term_width() - 4
-    if title:
-        title = _clip_visible(title, room - 2)
-    lines = [_clip_visible(x, room) for x in lines]
+    #
+    # Fitted to the *pane*, not `term_width()`: a pipe has none, and fitting
+    # to an assumed 80 clipped `boost count | …`'s 110-column summary to 76,
+    # dropping its tail — the one panel whose lines are data. As `table` does.
+    avail = pane_width()
+    if avail is not None:
+        room = avail - 4
+        if title:
+            title = _clip_visible(title, room - 2)
+        lines = [_clip_visible(x, room) for x in lines]
     widths = [visible_len(x) for x in lines]
     tw = visible_len(title) if title else 0
     # A titled rule needs a space each side, hence the +2 / -2. Clipping above
