@@ -38,6 +38,7 @@ from ..core import (
     registry,
     rules,
     scopes,
+    staleness,
     store,
     util,
 )
@@ -523,6 +524,11 @@ def cmd_info(argv):
     # Identity-card badges: a scannable status strip beneath the name, echoing
     # the web .badge pills. The detailed kv rows below still carry the specifics.
     badges = []
+    # One decision for the badge and the "latest" row, compared as versions:
+    # string inequality called a tap still at 1.4.0 an update to 1.4.1.
+    relation = (staleness.catalog_relation(
+        str(lock.get("version", "?")), str((cat or {}).get("version") or ""))
+        if lock and cat else None)
     if lock:
         badges.append(out.badge("installed", "green"))
         if lock.get("pinned"):
@@ -531,9 +537,10 @@ def cmd_info(argv):
             badges.append(out.badge("quarantined", "pink"))
         if lock.get("sidelined_by"):
             badges.append(out.badge("sidelined by %s" % lock["sidelined_by"], "cyan"))
-        latest = str((cat or {}).get("version") or "")
-        if cat and latest != str(lock.get("version", "?")):
+        if relation == staleness.BEHIND:
             badges.append(out.badge("update available", "yellow"))
+        elif relation == staleness.AHEAD:
+            badges.append(out.badge("ahead of tap", "cyan"))
     elif plock:
         badges.append(out.badge("installed in this project", "green"))
     else:
@@ -560,9 +567,14 @@ def cmd_info(argv):
         inst_v = str(lock.get("version", "?"))
         out.kv("version", inst_v)
         latest = str((cat or {}).get("version") or "")
-        if cat and latest != inst_v:
+        if relation == staleness.BEHIND:
             out.kv("latest", out.role(latest, "warn", bold=True)
                    + out.role("  (update available)", "muted"))
+        elif relation == staleness.AHEAD:
+            # Kept short: kv does not wrap by default, and the long form ran
+            # this row to 71 columns, past a 60-column pane.
+            out.kv("latest", latest + out.role("  (older than installed)",
+                                               "muted"))
     else:
         out.kv("latest", str((cat or {}).get("version", "?")))
     out.kv("tap", (lock or cat or {}).get("tap", "?"))
