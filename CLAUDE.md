@@ -648,7 +648,7 @@ names. `dense.ready()` still answers for the store alone. `dense.fix_hint()` map
 whichever state it is to the one next action — `boost doctor`, `boost search`
 and the MCP `SEARCH ENGINE` line all read that same table, so they can't give
 contradictory advice. The shard surfaces (`reindex --fetch-shards`, `update
---shards`, `quickstart` and `boost update`'s vector resync) answer a refused
+--shards`, `quickstart` and the vector refresh in `boost update`) answer a refused
 manifest through `shards.remedy()`, which hands back to that table, with the
 whole status, whenever the store or a missing provider is the real answer.
 

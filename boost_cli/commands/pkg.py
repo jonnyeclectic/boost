@@ -1555,13 +1555,14 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 installed_n += 1
                 continue
             try:
-                store.install(entry)
+                res = store.install(entry)
             except BoostError as err:
                 out.warn("%s: %s" % (sname, err.message))
                 failed += 1
                 continue
             out.ok("installed %s v%s (%s)" % (sname, entry.get("version"),
                                               entry["tap"]))
+            _warn_unwritable(res)
             have_installed[sname] = (entry_kind, entry)
             installed_kinds.add(entry_kind)
             installed_n += 1

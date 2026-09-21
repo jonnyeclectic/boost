@@ -11,6 +11,7 @@ from __future__ import annotations
 import getpass
 import hashlib
 import json
+import os
 import shutil
 import stat
 import sys
@@ -363,6 +364,28 @@ class TestProfile:
         assert "saved profile daily" not in second.out
         assert json.loads(boost("profile", "show", "daily", "--json").out)[
             "skills"].keys() == {"brainstorming", "tdd-workflow"}
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_use_names_an_agent_dir_that_refused_the_install(self, boost,
+                                                            tapped):
+        # `use` printed only the agents it linked, so a refused one showed
+        # only by being absent from the list.
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("uninstall", "brainstorming")
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o500)
+        try:
+            r = boost("profile", "use", "solo")
+        finally:
+            cursor.chmod(0o700)
+        out = " ".join(r.out.split())
+        assert "installed brainstorming" in out
+        assert "not linked: ~/.cursor/skills is not writable" in out
 
     def test_use_sidelines_then_prune_uninstalls_extras(self, boost, tapped):
         boost("install", "brainstorming")

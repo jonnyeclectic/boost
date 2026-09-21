@@ -2060,13 +2060,21 @@ def _offer_boost_first(hosts: list[str]) -> None:
     try:
         builtin.ensure_tap()
         catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
-        store.install(catalog.resolve_one(builtin.BUILTIN_RULES[0]),
-                     only_agents=[a for a in scoped_agents if a])
+        res = store.install(catalog.resolve_one(builtin.BUILTIN_RULES[0]),
+                            only_agents=[a for a in scoped_agents if a])
     except (BoostError, OSError) as exc:
         out.warn("could not install %s: %s" % (builtin.BUILTIN_RULES[0], exc))
         return
-    out.ok("installed %s — remove it with `boost uninstall %s`"
-           % (builtin.BUILTIN_RULES[0], builtin.BUILTIN_RULES[0]))
+    from .pkg import _warn_unwritable
+    if not res.linked:
+        # Every file it was offered for refused the write. The lock records
+        # the refusal so `boost sync` can finish it, but "installed" would be
+        # a success nothing on disk backs.
+        out.warn("%s was not written anywhere yet" % builtin.BUILTIN_RULES[0])
+    else:
+        out.ok("installed %s — remove it with `boost uninstall %s`"
+               % (builtin.BUILTIN_RULES[0], builtin.BUILTIN_RULES[0]))
+    _warn_unwritable(res)
 
 
 def cmd_mcp(argv) -> int:

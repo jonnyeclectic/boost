@@ -18,10 +18,13 @@ silently writes a managed block into a real `CLAUDE.md`.
 """
 from __future__ import annotations
 
+import os
+import sys
+
 import pytest
 
 from boost_cli.commands import configuration
-from boost_cli.core import builtin, lockfile, store
+from boost_cli.core import builtin, lockfile, paths, store
 from boost_cli.errors import BoostError
 
 RULE = builtin.BUILTIN_RULES[0]
@@ -194,6 +197,44 @@ class TestTheOfferIsNonFatalByConstruction:
         out = capsys.readouterr().out
         assert "could not install %s" % RULE in out
         assert "boost uninstall" not in out               # no false success
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_refused_write_is_not_reported_as_installed(self, offering, capsys):
+        # An unwritable dir is recorded on the result rather than raised, so
+        # the old `except` no longer saw it and "installed" was printed over
+        # a GEMINI.md that was never written.
+        gemini = paths.home() / ".gemini"
+        gemini.mkdir(parents=True, exist_ok=True)
+        gemini.chmod(0o500)
+        try:
+            configuration._offer_boost_first(["gemini"])
+        finally:
+            gemini.chmod(0o700)
+        out = " ".join(capsys.readouterr().out.split())
+        assert not (gemini / "GEMINI.md").exists()
+        assert "installed %s" % RULE not in out
+        assert "%s was not written anywhere yet" % RULE in out
+        assert "not written: ~/.gemini is not writable" in out
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_partly_refused_write_names_the_agent_it_missed(
+            self, offering, capsys):
+        gemini = paths.home() / ".gemini"
+        gemini.mkdir(parents=True, exist_ok=True)
+        gemini.chmod(0o500)
+        try:
+            configuration._offer_boost_first(["claude", "gemini"])
+        finally:
+            gemini.chmod(0o700)
+        out = " ".join(capsys.readouterr().out.split())
+        assert "installed %s" % RULE in out
+        assert "not written: ~/.gemini is not writable" in out
 
     def test_a_rule_missing_from_the_wheel_is_skipped_silently(
             self, offering, monkeypatch, capsys):

@@ -1048,6 +1048,27 @@ class TestBundle:
         assert "Installed 1 skill" in r.out
         assert _lock()["brainstorming"]["version"] == "1.4.0"
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_install_names_an_agent_dir_that_refused_it(self, boost, tapped,
+                                                        tmp_path):
+        # bundle install threw the install result away, so a refused agent
+        # dir read as a clean "installed" line and exit 0.
+        vf = tmp_path / "Boostfile"
+        vf.write_text("skill fixture-tap:brainstorming@1.4.0\n", encoding="utf-8")
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o500)
+        try:
+            r = boost("bundle", "install", vf)
+        finally:
+            cursor.chmod(0o700)
+        out = " ".join(r.out.split())
+        assert "installed brainstorming v1.4.0 (fixture-tap)" in out
+        assert "not linked: ~/.cursor/skills is not writable" in out
+
     def test_install_stdin(self, boost, tapped, monkeypatch):
         text = "skill fixture-tap:commit-messages@1.0.2\n"
         monkeypatch.setattr("sys.stdin", io.StringIO(text))
