@@ -375,15 +375,25 @@ def sha256_dir(path: Path) -> str:
     return h.hexdigest()
 
 
-def dir_size(path: Path) -> int:
+def dir_size(path: Path, follow_links: bool = False) -> int:
     """Sum the byte size of every regular file under ``path``, recursively.
 
-    A symlink is not a regular file, whatever it points at: ``is_file()`` and
-    ``stat()`` follow links, so a link counted its target's bytes a second
-    time, or bytes outside the tree, or nothing once it dangled. ``compact``
-    reports freed space as this before minus this after, and a link whose
-    target the narrow removed made the live figure overstate the run.
+    By default a symlink is not a regular file, whatever it points at, which
+    is what the tree occupies on disk: following links counted a target's
+    bytes a second time, or bytes outside the tree, or nothing once it
+    dangled. ``compact`` reports freed space as this before minus this after,
+    and a link whose target the narrow removed made its live figure overstate
+    the run.
+
+    ``follow_links=True`` answers a different question: what a copy of the
+    tree will hold. ``install`` copies with ``symlinks=False``, so a skill a
+    tap ships as links arrives as their targets' bytes, and ``info`` sizing
+    that skill from the tap must count them (it said 0B for a SKILL.md that
+    installs as 3 KB).
     """
+    if follow_links:
+        return sum(p.stat().st_size for p in Path(path).rglob("*")
+                   if p.is_file())
     return sum(p.lstat().st_size for p in Path(path).rglob("*")
                if p.is_file() and not p.is_symlink())
 

@@ -282,10 +282,15 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
             # Once per tap per process: a command loads a tap more than once.
             if tap.name not in _UNSAVED:
                 _UNSAVED.add(tap.name)
+                # Name the nearest directory that exists: when the cache
+                # dir itself could not be created, it is its parent that
+                # refuses, which is what rag._unsaved names too.
+                where = tap.cache_file.parent
+                while not where.exists() and where != where.parent:
+                    where = where.parent
                 output.warn("could not save the catalog cache for %s (%s) — "
                             "this command uses a fresh scan; make %s writable"
-                            % (tap.name, e.strerror or e,
-                               tap.cache_file.parent),
+                            % (tap.name, e.strerror or e, paths.tilde(where)),
                             stream=sys.stderr, wrap=True)
     # Drop the mtime-keyed cache so a rebuild is visible to an immediately
     # following load even when the filesystem mtime granularity is coarse.

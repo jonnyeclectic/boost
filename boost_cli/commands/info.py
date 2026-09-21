@@ -498,7 +498,10 @@ def cmd_info(argv):
     score = size = files = None
     if skill_dir:
         score, _notes = util.score_skill(skill_dir)
-        size, files = util.dir_size(skill_dir), _file_count(skill_dir)
+        # What an install will copy (links dereferenced), the same set
+        # _file_count counts, rather than what the tap's tree occupies.
+        size = util.dir_size(skill_dir, follow_links=True)
+        files = _file_count(skill_dir)
 
     if args.json:
         print(json.dumps({

@@ -334,6 +334,9 @@ class TestDirSize:
         (tree / "outer").symlink_to(outside)
         (tree / "dangling").symlink_to("gone.txt")
         assert util.dir_size(tree) == 10
+        # What a copy (install's copytree, symlinks=False) will hold instead:
+        # every live link as its target's bytes; the dangling one as nothing.
+        assert util.dir_size(tree, follow_links=True) == 10 + 10 + 1000
 
 
 class TestSemver:

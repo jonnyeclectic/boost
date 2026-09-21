@@ -308,6 +308,30 @@ class TestInfo:
         assert "[installed]" in r.out
         assert "[fixture-tap]" in r.out
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="git checks symlinks out as plain files on "
+                               "Windows by default")
+    def test_size_is_what_an_install_copies_when_the_tap_ships_links(
+            self, boost, sandbox, tmp_path):
+        # A tap that ships SKILL.md as a link to shared prose: install copies
+        # the target's bytes, so info must count them before the install too.
+        # (It said 0B once dir_size stopped following links for compact.)
+        repo = tmp_path / "linked"
+        (repo / "shared").mkdir(parents=True)
+        body = "---\nname: bee\ndescription: a linked skill\n---\n\n" + "b" * 3000
+        (repo / "shared" / "b.md").write_text(body, encoding="utf-8")
+        (repo / "skills" / "b").mkdir(parents=True)
+        (repo / "skills" / "b" / "SKILL.md").symlink_to("../../shared/b.md")
+        for cmd in (["init", "-q", "-b", "main"], ["add", "-A"],
+                    ["-c", "user.email=t@example.test", "-c", "user.name=T",
+                     "-c", "commit.gpgsign=false", "commit", "-qm", "init"]):
+            subprocess.run(["git", "-C", str(repo), *cmd], check=True)
+        boost("tap", str(repo))
+        before = json.loads(boost("info", "bee", "--json").out)
+        boost("install", "bee")
+        after = json.loads(boost("info", "bee", "--json").out)
+        assert before["size"] == after["size"] == len(body.encode("utf-8"))
+
     def test_info_reports_sidelined_by(self, boost, tapped):
         boost("install", "brainstorming", "jira-integration", "--no-deps")
         boost("focus", "brainstorming")

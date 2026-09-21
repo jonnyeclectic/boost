@@ -189,6 +189,24 @@ class TestANamesFileBoostCannotWrite:
             == "one\nthree\ntwo"
         assert capsys.readouterr().err == ""
 
+    def test_a_cache_dir_it_cannot_create_is_not_a_crash(
+            self, sandbox, monkeypatch, capsys):
+        # A read-only ~/.boost with no cache dir refuses the mkdir itself;
+        # that has to land in the same tolerance as a refused write.
+        _tap("t", ["one", "two"])
+        capsys.readouterr()
+
+        def refuse():
+            raise PermissionError(13, "Permission denied",
+                                  str(paths.cache_dir()))
+
+        monkeypatch.setattr(complete.paths, "ensure_dirs", refuse)
+        monkeypatch.setattr(Path, "write_text",
+                            lambda self, *a, **k: refuse())
+        assert complete.refresh_names() == 2
+        assert "could not save the completion list" \
+            in " ".join(capsys.readouterr().err.split())
+
     def test_a_write_that_fails_warns_once_and_carries_on(
             self, sandbox, monkeypatch, capsys):
         _tap("t", ["one", "two"])

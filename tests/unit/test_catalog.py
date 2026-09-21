@@ -500,7 +500,7 @@ class TestACacheBoostCannotWrite:
         # Folded to the pane, not one long line (wrap=True).
         assert len(cap.err.strip().splitlines()) > 1
         assert "(Permission denied)" in err
-        assert "make %s writable" % tap.cache_file.parent in err
+        assert "make %s writable" % paths.tilde(tap.cache_file.parent) in err
         assert err.count("could not save") == 1            # once, not per load
 
     def test_a_cache_dir_it_cannot_create_still_serves_the_scan(
@@ -526,6 +526,9 @@ class TestACacheBoostCannotWrite:
         err = " ".join(capsys.readouterr().err.split())
         assert "! could not save the catalog cache for fixture-tap" in err
         assert err.count("could not save") == 1
+        # The cache dir does not exist, so the directory to fix is the
+        # nearest one that does: ~/.boost, as rag._unsaved names it.
+        assert "make %s writable" % paths.tilde(paths.boost_home()) in err
 
 
 class TestEntrySetCache:
