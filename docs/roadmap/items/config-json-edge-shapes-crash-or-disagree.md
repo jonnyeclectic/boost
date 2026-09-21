@@ -2,14 +2,14 @@
 id: config-json-edge-shapes-crash-or-disagree
 board: code
 section: planned
-status: planned
+status: shipped
 category: Robustness · Bug
 complexity: S
 impact: Med
 wow: 2
 note: A config.json holding invalid UTF-8 crashes every command, doctor included; {"taps": "x"} reads as a fresh install to doctor and as configured to --help…
 order: 327
-owner:
+owner: loop/config-edge-shapes
 pr:
 title: Two <code>config.json</code> shapes still slip past the corrupt-config handling. Invalid UTF-8 crashes every command, <code>doctor</code> included. <code>{"taps": "x"}</code> is a fresh install to <code>doctor</code> and a configured machine to <code>--help</code>.
 ---
