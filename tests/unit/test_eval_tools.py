@@ -138,6 +138,15 @@ class TestTheIntervalRefusesToClaimCertainty:
             lo, hi = MOD.wilson(k, n)
             assert 0.0 <= lo <= hi <= 1.0, (k, n, lo, hi)
 
+    def test_the_edges_are_exact(self):
+        # In real arithmetic the bound IS 0 at k=0 and 1 at k=n. Floating
+        # point misses by ~1e-17 at some N (11, 22, 88, ...), and a lower bound
+        # of 2.8e-17 compared with `>` against a ceiling of 0 convicted a
+        # host that had made no false call at all.
+        for n in range(1, 3000):
+            assert MOD.wilson(0, n)[0] == 0.0, n
+            assert MOD.wilson(n, n)[1] == 1.0, n
+
     def test_the_point_estimate_sits_inside_its_interval(self):
         for k, n in ((1, 3), (2, 3), (5, 10), (7, 9)):
             lo, hi = MOD.wilson(k, n)
@@ -150,10 +159,22 @@ class TestBothDirectionsAreScored:
         _row("n1", "no-call"), _row("n2", "no-call")]
 
     def test_a_perfect_host_passes(self):
-        obs = {"c1": [True], "c2": [True], "n1": [False], "n2": [False]}
+        """And passes `verdict()`, which this test used never to call.
+
+        It asserted the two rates and stopped, so it went on passing while
+        `verdict()` returned TWO failures for this very observation — the
+        ceiling was unreachable at n=2, and the test named "a perfect host
+        passes" would have failed if it had asserted the thing its name claims.
+        Enough runs to make both bounds reachable, then assert the verdict.
+        """
+        runs = MOD.min_n_for_ceiling(0.25)          # per half, across 2 rows
+        obs = {"c1": [True] * runs, "c2": [True] * runs,
+               "n1": [False] * runs, "n2": [False] * runs}
         m = MOD.score_host(self.ROWS, obs)
         assert m["call_rate"]["rate"] == 1.0
         assert m["false_call_rate"]["rate"] == 0.0
+        assert MOD.verdict(m, 0.60, 0.25) == []
+        assert MOD.unjudgeable(m, 0.25) is None
 
     def test_a_host_that_never_calls_fails_the_floor(self):
         obs = {"c1": [False], "c2": [False], "n1": [False], "n2": [False]}
@@ -163,12 +184,19 @@ class TestBothDirectionsAreScored:
     def test_a_host_that_always_calls_fails_the_CEILING(self):
         # The whole reason this tier has two halves. Call rate is a perfect
         # 1.00 here — scoring that alone would report a triumph.
+        #
+        # One run per row, on purpose. n=2 is too few to PASS the ceiling, but
+        # 2/2 puts the Wilson LOWER bound at 0.34, over it already: a sample
+        # too small to clear a host can still convict one. This test was once
+        # moved to n=16 so that reading such a sample as undecided could pass.
         obs = {"c1": [True], "c2": [True], "n1": [True], "n2": [True]}
         m = MOD.score_host(self.ROWS, obs)
         assert m["call_rate"]["rate"] == 1.0
         reasons = MOD.verdict(m, 0.60, 0.20)
         assert reasons, "an always-calling host passed"
         assert any("false-call" in r for r in reasons)
+        assert MOD.unjudgeable(m, 0.20) is None
+        assert MOD.exit_code(reasons, MOD.unjudgeable(m, 0.20)) == 1
 
     def test_the_two_rates_are_computed_over_different_rows(self):
         obs = {"c1": [True], "c2": [True], "n1": [True], "n2": [True]}
@@ -205,6 +233,338 @@ class TestTheVerdictJudgesTheInterval:
     def test_no_observations_is_reported_rather_than_passed(self):
         # Silence must never read as success.
         assert MOD.verdict(MOD.score_host(self.ROWS, {}), 0.60, 0.20)
+
+
+class TestTheCeilingMustBeReachable:
+    """A bound judged against an upper bound needs enough N to be clearable.
+
+    At k=0 the Wilson upper bound is z^2/(n+z^2), a function of N alone, so
+    below a certain N the ceiling reports FAIL for every possible host. At the
+    old `--runs 1` default that was the shipped state: 8 no-call observations,
+    best achievable bound 0.3244, ceiling 0.20 — an unsatisfiable gate that
+    told its reader the tier was broken.
+    """
+
+    ROWS: ClassVar[list[dict]] = [_row("c1", "call"), _row("n1", "no-call")]
+
+    @pytest.mark.parametrize("ceiling,need", [(0.20, 16), (0.25, 12),
+                                              (0.10, 35), (0.50, 4)])
+    def test_the_minimum_n_is_the_wilson_algebra(self, ceiling, need):
+        assert MOD.min_n_for_ceiling(ceiling) == need
+        # and it is exactly the boundary, from both sides
+        assert MOD.wilson(0, need)[1] <= ceiling
+        assert MOD.wilson(0, need - 1)[1] > ceiling
+
+    # 30 happens to give a lower bound of exactly 0.0; 11, 22 and 88 are
+    # where k=0 used to come out at ~1e-17 and read as a conviction.
+    @pytest.mark.parametrize("n", [11, 22, 30, 88])
+    def test_a_ceiling_of_zero_is_never_judgeable(self, n):
+        assert MOD.min_n_for_ceiling(0.0) == 0
+        m = MOD.score_host(self.ROWS, {"c1": [True] * n, "n1": [False] * n})
+        assert "any sample size" in (MOD.unjudgeable(m, 0.0) or "")
+        assert not [r for r in MOD.verdict(m, 0.60, 0.0) if "false-call" in r]
+
+    def test_too_small_a_sample_is_inconclusive_not_a_failure(self):
+        # The defect, inverted: a flawless host used to be told it FAILED.
+        obs = {"c1": [True] * 8, "n1": [False] * 8}
+        m = MOD.score_host(self.ROWS, obs)
+        assert not [r for r in MOD.verdict(m, 0.60, 0.20) if "false-call" in r]
+        note = MOD.unjudgeable(m, 0.20)
+        assert note and "at least 16" in note and "--runs" in note
+
+    def test_a_reachable_sample_still_judges_the_ceiling(self):
+        # The fix must not turn the ceiling off: a host that always calls
+        # still fails it once the sample is big enough to say so.
+        obs = {"c1": [True] * 16, "n1": [True] * 16}
+        m = MOD.score_host(self.ROWS, obs)
+        assert MOD.unjudgeable(m, 0.20) is None
+        assert any("false-call" in r for r in MOD.verdict(m, 0.60, 0.20))
+
+    def test_a_sample_too_small_to_pass_can_still_prove_a_failure(self):
+        # Below the minimum a PASS is out of reach, but a FAIL is not: 8/8
+        # false calls put the Wilson LOWER bound at 0.68, over the ceiling
+        # whatever more runs would show. Reading that as "too few runs" hid
+        # the capture this half exists to catch, at the default N it had.
+        m = MOD.score_host(self.ROWS, {"c1": [True] * 8, "n1": [True] * 8})
+        assert MOD.unjudgeable(m, 0.25) is None
+        assert any("false-call" in r for r in MOD.verdict(m, 0.60, 0.25))
+
+    def test_a_zero_ceiling_still_convicts_a_host_that_calls(self):
+        # No sample can clear a ceiling of 0, but one can exceed it.
+        m = MOD.score_host(self.ROWS, {"c1": [True] * 30, "n1": [True] * 24})
+        assert MOD.unjudgeable(m, 0.0) is None
+        assert any("false-call" in r for r in MOD.verdict(m, 0.60, 0.0))
+
+    def test_a_ceiling_of_one_is_judgeable_from_the_first_observation(self):
+        # 1.0 is no ceiling rather than an unreachable one: every bound sits
+        # at or under it, so even an always-calling host clears it.
+        assert MOD.min_n_for_ceiling(1.0) == 1
+        m = MOD.score_host(self.ROWS, {"c1": [True] * 30, "n1": [True]})
+        assert MOD.unjudgeable(m, 1.0) is None
+        assert MOD.verdict(m, 0.60, 1.0) == []
+
+    def test_an_empty_no_call_half_is_inconclusive_not_a_pass(self):
+        # Every no-call run timed out: nothing was observed, so nothing was
+        # cleared. It used to fall through as a pass (exit 0), while the call
+        # half has always reported the same silence as a failure.
+        m = MOD.score_host(self.ROWS, {"c1": [True] * 30})
+        assert MOD.verdict(m, 0.60, 0.25) == []
+        note = MOD.unjudgeable(m, 0.25)
+        assert note and "no should-NOT-call observations" in note
+        assert MOD.exit_code([], note) == 2
+
+    def test_the_note_counts_prompts_per_run_not_observations(self):
+        # The note tells its reader how far to raise --runs, so the per-run
+        # figure is the half's PROMPT count. It printed the observation count,
+        # which is only the same number at one run. One prompt, eight runs, a
+        # ceiling that needs 16: three different numbers, each in its place.
+        m = MOD.score_host(self.ROWS, {"c1": [True] * 8, "n1": [False] * 8})
+        note = MOD.unjudgeable(m, 0.20) or ""
+        assert "needs at least 16 observations and this run has 8" in note
+        assert "the no-call half is 1 prompt(s) per run" in note
+
+    def test_the_minimum_is_where_wilson_says_at_every_ceiling(self):
+        """Property: the answer is the smallest N that `verdict` would clear.
+
+        The closed form is exact in real arithmetic and an ulp either side of
+        it in floats, where `verdict` reads `wilson()` with a strict `>`. Over
+        the exact k=0 boundaries c = z^2/(n+z^2) the two disagreed thousands
+        of times; round ceilings never did, so both grids are here.
+        """
+        z2 = 1.96 * 1.96
+        grid = ([i / 1000 for i in range(1, 1000)]
+                + [z2 / (n + z2) for n in range(1, 2000)])
+        wrong = []
+        for c in grid:
+            need = MOD.min_n_for_ceiling(c)
+            clears = MOD.wilson(0, need)[1] <= c
+            smallest = need == 1 or MOD.wilson(0, need - 1)[1] > c
+            if not (clears and smallest):
+                wrong.append((c, need))
+        assert not wrong, "%d wrong, e.g. %s" % (len(wrong), wrong[:3])
+
+    @pytest.mark.parametrize("n", [3, 13])
+    def test_the_minimum_agrees_with_verdict_at_an_exact_boundary(self, n):
+        # The two the review found. At n=3 the closed form answered 4 though
+        # 0/3 already clears; at n=13 it answered 13 though 0/13 sits 2.8e-17
+        # over and fails `verdict`'s strict `>` — a flawless host told it
+        # failed by a sample the gate had just called big enough.
+        z2 = 1.96 * 1.96
+        c = z2 / (n + z2)
+        need = MOD.min_n_for_ceiling(c)
+
+        def flawless(obs: int) -> dict:
+            return MOD.score_host(self.ROWS, {"c1": [True] * 60,
+                                              "n1": [False] * obs})
+
+        assert MOD.unjudgeable(flawless(need), c) is None
+        assert MOD.verdict(flawless(need), 0.60, c) == []
+        assert MOD.unjudgeable(flawless(need - 1), c) is not None
+        assert MOD.wilson(0, need - 1)[1] > c
+
+    def test_the_shipped_defaults_can_actually_pass(self):
+        """The parity that was missing: the two defaults against the algebra.
+
+        `--runs` and `--ceiling-false-call` were set independently and nothing
+        checked that the first produces a sample the second can clear. Read
+        off the shipped parser, never restated here — a test that restates a
+        default cannot catch it drifting.
+        """
+        defaults = _defaults()
+        rows = MOD.load_set(MOD.DEFAULT_SET)
+        _call, no_call = MOD.halves(rows)
+        n = len(no_call) * defaults["runs"]
+        need = MOD.min_n_for_ceiling(defaults["ceiling_false_call"])
+        assert n >= need, (
+            "the default --runs %d gives %d no-call observations, but the "
+            "default ceiling %.2f needs %d — a flawless host would be "
+            "reported as failing"
+            % (defaults["runs"], n, defaults["ceiling_false_call"], need))
+
+    def test_the_runs_help_names_the_run_count_that_cannot_pass(self):
+        # The help said anything under the default 3 runs was unreachable, but
+        # 2 runs reach the default ceiling; only 1 does not. Pin the sentence
+        # to the algebra it states, against the shipped set.
+        runs = next(a for a in MOD.build_parser()._actions if a.dest == "runs")
+        need = MOD.min_n_for_ceiling(_defaults()["ceiling_false_call"])
+        _call, no_call = MOD.halves(MOD.load_set(MOD.DEFAULT_SET))
+        assert len(no_call) * 1 < need <= len(no_call) * 2
+        assert "at 1 run" in runs.help
+        assert "n>=%d" % need in runs.help
+        assert "%d no-call prompts" % len(no_call) in runs.help
+
+    def test_the_ceiling_tolerates_one_slip_at_the_default_sample(self):
+        # Stated tolerance, not an accident: the floor absorbs four misses in
+        # 24, so a ceiling that fails on the first false call is not the same
+        # kind of measurement.
+        rows = MOD.load_set(MOD.DEFAULT_SET)
+        call, no_call = MOD.halves(rows)
+        defaults = _defaults()
+        runs, ceiling = defaults["runs"], defaults["ceiling_false_call"]
+        obs = {r["id"]: [True] * runs for r in call}
+        obs.update({r["id"]: [False] * runs for r in no_call})
+        obs[no_call[0]["id"]] = [True] + [False] * (runs - 1)
+        assert MOD.verdict(MOD.score_host(rows, obs), 0.60, ceiling) == []
+        obs[no_call[1]["id"]] = [True] + [False] * (runs - 1)
+        assert MOD.verdict(MOD.score_host(rows, obs), 0.60, ceiling)
+
+
+class TestTheExitCodeSaysWhichKind:
+    def test_a_clean_run_is_zero(self):
+        assert MOD.exit_code([], None) == 0
+
+    def test_an_undecided_ceiling_is_two(self):
+        assert MOD.exit_code([], "too few observations") == 2
+
+    def test_a_failure_outranks_an_undecided_ceiling(self):
+        # A floor miss is a real answer whatever the other half could not say.
+        assert MOD.exit_code(["call rate under floor"], "too few") == 1
+
+
+class TestMainReportsWhatItJudged:
+    """`main()` end to end, against a fake host.
+
+    Every other class tests a scoring function; nothing tested that main()
+    returns their answer, prints it, or puts it in --json — so replacing
+    `exit_code()` with the old `1 if reasons else 0` passed the whole file.
+    The host is faked at the three seams main() reaches it through: a prompt
+    goes in, the prompt comes back as the "event stream", and the probe
+    answers from which half that prompt belongs to.
+    """
+
+    @pytest.fixture
+    def run(self, monkeypatch, capsys):
+        from boost_cli.core import lockfile
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setattr(lockfile, "all_installed",
+                            lambda: {"skill": {}, "rule": {"boost-first": {}},
+                                     "workflow": {}})
+        monkeypatch.setattr(MOD, "claude_available", lambda: True)
+        rows = MOD.load_set(MOD.DEFAULT_SET)
+        call = {r["prompt"] for r in rows if r["expect"] == "call"}
+
+        # A real stream opens with the init event naming the tool surface, so
+        # the fake's does too; the prompt rides on the first line so the probe
+        # can answer from it.
+        init = json.dumps({"type": "system", "subtype": "init",
+                           "tools": ["a", "b", "c"], "mcp_servers": [{}]})
+
+        def go(*argv: str, host: str = "perfect") -> tuple[int, str, str]:
+            # "timeout": every should-NOT-call prompt comes back empty.
+            monkeypatch.setattr(
+                MOD, "run_claude", lambda prompt, timeout, cfg=None:
+                None if host == "timeout" and prompt not in call
+                else prompt + "\n" + init)
+            monkeypatch.setattr(
+                MOD, "called_boost",
+                lambda events: host == "always"
+                or events.split("\n", 1)[0] in call)
+            rc = MOD.main(list(argv))
+            cap = capsys.readouterr()
+            return rc, cap.out, cap.err
+
+        return go
+
+    def test_a_perfect_host_at_the_defaults_exits_zero(self, run):
+        rc, out, _ = run()
+        assert rc == 0
+        assert "FAIL:" not in out and "INCONCLUSIVE:" not in out
+
+    def test_a_sample_too_small_to_pass_exits_two_and_says_why(self, run):
+        rc, out, _ = run("--runs", "1")
+        assert rc == 2
+        assert ("INCONCLUSIVE: false-call ceiling 0.25 needs at least 12 "
+                "observations and this run has 8") in out
+        assert "FAIL:" not in out
+
+    def test_the_note_names_the_prompts_per_run(self, run):
+        # 8 no-call prompts x 2 runs = 16 observations, against 35 needed.
+        rc, out, _ = run("--runs", "2", "--ceiling-false-call", "0.10")
+        assert rc == 2
+        assert "needs at least 35 observations and this run has 16" in out
+        assert "the no-call half is 8 prompt(s) per run" in out
+
+    @pytest.mark.parametrize("argv", [
+        ("--runs", "1"),
+        ("--runs", "3", "--ceiling-false-call", "0.10"),
+        ("--ceiling-false-call", "0"),
+    ])
+    def test_a_host_that_always_calls_fails_at_any_n(self, run, argv):
+        # Each of these is a sample that could never PASS the ceiling, and
+        # each proves the host over it: the lower bound is 0.68 at 8/8 and
+        # 0.86 at 24/24. A red, exit 1 — never "raise --runs".
+        rc, out, _ = run(*argv, host="always")
+        assert rc == 1
+        assert "FAIL: false-call rate 1.00" in out
+        assert "INCONCLUSIVE:" not in out
+
+    def test_every_no_call_run_timing_out_exits_two(self, run):
+        rc, out, _ = run(host="timeout")
+        assert rc == 2
+        assert "INCONCLUSIVE: no should-NOT-call observations" in out
+
+    def test_json_carries_the_undecided_state(self, run):
+        # The whole of stdout is the document: the context notes go to
+        # stderr under --json, where they used to open stdout and make it
+        # unparseable before the verdict was ever read.
+        rc, out, err = run("--runs", "1", "--json")
+        doc = json.loads(out)
+        assert rc == 2
+        assert doc["failures"] == []
+        assert "needs at least 12" in doc["inconclusive"]
+        assert "context:" in err
+
+    def test_json_carries_a_proven_failure(self, run):
+        rc, out, _ = run("--runs", "1", "--json", host="always")
+        doc = json.loads(out)
+        assert rc == 1
+        assert any("false-call" in r for r in doc["failures"])
+        assert doc["inconclusive"] is None
+
+    def test_json_keeps_the_strict_mcp_note_off_stdout(self, run):
+        # --strict-mcp-config adds a third context line; under --json it goes
+        # where the other two go.
+        _rc, out, err = run("--runs", "1", "--json", "--strict-mcp-config")
+        assert json.loads(out)["inconclusive"]
+        assert "--strict-mcp-config on" in err
+
+    def test_without_json_the_context_stays_on_stdout(self, run):
+        _rc, out, err = run()
+        assert "context:" in out
+        assert "context:" not in err
+
+    def test_json_sends_every_context_line_to_stderr(self, run):
+        # All three lines a real run prints: the rules count, the rules
+        # caveat, and the tool surface from the init event.
+        _rc, out, err = run("--json")
+        json.loads(out)
+        assert "1 rule(s) installed" in err
+        assert "these are standing instructions" in err
+        assert "host offered 3 tool(s) across 1 MCP server(s)" in err
+        assert "host offered" not in out
+
+    def test_json_sends_a_lock_file_error_to_stderr(self, run, monkeypatch):
+        from boost_cli.core import lockfile
+
+        def broken():
+            raise OSError("unreadable")
+        monkeypatch.setattr(lockfile, "all_installed", broken)
+        _rc, out, err = run("--json")
+        json.loads(out)
+        assert "could not read the lock file" in err
+
+    def test_a_perfect_host_at_a_ceiling_of_zero_is_never_convicted(self, run):
+        # 11 runs x 8 no-call prompts = 88, where the k=0 lower bound used to
+        # come out at ~3e-18 and a flawless host was told it FAILED.
+        rc, out, _ = run("--runs", "11", "--ceiling-false-call", "0")
+        assert rc == 2
+        assert "FAIL:" not in out
+        assert "cannot be cleared at any sample size" in out
+
+
+def _defaults() -> dict:
+    """Every shipped default, from the parser itself."""
+    return vars(MOD.build_parser().parse_args([]))
 
 
 def _assistant_call(name: str) -> str:

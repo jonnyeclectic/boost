@@ -116,7 +116,20 @@ opt-in evals stay out of `check` and all degrade cleanly:
   avoid. Rates carry a Wilson interval over N runs and floors are judged
   against the bound, not the point estimate: at 3/3 the normal approximation
   claims [1.00, 1.00] and would let a wording regression hide behind one lucky
-  run. Drives a real host, so it is opt-in, out of `check`, and degrades
+  run. A bound judged that way needs **enough N to be reachable**, and the
+  ceiling half is where that bites: at k=0 the Wilson upper bound is
+  z²/(n+z²), a function of N alone, so at the old `--runs 1` default a
+  flawless host was told it FAILED (0.3244 against a 0.20 ceiling, unclearable
+  below n=16). `--runs` defaults to 3, `min_n_for_ceiling` computes the
+  minimum for any ceiling, and a sample below it reports INCONCLUSIVE with its
+  own exit code (2) rather than a red that says nothing about the host —
+  unless its Wilson *lower* bound is already over the ceiling. Too small to
+  pass is not too small to fail: a conclusive red below the minimum is still a
+  red (exit 1), and a no-call half with no observations at all is
+  INCONCLUSIVE, never a pass. The
+  ceiling is 0.25 so one slip in 24 passes and two do not — a zero-tolerance
+  half beside a floor that absorbs four misses is not the same measurement
+  twice. Drives a real host, so it is opt-in, out of `check`, and degrades
   cleanly when `claude` is not on `PATH`.
 
 The `[eval]` extra (`pip install -e '.[eval]'`) carries `ranx` + `ragas`; nothing
