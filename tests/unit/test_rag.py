@@ -526,9 +526,9 @@ class TestAnIndexBoostCannotSave:
 
     @staticmethod
     def _refuse(monkeypatch, exc):
-        def refuse(*a, **k):
-            raise exc
+        refuse = mock.Mock(side_effect=exc)
         monkeypatch.setattr(rag.tempfile, "mkstemp", refuse)
+        return refuse
 
     def test_an_unwritable_cache_dir_is_an_error_naming_it(self, corpus,
                                                             monkeypatch):
@@ -547,11 +547,29 @@ class TestAnIndexBoostCannotSave:
 
     def test_search_still_degrades_rather_than_raising(self, corpus,
                                                        monkeypatch):
-        # ensure() is what search calls; a BoostError is an Exception, so it
-        # still answers "no index" and search falls back to frontmatter.
+        # ensure() is what search calls. The build must really reach _save
+        # and be refused there, so what ensure() swallows is the BoostError
+        # reindex prints: search then answers "no index" and falls back to
+        # frontmatter at exit 0 instead of exiting 1 on a cold cache.
+        _root, entries = corpus
         monkeypatch.setattr(registry, "list_taps", lambda: ["a-tap"])
-        self._refuse(monkeypatch, PermissionError(13, "Permission denied"))
+        monkeypatch.setattr(rag.catalog, "all_entries", lambda: entries)
+        build, raised = rag.build, []
+
+        def spy(*a, **k):
+            try:
+                return build(*a, **k)
+            except Exception as e:
+                raised.append(e)
+                raise
+
+        monkeypatch.setattr(rag, "build", spy)
+        refuse = self._refuse(monkeypatch,
+                              PermissionError(13, "Permission denied"))
         assert rag.ensure() is False
+        assert refuse.called                  # the build got as far as _save
+        assert [type(e) for e in raised] == [BoostError]
+        assert rag.ready() is False
 
     def test_a_full_disk_is_not_told_to_chmod(self, corpus, monkeypatch):
         _root, entries = corpus

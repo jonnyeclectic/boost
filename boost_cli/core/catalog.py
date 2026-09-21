@@ -254,7 +254,6 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
         raise BoostError("tap %s is not cloned" % tap.name,
                         hint="run `boost update %s`" % tap.name)
     entries = scan_dir(tap.path, tap.name, tap.curated)
-    paths.ensure_dirs()
     payload = json.dumps({
         "tap": tap.name,
         "url": tap.url,
@@ -271,7 +270,10 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
     # back to the in-place write that always worked there. If neither lands
     # (a full disk), the scan in hand is still the answer: a cache is a
     # speed-up, and failing to keep one is never an error (see load_tap).
+    # That includes a cache dir it cannot create under a read-only ~/.boost,
+    # which exited 70 here before `reindex` reached the error it owes.
     try:
+        paths.ensure_dirs()
         util.atomic_write_text(tap.cache_file, payload)
     except OSError:
         try:

@@ -2179,6 +2179,28 @@ class TestReindex:
         assert not list(paths.cache_dir().glob(".rag_postings.sqlite.*.tmp"))
         boost("reindex", "--force")               # and once it is writable
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_cache_dir_it_cannot_create_names_boost_home(self, boost,
+                                                           tapped):
+        # A cloned tap, no cache dir and a read-only ~/.boost: rebuild_tap
+        # exited 70 creating the dir before the index could say what to fix.
+        shutil.rmtree(paths.cache_dir())
+        paths.boost_home().chmod(0o500)
+        try:
+            r = boost("reindex", expect=1)
+        finally:
+            paths.boost_home().chmod(0o700)
+        assert "could not save the catalog cache for fixture-tap" \
+            in " ".join(r.err.split())
+        assert r.err.splitlines()[-2:] == [
+            "Error: could not save the search index in ~/.boost "
+            "(Permission denied)",
+            "  hint: run `chmod u+w ~/.boost`"]
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+
     def test_json_stats(self, boost, tapped):
         r = boost("reindex", "--json")
         data = json.loads(r.out)

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
@@ -12,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, gitutil, lockfile, paths, policy, util
+from . import config, gitutil, lockfile, output, paths, policy, util
 
 
 @dataclass
@@ -573,7 +574,17 @@ def remove(name: str) -> Tap:
     if tap.path.exists():
         util.rmtree(tap.path)
     if tap.cache_file.exists():
-        tap.cache_file.unlink()
+        try:
+            tap.cache_file.unlink()
+        except OSError as e:
+            # A cache dir boost cannot write (doctor flags it) made untap exit
+            # 70 here with the tap already deregistered. The file left behind
+            # names no configured tap, which is what `boost clean` sweeps.
+            output.warn("could not remove the catalog cache for %s (%s) — "
+                        "make %s writable, then run `boost clean`"
+                        % (tap.name, e.strerror or e,
+                           paths.tilde(tap.cache_file.parent)),
+                        stream=sys.stderr, wrap=True)
     return tap
 
 

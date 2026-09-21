@@ -72,8 +72,9 @@ def refresh_names() -> int:
     """Rebuild the names cache from the tap caches. Returns the name count.
 
     Called after anything that changes the catalogue (tap, untap, update,
-    heal), and lazily by :func:`_cached_names` when the file is missing, so a
-    user who never runs those still gets completion on their first TAB.
+    heal), and lazily by :func:`_cached_names` when the file is missing or
+    unreadable, so a user who never runs those still gets completion on their
+    first TAB.
     """
     global _WARNED_UNSAVED
     names = sorted({str(e.get("name", "")) for e in catalog.all_entries()
@@ -106,11 +107,20 @@ def refresh_names() -> int:
 
 def _cached_names() -> list[str]:
     path = names_file()
-    if not path.exists():
-        refresh_names()
     # errors="replace" rather than a raise: a cache corrupted by a half-written
     # file must degrade to whatever is readable, not break the prompt.
-    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        # Missing, or unreadable: the root-owned 0600 copy a `sudo boost` run
+        # leaves emptied TAB silently while doctor said healthy. Rebuilding
+        # replaces it whenever the dir is writable; when it is not, TAB offers
+        # nothing, as it would for a missing file.
+        refresh_names()
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
     return [line for line in text.split("\n") if line]
 
 

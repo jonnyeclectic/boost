@@ -124,6 +124,12 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.delenv("BOOST_NO_EMBED", raising=False)
     monkeypatch.setenv("NO_COLOR", "1")         # plain output for assertions
     monkeypatch.setenv("BOOST_ASSUME_YES", "1")  # never block on confirm()
+    # Once-per-process warnings for a cache boost could not save. A flag one
+    # test left set would silence the warning in the next, so an assertion
+    # that it is absent would pass for the wrong reason.
+    from boost_cli.core import catalog, complete
+    monkeypatch.setattr(complete, "_WARNED_UNSAVED", False)
+    monkeypatch.setattr(catalog, "_UNSAVED", set())
     return home
 
 

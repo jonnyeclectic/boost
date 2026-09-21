@@ -210,12 +210,10 @@ class TestDoctor:
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")
     def test_a_names_file_it_cannot_write_or_replace_is_a_warning(
-            self, boost, tapped, monkeypatch):
+            self, boost, tapped):
         # Read-only file in a read-only dir: neither the replace nor the
         # in-place write can land, and `update` must still finish.
-        from boost_cli.core import catalog, complete
-        monkeypatch.setattr(complete, "_WARNED_UNSAVED", False, raising=False)
-        monkeypatch.setattr(catalog, "_UNSAVED", set())
+        from boost_cli.core import complete
         complete.names_file().chmod(0o444)
         paths.cache_dir().chmod(0o500)
         try:

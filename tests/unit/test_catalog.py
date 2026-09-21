@@ -503,6 +503,30 @@ class TestACacheBoostCannotWrite:
         assert "make %s writable" % tap.cache_file.parent in err
         assert err.count("could not save") == 1            # once, not per load
 
+    def test_a_cache_dir_it_cannot_create_still_serves_the_scan(
+            self, sandbox, fixture_tap_src, monkeypatch, capsys):
+        # ~/.boost read-only and no cache dir: creating the dir is refused
+        # too. That was exit 70 from `search`, `info` and `reindex`, the last
+        # before rag._save could name ~/.boost as the directory to fix.
+        tap = registry.add(str(fixture_tap_src))
+        for f in paths.cache_dir().iterdir():
+            f.unlink()
+        paths.cache_dir().rmdir()
+        capsys.readouterr()
+
+        def refuse():
+            raise PermissionError(13, "Permission denied",
+                                  str(paths.cache_dir()))
+
+        monkeypatch.setattr(catalog.paths, "ensure_dirs", refuse)
+        entries = catalog.rebuild_tap(tap)
+        catalog.rebuild_tap(tap)                 # a second load, same command
+        assert [e["name"] for e in entries] == FIXTURE_NAMES
+        assert not paths.cache_dir().exists()
+        err = " ".join(capsys.readouterr().err.split())
+        assert "! could not save the catalog cache for fixture-tap" in err
+        assert err.count("could not save") == 1
+
 
 class TestEntrySetCache:
     """load_tap memoizes parsed skills on the cache file's (mtime_ns, size)

@@ -777,8 +777,10 @@ def _unsaved(e: OSError) -> BoostError:
     used to surface as exit 70 and a crash report for a PermissionError on
     the temp file, in a cache dir doctor already flags. The directory named is
     the one the write was refused in, so a missing cache dir under a read-only
-    ~/.boost names ~/.boost; chmod is offered only for a permission error,
-    since it cannot help a full or read-only disk.
+    ~/.boost names ~/.boost. `reindex` only gets here in that state because
+    catalog.rebuild_tap tolerates the same refused mkdir while loading taps.
+    chmod is offered only for a permission error, since it cannot help a full
+    or read-only disk.
     """
     where = paths.tilde(Path(e.filename).parent if e.filename
                         else paths.cache_dir())
