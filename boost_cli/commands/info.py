@@ -769,6 +769,13 @@ def cmd_preview(argv):
 _FAITHFULNESS_MIN_KEY = "ai.explain_faithfulness_min"
 _FAITHFULNESS_DEFAULT = 0.5
 
+# The heuristic explain's outline is a summary, not a reprint of the file.
+# Uncapped it printed 521 lines for one catalog entry, while "Key rules:" in
+# the same function stopped at 12. 25 is the line the audit measured against:
+# the median entry (16 headings) prints unchanged, and the ~28% over it get a
+# counted "… and N more headings" instead of a wall.
+_OUTLINE_CAP = 25
+
 
 def _faithfulness_threshold() -> float:
     """The minimum faithfulness score an AI explanation must clear (config-tunable).
@@ -841,8 +848,12 @@ def cmd_explain(argv):
     if headings:
         print()
         out.info(out.c("Outline:", out.BOLD))
-        for hashes, title in headings:
+        for hashes, title in headings[:_OUTLINE_CAP]:
             out.info("  " * len(hashes) + title)
+        if len(headings) > _OUTLINE_CAP:
+            more = len(headings) - _OUTLINE_CAP
+            out.info(out.role("  … and %d more heading%s"
+                              % (more, "" if more == 1 else "s"), "muted"))
     rules, seen = [], set()
     for line in body.splitlines():
         stripped = re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", line).strip()
