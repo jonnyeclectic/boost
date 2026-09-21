@@ -583,7 +583,24 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
             return ("set the key it was built with: `export %s=...` — "
                     "reinstalling the extra swaps in the local model and "
                     "forces all %s to be re-embedded" % (env, n))
+    if (reason == "model-unavailable" and status
+            and (status.get("model_failure") or {}).get("stage") == "load"):
+        # The files are on disk and the load itself failed: promising a
+        # download here contradicted reindex's own warning, which already
+        # leaves the network out for this stage.
+        return "retry loading the local model: `boost reindex --dense`"
     return _FIX.get(reason, "see `boost reindex --dense`")
+
+
+def current_fix() -> str:
+    """:func:`fix_hint` for the store as it is now, with the status it needs.
+
+    For callers with no status in hand: passing the reason alone loses the
+    detail some answers turn on (``no-key``'s built provider, a failed model's
+    stage), and the shard surfaces promised a download for a load failure.
+    """
+    st = status()
+    return fix_hint(st.get("reason", ""), st)
 
 
 def status(*, count: bool = False) -> dict:

@@ -381,6 +381,39 @@ class TestStatusNamesTheState:
         _record_on_disk()
         assert dense.status()["reason"] == "model-changed"
 
+    def test_an_empty_store_is_named_before_the_model(self, monkeypatch):
+        # Nothing to search is the first thing to fix: a store with no
+        # vectors needs building whether or not the model can load.
+        monkeypatch.setattr(dense, "_load", lambda: object())
+        monkeypatch.setattr(embed, "local_available", lambda: True)
+        _local_store(chunks=0)
+        _record_on_disk()
+        assert dense.status()["reason"] == "empty"
+
+    def test_a_load_failure_is_not_sent_to_download(self, monkeypatch):
+        # The files are on disk; the load failed. Doctor must not promise a
+        # 133 MB download the retry will not make.
+        monkeypatch.setattr(dense, "_load", lambda: object())
+        monkeypatch.setattr(embed, "local_available", lambda: True)
+        _local_store()
+        _record_on_disk(stage="load", error="RuntimeError: bad model")
+        st = dense.status()
+        assert st["reason"] == "model-unavailable"
+        hint = dense.fix_hint(st["reason"], st)
+        assert "`boost reindex --dense`" in hint
+        assert "huggingface.co" not in hint and "download" not in hint
+
+    def test_callers_without_a_status_get_the_same_answer(self, monkeypatch):
+        # The shard surfaces had only the reason, so a load failure was sent
+        # to download a model already on disk.
+        monkeypatch.setattr(dense, "_load", lambda: object())
+        monkeypatch.setattr(embed, "local_available", lambda: True)
+        _local_store()
+        _record_on_disk(stage="load", error="RuntimeError: bad model")
+        st = dense.status()
+        assert dense.current_fix() == dense.fix_hint(st["reason"], st)
+        assert "download" not in dense.current_fix()
+
     def test_the_remedy_retries_rather_than_rebuilds(self):
         hint = dense.fix_hint("model-unavailable")
         assert "`boost reindex --dense`" in hint

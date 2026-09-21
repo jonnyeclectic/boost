@@ -104,8 +104,10 @@ def _reset_localembed_failure():
     """
     from boost_cli.core import localembed
     localembed._failure = None
+    localembed._fetch_error = ""
     yield
     localembed._failure = None
+    localembed._fetch_error = ""
 
 
 @pytest.fixture()
