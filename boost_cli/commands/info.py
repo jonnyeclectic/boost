@@ -1043,6 +1043,7 @@ def cmd_home(argv):
     try:
         tap = registry.get(tap_name)
     except BoostError:
+        lock = store.resolve_lock_entry(args.name)[2]
         home = str((lock or {}).get("source_url") or "")
         if not home:
             out.info(_tilde(rel))   # local import — only a path to show
