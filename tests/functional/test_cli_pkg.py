@@ -2044,6 +2044,29 @@ class TestBundleAuditFindings:
         assert "failed" not in real.out
         assert lockfile.installed()["brainstorming"]["tap"] == "newtap-src"
 
+    def test_dry_run_resolves_a_line_whose_derived_tap_is_already_there(
+            self, boost, sandbox, fixture_tap_src, tmp_path):
+        # Tapped once under its derived name, the tap is present: a line
+        # naming a skill it lacks misses now, in the preview as in the run.
+        src = _copy_tap(fixture_tap_src, tmp_path / "newtap-src")
+        boost("tap", src.as_posix())
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap myalias %s\nskill newtap-src:ghost\n"
+                      % src.as_posix(), encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run", expect=None)
+        assert "cannot resolve yet" not in dry.out
+        assert dry.rc != 0 and "ghost" in dry.out
+
+    def test_dry_run_survives_a_tap_line_it_cannot_parse(self, boost, tapped,
+                                                         tmp_path):
+        # A bare NAME with no URL has no derivable name: the preview keeps
+        # NAME and carries on rather than failing on the parse.
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap foo\nskill brainstorming\n", encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run")
+        assert "would tap foo" in dry.out
+        assert "cannot parse tap spec" not in dry.out + dry.err
+
     def test_dry_run_remembers_what_it_would_install(self, boost, tapped,
                                                      tmp_path):
         # A later line naming the same item meets it as the real run would:

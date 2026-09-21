@@ -1433,7 +1433,12 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 would_tap.add(tname)
                 # no derivable name: NAME is then all there is to match
                 with contextlib.suppress(BoostError):
-                    would_tap.add(registry.parse_spec(turl or tname)[0])
+                    derived = registry.parse_spec(turl or tname)[0]
+                    # Already configured under that name, a skill line naming
+                    # it resolves now and misses the way the real run will,
+                    # so it must not be deferred as "cannot resolve yet".
+                    if derived not in have_taps:
+                        would_tap.add(derived)
                 out.info("would tap %s" % tname)
                 taps_added += 1
                 continue
