@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>60</b><span>Planned</span></div>
-      <div class="stat"><b>475</b><span>Loop finds</span></div>
+      <div class="stat"><b>61</b><span>Planned</span></div>
+      <div class="stat"><b>476</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2053,6 +2053,30 @@ Likely fix: <code>paths.ensure_dirs</code> callers on the doctor, heal, update a
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">With ~/.boost read-only and no cache dir, update, heal and doctor exit 70; heal --dry-run exits 0 while heal exits 70…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="keyed-no-store-hint-disagrees-with-shard-remedy">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Consistency · Bug</span></div>
+        <h3>With an API key exported and no vector store yet, <code>doctor</code> and <code>search</code> send the user to a paid build while <code>quickstart</code> offers the free download</h3>
+        <p><b>Found while verifying the quickstart shard-status fix.</b> After that fix, <code>shards.remedy()</code>
+tells a keyed machine with no store to <code>unset VOYAGE_API_KEY</code> and run
+<code>boost update --shards</code>, which downloads the published keyless vectors for free.
+<code>boost doctor</code> and <code>boost search</code> read <code>dense.fix_hint("no-store")</code>
+instead, which says <em>build it: <code>boost reindex --dense</code></em>. With a key in force,
+that embeds the whole catalogue through the paid API.
+
+That leaves two commands giving the same user contradictory advice, which is the thing
+<code>fix_hint</code> exists to prevent. <b>Fix direction:</b> when the reason is
+<code>no-store</code> and a key outranks the local model, have <code>fix_hint</code> answer with
+<code>shards.remedy()</code> (or the same table row), so <code>doctor</code>, <code>search</code>,
+<code>quickstart</code> and <code>update --shards</code> give one answer. Keep the manifest fetch off
+the search path: <code>search</code> must not touch the network to word a hint.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">On a keyed machine with no vector store, doctor and search say "build it" (paid), while quickstart and update --shards say to unset the key and download free…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

@@ -160,6 +160,32 @@ class TestVectorsResyncWhenATapMoves:
         assert "`boost reindex --dense` keeps them current" in flat
         assert "unset" not in flat
 
+    def test_the_incompatible_resync_lines_are_muted(
+            self, boost, moved, monkeypatch, vector_store):
+        # The "not yet" line it replaced was muted; the replacement folds
+        # over several lines and every one of them must stay muted, which
+        # only holds if the message is wrapped before it is coloured.
+        from boost_cli.core import dense, embed, shards
+        monkeypatch.setattr(embed, "provider", lambda: "voyage")
+        monkeypatch.setattr(embed, "model", lambda: "voyage-4")
+        monkeypatch.setattr(embed, "dimension", lambda: 1024)
+        monkeypatch.setattr(embed, "local_available", lambda: True)
+        assert vector_store()["ready"]
+        monkeypatch.setattr(dense, "ready", lambda: True)
+        monkeypatch.setattr(shards, "fetch_manifest", lambda *a, **k: {
+            "version": 1, "provider": "local",
+            "model": "BAAI/bge-small-en-v1.5", "dim": 384,
+            "shards": [], "_url": "file:///x"})
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        monkeypatch.setenv("COLUMNS", "60")
+        lines = boost("update", "--taps-only", "--force").out.splitlines()
+        first = next(i for i, x in enumerate(lines) if "are now stale" in x)
+        last = next(i for i, x in enumerate(lines) if "paid API" in x)
+        assert last > first                     # the message folded
+        for line in lines[first:last + 1]:
+            assert line.startswith("  \033[2m") and line.endswith("\033[0m")
+
     def test_an_unreachable_manifest_still_reports_the_staleness(
             self, boost, moved, monkeypatch):
         from boost_cli.core import dense, shards
