@@ -41,6 +41,16 @@
      what lets the grid item reach the width the break makes possible. */
   .rcard code { overflow-wrap: anywhere; }
 
+  /* An off-screen card skips style, layout and paint until it nears the
+     viewport; its text still ships, finds, and reads to assistive tech. The
+     board's Lighthouse cost was never bytes or script but layout and paint of
+     ~11,000 elements (see roadmap-page-weight-grows-without-bound), and its
+     median had sunk onto the 0.80 floor. The size is a placeholder until a
+     card first renders, after which `auto` remembers the real one: settled
+     cards are ~300px, open cards carry their whole write-up (~3,300px). */
+  .rcard { content-visibility: auto; contain-intrinsic-block-size: auto 3300px; }
+  .rcard:has(> .cardbody > .writeup) { contain-intrinsic-block-size: auto 300px; }
+
   /* Finished cards link their write-up instead of shipping it. A closed
      details element came first and fixed what it aimed at — 705 ms styleLayout
      + 393 ms paint against 20 ms of script — but it deliberately did not
