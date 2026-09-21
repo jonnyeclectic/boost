@@ -88,11 +88,16 @@ def _list(scope, host, event=None, as_json=False) -> int:
                  + (" for event '%s'" % event if event else ""))
         return 0
     out.table(
-        [(r["host"], r["scope"], r["event"], r["name"], r["matcher"] or "-",
+        [(r["name"], r["host"], r["scope"], r["event"], r["matcher"] or "-",
           r["command"]) for r in rows],
-        headers=("host", "scope", "event", "name", "matcher", "command"),
+        # `name` leads because a narrow pane drops columns right to left: it is
+        # what `hooks remove -n` takes, so it goes last, while `host` — the
+        # same word on every row — goes before it. Fourth, it went second.
+        headers=("name", "host", "scope", "event", "matcher", "command"),
         # A hook's command is what the user came to read — a clipped one
         # cannot be compared against what they registered, or copied back.
+        # Only it: protecting `name` too let the two outgrow the pane together
+        # with nothing left to drop.
         keep=("command",))
     return 0
 

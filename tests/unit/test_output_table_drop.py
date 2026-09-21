@@ -23,10 +23,12 @@ import pytest
 
 from boost_cli.core import output
 
-# The shape from `boost hooks list` (commands/hooks.py:90): six columns, the
-# one the user came to read is the *last* and is the protected one, so every
-# dead column is a leading one. Rows are a sandbox ~/.claude/settings.json
-# carrying two boost-managed hooks.
+# The shape `boost hooks list` had when this fitter was written: six columns,
+# the one the user came to read is the *last* and is the protected one, so
+# every dead column is a leading one. Rows are a sandbox ~/.claude/settings.json
+# carrying two boost-managed hooks. `hooks list` itself now leads with `name`
+# (see tests/functional/test_cli_hooks.py::TestListColumnOrder); this fixture
+# keeps the old order because it tests the fitter, not that command.
 HOOK_HEADERS = ("host", "scope", "event", "name", "matcher", "command")
 HOOK_ROWS = [
     ("claude", "global", "SessionStart", "bmad", "startup|resume|clear",
