@@ -505,3 +505,34 @@ class TestWriteUpLinksResolveOnTheirOwnPR:
         assert "github.event_name == 'pull_request' &&" in line
         # {0} must be the checkout itself, or the remap points nowhere.
         assert re.search(r"''', github\.workspace\)", line), line
+
+
+class TestOffScreenCardsSkipLayout:
+    """The board's Lighthouse cost is layout and paint of ~11,000 elements, and
+    its median sank onto the 0.80 floor (lighthouse-flips-on-byte-identical-
+    input). Off-screen cards are `content-visibility: auto`; these pin the rule,
+    the hook its size estimate keys on, and the two browser sweeps that must
+    render every card or they stop measuring the ones below the fold."""
+
+    def test_cards_are_content_visibility_auto(self):
+        html = _CODE_HTML.read_text(encoding="utf-8")
+        assert _declares(html, ".rcard", "content-visibility: auto")
+        assert _declares(html, ".rcard", "contain-intrinsic-block-size: auto")
+
+    def test_the_settled_size_hook_matches_a_generated_settled_card(self):
+        html = _CODE_HTML.read_text(encoding="utf-8")
+        assert _declares(html, ".rcard:has(> .cardbody > .writeup)",
+                         "contain-intrinsic-block-size: auto")
+        card = _load_builder().render_code_card(
+            {"id": "x", "status": "shipped", "category": "C", "title": "T",
+             "body": "B", "complexity": "S", "impact": "Med", "wow": 1,
+             "note": "n", "_file": "x.md", "pr": "1"})
+        # `>` is direct-child: the paragraph must sit right under <article>.
+        inner = card.split(">", 1)[1].rsplit("</article>", 1)[0]
+        assert re.search(r'^\s*<p class="cardbody"><a class="writeup"', inner,
+                         re.M), card
+
+    @pytest.mark.parametrize("script", ["visual_check.mjs", "a11y_check.mjs"])
+    def test_browser_sweeps_render_every_card(self, script):
+        text = (_ROOT / "tests" / "visual" / script).read_text(encoding="utf-8")
+        assert ".rcard{content-visibility:visible!important}" in text

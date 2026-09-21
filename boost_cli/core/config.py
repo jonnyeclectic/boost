@@ -119,6 +119,38 @@ DEFAULT_TAPS = [
 ]
 
 
+# The one sentence that names where setup lives, and the command it names is
+# `quickstart` rather than `tap --defaults` on purpose: the two setup paths are
+# not equivalent. `quickstart` pins each registry to the commit its published
+# vectors describe and can import those vectors; `tap --defaults` does neither.
+# README leads with quickstart while ~15 source sites route to tap --defaults
+# and none of the newcomer-plausible surfaces (search, doctor, taps, browse,
+# list) named quickstart at all.
+FIRST_RUN_HINT = ("new here? `boost quickstart` taps the starter registries "
+                  "and indexes them for search")
+
+
+def first_run() -> bool:
+    """True when config.json names no registry, so nothing is searchable yet.
+
+    Lives here rather than beside `registry.list_taps` because `boost --help`
+    asks it, and help already loads this module for its log level: answering
+    through `registry` pulled gitutil, lockfile, policy and subprocess onto the
+    help path for a question this file can answer alone.
+
+    A config.json that exists but cannot be parsed is **not** a first run.
+    `get` folds it into DEFAULTS, where the tap list is empty, but the file
+    being there means boost was set up here and its clones may still be on
+    disk — unknown state, and "new here?" would be a guess dressed as a fact.
+    Read through `jsonstate` directly, not `_read_raw`, which would print the
+    corrupt-file warning a second time on the same screen.
+    """
+    data, err = jsonstate.read_object(paths.config_path())
+    if err is not None:
+        return False
+    return not (data or {}).get("taps")
+
+
 # Path to the bundled curated registry catalog (skills + rules + workflows).
 REGISTRY_CATALOG = paths.package_root() / "data" / "registries.json"
 
@@ -245,6 +277,29 @@ def _cached() -> dict:
         _cache = cache
         _cache_key = key
     return cache
+
+
+def check() -> str | None:
+    """Why config.json cannot be read, or None when it reads or is absent.
+
+    `load()` degrades a corrupt file to DEFAULTS with one stderr warning, which
+    is right for an ordinary command and wrong for `doctor`: with the tap list
+    gone, every check passed and the verdict read "ready to set up" on a
+    machine with clones on disk, while `heal` found "nothing to heal". This
+    reports the raw state instead, as `lockfile.check()` does for the lock.
+    """
+    return jsonstate.read_object(paths.config_path())[1]
+
+
+def unlisted_clones() -> list[str]:
+    """Tap clone directories under `repos/`, by name.
+
+    With config.json unreadable no tap is listed, so these are what `doctor`
+    can still see of the user's registries.
+    """
+    root = paths.repos_dir()
+    return sorted(d.name for d in root.iterdir() if d.is_dir()) \
+        if root.is_dir() else []
 
 
 def load() -> dict:

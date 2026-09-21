@@ -2,15 +2,15 @@
 id: search-rows-use-term-width-so-piping-drops-the-tap-column
 board: code
 section: planned
-status: planned
+status: shipped
 category: UX · Bug
 complexity: M
 impact: Med
 wow: 3
 note: commands/discovery.py:219 builds the search column plan from out.term_width(), which …
 order: 234
-owner:
-pr:
+owner: loop/search-rows-pane
+pr: 887
 title: <code>boost search</code> rows fit to <code>term_width()</code>, not <code>pane_width()</code>, so a piped search silently loses the TAP column entirely
 ---
 <b>Measured.</b> Piped, <code>boost search orchestrator | grep -c sickn33/antigravity</code> returns 0, while <code>COLUMNS=200</code> on the identical pipe prints that tap in the row — and <code>pane_width</code> has 0 callers in <code>boost_cli/commands/discovery.py</code> against 6 <code>out.term_width()</code> calls, so the search row plan (discovery.py:219) is built from an assumed 80 columns that <code>search_layout</code> (output.py:674-676) then uses to drop the tap column entirely.

@@ -348,12 +348,44 @@ def index_path() -> Path:
 
 
 def surface(entry: dict) -> str:
-    """The item's own identifying text, indexed alongside its body.
+    """The item's own identifying text, repeated ahead of its body.
 
     A chunked index got name matching for free: the name sat in whichever chunk
-    happened to contain it. One document per entry has to state it, and the
-    de-hyphenated form matters because `tokenize` does not split on hyphens —
-    without it the query "code reviewer" cannot match the item `code-reviewer`.
+    happened to contain it. One document per entry has to state it.
+
+    What the second, de-hyphenated copy buys is a **field weighting**, not
+    hyphen handling. An earlier version of this docstring claimed the latter,
+    and both halves of that claim were false at the commit that wrote them:
+    `tokenize` splits on `[^a-z0-9]+`, which is hyphens and underscores
+    included, so over the 20-tap eval corpus (10,731 entries) de-hyphenating
+    the name changes the token list for **0** of them; and `read_body` already
+    prepends the name and the description to every body, so the name reaches
+    the index whether or not this function exists.
+
+    The measured effect of naming the entry twice here, ahead of a body that
+    names it once more, is that :func:`_make_docs` counts every name token
+    **3x** and every description token **2x** — for every entry, hyphenated or
+    not. That weighting, not hyphen handling, is what the copy is for.
+
+    Ablating only the de-hyphenated copy — `surface` returning name plus
+    description — moves no `eval` floor, which is why the guard on it has to
+    be arithmetic rather than the gate. Measured over the 20-tap eval corpus
+    (10,731 entries): recall@10 0.8407 and hit@1 0.4835 are identical either
+    way, MRR goes 0.6065 -> 0.6048 and nDCG@k 0.6552 -> 0.6540. What moves is
+    the order — across the 141 golden + golden-natural queries the raw
+    :func:`retrieve` top-10 changes order for **20** and membership for
+    **5**. Those are raw name lists, not the gate's
+    content-hash-deduplicated ranks; do not conflate the two.
+
+    Re-measure rather than carrying those numbers forward. The roadmap item
+    that found this scored the same ablation at 1/91 = 0.011 recall@10, from
+    before `SYMBOL_ALIASES` and the INDEX_VERSION 8 re-tokenize landed in
+    this module; `tests/eval/taps.txt` has not moved since, so the corpus is
+    the same pinned list and the index over it is not.
+
+    `TestSurfaceFieldWeighting` in tests/unit/test_rag.py pins the exact
+    multiplicities, because asserting membership alone ("reviewer" in tf)
+    passes with the copy deleted — which is how this went unguarded.
     """
     name = entry.get("name", "")
     return " ".join([name, name.replace("-", " ").replace("_", " "),

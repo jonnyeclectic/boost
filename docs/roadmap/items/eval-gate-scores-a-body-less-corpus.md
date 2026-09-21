@@ -2,15 +2,15 @@
 id: eval-gate-scores-a-body-less-corpus
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Retrieval eval
 complexity: M
 impact: Med
 wow: 3
 note: The Tier 1 required gate has no check that the corpus it scores actually contains the…
 order: 211
-owner:
-pr:
+owner: loop/eval-corpus-bodies
+pr: 908
 title: <code>make eval</code> scores a corpus with every SKILL.md body missing, reports all four floors PASS, and scores HIGHER than the real corpus
 ---
 <b>Measured.</b> With <code>$BOOST_HOME/repos</code> deleted but the digest sentinel and catalog cache intact, <code>make eval</code>'s two commands print "eval corpus already tapped for this taps.txt — skipping", index the identical 10,152 entries across the identical 20 taps under the identical "BM25 full-content" label, and exit 0 with all four floors PASS — while the index's mean document length falls from 814.836780929866 to 40.5795902285264 tokens (95.0% of the scored text absent) and hit@1 RISES from 0.473 to 0.593, clearing its 0.40 floor by 48% instead of 18%.

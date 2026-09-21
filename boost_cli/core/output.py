@@ -537,10 +537,16 @@ def panel(lines, title: str | None = None, hue: str = "cyan") -> str:
     # itself to its content and sailed past the pane: `boost count` drew 108
     # columns into an 80-column terminal, and a box whose border wraps is the
     # worst-looking overflow the CLI has, because the shape itself breaks.
-    room = term_width() - 4
-    if title:
-        title = _clip_visible(title, room - 2)
-    lines = [_clip_visible(x, room) for x in lines]
+    #
+    # Fitted to the *pane*, not `term_width()`: a pipe has none, and fitting
+    # to an assumed 80 clipped `boost count | …`'s 110-column summary to 76,
+    # dropping its tail — the one panel whose lines are data. As `table` does.
+    avail = pane_width()
+    if avail is not None:
+        room = avail - 4
+        if title:
+            title = _clip_visible(title, room - 2)
+        lines = [_clip_visible(x, room) for x in lines]
     widths = [visible_len(x) for x in lines]
     tw = visible_len(title) if title else 0
     # A titled rule needs a space each side, hence the +2 / -2. Clipping above
@@ -629,6 +635,41 @@ def meter_hue(frac: float) -> str:
     return "pink"
 
 
+#: The fraction the page's weakest row is held at. An empty ``▱▱▱▱`` on a row
+#: the ranker chose to show reads as "no match", which is a claim it never
+#: made; one lit cell says "last on this page" instead.
+METER_FLOOR = 0.25
+
+
+def relevance_fractions(scores: Sequence[float]) -> list[float]:
+    """Map one screen of scores onto meter fractions, in the order given.
+
+    The bar reads as *standing on this page*: the best row fills it, the
+    weakest keeps one lit cell at :data:`METER_FLOOR`, and the rest land in
+    between. So the same row can draw a different bar under a different
+    ``--limit`` — the honest reading, because nothing here knows what a "good"
+    BM25 or RRF score is in the absolute.
+
+    Dividing by the top score alone cannot say this. A retrieval engine's
+    top-k scores are compressed by construction, and ``round(frac * 4)`` needs
+    a 12.5% gap before one of four cells goes out, so a whole screen draws the
+    same bar in the same hue. Stretching the page's own span adapts to
+    whatever spread it has, rather than to a constant tuned to one engine on
+    one corpus.
+
+    Equal scores carry no ordering, so a page that is all ties — and a page of
+    one row — fills every bar rather than inventing a loser.
+    """
+    if not scores:
+        return []
+    lo, hi = min(scores), max(scores)
+    if hi <= lo:
+        return [1.0] * len(scores)
+    span = hi - lo
+    return [METER_FLOOR + (1.0 - METER_FLOOR) * ((s - lo) / span)
+            for s in scores]
+
+
 def kind_label(kind: str) -> str:
     """Bracketed display text for a catalog kind — ``[skill]`` / ``[rule]`` /
     ``[workflow]``, an unknown kind bracketed verbatim, a missing one shown as
@@ -647,6 +688,10 @@ _SEARCH_INDENT = 2
 _CURATED_TAIL_W = 11
 
 
+#: A width no line reaches: what an unfitted plan (a pipe) measures against.
+_UNPANED = 10 ** 6
+
+
 @dataclass(frozen=True)
 class SearchLayout:
     """Column plan for one search-result screen, in visible cells.
@@ -661,9 +706,15 @@ class SearchLayout:
     desc_w: int          # room for an uncurated row's description
 
 
-def search_layout(cols: int, names: Sequence[str], kinds: Sequence[str],
-                  taps: Sequence[str]) -> SearchLayout:
+def search_layout(cols: int | None, names: Sequence[str],
+                  kinds: Sequence[str], taps: Sequence[str]) -> SearchLayout:
     """Plan the search-result columns for a ``cols``-wide terminal.
+
+    ``cols=None`` means there is no pane at all (a pipe — see
+    :func:`pane_width`): nothing is fitted, so no column is dropped, capped or
+    truncated. The name and the tap are what ``grep owner/repo`` and ``boost
+    info owner/repo:name`` need whole, and a 20-cell tap cap left
+    ``sickn33/antigravity…`` in a pipe that has room for anything.
 
     Sizing: the name column fits the widest shown name (capped at 32), the
     kind column the widest shown kind label (capped at ``[workflow]``'s 10),
@@ -679,6 +730,12 @@ def search_layout(cols: int, names: Sequence[str], kinds: Sequence[str],
     measures within ``cols`` (indent included) for any terminal 40 cells wide
     or more.
     """
+    if cols is None:
+        return SearchLayout(
+            cols=_UNPANED, name_w=max((visible_len(n) for n in names), default=1),
+            kind_w=max((visible_len(kind_label(k)) for k in kinds), default=0),
+            tap_w=max((visible_len(t) for t in taps), default=0),
+            desc_w=_UNPANED)
     avail = cols - _SEARCH_INDENT - _SEARCH_FIXED
     name_w = min(max((visible_len(n) for n in names), default=1), 32)
     kind_w = 0
@@ -845,6 +902,78 @@ def _fit_widths(widths, numeric, avail: int, sep: int = 2, floor: int = 1,
     return widths
 
 
+#: The narrowest a squeezed column may get before it is dropped instead: six
+#: visible characters and the ellipsis, which still carry a word.
+#:
+#: Why 7: piped at COLUMNS=66, `boost hooks list` fits all six of its columns
+#: with `event` squeezed to 7 — six, as it showed before columns could be
+#: dropped at all. At 8 that pane lost `matcher`, 8 wide and carrying real
+#: data, to buy one cell, and the row measured 61 into a 66-wide pane.
+#:
+#: What it costs, on what boost actually prints: `boost taps` renders UPDATED
+#: as YYYY-MM-DD (`_tap_updated_display`), so a date squeezed to the floor
+#: reads "2026-0…" — the month is gone, and the cell is barely more than the
+#: placeholder this function exists to stop printing. At 6 it would read
+#: "2026-…"; at 8, "2026-09…". A URL at the floor ("https:…") says nothing.
+_MIN_COL = 7
+
+
+def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=()):
+    """Choose which columns an `avail`-wide pane shows, and how wide.
+
+    Shrinking first (:func:`_fit_widths`, down to :data:`_MIN_COL`), then
+    dropping: a column that cannot be shown at a legible width is removed
+    **with its separator**, which is the only move that recovers the width
+    when the dead columns are leading ones — `rstrip` cannot reach a gutter
+    that has data to its right, so shrinking alone left `boost hooks list` 7
+    columns over an 80-column pane having already destroyed five of its six
+    columns.
+
+    An empty column — header and every cell with nothing to show, like
+    `boost taps`' curated column when no tap is curated — goes before anything
+    is shrunk: it carries no data and still costs a gutter, and keeping it
+    squeezed the real date beside it (piped at COLUMNS=57, "2026-0…" where 56
+    gave "2026-09…"). Only when the row does not fit as it is: a table that
+    fits is printed exactly as it always was.
+
+    Drop order is right to left, skipping `protected` (:func:`table`'s
+    ``keep``), which is never dropped, even when empty: these tables put the
+    identifier the user acts on first and the chrome that repeats on every row
+    last. The drop loop never removes the last column either — an empty table
+    is not a better answer than an over-wide one — and once nothing more may
+    go, the floor stops applying, so that column clips to the pane the way it
+    always did. When every column is protected the row overflows whole,
+    unchanged.
+
+    Returns the surviving column indexes (ascending) and their widths.
+    """
+    protected = set(protected)
+    show = list(range(len(widths)))
+
+    def total(ws) -> int:
+        return sum(ws) + sep * (len(ws) - 1)
+
+    if total(widths) > avail:
+        show = [i for i in show if widths[i] or i in protected] or show
+    order = [i for i in reversed(show) if i not in protected]
+
+    def fit(floor: int):
+        return _fit_widths([widths[i] for i in show],
+                           [numeric[i] for i in show], avail, sep=sep,
+                           floor=floor,
+                           protected=[j for j, i in enumerate(show)
+                                      if i in protected])
+
+    while True:
+        fitted = fit(_MIN_COL)
+        if total(fitted) <= avail:
+            return show, fitted
+        if not order or len(show) <= 1:
+            break
+        show.remove(order.pop(0))
+    return show, fit(1)
+
+
 def _keep_indexes(keep, headers, ncols) -> set[int]:
     """Resolve `table`'s ``keep`` — column indexes, header names, or a mix —
     to indexes. An unknown name is ignored rather than raising: a call site
@@ -869,6 +998,16 @@ def table(rows, headers=None, stream=None, keep=(), text=()) -> None:
     numeric columns are right-aligned, and when a row would overflow the
     terminal the widest text column is shrunk (its cells clipped with an
     ellipsis) so wide catalogs stay on one line instead of wrapping.
+
+    A text column is shrunk no narrower than :data:`_MIN_COL` (7 cells), and
+    a column that cannot be shown at that floor is **dropped** — the column
+    and its separator, in the header and the body alike — rather than rendered
+    as a placeholder that costs ink and carries nothing. A column with nothing
+    in it goes first; after that the order is right to left, skipping
+    ``keep``; the last surviving column is never dropped and clips to the
+    pane instead. See :func:`_fit_columns`, and :func:`search_layout` for the
+    same shape on the search screen. Nothing is announced: a dropped column is
+    a layout decision, not an event.
 
     On a color terminal, columns are joined by a dim ``│`` separator — the
     terminal cousin of the web stat blocks' hairline borders. Non-color output
@@ -906,9 +1045,13 @@ def table(rows, headers=None, stream=None, keep=(), text=()) -> None:
     else:
         sep, sep_w = "  ", 2
     avail = pane_width(stream)
+    show = list(range(ncols))
     if avail is not None:
-        widths = _fit_widths(widths, numeric, avail, sep=sep_w,
-                             protected=_keep_indexes(keep, headers, ncols))
+        show, fitted = _fit_columns(widths, numeric, avail, sep=sep_w,
+                                    protected=_keep_indexes(keep, headers,
+                                                            ncols))
+        for i, w in zip(show, fitted, strict=True):
+            widths[i] = w
 
     def fmt(cell: str, i: int) -> str:
         cell = _clip_visible(cell, widths[i])
@@ -917,10 +1060,11 @@ def table(rows, headers=None, stream=None, keep=(), text=()) -> None:
     if headers:
         # Bold each header cell individually: a whole-line wrap would be
         # cancelled at the first separator's RESET on color terminals.
-        cells = [c(fmt(str(h), i), BOLD) for i, h in enumerate(headers)]
+        cells = [c(fmt(str(headers[i]), i), BOLD)
+                 for i in show if i < len(headers)]
         print(sep.join(cells).rstrip(), file=stream)
     for r in rows:
-        print(sep.join(fmt(cell, i) for i, cell in enumerate(r)).rstrip(),
+        print(sep.join(fmt(r[i], i) for i in show if i < len(r)).rstrip(),
               file=stream)
 
 

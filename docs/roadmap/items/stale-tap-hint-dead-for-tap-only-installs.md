@@ -2,15 +2,15 @@
 id: stale-tap-hint-dead-for-tap-only-installs
 board: code
 section: planned
-status: planned
+status: shipped
 category: Tech-debt
 complexity: M
 impact: Med
 wow: 3
 note: CLAUDE.md's rule is that "search must never refresh taps in the background: _hint_sta…
 order: 244
-owner:
-pr:
+owner: loop/stale-tap-hint
+pr: 893
 title: The "taps last refreshed N days ago" hint can never fire on a machine that tapped and never ran <code>boost update</code> — the only writer of the marker is <code>update</code> itself
 ---
 <b>Measured.</b> The maintainer's own production install has 458 taps configured and no marker: <code>~/.boost/state/</code> is fully populated (pulse.jsonl 95k, lock-history/, snapshots/, and <code>last-shard-sync</code> stamped 8 Sep) while <code>last-tap-refresh</code> is absent — so the directory was not wiped, the file was simply never written across 458 taps, and the stale-tap hint CLAUDE.md describes as search's drift-reporting mechanism has never been able to fire there. The 20-tap eval corpus is the same: no marker. Two real installs, zero markers.

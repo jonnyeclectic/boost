@@ -546,8 +546,19 @@ class TestPanelFitsTerminal:
 
     def _rows(self, monkeypatch, cols, lines, **kw):
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: cols)
+        monkeypatch.setattr(output, "pane_width", lambda stream=None: cols)
         return output.panel(lines, **kw).split("\n")
+
+    def test_a_pipe_has_no_pane_so_nothing_is_clipped(self, monkeypatch):
+        # term_width() answers 80 in a pipe; fitting to that clipped
+        # `boost count | cat`'s summary and dropped its tail.
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "pane_width", lambda stream=None: None)
+        monkeypatch.setattr(output, "term_width", lambda: 40)
+        rows = output.panel("q" * 110, title="t" * 90).split("\n")
+        assert rows[1] == "│ " + "q" * 110 + " │"
+        assert "t" * 90 in rows[0]
+        assert len({output.visible_len(r) for r in rows}) == 1
 
     def test_untouched_when_it_already_fits(self, monkeypatch):
         rows = self._rows(monkeypatch, 40, "x" * 36)
@@ -574,6 +585,13 @@ class TestPanelFitsTerminal:
         rows = self._rows(monkeypatch, 24, "a" * 50, title="t" * 40)
         assert all(output.visible_len(r) <= 24 for r in rows)
         assert len({output.visible_len(r) for r in rows}) == 1
+
+    def test_a_clipped_title_keeps_exactly_the_room_beside_the_rule(self,
+                                                                     monkeypatch):
+        # 24 columns: 20 of content room, and a titled rule spends one space
+        # each side, so the title gets 18 — 17 characters plus the ellipsis.
+        rows = self._rows(monkeypatch, 24, "a" * 50, title="t" * 40)
+        assert rows[0].startswith("╭─ " + "t" * 17 + "… ")
 
     def test_a_narrow_pane_still_yields_a_box(self, monkeypatch):
         rows = self._rows(monkeypatch, 8, "content that is far too long")
@@ -712,6 +730,73 @@ class TestMeter:
     def test_rounds_to_nearest_cell(self):
         # 0.6 * 5 = 3.0 -> exactly three filled
         assert output.meter(0.6, 5) == "▰▰▰▱▱"
+
+
+class TestRelevanceFractions:
+    """One screen of scores -> one screen of meter fractions.
+
+    The boundaries are the contract: the best row fills the bar, the weakest
+    holds exactly ``METER_FLOOR``, and the rest are linear in between. Every
+    value below is exact, because a drifted endpoint re-draws every search
+    row while still looking like a meter.
+    """
+
+    def test_spreads_a_page_the_top_score_alone_flattens(self):
+        # The measured defect: 15 BM25 hits within 2.1% of the top all render
+        # ▰▰▰▰ under score/top, because round(frac * 4) needs a 12.5% gap.
+        scores = [1.0 - 0.0015 * i for i in range(15)]
+        old = [output.meter(s / scores[0]) for s in scores]
+        assert set(old) == {"▰▰▰▰"}
+        new = [output.meter(f) for f in output.relevance_fractions(scores)]
+        assert new[0] == "▰▰▰▰"
+        assert new[-1] == "▰▱▱▱"
+        assert len(set(new)) == 4
+
+    def test_is_linear_between_the_floor_and_full(self):
+        assert output.relevance_fractions([4, 3, 2, 1]) == [1.0, 0.75, 0.5, 0.25]
+
+    def test_weakest_row_sits_exactly_on_the_floor(self):
+        assert output.METER_FLOOR == 0.25
+        last = output.relevance_fractions([9.0, 1.0])[-1]
+        assert last == output.METER_FLOOR
+        # One lit cell, not an empty bar: a row the ranker chose to show never
+        # reads as "no match".
+        assert output.meter(last) == "▰▱▱▱"
+        assert output.meter_hue(last) == "pink"
+
+    def test_best_row_fills_the_bar_and_takes_the_top_hue(self):
+        first = output.relevance_fractions([9.0, 1.0])[0]
+        assert first == 1.0
+        assert output.meter(first) == "▰▰▰▰"
+        assert output.meter_hue(first) == "cyan"
+
+    def test_keeps_the_caller_order_rather_than_sorting(self):
+        # Ranked order is the caller's; the row at index 1 is the best here.
+        assert output.relevance_fractions([2, 4, 1]) == [0.5, 1.0, 0.25]
+
+    def test_one_row_fills_the_bar(self):
+        assert output.relevance_fractions([7.0]) == [1.0]
+
+    def test_all_ties_fill_rather_than_inventing_a_loser(self):
+        assert output.relevance_fractions([3, 3, 3]) == [1.0, 1.0, 1.0]
+
+    def test_all_zero_scores_fill_rather_than_empty(self):
+        # score/top read this as 0 and drew ▱▱▱▱ on every row.
+        assert output.relevance_fractions([0.0, 0.0]) == [1.0, 1.0]
+
+    def test_empty_page_has_no_fractions(self):
+        assert output.relevance_fractions([]) == []
+
+    def test_negative_scores_still_span_the_bar(self):
+        # RRF and heuristic scores are not promised to be positive; the span
+        # is what matters, not the sign.
+        assert output.relevance_fractions([-1.0, -3.0]) == [1.0, 0.25]
+
+    def test_every_fraction_is_a_legal_meter_input(self):
+        for page in ([5, 4, 3, 2, 1], [1.0], [2, 2], [], [-4, 9, 0]):
+            for f in output.relevance_fractions(page):
+                assert 0.0 <= f <= 1.0
+                assert output.meter_hue(f) in output.TOKENS
 
 
 class TestHelpers:
@@ -875,16 +960,23 @@ class TestTableColor:
 
     def test_separator_width_counts_in_fit_budget(self, capsys, monkeypatch):
         import re
-        # 3 columns of visible width 4 + two 3-wide separators = 18 > 17,
-        # so exactly one text column must shrink; with the old 2-wide gutter
-        # (total 16) nothing would shrink. Proves sep=3 reaches _fit_widths.
+        # 3 columns of visible width 4 + two 3-wide separators = 18 > 17, so
+        # the row does not fit and — none of the columns being wide enough to
+        # give a cell away above the readable floor — the last one goes. With
+        # the 2-wide gutter (total 16) all three stay. Proves sep=3 reaches
+        # the fit budget.
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
         monkeypatch.setenv("COLUMNS", "17")
         output.table([("aaaa", "bbbb", "cccc")])
         vis = re.sub(r"\x1b\[[0-9;]*m", "",
                      capsys.readouterr().out.splitlines()[0])
         assert len(vis.rstrip()) <= 17
-        assert "…" in vis                            # a cell was clipped
+        assert "cccc" not in vis                     # a column was dropped
+        assert "aaaa" in vis and "bbbb" in vis
+        monkeypatch.delenv("CLICOLOR_FORCE")
+        monkeypatch.setenv("NO_COLOR", "1")
+        output.table([("aaaa", "bbbb", "cccc")])
+        assert capsys.readouterr().out == "aaaa  bbbb  cccc\n"
 
 
 class TestTable:
@@ -1446,6 +1538,38 @@ class TestSearchLayout:
     NAMES = ("commit-messages", "tdd-workflow", "safe-refactors")
     KINDS = ("skill", "workflow", "rule")
     TAPS = ("anthropics/skills", "obra/superpowers", "sdi/agent-rules")
+
+    def test_the_drop_order_boundaries_are_exact(self):
+        # Backfilled while touching search_layout: every threshold below had
+        # a surviving off-by-one mutant. A 32-cell name, `[skill]`, a 20-cell
+        # tap: at 98 columns the description gets exactly the 24 cells that
+        # keep the tap; one column less and the tap goes.
+        names, kinds, taps = ["n" * 32], ["skill"], ["t" * 20]
+        lay = output.search_layout(98, names, kinds, taps)
+        assert (lay.tap_w, lay.desc_w) == (20, 24)
+        assert output.search_layout(99, names, kinds, taps).desc_w == 25
+        assert output.search_layout(97, names, kinds, taps).tap_w == 0
+        # The name cap steps 32 -> 24 -> 16 -> 12 as the pane narrows.
+        assert output.search_layout(40, names, kinds, taps).name_w == 16
+        assert output.search_layout(34, names, kinds, taps).name_w == 12
+
+    def test_no_pane_plans_nothing_to_fit(self):
+        # A pipe (pane_width() is None): the caps and drops exist to fit a
+        # pane, and there is none. The tap and name are grep/info targets.
+        tap = "sickn33/antigravity-awesome-skills"          # 34 cells
+        name = "n" * 40
+        lay = output.search_layout(None, [name, "x"], ["workflow", "skill"],
+                                   [tap, "a/b"])
+        assert (lay.name_w, lay.kind_w, lay.tap_w) == (40, 10, 34)
+        assert lay.desc_w >= 10 ** 6
+        row = output.format_search_row(name, "d" * 500, "skill", tap, 1.0,
+                                       curated=False, installed=False, lay=lay)
+        assert tap in row and name in row and "d" * 500 in row
+        assert "…" not in row
+
+    def test_no_pane_with_nothing_shown_keeps_the_empty_columns_empty(self):
+        lay = output.search_layout(None, [], [], [])
+        assert (lay.name_w, lay.kind_w, lay.tap_w) == (1, 0, 0)
 
     def test_name_column_fits_the_widest_shown_name(self):
         lay = output.search_layout(100, self.NAMES, self.KINDS, self.TAPS)

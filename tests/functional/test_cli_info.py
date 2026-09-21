@@ -853,6 +853,58 @@ class TestExplain:
         assert "Key rules:" not in r.out
 
 
+# The outline used to print every heading in the file: 521 lines for one
+# catalog entry, while the "Key rules:" list beside it stopped at 12. The cap
+# is spelled out here rather than read from `info`, so the boundary is a
+# stated fact the code has to meet, not whatever the code happens to say.
+_OUTLINE_CAP = 25
+
+
+def _explain_outline(boost, monkeypatch, n):
+    """Run the no-AI explain over a skill with ``n`` headings.
+
+    Returns the outline block (the lines after "Outline:" up to the next
+    blank line, stripped) and the whole stdout.
+    """
+    body = "".join("%s Section %03d\n\nBody.\n\n" % ("#" if i == 1 else "##", i)
+                   for i in range(1, n + 1))
+    text = ("---\nname: many-headings\ndescription: Many headings.\n---\n\n"
+            + body + "- Always keep the rules list below the outline.\n")
+    monkeypatch.setattr(info, "_resolve_text",
+                        lambda name: (text, "skill", None, None))
+    r = boost("explain", "many-headings")
+    lines = r.out.split("\n")
+    start = [ln.strip() for ln in lines].index("Outline:") + 1
+    end = lines.index("", start)
+    return [ln.strip() for ln in lines[start:end]], r.out
+
+
+class TestExplainOutlineCap:
+    @pytest.mark.parametrize("n", [1, _OUTLINE_CAP - 1, _OUTLINE_CAP])
+    def test_at_or_under_the_cap_prints_every_heading_and_no_marker(
+            self, boost, monkeypatch, n):
+        outline, stdout = _explain_outline(boost, monkeypatch, n)
+        assert outline == ["Section %03d" % i for i in range(1, n + 1)]
+        assert "more headings" not in stdout
+
+    def test_one_over_the_cap_keeps_the_first_cap_and_counts_one_more(
+            self, boost, monkeypatch):
+        outline, _ = _explain_outline(boost, monkeypatch, _OUTLINE_CAP + 1)
+        assert outline == (["Section %03d" % i
+                            for i in range(1, _OUTLINE_CAP + 1)]
+                           + ["… and 1 more heading"])          # singular
+
+    def test_the_marker_counts_every_dropped_heading(self, boost, monkeypatch):
+        outline, stdout = _explain_outline(boost, monkeypatch, 60)
+        assert len(outline) == _OUTLINE_CAP + 1
+        assert outline[-2] == "Section 025"
+        assert outline[-1] == "… and 35 more headings"
+        assert "Section 026" not in stdout
+        # The sibling section still follows the capped outline.
+        assert "Key rules:" in stdout
+        assert "• Always keep the rules list below the outline." in stdout
+
+
 # ── log ──────────────────────────────────────────────────────────────────
 
 class TestLog:
@@ -1264,6 +1316,22 @@ class TestMaterializedKinds:
         assert not re.search(r"source\s+rules\s*$", r.out, re.MULTILINE)
         data = json.loads(boost("info", "dep-mgmt", "--json").out)
         assert data["kind"] == "rule"
+
+    def test_info_and_deps_on_a_not_installed_rule_leave_the_cone_alone(
+            self, boost, fixture_tap_src, tmp_path):
+        # docs/roadmap/items/info-deps-materialize-a-dir-they-then-reject.md:
+        # both commands used to `sparse-checkout add /rules/*` for a directory
+        # `source_dir_for` then rejected — a git write from a read-only command.
+        from boost_cli.core import registry
+        tap = _git_rule_tap(fixture_tap_src, tmp_path / "rule-tap")
+        boost("tap", str(tap))
+        cone = registry.get("rule-tap").path / ".git" / "info" / "sparse-checkout"
+        before = cone.read_bytes()
+
+        boost("info", "dep-mgmt")
+        boost("deps", "dep-mgmt")
+
+        assert cone.read_bytes() == before
 
     def test_explain_installed_rule_keeps_description_and_a_real_outline(
             self, boost, fixture_tap_src, tmp_path):

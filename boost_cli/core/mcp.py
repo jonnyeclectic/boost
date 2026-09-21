@@ -175,6 +175,18 @@ PROTOCOL_VERSION = "2024-11-05"
 # one kind of three) and leaves the conclusion to the reader.
 #
 # NON-CAPTURING, and this is a measured knife edge rather than a manner.
+#: The bound: the one element that says when NOT to call. It lives here so
+#: `INSTRUCTIONS` and `boost_search`'s tool description carry the same
+#: sentence — the description is the only boost text reliably in context on a
+#: Gemini-family host, and the bound shipped in none of the seven
+#: descriptions (mcp-skip-list-absent-from-tool-descriptions). Concrete cases,
+#: never a judgement call: a bound that asks an agent to rate its own task
+#: "non-trivial" over-suppressed when it was tried (mcp-one-benefit-nameable-
+#: task), because every turn looks small when it opens.
+SKIP_IT = ("Skip it for a question, a one-line edit, or a command you were "
+           "just handed.")
+
+
 # Editing only a tool's description moves how often a model calls it by more
 # than 10x ("Tool Preferences in Agentic LLMs are Unreliable", EMNLP 2025),
 # and assertive phrasing is precisely the lever that does it. So the skip list
@@ -221,8 +233,7 @@ INSTRUCTIONS = (
     "something is a head start, not an instruction — read it, take what fits, "
     "discard the rest. The task stays yours.\n"
     "\n"
-    "Flow: boost_search -> boost_install. Skip it for a question, a one-line "
-    "edit, or a command you were just handed."
+    "Flow: boost_search -> boost_install. " + SKIP_IT
 )
 
 

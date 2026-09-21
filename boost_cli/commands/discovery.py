@@ -233,18 +233,25 @@ def cmd_search(argv):
     installed: set[str] = set()
     with contextlib.suppress(Exception):
         installed = set(store.installed())
-    top = max((s for _e, s in shown), default=0) or 1
+    # The meter reads across the whole shown page, so its fractions are one
+    # screen-wide decision rather than a per-row division — see
+    # out.relevance_fractions for why the top score alone cannot say it.
+    fracs = out.relevance_fractions([s for _e, s in shown])
     # One column plan for the whole screen (name, kind, tap, description with
     # a stated drop order), one assembler per row — both pure and unit-tested
     # in core.output, so this loop only feeds and prints.
-    lay = out.search_layout(out.term_width(),
+    # Against the *pane*: a pipe has none, and planning for `term_width()`'s
+    # assumed 80 dropped the TAP column (it needs 84), so `boost search x |
+    # grep owner/repo` found nothing the same search shows on a wide pane.
+    # No pane (None) plans nothing to fit — see `search_layout`.
+    lay = out.search_layout(out.pane_width(),
                             [e["name"] for e, _ in shown],
                             [str(e.get("kind") or "skill") for e, _ in shown],
                             [str(e.get("tap") or "") for e, _ in shown])
-    for e, sc in shown:
+    for (e, _sc), frac in zip(shown, fracs, strict=True):
         out.info(out.format_search_row(
             e["name"], e.get("description") or "",
-            str(e.get("kind") or "skill"), str(e.get("tap") or ""), sc / top,
+            str(e.get("kind") or "skill"), str(e.get("tap") or ""), frac,
             curated=bool(e.get("curated")),
             installed=e["name"] in installed, lay=lay))
     if hit_cap:
@@ -1983,6 +1990,9 @@ def cmd_browse(argv):
                      + ", ".join(agents.display_name(a) for a in res.linked))
         for conflict in res.conflicts:
             out.warn("conflict: %s exists and is not a symlink" % _tilde(conflict))
+        for adir in res.unwritable:
+            out.warn("not linked: %s is not writable — `chmod u+w %s`, then "
+                     "`boost sync`" % (_tilde(adir), _tilde(adir)))
     return 0
 
 

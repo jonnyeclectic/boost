@@ -216,6 +216,10 @@ for (const rel of PAGES) {
     { name: "prefers-reduced-motion", value: "reduce" },
   ]);
   await page.goto("file://" + file, { waitUntil: "load" });
+  // Roadmap cards are `content-visibility: auto`, so an off-screen card has no
+  // geometry and axe files its contrast checks as "incomplete" rather than
+  // checking them. Render every card for the sweep.
+  await page.addStyleTag({ content: ".rcard{content-visibility:visible!important}" });
 
   // Guard: prove the page is actually styled before trusting a contrast result.
   // Most pages link ../style/boost.css RELATIVELY over file://, which only

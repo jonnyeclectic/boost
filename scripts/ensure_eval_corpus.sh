@@ -17,11 +17,32 @@
 # is the same class of bug as the unpinned list this whole area exists to fix,
 # one directory further along. Keying on the digest makes an edit a cache miss.
 #
+# THE SENTINEL ALSO HAS TO SEE THE CLONES, for the same reason. It records that
+# a corpus was built for this tap list; it cannot record that the corpus is
+# still there. Reclaim the ~300 MB `repos/` tree by hand and the sentinel, the
+# config and the per-tap catalog caches all survive, so this script skipped,
+# `rag.build` found every entry and none of their files, and the gate scored a
+# frontmatter index under the "BM25 full-content" label — passing all four
+# floors, by a wider margin than the real corpus. So a `repos/` holding no clone
+# directory is a cache miss (a stray `.DS_Store` is not a clone), and --ensure
+# re-clones every configured tap whose directory is gone before it re-pins.
+#
+# AND IT IS DROPPED BEFORE EVERY --ensure, so only a clean run can vouch for the
+# corpus again. It used to be written after a clean run and never removed: a
+# FORCE=1 run that failed its counts kept the OLD sentinel, and the next run
+# skipped straight past the corpus it had just failed to repair.
+#
 # The tap list carries a commit SHA and an entry count per repo, and the loop
 # that reads it lives in scripts/eval_corpus.py rather than here: the format
 # needs parsing, the pin needs a fetch-then-checkout, and the count needs
 # verifying — none of which a shell loop can be unit-tested on. This file keeps
-# what it is good at, the sentinel and the environment.
+# what it is good at, the sentinel and the environment. Per-repo presence is
+# checked there too: --ensure re-clones a missing clone and force-checks every
+# row out at its pin, so a deleted file inside a clone is restored rather than
+# counted short. What belongs here is only the cheap "is there a corpus at
+# all" that decides whether to call it; a partly reclaimed tree passes it, and
+# the gate's own check (scripts/eval_retrieval.py, `corpus_refusal`) catches
+# that and prints the FORCE=1 command that repairs it.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -34,10 +55,14 @@ digest=$("$py" -c 'import hashlib,sys
 print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$taps")
 
 if [ -z "${FORCE:-}" ] && [ -f "$sentinel" ] && [ "$(cat "$sentinel")" = "$digest" ]; then
-  echo "eval corpus already tapped for this taps.txt — skipping (FORCE=1 to re-tap)"
-  exit 0
+  if [ -n "$(find "$home/repos" -mindepth 1 -maxdepth 1 -type d -print -quit 2>/dev/null)" ]; then
+    echo "eval corpus already tapped for this taps.txt — skipping (FORCE=1 to re-tap)"
+    exit 0
+  fi
+  echo "eval corpus sentinel is present but $home/repos holds no clone — re-tapping" >&2
 fi
 
+rm -f "$sentinel"
 PYTHONPATH="$root" "$py" "$root/scripts/eval_corpus.py" --ensure
 
 # Only after a clean --ensure: `set -e` means a corpus that could not be

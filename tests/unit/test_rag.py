@@ -1138,8 +1138,11 @@ class TestMakeDocs:
         docs = rag._make_docs(
             [_entry("code-reviewer", desc="reviews diffs")], {})
         tf = docs[0]["tf"]
-        assert "reviewer" in tf, "the de-hyphenated name must be searchable"
+        assert "reviewer" in tf, "the name must be searchable"
         assert "diffs" in tf, "the description must be searchable"
+        # Membership only. `tokenize` splits hyphens itself, so this passes
+        # with the de-hyphenated copy deleted — TestSurfaceFieldWeighting
+        # below is what actually guards `surface`.
 
     def test_empty_chunk_is_skipped_not_break(self, monkeypatch):
         body = ("the " * 220) + "\n\n" + ("widget " * 130)
@@ -1150,6 +1153,66 @@ class TestMakeDocs:
         # its one document, carrying the terms from the rest of the body.
         assert len(docs) == 1
         assert "widget" in docs[0]["tf"]
+
+
+class TestSurfaceFieldWeighting:
+    """`surface` is a field weighting, not hyphen handling.
+
+    Its docstring used to say the de-hyphenated copy of the name was there
+    because `tokenize` does not split hyphens. It does split them, and
+    `read_body` prepends name + description to every body anyway — so the copy
+    changes no token list, it changes token *counts*. Deleting it moves no
+    `eval` floor — recall@10 and hit@1 are identical either way — while it
+    silently reorders the raw top 10 for 20 of the 141 golden +
+    golden-natural queries. So the guard has to be the arithmetic: these
+    assertions are exact multiplicities and exact strings for that reason,
+    because a ">= 1" or an ``in`` is satisfied by the ablated function.
+    """
+
+    def test_surface_names_the_entry_twice_then_describes_it_once(self):
+        e = _entry("alpha-beta_gamma", desc="delta epsilon")
+        assert rag.surface(e) == "alpha-beta_gamma alpha beta gamma delta epsilon"
+
+    def test_a_missing_description_contributes_an_empty_field(self):
+        # `or ""` rather than a default, so a null description is a field too.
+        assert rag.surface({"name": "x-y"}) == "x-y x y "
+
+    def test_an_entry_with_neither_field_is_three_empty_fields(self):
+        assert rag.surface({}) == "  "
+
+    def test_the_name_counts_3x_and_the_description_2x_in_the_document(
+            self, tmp_path):
+        # End to end through the real `read_body_full`, not a faked body: the
+        # 3x is `surface`'s two copies plus the header `read_body_full`
+        # prepends, so faking the body would pin only half the composition.
+        root = tmp_path / "repo"
+        (root / "alpha-beta_gamma").mkdir(parents=True)
+        (root / "alpha-beta_gamma" / "SKILL.md").write_text(
+            "---\nname: alpha-beta_gamma\n---\n\nzeta\n", encoding="utf-8")
+        e = _entry("alpha-beta_gamma",
+                   skill_md="alpha-beta_gamma/SKILL.md", desc="delta epsilon")
+        docs = rag._make_docs([e], {"acme/skills": root})
+        assert docs[0]["tf"] == {"alpha": 3, "beta": 3, "gamma": 3,
+                                 "delta": 2, "epsilon": 2, "zeta": 1}
+
+    def test_an_unhyphenated_name_is_weighted_the_same_3x(self, tmp_path):
+        # The copy is a pure duplication for every entry, not a rescue for
+        # hyphenated ones: `solo` is counted three times as well.
+        root = tmp_path / "repo"
+        (root / "solo").mkdir(parents=True)
+        (root / "solo" / "SKILL.md").write_text(
+            "---\nname: solo\n---\n\nzeta\n", encoding="utf-8")
+        e = _entry("solo", skill_md="solo/SKILL.md")
+        docs = rag._make_docs([e], {"acme/skills": root})
+        assert docs[0]["tf"] == {"solo": 3, "zeta": 1}
+
+    def test_de_hyphenating_a_name_never_changes_its_token_list(self):
+        # Measured over the 20-tap eval corpus (10,731 entries): 0 differ.
+        # Includes the alias rows, where both spellings fold to one token.
+        for name in ("code-reviewer", "alpha_beta", "objective-c", "c++",
+                     "solo", "a-b-c-d"):
+            assert rag.tokenize(name) == rag.tokenize(
+                name.replace("-", " ").replace("_", " ")), name
 
 
 class TestPassage:

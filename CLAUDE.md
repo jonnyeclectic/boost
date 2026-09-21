@@ -116,7 +116,20 @@ opt-in evals stay out of `check` and all degrade cleanly:
   avoid. Rates carry a Wilson interval over N runs and floors are judged
   against the bound, not the point estimate: at 3/3 the normal approximation
   claims [1.00, 1.00] and would let a wording regression hide behind one lucky
-  run. Drives a real host, so it is opt-in, out of `check`, and degrades
+  run. A bound judged that way needs **enough N to be reachable**, and the
+  ceiling half is where that bites: at k=0 the Wilson upper bound is
+  z²/(n+z²), a function of N alone, so at the old `--runs 1` default a
+  flawless host was told it FAILED (0.3244 against a 0.20 ceiling, which no
+  sample below n=16 can clear). `--runs` defaults to 3, `min_n_for_ceiling` computes the
+  minimum for any ceiling, and a sample below it reports INCONCLUSIVE with its
+  own exit code (2) rather than a red that says nothing about the host —
+  unless its Wilson *lower* bound is already over the ceiling. Too small to
+  pass is not too small to fail: a conclusive red below the minimum is still a
+  red (exit 1), and a no-call half with no observations at all is
+  INCONCLUSIVE, never a pass. The
+  ceiling is 0.25 so one slip in 24 passes and two do not — a zero-tolerance
+  half beside a floor that absorbs four misses is not the same measurement
+  twice. Drives a real host, so it is opt-in, out of `check`, and degrades
   cleanly when `claude` is not on `PATH`.
 
 The `[eval]` extra (`pip install -e '.[eval]'`) carries `ranx` + `ragas`; nothing
@@ -295,8 +308,11 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   `noxfile.py` opens with `# Copyright the boost contributors.` and
   `# SPDX-License-Identifier: Apache-2.0`. Run
   `python3 scripts/add_spdx_headers.py` (idempotent) — the file list and the
-  expression live there, so changing the licence expression is one edit rather
-  than hundreds. Separately, `prose-lint.yml` names the Markdown files vale checks
+  expression live there (`SPDX_ID`), so changing the licence is one edit
+  rather than hundreds, and `tests/unit/test_spdx_headers.py` pins this
+  paragraph to that constant: #587 moved the tree off `GPL-3.0-only` and left
+  this sentence naming the old expression for every agent that read it since.
+  Separately, `prose-lint.yml` names the Markdown files vale checks
   **explicitly**: a new doc that is not added to that list is never linted, and
   `make lint` will not tell you.
 
@@ -608,9 +624,15 @@ upgrade rather than the entry fee. When both engines are built, `retrieve_any`
 fuses them with reciprocal rank fusion (`rag.rrf_fuse`, `RRF_K = 60`) and
 reports `hybrid RRF`; it degrades to whichever single engine is ready, and to
 BM25 alone otherwise. `dense.status()` names which of the three links (extra,
-backend, built store) is missing, and `dense.fix_hint()` maps that to the one
-next action — both `boost doctor` and `boost search` read that same table, so
-they can't give contradictory advice.
+backend, built store) is missing — or `disabled`, a fourth state that is no
+missing link at all but the `BOOST_NO_EMBED` kill switch, which sits **first**
+in the ladder (`embed.provider()` reads it before any key, so every other
+remedy is a measured no-op under it) and is excluded from `degraded`, so a
+deliberate opt-out never moves doctor's exit code. `dense.fix_hint()` maps
+whichever state it is to the one next action — `boost doctor`, `boost search`,
+the MCP `SEARCH ENGINE` line and both shard surfaces (`reindex --fetch-shards`,
+`update --shards`) all read that same table, so they can't give contradictory
+advice.
 
 **The dense store ranks twice, and `vec0` is why.** `sqlite-vec` has no ANN
 index: a float32 `MATCH` scores *every* vector in the store, which on a real

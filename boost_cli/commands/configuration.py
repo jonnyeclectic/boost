@@ -1538,6 +1538,10 @@ def _tool_install(args: dict):
     lines.append("quality score: %d/100" % res.score)
     if res.conflicts:
         lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
+    if res.unwritable:
+        lines.append("not linked, directory not writable: %s — ask the user to "
+                     "`chmod u+w` it, then `boost sync`"
+                     % ", ".join(res.unwritable))
     # The same prompt-injection and secret scan `boost install` runs. This path
     # needs it more, not less: nobody is watching a terminal here, and the skill
     # was chosen and installed by an agent acting on its own. The install still
@@ -1591,7 +1595,16 @@ def _tool_doctor(args: dict):
     # Additive, deliberately: an untapped machine can ALSO have a broken
     # materialization, and folding the two into one branch would hide the
     # issue count behind the setup note.
-    if not taps:
+    # With config.json unreadable the tap list reads as DEFAULTS' empty one,
+    # and the note below would send the agent to re-tap the defaults over the
+    # user's real list — the fix CLI `boost doctor` now names instead.
+    cfg_err = config.check()
+    if cfg_err:
+        total += 1
+        lines.append("%s — boost is running on defaults, so the user's taps are "
+                     "not listed; ask the user to repair the file or re-add "
+                     "their taps (run `boost doctor` for details)" % cfg_err)
+    elif not taps:
         # Same command, same order, as mcp.no_results: an agent that calls
         # both tools in one session must not see the recommendation flipped
         # and read it as two different fixes. `boost tap --defaults` leads
@@ -1603,7 +1616,7 @@ def _tool_doctor(args: dict):
     if total == 0:
         if taps:
             lines.append("healthy — no issues found")
-    elif mat_issues:
+    elif mat_issues or cfg_err:
         lines.append("%d issue(s) — run `boost doctor` for details" % total)
     else:
         lines.append("%d issue(s) — run `boost sync` to fix" % issues)
@@ -1684,7 +1697,14 @@ REGISTRY.register(
     "Coming back empty is a real answer too, not a "
     "wasted turn: it means build it yourself, now knowing nothing already "
     "covers it — and on a machine with nothing tapped yet it says so and names "
-    "the one command that fixes it, rather than reporting a miss.",
+    "the one command that fixes it, rather than reporting a miss. "
+    # The bound, verbatim from `mcp.INSTRUCTIONS`: six of its seven
+    # load-bearing elements were already duplicated into this description and
+    # the seventh — the one that says when not to call — was in none of the
+    # seven. On a Gemini-family host the description is the only boost text
+    # reliably in context, so what shipped there was every persuasive element
+    # and none of the restraint.
+    + mcp.SKIP_IT,
     {"type": "object",
      "properties": {"query": {"type": "string",
                               "description": "what you are trying to do, in "

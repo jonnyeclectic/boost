@@ -11,7 +11,10 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime
+
+import pytest
 
 from boost_cli.core import paths
 
@@ -87,6 +90,152 @@ class TestDoctor:
         r = boost("doctor")
         assert "● healthy" not in r.out
         assert "ready to set up" in r.out
+
+    def test_a_corrupt_config_is_an_issue_not_a_fresh_install(
+            self, boost, installed):
+        from boost_cli.core import paths
+        paths.config_path().write_text('{"taps": [', encoding="utf-8")
+        r = boost("doctor", expect=1)
+        assert "ready to set up" not in r.out
+        assert "boost tap --defaults" not in r.out     # not a new user
+        assert "invalid JSON" in r.out
+        assert "1 tap clone on disk is not listed" in r.out.replace("\n    ", " ")
+        d = json.loads(boost("doctor", "--json", expect=1).out)
+        assert d["ok"] is False
+        assert [c["name"] for c in d["checks"] if c["status"] == "issue"] == ["config"]
+
+    def test_heal_does_not_certify_a_corrupt_config(self, boost, installed):
+        from boost_cli.core import paths
+        paths.config_path().write_text('{"taps": [', encoding="utf-8")
+        r = boost("heal", expect=1)
+        assert "nothing to heal" not in r.out
+        assert "heal cannot repair it" in r.out.replace("\n    ", " ")
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unwritable_cache_dir_is_an_issue(self, boost, tapped):
+        paths.cache_dir().chmod(0o500)
+        try:
+            r = boost("doctor", expect=1)
+        finally:
+            paths.cache_dir().chmod(0o700)
+        assert "is not writable" in r.out
+        # ...and nothing beneath it still claims the taps are cached.
+        assert "1 tap cloned & cached" not in r.out
+        assert "1 tap cloned" in r.out
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_heal_names_an_unwritable_cache_dir_doctor_flags(self, boost,
+                                                             tapped):
+        # doctor calls it an issue; heal answering "nothing to heal" under it
+        # is the contradiction #888 removed for config.json.
+        paths.cache_dir().chmod(0o500)
+        try:
+            r = boost("heal", expect=1)
+        finally:
+            paths.cache_dir().chmod(0o700)
+        out = r.out.replace("\n    ", " ")
+        assert "is not writable — heal does not change permissions" in out
+        assert "nothing to heal" not in out
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_missing_cache_dir_is_not_an_unwritable_one(self, boost, tapped):
+        # The real heal creates it, so neither the preview nor doctor may
+        # call it unwritable: a preview exiting 1 where the run exits 0 is the
+        # dry-run divergence this repo treats as a defect.
+        shutil.rmtree(paths.cache_dir())
+        dry = boost("heal", "--dry-run").out
+        assert "not writable" not in dry
+        assert "would rebuild catalog cache" in dry
+        doc = boost("doctor", expect=1).out      # the missing cache IS an issue
+        assert "no catalog cache" in doc and "not writable" not in doc
+        assert "rebuilt catalog cache" in boost("heal").out
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_heal_does_not_claim_a_cache_it_could_not_write(self, boost,
+                                                            tapped):
+        for f in paths.cache_dir().glob("*.json"):
+            if f.name not in paths.INTERNAL_CACHE_FILES:
+                f.unlink()
+        paths.cache_dir().chmod(0o500)
+        try:
+            r = boost("heal", expect=1)
+        finally:
+            paths.cache_dir().chmod(0o700)
+        assert "could not save the catalog cache" in r.out + r.err
+        assert "rebuilt catalog cache" not in r.out
+        paths.cache_dir().chmod(0o500)
+        try:
+            dry = boost("heal", "--dry-run", expect=1).out
+        finally:
+            paths.cache_dir().chmod(0o700)
+        assert "would rebuild catalog cache" not in dry   # the run won't
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unwritable_agent_dir_names_its_remedy_everywhere(
+            self, boost, tapped):
+        # doctor named it with no next action, heal answered "nothing to
+        # heal", and the next install crashed at exit 70.
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o500)
+        try:
+            doc = boost("doctor", expect=1).out.replace("\n    ", " ")
+            heal = boost("heal", expect=1).out.replace("\n    ", " ")
+            inst = boost("install", "brainstorming").out.replace("\n    ", " ")
+        finally:
+            cursor.chmod(0o700)
+        remedy = "`chmod u+w ~/.cursor/skills`"
+        assert remedy in doc and "`boost sync`" in doc
+        assert remedy in heal and "nothing to heal" not in heal
+        assert "not linked: ~/.cursor/skills is not writable" in inst
+        assert remedy in inst
+        boost("sync")                                # now it may
+        assert (cursor / "brainstorming").is_symlink()
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_reinstall_names_the_link_it_could_not_make(self, boost, installed):
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.chmod(0o500)
+        try:
+            r = boost("reinstall", "brainstorming")
+        finally:
+            cursor.chmod(0o700)
+        assert "not linked: ~/.cursor/skills is not writable" in r.out.replace(
+            "\n    ", " ")
+
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_native_store_agents_dir_is_not_boosts_to_write(self, boost,
+                                                               installed):
+        # Gemini reads the canonical store; boost never links into its skills
+        # dir, so a locked one is not an issue `boost sync` could fix.
+        gemini = paths.home() / ".gemini" / "skills"
+        gemini.mkdir(parents=True, exist_ok=True)
+        gemini.chmod(0o500)
+        try:
+            doc = boost("doctor").out
+            boost("heal")                          # rc 0: nothing of boost's
+        finally:
+            gemini.chmod(0o700)
+        assert "agent dir" not in doc
 
     def test_an_untapped_machine_is_still_rc0(self, boost):
         # Reported, never fatal. The exit code turns on real issues only, so
@@ -1614,16 +1763,25 @@ class TestHealth:
             self, boost, installed):
         # The bug: twelve minutes after tapping, health read the tap clone's
         # own git log (the upstream's commit clock, unmoved by a local sync)
-        # and reported weeks-old staleness for a brand-new clone. A tap that
-        # has only ever been *tapped*, never `update`d, has genuinely never
-        # been synced — "never" is the honest answer, not a fabricated age.
+        # and reported weeks-old staleness for a brand-new clone. The marker
+        # is the local clock, and a clone stamps it — a fresh clone IS a
+        # sync, which is what makes the stale-tap hint reachable on a machine
+        # that never runs `boost update` (stale-tap-hint-dead-for-tap-only-
+        # installs). This test read "never" here until then.
         r = boost("health")
-        assert re.search(r"last tap sync\s+never", r.out)
+        sync_line = next(ln for ln in r.out.splitlines() if "last tap sync" in ln)
+        assert "never" not in sync_line and "ago" in sync_line
         boost("update")
         r = boost("health")
         sync_line = next(ln for ln in r.out.splitlines() if "last tap sync" in ln)
         assert "never" not in sync_line
         assert "ago" in sync_line
+
+    def test_last_tap_sync_is_never_before_anything_is_tapped(self, boost,
+                                                              sandbox):
+        # The marker starts at the first clone, so a machine with no taps at
+        # all still has nothing to report — and must not fabricate an age.
+        assert re.search(r"last tap sync\s+never", boost("health").out)
 
 
 class TestDuplicateSkillDiscovery:

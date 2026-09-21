@@ -159,6 +159,23 @@ def parse_specs(specs: list[str]) -> list[tuple[str, str]]:
     return [parse_spec(spec) for spec in specs]
 
 
+def tap_summary(tapped: list[tuple[str, int]]) -> str:
+    """"3 registries · 512 items" — what a tap run actually added.
+
+    A count, not a list: the per-tap `✓ tapped X (N items)` lines above it
+    already name every registry, and repeating them would make the summary
+    longer than the thing it summarises. Pure so it can be asserted on
+    directly; the surface decides where to frame it.
+    """
+    taps = len(tapped)
+    items = sum(n for _name, n in tapped)
+    # Both spellings written out rather than interpolated onto a stem:
+    # codespell reads that stem as a misspelling of "register", and an
+    # exception in the lint config costs more than one extra word here.
+    return "%d %s · %d %s" % (taps, "registry" if taps == 1 else "registries",
+                              items, "item" if items == 1 else "items")
+
+
 def list_taps() -> list[Tap]:
     """Configured taps from config.json.
 
@@ -268,6 +285,7 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
         row["pin"] = at
     cfg.setdefault("taps", []).append(row)
     config.save(cfg)
+    start_refresh_clock()
     tap.pin = at or ""
     return tap
 
@@ -406,6 +424,7 @@ def add_many(specs: list[str], curated: bool = False,
                 r["tap"].pin = pin
             rows.append(row)
         config.save(cfg)
+        start_refresh_clock()
     # First occurrence, not last: a dict comprehension over `specs` keeps the
     # LAST index for a repeated spec, which pushed the duplicate — and so its
     # whole position — to the end and reordered everything in between.
@@ -430,6 +449,25 @@ def mark_refreshed() -> None:
     with suppress(OSError):
         paths.ensure_dirs()
         paths.tap_refresh_marker().write_text("", encoding="utf-8")
+
+
+def start_refresh_clock() -> None:
+    """Stamp the refresh marker at a first clone, if nothing has yet.
+
+    `boost update` was the marker's only writer, so a machine that tapped
+    (`tap --defaults`, `quickstart`) and never updated had no marker at all —
+    and the stale-tap hint on `search`, the one line that says a catalogue
+    has drifted (boost deliberately never refreshes in the background), could
+    never fire for exactly those users. Two real installs, one with 458 taps,
+    had no marker. A fresh clone *is* a refresh, so the first one starts the
+    clock. An existing marker is left alone: adding one tap does not refresh
+    the taps already here.
+    """
+    # ponytail: an install that predates this starts its clock at its next
+    # tap rather than at its oldest clone; derive it from clone mtimes if
+    # that gap ever matters.
+    if not paths.tap_refresh_marker().exists():
+        mark_refreshed()
 
 
 def refresh_age_days() -> float | None:

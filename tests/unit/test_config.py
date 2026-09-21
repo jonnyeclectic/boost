@@ -484,3 +484,35 @@ class TestCorruptFile:
         second = paths.config_path().with_name("config.json.corrupt.2")
         assert first.read_text(encoding="utf-8") == "bad one"
         assert second.read_text(encoding="utf-8") == "bad two"
+
+
+class TestCheckReportsTheRawState:
+    """`load()` degrades a corrupt file to DEFAULTS; `check()` is what lets
+    doctor say so instead of verdicting "ready to set up" (see
+    corrupt-config-reads-as-ready-to-set-up)."""
+
+    def test_missing_file_is_not_a_problem(self, sandbox):
+        assert config.check() is None
+
+    def test_a_valid_file_is_not_a_problem(self, sandbox):
+        config.save({"taps": []})
+        assert config.check() is None
+
+    def test_invalid_json_names_the_file_and_the_error(self, sandbox):
+        paths.ensure_dirs()
+        paths.config_path().write_text('{"taps": [', encoding="utf-8")
+        err = config.check()
+        assert err and str(paths.config_path()) in err and "invalid JSON" in err
+
+    def test_a_non_object_is_a_problem_too(self, sandbox):
+        paths.ensure_dirs()
+        paths.config_path().write_text("[]", encoding="utf-8")
+        assert "expected a JSON object" in config.check()
+
+    def test_unlisted_clones_are_the_directories_under_repos(self, sandbox):
+        assert config.unlisted_clones() == []           # no repos/ at all
+        paths.ensure_dirs()
+        for name in ("b__two", "a__one"):
+            (paths.repos_dir() / name).mkdir()
+        (paths.repos_dir() / "stray.txt").write_text("x", encoding="utf-8")
+        assert config.unlisted_clones() == ["a__one", "b__two"]

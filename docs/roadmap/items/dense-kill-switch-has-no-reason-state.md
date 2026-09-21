@@ -2,15 +2,15 @@
 id: dense-kill-switch-has-no-reason-state
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Retrieval eval
 complexity: M
 impact: Med
 wow: 3
 note: embed.enabled() short-circuits provider() to None (embed.py:134), so BOOST_NO_EMBED=1…
 order: 203
-owner:
-pr:
+owner: loop/dense-kill-switch
+pr: 901
 title: BOOST_NO_EMBED has no state in the reason ladder: doctor calls a deliberate kill switch a degraded fault (exit 1) and hands advice that is a measured no-op in both branches
 ---
 <b>Measured.</b> With <code>BOOST_NO_EMBED=1</code> and a 5-chunk voyage-4 store, <code>dense.fix_hint</code> tells the user "set the key it was built with: <code>export VOYAGE_API_KEY=...</code>"; exporting that key produces a byte-identical status (reason='no-key', degraded=True, ready=False) and the byte-identical hint — the kill switch is read in <code>provider()</code> before any key, so boost's own remedy is a measured no-op, on both <code>boost doctor</code> (exit 1) and <code>boost search</code>.
@@ -52,6 +52,6 @@ Confirmed exact: reason/degraded/built_provider in both branches; both hint stri
 
 4. PRECONDITION IS NARROW — do not overstate reach. You must have BUILT a dense store and THEN set the kill switch.
 
-<b>Why it is worth doing.</b> <code>BOOST_NO_EMBED</code> is documented as a hard kill switch (embed.py:32) and is what a user or a CI job sets to opt out deliberately — including anyone who hits the previous two findings and wants to stop paying for a broken embedder. Doing so turns <code>boost doctor</code> red forever, which breaks it as a CI gate, and the only remedies boost offers are provably inert: reinstalling an installed package, or exporting a key the kill switch never reads. The correct sentence already exists eight lines away in the same module.
+<b>Why it is worth doing.</b> <code>BOOST_NO_EMBED</code> is documented as a hard kill switch (embed.py:32) and is what a user or a CI job sets to opt out deliberately — including anyone who hits the previous two findings and wants to stop paying for a broken embedder. Doing so turns <code>boost doctor</code> red forever, which breaks it as a CI gate, and the only remedies boost offers are provably inert: reinstalling an installed package, or exporting a key the kill switch never reads. The correct sentence already exists in <code>embed.fallback_note()</code> (boost_cli/core/embed.py:170-179) — a different module from the inert <code>_FIX</code> table, which is why the ladder never learned it.
 
 <em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CONFIRMED</b>. No fix is prescribed here — the measurement is the contribution.</em>

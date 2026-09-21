@@ -38,6 +38,10 @@ class InstallResult:
     dest: Path
     linked: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
+    # Agent skill dirs the link could not be written into (a dir restored with
+    # the wrong owner, say). Kept apart from `conflicts`: nothing is in the
+    # way, the directory itself refuses, and the remedy is different.
+    unwritable: list[str] = field(default_factory=list)
     # Agents that can already use this skill without a symlink because they read
     # the canonical store directly (agents.native_store_agents). Kept apart from
     # `linked` so the lock records only real links, while the install report can
@@ -170,7 +174,19 @@ def source_dir_for(entry: dict) -> Path:
     is there and reports success. Every consumer of a tap's real files — both
     install paths, `sha256_dir`, `boost info` — comes through here, so this is
     the one place that has to get it right.
+
+    Only a skill has a source directory. A rule or workflow is one file, read
+    through ``entry["skill_md"]`` by its own installer, so it is refused here
+    before the tap is cloned or widened: `boost info` and `boost deps` ask
+    about every not-installed entry, and checking SKILL.md after materializing
+    had them write ``/rules/*`` into the sparse cone for a dir they discarded.
+    An entry with no ``kind`` (an old cache, or one `quality` builds by hand)
+    is a skill.
     """
+    kind = entry.get("kind") or catalog.KIND_SKILL
+    if kind != catalog.KIND_SKILL:
+        raise BoostError("%s is a %s, not a skill: it has no source directory"
+                         % (entry["name"], kind))
     tap = registry.get(entry["tap"])
     if not tap.is_cloned:
         gitutil.clone_shallow(tap.url, tap.path)
@@ -199,14 +215,22 @@ def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
     for agent, adir in agents.linking_agents().items():
         if only and agent not in only:
             continue
-        adir.mkdir(parents=True, exist_ok=True)
         link = adir / name
-        if link.is_symlink():
-            link.unlink()
-        elif link.exists():
-            res.conflicts.append(str(link))
+        try:
+            adir.mkdir(parents=True, exist_ok=True)
+            if link.is_symlink():
+                link.unlink()
+            elif link.exists():
+                res.conflicts.append(str(link))
+                continue
+            link.symlink_to(target)
+        except PermissionError:
+            # One unwritable agent dir used to abort the whole install at
+            # exit 70 — after the store copy and the other agents' links, so
+            # the lock recorded none of it. Skip the agent and say so; the
+            # caller names the remedy.
+            res.unwritable.append(str(adir))
             continue
-        link.symlink_to(target)
         res.linked.append(agent)
     return res
 

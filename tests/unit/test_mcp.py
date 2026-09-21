@@ -429,6 +429,23 @@ class TestInstructionsCoverAllThreeKinds:
         low = mcp.INSTRUCTIONS.lower()
         assert "anti-pattern" in low
 
+    def test_the_bound_ships_in_the_description_too(self):
+        # Six of the instructions' seven load-bearing elements were
+        # duplicated into boost_search's description; the seventh — the one
+        # that says when NOT to call — was in none of the seven descriptions.
+        # On a Gemini-family host the description is the only boost text
+        # reliably in context, so the persuasion shipped without the bound.
+        from boost_cli.commands import configuration
+        desc = {s["name"]: s["description"]
+                for s in configuration.REGISTRY.specs()}
+        assert mcp.SKIP_IT in mcp.INSTRUCTIONS      # one sentence, two homes
+        assert mcp.SKIP_IT in desc["boost_search"]
+        # Concrete cases, not a judgement call: asking an agent to rate its
+        # own task over-suppressed when it was tried.
+        assert "non-trivial" not in mcp.SKIP_IT.lower()
+        for case in ("a question", "a one-line edit", "a command you were"):
+            assert case in mcp.SKIP_IT
+
     def test_install_description_still_flags_the_invasive_kind(self):
         # Pre-existing contract, restated here because this change is what
         # makes it actionable: search output now marks kind, so the warning
@@ -1200,3 +1217,25 @@ class TestDoctorCountsWithoutBuildingTheList:
                             lambda: {"skill": 1, "rule": 1, "workflow": 1})
         text, _ = configuration._tool_doctor({})
         assert "3 items available" in text
+
+
+class TestDoctorToolOnACorruptConfig:
+    """The MCP twin of CLI doctor's `config` issue: with config.json
+    unreadable, "no registries tapped — run `boost tap --defaults`" would send
+    the agent to re-tap the defaults over the user's real list."""
+
+    def test_it_is_an_issue_with_the_repair_not_a_setup_note(self, sandbox):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        paths.ensure_dirs()
+        paths.config_path().write_text('{"taps": [', encoding="utf-8")
+        text, is_error = configuration._tool_doctor({})
+        assert is_error is True
+        assert "invalid JSON" in text and "re-add their taps" in text
+        assert "boost tap --defaults" not in text
+        assert text.splitlines()[-1] == "1 issue(s) — run `boost doctor` for details"
+
+    def test_a_healthy_config_is_untouched(self, sandbox):
+        from boost_cli.commands import configuration
+        text, is_error = configuration._tool_doctor({})
+        assert is_error is False and "boost tap --defaults" in text

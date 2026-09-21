@@ -27,6 +27,7 @@ from ..core import (
     catalog,
     claude_settings,
     complete,
+    config,
     frontmatter,
     gitutil,
     imperative,
@@ -412,6 +413,20 @@ def cmd_doctor(argv):
         bad("git", "git not found on PATH — install git")
     paths.ensure_dirs()  # create silently; never a failure
 
+    # A corrupt config.json reads as DEFAULTS, so the tap list below comes
+    # back empty and the verdict used to be "ready to set up", exit 0, on a
+    # machine whose clones were all still on disk. Say what was lost instead.
+    cfg_err = config.check()
+    if cfg_err:
+        clones = config.unlisted_clones()
+        bad("config", "%s — boost is running on defaults, so %s. Repair the "
+            "file, or re-add your taps; the next write moves the bad file "
+            "to config.json.corrupt" % (cfg_err, (
+                "the %d tap clone%s on disk %s not listed" % (
+                    len(clones), _s(len(clones)),
+                    "is" if len(clones) == 1 else "are"))
+                if clones else "no taps or settings are read"), wrap=True)
+
     taps = registry.list_taps()
     tap_ok = 0
     for tap in taps:
@@ -422,9 +437,21 @@ def cmd_doctor(argv):
                 % (tap.name, tap.name))
         else:
             tap_ok += 1
+    # A cache dir boost cannot write leaves every command rescanning its taps
+    # and warning that it could not keep the result (catalog.rebuild_tap), so
+    # "cloned & cached" below would be the one line on the screen claiming
+    # otherwise.
+    cache_writable = (not paths.cache_dir().is_dir()
+                      or os.access(paths.cache_dir(), os.W_OK))
+    if taps and not cache_writable:
+        bad("cache", "%s is not writable — every command rescans its taps and "
+            "cannot keep the result; make it writable"
+            % _tilde(paths.cache_dir()), wrap=True)
     if taps and tap_ok == len(taps):
-        rep.ok("taps", "%d tap%s cloned & cached" % (len(taps), _s(len(taps))))
-    elif not taps:
+        rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
+                                              " & cached" if cache_writable
+                                              else ""))
+    elif not taps and not cfg_err:
         # `boost tap --defaults` leads, and it is the same command in the same
         # order that `boost search`'s error, `mcp.no_results` and the MCP
         # `boost_doctor` tool all name. A user who hits two of these surfaces
@@ -660,9 +687,16 @@ def cmd_doctor(argv):
             % (dup.name, agents.display_name(dup.agent), _tilde(dup.path),
                _tilde(dup.target)), wrap=True)
 
-    for adir in enabled.values():
+    # Linking agents only: a native-store agent's skills dir (Gemini's) is
+    # never written, so its permissions are not boost's problem and `boost
+    # sync` could not act on them.
+    for adir in agents.linking_agents().values():
         if adir.is_dir() and not os.access(str(adir), os.W_OK):
-            bad("agent-dir", "agent dir %s is not writable" % _tilde(adir))
+            # A next action, like the log line below it: without one this was
+            # the only issue doctor names that nothing can act on.
+            bad("agent-dir", "agent dir %s is not writable — `chmod u+w %s`, "
+                "then `boost sync` relinks what it missed"
+                % (_tilde(adir), _tilde(adir)), wrap=True)
 
     rotation = journal.rotation_healthy()
     if not rotation:
@@ -796,6 +830,27 @@ def _report_search_engine(rep) -> None:
                   "semantic search silently off — %d-chunk vector store %s; "
                   "searches are using BM25 — %s" % (st["chunks"], detail, fix),
                   hint=fix, wrap=True)
+        return
+
+    if st["reason"] == "disabled":
+        # A deliberate opt-out, not a fault, so it stays a note and doctor
+        # stays green: BOOST_NO_EMBED is documented as the hard kill switch,
+        # and the CI job that sets it is the one caller that most needs a
+        # zero exit code. Say the vectors are still there, because the user
+        # who turned it off is the user deciding whether to turn it back on.
+        held = ""
+        if st["store_exists"] and st["chunks"]:
+            # "still on disk", not "intact": the switch shadows every rung
+            # below it, so a store that is *also* stale (version/model/dim
+            # changed) reaches this line too, and unsetting the switch would
+            # turn it red rather than green. Say what is measured — the
+            # vectors were not discarded — and let the next status say more.
+            held = (" — the %d-chunk vector store is still on disk"
+                    % st["chunks"])
+        rep.note("search-engine",
+                 "semantic search off by BOOST_NO_EMBED — using the "
+                 "full-content BM25 engine%s (%s)" % (held, fix),
+                 hint=fix, wrap=True)
         return
 
     rep.note("search-engine",
@@ -1139,18 +1194,26 @@ def cmd_heal(argv):
             out.warn("%s is no longer a symlink into the store — left alone"
                      % _tilde(dup.path))
 
+    # A dir that exists and refuses writes. A MISSING one is not stuck: the
+    # real run creates it above, so a preview that called it unwritable would
+    # exit 1 where the run it previews exits 0.
+    cache_dir = paths.cache_dir()
+    cache_stuck = cache_dir.is_dir() and not os.access(cache_dir, os.W_OK)
     for tap in registry.list_taps():
         if not tap.is_cloned:
             out.warn("tap %s not cloned — skipped (run `boost update`)" % tap.name)
             continue
         had_cache = tap.cache_file.exists()
         if dry:
-            if not had_cache:
+            if not had_cache and not cache_stuck:
                 out.info("would rebuild catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
         else:
             catalog.rebuild_tap(tap)
-            if not had_cache:
+            # rebuild_tap survives a cache it cannot write and warns; claiming
+            # the rebuild under that warning would certify a file that is
+            # still missing, and every later run would claim it again.
+            if not had_cache and tap.cache_file.exists():
                 out.ok("rebuilt catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
 
@@ -1164,15 +1227,38 @@ def cmd_heal(argv):
             out.ok("journal rotation scheduled (next write rotates)")
         actions.append("rotate")
 
-    if not actions:
+    # Not repairable from here — the tap list is the user's, not derivable —
+    # and never covered by an all-clear: with it unreadable, every check
+    # above ran against DEFAULTS.
+    cfg_err = config.check()
+    if cfg_err:
+        out.warn("%s — heal cannot repair it: boost is running on defaults "
+                 "until the file is fixed or your taps are re-added"
+                 % cfg_err, wrap=True)
+    # Permissions are the user's to change, not heal's; but a dir heal saw and
+    # cannot fix must not sit under an all-clear.
+    stuck = [adir for adir in agents.linking_agents().values()
+             if adir.is_dir() and not os.access(str(adir), os.W_OK)]
+    for adir in stuck:
+        out.warn("agent dir %s is not writable — heal does not change "
+                 "permissions; run `chmod u+w %s`, then `boost sync`"
+                 % (_tilde(adir), _tilde(adir)), wrap=True)
+    # The same rule for the cache dir doctor flags: heal cannot make it
+    # writable, so it must not answer "nothing to heal" beneath the problem.
+    if registry.list_taps() and cache_stuck:
+        stuck.append(cache_dir)
+        out.warn("%s is not writable — heal does not change permissions; "
+                 "run `chmod u+w %s`" % (_tilde(cache_dir), _tilde(cache_dir)),
+                 wrap=True)
+    if not actions and not stuck and not cfg_err:
         # A duplicate this run declined to prune is something `heal` saw, can
         # fix, and deliberately left. A bare "nothing to heal" printed under
         # the line offering the flag contradicts it.
         out.ok("nothing to heal automatically"
                if declined_duplicates else "nothing to heal")
-    elif not dry:
+    if actions and not dry:
         journal.log("heal", "%d actions" % len(actions))
-    return 0
+    return 1 if cfg_err or stuck else 0
 
 
 def cmd_conflict(argv):
