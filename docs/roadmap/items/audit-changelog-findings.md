@@ -10,7 +10,7 @@ wow: 1
 note: fetch --unshallow advised on complete clones; rules/workflows logged at directory granularity
 order: 254
 owner: loop/changelog-audit
-pr:
+pr: 922
 title: "boost changelog: CLI audit findings (2026-08)"
 ---
 <b>The shallow-clone hint fires on complete clones</b> (cluster <code>changelog-shallow-hint</code>,
