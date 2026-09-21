@@ -1479,6 +1479,7 @@ def _browse_tui(curses, entries, install=None):
     loading: set = set()
     installed_names = set(store.installed())
     do_install = install or store.install
+    from .pkg import _skipped_agent_lines  # imported here: pkg is large
     # Collapse rows that say the same thing. A registry renders one skill into
     # .claude/, .cursor/, .gemini/ and a plugin root, so 37% of a real 60,047
     # entry catalogue is a duplicate of another row. Kept as (entry, copies) so
@@ -1549,7 +1550,12 @@ def _browse_tui(curses, entries, install=None):
                 else:
                     installed_names.add(nm)
                     done.append(item)
-                    status[nm] = (browse.OK, _tilde(getattr(res, "dest", "")))
+                    # An agent the install skipped rides on the message: the
+                    # pane is the only report an in-place install gets, and a
+                    # bare path there read as every agent reached.
+                    conflicts, refused = _skipped_agent_lines(res)
+                    status[nm] = (browse.OK, " · ".join(
+                        [_tilde(getattr(res, "dest", "")), *conflicts, *refused]))
 
         t = threading.Thread(target=worker, daemon=True)
         workers.append(t)

@@ -563,6 +563,8 @@ def cmd_create(argv) -> int:
         out.ok("%s %s → %s" % ("replaced" if owner else "installed", name, _tilde(res.dest)))
         if res.linked:
             out.info("linked: " + ", ".join(agents.display_name(a) for a in res.linked))
+        from .pkg import _warn_unwritable
+        _warn_unwritable(res)
     else:
         out.dim("  next: edit it, then `boost import %s`" % _tilde(target))
     return 0
@@ -2070,7 +2072,12 @@ def _offer_boost_first(hosts: list[str]) -> None:
         # Every file it was offered for refused the write. The lock records
         # the refusal so `boost sync` can finish it, but "installed" would be
         # a success nothing on disk backs.
-        out.warn("%s was not written anywhere yet" % builtin.BUILTIN_RULES[0])
+        # The reversal is named here too: the docstring promises it on every
+        # branch, and this is the one where it went missing.
+        out.warn("%s was not written anywhere yet — `boost sync` finishes it "
+                 "once the files allow it, or `boost uninstall %s` drops it"
+                 % (builtin.BUILTIN_RULES[0], builtin.BUILTIN_RULES[0]),
+                 wrap=True)
     else:
         out.ok("installed %s — remove it with `boost uninstall %s`"
                % (builtin.BUILTIN_RULES[0], builtin.BUILTIN_RULES[0]))

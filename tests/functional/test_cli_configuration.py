@@ -12,6 +12,7 @@ import getpass
 import io
 import itertools
 import json
+import os
 import pathlib
 import socket
 import subprocess
@@ -270,6 +271,26 @@ class TestCreate:
             assert section in body
         assert "next: edit it, then `boost import" in r.out
         assert journal.events(action="create")[0]["subject"] == "my-skill"
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_install_names_an_agent_dir_that_refused_the_link(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # It listed the agents it linked, so a refused one showed only by
+        # being absent from the list.
+        monkeypatch.chdir(tmp_path)
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o500)
+        try:
+            r = boost("create", "my-skill", "--install")
+        finally:
+            cursor.chmod(0o700)
+        out = " ".join(r.out.split())
+        assert "installed my-skill" in out
+        assert "not linked: ~/.cursor/skills is not writable" in out
 
     def test_refuses_overwrite(self, boost, sandbox, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

@@ -164,6 +164,8 @@ def _install_generated(name: str, text: str, yes: bool = False) -> None:
     out.ok("%s %s → %s" % ("replaced" if owner else "installed", name, _tilde(res.dest)))
     if res.linked:
         out.info(out.role("linked into: %s" % ", ".join(res.linked), "muted"))
+    from .pkg import _warn_unwritable
+    _warn_unwritable(res)
 
 
 def _write_generated(dest: Path, text: str, yes: bool = False) -> bool:

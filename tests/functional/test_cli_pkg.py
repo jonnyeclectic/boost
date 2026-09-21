@@ -996,6 +996,25 @@ class TestReinstall:
         assert "nothing to reinstall" in r.err
         assert "name a skill or pass --all" in r.err
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_local_reinstall_names_an_agent_dir_that_refused_it(
+            self, boost, sandbox, tmp_path):
+        # The tap branch reported a refused agent dir; the local branch threw
+        # the install result away and printed a clean "reinstalled".
+        boost("import", _skill_dir(tmp_path, "my-skill"))
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.chmod(0o500)
+        try:
+            r = boost("reinstall", "my-skill")
+        finally:
+            cursor.chmod(0o700)
+        out = " ".join(r.out.split())
+        assert "reinstalled my-skill (local, from" in out
+        assert "not linked: ~/.cursor/skills is not writable" in out
+
 
 # ── pin / unpin ──────────────────────────────────────────────────────────
 
@@ -1123,6 +1142,28 @@ class TestImport:
         assert "imported beta v0.1.0" in r.out
         assert "Imported 2 skills" in r.out
         assert set(_lock()) == {"alpha", "beta"}
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_all_names_an_agent_dir_that_refused_each_link(self, boost, sandbox,
+                                                            tmp_path):
+        # A single import reports through _report_result; --all printed one
+        # "imported" line per skill and nothing about the agent it skipped.
+        root = tmp_path / "many"
+        _skill_dir(root, "alpha")
+        _skill_dir(root, "beta")
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o500)
+        try:
+            r = boost("import", root, "--all")
+        finally:
+            cursor.chmod(0o700)
+        out = " ".join(r.out.split())
+        assert "Imported 2 skills" in out
+        assert out.count("not linked: ~/.cursor/skills is not writable") == 2
 
     def test_all_scans_each_import_for_injection_and_secrets(self, boost, sandbox,
                                                               tmp_path):
@@ -2280,6 +2321,26 @@ class TestImportProvenance:
         assert "version: 0.2.0" in (paths.store_dir() / "url-skill"
                                     / "SKILL.md").read_text(encoding="utf-8")
         assert calls == [(_URL, False), (_URL, False)]
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_reinstall_of_a_url_import_names_an_agent_dir_that_refused_it(
+            self, boost, sandbox, url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.chmod(0o500)
+        try:
+            r = boost("reinstall", "url-skill")
+        finally:
+            cursor.chmod(0o700)
+        out = " ".join(r.out.split())
+        assert "reinstalled url-skill (from %s" % _URL in out
+        assert "not linked: ~/.cursor/skills is not writable" in out
 
     def test_reinstall_names_the_url_when_the_commit_is_unknown(
             self, boost, sandbox, tmp_path, monkeypatch):

@@ -9,7 +9,9 @@ boost_cli.core.ai monkeypatched to canned replies.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 
 import pytest
 
@@ -364,6 +366,25 @@ class TestInfer:
         assert (paths.store_dir() / "project-conventions" / "SKILL.md").is_file()
         lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["project-conventions"]["tap"] == "local"
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_install_names_an_agent_dir_that_refused_the_link(
+            self, boost, sandbox, py_project):
+        # _install_generated backs distill, infer and absorb --install, and
+        # printed only the agents it reached.
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o500)
+        try:
+            r = boost("infer", "--path", py_project, "--install")
+        finally:
+            cursor.chmod(0o700)
+        out = " ".join(r.out.split())
+        assert "installed project-conventions" in out
+        assert "not linked: ~/.cursor/skills is not writable" in out
 
     def test_ai_path(self, boost, sandbox, py_project, ai_on):
         ai_on(ask_author="---\nname: project-conventions\ndescription: AI says\n"
