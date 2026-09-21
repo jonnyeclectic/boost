@@ -67,20 +67,30 @@ def in_cone(rel: str | PurePosixPath, ignorecase: bool = False) -> bool:
     (`tests/unit/test_gitutil_sparse.py`): three literal lists of the same set
     drift, and the one that drifts silently is the one in a preview.
 
+    A `--no-cone` pattern is gitignore syntax, so it is tested against every
+    component of the path, not only the leaf. git matches a file and then each
+    directory above it, and keeps the file if any of them matches. An
+    unanchored `*.md` or `.clinerules` names a directory as readily as a file,
+    and everything under a matched directory stays: a tracked
+    `.clinerules/state/x.json` or `docs.md/run.py` survives `reapply`. Matching
+    the leaf alone promised those bytes, and the live run freed none of them.
+    The anchored `/.boost/*` is the exception. It matches only below a root
+    `.boost` directory, so a root *file* called `.boost` is not kept.
+
     ``ignorecase`` is the clone's `core.ignorecase` (:func:`folds_case`), which
     git's own sparse matching follows: on macOS `*.md` keeps a `README.MD`, on
     Linux it drops it. The patterns are lowercase literals, so folding the path
     alone is enough.
     """
-    path = PurePosixPath(str(rel).lower() if ignorecase else rel)
+    parts = PurePosixPath(str(rel).lower() if ignorecase else rel).parts
     for pattern in gitutil.SPARSE_PATTERNS:
         if pattern.startswith("/") and pattern.endswith("/*"):
-            if path.parts[:1] == (pattern[1:-2],):
+            if len(parts) > 1 and parts[0] == pattern[1:-2]:
                 return True
         elif pattern.startswith("*"):
-            if path.name.endswith(pattern[1:]):
+            if any(part.endswith(pattern[1:]) for part in parts):
                 return True
-        elif path.name == pattern:
+        elif pattern in parts:
             return True
     return False
 

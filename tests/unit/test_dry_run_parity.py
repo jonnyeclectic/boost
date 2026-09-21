@@ -128,7 +128,11 @@ class TestCompactPredictsOnlyTrackedFreight:
         src = tmp_path / "src"
         edge = {".boost/manifest.json": 11, "sub/.boost/x.json": 13,
                 ".cursorrules": 17, "sub/.windsurfrules": 19,
-                "README.MD": 23, "notes.md.bak": 29, "skills/a/SKILL.md": 31}
+                "README.MD": 23, "notes.md.bak": 29, "skills/a/SKILL.md": 31,
+                # A pattern names a directory too, and git keeps its subtree.
+                "docs.md/run.py": 41, ".clinerules/state/x.json": 43,
+                # A bare rule name is a whole name, never a suffix.
+                "sk/a.cursorrules": 37}
         for rel, size in edge.items():
             (src / rel).parent.mkdir(parents=True, exist_ok=True)
             (src / rel).write_text("x" * size, encoding="utf-8")
@@ -142,9 +146,13 @@ class TestCompactPredictsOnlyTrackedFreight:
         gitutil.narrow(clone)
 
         assert before - _worktree_bytes(clone) == predicted
-        # sub/.boost and notes.md.bak always go; README.MD goes only where
-        # the clone matches case-sensitively (Linux), and parity holds either way.
-        assert predicted == 13 + 29 + (0 if _compact().folds_case(clone) else 23)
+        # sub/.boost, notes.md.bak and sk/a.cursorrules always go; README.MD
+        # goes only where the clone matches case-sensitively (Linux), and
+        # parity holds either way. docs.md/ and .clinerules/ stay whole.
+        assert predicted == 13 + 29 + 37 + (
+            0 if _compact().folds_case(clone) else 23)
+        assert (clone / "docs.md" / "run.py").is_file()
+        assert (clone / ".clinerules" / "state" / "x.json").is_file()
 
     @pytest.mark.parametrize("ignorecase", ["true", "false"])
     def test_parity_holds_whichever_way_the_clone_matches_case(
@@ -216,16 +224,67 @@ class TestCompactPredictsOnlyTrackedFreight:
         ("sub/.boost/manifest.json", False),  # … and only at the root
         ("scripts/run.py", False),
         ("cursorrules", False),               # a name, not a suffix
+        ("sk/a.cursorrules", False),          # … in either direction
         ("notes.md.bak", False),
+        # gitignore syntax: a pattern names a directory as readily as a file,
+        # and git keeps everything under a directory that matches.
+        ("docs.md/run.py", True),             # *.md on a directory
+        ("a/b.mdc/c.txt", True),              # *.mdc on a nested directory
+        (".clinerules/state/x.json", True),   # a rule name on a directory
+        ("sub/.windsurfrules/y.txt", True),   # … at any depth
+        ("notes.md.bak/q.txt", False),        # the suffix still has to end it
+        (".boost", False),                    # /.boost/* wants a child
+        (".boost/sub/deep.json", True),       # … at any depth below the root
     ])
     def test_the_cone_is_the_one_git_applies(self, rel, kept):
         assert _compact().in_cone(rel) is kept
 
     @pytest.mark.parametrize(("rel", "kept"), [
         ("README.MD", True), ("Rules/House.MDC", True),
-        (".CursorRules", True), (".BOOST/x.json", True), ("run.PY", False)])
+        (".CursorRules", True), (".BOOST/x.json", True), ("run.PY", False),
+        ("Docs.MD/run.py", True), (".CLINERULES/s.json", True)])
     def test_a_case_folding_clone_folds_the_cone_too(self, rel, kept):
         assert _compact().in_cone(rel, ignorecase=True) is kept
+
+    @pytest.mark.parametrize("ignorecase", ["true", "false"])
+    @pytest.mark.parametrize("layout", [
+        # The verifier's repro: a real registry's cline state directory.
+        [".clinerules/intelligence/state/a.json",
+         ".clinerules/intelligence/state/b.json",
+         ".clinerules/rules.md", "skills/x/SKILL.md", "run.py"],
+        ["docs.md/run.py", "docs.md/deep/er/x.bin", "a/b.mdc/c.txt",
+         "sub/.cursorrules/x.json", ".windsurfrules/y.txt",
+         "sk/a.cursorrules", "x.cursorrulesz", "cursorrules/z.txt",
+         "notes.md.bak/q.txt", "md/r.txt", ".md", "dir/.mdc"],
+        [".boost/manifest.json", ".boost/sub/deep.json", "sub/.boost/x.json",
+         "sub/.boost/y/z.json", ".boostx/a.json", "x/.boost"],
+        [".boost", "keep.md"],
+        ["README.MD", "Docs.MD/run.py", ".CLINERULES/s.json",
+         ".BOOST/x.json", "run.PY"],
+    ], ids=["cline-state", "directory-names", "boost-anchor", "boost-file",
+            "case"])
+    def test_every_path_is_judged_the_way_git_judges_it(
+            self, tmp_path, layout, ignorecase):
+        """Path by path, not only in total: a matcher that kept one file too
+        many and dropped another of the same size would pass a byte count."""
+        src = tmp_path / "src"
+        for n, rel in enumerate(layout, start=1):
+            (src / rel).parent.mkdir(parents=True, exist_ok=True)
+            (src / rel).write_text("x" * n, encoding="utf-8")
+        _git(src, "init", "-q", "-b", "main")
+        _git(src, "add", "-A")
+        _git(src, "commit", "-qm", "layout")
+        clone = _fat_clone(src, tmp_path / "c")
+        _git(clone, "config", "core.ignorecase", ignorecase)
+        fold = _compact().folds_case(clone)
+        predicted = {rel: _compact().in_cone(rel, fold) for rel in layout}
+        freight = _compact().freight_bytes(clone, [])
+        before = _worktree_bytes(clone)
+
+        gitutil.narrow(clone)
+
+        assert {rel: (clone / rel).is_file() for rel in layout} == predicted
+        assert before - _worktree_bytes(clone) == freight
 
     def test_case_folding_is_read_from_the_clone(self, tmp_path):
         clone = _fat_clone(_repo(tmp_path / "src"), tmp_path / "c")
@@ -398,6 +457,24 @@ class TestHealPreviewsTheBranchItWillTake:
         assert "would reinstall local-skill from local source %s" % src in preview
         assert "reinstalled missing local-skill from local source %s" % src \
             in applied
+
+    def test_a_local_source_without_its_skill_md_is_previewed_as_the_drop(
+            self, boost, sandbox, tmp_path):
+        """The directory is still there, but install_from_path needs its
+        SKILL.md, so the run drops the entry — and the preview must say so
+        rather than promise a reinstall from a path that cannot supply one."""
+        src = _local_skill(tmp_path)
+        store.install_from_path(src)
+        shutil.rmtree(paths.store_dir() / "local-skill")
+        (src / "SKILL.md").unlink()
+        assert src.is_dir()
+
+        preview, applied = _heal_both(boost)
+
+        assert "would drop local-skill from the lock" in preview
+        assert "would reinstall" not in preview
+        assert "dropped local-skill from lock" in applied
+        assert lockfile.get_skill("local-skill") is None
 
     def test_a_pin_that_blocks_the_repair_is_previewed_as_declined(
             self, boost, sandbox, tmp_path):
