@@ -177,21 +177,21 @@ they are separate modes rather than one pass, and `--shards --taps-only` is
 refused rather than silently picking one.
 
 Because vectors are keyed to a registry's commit, `quickstart` **pins** every
-registry that has published vectors, even when the `[rag]` extra is missing
-and the vectors cannot load yet, and `boost update` skips a pinned tap rather
-than moving it out from under them (`--force` moves it anyway and drops the
-pin). A pinned
-tap with *no* clone is not skipped — there is nothing to hold still, so it is
-cloned and checked out at its pin; if that pin cannot be reached the clone is
-removed rather than left on HEAD with a pin that no longer describes it, and
-`compact --reclone` follows the same rule. When a tap does move, boost checks whether a newer shard exists for the new commit and
-imports it; if none does, it says so instead of leaving stale vectors looking
-fresh. `boost search` never refreshes taps behind your back, and never checks
-the manifest either — acting on that answer means moving taps and downloading
-hundreds of megabytes, which cannot happen inside a sub-second search. It prints
-one line when the taps or the prebuilt vectors are more than two weeks old and
-leaves the fetching to `boost update --taps-only` or `boost update --shards`.
-Every download is checked against the sha256 in the manifest and refused on a
+registry that has published vectors, even when the `[rag]` extra is missing and
+the vectors cannot load yet, and `boost update` skips a pinned tap rather than
+moving it out from under them (`--force` moves it anyway and drops the pin). A
+pinned tap with *no* clone is not skipped — there is nothing to hold still, so
+it is cloned and checked out at its pin; if that pin cannot be reached the
+clone is removed rather than left on HEAD with a pin that no longer describes
+it, and `compact --reclone` follows the same rule. When a tap does move, boost
+checks whether a newer shard exists for the new commit and imports it; if none
+does, it says so instead of leaving stale vectors looking fresh. `boost search`
+never refreshes taps behind your back, and never checks the manifest either —
+acting on that answer means moving taps and downloading hundreds of megabytes,
+which cannot happen inside a sub-second search. It prints one line when the
+taps or the prebuilt vectors are more than two weeks old and leaves the
+fetching to `boost update --taps-only` or `boost update --shards`. Every
+download is checked against the sha256 in the manifest and refused on a
 mismatch, and shards for a registry that has moved since publication are
 refused rather than merged — stale vectors would otherwise look fresh forever.
 

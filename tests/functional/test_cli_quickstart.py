@@ -370,24 +370,28 @@ class TestEveryZeroShardReasonNamesItself:
         for cmd in ("`boost update --shards`", "`boost reindex --dense`"):
             assert any(cmd in ln for ln in lines)
 
+    @pytest.mark.parametrize("hint", [
+        "a proxy or a dropped connection cut the stream — retry",
+        "LOCAL_EMBED_HINT"])
     def test_a_manifest_error_keeps_its_hint_and_names_the_real_cause(
-            self, boost, monkeypatch):
+            self, boost, monkeypatch, hint):
         # "no published shards" said the project has none; the cause is
         # local. And the hint — the only actionable line, carried by every
-        # transport-shaped failure — was thrown away.
+        # transport-shaped failure — was thrown away. With the extra even the
+        # local-embed hint applies, so it is kept too.
         from boost_cli.core import dense, shards
         from boost_cli.errors import BoostError
+        if hint == "LOCAL_EMBED_HINT":
+            hint = shards.LOCAL_EMBED_HINT
 
         def boom(*_a, **_k):
-            raise BoostError("cannot reach the manifest",
-                             hint="a proxy or a dropped connection cut the "
-                                  "stream — retry")
+            raise BoostError("cannot reach the manifest", hint=hint)
 
         monkeypatch.setattr(dense, "have_backend", lambda: True)
         monkeypatch.setattr(shards, "fetch_manifest", boom)
         out = _flat(boost("quickstart", "--dry-run").out)
         assert "could not read the shard manifest: cannot reach" in out
-        assert "a proxy or a dropped connection cut the stream — retry" in out
+        assert hint in out
         assert "no published shards" not in out
 
     def test_a_manifest_with_no_matching_shard_says_so(self, boost,
