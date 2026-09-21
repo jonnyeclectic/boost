@@ -848,6 +848,174 @@ class TestHelpers:
         assert cap.err == "  ! routed\n  hint\n"
 
 
+class _TtyBuffer(io.StringIO):
+    """A writable stream that reports itself as a terminal."""
+
+    def isatty(self):
+        return True
+
+
+class TestWarnColourFollowsItsStream:
+    """A warning routed to stderr is coloured by what stderr is, not stdout.
+
+    `boost bundle dump > Boostfile` sends its notice to a terminal while
+    stdout is a file; `2>log` sends it to a file while stdout is a terminal
+    (docs/roadmap/items/audit-bundle-findings.md). Asking stdout printed the
+    first plain and wrote escape codes into the second.
+    """
+
+    def test_a_terminal_stderr_is_coloured_while_stdout_is_a_file(
+            self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        err = _TtyBuffer()
+        output.warn("notice", stream=err)
+        text = err.getvalue()
+        # both the marker and the message are painted
+        assert text.count(output.RESET) == 2
+        assert output.visible_len(text.rstrip("\n")) == len("  ! notice")
+        assert sys.stdout.getvalue() == ""
+
+    def test_a_redirected_stderr_stays_plain_while_stdout_is_a_terminal(
+            self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", _TtyBuffer())
+        err = io.StringIO()
+        output.warn("notice", stream=err)
+        assert err.getvalue() == "  ! notice\n"
+
+    def test_wrapped_continuations_follow_the_stream_too(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", _TtyBuffer())
+        monkeypatch.setattr(output, "term_width", lambda default=80: 20)
+        err = io.StringIO()
+        output.warn("one two three four five six seven", stream=err, wrap=True)
+        assert "\x1b[" not in err.getvalue()
+        assert len(err.getvalue().splitlines()) > 1
+
+    def test_the_default_stream_is_still_stdout_and_judged_by_it(
+            self, monkeypatch):
+        tty = _TtyBuffer()
+        monkeypatch.setattr(sys, "stdout", tty)
+        output.warn("notice")
+        assert tty.getvalue().count(output.RESET) == 2
+        plain = io.StringIO()
+        monkeypatch.setattr(sys, "stdout", plain)
+        output.warn("notice")
+        assert plain.getvalue() == "  ! notice\n"
+
+
+class _Terminal:
+    """One merged capture behind two streams, the way `2>&1 | cat` sees them.
+
+    stdout into a pipe is block-buffered, so what boost prints there is held
+    until something flushes it; stderr is written straight through. ``log``
+    is the order the reader of the merged pipe gets.
+    """
+
+    def __init__(self, flush_error=None):
+        self.log: list[str] = []
+        self.held: list[str] = []
+        self.flushes = 0
+        self._flush_error = flush_error
+        term = self
+
+        class _Out:
+            def write(self, text):
+                term.held.append(text)
+                return len(text)
+
+            def flush(self):
+                term.flushes += 1
+                if term._flush_error is not None:
+                    raise term._flush_error
+                term.log.append("".join(term.held))
+                term.held.clear()
+
+            def isatty(self):
+                return False
+
+        class _Err:
+            def write(self, text):
+                term.log.append(text)
+                return len(text)
+
+            def flush(self):
+                pass
+
+            def isatty(self):
+                return False
+
+        self.out, self.err = _Out(), _Err()
+
+    def text(self) -> str:
+        return "".join(self.log)
+
+    def install(self, monkeypatch) -> _Terminal:
+        """Become sys.stdout/sys.stderr. Call from the test body: pytest's own
+        capture re-binds both streams when the call phase starts, so a patch
+        made in a fixture is gone before the test runs."""
+        monkeypatch.setattr(sys, "stdout", self.out)
+        monkeypatch.setattr(sys, "stderr", self.err)
+        return self
+
+
+class TestStderrWaitsForStdout:
+    """An error written to stderr must not overtake the stdout it refers to."""
+
+    @pytest.fixture(autouse=True)
+    def plain(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+
+    def test_err_lands_after_the_table_it_follows(self, monkeypatch):
+        term = _Terminal().install(monkeypatch)
+        output.heading("2 skills in ./many")
+        output.table([("alpha", "v0.1.0"), ("beta", "v0.1.0")])
+        output.err("multiple skills found", hint="add `--name NAME`")
+        text = term.text()
+        assert text.index("beta") < text.index("Error: multiple skills found")
+        assert text.endswith("  hint: add `--name NAME`\n")
+
+    @pytest.mark.parametrize("emit", [
+        lambda: output.warn("notice", stream=sys.stderr),
+        lambda: output.info("notice", stream=sys.stderr),
+        lambda: output.info("notice", stream=sys.stderr, wrap=True),
+        lambda: output.heading("notice", stream=sys.stderr),
+        lambda: output.table([("notice", "x")], stream=sys.stderr),
+    ])
+    def test_every_stderr_emitter_flushes_stdout_first(self, monkeypatch, emit):
+        term = _Terminal().install(monkeypatch)
+        output.info("report line")
+        emit()
+        text = term.text()
+        assert text.index("report line") < text.index("notice")
+
+    def test_a_stdout_write_leaves_stdout_buffered(self, monkeypatch):
+        # The flush is for crossing streams; a line to stdout itself has no
+        # other stream to be ordered against, so it keeps its buffering.
+        term = _Terminal().install(monkeypatch)
+        output.warn("to stdout")
+        output.info("to stdout")
+        output.heading("to stdout")
+        output.table([("to", "stdout")])
+        assert term.flushes == 0
+        assert term.log == []
+
+    def test_err_still_prints_when_stdout_cannot_be_flushed(self, monkeypatch):
+        # A reader that closed the pipe (`boost import … | head -0`) makes the
+        # flush raise; that must not cost the user the error message itself.
+        t = _Terminal(flush_error=BrokenPipeError()).install(monkeypatch)
+        output.err("boom")
+        assert t.text() == "Error: boom\n"
+
+    def test_err_still_prints_when_stdout_was_closed_at_launch(self, monkeypatch):
+        # `boost … >&-` starts Python with fd 1 closed, and Python then sets
+        # sys.stdout to None: there is no stdout to flush, and asking it to
+        # raised AttributeError before the error line was written.
+        t = _Terminal().install(monkeypatch)
+        monkeypatch.setattr(sys, "stdout", None)
+        output.err("boom", hint="try again")
+        output.warn("notice", stream=sys.stderr)
+        assert t.text() == "Error: boom\n  hint: try again\n  ! notice\n"
+
+
 class TestPlain:
     """Control characters are stripped from text boost did not author.
 

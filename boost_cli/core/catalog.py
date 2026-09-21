@@ -562,6 +562,28 @@ def select_lock_source(matches: list[dict], lk: dict) -> tuple[dict | None, str 
                       % (fallback.get("name", "?"), wanted, fallback.get(field, "?")))
 
 
+def upstream_path(entry: dict) -> str:
+    """The path inside its tap that *is* this item, for a lock or catalog entry.
+
+    A skill is a directory: SKILL.md plus the scripts and assets beside it.
+    A rule or a workflow is a single file, and the directory holding it is
+    shared: one real ``rules/ci-cd`` holds eleven rules, and one ``agents/``
+    holds 138 workflows. Using ``rel_dir`` for those made ``git log -- <dir>``
+    show every sibling's commits as this item's history. It also made
+    ``boost home`` link the folder instead of the file.
+
+    Both entry shapes are accepted, with the key pairing
+    :func:`select_lock_source` uses. A lock records ``source_file`` for a
+    rule or workflow and ``source_dir`` for a skill. A catalog entry records
+    ``skill_md`` (the defining file) and ``rel_dir`` for every kind.
+    """
+    if entry.get("source_file"):
+        return str(entry["source_file"])
+    if entry.get("kind", "skill") != "skill" and entry.get("skill_md"):
+        return str(entry["skill_md"])
+    return str(entry.get("source_dir") or entry.get("rel_dir") or ".")
+
+
 def _identity(entry: dict) -> str:
     """What a user could actually use to tell two candidates apart.
 

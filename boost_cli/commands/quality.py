@@ -511,7 +511,9 @@ def cmd_doctor(argv):
     for name, entry in sorted(skills.items()):
         sdir = store.skill_store_dir(name)
         if not sdir.is_dir():
-            bad("skill", "skill %s missing from store — run `boost heal`" % name)
+            fix = ("boost reinstall %s" % name if store.is_url_import(entry)
+                   else "boost heal")
+            bad("skill", "skill %s missing from store — run `%s`" % (name, fix))
             skill_issues += 1
             continue
         if entry.get("quarantined"):
@@ -611,9 +613,29 @@ def cmd_doctor(argv):
     quarantined_rules = len(all_rules) - len(rules)
     quarantined_workflows = len(all_workflows) - len(workflows)
     mat_issues = 0
+    for kind, section in (("rule", rules), ("workflow", workflows)):
+        for name, entry in sorted(section.items()):
+            for m in entry.get("materializations") or []:
+                if m.get("unwritable"):
+                    # Refused at install, so `boost reinstall` would be refused
+                    # too until the dir allows it; the agent-dir line below
+                    # names the `chmod`, or the move when a file or a dangling
+                    # link is in the way. Any file there predates the refusal.
+                    block = paths.refuses_writes(Path(m.get("path", "")).parent)
+                    if block is not None and paths.in_the_way(block):
+                        why = ("%s is in the way — `boost sync` writes it once "
+                               "it is moved" % _tilde(block))
+                    else:
+                        why = ("its dir was not writable — `boost sync` writes "
+                               "it once it is")
+                    bad(kind, "%s %s was not written for %s: %s"
+                        % (kind, name, m.get("agent", "?"), why), wrap=True)
+                    mat_issues += 1
     for name, entry in sorted(rules.items()):
         for m in entry.get("materializations") or []:
             p = Path(m.get("path", ""))
+            if m.get("unwritable"):
+                continue
             if m.get("mode") == "claude":
                 try:
                     present = p.exists() and ("boost:rule:%s start" % name) in \
@@ -628,7 +650,7 @@ def cmd_doctor(argv):
                 mat_issues += 1
     for name, entry in sorted(workflows.items()):
         for m in entry.get("materializations") or []:
-            if not Path(m.get("path", "")).is_file():
+            if not m.get("unwritable") and not Path(m.get("path", "")).is_file():
                 bad("workflow", "workflow %s missing its %s file — run `boost reinstall %s`"
                     % (name, m.get("agent", "?"), name))
                 mat_issues += 1
@@ -703,23 +725,23 @@ def cmd_doctor(argv):
             % (dup.name, agents.display_name(dup.agent), _tilde(dup.path),
                _tilde(dup.target)), wrap=True)
 
-    # Linking agents only: a native-store agent's skills dir (Gemini's) is
-    # never written, so its permissions are not boost's problem and `boost
-    # sync` could not act on them.
-    for adir in agents.linking_agents().values():
-        block = paths.refuses_writes(adir)
-        if block is not None and paths.in_the_way(block):
-            # A file or a dangling link where the dir belongs. Heal names it,
-            # install skips the agent, and doctor said nothing and exited 0.
-            bad("agent-dir", "%s — %s, then `boost sync` relinks what it "
-                "missed" % (paths.not_writable(adir, block),
-                            paths.write_remedy(block)), wrap=True)
-        elif adir.is_dir() and not os.access(str(adir), os.W_OK):
-            # A next action, like the log line below it: without one this was
-            # the only issue doctor names that nothing can act on.
-            bad("agent-dir", "agent dir %s is not writable — `chmod u+w %s`, "
-                "then `boost sync` relinks what it missed"
-                % (_tilde(adir), _tilde(adir)), wrap=True)
+    # Every dir boost writes into: the linking agents' skills dirs, and the
+    # rules/ and commands/ dirs rules and workflows materialize into. Not a
+    # native-store agent's skills dir (Gemini's): boost never writes it, and
+    # `boost sync` could not act on it.
+    skills_dirs = set(agents.linking_agents().values())
+    for adir, block in store.blocked_agent_dirs():
+        # A file or a dangling link where the dir belongs. Heal names it,
+        # install skips the agent, and doctor said nothing and exited 0.
+        bad("agent-dir", "%s — %s, then `boost sync` %s what it missed"
+            % (paths.not_writable(adir, block), paths.write_remedy(block),
+               "relinks" if adir in skills_dirs else "writes"), wrap=True)
+    for adir in store.unwritable_agent_dirs():
+        # A next action, like the log line below it: without one this was
+        # the only issue doctor names that nothing can act on.
+        bad("agent-dir", "agent dir %s is not writable — `chmod u+w %s`, "
+            "then `boost sync` writes what it missed"
+            % (_tilde(adir), _tilde(adir)), wrap=True)
 
     rotation = journal.rotation_healthy()
     if not rotation:
@@ -849,6 +871,17 @@ def _report_search_engine(rep) -> None:
             detail += ", live key is %s" % st["provider"]
         elif st["reason"] == "empty":
             detail += " but holds no vectors"
+        elif st["reason"] == "model-unavailable":
+            # The store is fine; the query embedder is what failed. Say which
+            # half and when, because a record from an hour ago on another
+            # network reads differently from one made by the last search.
+            from ..core import embed
+            fail = st.get("model_failure") or {}
+            detail += ", but %s" % embed.local_failure_text(fail)
+            if isinstance(fail.get("at"), (int, float)):
+                detail += ", last tried %s" % util.rel_time(
+                    datetime.fromtimestamp(fail["at"], UTC)
+                    .strftime("%Y-%m-%dT%H:%M:%SZ"))
         rep.issue("search-engine",
                   "semantic search silently off — %d-chunk vector store %s; "
                   "searches are using BM25 — %s" % (st["chunks"], detail, fix),
@@ -1272,8 +1305,7 @@ def cmd_heal(argv):
                  % cfg_err, wrap=True)
     # Permissions are the user's to change, not heal's; but a dir heal saw and
     # cannot fix must not sit under an all-clear.
-    stuck = [adir for adir in agents.linking_agents().values()
-             if adir.is_dir() and not os.access(str(adir), os.W_OK)]
+    stuck = store.unwritable_agent_dirs()
     for adir in stuck:
         out.warn("agent dir %s is not writable — heal does not change "
                  "permissions; run `chmod u+w %s`, then `boost sync`"
@@ -1286,6 +1318,11 @@ def cmd_heal(argv):
     if registry.list_taps() and cache_stuck:
         blocked.setdefault(cache_dir,
                            paths.refuses_writes(cache_dir) or cache_dir)
+    # A file or a dangling link where a recorded rule's or workflow's dir
+    # belongs. A block already named for a skills dir is named once.
+    for d, block in store.blocked_agent_dirs():
+        if block not in blocked.values():
+            blocked.setdefault(d, block)
     for d, block in blocked.items():
         stuck.append(d)
         out.warn("%s — heal does not %s; %s"
@@ -1413,20 +1450,16 @@ def cmd_conflict(argv):
 def cmd_changelog(argv):
     ap = cliparse.parser(
         prog="boost changelog",
-        description="Show a skill's upstream change history")
+        description="Show an item's upstream change history")
     ap.add_argument("name", metavar="NAME")
     ap.add_argument("-n", type=util.positive_int, default=20, metavar="N",
                     help="number of entries (default 20)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
-    _, bare = catalog.split_name(args.name)
-    entry = lockfile.get_skill(args.name)
-    if entry:
-        tap_name, rel = entry.get("tap", ""), entry.get("source_dir", ".")
-    else:
-        e = catalog.resolve_one(args.name)
-        tap_name, rel = e["tap"], e["rel_dir"]
+    # Lock first, all three kinds. A rule or workflow is logged over its own
+    # file, not the directory it shares with its siblings.
+    bare, _kind, tap_name, rel = store.upstream_source(args.name)
     if tap_name == "local":
         if args.json:
             print(json.dumps({"name": bare, "tap": None, "commits": []},
@@ -1452,7 +1485,11 @@ def cmd_changelog(argv):
         out.info(line)
     if not lines:
         out.warn("no history found for %s in %s" % (rel, tap.name))
-    if len(lines) < 3:
+    # Fewer entries than -n asked for means git ran out of history. On a
+    # shallow clone that end may be the cut, not the first commit, however
+    # far the clone was deepened. A short log alone proves nothing: a
+    # local-path tap is complete, and there `fetch --unshallow` fails.
+    if len(lines) < args.n and gitutil.is_shallow(tap.path):
         note = ("(shallow clone: run `git -C %s fetch --unshallow` "
                 "for full history)" % _tilde(tap.path))
         for line in out.wrap(note, max(out.term_width() - 2, 20)):

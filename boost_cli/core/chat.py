@@ -76,10 +76,17 @@ _SYSTEM = (
 
 
 class Turn(NamedTuple):
-    """One exchange, kept so a follow-up can refer back to it."""
+    """One exchange, kept so a follow-up can refer back to it.
+
+    ``skills`` is what the answer drew on, in the order it was shown. A
+    follow-up like "which of these should I install first?" points at exactly
+    that list, and the list cannot be rebuilt from the question — re-querying
+    the catalogue with it retrieved skills the user had never been shown.
+    """
 
     question: str
     answer: str
+    skills: Sequence[dict] = ()
 
 
 class Reply(NamedTuple):
@@ -131,9 +138,147 @@ def expand_query(question: str, history: Sequence[Turn]) -> str:
     if not history:
         return question
     # Long questions carry their own context; short ones are the follow-ups.
+    # This is also the fresh search a pointer ("which of these…") runs
+    # alongside the rows it points at, so it must stay the query main sends:
+    # that is what keeps a misread pointer from losing main's answer.
     if len(question.split()) > 6:
         return question
     return "%s %s" % (history[-1].question, question)
+
+
+# Phrases that point back at the list the previous answer showed. Kept narrow,
+# though a false match now costs order rather than the answer (see
+# :func:`retrieve`): "those flaky tests" is a new subject, "those skills" is a
+# reference; "which one is best for linting?" asks the catalogue, "which one of
+# these" asks the list; "the other SKILL.md field" is a new subject, "from the
+# others" is not; "this one-liner" and "best of both worlds" are English.
+_REFERS = re.compile(
+    r"\b(?:(?:of|between|among|from|compare)\s+(?:these|those|them)"
+    r"|(?:of|between|among|from|than|to|about|vs\.?|versus|compared?)\s+the\s+others"
+    r"|(?:these|those)\s+(?:ones?|skills?|options?|results?|matches)"
+    r"|(?:that|this)\s+one\b(?!-))\b", re.IGNORECASE)
+
+# "the second one", "the 2nd skill?" — one row of the previous list. The
+# ordinal needs a pointer in front ("the", "that", "this", or nothing but the
+# ordinal in the whole question): "my first skill" is a new subject. With a
+# noun rather than "one" it must also end the clause, because "the last skill I
+# should install for linting" is a new question that happens to say "the last",
+# and "one" must not start a compound: "the first one-shot prompt".
+_ORDINAL = re.compile(
+    r"(?:\b(?:the|that|this)\s+|^\W*(?:and\s+)?)"
+    r"(?P<word>first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)\s+"
+    r"(?:one\b(?!-)|(?:skill|option|result|match)\b(?=\s*(?:[?.!,;]|$)))",
+    re.IGNORECASE)
+
+# "#3", "number 2" — only where a row number can stand: the whole question, a
+# question that opens "and #3" / "is number 1", or after a verb or preposition
+# that takes one ("about #3", "try #2"). "is", "and" and "or" count only at the
+# start: mid-question they join numbers that count something else ("which
+# skill is #1 for security?", "PRs #2 and #3").
+_ROW_NUMBER = re.compile(
+    r"(?:^\W*(?:(?:and|or|is)\s+)?|\b(?:about|try|install|use|pick|choose|vs|than|with)\s+)"
+    r"(?:#\s*|number\s+)(?P<n>\d+)\b", re.IGNORECASE)
+# A number after one of these numbers that thing, and so does every number in
+# a question that has one: "compare PR #2 with #3" is two pull requests.
+_TRACKED = re.compile(
+    r"\b(?:prs?|pull\s+requests?|issues?|bugs?|tickets?)\s*(?:#\s*|number\s+)?\d",
+    re.IGNORECASE)
+_ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+             "1st": 1, "2nd": 2, "3rd": 3, "4th": 4, "5th": 5}
+
+
+def _row_number(question: str) -> int | None:
+    """The row a "#N" / "number N" in ``question`` names, if it names one."""
+    if _TRACKED.search(question):
+        return None
+    m = _ROW_NUMBER.search(question)
+    return int(m.group("n")) if m else None
+
+
+def is_referential(question: str) -> bool:
+    """Whether ``question`` points back at the previous answer's list."""
+    return bool(_REFERS.search(question) or _ORDINAL.search(question)
+                or _row_number(question) is not None)
+
+
+def referenced(question: str, previous: Sequence[dict]) -> list[dict] | None:
+    """The previous answer's rows if ``question`` points at them, else None.
+
+    An ordinal or a row number moves its row to the front, numbered as the
+    answer numbered it, and keeps the others after it: the pointer might be a
+    misreading, and the rest of the list costs nothing to keep. A word ordinal
+    past the end still points at the list. A number past the end does not:
+    "what about #42?" is not a row of five, and gets an ordinary search.
+    """
+    if not previous or not is_referential(question):
+        return None
+    word = _ORDINAL.search(question)
+    number = _row_number(question)
+    if word:
+        w = word.group("word").lower()
+        n = len(previous) if w == "last" else _ORDINALS[w]
+    elif number is not None:
+        n = number
+    else:
+        return list(previous)
+    if 1 <= n <= len(previous):
+        return [previous[n - 1], *previous[:n - 1], *previous[n:]]
+    # Past the end, a word ordinal still points at the list; a number numbers
+    # something else unless the question also points back.
+    if word or _REFERS.search(question):
+        return list(previous)
+    return None
+
+
+def _name(entry: dict) -> str:
+    return str(entry.get("name", "")).lower()
+
+
+def _row(entry: dict) -> tuple:
+    """Row identity (``rag.entry_key``'s fields), tolerant of synthesised rows.
+
+    Equality rather than ``is``: the previous turn's rows and this turn's hits
+    can be equal dicts from two catalogue loads, and must not be listed twice.
+    """
+    return (entry.get("tap"), entry.get("skill_md"), entry.get("name"))
+
+
+def promote_named(question: str, ranked: Sequence[dict],
+                  previous: Sequence[dict] = (),
+                  catalogue: Sequence[dict] = ()) -> list[dict]:
+    """``ranked`` with any skill the question names moved to the front.
+
+    Asking "what does orch-review actually do?" is a lookup, and a ranker can
+    score a sibling that repeats the query terms above the skill it names — the
+    audit saw ``orch-refine-code`` outrank ``orch-review`` for exactly that
+    question. A name counts when it is catalogue-shaped (hyphenated), or when
+    it is any word naming a skill the previous answer showed: "teach" in an
+    arbitrary question is English, but not right after the user was shown a
+    skill called ``teach``.
+
+    For each name the row the user was just shown wins, then the best-ranked
+    hit, then the catalogue — so a name several taps carry resolves to the one
+    the conversation is about. Namesakes are kept, ranked after.
+    """
+    shown = {_name(e) for e in previous}
+    words = re.findall(r"[a-z0-9][a-z0-9-]*[a-z0-9]|[a-z0-9]", question.lower())
+    # dict.fromkeys: each name once, in the order the question gives them.
+    names = dict.fromkeys(w for w in words if _TOKEN.fullmatch(w) or w in shown)
+    pools = (previous, ranked, catalogue)
+    found = (next((e for pool in pools for e in pool if _name(e) == n), None)
+             for n in names)
+    front = [e for e in found if e is not None]
+    placed = {_row(e) for e in front}
+    return front + [e for e in ranked if _row(e) not in placed]
+
+
+def _search(query: str, k: int, entries: list[dict]) -> tuple[list[dict], str]:
+    """The top ``k`` for ``query`` from whichever engine the machine has."""
+    hits, engine = rag.retrieve_any(query, k=k, entries=entries)
+    if hits is None:
+        # No index of any kind: catalog.search is the documented floor.
+        return [e for e, _score in catalog.search(query)[:k]], "frontmatter scan"
+    return [h["entry"] for h in hits[:k]], engine
 
 
 def retrieve(question: str, history: Sequence[Turn] = (),
@@ -144,15 +289,39 @@ def retrieve(question: str, history: Sequence[Turn] = (),
     gets whatever the machine has — hybrid, dense, or BM25 — rather than pinning
     an engine of its own, and falls back to the frontmatter scan when no index
     exists at all so a fresh install still answers.
+
+    A follow-up that points back at the previous answer ("which of these…",
+    "the second one") leads with that answer's rows, the row it names first:
+    the audit measured "which of these should I install first?" coming back
+    with nothing from the turn before. It never *replaces* the search, though.
+    The same search runs, and its results follow the carried rows, so a
+    question misread as a pointer ("this one-liner", "PRs #2 and #3") loses
+    order, not the answer. That makes such a turn longer than ``k``: ``k``
+    carried rows (plus any the question names that fell past ``k``), then a
+    skill named but never shown, then the search's ``k``.
+
+    A skill the question names is ranked first on an ordinary search, and may
+    come from the catalogue: "is pre-commit better than those skills?" names a
+    skill the list never showed, and an answer about it is only grounded if
+    it is among the sources. On a pointer it goes after the carried rows,
+    which are what the question is about.
     """
-    query = expand_query(question, history)
+    previous = list(history[-1].skills) if history else []
     entries = catalog.all_entries()
-    hits, engine = rag.retrieve_any(query, k=k, entries=entries)
-    if hits is None:
-        # No index of any kind: catalog.search is the documented floor.
-        scored = catalog.search(query)
-        return [e for e, _score in scored[:k]], "frontmatter scan"
-    return [h["entry"] for h in hits[:k]], engine
+    found, engine = _search(expand_query(question, history), k, entries)
+    carried = referenced(question, previous)
+    if carried is None:
+        return promote_named(question, found, previous, entries)[:k], engine
+    head = carried[:k]
+    # Search hits before the rest of the catalogue, so a name several taps
+    # carry resolves to the copy the search ranked.
+    lead = promote_named(question, head, previous, [*found, *entries])
+    shown = {_row(e) for e in previous}
+    placed = {_row(e) for e in lead}
+    return ([e for e in lead if _row(e) in shown]
+            + [e for e in lead if _row(e) not in shown]
+            + [e for e in found if _row(e) not in placed],
+            "previous answer + %s" % engine)
 
 
 # Catalogue descriptions are untrusted upstream text and some are enormous:
@@ -389,19 +558,26 @@ def citations(entries: Sequence[dict]) -> list[dict[str, str]]:
     return out
 
 
-def suggest_followups(entries: Sequence[dict]) -> list[str]:
+def suggest_followups(entries: Sequence[dict], with_ai: bool = True) -> list[str]:
     """Concrete next questions, drawn from what was actually retrieved.
 
     Generic prompts ("ask me anything!") teach nothing; naming a real retrieved
     skill shows the user the shape of a question that works.
+
+    ``with_ai=False`` offers only what the extractive answer can answer: a
+    lookup of one named skill, which :func:`promote_named` puts first. A
+    comparison or a "which first" needs prose that path does not write, so
+    suggesting one invites a question whose answer is the same list again.
     """
     if not entries:
-        return ["what skills do I have installed?"]
+        return ["what skills do I have installed?"] if with_ai else []
     top: dict | None = entries[0]
     name = str(top.get("name", "")) if top else ""
     out: list[str] = []
     if name:
-        out.extend(("what does %s actually do?" % name,
-                    "how is %s different from the others?" % name))
-    out.append("which of these should I install first?")
+        out.append("what does %s actually do?" % name)
+    if with_ai:
+        if name:
+            out.append("how is %s different from the others?" % name)
+        out.append("which of these should I install first?")
     return out

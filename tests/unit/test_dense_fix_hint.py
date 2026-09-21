@@ -30,6 +30,7 @@ ALL_REASONS = [
     "model-changed",
     "dim-changed",
     "empty",
+    "model-unavailable",
 ]
 
 

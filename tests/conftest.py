@@ -93,6 +93,23 @@ def _reset_ai_last_failure():
     ai._last_failure = None
 
 
+@pytest.fixture(autouse=True)
+def _reset_localembed_failure():
+    """Clear the local model's in-process failure record between tests.
+
+    Same leak as `ai._last_failure` above: the marker file lives under each
+    test's sandbox HOME and goes with it, but the in-process copy is a module
+    global, and `dense.status()` reads it first — one test's failed fetch would
+    turn the next test's healthy local store into `model-unavailable`.
+    """
+    from boost_cli.core import localembed
+    localembed._failure = None
+    localembed._fetch_error = ""
+    yield
+    localembed._failure = None
+    localembed._fetch_error = ""
+
+
 @pytest.fixture()
 def sandbox(tmp_path, monkeypatch):
     """A fresh fake $HOME; returns its Path."""
@@ -131,6 +148,48 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(complete, "_WARNED_UNSAVED", False)
     monkeypatch.setattr(catalog, "_UNSAVED", set())
     return home
+
+
+@pytest.fixture()
+def vector_store(sandbox, monkeypatch):
+    """Write a dense store into the sandbox, as `dense.status` reads it.
+
+    Plain sqlite, `meta` plus one `chunks` row and no vec0: `status` reads
+    `meta` without the extra, so to every question short of a query this is
+    the real store — no stubbed status dict whose keys could drift from the
+    ones the code under test reads. `have_backend` is stubbed present so the
+    ladder reaches the store at all; without it a runner with no `[rag]`
+    extra stops at `no-backend` and one with it does not, and the test means
+    different things on each. Returns a writer taking the space to stamp,
+    voyage-4 by default: the store a user with VOYAGE_API_KEY has paid for.
+    ``provider=None`` stamps a store with no recorded space.
+    """
+    import json
+    import sqlite3
+
+    from boost_cli.core import dense
+    monkeypatch.setattr(dense, "have_backend", lambda: True)
+
+    def write(provider="voyage", model="voyage-4", dim=1024,
+              version=dense.INDEX_VERSION):
+        meta = {"version": version, "provider": provider, "model": model,
+                "dim": dim, "chunks": 1}
+        dense.db_path().parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(str(dense.db_path()))
+        try:
+            con.execute("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)")
+            con.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY,"
+                        " name TEXT)")
+            con.execute("INSERT INTO chunks (name) VALUES ('x')")
+            con.executemany("INSERT INTO meta (k, v) VALUES (?, ?)",
+                            [(k, json.dumps(v)) for k, v in meta.items()
+                             if v is not None])
+            con.commit()
+        finally:
+            con.close()
+        return dense.status()
+
+    return write
 
 
 class CliResult:
@@ -293,3 +352,48 @@ def rival_tap(boost, tapped, tmp_path):
     run("git", "commit", "-qm", "rival skills")
     boost("tap", root)
     return "rival-tap"
+
+
+@pytest.fixture()
+def sibling_rules_tap(boost, tmp_path):
+    """A real tap whose rules share a directory and whose workflow name repeats.
+
+    Two commits: the first adds ``rules/ci-cd/dotnet-build.mdc`` and three
+    differently-worded ``csharp-reviewer`` workflows. The second adds only
+    the sibling ``rules/ci-cd/dotnet-test.mdc``. The second commit is not
+    part of ``dotnet-build``'s history, so a log over the shared directory
+    shows the mistake. The three reviewers make the catalog refuse the bare
+    name, so only the lock can tell which one was installed.
+    Returns the source repo path.
+    """
+    root = tmp_path / "sibling-tap"
+    files = {
+        "rules/ci-cd/dotnet-build.mdc":
+            "---\nname: dotnet-build\ndescription: Build dotnet projects\n---\n"
+            "Use dotnet build.\n",
+        "agents/csharp-reviewer.md":
+            "---\nname: csharp-reviewer\ndescription: Reviews C# (top)\n---\n"
+            "Review it.\n",
+        "plugins/a/agents/csharp-reviewer.md":
+            "---\nname: csharp-reviewer\ndescription: Reviews C# (plugin a)\n"
+            "---\nReview it, A.\n",
+        "plugins/b/agents/csharp-reviewer.md":
+            "---\nname: csharp-reviewer\ndescription: Reviews C# (plugin b)\n"
+            "---\nReview it, B.\n",
+    }
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "sib@boost.test")
+    run("git", "config", "user.name", "Sibling Tap")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "add dotnet-build and reviewers")
+    (root / "rules" / "ci-cd" / "dotnet-test.mdc").write_text(
+        "---\nname: dotnet-test\ndescription: Test dotnet projects\n---\n"
+        "Use dotnet test.\n", encoding="utf-8")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "add sibling rule dotnet-test")
+    boost("tap", root)
+    return root

@@ -8,7 +8,7 @@
 # rows, which are copied here verbatim — pins and counts included.
 #
 # Scheduled, never required. It exists because the required gate measures
-# 10,152 entries and a real install carries ~71,655, where all four floors
+# 10,731 entries and a real install carries ~71,655, where all four floors
 # fail. It is A scale, not THE scale: hit@1 decays continuously with corpus
 # size and never plateaus, so no size here can be canonical.
 #

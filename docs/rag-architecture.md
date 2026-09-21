@@ -168,8 +168,8 @@ them next to the results they are not in, on stderr under `--json`, and as its o
 when *every* term went (`no searchable terms in 'R'`, not `no matches`, and no `boost discover`
 suggestion for a query that never reached an index). `mcp.no_results` carries the same third
 branch, because an agent told "no skills match 'C++'" has no second query to try. Falling back
-to `catalog.search` for these was measured and rejected: substring-matching `R` returns 10,092
-of 10,152 entries.
+to `catalog.search` for these was measured and rejected: substring-matching `R` returned 10,092
+of the 10,152 entries in the eval corpus at the #410 pins.
 
 **Query path as shipped** (post `cold-search-reads-the-whole-catalogue`): with
 `entries=None` — the CLI, MCP and eval path — `rag.retrieve` ranks straight off

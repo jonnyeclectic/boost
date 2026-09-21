@@ -538,6 +538,12 @@ _FIX = {
     "model-changed": "rebuild it: `boost reindex --dense --force`",
     "dim-changed": "rebuild it: `boost reindex --dense --force`",
     "empty": "rebuild it: `boost reindex --dense --force`",
+    # The store is fine and the query embedder is not: the local model could
+    # not be fetched or loaded. Not `--force` — every vector on disk is still
+    # good, and re-embedding them needs the very model that is missing.
+    # Searches hold back a retry for an hour; this command retries at once.
+    "model-unavailable": ("retry the local model (a 133 MB download from "
+                          "huggingface.co): `boost reindex --dense`"),
 }
 
 
@@ -577,6 +583,12 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
             return ("set the key it was built with: `export %s=...` — "
                     "reinstalling the extra swaps in the local model and "
                     "forces all %s to be re-embedded" % (env, n))
+    if (reason == "model-unavailable" and status
+            and (status.get("model_failure") or {}).get("stage") == "load"):
+        # The files are on disk and the load itself failed: promising a
+        # download here contradicted reindex's own warning, which already
+        # leaves the network out for this stage.
+        return "retry loading the local model: `boost reindex --dense`"
     return _FIX.get(reason, "see `boost reindex --dense`")
 
 
@@ -606,6 +618,14 @@ def status(*, count: bool = False) -> dict:
     offers inert — measured on a 5-chunk voyage-4 store, exporting the key the
     hint named produced a byte-identical status and the byte-identical hint.
 
+    ``model-unavailable`` is the last link: a store that matches the live
+    space but whose query embedder cannot run, because the local model could
+    not be fetched or loaded. Nothing in the store shows that, so it is read
+    from the failure :mod:`core.localembed` records — never probed, since the
+    probe *is* the 133 MB fetch. It used to report ready: doctor green-ticked
+    a tier that never ran and every search re-paid the failed fetch.
+    ``model_failure`` carries the record (stage, error, when).
+
     ``degraded`` is the load-bearing distinction: a user who never configured
     dense search is *healthy* (BM25 is the documented default), while a user
     who did all three steps and is still on BM25 has a real problem no other
@@ -625,6 +645,9 @@ def status(*, count: bool = False) -> dict:
     # lets the count stay unknown without any reason becoming a guess.
     nonempty = bool(meta.get("_nonempty"))
     store_exists = bool(meta)
+    # Only the local provider records one: an API key's failures are not
+    # tracked, and a record left by the local model says nothing about Voyage.
+    failure = embed.local_failure() if prov == "local" else None
 
     # Order matters: report the *first* missing link, so the message names the
     # next action rather than a downstream symptom of the same gap.
@@ -650,6 +673,11 @@ def status(*, count: bool = False) -> dict:
         reason = "dim-changed"
     elif not nonempty:
         reason = "empty"
+    elif failure is not None:
+        # Last, below every store rung: a stale store needs rebuilding either
+        # way, and rebuilding needs this same model, so naming the store first
+        # names the one step the user would take next anyway.
+        reason = "model-unavailable"
     else:
         reason = None
 
@@ -680,6 +708,7 @@ def status(*, count: bool = False) -> dict:
         # query. Nothing else in this dict distinguishes it.
         "quantized": bool(meta.get("_quantized")),
         "taps": len(commits) if isinstance(commits, dict) else 0,
+        "model_failure": failure,
         "ready": reason is None,
         "reason": reason,
         "degraded": degraded,
@@ -693,6 +722,12 @@ def ready() -> bool:
     every BM25-only install — this must answer False without importing the
     backend, because ``have_backend()`` drags in numpy via sqlite_vec
     (~120 ms measured) and every cold ``boost search`` asks.
+
+    It answers for the *store*, not the query embedder, so it stays True where
+    ``status()`` says ``model-unavailable``. That is deliberate: re-importing
+    shards after a tap moves and the near-duplicate collapse read stored
+    vectors and need no model, and a query embedding that cannot be made is
+    refused cheaply inside ``core.localembed`` while its failure is recent.
     """
     if not db_path().exists():
         return False

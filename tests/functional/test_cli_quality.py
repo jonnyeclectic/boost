@@ -306,6 +306,18 @@ class TestDoctor:
         assert "not linked: ~/.cursor/skills is not writable" in r.out.replace(
             "\n    ", " ")
 
+    def test_reinstall_names_a_conflict_it_left_in_place(self, boost,
+                                                         installed):
+        # reinstall discarded the install result, so a real directory
+        # squatting the link path went unmentioned under "reinstalled".
+        link = paths.home() / ".cursor" / "skills" / "brainstorming"
+        link.unlink()
+        link.mkdir()
+        r = boost("reinstall", "brainstorming")
+        assert ("not linked: ~/.cursor/skills/brainstorming exists and is not "
+                "managed by boost") in " ".join(r.out.split())
+        assert link.is_dir() and not link.is_symlink()
+
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")
     def test_a_native_store_agents_dir_is_not_boosts_to_write(self, boost,
@@ -321,6 +333,87 @@ class TestDoctor:
         finally:
             gemini.chmod(0o700)
         assert "agent dir" not in doc
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unwritable_rules_or_commands_dir_is_skipped_with_a_remedy(
+            self, boost, fixture_tap_src, tmp_path):
+        # Rules and workflows are written, not linked: an unwritable
+        # ~/.cursor/rules crashed the install at exit 70, left a CLAUDE.md
+        # block the lock never recorded, and doctor stayed healthy.
+        dst = tmp_path / "rw-tap"
+        shutil.copytree(fixture_tap_src, dst)
+        (dst / "rules").mkdir()
+        (dst / "rules" / "house.mdc").write_text(
+            "---\nname: house\n---\n\nAlways write tests first.\n",
+            encoding="utf-8")
+        (dst / "commands").mkdir()
+        (dst / "commands" / "ship-it.md").write_text(
+            "---\nname: ship-it\ndescription: release helper\n---\n\nShip.\n",
+            encoding="utf-8")
+        subprocess.run(["git", "-C", str(dst), "add", "-A"], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(dst), "commit", "-qm", "rw"],
+                       check=True, capture_output=True)
+        boost("tap", str(dst))
+        cursor = paths.home() / ".cursor"
+        dirs = [cursor / "rules", cursor / "commands"]
+        for d in dirs:
+            d.mkdir(parents=True)
+            d.chmod(0o500)
+        try:
+            rule = boost("install", "house").out.replace("\n    ", " ")
+            wf = boost("install", "ship-it").out.replace("\n    ", " ")
+            doc = boost("doctor", expect=1).out.replace("\n    ", " ")
+            heal = boost("heal", expect=1).out.replace("\n    ", " ")
+            synced = boost("sync").out.replace("\n    ", " ")
+        finally:
+            for d in dirs:
+                d.chmod(0o700)
+        # sync may not write there yet, so it names the dir, not an all-clear.
+        assert "everything in sync" not in synced
+        assert ("agent dir ~/.cursor/rules is not writable — "
+                "`chmod u+w ~/.cursor/rules`") in synced
+        assert ("not written: ~/.cursor/rules is not writable — "
+                "`chmod u+w ~/.cursor/rules`, then `boost sync` writes it") in rule
+        assert "not written: ~/.cursor/commands is not writable" in wf
+        for d in ("rules", "commands"):
+            assert "agent dir ~/.cursor/%s is not writable" % d in doc
+            assert "`chmod u+w ~/.cursor/%s`" % d in heal
+        assert "rule house was not written for cursor" in doc
+        assert "nothing to heal" not in heal
+        boost("sync")                                # now it may
+        assert (cursor / "rules" / "house.mdc").is_file()
+        assert (cursor / "commands" / "ship-it.md").is_file()
+        boost("doctor")                              # rc 0 again
+        boost("uninstall", "house")                  # the lock knows it
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_locked_dir_nothing_installed_writes_into_is_not_an_issue(
+            self, boost, installed):
+        # Skills only: boost has nothing to write into ~/.claude/commands or
+        # ~/.cursor/rules, so a read-only one (managed by another tool, say)
+        # is not boost's to report. It turned doctor rc 1 and kept sync from
+        # ever saying "everything in sync".
+        home = paths.home()
+        dirs = [home / ".claude" / "commands", home / ".cursor" / "rules"]
+        for d in dirs:
+            d.mkdir(parents=True, exist_ok=True)
+            d.chmod(0o500)
+        try:
+            doc = boost("doctor").out
+            synced = boost("sync").out
+            heal = boost("heal").out
+        finally:
+            for d in dirs:
+                d.chmod(0o700)
+        assert "agent dir" not in doc + synced + heal
+        assert "everything in sync" in synced
 
     def test_an_untapped_machine_is_still_rc0(self, boost):
         # Reported, never fatal. The exit code turns on real issues only, so
@@ -401,6 +494,40 @@ class TestDoctor:
         assert "4 broken symlinks in agent dirs" in r.out
         assert "1 skill installed · 1 tap synced · 4 broken links" in r.out
         assert "2 issues need attention" in r.out  # plural verb: two bad() calls
+
+    def test_missing_store_of_a_url_import_names_reinstall(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # `boost heal` only keeps a URL import's entry and points onward, since
+        # sync never touches the network — so doctor sending the reader to heal
+        # cost a second command to reach the one that clones it again.
+        src = tmp_path / "url-skill"
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: url-skill\ndescription: a skill imported by URL\n"
+            "version: 0.1.0\n---\n\nBody.\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest, sparse=True: shutil.copytree(src, dest))
+        boost("import", "https://example.invalid/skills.git")
+        shutil.rmtree(paths.store_dir() / "url-skill")
+        r = boost("doctor", expect=1)
+        line = next(ln for ln in r.out.splitlines() if "missing from store" in ln)
+        assert "skill url-skill missing from store — run `boost reinstall url-skill`" in line
+        assert "boost heal" not in line
+
+    def test_missing_store_of_a_path_import_still_names_heal(
+            self, boost, sandbox, tmp_path):
+        # A local-path import has no URL, and heal re-copies it from the path
+        # it recorded — so heal stays the remedy there.
+        src = tmp_path / "path-skill"
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: path-skill\ndescription: a skill imported by path\n"
+            "version: 0.1.0\n---\n\nBody.\n", encoding="utf-8")
+        boost("import", src)
+        shutil.rmtree(paths.store_dir() / "path-skill")
+        r = boost("doctor", expect=1)
+        assert "skill path-skill missing from store — run `boost heal`" in r.out
 
     def test_missing_lock_over_populated_store_rc1(self, boost, installed):
         # The store dir and its agent links from `installed` are still on
@@ -1745,11 +1872,88 @@ class TestConflict:
 # ── changelog ────────────────────────────────────────────────────────────
 
 class TestChangelog:
-    def test_fixture_commit_and_shallow_note(self, boost, installed):
+    def test_fixture_commit_and_no_shallow_note_on_a_complete_clone(
+            self, boost, installed):
+        # git ignores --depth when cloning a local path, so the fixture clone
+        # is complete. The note used to fire on any log shorter than three
+        # lines and send the user to `fetch --unshallow`, which fails on a
+        # complete repository.
         r = boost("changelog", "brainstorming")
         assert "changelog for brainstorming (fixture-tap)" in r.out
         assert "fixture skills" in r.out          # the fixture commit subject
-        assert "fetch --unshallow" in r.out       # < 3 entries → shallow note
+        assert not (paths.repos_dir() / "fixture-tap" / ".git" / "shallow").exists()
+        assert "fetch --unshallow" not in r.out
+
+    def test_shallow_note_on_a_shallow_clone(self, boost, installed):
+        # A depth-1 clone writes its tip commit into .git/shallow. Writing it
+        # by hand gives the same state, since `boost tap` cannot make a
+        # shallow clone of a local path.
+        clone = paths.repos_dir() / "fixture-tap"
+        head = subprocess.run(["git", "-C", str(clone), "rev-parse", "HEAD"],
+                              check=True, capture_output=True, text=True)
+        (clone / ".git" / "shallow").write_text(head.stdout, encoding="utf-8")
+        r = boost("changelog", "brainstorming")
+        assert "fetch --unshallow" in " ".join(r.out.split())
+
+    def test_shallow_note_on_a_deepened_clone_is_gated_on_n(
+            self, boost, installed):
+        # A clone deepened past three commits is still shallow. The note used
+        # to need a log shorter than three lines, so it went quiet here even
+        # when git returned fewer entries than -n asked for.
+        clone = paths.repos_dir() / "fixture-tap"
+        skill_md = next(p for p in clone.rglob("SKILL.md")
+                        if p.parent.name == "brainstorming")
+
+        def git(*a):
+            return subprocess.run(
+                ["git", "-C", str(clone), "-c", "user.name=Deepen",
+                 "-c", "user.email=deepen@boost.test", *a],
+                check=True, capture_output=True, text=True).stdout
+
+        for i in range(3):
+            with skill_md.open("a", encoding="utf-8") as fh:
+                fh.write("\nrevision %d\n" % i)
+            git("commit", "-qam", "revise brainstorming %d" % i)
+        # `.git/shallow` names the boundary commits. The root keeps all four
+        # in the log, the shape `fetch --deepen` leaves on a longer history.
+        root = git("rev-list", "--max-parents=0", "HEAD")
+        (clone / ".git" / "shallow").write_text(root, encoding="utf-8")
+
+        def changelog(*extra):
+            r = boost("changelog", "brainstorming", *extra)
+            return (sum("revise brainstorming" in ln or "fixture skills" in ln
+                        for ln in r.out.splitlines()),
+                    "fetch --unshallow" in " ".join(r.out.split()))
+
+        assert changelog() == (4, True)           # 4 < the default 20
+        assert changelog("-n", "5") == (4, True)   # one short of -n
+        assert changelog("-n", "4") == (4, False)  # everything asked for came back
+        assert changelog("-n", "2") == (2, False)  # 2 < 3, but not < 2
+
+    def test_a_rule_is_logged_over_its_file_not_its_directory(
+            self, boost, sibling_rules_tap):
+        # Not installed: resolved from the catalog. The sibling commit only
+        # touches rules/ci-cd/dotnet-test.mdc.
+        r = boost("changelog", "dotnet-build")
+        assert "add dotnet-build and reviewers" in r.out
+        assert "add sibling rule dotnet-test" not in r.out
+        boost("install", "dotnet-build")
+        r = boost("changelog", "dotnet-build")   # installed: resolved from the lock
+        assert "add dotnet-build and reviewers" in r.out
+        assert "add sibling rule dotnet-test" not in r.out
+        data = json.loads(boost("changelog", "dotnet-build", "--json").out)
+        assert [c["subject"] for c in data["commits"]] == [
+            "add dotnet-build and reviewers"]
+
+    def test_an_installed_workflow_resolves_through_the_lock(
+            self, boost, sibling_rules_tap):
+        # The catalog refuses the bare name: three copies in one tap. The
+        # refusal tells the user to install one with --path and retry, so
+        # the retry has to work.
+        boost("install", "csharp-reviewer", "--path", "plugins/a/agents")
+        r = boost("changelog", "csharp-reviewer")
+        assert "changelog for csharp-reviewer" in r.out
+        assert "add dotnet-build and reviewers" in r.out
 
     def test_local_import_message(self, boost, sandbox, tmp_path):
         _import_skill(boost, tmp_path, "local-one", "# Local\n\nBody.\n")
@@ -2181,30 +2385,39 @@ class TestAnInstallRecordsWhatItWrites:
         assert not lockfile.find_any(name)
         assert not list(paths.logs_dir().glob("crash-*.log"))
 
-    @pytest.mark.parametrize("name", ["team-conventions", "ship-it"])
-    def test_one_agent_dir_that_refuses_stops_the_install_before_any_write(
-            self, boost, mixed_tap, name):
+    @pytest.mark.parametrize("name, section, cursor_file", [
+        ("team-conventions", "rules", "rules/team-conventions.mdc"),
+        ("ship-it", "workflows", "commands/ship-it.md")])
+    def test_one_agent_dir_that_refuses_skips_that_agent_and_records_it(
+            self, boost, mixed_tap, name, section, cursor_file):
         # claude-code comes first, so a read-only ~/.cursor let the install
-        # write CLAUDE.md (or ~/.claude/commands) and then exit 70 — on
-        # origin/main too — with no lock entry for what it had written.
-        before = sorted(p for p in paths.home().rglob("*")
-                        if paths.boost_home() not in p.parents)
+        # write CLAUDE.md (or ~/.claude/commands) and then exit 70 with no
+        # lock entry for what it had written. Unlike the store, one agent's
+        # dir does not stop the install (it once refused the whole of it):
+        # that agent is skipped and recorded, the rest are written, and
+        # `boost sync` writes it after the chmod.
         cursor = paths.home() / ".cursor"
         assert cursor.is_dir()
         cursor.chmod(0o500)
         try:
-            r = boost("install", name, expect=1)
+            r = boost("install", name)
         finally:
             cursor.chmod(0o700)
         out = self._flat(r.out + r.err)
-        assert "cannot install %s: ~/.cursor/" % name in out
-        assert "cannot be created: ~/.cursor is not writable" in out
-        assert "run `chmod u+w ~/.cursor`, then re-run" in out
-        after = sorted(p for p in paths.home().rglob("*")
-                       if paths.boost_home() not in p.parents)
-        assert after == before
-        assert not lockfile.find_any(name)
+        assert ("not written: ~/.cursor is not writable — `chmod u+w "
+                "~/.cursor`, then `boost sync` writes it" in out)
+        rows = {m["agent"]: m for m in
+                lockfile.read()[section][name]["materializations"]}
+        assert rows["cursor"]["unwritable"] is True
+        assert "claude-code" in rows
+        assert not rows["claude-code"].get("unwritable")
+        assert os.path.isfile(rows["claude-code"]["path"])
+        assert not (cursor / cursor_file).exists()
         assert not list(paths.logs_dir().glob("crash-*.log"))
+        boost("sync")
+        assert (cursor / cursor_file).is_file()
+        assert not any(m.get("unwritable") for m in
+                       lockfile.read()[section][name]["materializations"])
 
     def test_a_missing_store_names_the_parent_that_refuses(self, boost,
                                                            tapped):
@@ -2343,6 +2556,50 @@ class TestAnInstallPastSomethingInTheWay:
         assert "~/.claude/skills is not a directory" not in r.out + r.err
 
 
+class TestARulePastSomethingInTheWay:
+    """A file at ~/.cursor: the rule install's mkdir raised
+    NotADirectoryError, which only a read-only dir was guarded against, so it
+    exited 70 with CLAUDE.md already written. Cursor is skipped and recorded,
+    and every surface names the move, not a chmod."""
+
+    def test_install_doctor_heal_and_sync_name_the_move(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "rule-tap")
+        _add_and_commit(tap_dir, "rules/team-conventions.mdc",
+                        "---\nname: team-conventions\n---\n\nTest first.\n",
+                        "add rule")
+        boost("tap", tap_dir)
+        cursor = paths.home() / ".cursor"
+        if cursor.exists():
+            shutil.rmtree(cursor)
+        cursor.write_text("not a dir\n", encoding="utf-8")
+        out = self._flat(boost("install", "team-conventions").out)
+        assert ("not written: ~/.cursor/rules cannot be created: ~/.cursor is "
+                "not a directory — move ~/.cursor aside, then `boost sync` "
+                "writes it" in out)
+        assert "chmod" not in out
+        assert "cursor" in {m["agent"] for m in lockfile.get_rule(
+            "team-conventions")["materializations"]}
+        doc = self._flat(boost("doctor", expect=1).out)
+        assert "move ~/.cursor aside" in doc
+        assert ("rule team-conventions was not written for cursor: ~/.cursor "
+                "is in the way — `boost sync` writes it once it is moved" in doc)
+        heal = self._flat(boost("heal", "--dry-run", expect=1).out)
+        assert heal.count("move ~/.cursor aside") == 1
+        sync = self._flat(boost("sync").out)
+        assert "move ~/.cursor aside, then re-run `boost sync`" in sync
+        assert "everything in sync" not in sync
+        assert "re-materialized" not in sync
+        cursor.unlink()
+        assert "re-materialized rule team-conventions" in boost("sync").out
+        assert (cursor / "rules" / "team-conventions.mdc").is_file()
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+
+    @staticmethod
+    def _flat(text):
+        return " ".join(text.split())
+
+
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="chmod can't make a directory unwritable on Windows")
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
@@ -2354,8 +2611,8 @@ class TestSyncSaysWhyARuleWasNotRematerialized:
 
     RULE = "Always write tests first."
 
-    def test_the_install_error_is_the_reported_cause(
-            self, boost, fixture_tap_src, tmp_path):
+    @pytest.fixture()
+    def rule_gone(self, boost, fixture_tap_src, tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "rule-tap")
         _add_and_commit(tap_dir, "rules/team-conventions.mdc",
                         "---\nname: team-conventions\n---\n\n%s\n" % self.RULE,
@@ -2364,21 +2621,44 @@ class TestSyncSaysWhyARuleWasNotRematerialized:
         boost("install", "team-conventions")
         rules_dir = paths.home() / ".cursor" / "rules"
         (rules_dir / "team-conventions.mdc").unlink()
-        rules_dir.chmod(0o500)
+        return rules_dir
+
+    def test_a_locked_target_dir_is_named_not_called_gone(self, boost,
+                                                          rule_gone):
+        # A target dir that refuses no longer fails the install, so there is
+        # no install error to report: sync claims no repair and names the dir.
+        rule_gone.chmod(0o500)
         try:
             text = self._flat(boost("sync").out)
             actions = json.loads(boost("sync", "--json").out)["actions"]
         finally:
-            rules_dir.chmod(0o700)
+            rule_gone.chmod(0o700)
+        assert ("agent dir ~/.cursor/rules is not writable — `chmod u+w "
+                "~/.cursor/rules`, then re-run `boost sync`" in text)
+        assert actions == []
+        assert "source is gone" not in text
+        # And once the dir takes writes again, the same sync repairs it.
+        assert "re-materialized rule team-conventions" in boost("sync").out
+        assert (rule_gone / "team-conventions.mdc").is_file()
+
+    def test_the_install_error_is_the_reported_cause(self, boost, rule_gone):
+        # The store still refuses a whole install, and that refusal is what
+        # sync reports, not `_GONE`.
+        store = paths.store_dir()
+        store.chmod(0o500)
+        try:
+            text = self._flat(boost("sync").out)
+            actions = json.loads(boost("sync", "--json").out)["actions"]
+        finally:
+            store.chmod(0o700)
         cause = ("rule team-conventions was not re-materialized: cannot "
-                 "install team-conventions: ~/.cursor/rules is not writable — "
-                 "run `chmod u+w ~/.cursor/rules`, then re-run")
+                 "install team-conventions: ~/.agents/skills is not writable "
+                 "— run `chmod u+w ~/.agents/skills`, then re-run")
         assert cause in text
         assert cause in actions
         assert "source is gone" not in text + " ".join(actions)
-        # And once the dir takes writes again, the same sync repairs it.
         assert "re-materialized rule team-conventions" in boost("sync").out
-        assert (rules_dir / "team-conventions.mdc").is_file()
+        assert (rule_gone / "team-conventions.mdc").is_file()
 
     @staticmethod
     def _flat(text):

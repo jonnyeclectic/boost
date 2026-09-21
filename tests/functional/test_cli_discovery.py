@@ -446,6 +446,12 @@ class TestSearch:
         assert "commit-messages" in r.out
         assert "ranked by heuristic relevance" in r.out
 
+    def test_k_is_an_alias_of_limit(self, boost, tapped):
+        # chat took -k and search did not: `search "…" -k 5` was a usage error.
+        short = boost("search", "workflow", "-k", "1")
+        assert short.out == boost("search", "workflow", "--limit", "1").out
+        assert "jira-integration" not in short.out
+
     def test_limit_must_be_positive_int(self, boost, tapped):
         r = boost("search", "x", "--limit", "0", expect=2)
         assert "must be >= 1" in r.err

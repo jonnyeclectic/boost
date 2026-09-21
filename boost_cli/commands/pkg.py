@@ -4,13 +4,13 @@
 reinstall, bundle, import, pin, unpin, snapshot, export."""
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
 import shutil
 import sys
 import tarfile
-import tempfile
 import zipfile
 from datetime import UTC, datetime
 from itertools import chain
@@ -231,6 +231,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         where = " (this repo)" if res.scope == "project" else ""
         out.ok("materialized%s → %s"
                % (where, " · ".join(res.linked) or "(no enabled agents)"))
+        _warn_unwritable(res)
         out.ok("lock updated (.skill-lock.json)")
         _warn_injection(res)
         _warn_secrets(res)
@@ -258,8 +259,6 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
     if res.native:
         out.ok("available to %s (reads the store directly)"
                % " · ".join(agents.display_name(a) for a in res.native))
-    for path in res.conflicts:
-        out.warn("not linked: %s exists and is not managed by boost" % _tilde(path))
     _warn_unwritable(res)
     out.ok("lock updated (.skill-lock.json)")
     _warn_injection(res)
@@ -268,16 +267,26 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
 
 
 def _warn_unwritable(res) -> None:
-    """Name the remedy for each agent skills dir an install could not link
-    into — every path that installs, reinstall and update included, so none
-    reports success over a link it silently skipped."""
+    """Name what an install skipped, and the remedy — every path that
+    installs, reinstall and update included, so none reports success over an
+    agent it silently left out.
+
+    A conflict is a real file squatting a skill's link path. An unwritable dir
+    refused a link, or a rule or workflow file; the refused agent is still
+    recorded, so `boost sync` writes it once the dir allows it."""
+    for path in res.conflicts:
+        out.warn("not linked: %s exists and is not managed by boost" % _tilde(path))
+    what = ("not linked", "adds the link") if res.kind == "skill" else (
+        "not written", "writes it")
     for adir in res.unwritable:
-        out.warn("not linked: %s is not writable — `chmod u+w %s`, then "
-                 "`boost sync` adds the link" % (_tilde(adir), _tilde(adir)),
-                 wrap=True)
+        out.warn("%s: %s is not writable — `chmod u+w %s`, then `boost sync` %s"
+                 % (what[0], _tilde(adir), _tilde(adir), what[1]), wrap=True)
+    # Something in the way of the dir: no chmod clears a file or a dangling
+    # link, so the remedy is the move `store.link_refusal` names.
     for adir, block in res.blocked:
-        out.warn("not linked: %s — %s, then `boost sync` adds the link"
-                 % store.link_refusal(adir, block), wrap=True)
+        out.warn("%s: %s — %s, then `boost sync` %s"
+                 % (what[0], *store.link_refusal(adir, block), what[1]),
+                 wrap=True)
 
 
 def _boostfile_text(skills: dict[str, dict], via: str = "boost bundle dump") -> str:
@@ -779,7 +788,21 @@ def cmd_sync(argv: list[str]) -> int:
                  % (_plural(len(blocked), "agent link"),
                     ", ".join("%s → %s (%s in the way)"
                               % (n, a, _tilde(Path(p))) for n, a, p in blocked)))
-    if not actions and not pruned and not left and not oos and not blocked:
+    # A dir that refused a link or a file: sync wrote what it could and says
+    # what it could not, rather than "everything in sync" over it.
+    stuck = store.unwritable_agent_dirs()
+    for adir in stuck:
+        out.warn("agent dir %s is not writable — `chmod u+w %s`, then re-run "
+                 "`boost sync`" % (_tilde(adir), _tilde(adir)), wrap=True)
+    # A file or a dangling link where a rules/ or commands/ dir belongs. A
+    # block the line above already names for a skill link is not named twice.
+    named = {Path(p) for _n, _a, p in blocked}
+    in_way = [(d, b) for d, b in store.blocked_agent_dirs() if b not in named]
+    for adir, block in in_way:
+        out.warn("%s — %s, then re-run `boost sync`"
+                 % store.link_refusal(str(adir), str(block)), wrap=True)
+    if (not actions and not pruned and not left and not oos and not blocked
+            and not stuck and not in_way):
         out.ok("everything in sync")
     return 0
 
@@ -920,8 +943,10 @@ def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
             continue
         try:
             # keep the item where it was installed (user vs a specific repo).
-            store.install(entry, force=True,
-                          scope=lk.get("scope", "user"), base=lk.get("base"))
+            # A dir that refused the refresh is named here, as for a skill.
+            _warn_unwritable(store.install(
+                entry, force=True,
+                scope=lk.get("scope", "user"), base=lk.get("base")))
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             continue
@@ -962,12 +987,21 @@ def _resync_vectors(moved: list[str]) -> None:
     commits = rag._tap_commits()
     by_name = {t.name: commits.get(t.safe_name, "")
                for t in registry.list_taps() if t.name in moved}
-    got = [r for r in shards.sync(list(by_name), by_name, manifest=manifest)
-           if r["status"] == "imported"]
+    results = shards.sync(list(by_name), by_name, manifest=manifest)
+    got = [r for r in results if r["status"] == "imported"]
     if got:
         out.ok("re-imported prebuilt vectors for %d tap(s)" % len(got))
     left = len(moved) - len(got)
-    if left:
+    if left and any(r["status"] == "incompatible" for r in results):
+        # Not "yet": a manifest in another space never matches this store,
+        # however many weeks go by. Same words as every other refusal, and
+        # wrapped before it is coloured (`- 2` pays for `out.info`'s indent).
+        msg = ("vectors for %d refreshed tap(s) are now stale, and no "
+               "published shard can replace them: %s"
+               % (left, shards.remedy(manifest)))
+        for line in out.wrap(msg, max(out.term_width() - 2, 20)):
+            out.info(out.role(line, "muted"))
+    elif left:
         out.info(out.role("%d refreshed tap(s) have no matching shard yet — "
                           "their vectors are stale until "
                           "`boost reindex --dense`" % left, "muted"))
@@ -1008,7 +1042,7 @@ def _ingest_shards(args) -> int:
     why = shards.incompatible(manifest)
     if why:
         raise BoostError("published shards cannot serve this machine — %s" % why,
-                         hint=dense.fix_hint(dense.status().get("reason", "")))
+                         hint=shards.remedy(manifest))
     commits = rag._tap_commits()
     stored = dense.tap_commits()
     # Both maps are keyed by tap name; the two sources are keyed by safe name.
@@ -1272,25 +1306,36 @@ def cmd_reinstall(argv: list[str]) -> int:
             done_kinds.add(kind)
             continue
         if lk.get("tap") == "local":
-            src = Path(str(lk.get("source_dir") or ""))
-            if src.is_dir() and (src / "SKILL.md").exists():
-                # force=True to match the tap branch's `install(..., force=True)`:
-                # reinstalling a pinned skill is the point of the command. Policy
-                # still applies. The try/except mirrors the tap branch too —
-                # without it one policy-blocked skill aborts `--all` mid-run and
-                # the remaining names are never attempted.
-                try:
-                    store.install_from_path(src, name=name, force=True)
-                except BoostError as err:
-                    out.warn("%s: %s" % (name, err.message))
-                    failed += 1
-                    continue
-                out.ok("reinstalled %s (local, from %s)" % (name, _tilde(src)))
-                done += 1
-                done_kinds.add("skill")
-            else:
-                out.warn("%s: local source %s is gone — skipped" % (name, _tilde(src)))
+            src = store.local_source_dir(lk)
+            url = str(lk.get("source_url") or "")
+            if src is None and not url:
+                out.warn("%s: local source %s is gone — skipped"
+                         % (name, _tilde(str(lk.get("source_dir") or ""))))
                 failed += 1
+                continue
+            # force=True to match the tap branch's `install(..., force=True)`:
+            # reinstalling a pinned skill is the point of the command. Policy
+            # still applies. The try/except mirrors the tap branch too —
+            # without it one policy-blocked skill aborts `--all` mid-run and
+            # the remaining names are never attempted.
+            try:
+                if src is not None:
+                    store.install_from_path(src, name=name, force=True)
+                    how = "local, from %s" % _tilde(src)
+                else:
+                    # A URL import's clone was deleted when the import
+                    # returned; the lock kept the URL so it can be cloned again.
+                    store.reinstall_from_url(name, lk)
+                    commit = str((lockfile.get_skill(name) or {}).get("commit") or "")
+                    how = ("from %s at %s" % (url, commit[:7]) if commit
+                           else "from %s" % url)
+            except BoostError as err:
+                out.warn("%s: %s" % (name, err.message))
+                failed += 1
+                continue
+            out.ok("reinstalled %s (%s)" % (name, how))
+            done += 1
+            done_kinds.add("skill")
             continue
         matches = [e for e in catalog.find(name) if e["tap"] == lk.get("tap")]
         if not matches:
@@ -1337,14 +1382,23 @@ def cmd_bundle(argv: list[str]) -> int:
 
 def _bundle_dump(file: str | None) -> int:
     text = _boostfile_text(lockfile.installed())
+    lines = text.splitlines()
+    # What the file cannot reinstall, said on both paths: a local skill is
+    # only a comment in it, and rules/workflows are not in it at all.
+    notices = []
+    n_local = sum(1 for ln in lines if ln.startswith("# local skill"))
+    if n_local:
+        notices.append("%s written as comments — no tap source to reinstall "
+                       "from" % _plural(n_local, "local skill"))
     others = _others_installed()
+    if others:
+        notices.append("%s not captured — Boostfiles carry skills only" % others)
     if not file or file == "-":
         print(text, end="")
-        if others:
-            # stdout IS the Boostfile here; the omission notice goes to stderr
-            # so `boost bundle dump > Boostfile` stays a parseable artifact.
-            print("  ! %s not captured — Boostfiles carry skills only" % others,
-                  file=sys.stderr)
+        # stdout IS the Boostfile here; the notices go to stderr so
+        # `boost bundle dump > Boostfile` stays a parseable artifact.
+        for msg in notices:
+            out.warn(msg, stream=sys.stderr)
         return 0
     dest = paths.expand(file)
     try:
@@ -1352,12 +1406,12 @@ def _bundle_dump(file: str | None) -> int:
     except OSError as e:
         raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
                         hint="check the path exists and is writable") from e
-    n_taps = sum(1 for ln in text.splitlines() if ln.startswith("tap "))
-    n_skills = sum(1 for ln in text.splitlines() if ln.startswith("skill "))
+    n_taps = sum(1 for ln in lines if ln.startswith("tap "))
+    n_skills = sum(1 for ln in lines if ln.startswith("skill "))
     out.ok("wrote %s (%s, %s)" % (_tilde(dest), _plural(n_taps, "tap"),
                                   _plural(n_skills, "skill")))
-    if others:
-        out.warn("%s not captured — Boostfiles carry skills only" % others)
+    for msg in notices:
+        out.warn(msg)
     return 0
 
 
@@ -1373,35 +1427,44 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     """
     if file == "-":
         text, label = sys.stdin.read(), "<stdin>"
+        shown = label  # one spelling, in the warning and the journal alike
     else:
         path = paths.expand(file or "./Boostfile")
+        # Absolute, not as given: pathlib folds `./Boostfile` to `Boostfile`,
+        # which made the missing-file error the tautology "no Boostfile at
+        # Boostfile". Not resolve(): that would swap a symlinked /tmp for
+        # /private/tmp in a path the user never typed.
+        shown = _tilde(path.absolute())
         if not path.exists():
-            raise BoostError("no Boostfile at %s" % _tilde(path),
+            raise BoostError("no Boostfile at %s" % shown,
                             hint="create one with `boost bundle dump Boostfile`")
         if path.is_dir():
-            raise BoostError("%s is a directory, not a Boostfile" % _tilde(path),
+            raise BoostError("%s is a directory, not a Boostfile" % shown,
                             hint="point at the Boostfile itself, "
                                  "or use `boost import` for skill directories")
         try:
             text, label = path.read_text(encoding="utf-8"), str(path)
         except OSError as e:
-            raise BoostError("cannot read %s: %s" % (_tilde(path), e.strerror or e)) from e
-    taps_added = installed_n = present = failed = 0
+            raise BoostError("cannot read %s: %s" % (shown, e.strerror or e)) from e
+    taps_added = installed_n = present = drifted = unresolved = failed = 0
+    directives = 0
     installed_kinds: set[str] = set()
     would_tap: set[str] = set()
     would_rules: list[str] = []
     have_taps = {t.name for t in registry.list_taps()}
-    # name -> kind across every lock section, so a `skill` line naming an
-    # already-installed rule/workflow is counted present, not re-installed.
-    have_installed: dict[str, str] = {}
+    # name -> (kind, lock entry) across every lock section, so a `skill` line
+    # naming an already-installed rule/workflow is counted present, not
+    # re-installed — and so its tap and version can be held to the line.
+    have_installed: dict[str, tuple[str, dict]] = {}
     for kind, section in lockfile.all_installed().items():
-        for n in section:              # first section wins: skill > rule >
-            have_installed.setdefault(n, kind)  # workflow, same as find_any
+        for n, lk in section.items():  # first section wins: skill > rule >
+            have_installed.setdefault(n, (kind, lk))  # workflow, as find_any
 
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        directives += 1
         parts = line.split(None, 2)
         if parts[0] == "tap" and len(parts) >= 2:
             tname, turl = parts[1], parts[2] if len(parts) > 2 else ""
@@ -1410,7 +1473,19 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             if dry_run:
                 # Nothing is cloned, so any skill line naming this tap cannot
                 # be resolved below — said plainly there rather than guessed.
+                # Under both names: the real run names the tap from its URL
+                # (`registry.add` -> `parse_spec`), not from this line's NAME,
+                # so `tap myalias ./x` is tapped as `x`, and a `skill x:…`
+                # line must defer here as it will install there.
                 would_tap.add(tname)
+                # no derivable name: NAME is then all there is to match
+                with contextlib.suppress(BoostError):
+                    derived = registry.parse_spec(turl or tname)[0]
+                    # Already configured under that name, a skill line naming
+                    # it resolves now and misses the way the real run will,
+                    # so it must not be deferred as "cannot resolve yet".
+                    if derived not in have_taps:
+                        would_tap.add(derived)
                 out.info("would tap %s" % tname)
                 taps_added += 1
                 continue
@@ -1427,8 +1502,23 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
         elif parts[0] == "skill" and len(parts) >= 2:
             tapq, _, rest = parts[1].rpartition(":")
             sname, _, sver = rest.partition("@")
-            kind_here = have_installed.get(sname)
-            if kind_here is not None:
+            if sname in have_installed:
+                kind_here, lk = have_installed[sname]
+                drift = store.lock_drift(lk, tapq, sver)
+                # Before the kind check, on purpose: a rule or workflow
+                # installed from another tap or at another version is drift
+                # just as a skill is, so it counts "differs", not "present".
+                if drift:
+                    # A Boostfile is a reproducibility contract, so an install
+                    # from another tap or at another version is not "already
+                    # present". Kept rather than replaced: swapping out what
+                    # the user has is not this command's call to make.
+                    out.warn("%s: %s — kept as installed" % (sname, "; ".join(
+                        ("installed from %s, Boostfile wants %s" if field == "tap"
+                         else "installed %s, Boostfile wants @%s") % (have, want)
+                        for field, have, want in drift)), wrap=True)
+                    drifted += 1
+                    continue
                 if kind_here != "skill":
                     out.info("%s is already installed as a %s — skipped"
                              % (sname, kind_here))
@@ -1436,12 +1526,17 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 continue
             matches = catalog.find(sname, tap=tapq or None)
             if not matches:
-                if dry_run and (tapq in would_tap or would_tap):
+                if dry_run and (any(catalog.tap_matches(t, tapq)
+                                    for t in would_tap)
+                                if tapq else would_tap):
                     # Honest rather than optimistic: the tap it would come
                     # from has not been cloned, so whether this resolves is
-                    # genuinely unknown until it is.
+                    # genuinely unknown until it is. Only then, though — a
+                    # line qualified with a tap already present resolves
+                    # right now, and misses the way the real run will.
                     out.info("%s — cannot resolve yet; its tap would be "
                              "added by this same file" % sname)
+                    unresolved += 1
                     continue
                 out.warn("%s not found%s — skipped"
                          % (sname, (" in tap %s" % tapq) if tapq else ""))
@@ -1457,8 +1552,9 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 continue
             entry = matches[0]
             if sver and str(entry.get("version")) != sver:
-                out.warn("%s: Boostfile wants @%s, tap has %s — installing that"
-                         % (sname, sver, entry.get("version")))
+                out.warn("%s: Boostfile wants @%s, tap has %s — %s that"
+                         % (sname, sver, entry.get("version"),
+                            "would install" if dry_run else "installing"))
             entry_kind = entry.get("kind", "skill")
             if dry_run:
                 out.info("would install %s v%s (%s)%s"
@@ -1467,7 +1563,7 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                             else " [%s]" % entry_kind))
                 if entry_kind == "rule":
                     would_rules.append(sname)
-                have_installed[sname] = entry_kind
+                have_installed[sname] = (entry_kind, entry)
                 installed_kinds.add(entry_kind)
                 installed_n += 1
                 continue
@@ -1479,18 +1575,35 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 continue
             out.ok("installed %s v%s (%s)" % (sname, entry.get("version"),
                                               entry["tap"]))
-            have_installed[sname] = entry_kind
+            have_installed[sname] = (entry_kind, entry)
             installed_kinds.add(entry_kind)
             installed_n += 1
         else:
             out.warn("line %d: unrecognised: %s" % (lineno, line))
             failed += 1
+    if not directives:
+        # An empty stdin or a comments-only file is not an error, but a bare
+        # "Installed 0 skills" reads as "everything was already in place".
+        out.warn("nothing to apply: %s has no tap or skill lines" % shown)
+    # A "skill NAME" line can resolve to a rule or workflow (`catalog.find`
+    # searches every kind) — name the kind when only one was actually
+    # installed, the same call `cmd_reinstall` makes, so this summary agrees
+    # with what `bundle dump`'s own kind-aware sections would call it. Shared
+    # by both paths, so a preview names what the run will.
+    noun = next(iter(installed_kinds)) if len(installed_kinds) == 1 else (
+        "item" if installed_kinds else "skill")
+    differ = "%d %s from the Boostfile" % (drifted,
+                                          "differs" if drifted == 1 else "differ")
     if dry_run:
-        summary = "would install %s" % _plural(installed_n, "item")
+        summary = "would install %s" % _plural(installed_n, noun)
         if taps_added:
             summary += ", add %s" % _plural(taps_added, "tap")
         if present:
             summary += ", %d already present" % present
+        if drifted:
+            summary += ", " + differ
+        if unresolved:
+            summary += ", %d unresolved until tapped" % unresolved
         if failed:
             summary += ", %d would fail" % failed
         out.info(summary)
@@ -1507,17 +1620,13 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     if taps_added:
         complete.refresh_names()
     journal.log("bundle-install", label, taps=taps_added, skills=installed_n)
-    # A "skill NAME" line can resolve to a rule or workflow (`catalog.find`
-    # searches every kind) — name the kind when only one was actually
-    # installed, the same call `cmd_reinstall` makes, so this summary agrees
-    # with what `bundle dump`'s own kind-aware sections would call it.
-    noun = next(iter(installed_kinds)) if len(installed_kinds) == 1 else (
-        "item" if installed_kinds else "skill")
     summary = "Installed %s" % _plural(installed_n, noun)
     if taps_added:
         summary += ", added %s" % _plural(taps_added, "tap")
     if present:
         summary += ", %d already present" % present
+    if drifted:
+        summary += ", " + differ
     if failed:
         summary += ", %d failed" % failed
     out.info(summary)
@@ -1539,31 +1648,48 @@ def cmd_import(argv: list[str]) -> int:
                     help="link only into this agent (repeatable)")
     args = ap.parse_args(argv)
     only = _check_agents(args.agent)
-    tmp = None
-    try:
-        if args.source.startswith(("http://", "https://", "git@", "ssh://")):
-            tmp = Path(tempfile.mkdtemp(prefix="boost-import-"))
-            root = tmp / "repo"
-            out.info("cloning %s …" % args.source)
-            # Full checkout, not a tap's Markdown cone: import reads whatever the
-            # repo ships and copies it verbatim, assets included.
-            gitutil.clone_shallow(args.source, root, sparse=False)
-        else:
-            root = paths.expand(args.source)
-            if not root.is_dir():
-                raise BoostError("no such directory: %s" % args.source,
-                                hint="pass a local path or a git URL")
-        return _import_root(root, args.name, args.all, only, args.source)
-    finally:
-        if tmp:
-            shutil.rmtree(tmp, ignore_errors=True)
+    if args.source.startswith(("http://", "https://", "git@", "ssh://")):
+        out.info("cloning %s …" % args.source)
+        with store.cloned_source(args.source) as remote:
+            return _import_root(remote.root, args.name, args.all, only,
+                                args.source, remote=remote)
+    root = paths.expand(args.source)
+    if not root.is_dir():
+        raise BoostError("no such directory: %s" % args.source,
+                        hint="pass a local path or a git URL")
+    return _import_root(root, args.name, args.all, only, args.source)
+
+
+def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
+    """What an import changed beyond the files: provenance and stray links.
+
+    ``narrowed`` is whether this run passed ``--agent``. Without it the scope
+    is one an earlier run recorded and this one carried forward, and saying
+    it was "just declared" sends the reader looking for a flag they never
+    passed.
+    """
+    if res.replaced_tap:
+        out.warn("%s was installed from %s — it is a local import now, so "
+                 "`boost update` will not refresh it "
+                 "(`boost install %s:%s --force` puts the tap's copy back)"
+                 % (res.name, res.replaced_tap, res.replaced_tap, res.name),
+                 wrap=True)
+    if res.out_of_scope:
+        out.warn("%s is still linked into %s, outside the --agent scope %s "
+                 "— `boost sync --prune` removes those links"
+                 % (res.name, ", ".join(res.out_of_scope),
+                    "just declared" if narrowed else "an earlier run declared"),
+                 wrap=True)
 
 
 def _import_root(root: Path, name: str | None, do_all: bool,
-                 only: list[str] | None, display: str) -> int:
+                 only: list[str] | None, display: str,
+                 remote: store.RemoteSource | None = None) -> int:
     def one(skill_dir: Path, rename: str | None = None) -> int:
-        res = store.install_from_path(skill_dir, name=rename, only_agents=only)
+        res = store.install_from_path(skill_dir, name=rename, only_agents=only,
+                                      remote=remote)
         _report_result(res)
+        _warn_import(res, only is not None)
         out.info("Imported %s; quality score %d/100" % (res.name, res.score))
         return 0
 
@@ -1591,7 +1717,8 @@ def _import_root(root: Path, name: str | None, do_all: bool,
         imported, refused = 0, 0
         for e in entries:
             try:
-                res = store.install_from_path(dir_of(e), only_agents=only)
+                res = store.install_from_path(dir_of(e), only_agents=only,
+                                              remote=remote)
             except BoostError as err:
                 out.warn("%s: %s" % (e["name"], err.message))
                 refused += 1
@@ -1600,11 +1727,16 @@ def _import_root(root: Path, name: str | None, do_all: bool,
                                                        res.score))
             _warn_injection(res)
             _warn_secrets(res)
+            _warn_import(res, only is not None)
             imported += 1
         out.info("Imported %s" % _plural(imported, "skill"))
         return 1 if refused else 0
     out.heading("%d skills in %s" % (len(entries), display))
-    out.table([(e["name"], "v" + e["version"], (e["description"] or "")[:60])
+    # Whole descriptions: `out.table` fits the widest column to the pane and
+    # clips it there with an ellipsis, so cutting first only wasted columns.
+    # One line each, and no control bytes — this is a foreign repo's frontmatter.
+    out.table([(e["name"], "v" + e["version"],
+                " ".join(out.plain(e["description"] or "").split()))
                for e in entries])
     raise BoostError("multiple skills found — pick one or import all",
                     hint="add `--name NAME` or `--all`")
