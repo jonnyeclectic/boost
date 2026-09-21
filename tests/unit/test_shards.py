@@ -140,6 +140,107 @@ class TestIncompatible:
         monkeypatch.setattr(shards.embed, "dimension", lambda: 768)
         assert "768" in shards.incompatible({**SPACE})
 
+    def test_the_kill_switch_is_named_not_mistaken_for_a_missing_backend(
+            self, monkeypatch):
+        # With BOOST_NO_EMBED set, `provider()` is None whether or not the
+        # extra is installed, and "no embedding backend" sent a user who has
+        # one to reinstall it. The switch is what to name.
+        monkeypatch.setenv("BOOST_NO_EMBED", "1")
+        why = shards.incompatible({**SPACE})
+        assert "BOOST_NO_EMBED" in why
+        assert "backend" not in why
+
+
+def _machine(monkeypatch, prov, model, dim, local=True):
+    """Stub the embedding space this machine resolves, and its local model."""
+    monkeypatch.setattr(shards.embed, "provider", lambda: prov)
+    monkeypatch.setattr(shards.embed, "model", lambda: model)
+    monkeypatch.setattr(shards.embed, "dimension", lambda: dim)
+    monkeypatch.setattr(shards.embed, "local_available", lambda: local)
+    for env in shards.embed.KEY_ENV.values():
+        monkeypatch.delenv(env, raising=False)
+
+
+class TestRemedy:
+    """The one next action for a refused manifest, read by every surface.
+
+    The defect it closes: a machine with VOYAGE_API_KEY exported refuses the
+    keyless shards, and the only advice anywhere was `boost reindex --dense` —
+    which, with that key set, embeds through the paid API. The free path
+    (drop the key, take the download) was never mentioned.
+    """
+
+    def test_a_key_that_outranks_the_local_model_is_named_with_its_cost(
+            self, monkeypatch):
+        _machine(monkeypatch, "voyage", "voyage-4", 1024)
+        fix = shards.remedy({**SPACE})
+        assert "`unset VOYAGE_API_KEY`" in fix
+        # The free path must say how to take it, not just what to drop.
+        assert "`boost update --shards`" in fix
+        # Keeping the key is a real choice, and it is not free: say so.
+        assert "keep the key, and `boost reindex --dense`" in fix
+        assert "voyage" in fix.split("`boost reindex --dense`")[1]
+        assert "paid" in fix
+
+    def test_every_key_that_outranks_local_is_named(self, monkeypatch):
+        # Unsetting VOYAGE alone falls through to OPENAI, which is still not
+        # the published space — the remedy would be a measured no-op.
+        _machine(monkeypatch, "voyage", "voyage-4", 1024)
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        monkeypatch.setenv("OPENAI_API_KEY", "o")
+        fix = shards.remedy({**SPACE})
+        assert "`unset VOYAGE_API_KEY OPENAI_API_KEY`" in fix
+        assert "keep the keys," in fix
+
+    def test_only_the_key_in_force_is_named(self, monkeypatch):
+        _machine(monkeypatch, "openai", "text-embedding-3-small", 1536)
+        fix = shards.remedy({**SPACE})
+        assert "`unset OPENAI_API_KEY`" in fix
+        assert "VOYAGE" not in fix
+        assert "openai" in fix
+
+    def test_no_local_model_means_unsetting_the_key_would_not_help(
+            self, monkeypatch):
+        # Drop the key without the local model and `provider()` is None:
+        # the published vectors still cannot load. Don't send them there.
+        _machine(monkeypatch, "voyage", "voyage-4", 1024, local=False)
+        fix = shards.remedy({**SPACE})
+        assert "unset" not in fix
+        assert "`boost reindex --dense`" in fix and "paid" in fix
+
+    def test_a_local_model_mismatch_embeds_locally_and_costs_nothing(
+            self, monkeypatch):
+        _machine(monkeypatch, "local", "other/model", 384)
+        fix = shards.remedy({**SPACE})
+        assert "`boost reindex --dense`" in fix
+        assert "locally" in fix
+        assert "unset" not in fix and "paid" not in fix
+
+    def test_a_keyed_manifest_is_not_answered_by_dropping_a_key(
+            self, monkeypatch):
+        # Only a keyless manifest is served by unsetting keys.
+        _machine(monkeypatch, "voyage", "voyage-4", 1024)
+        fix = shards.remedy({"provider": "openai",
+                             "model": "text-embedding-3-small", "dim": 1536})
+        assert "unset" not in fix
+        assert "`boost reindex --dense`" in fix
+
+    def test_the_kill_switch_defers_to_the_dense_table(self, monkeypatch):
+        monkeypatch.setenv("BOOST_NO_EMBED", "1")
+        fix = shards.remedy({**SPACE})
+        from boost_cli.core import dense
+        assert fix == dense.fix_hint("disabled")
+
+    def test_no_backend_defers_to_the_dense_table(self, monkeypatch):
+        # One table for one question: `boost doctor` and `boost search`
+        # already answer "no provider" from dense.fix_hint, so this must not
+        # grow a second, possibly contradictory, answer.
+        from boost_cli.core import dense
+        _machine(monkeypatch, None, None, None)
+        st = {"reason": "no-backend"}
+        monkeypatch.setattr(dense, "status", lambda **k: st)
+        assert shards.remedy({**SPACE}) == dense.fix_hint("no-backend")
+
 
 class TestRows:
     """One malformed row must not deny a user the other forty."""

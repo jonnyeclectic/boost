@@ -22,6 +22,8 @@ import pytest
 
 from boost_cli.core import bootstrap
 
+SPACE = {"provider": "local", "model": "BAAI/bge-small-en-v1.5", "dim": 384}
+
 
 def _outcome(**kw) -> bootstrap.SetupOutcome:
     kw.setdefault("entries", 1)
@@ -244,3 +246,59 @@ class TestIndexFailuresAreNotNetworkFailures:
         note = _outcome(tapped=["a"], unindexed=unindexed).failure_note()
         assert note == ("%d of %d registries could not be indexed"
                         % (cap + 1, cap + 2))
+
+
+class TestPublishedVectorsThisMachineCannotUse:
+    """A refused manifest is judged once, and both runs read that judgement.
+
+    On a machine with VOYAGE_API_KEY exported, `shards.sync` answered
+    `incompatible` for every tap and quickstart rendered none of it — while
+    `--dry-run` on the same machine promised "import 5 shard(s)". The verdict
+    stays "ready": keyword search is the documented default, and a first-run
+    command must not fail because an optional upgrade did not apply.
+    """
+
+    def _machine(self, monkeypatch, prov, model, dim):
+        from boost_cli.core import embed
+        monkeypatch.setattr(embed, "provider", lambda: prov)
+        monkeypatch.setattr(embed, "model", lambda: model)
+        monkeypatch.setattr(embed, "dimension", lambda: dim)
+        monkeypatch.setattr(embed, "local_available", lambda: True)
+
+    def test_a_usable_manifest_is_accepted_and_records_nothing(
+            self, monkeypatch):
+        self._machine(monkeypatch, "local", SPACE["model"], 384)
+        outcome = _outcome(tapped=["a"])
+        assert outcome.judge_vectors(dict(SPACE)) is True
+        assert outcome.vectors_refused == ""
+        assert outcome.vectors_remedy == ""
+        assert outcome.vectors_note() == ("", "")
+
+    def test_a_refused_manifest_records_the_reason_and_its_remedy(
+            self, monkeypatch):
+        from boost_cli.core import shards
+        self._machine(monkeypatch, "voyage", "voyage-4", 1024)
+        outcome = _outcome(tapped=["a"])
+        assert outcome.judge_vectors(dict(SPACE)) is False
+        assert outcome.vectors_refused == shards.incompatible(SPACE)
+        assert outcome.vectors_remedy == shards.remedy(SPACE)
+        assert "VOYAGE_API_KEY" in outcome.vectors_remedy
+
+    def test_the_live_run_says_nothing_was_imported_and_why(self):
+        outcome = _outcome(tapped=["a"], vectors_refused="spaces differ",
+                           vectors_remedy="do the thing")
+        assert outcome.vectors_note() == (
+            "no vectors imported — spaces differ", "do the thing")
+
+    def test_the_dry_run_explains_its_zero_with_the_same_reason(self):
+        outcome = _outcome(vectors_refused="spaces differ",
+                           vectors_remedy="do the thing")
+        assert outcome.vectors_note(dry_run=True) == (
+            "(0 because spaces differ)", "do the thing")
+
+    def test_refused_vectors_do_not_make_a_working_run_not_ready(self):
+        outcome = _outcome(tapped=["a"], vectors_refused="spaces differ",
+                           vectors_remedy="do the thing")
+        assert outcome.ok is True
+        assert outcome.verdict() == (
+            "ready — try `boost search brainstorming`", "")

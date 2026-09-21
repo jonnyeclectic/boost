@@ -473,7 +473,7 @@ def _fetch_shards(args) -> int:
     why = shards.incompatible(manifest)
     if why:
         raise BoostError("published shards cannot serve this machine — %s" % why,
-                        hint=dense.fix_hint(dense.status().get("reason", "")))
+                        hint=shards.remedy(manifest))
     commits = rag._tap_commits()
     stored = dense.tap_commits()
     by_name = {t.name: commits.get(t.safe_name, "") for t in registry.list_taps()}

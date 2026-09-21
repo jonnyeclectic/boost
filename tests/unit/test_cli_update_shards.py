@@ -111,6 +111,24 @@ class TestUpdateShards:
         assert fetched == []
 
 
+    def test_an_incompatible_space_names_the_free_path_beside_the_paid_one(
+            self, boost, published, monkeypatch):
+        """With a key exported, the keyless shards load once it is unset.
+
+        The hint read the store's status table instead, which on this
+        machine answered "install the extra" — already installed — and never
+        mentioned that the refusal was the key's doing.
+        """
+        published()
+        monkeypatch.setattr(embed, "provider", lambda: "voyage")
+        monkeypatch.setattr(embed, "model", lambda: "voyage-4")
+        monkeypatch.setattr(embed, "dimension", lambda: 1024)
+        monkeypatch.setattr(embed, "local_available", lambda: True)
+        res = boost("update", "--shards", expect=1)
+        both = " ".join((res.out + res.err).split())
+        assert "`unset VOYAGE_API_KEY`" in both
+        assert "`boost update --shards`" in both
+
 class TestStaleShardHint:
     """What search says about it — one `stat`, and never a network call."""
 
