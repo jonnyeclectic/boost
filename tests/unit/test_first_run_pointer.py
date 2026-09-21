@@ -102,6 +102,10 @@ class TestHelpScreen:
     def test_the_command_index_itself_is_unchanged(self, sandbox, capsys,
                                                    monkeypatch):
         """Only the pointer is added — every command row still prints."""
+        # An exported COLUMNS is a pane even without a TTY (out.pane_width),
+        # and below ~95 it wraps the hint, which this exact-text check reads
+        # as a changed index.
+        monkeypatch.delenv("COLUMNS", raising=False)
         cli.print_help()
         virgin = _plain(capsys.readouterr().out)
         monkeypatch.setattr(config, "first_run", lambda: False)
@@ -110,7 +114,7 @@ class TestHelpScreen:
         assert "%d commands" % len(cli.COMMANDS) in settled
         assert "new here?" not in settled
         # Exactly the pointer, and nothing else: one blank line and the
-        # sentence. A test has no pane, so the hint is never wrapped here.
+        # sentence. COLUMNS is unset above, so the hint is never wrapped here.
         assert virgin.replace("\n" + config.FIRST_RUN_HINT + "\n", "", 1) == settled
 
     def test_a_config_that_cannot_be_read_still_prints_help(self, sandbox,
@@ -120,7 +124,6 @@ class TestHelpScreen:
         monkeypatch.setattr(config, "first_run", boom)
         cli.print_help()                     # must not raise
         assert "%d commands" % len(cli.COMMANDS) in _plain(capsys.readouterr().out)
-
 
     def test_a_config_that_cannot_be_parsed_gets_no_pointer(self, sandbox,
                                                             capsys):
@@ -153,8 +156,9 @@ class TestHelpScreen:
     def test_asking_costs_help_no_extra_imports(self, sandbox):
         # `registry` brought gitutil, lockfile, policy, subprocess and
         # concurrent.futures onto the help path to answer a question `config`,
-        # which help already loads for its log level, can answer alone. The pointer is asserted too, so a predicate that
-        # failed to import (and was swallowed) cannot pass this vacuously.
+        # which help already loads for its log level, can answer alone. The
+        # pointer is asserted too, so a predicate that failed to import (and
+        # was swallowed) cannot pass this vacuously.
         code = ("import sys; from boost_cli.cli import main; main(['--help']); "
                 "print('registry' if 'boost_cli.core.registry' in sys.modules "
                 "else 'lean')")
