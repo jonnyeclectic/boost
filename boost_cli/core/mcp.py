@@ -238,7 +238,7 @@ def search_cost(ai_available: bool) -> str:
                 "it — repeating an identical search skips the LLM and answers "
                 "from a local cache.")
     return ("boost_search makes no LLM call on this machine: no AI backend is "
-            "available, so it skips the rerank and returns its matches in "
+            "available or enabled, so it skips the rerank and returns its matches in "
             "retrieval order, typically well under a second once its index is "
             "built. That order is a shortlist to read rather than a verdict to "
             "act on.")

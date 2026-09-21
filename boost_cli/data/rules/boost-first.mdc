@@ -21,9 +21,9 @@ sits on disk is the one avoidable mistake.
 `boost_search` costs ten to fifteen seconds where an AI backend is
 available, because it retrieves and then an LLM reranks — which is what makes
 its top result worth acting on rather than skimming ten. Where none is, it
-skips the rerank and answers in well under a second, and its order is a
-shortlist to read rather than a verdict. Its own tool description says which
-applies on this machine. The cheapest test of whether a search is worth making
+skips the rerank and typically answers in well under a second once its index
+is built, and its order is a shortlist to read rather than a verdict. Its own
+tool description says which applies on this machine. The cheapest test of whether a search is worth making
 is whether the task in front of you has a name you could say out loud — "set
 up code review", "add commit conventions", "debug flaky tests".
 
