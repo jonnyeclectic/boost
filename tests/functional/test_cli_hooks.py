@@ -119,6 +119,26 @@ class TestHooksErrors:
                   "-s", "global", expect=1)
         assert "needs --name" in r.err
 
+    def test_list_fits_the_pane_with_a_long_name_and_command(
+            self, boost, sandbox, monkeypatch):
+        # `command` is the one protected column. Protecting `name` as well
+        # left a remainder nothing could drop: name + command alone outgrew an
+        # 80-column pane and the row printed past it, the very overflow the
+        # fitter exists to prevent. These are the names `boost bmad
+        # autopilot` installs.
+        cmd = ("boost check --strict --json | jq -r '.issues[] | .msg'"
+               " | head -20 | sort")          # 72 cells: name + command > 80
+        boost("hooks", "add", "SessionStart", "-s", "global", "-n", "bmad",
+              "-c", "boost bmad orient --quiet --and-then-report-status-to-the-user",
+              "-m", "startup|resume|clear")
+        boost("hooks", "add", "PreToolUse", "-s", "global", "-n", "bmad-route",
+              "-c", cmd, "-m", "Bash")
+        monkeypatch.setenv("COLUMNS", "80")
+        r = boost("hooks", "list")
+        lines = [ln for ln in r.out.splitlines() if ln.strip()]
+        assert lines and max(len(ln) for ln in lines) <= 80, r.out
+        assert cmd in r.out   # protected: whole, never clipped
+
     def test_list_empty(self, boost, sandbox):
         r = boost("hooks", "list")
         assert "no boost-managed hooks" in r.out
