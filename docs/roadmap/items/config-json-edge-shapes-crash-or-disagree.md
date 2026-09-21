@@ -10,7 +10,7 @@ wow: 2
 note: A config.json holding invalid UTF-8 crashes every command, doctor included; {"taps": "x"} reads as a fresh install to doctor and as configured to --help…
 order: 327
 owner: loop/config-edge-shapes
-pr:
+pr: 915
 title: Two <code>config.json</code> shapes still slip past the corrupt-config handling. Invalid UTF-8 crashes every command, <code>doctor</code> included. <code>{"taps": "x"}</code> is a fresh install to <code>doctor</code> and a configured machine to <code>--help</code>.
 ---
 <b>Measured</b> on the 2026-09-21 release train, which carries PR 888 (corrupt <code>config.json</code> is an issue, not a fresh install) and PR 904 (the first-run pointer).
