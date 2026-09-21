@@ -59,6 +59,18 @@ class TestStdin:
         assert e.value.hint == "pipe the text in, or pass it as the value itself"
 
 
+    def test_invalid_utf8_on_stdin_is_replaced_not_a_traceback(self):
+        # A real stdin is a text wrapper over bytes, and its strict decode
+        # raised UnicodeDecodeError, which is not a BoostError: the `@FILE`
+        # arm was hardened against exactly this, and `-` was not.
+        stream = io.TextIOWrapper(io.BytesIO(b"\xff ok"), encoding="utf-8")
+        assert util.read_text_arg("-", "--feedback", stdin=stream) == "\ufffd ok"
+
+    def test_a_stream_with_no_byte_layer_is_read_as_text(self):
+        assert util.read_text_arg("-", "--feedback",
+                                  stdin=io.StringIO("é ok\n")) == "é ok"
+
+
 class TestFile:
     def test_at_path_reads_the_file(self, tmp_path):
         f = tmp_path / "fb.txt"

@@ -566,8 +566,8 @@ def cmd_info(argv):
             out.kv("latest", out.role(latest, "warn", bold=True)
                    + out.role("  (update available)", "muted"))
         elif relation == staleness.AHEAD:
-            # Kept short: kv does not wrap, and the long form ran this row
-            # to 71 columns, past a 60-column pane.
+            # Kept short: kv does not wrap by default, and the long form ran
+            # this row to 71 columns, past a 60-column pane.
             out.kv("latest", latest + out.role("  (older than installed)",
                                                "muted"))
     else:
