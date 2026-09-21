@@ -28,9 +28,11 @@ every open pull request at once.
 """
 from __future__ import annotations
 
+import functools
 import importlib.util
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +44,8 @@ _SCRIPT = _ROOT / "scripts" / "eval_corpus.py"
 _ENSURE = _ROOT / "scripts" / "ensure_eval_corpus.sh"
 _TAPS = _ROOT / "tests" / "eval" / "taps.txt"
 _REFRESH = _ROOT / ".github/workflows/eval-corpus-refresh.yml"
+_CI = _ROOT / ".github/workflows/ci.yml"
+_EVAL = _ROOT / "scripts" / "eval_retrieval.py"
 
 pytestmark = pytest.mark.skipif(
     not _SCRIPT.exists(), reason="repo-root script not reachable")
@@ -389,6 +393,76 @@ class TestFailuresAreClassified:
         assert "2 of 20" in out
 
 
+@functools.lru_cache(maxsize=1)
+def _eval_retrieval():
+    spec = importlib.util.spec_from_file_location("eval_retrieval", _EVAL)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# A shell word that ends the command rather than passing it an argument: a
+# pipe, a list operator or a redirection. The refresh workflow scores through
+# `2>&1 | tee ... || rc=$?`, and none of that is the gate's business.
+_SHELL_CHROME = re.compile(r"^(\||&|;|\d*[<>])")
+
+
+def _recipe(target: str) -> str:
+    makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
+    return makefile.split("\n%s:" % target, 1)[1].split("\n\n", 1)[0]
+
+
+def _step(workflow: str, name: str) -> str:
+    """One workflow step, from its `- name:` up to the step after it."""
+    body = workflow.split("- name: " + name, 1)[1]
+    return re.split(r"\n\s*- (?:name|uses):", body, maxsplit=1)[0]
+
+
+def _invocation(text: str) -> list[str]:
+    """The argv `scripts/eval_retrieval.py` receives from one shell block.
+
+    Continuations are joined first, because both the Makefile and the
+    workflows wrap the call over three lines. Comment lines are skipped
+    before anything is anchored: the refresh workflow names
+    `scripts/eval_retrieval.py` in the comment above its `run:`. And exactly
+    one call is required, so a block that grew a second one is an error
+    rather than a coin toss over which of them is compared.
+    """
+    joined = re.sub(r"\\\r?\n", " ", text)
+    calls = [line for line in joined.splitlines()
+             if "eval_retrieval.py" in line
+             and not line.lstrip().startswith("#")]
+    assert len(calls) == 1, (
+        "expected one eval_retrieval.py call, found %d in:\n%s"
+        % (len(calls), text))
+    words = shlex.split(calls[0])
+    first = next(i for i, word in enumerate(words)
+                 if word.endswith("eval_retrieval.py")) + 1
+    argv: list[str] = []
+    for word in words[first:]:
+        if _SHELL_CHROME.match(word):
+            break
+        argv.append(word)
+    return argv
+
+
+def _meaning(argv: list[str]) -> dict:
+    """What a run of the gate with `argv` measures and enforces.
+
+    Parsed by the script's own parser, so every flag it accepts is compared
+    — including one added after this test was written — and a flag it does
+    not accept fails here instead of in CI. Floors become a mapping, since
+    their order means nothing; `--golden` is resolved from the repo root,
+    where every one of these invocations runs.
+    """
+    ev = _eval_retrieval()
+    meaning = vars(ev.build_parser().parse_args(argv))
+    meaning["floor"] = ev.parse_floors(meaning["floor"])
+    meaning["golden"] = (_ROOT / meaning["golden"]).resolve()
+    return meaning
+
+
 class TestTheGateIsDefinedOnce:
     """`make check` claims to BE the required gate. For `eval` it was not.
 
@@ -399,44 +473,141 @@ class TestTheGateIsDefinedOnce:
     the other three, which are the ones added to close the "finds it every time,
     never ranks it first" hole. A ranker could regress hit@1 to 0.000 and the
     required gate would pass.
+
+    The first version of this guard compared the floor VALUES and nothing
+    else, so it could not see the flags that decide what a floor is measured
+    on. Measured: `-k 5` in ci.yml alone kept it at "2 passed" while the
+    required gate went from exit 0 to exit 1 (recall@k 0.841 -> 0.742 against
+    a 0.780 floor) and `make eval` stayed green; dropping `--build`, adding
+    `--golden` or changing `--regression-eps` slipped past it the same way. It
+    now compares the whole invocation, parsed.
     """
 
-    def _flags(self, text: str):
-        # The invocation is line-continued in the Makefile, so match over the
-        # whole recipe/step rather than a single line.
-        assert "eval_retrieval.py" in text
-        floors = dict(re.findall(r"--floor\s+([\w@]+)=([\d.]+)", text))
-        under = re.search(r"--fail-under\s+([\d.]+)", text)
-        assert under, "no --fail-under in:\n%s" % text
-        floors["recall@k"] = under.group(1)
-        return floors
+    def _gate(self) -> dict:
+        return _meaning(_invocation(_recipe("eval")))
 
     @pytest.mark.skipif(not (_ROOT / "Makefile").exists(),
                         reason="repo-root Makefile not reachable")
-    def test_ci_and_make_floor_the_same_metrics_at_the_same_values(self):
-        makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
-        recipe = makefile.split("\neval:", 1)[1].split("\n\n", 1)[0]
-        ci = (_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        # Anchor on the step, not the prose: the comment block above it names
-        # the gate too, and now carries the caching rationale between them.
-        step = ci.split("- name: retrieval quality gate", 1)[1].split("\n\n", 1)[0]
-        assert self._flags(step) == self._flags(recipe)
+    def test_ci_runs_the_make_eval_invocation_flag_for_flag(self):
+        ci = _CI.read_text(encoding="utf-8")
+        step = _step(ci, "retrieval quality gate")
+        assert _meaning(_invocation(step)) == self._gate()
 
     @pytest.mark.skipif(not _REFRESH.exists(), reason="refresh workflow absent")
-    def test_the_corpus_refresh_scores_against_the_same_floors(self):
+    def test_the_corpus_refresh_scores_with_the_same_invocation(self):
         """Otherwise its PASS/FAIL banner is about a different gate.
 
         The refresh job runs the eval non-blocking and puts the verdict at the
         top of the PR body, which is the whole point of the job — a reviewer
-        decides from that banner whether the new corpus is acceptable. Floors
-        that drifted from the required ones would make the banner confidently
-        wrong in either direction.
+        decides from that banner whether the new corpus is acceptable. The
+        step differs from `make eval` only around the call — `set -o
+        pipefail`, `tee`, the exit code kept for the next step — so its argv
+        must match exactly.
         """
-        makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
-        recipe = makefile.split("\neval:", 1)[1].split("\n\n", 1)[0]
         wf = _REFRESH.read_text(encoding="utf-8")
-        step = wf.split("- name: score the refreshed corpus", 1)[1]
-        assert self._flags(step) == self._flags(recipe)
+        step = _step(wf, "score the refreshed corpus")
+        assert _meaning(_invocation(step)) == self._gate()
+
+    @pytest.mark.skipif(not _REFRESH.exists(), reason="refresh workflow absent")
+    def test_the_refresh_rebaselines_what_the_gate_measures(self):
+        """The re-baseline call differs on purpose, but not in what it measures.
+
+        It saves rather than judges, so it takes no floors, does not rebuild
+        the index the scoring step just built, and never runs the regression
+        check its `--regression-eps` would tune. But the baseline it writes is
+        what every later `make eval` compares to, and it records the `k` and
+        the query set it was taken at: written at another cutoff, or over
+        another golden set or engine list, it describes a different
+        measurement from the one it is compared against.
+        """
+        wf = _REFRESH.read_text(encoding="utf-8")
+        rebase = _meaning(_invocation(
+            _step(wf, "re-baseline against the refreshed corpus")))
+        gate = self._gate()
+        assert rebase["save_baseline"] and not gate["save_baseline"]
+        for flag in ("k", "golden", "engines"):
+            assert rebase[flag] == gate[flag], flag
+
+    @pytest.mark.parametrize("old, new", [
+        ("--build -k 10", "--build -k 5"),
+        ("--build -k 10", "-k 10"),
+        ("--regression-eps 1\n", "--regression-eps 0.02\n"),
+        ("--build -k 10", "--build -k 10 --golden tests/eval/golden-natural.jsonl"),
+        ("--build -k 10", "--build -k 10 --engines bm25"),
+        ("--fail-under 0.78", "--fail-under 0.70"),
+        ("--floor hit@1=0.40", "--floor hit@1=0.10"),
+        (" --floor nDCG@k=0.58", ""),
+    ], ids=["k", "build", "regression-eps", "golden", "engines", "fail-under",
+            "floor-value", "floor-dropped"])
+    def test_an_edit_to_the_ci_invocation_alone_breaks_parity(self, old, new):
+        """The -k case is the card's: the old guard stayed green on it."""
+        step = _step(_CI.read_text(encoding="utf-8"), "retrieval quality gate")
+        assert old in step
+        edited = step.replace(old, new)
+        assert _meaning(_invocation(edited)) != self._gate()
+
+    @pytest.mark.parametrize("old, new", [
+        ("-k 10", "-k10"),
+        ("--floor hit@1=0.40 --floor MRR=0.52",
+         "--floor MRR=0.52 --floor hit@1=0.40"),
+        ("--floor hit@1=0.40", "--floor hit@1=0.4"),
+        ("--build -k 10", "--build -k 10 --golden tests/eval/golden.jsonl"),
+        (" \\\n            --", " --"),
+        ("--regression-eps 1\n", "--regression-eps 1 2>&1 | tee g.txt || rc=$?\n"),
+    ], ids=["glued-k", "floor-order", "float-spelling", "explicit-default-golden",
+            "one-line", "piped"])
+    def test_a_respelling_of_the_same_gate_still_matches(self, old, new):
+        """Parity is about what the gate checks, not how the line is typed."""
+        step = _step(_CI.read_text(encoding="utf-8"), "retrieval quality gate")
+        assert old in step
+        edited = step.replace(old, new)
+        assert _meaning(_invocation(edited)) == self._gate()
+
+
+class TestReadingAnInvocation:
+    @pytest.mark.parametrize("text", [
+        "python scripts/eval_retrieval.py -k 3 --build",
+        "python scripts/eval_retrieval.py -k 3 \\\n    --build",
+        "# scripts/eval_retrieval.py\npython scripts/eval_retrieval.py -k 3 --build",
+        "python scripts/eval_retrieval.py -k 3 --build 2>&1 | tee x",
+        "python scripts/eval_retrieval.py -k 3 --build || rc=$?",
+        "python scripts/eval_retrieval.py -k 3 --build && echo ok",
+        "python scripts/eval_retrieval.py -k 3 --build ; echo ok",
+        "python scripts/eval_retrieval.py -k 3 --build > out.txt",
+        "python scripts/eval_retrieval.py -k 3 --build &",
+    ], ids=["plain", "continued", "commented", "redirected-and-piped", "or",
+            "and", "semicolon", "redirected", "background"])
+    def test_the_argv_is_what_follows_the_script_up_to_the_shell(self, text):
+        assert _invocation(text) == ["-k", "3", "--build"]
+
+    def test_the_words_before_the_script_are_not_its_arguments(self):
+        text = "BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_retrieval.py --json"
+        assert _invocation(text) == ["--json"]
+
+    @pytest.mark.parametrize("text", [
+        "echo nothing to see",
+        "# python scripts/eval_retrieval.py -k 3",
+        "python scripts/eval_retrieval.py -k 3\npython scripts/eval_retrieval.py",
+    ], ids=["none", "only-a-comment", "two"])
+    def test_anything_but_one_call_is_refused(self, text):
+        with pytest.raises(AssertionError, match="expected one"):
+            _invocation(text)
+
+    def test_a_step_ends_where_the_next_one_begins(self):
+        wf = ("      - name: first\n        run: a\n"
+              "      - uses: some/action@v1\n"
+              "      - name: second\n        run: b\n")
+        assert _step(wf, "first") == "\n        run: a"
+        assert _step(wf, "second") == "\n        run: b\n"
+
+    def test_an_unknown_flag_fails_rather_than_being_ignored(self):
+        with pytest.raises(SystemExit):
+            _meaning(["--no-such-flag"])
+
+    def test_floors_are_read_as_a_mapping(self):
+        meaning = _meaning(["--floor", "MRR=0.5", "--floor", "hit@1=0.25"])
+        assert meaning["floor"] == {"MRR": 0.5, "hit@1": 0.25}
+        assert meaning["golden"].is_absolute()
 
 
 class TestPinningAClone:
