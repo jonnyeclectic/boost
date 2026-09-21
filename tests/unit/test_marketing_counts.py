@@ -252,6 +252,8 @@ class TestHeroBlock:
         assert len(names) == 1, \
             "the hero block installs %d skills: %s" % (len(names), names)
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="runs smoke.sh's own bash/awk line; smoke.sh is POSIX")
     def test_smoke_extracts_the_same_name_this_test_does(self):
         """Run smoke.sh's own extraction and compare, rather than re-spelling it.
 
@@ -269,6 +271,8 @@ class TestHeroBlock:
             "smoke.sh reads %r, the hero fence installs %r"
             % (got.stdout.strip(), _hero_install_name()))
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="runs smoke.sh's own bash/awk line; smoke.sh is POSIX")
     def test_a_decoy_install_line_cannot_steal_the_check(self, tmp_path):
         """The regression this pin exists for, executed rather than asserted."""
         decoy = README.replace(

@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import ClassVar
 
@@ -3428,6 +3429,8 @@ class TestResolveLockEntry:
         assert entry == lockfile.get_rule("team-conventions")
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="chmod can't make a directory unwritable on Windows")
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                     reason="root ignores mode bits")
 class TestAnUnwritableAgentDirIsSkipped:

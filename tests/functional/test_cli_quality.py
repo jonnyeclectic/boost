@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 
 import pytest
@@ -110,6 +111,8 @@ class TestDoctor:
         assert "nothing to heal" not in r.out
         assert "heal cannot repair it" in r.out.replace("\n    ", " ")
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")
     def test_an_unwritable_cache_dir_is_an_issue(self, boost, tapped):
@@ -120,6 +123,8 @@ class TestDoctor:
             paths.cache_dir().chmod(0o700)
         assert "is not writable" in r.out
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")
     def test_an_unwritable_agent_dir_names_its_remedy_everywhere(
@@ -143,6 +148,8 @@ class TestDoctor:
         boost("sync")                                # now it may
         assert (cursor / "brainstorming").is_symlink()
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")
     def test_reinstall_names_the_link_it_could_not_make(self, boost, installed):

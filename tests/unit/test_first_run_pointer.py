@@ -162,10 +162,14 @@ class TestHelpScreen:
         code = ("import sys; from boost_cli.cli import main; main(['--help']); "
                 "print('registry' if 'boost_cli.core.registry' in sys.modules "
                 "else 'lean')")
-        env = dict(os.environ,
+        # UTF-8 both ways: help prints box and arrow glyphs, and on Windows a
+        # cp1252 decode of them kills subprocess's reader thread, which leaves
+        # stdout None rather than raising.
+        env = dict(os.environ, PYTHONIOENCODING="utf-8",
                    PYTHONPATH=str(Path(boost_cli.__file__).resolve().parents[1]))
         proc = subprocess.run([sys.executable, "-c", code], env=env,
-                              capture_output=True, text=True, check=True)
+                              capture_output=True, encoding="utf-8",
+                              check=True)
         assert "new here?" in proc.stdout
         assert proc.stdout.splitlines()[-1] == "lean"
 

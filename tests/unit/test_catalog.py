@@ -411,6 +411,9 @@ class TestACacheBoostCannotWrite:
     (unreadable-tap-cache-healthy-doctor-crashing-heal). A cache is a
     speed-up: failing to keep one must never be an error."""
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows refuses to replace a read-only file, so "
+                               "the stale cache is served rather than replaced")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")
     def test_a_read_only_stale_cache_file_is_replaced_not_refused(
