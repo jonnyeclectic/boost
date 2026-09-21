@@ -86,16 +86,16 @@ stays relaxed (`--regression-eps 1`), so the absolute floors are the real gate.
 checks each clone out at it — most of the corpus is one third-party repo, so an
 unpinned list left a required check hostage to someone else's push. The size
 and that share are stated once, in a block at the top of `taps.txt` that
-`--relock` and `--refresh` write from the rows; the figures quoted above (and
-in the `Makefile` and `docs/eval.html`) are checked against the rows and
-`baseline.json` by `tests/unit/test_corpus_prose.py`, because the monthly
-refresh moves both and nothing else would notice. CI and `make eval` must
-invoke the gate with identical arguments, not just identical floors — `-k`
-decides what two of them measure; `tests/unit/test_eval_corpus.py` parses both
-calls and fails the build if they diverge, which they had (CI floored recall
-alone at 0.85 against a measured 0.863 — a buffer of 1.15 queries out of 91 —
-and applied none of the other three). Moving a pin means regenerating the
-baseline; the file says how.
+`--relock` and `--refresh` write from the rows; the sizes and the twenty-repo
+scores quoted above (and in the `Makefile` and `docs/eval.html`) are checked
+against the rows and `baseline.json` by `tests/unit/test_corpus_prose.py`,
+because the monthly refresh moves both and nothing else would notice. CI and
+`make eval` must invoke the gate with identical arguments, not just identical
+floors — `-k` decides what two of them measure; `tests/unit/test_eval_corpus.py`
+parses both calls and fails the build if they diverge, which they had (CI
+floored recall alone at 0.85 against a measured 0.863 — a buffer of 1.15
+queries out of 91 — and applied none of the other three). Moving a pin means
+regenerating the baseline; the file says how.
 
 **Baselines are keyed by query set** (`name@content-digest`), so one file holds
 both `golden.jsonl` and `golden-natural.jsonl` without either overwriting the

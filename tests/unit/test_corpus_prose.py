@@ -21,6 +21,7 @@ with itself.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 from pathlib import Path
@@ -61,18 +62,29 @@ LIVE = sorted({path for path, _t in QUOTED} | {
     "tests/unit/test_scale_corpus.py",
 })
 
-#: "10,731 entries", "10731 entries", "10,731-entry".
+#: The gaps a figure may be separated by: a space, a hyphen, or a
+#: non-breaking space, raw or as an HTML entity.
+_GAP = r"(?:[ \u00a0-]|&nbsp;|&#160;)"
+#: "10,731 entries", "10731 entries", "10,731-entry", "10,731 catalog
+#: entries": one word at most between the figure and "entries", so a figure
+#: counting some other noun ("10,731 files, 921 entries") is not read as one.
 _FIGURE = re.compile(
-    r"(?<![\d,.])(\d{1,3}(?:,\d{3})+|\d{4,6})(?=[ -]entr(?:y|ies)\b)")
+    r"(?<![\d,.])(\d{1,3}(?:,\d{3})+|\d{4,6})"
+    r"(?=%s(?:[A-Za-z]+%s)?entr(?:y|ies)\b)" % (_GAP, _GAP))
 #: A pull request number (#410) — the measurement a dated figure belongs to.
 #: The lookbehind keeps HTML entities (&#8212;) from reading as one.
 _DATED = re.compile(r"(?<![&\w])#\d{3,4}\b")
 
-#: A whole-corpus figure is one within this factor of the current total. One
-#: refresh moved the total 5.7%; the corpus's subsets (the six target repos,
-#: the corpus without its largest repo) and a real install's ~71k are far
-#: outside it, so they are not mistaken for a stale total.
-_WINDOW = (0.8, 1.25)
+#: A whole-corpus figure is one within this factor of the current total. The
+#: low end is what catches growth — the old total sits BELOW the new one — so
+#: it is as low as it can go while staying above eval_corpus.MAX_SHARE (65%):
+#: the size block names the largest repo's entries on an undated line, and the
+#: cap keeps that figure out. 0.7 catches the old total after a refresh that
+#: grows the corpus by up to 43% (the first one moved it 5.7%); 2.0 catches it
+#: after one that halves it. The other subsets quoted today (the six target
+#: repos, 9%; the corpus without its largest repo, 38%) and a real install's
+#: ~71k are outside it.
+_WINDOW = (0.7, 2.0)
 
 
 def _counts(text: str) -> list[int]:
@@ -103,6 +115,21 @@ def _figures() -> dict[str, str]:
                            for k in ("recall@k", "hit@1", "MRR", "nDCG@k")),
         "recall": "%.3f" % bm25["recall@k"],
     }
+
+
+def _max_share() -> float:
+    """``eval_corpus.MAX_SHARE``, the cap on one repo's share of the corpus.
+
+    A limit the window has to respect, not a figure the prose quotes, so
+    reading it from the writer's module costs the check none of its
+    independence.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "eval_corpus", _ROOT / "scripts" / "eval_corpus.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return float(mod.MAX_SHARE)
 
 
 def _folded(text: str) -> str:
@@ -139,6 +166,36 @@ class TestTheCheckItself:
     def test_every_spelling_of_a_size_is_read(self):
         text = "10152 entries\na 10,152-entry corpus\n"
         assert len(stale_totals(text, 10_731)) == 2
+
+    def test_a_word_between_the_figure_and_entries_is_read(self):
+        assert stale_totals("the corpus is 10,152 catalog entries", 10_731) \
+            == ["1: the corpus is 10,152 catalog entries"]
+
+    def test_a_non_breaking_space_is_read(self):
+        text = "10,152\u00a0entries\n10,152&nbsp;entries\n10,152&#160;entries\n"
+        assert len(stale_totals(text, 10_731)) == 3
+
+    def test_only_one_word_may_come_between(self):
+        # A figure followed by some other noun, then a count of entries, is
+        # the other noun's count.
+        text = "10,152 files, 921 entries\n10,152 of the entries\n"
+        assert stale_totals(text, 10_731) == []
+
+    def test_a_large_growth_still_catches_the_old_total(self):
+        # A refresh that grows the corpus 39% leaves the old total at 72% of
+        # the new one.
+        assert stale_totals("the corpus is 10,731 entries", 14_902) == [
+            "1: the corpus is 10,731 entries"]
+
+    def test_a_halving_still_catches_the_old_total(self):
+        assert stale_totals("the corpus is 10,731 entries", 5_366) != []
+
+    def test_the_largest_repo_is_never_read_as_a_total(self):
+        # The size block names the largest repo's entries on an undated line,
+        # and eval_corpus.MAX_SHARE is the most that figure may be.
+        largest = int(10_731 * _max_share())
+        text = "# largest: x/y, %s entries" % f"{largest:,}"
+        assert stale_totals(text, 10_731) == []
 
     def test_a_dated_figure_is_a_record_not_a_claim(self):
         assert stale_totals("10,152 entries at the #410 pins", 10_731) == []

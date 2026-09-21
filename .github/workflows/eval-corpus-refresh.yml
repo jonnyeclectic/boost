@@ -167,10 +167,12 @@ jobs:
             echo "corpus in the same commit, because a baseline is a statement"
             echo "about a specific corpus."
             echo
-            echo "Figures quoted in prose (CLAUDE.md, the Makefile,"
-            echo "\`docs/eval.html\`) are checked against the new rows and"
-            echo "baseline by \`tests/unit/test_corpus_prose.py\`. If it fails"
-            echo "here, update the figures it names in this branch."
+            echo "Corpus sizes and twenty-repo scores quoted in prose"
+            echo "(CLAUDE.md, the Makefile, \`docs/eval.html\`) are checked"
+            echo "against the new rows and baseline by"
+            echo "\`tests/unit/test_corpus_prose.py\`. If it fails here, update"
+            echo "the figures it names in this branch, and re-measure any score"
+            echo "quoted beside them."
             echo
             echo "**This PR arrives with no check runs.** \`create-pull-request\`"
             echo "pushes with \`GITHUB_TOKEN\`, and a \`GITHUB_TOKEN\` push never"

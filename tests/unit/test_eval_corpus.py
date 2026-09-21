@@ -6,7 +6,7 @@ WHY THIS FILE EXISTS. `tests/eval/taps.txt` pinned repo NAMES, not commits, so
 the gate's corpus was whatever those repos happened to contain at clone time.
 Measured: the list recorded 743 entries when it was written and resolved to
 **3,843** on the same 20 repos later, a 5.2x drift nobody changed a file to
-cause. One repo (`affaan-m/ECC`) is 1,616 of those entries, so a single third
+cause. One repo (`affaan-m/ECC`) was 1,616 of those entries, so a single third
 party can move the required number on its own.
 
 That matters because the floor is not comfortable: BM25 scores recall@10

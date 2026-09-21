@@ -19,9 +19,9 @@
 # The block above is the only place this header states the corpus's size.
 # `--relock` and `--refresh` rewrite it with the rows, so it cannot disagree
 # with them; a sentence typed here did, the first time the monthly refresh
-# moved the pins. Figures quoted elsewhere (CLAUDE.md, the Makefile,
-# docs/eval.html) are checked against these rows and baseline.json by
-# tests/unit/test_corpus_prose.py.
+# moved the pins. The sizes and twenty-repo scores quoted elsewhere (CLAUDE.md,
+# the Makefile, docs/eval.html) are checked against these rows and
+# baseline.json by tests/unit/test_corpus_prose.py.
 #
 # The golden set (golden.jsonl) grades real catalog items by NAME, so the gate
 # needs the repos that actually contain those items tapped before it can score.
