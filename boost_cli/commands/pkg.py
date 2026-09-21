@@ -1004,7 +1004,10 @@ def _resync_vectors(moved: list[str]) -> None:
     commits = rag._tap_commits()
     by_name = {t.name: commits.get(t.safe_name, "")
                for t in registry.list_taps() if t.name in moved}
-    results = shards.sync(list(by_name), by_name, manifest=manifest)
+    # The one `sync` caller that printed nothing while it downloaded: a
+    # `boost update` that moved forty taps fetched forty shards in silence.
+    results = shards.sync(list(by_name), by_name, manifest=manifest,
+                          on_event=_ingest_event)
     got = [r for r in results if r["status"] == "imported"]
     if got:
         out.ok("re-imported prebuilt vectors for %d tap(s)" % len(got))
