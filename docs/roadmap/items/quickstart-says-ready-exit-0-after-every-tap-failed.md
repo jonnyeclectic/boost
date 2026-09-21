@@ -2,14 +2,14 @@
 id: quickstart-says-ready-exit-0-after-every-tap-failed
 board: code
 section: planned
-status: planned
+status: shipped
 category: Onboarding · Bug
 complexity: L
 impact: High
 wow: 4
 note: cmd_quickstart warns per failed clone but never tracks failures: it unconditionally r…
 order: 222
-owner:
+owner: loop/quickstart-exit
 pr:
 title: With every registry unreachable, quickstart prints "✓ indexed 0 items" and "✓ ready", exits 0 — and the command it recommends exits 1
 ---
