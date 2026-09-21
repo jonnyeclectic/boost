@@ -4,6 +4,7 @@
 reinstall, bundle, import, pin, unpin, snapshot, export."""
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
@@ -1334,14 +1335,23 @@ def cmd_bundle(argv: list[str]) -> int:
 
 def _bundle_dump(file: str | None) -> int:
     text = _boostfile_text(lockfile.installed())
+    lines = text.splitlines()
+    # What the file cannot reinstall, said on both paths: a local skill is
+    # only a comment in it, and rules/workflows are not in it at all.
+    notices = []
+    n_local = sum(1 for ln in lines if ln.startswith("# local skill"))
+    if n_local:
+        notices.append("%s written as comments — no tap source to reinstall "
+                       "from" % _plural(n_local, "local skill"))
     others = _others_installed()
+    if others:
+        notices.append("%s not captured — Boostfiles carry skills only" % others)
     if not file or file == "-":
         print(text, end="")
-        if others:
-            # stdout IS the Boostfile here; the omission notice goes to stderr
-            # so `boost bundle dump > Boostfile` stays a parseable artifact.
-            print("  ! %s not captured — Boostfiles carry skills only" % others,
-                  file=sys.stderr)
+        # stdout IS the Boostfile here; the notices go to stderr so
+        # `boost bundle dump > Boostfile` stays a parseable artifact.
+        for msg in notices:
+            out.warn(msg, stream=sys.stderr)
         return 0
     dest = paths.expand(file)
     try:
@@ -1349,12 +1359,12 @@ def _bundle_dump(file: str | None) -> int:
     except OSError as e:
         raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
                         hint="check the path exists and is writable") from e
-    n_taps = sum(1 for ln in text.splitlines() if ln.startswith("tap "))
-    n_skills = sum(1 for ln in text.splitlines() if ln.startswith("skill "))
+    n_taps = sum(1 for ln in lines if ln.startswith("tap "))
+    n_skills = sum(1 for ln in lines if ln.startswith("skill "))
     out.ok("wrote %s (%s, %s)" % (_tilde(dest), _plural(n_taps, "tap"),
                                   _plural(n_skills, "skill")))
-    if others:
-        out.warn("%s not captured — Boostfiles carry skills only" % others)
+    for msg in notices:
+        out.warn(msg)
     return 0
 
 
@@ -1370,35 +1380,44 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     """
     if file == "-":
         text, label = sys.stdin.read(), "<stdin>"
+        shown = label  # one spelling, in the warning and the journal alike
     else:
         path = paths.expand(file or "./Boostfile")
+        # Absolute, not as given: pathlib folds `./Boostfile` to `Boostfile`,
+        # which made the missing-file error the tautology "no Boostfile at
+        # Boostfile". Not resolve(): that would swap a symlinked /tmp for
+        # /private/tmp in a path the user never typed.
+        shown = _tilde(path.absolute())
         if not path.exists():
-            raise BoostError("no Boostfile at %s" % _tilde(path),
+            raise BoostError("no Boostfile at %s" % shown,
                             hint="create one with `boost bundle dump Boostfile`")
         if path.is_dir():
-            raise BoostError("%s is a directory, not a Boostfile" % _tilde(path),
+            raise BoostError("%s is a directory, not a Boostfile" % shown,
                             hint="point at the Boostfile itself, "
                                  "or use `boost import` for skill directories")
         try:
             text, label = path.read_text(encoding="utf-8"), str(path)
         except OSError as e:
-            raise BoostError("cannot read %s: %s" % (_tilde(path), e.strerror or e)) from e
-    taps_added = installed_n = present = failed = 0
+            raise BoostError("cannot read %s: %s" % (shown, e.strerror or e)) from e
+    taps_added = installed_n = present = drifted = unresolved = failed = 0
+    directives = 0
     installed_kinds: set[str] = set()
     would_tap: set[str] = set()
     would_rules: list[str] = []
     have_taps = {t.name for t in registry.list_taps()}
-    # name -> kind across every lock section, so a `skill` line naming an
-    # already-installed rule/workflow is counted present, not re-installed.
-    have_installed: dict[str, str] = {}
+    # name -> (kind, lock entry) across every lock section, so a `skill` line
+    # naming an already-installed rule/workflow is counted present, not
+    # re-installed — and so its tap and version can be held to the line.
+    have_installed: dict[str, tuple[str, dict]] = {}
     for kind, section in lockfile.all_installed().items():
-        for n in section:              # first section wins: skill > rule >
-            have_installed.setdefault(n, kind)  # workflow, same as find_any
+        for n, lk in section.items():  # first section wins: skill > rule >
+            have_installed.setdefault(n, (kind, lk))  # workflow, as find_any
 
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        directives += 1
         parts = line.split(None, 2)
         if parts[0] == "tap" and len(parts) >= 2:
             tname, turl = parts[1], parts[2] if len(parts) > 2 else ""
@@ -1407,7 +1426,19 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             if dry_run:
                 # Nothing is cloned, so any skill line naming this tap cannot
                 # be resolved below — said plainly there rather than guessed.
+                # Under both names: the real run names the tap from its URL
+                # (`registry.add` -> `parse_spec`), not from this line's NAME,
+                # so `tap myalias ./x` is tapped as `x`, and a `skill x:…`
+                # line must defer here as it will install there.
                 would_tap.add(tname)
+                # no derivable name: NAME is then all there is to match
+                with contextlib.suppress(BoostError):
+                    derived = registry.parse_spec(turl or tname)[0]
+                    # Already configured under that name, a skill line naming
+                    # it resolves now and misses the way the real run will,
+                    # so it must not be deferred as "cannot resolve yet".
+                    if derived not in have_taps:
+                        would_tap.add(derived)
                 out.info("would tap %s" % tname)
                 taps_added += 1
                 continue
@@ -1424,8 +1455,23 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
         elif parts[0] == "skill" and len(parts) >= 2:
             tapq, _, rest = parts[1].rpartition(":")
             sname, _, sver = rest.partition("@")
-            kind_here = have_installed.get(sname)
-            if kind_here is not None:
+            if sname in have_installed:
+                kind_here, lk = have_installed[sname]
+                drift = store.lock_drift(lk, tapq, sver)
+                # Before the kind check, on purpose: a rule or workflow
+                # installed from another tap or at another version is drift
+                # just as a skill is, so it counts "differs", not "present".
+                if drift:
+                    # A Boostfile is a reproducibility contract, so an install
+                    # from another tap or at another version is not "already
+                    # present". Kept rather than replaced: swapping out what
+                    # the user has is not this command's call to make.
+                    out.warn("%s: %s — kept as installed" % (sname, "; ".join(
+                        ("installed from %s, Boostfile wants %s" if field == "tap"
+                         else "installed %s, Boostfile wants @%s") % (have, want)
+                        for field, have, want in drift)), wrap=True)
+                    drifted += 1
+                    continue
                 if kind_here != "skill":
                     out.info("%s is already installed as a %s — skipped"
                              % (sname, kind_here))
@@ -1433,12 +1479,17 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 continue
             matches = catalog.find(sname, tap=tapq or None)
             if not matches:
-                if dry_run and (tapq in would_tap or would_tap):
+                if dry_run and (any(catalog.tap_matches(t, tapq)
+                                    for t in would_tap)
+                                if tapq else would_tap):
                     # Honest rather than optimistic: the tap it would come
                     # from has not been cloned, so whether this resolves is
-                    # genuinely unknown until it is.
+                    # genuinely unknown until it is. Only then, though — a
+                    # line qualified with a tap already present resolves
+                    # right now, and misses the way the real run will.
                     out.info("%s — cannot resolve yet; its tap would be "
                              "added by this same file" % sname)
+                    unresolved += 1
                     continue
                 out.warn("%s not found%s — skipped"
                          % (sname, (" in tap %s" % tapq) if tapq else ""))
@@ -1454,8 +1505,9 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 continue
             entry = matches[0]
             if sver and str(entry.get("version")) != sver:
-                out.warn("%s: Boostfile wants @%s, tap has %s — installing that"
-                         % (sname, sver, entry.get("version")))
+                out.warn("%s: Boostfile wants @%s, tap has %s — %s that"
+                         % (sname, sver, entry.get("version"),
+                            "would install" if dry_run else "installing"))
             entry_kind = entry.get("kind", "skill")
             if dry_run:
                 out.info("would install %s v%s (%s)%s"
@@ -1464,7 +1516,7 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                             else " [%s]" % entry_kind))
                 if entry_kind == "rule":
                     would_rules.append(sname)
-                have_installed[sname] = entry_kind
+                have_installed[sname] = (entry_kind, entry)
                 installed_kinds.add(entry_kind)
                 installed_n += 1
                 continue
@@ -1476,18 +1528,35 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 continue
             out.ok("installed %s v%s (%s)" % (sname, entry.get("version"),
                                               entry["tap"]))
-            have_installed[sname] = entry_kind
+            have_installed[sname] = (entry_kind, entry)
             installed_kinds.add(entry_kind)
             installed_n += 1
         else:
             out.warn("line %d: unrecognised: %s" % (lineno, line))
             failed += 1
+    if not directives:
+        # An empty stdin or a comments-only file is not an error, but a bare
+        # "Installed 0 skills" reads as "everything was already in place".
+        out.warn("nothing to apply: %s has no tap or skill lines" % shown)
+    # A "skill NAME" line can resolve to a rule or workflow (`catalog.find`
+    # searches every kind) — name the kind when only one was actually
+    # installed, the same call `cmd_reinstall` makes, so this summary agrees
+    # with what `bundle dump`'s own kind-aware sections would call it. Shared
+    # by both paths, so a preview names what the run will.
+    noun = next(iter(installed_kinds)) if len(installed_kinds) == 1 else (
+        "item" if installed_kinds else "skill")
+    differ = "%d %s from the Boostfile" % (drifted,
+                                          "differs" if drifted == 1 else "differ")
     if dry_run:
-        summary = "would install %s" % _plural(installed_n, "item")
+        summary = "would install %s" % _plural(installed_n, noun)
         if taps_added:
             summary += ", add %s" % _plural(taps_added, "tap")
         if present:
             summary += ", %d already present" % present
+        if drifted:
+            summary += ", " + differ
+        if unresolved:
+            summary += ", %d unresolved until tapped" % unresolved
         if failed:
             summary += ", %d would fail" % failed
         out.info(summary)
@@ -1504,17 +1573,13 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     if taps_added:
         complete.refresh_names()
     journal.log("bundle-install", label, taps=taps_added, skills=installed_n)
-    # A "skill NAME" line can resolve to a rule or workflow (`catalog.find`
-    # searches every kind) — name the kind when only one was actually
-    # installed, the same call `cmd_reinstall` makes, so this summary agrees
-    # with what `bundle dump`'s own kind-aware sections would call it.
-    noun = next(iter(installed_kinds)) if len(installed_kinds) == 1 else (
-        "item" if installed_kinds else "skill")
     summary = "Installed %s" % _plural(installed_n, noun)
     if taps_added:
         summary += ", added %s" % _plural(taps_added, "tap")
     if present:
         summary += ", %d already present" % present
+    if drifted:
+        summary += ", " + differ
     if failed:
         summary += ", %d failed" % failed
     out.info(summary)

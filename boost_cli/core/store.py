@@ -158,6 +158,32 @@ def upstream_source(name: str) -> tuple[str, str, str, str]:
             catalog.upstream_path(entry))
 
 
+def lock_drift(entry: dict, qualifier: str | None,
+               version: str | None) -> list[tuple[str, str, str]]:
+    """How an installed lock ``entry`` differs from a requested ``tap:name@ver``.
+
+    Returns ``(field, installed, wanted)`` for each of ``"tap"`` and
+    ``"version"`` that the request pins and the entry does not satisfy; an
+    empty list means the install is what was asked for. A field the request
+    leaves out (no qualifier, no ``@version``) is never drift.
+
+    The tap test is :func:`catalog.tap_matches`, the same one
+    :func:`resolve_lock_entry` applies, so ``skills:x`` still matches an
+    install from ``owner/skills``. The fallbacks mirror what
+    ``boost bundle dump`` writes for an entry missing either field — no tap is
+    ``local``, no version is ``0.0.0`` — so a Boostfile dumped from this lock
+    reads back with no drift at all.
+    """
+    drift: list[tuple[str, str, str]] = []
+    tap = str(entry.get("tap") or "local")
+    if qualifier and not catalog.tap_matches(tap, qualifier):
+        drift.append(("tap", tap, qualifier))
+    have = str(entry.get("version", "0.0.0"))
+    if version and have != version:
+        drift.append(("version", have, version))
+    return drift
+
+
 def installed() -> dict:
     """Return the lock file's installed skills as {name: entry}.
 

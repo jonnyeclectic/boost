@@ -3429,6 +3429,52 @@ class TestResolveLockEntry:
         assert entry == lockfile.get_rule("team-conventions")
 
 
+class TestLockDrift:
+    """``store.lock_drift`` — how an installed entry differs from a requested
+    ``tap:name@version``; what keeps `boost bundle install` from calling an
+    install at another tap or version "already present"
+    (docs/roadmap/items/audit-bundle-findings.md)."""
+
+    ENTRY: ClassVar[dict] = {"tap": "acme/skills", "version": "1.4.0"}
+
+    def test_a_request_that_pins_nothing_never_drifts(self):
+        assert store.lock_drift(self.ENTRY, None, None) == []
+        assert store.lock_drift(self.ENTRY, "", "") == []
+
+    def test_the_same_tap_and_version_is_no_drift(self):
+        assert store.lock_drift(self.ENTRY, "acme/skills", "1.4.0") == []
+
+    def test_the_repo_tail_names_the_installed_tap(self):
+        # the tier catalog.find accepts, so `skills:x` is not "another tap"
+        assert store.lock_drift(self.ENTRY, "skills", None) == []
+
+    def test_another_tap_is_drift(self):
+        assert store.lock_drift(self.ENTRY, "other/skills", None) == [
+            ("tap", "acme/skills", "other/skills")]
+        assert store.lock_drift(self.ENTRY, "acme", None) == [
+            ("tap", "acme/skills", "acme")]
+
+    def test_another_version_is_drift(self):
+        assert store.lock_drift(self.ENTRY, None, "9.9.9") == [
+            ("version", "1.4.0", "9.9.9")]
+
+    def test_both_are_reported_tap_first(self):
+        assert store.lock_drift(self.ENTRY, "other/skills", "9.9.9") == [
+            ("tap", "acme/skills", "other/skills"),
+            ("version", "1.4.0", "9.9.9")]
+
+    def test_missing_fields_default_the_way_bundle_dump_writes_them(self):
+        # dump writes a tap-less entry as local and a version-less one @0.0.0,
+        # so what it wrote must read back as no drift
+        assert store.lock_drift({}, "local", "0.0.0") == []
+        assert store.lock_drift({"tap": None}, "local", None) == []
+        assert store.lock_drift({}, "acme/skills", "1.0") == [
+            ("tap", "local", "acme/skills"), ("version", "0.0.0", "1.0")]
+
+    def test_a_non_string_version_is_compared_as_written(self):
+        assert store.lock_drift({"tap": "t", "version": 2}, None, "2") == []
+
+
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="chmod can't make a directory unwritable on Windows")
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
