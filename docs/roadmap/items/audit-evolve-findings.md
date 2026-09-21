@@ -2,14 +2,14 @@
 id: audit-evolve-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
 note: empty --feedback writes an empty section + version bump; the revision is left unpinned
 order: 266
-owner:
+owner: loop/evolve-audit
 pr:
 title: "<code>boost evolve</code>: CLI audit findings (2026-08)"
 ---
