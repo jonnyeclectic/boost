@@ -677,7 +677,10 @@ def _refused_target(err: OSError, path: Path, unwritable: list[str],
     parent that is fine.
     """
     if isinstance(err, PermissionError):
-        unwritable.append(str(refusing_dir(path.parent)))
+        # Not `refusing_dir`: its `exists()` walk raises PermissionError of its
+        # own under a parent with no search bit, after the other agents were
+        # written. `refuses_writes` asks `lexists`, which answers False there.
+        unwritable.append(str(paths.refuses_writes(path.parent) or path.parent))
         return True
     block = paths.refuses_writes(path.parent)
     if block is None or not paths.in_the_way(block):

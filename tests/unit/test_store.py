@@ -3939,6 +3939,25 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
         assert store.sync_plan()["missing_materializations"] == []
 
     @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_dotdir_with_no_search_bit_is_skipped_not_a_crash(self, tap, kind):
+        # ~/.cursor at 0o600: stat below it raises PermissionError, so naming
+        # the refusing dir by walking `exists()` up from rules/ crashed after
+        # the other agents were written, with nothing in the lock.
+        entry = self._entry(tap, kind)
+        cursor = paths.home() / ".cursor"
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o600)
+        try:
+            res = store.install(entry)
+        finally:
+            cursor.chmod(0o700)
+        assert res.unwritable == [str(cursor)]
+        assert set(res.linked) == {"claude-code", "windsurf", "gemini"}
+        rows = {m["agent"]: m for m in self._locked(kind, entry["name"])
+                ["materializations"]}
+        assert rows["cursor"]["unwritable"] is True
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
     def test_a_repeat_refusal_is_one_row_and_keeps_the_scope(self, tap, kind):
         entry = self._entry(tap, kind)
         cursor = self._cursor_dir(kind)
