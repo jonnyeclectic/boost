@@ -79,6 +79,26 @@ name: lighthouse
 # roadmap-page-weight-grows-without-bound card (collapse or paginate settled
 # sections in build_roadmap.py).
 #
+# 0.75, BECAUSE 0.80 WAS A ZERO-MARGIN FLOOR AND THE GATE FLIPPED ON IT. Every
+# number above follows "measure, then floor", and 0.80 stopped doing that as the
+# board grew back: measured 2026-09-20 over the artifacts of four consecutive
+# jobs (12 runs), roadmap.html scores min 0.78, median 0.83, max 0.94, with
+# per-job medians of 0.80, 0.82, 0.84 and 0.89. The worst of those medians IS
+# the floor, so the assertion was decided by which way runner timing fell —
+# two commits whose roadmap.html was byte-identical (sha256 42bdc4f7..., 784,560
+# bytes) got opposite verdicts 60 seconds apart. 0.75 sits below the worst
+# median AND below the worst single sample, with ~0.08 of margin on the median.
+#
+# Lowering it alone would only relocate the coin flip, so the number that bounds
+# the growth eating the margin is the one that has to be tight — and it already
+# is, deterministically and in the REQUIRED lint job: scripts/page_budget.py
+# holds the board to 1,200 kB / 18,000 elements, which it sits at 58% / 60% of
+# today, with tests that fire at 80%. Markup size is not a predictor of the
+# score (a 33% cut in laid-out body text moved it 0.00), which is exactly why
+# the two gates are separate: this one says the page is fast enough, that one
+# says it is not growing unwatched. tests/unit/test_lighthouse_budgets.py pins
+# both, so raising this floor again means re-measuring rather than guessing.
+#
 # The two hand-authored, highest-traffic pages are audited: the landing page and
 # the code roadmap. Served over a throwaway localhost static server (no network),
 # three runs each so a noisy single sample can't redden a PR.

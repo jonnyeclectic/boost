@@ -42,3 +42,5 @@ guarantee is wanted, then make the gate express it: assert the median of the thr
 rather than the worst, or floor at a value the page actually clears and put a separate
 bound on the growth that is eating the margin, so the number that moves is the one being
 regressed. Lowering the floor alone just relocates the coin flip.
+
+<b>Shipped in two parts.</b> PR 886 cut what the score is spent on: off-screen cards are <code>content-visibility: auto</code>, so the board no longer lays out ~11,000 elements to paint one screen. PR 906 then floored performance at 0.75, under the worst per-job median measured across repeated runs (0.80) rather than at it, with the margin pinned by <code>tests/unit/test_lighthouse_budgets.py</code>. So the floor is now one the page clears by a margin, not one it sits on.
