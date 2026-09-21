@@ -441,7 +441,8 @@ def cmd_doctor(argv):
     # and warning that it could not keep the result (catalog.rebuild_tap), so
     # "cloned & cached" below would be the one line on the screen claiming
     # otherwise.
-    cache_writable = os.access(paths.cache_dir(), os.W_OK)
+    cache_writable = (not paths.cache_dir().is_dir()
+                      or os.access(paths.cache_dir(), os.W_OK))
     if taps and not cache_writable:
         bad("cache", "%s is not writable — every command rescans its taps and "
             "cannot keep the result; make it writable"
@@ -1193,13 +1194,18 @@ def cmd_heal(argv):
             out.warn("%s is no longer a symlink into the store — left alone"
                      % _tilde(dup.path))
 
+    # A dir that exists and refuses writes. A MISSING one is not stuck: the
+    # real run creates it above, so a preview that called it unwritable would
+    # exit 1 where the run it previews exits 0.
+    cache_dir = paths.cache_dir()
+    cache_stuck = cache_dir.is_dir() and not os.access(cache_dir, os.W_OK)
     for tap in registry.list_taps():
         if not tap.is_cloned:
             out.warn("tap %s not cloned — skipped (run `boost update`)" % tap.name)
             continue
         had_cache = tap.cache_file.exists()
         if dry:
-            if not had_cache:
+            if not had_cache and not cache_stuck:
                 out.info("would rebuild catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
         else:
@@ -1239,8 +1245,7 @@ def cmd_heal(argv):
                  % (_tilde(adir), _tilde(adir)), wrap=True)
     # The same rule for the cache dir doctor flags: heal cannot make it
     # writable, so it must not answer "nothing to heal" beneath the problem.
-    cache_dir = paths.cache_dir()
-    if registry.list_taps() and not os.access(cache_dir, os.W_OK):
+    if registry.list_taps() and cache_stuck:
         stuck.append(cache_dir)
         out.warn("%s is not writable — heal does not change permissions; "
                  "run `chmod u+w %s`" % (_tilde(cache_dir), _tilde(cache_dir)),

@@ -147,6 +147,22 @@ class TestDoctor:
                         reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")
+    def test_a_missing_cache_dir_is_not_an_unwritable_one(self, boost, tapped):
+        # The real heal creates it, so neither the preview nor doctor may
+        # call it unwritable: a preview exiting 1 where the run exits 0 is the
+        # dry-run divergence this repo treats as a defect.
+        shutil.rmtree(paths.cache_dir())
+        dry = boost("heal", "--dry-run").out
+        assert "not writable" not in dry
+        assert "would rebuild catalog cache" in dry
+        doc = boost("doctor", expect=1).out      # the missing cache IS an issue
+        assert "no catalog cache" in doc and "not writable" not in doc
+        assert "rebuilt catalog cache" in boost("heal").out
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
     def test_heal_does_not_claim_a_cache_it_could_not_write(self, boost,
                                                             tapped):
         for f in paths.cache_dir().glob("*.json"):
@@ -159,6 +175,12 @@ class TestDoctor:
             paths.cache_dir().chmod(0o700)
         assert "could not save the catalog cache" in r.out + r.err
         assert "rebuilt catalog cache" not in r.out
+        paths.cache_dir().chmod(0o500)
+        try:
+            dry = boost("heal", "--dry-run", expect=1).out
+        finally:
+            paths.cache_dir().chmod(0o700)
+        assert "would rebuild catalog cache" not in dry   # the run won't
 
     @pytest.mark.skipif(sys.platform == "win32",
                         reason="chmod can't make a directory unwritable on Windows")
