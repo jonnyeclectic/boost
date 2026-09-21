@@ -28,6 +28,15 @@ from ..errors import BoostError
 # handler produced no result (treated by the server as an unknown/aborted tool).
 Handler = Callable[[dict], tuple[str | None, bool]]
 
+# A tool description: the text itself, or a zero-argument callable returning it.
+# The callable form is for a claim that depends on the machine rather than on
+# the build. ``specs()`` calls it every time a host asks for ``tools/list`` —
+# at connect time — so the host is told about the machine it connected to.
+# Rendering at registration instead would freeze whatever state held when the
+# module was imported, which in the test suite is whichever test imported it
+# first.
+Description = str | Callable[[], str]
+
 
 class Registry:
     """An ordered name -> (spec, handler) map for MCP tools."""
@@ -37,7 +46,7 @@ class Registry:
         self._specs: dict[str, dict] = {}
         self._handlers: dict[str, Handler] = {}
 
-    def register(self, name: str, description: str, input_schema: dict,
+    def register(self, name: str, description: Description, input_schema: dict,
                  handler: Handler) -> None:
         """Register one tool. Raises on an empty or duplicate name."""
         if not name:
@@ -49,7 +58,7 @@ class Registry:
                              "inputSchema": input_schema}
         self._handlers[name] = handler
 
-    def tool(self, name: str, description: str,
+    def tool(self, name: str, description: Description,
              input_schema: dict) -> Callable[[Handler], Handler]:
         """Decorator form of :meth:`register`; returns the handler unchanged."""
         def deco(fn: Handler) -> Handler:
@@ -58,8 +67,17 @@ class Registry:
         return deco
 
     def specs(self) -> list[dict]:
-        """The ``tools/list`` payload — specs in registration order."""
-        return [self._specs[name] for name in self._order]
+        """The ``tools/list`` payload — specs in registration order.
+
+        A callable description (see :data:`Description`) is rendered here, on
+        every call, into a copy of its spec; a plain one is served as stored.
+        """
+        return [self._rendered(self._specs[name]) for name in self._order]
+
+    @staticmethod
+    def _rendered(spec: dict) -> dict:
+        desc = spec["description"]
+        return spec | {"description": desc()} if callable(desc) else spec
 
     def names(self) -> list[str]:
         """Registered tool names, in registration order."""
@@ -176,7 +194,7 @@ PROTOCOL_VERSION = "2024-11-05"
 #
 # NON-CAPTURING, and this is a measured knife edge rather than a manner.
 #: The bound: the one element that says when NOT to call. It lives here so
-#: `INSTRUCTIONS` and `boost_search`'s tool description carry the same
+#: :func:`instructions` and `boost_search`'s tool description carry the same
 #: sentence — the description is the only boost text reliably in context on a
 #: Gemini-family host, and the bound shipped in none of the seven
 #: descriptions (mcp-skip-list-absent-from-tool-descriptions). Concrete cases,
@@ -187,13 +205,52 @@ SKIP_IT = ("Skip it for a question, a one-line edit, or a command you were "
            "just handed.")
 
 
+def search_cost(ai_available: bool) -> str:
+    """What one ``boost_search`` costs on this machine, as one clause.
+
+    Both surfaces interpolate it — :func:`instructions` and ``boost_search``'s
+    own description — so they cannot disagree about the price, the way they
+    already share :data:`SKIP_IT`. Neither is a constant any more because the
+    price is not one: ``rag.rerank`` branches on ``ai.available()`` and, with
+    no AI backend, returns the retrieval order without an LLM call. Measured
+    that way over the 10,152-entry eval corpus, a search took a median of
+    0.009 s (0.069 s for the first in a fresh process) while both surfaces
+    said "10-15 seconds — an LLM reranks every match". The stated cost is what
+    the "worth the seconds" gate is weighed against, so a wrong one there
+    talks an agent out of a free call.
+
+    The keyless branch quotes no figure: 0.009 s is one corpus, the rerank-off
+    path measured 0.10 s on another, and a real install is several times
+    larger again. What holds on all of them is the mechanism — no LLM call —
+    and that the order is retrieval's, which is the same thing each reply's
+    ranking note says after the fact.
+
+    The caller passes ``ai.available()``, the predicate ``rag.rerank`` itself
+    tests. It is a config read plus a PATH probe: measured at under 1 ms for
+    the first call in a process and about 30 microseconds after, so asking it when a
+    host connects costs less than the ``dense.status()`` call
+    :func:`engine_note` already makes there.
+    """
+    if ai_available:
+        return ("boost_search costs 10-15 seconds: it retrieves, then an LLM "
+                "reranks every match, which is what makes the top result worth "
+                "acting on rather than skimming ten. Only a novel search pays "
+                "it — repeating an identical search skips the LLM and answers "
+                "from a local cache.")
+    return ("boost_search makes no LLM call on this machine: no AI backend is "
+            "available, so it skips the rerank and returns its matches in "
+            "retrieval order, typically well under a second once its index is "
+            "built. That order is a shortlist to read rather than a verdict to "
+            "act on.")
+
+
 # Editing only a tool's description moves how often a model calls it by more
 # than 10x ("Tool Preferences in Agentic LLMs are Unreliable", EMNLP 2025),
 # and assertive phrasing is precisely the lever that does it. So the skip list
 # stays in plain sight, the cost stays stated, and nothing here is an order —
 # a surface that captures work it cannot do gets routed around permanently the
 # first time it misses, which costs more than every call it ever won.
-INSTRUCTIONS = (
+_INSTRUCTIONS_HEAD = (
     "boost is a shared shelf of version-tracked procedures for AI coding "
     "agents, in three kinds: SKILLS (a procedure someone already worked out "
     "and debugged), RULES (guardrails that steer toward a better path and "
@@ -206,12 +263,11 @@ INSTRUCTIONS = (
     "flaky tests\" — someone has probably already written it down. Call "
     "boost_list for what is installed on this machine and boost_search for "
     "what exists. Both are read-only and install nothing. boost_list is "
-    "instant. boost_search costs 10-15 seconds: it retrieves, then an LLM "
-    "reranks every match, which is what makes the top result worth acting on "
-    "rather than skimming ten. Only a novel search pays it — repeating an "
-    "identical search skips the LLM and answers from a local cache.\n"
-    "\n"
-    "WORTH THE SECONDS (boost_search — boost_list is free, call it whenever). "
+    "instant. "
+)
+
+_INSTRUCTIONS_TAIL = (
+    " (boost_search — boost_list is free, call it whenever). "
     "Two signals, both readable from the request itself rather than from work "
     "you have not done: it asks you to touch more than one file, or it asks "
     "for something that outlives this session — a config, a CI job, a "
@@ -235,6 +291,21 @@ INSTRUCTIONS = (
     "\n"
     "Flow: boost_search -> boost_install. " + SKIP_IT
 )
+
+
+def instructions(*, ai_available: bool) -> str:
+    """The server ``instructions``, priced for this machine.
+
+    Everything except the price is fixed text: :func:`search_cost`, and the
+    heading of the gate that is weighed against it — "worth the seconds" names
+    a cost a keyless machine never pays. The two signals under that heading
+    are the same on both, so the bound does not widen where a search is
+    cheapest. :func:`handle_request` asks which applies at ``initialize``,
+    alongside :func:`engine_note`.
+    """
+    gate = "WORTH THE SECONDS" if ai_available else "WORTH A SEARCH"
+    return "%s%s\n\n%s%s" % (_INSTRUCTIONS_HEAD, search_cost(ai_available),
+                             gate, _INSTRUCTIONS_TAIL)
 
 
 def hit_line(entry: dict, *, installed: bool = False) -> str:
@@ -361,7 +432,7 @@ def coverage_line(installed: dict, *, tapped: int) -> str:
     as the size of what the user is missing would be the only claim in this
     surface an agent cannot check. Dropping it also keeps the tool honest about
     its cost: with no catalog read, boost_list stays the "instant" tool
-    INSTRUCTIONS advertises.
+    the server instructions advertise.
 
     ``tapped`` selects the closing sentence, keyed the way :func:`no_results`
     and ``boost_doctor`` key theirs and naming the same one command in the same
@@ -458,7 +529,7 @@ def engine_note() -> str:
     of a BM25 index that needs the word "docker". Naming the engine, and the one
     command that upgrades it, costs a line and removes the guess.
 
-    Appended at `initialize` rather than baked into INSTRUCTIONS because the
+    Appended at `initialize` rather than baked into the fixed text because the
     answer depends on machine state at connect time, not on the build.
     """
     from . import dense
@@ -488,10 +559,12 @@ def handle_request(req: dict, *, version: str,
         return None
     resp: dict = {"jsonrpc": "2.0", "id": req.get("id")}
     if method == "initialize":
+        from . import ai
+        instr = instructions(ai_available=ai.available()) + engine_note()
         resp["result"] = {"protocolVersion": PROTOCOL_VERSION,
                           "capabilities": {"tools": {}},
                           "serverInfo": {"name": "boost", "version": version},
-                          "instructions": INSTRUCTIONS + engine_note()}
+                          "instructions": instr}
     elif method == "ping":
         resp["result"] = {}
     elif method == "tools/list":

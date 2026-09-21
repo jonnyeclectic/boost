@@ -2,14 +2,14 @@
 id: mcp-search-cost-overstated-on-keyless-machines
 board: code
 section: planned
-status: planned
+status: shipped
 category: Interop
 complexity: M
 impact: Med
 wow: 3
 note: boost_search's description and INSTRUCTIONS both state the cost as a flat "10-15 seco…
 order: 217
-owner:
+owner: loop/mcp-search-cost
 pr:
 title: boost_search advertises "10-15 seconds" unconditionally; with no AI configured it is 0.013 s median and the rerank never runs
 ---

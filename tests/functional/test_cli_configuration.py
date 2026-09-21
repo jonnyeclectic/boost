@@ -1508,9 +1508,29 @@ class TestMcp:
     def test_registry_dispatches_and_lists_all_tools(self, sandbox):
         from boost_cli.commands import configuration
         # tools/list payload and the dispatcher share one registry
-        assert configuration.REGISTRY.specs() == configuration._MCP_TOOLS
+        assert ([s["name"] for s in configuration.REGISTRY.specs()]
+                == configuration.REGISTRY.names())
         assert "boost_discover_github" in configuration.REGISTRY.names()
         assert configuration._mcp_tool("nonexistent_tool", {}) == (None, False)
+
+    def test_search_cost_follows_the_real_ai_predicate(self, sandbox,
+                                                       monkeypatch):
+        # End to end through `ai.available()` itself, not a stub: the same
+        # registry quotes the rerank's price once a backend exists and drops
+        # it when none does. `rag.rerank` branches on that predicate, so the
+        # description is true exactly when the rerank will run.
+        from boost_cli.commands import configuration
+
+        def search_desc():
+            return next(s["description"] for s in configuration.REGISTRY.specs()
+                        if s["name"] == "boost_search")
+
+        assert "10-15 seconds" not in search_desc()      # BOOST_NO_AI=1
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+        assert "10-15 seconds" in search_desc()
+        monkeypatch.setenv("BOOST_NO_AI", "1")
+        assert "10-15 seconds" not in search_desc()
 
     def test_tool_descriptions_are_intent_framed(self, sandbox):
         # The descriptions must tell an agent WHEN to reach for boost, not just
@@ -1559,7 +1579,7 @@ class TestMcp:
         # The rerank figures stay OUT of the tool description, deliberately.
         # They are real -- _tool_search's own comment records "the rerank moves
         # hit@1 from 0.791 to 0.945" on the 91-query golden set, which is where
-        # mcp.INSTRUCTIONS' "95% against 79%" comes from -- but 0.791 is the
+        # the MCP instructions' "95% against 79%" came from -- but 0.791 is the
         # BM25 baseline over the SIX-repo corpus, and tests/eval/baseline.json
         # records 0.4725 for the twenty-repo corpus that replaced it precisely
         # because six was unrealistically small (see CLAUDE.md). Quoting 79%
@@ -1576,8 +1596,10 @@ class TestMcp:
         assert "llm" in specs["boost_search"]
         # Stating the benefit must never quietly drop the cost with it.
         # A description whose job is to make a tool worth reaching for is the
-        # one place a flattering lie discredits everything around it.
-        assert "seconds" in specs["boost_search"]
+        # one place a flattering lie discredits everything around it. Under
+        # the sandbox's BOOST_NO_AI that cost is the keyless one — "well under
+        # a second" — so the pin is on the unit rather than the plural.
+        assert "second" in specs["boost_search"]
         assert "instant" not in specs["boost_search"]
         for bad in ("always call", "you must", "never skip"):
             assert bad not in specs["boost_search"], (
@@ -1612,8 +1634,12 @@ class TestMcp:
         # Ship the real cost. docs/roadmap/items/mcp-search-cost-was-
         # understated.md measured this path at 11.7-17.0s (median ~12) and
         # exists because "about a second" shipped once already; "a few seconds"
-        # is the same understatement wearing a vaguer hat.
-        assert "10-15 seconds" in specs["boost_search"]
+        # is the same understatement wearing a vaguer hat. The cost is priced
+        # per machine now, and the sandbox sets BOOST_NO_AI, so this is the
+        # keyless text: no rerank runs, so no rerank price is quoted.
+        # test_search_cost_follows_the_real_ai_predicate pins the other half.
+        assert "10-15 seconds" not in specs["boost_search"]
+        assert "no llm call" in specs["boost_search"]
         assert "a few seconds" not in specs["boost_search"]
 
         # "vetted" claims item-level curation boost does not do: registries
