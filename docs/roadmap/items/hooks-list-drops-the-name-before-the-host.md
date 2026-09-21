@@ -10,7 +10,7 @@ wow: 2
 note: fixed — `name` now leads the table, so a narrow pane drops it after `host`, `scope`, `event` and `matcher`, never before
 order: 326
 owner: loop/hooks-name-drop
-pr:
+pr: 916
 title: At a narrow pane <code>boost hooks list</code> drops <code>name</code>, the argument <code>hooks remove -n</code> takes, while <code>host</code> and <code>scope</code> survive
 ---
 <b>Measured.</b> With the two hooks <code>boost bmad autopilot</code> installs (<code>bmad</code>, <code>bmad-route</code>), <code>COLUMNS=65 boost hooks list</code> prints <code>host scope event command</code>: the column dropped second, after <code>matcher</code>, is <code>name</code>, while <code>host</code> prints the same word on every row. <code>out.table</code> drops right to left, skipping <code>keep=</code>, and <code>name</code> sits in the middle of this table.
