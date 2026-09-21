@@ -463,7 +463,7 @@ def _wrap_tokens(text: str) -> list[str]:
 
     A backtick span is one token even though it contains spaces, because the
     spans in boost's hints are shell commands the user is meant to select and
-    paste — `pip install 'boost-skill-cli[rag]'`. A `**bold**` span is atomic
+    paste — `pip install "boost-skill-cli[rag]"`. A `**bold**` span is atomic
     for a different reason: `commands/info.py`'s `_render_markdown` wraps a
     line first and colorizes each wrapped chunk after, via the same regex
     `_inline()` uses (``\\*\\*([^*]+)\\*\\*``) — a span split across that wrap

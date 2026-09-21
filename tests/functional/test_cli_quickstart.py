@@ -149,6 +149,30 @@ class TestQuickstartWithoutTheExtra:
         assert "would tap" in res.out
         assert " @ " not in res.out
 
+    @pytest.mark.parametrize("dry", [True, False])
+    def test_an_unreadable_manifest_offers_no_remedy_that_needs_the_extra(
+            self, boost, monkeypatch, dry):
+        # The transport hint says `boost reindex --dense` embeds locally
+        # instead, which cannot run without the extra. Here the manifest was
+        # read for its pins alone: say it failed, and offer nothing else.
+        from boost_cli.core import dense, shards
+        from boost_cli.errors import BoostError
+
+        def boom(*_a, **_k):
+            raise BoostError("cannot reach the manifest",
+                             hint="shards are optional — `boost reindex "
+                                  "--dense` embeds locally instead")
+
+        monkeypatch.setattr(dense, "have_backend", lambda: False)
+        monkeypatch.setattr(shards, "fetch_manifest", boom)
+        calls = _fake_add_many(monkeypatch, ["ok"] * 7)
+        out = _flat(boost("quickstart", *(["--dry-run"] if dry else [])).out)
+        assert "could not read the shard manifest: cannot reach" in out
+        assert "shards are optional" not in out
+        assert "reindex --dense" not in out
+        if not dry:
+            assert calls["pins"] == {}
+
     def test_the_taps_are_pinned_without_the_extra(
             self, boost, defaults_manifest, monkeypatch):
         """The six taps landed `pin: null`, and the rerun could not fix it.

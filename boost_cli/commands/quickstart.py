@@ -223,7 +223,11 @@ def cmd_quickstart(argv) -> int:
             # transport-shaped failure raised here carries one.
             out.warn("could not read the shard manifest: %s" % exc.message,
                      wrap=True)
-            if exc.hint:
+            # Without the extra the manifest was read for its pins alone, and
+            # losing them is the whole cost. The transport hint offers
+            # `boost reindex --dense`, which needs the very extra this machine
+            # lacks, and the run already ends naming how to install it.
+            if exc.hint and want_vectors:
                 _muted(exc.hint)
             manifest = None
 
