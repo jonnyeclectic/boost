@@ -263,7 +263,12 @@ def cmd_search(argv):
     else:
         footer = ("%d match%s · ranked by %s"
                   % (len(scored), "" if len(scored) == 1 else "es", ranker))
-    out.info(out.role(footer, "muted"))
+    # Chrome, so fitted like the rows `search_layout` just fitted above it —
+    # the same wrap-then-colour as `_hint_semantic_search`. Emitted whole it
+    # measured 55 columns in a 40-column pane (the cap branch), and the
+    # pane-width gate only passed because its fixture returned one match.
+    for line in out.wrap(footer, max(out.term_width() - 2, 20)):
+        out.info(out.role(line, "muted"))
     if use_rag:
         _note_stem_expansions(query)
         _note_dropped_terms(dropped)

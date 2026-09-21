@@ -2,15 +2,15 @@
 id: search-footer-not-fitted-to-the-pane-its-rows-were-fitted-to
 board: code
 section: planned
-status: planned
+status: shipped
 category: UX · Bug
 complexity: S
 impact: Low
 wow: 2
 note: search_layout's docstring guarantees every row measures within cols, and at COLUMNS=4…
 order: 231
-owner:
-pr:
+owner: loop/search-footer-fit
+pr: 884
 title: The search footer is the one unfitted line on a screen <code>search_layout</code> just fitted: 55 columns in a 40-column pane
 ---
 <b>Measured.</b> The same command measures 55 columns in a 40-column pane in the field and 39 in the test that asserts it fits: <code>tests/functional/test_cli_pane_width.py::TestChromeOnlyCommandsFitAnyPane::test_search[40]</code> passes only because its fixture tap yields exactly one match, whose footer is <code>1 match · ranked by full-content BM25</code> = 39 — one column under the pane.
