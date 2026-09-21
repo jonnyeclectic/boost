@@ -10,7 +10,7 @@ wow: 3
 note: output.search_layout (output.py:668-690) hard-caps name_w at 32 and tap_w at 20 and h…
 order: 229
 owner: loop/search-id-caps
-pr:
+pr: 918
 title: <code>search</code> caps the name column at 32 and the tap column at 20 at every terminal width, while the description column grows without limit
 ---
 <b>Measured.</b> At COLUMNS=300 the same two <code>doc-coauthoring</code> rows render their tap as <code>anthropics/skills</code> and <code>sickn33/antigravity…</code> in <code>search</code> while <code>browse</code> prints both taps in full on the identical terminal — and <code>./boost info 'sickn33/antigravity…:doc-coauthoring'</code> returns "Error: no tap named 'sickn33/antigravity…'", so the qualifier <code>info</code> demands cannot be built from the row <code>search</code> shows. Across the 10,152-entry corpus, 714 rows (7.03%) have at least one clipped copy target — a name over 32 cells, or a required tap qualifier over 20 cells — and because <code>name_w</code> and <code>tap_w</code> are <code>min(..., 32)</code> and <code>min(..., 20)</code> with no width term, that 7.03% does not shrink at any terminal width, while the description column grows from 27 cells at 84 columns to 443 at 500.
