@@ -1106,3 +1106,13 @@ def test_a_status_message_keeps_a_backticked_command_whole():
     assert any("`chmod u+w ~/.cursor/skills`" in t for t in lines), lines
     assert all(t.count("`") % 2 == 0 for t in lines), lines
 
+
+def test_a_status_token_wider_than_the_pane_still_fits_it():
+    # output.wrap lets an over-wide token run long; in a curses pane that
+    # drew over the frame and cut the tail off.
+    msg = "installed ~/.agents/skills/" + "a-very-long-skill-name" * 3
+    lines = [t for role, t in browse.detail_lines(
+        {"name": "x"}, width=30, state="ok", message=msg)]
+    assert all(len(t) <= 30 for t in lines), lines
+    assert "".join(lines).count("a-very-long-skill-name") >= 1
+
