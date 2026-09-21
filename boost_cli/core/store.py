@@ -426,21 +426,28 @@ def _untouched_materializations(existing: dict | None,
 
 
 def unwritable_agent_dirs() -> list[Path]:
-    """Existing user-scope agent dirs boost writes into and may not.
+    """Existing agent dirs boost writes into and may not.
 
-    The linking agents' skills dirs, where an install symlinks, and each
-    materializing agent's rule and workflow dirs — derived from the same
-    target functions the installers write through, so this cannot drift from
-    them: ``~/.cursor/rules``, ``~/.cursor/commands``, and ``~/.claude`` itself,
-    which holds the ``CLAUDE.md`` a rule merges into. A dir that does not exist
-    yet is not reported: the install creates it, so it refuses nothing.
+    Every linking agent's skills dir, where an install symlinks, and each dir
+    a recorded rule or workflow row materializes into: ``~/.cursor/rules``,
+    ``~/.cursor/commands``, or ``~/.claude`` itself for the ``CLAUDE.md`` a
+    rule merges into. Only the dirs a row names: a skills-only user whose
+    ``~/.claude/commands`` is read-only on purpose (another tool manages it)
+    has nothing boost would write there, so it is not boost's to report.
+
+    A row refused at install names the nearest existing ancestor, as the
+    install did, since a ``chmod u+w`` on a dir that was never created fails.
+    A dir that does not exist is not reported: an install creates it.
     """
-    from . import rules, workflows
     dirs = list(agents.linking_agents().values())
-    for agent, sdir in agents.materializing_agents().items():
-        dirs.append(rules.rule_target(agent, sdir, "x")[1].parent)
-        dirs.extend(workflows.workflow_target(sdir, slot, "x", agent=agent).parent
-                    for slot in (workflows.SLOT_COMMANDS, workflows.SLOT_AGENTS))
+    for section in (lockfile.installed_rules(), lockfile.installed_workflows()):
+        for entry in section.values():
+            for m in entry.get("materializations") or []:
+                if not m.get("path"):
+                    continue
+                parent = Path(m["path"]).parent
+                dirs.append(refusing_dir(parent) if m.get("unwritable")
+                            else parent)
     return [d for d in dict.fromkeys(dirs)
             if d.is_dir() and not os.access(str(d), os.W_OK)]
 
@@ -1180,6 +1187,13 @@ def _install_rule(entry: dict, force: bool = False,
     return res
 
 
+def _removal_refused(name: str, path: Path) -> BoostError:
+    """The named refusal for a removal under ``path`` that its dir forbids."""
+    where = paths.tilde(str(refusing_dir(path.parent)))
+    return BoostError("cannot uninstall %s: %s is not writable" % (name, where),
+                      hint="`chmod u+w %s`, then uninstall again" % where)
+
+
 @contextlib.contextmanager
 def _refused_removal(name: str, path: Path):
     """Turn a locked agent dir into a named refusal, before the lock is touched.
@@ -1191,15 +1205,34 @@ def _refused_removal(name: str, path: Path):
     try:
         yield
     except PermissionError:
-        where = paths.tilde(str(refusing_dir(path.parent)))
-        raise BoostError("cannot uninstall %s: %s is not writable" % (name, where),
-                         hint="`chmod u+w %s`, then uninstall again" % where) from None
+        raise _removal_refused(name, path) from None
+
+
+def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> None:
+    """Apply an uninstall's removals, or none of them.
+
+    ``plan`` holds ``(path, new_text)`` for each file to change: ``""`` to
+    delete it, other text to rewrite it. Every dir is checked before the
+    first change, because a refusal part-way left some agents' files gone and
+    the lock still naming them, so a `boost sync` in between wrote them back.
+    The per-file guard stays, for what ``os.access`` cannot foresee.
+    """
+    for path, _text in plan:
+        if not os.access(str(path.parent), os.W_OK):
+            raise _removal_refused(name, path)
+    for path, text in plan:
+        with _refused_removal(name, path):
+            if text:
+                util.atomic_write_text(path, text)
+            else:
+                path.unlink()
 
 
 def _uninstall_rule(name: str, rule: dict) -> dict:
     """Reverse every materialization recorded for an installed rule."""
     from . import rules
     removed: list[str] = []
+    plan: list[tuple[Path, str]] = []
     for m in rule.get("materializations", []):
         path = Path(m.get("path", ""))
         with _refused_removal(name, path):
@@ -1207,16 +1240,15 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
                 if path.exists():
                     text = path.read_text(encoding="utf-8")
                     stripped = rules.strip_block(text, name)
-                    if stripped == text:
-                        pass  # no block of ours (a refused write): no rewrite
-                    elif stripped:
-                        util.atomic_write_text(path, stripped)
-                    else:
-                        path.unlink()  # file held only our block — boost created it
+                    # No block of ours (a refused write): no rewrite. An
+                    # empty result held only our block: boost created it.
+                    if stripped != text:
+                        plan.append((path, stripped))
             elif path.is_file() or path.is_symlink():
-                path.unlink()
+                plan.append((path, ""))
         if m.get("agent"):
             removed.append(m["agent"])
+    _remove_all_or_nothing(name, plan)
     lockfile.remove_rule(name)
     journal.log("uninstall", name)
     return {"name": name, "unlinked": removed, "entry": rule, "kind": "rule"}
@@ -1453,13 +1485,15 @@ def _install_workflow(entry: dict, force: bool = False,
 def _uninstall_workflow(name: str, workflow: dict) -> dict:
     """Remove every file dropped for an installed workflow."""
     removed: list[str] = []
+    plan: list[tuple[Path, str]] = []
     for m in workflow.get("materializations", []):
         path = Path(m.get("path", ""))
         with _refused_removal(name, path):
             if path.is_file() or path.is_symlink():
-                path.unlink()
+                plan.append((path, ""))
         if m.get("agent"):
             removed.append(m["agent"])
+    _remove_all_or_nothing(name, plan)
     lockfile.remove_workflow(name)
     journal.log("uninstall", name)
     return {"name": name, "unlinked": removed, "entry": workflow, "kind": "workflow"}

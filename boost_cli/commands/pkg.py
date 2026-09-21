@@ -930,8 +930,10 @@ def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
             continue
         try:
             # keep the item where it was installed (user vs a specific repo).
-            store.install(entry, force=True,
-                          scope=lk.get("scope", "user"), base=lk.get("base"))
+            # A dir that refused the refresh is named here, as for a skill.
+            _warn_unwritable(store.install(
+                entry, force=True,
+                scope=lk.get("scope", "user"), base=lk.get("base")))
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             continue

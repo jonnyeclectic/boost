@@ -368,9 +368,14 @@ class TestDoctor:
             wf = boost("install", "ship-it").out.replace("\n    ", " ")
             doc = boost("doctor", expect=1).out.replace("\n    ", " ")
             heal = boost("heal", expect=1).out.replace("\n    ", " ")
+            synced = boost("sync").out.replace("\n    ", " ")
         finally:
             for d in dirs:
                 d.chmod(0o700)
+        # sync may not write there yet, so it names the dir, not an all-clear.
+        assert "everything in sync" not in synced
+        assert ("agent dir ~/.cursor/rules is not writable — "
+                "`chmod u+w ~/.cursor/rules`") in synced
         assert ("not written: ~/.cursor/rules is not writable — "
                 "`chmod u+w ~/.cursor/rules`, then `boost sync` writes it") in rule
         assert "not written: ~/.cursor/commands is not writable" in wf
@@ -384,6 +389,31 @@ class TestDoctor:
         assert (cursor / "commands" / "ship-it.md").is_file()
         boost("doctor")                              # rc 0 again
         boost("uninstall", "house")                  # the lock knows it
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_locked_dir_nothing_installed_writes_into_is_not_an_issue(
+            self, boost, installed):
+        # Skills only: boost has nothing to write into ~/.claude/commands or
+        # ~/.cursor/rules, so a read-only one (managed by another tool, say)
+        # is not boost's to report. It turned doctor rc 1 and kept sync from
+        # ever saying "everything in sync".
+        home = paths.home()
+        dirs = [home / ".claude" / "commands", home / ".cursor" / "rules"]
+        for d in dirs:
+            d.mkdir(parents=True, exist_ok=True)
+            d.chmod(0o500)
+        try:
+            doc = boost("doctor").out
+            synced = boost("sync").out
+            heal = boost("heal").out
+        finally:
+            for d in dirs:
+                d.chmod(0o700)
+        assert "agent dir" not in doc + synced + heal
+        assert "everything in sync" in synced
 
     def test_an_untapped_machine_is_still_rc0(self, boost):
         # Reported, never fatal. The exit code turns on real issues only, so

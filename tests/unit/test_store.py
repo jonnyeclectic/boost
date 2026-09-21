@@ -3561,6 +3561,31 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
         store.uninstall("team-conventions")        # after the chmod, it may
         assert not (cursor / "team-conventions.mdc").exists()
 
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_refused_uninstall_removes_nothing(self, tap, kind):
+        # Cursor's row sits after Claude Code's and Windsurf's; removing
+        # those first and then refusing left a lock that `boost sync` would
+        # write straight back. The check runs before the first removal.
+        entry = self._entry(tap, kind)
+        store.install(entry)
+        rows = self._locked(kind, entry["name"])["materializations"]
+        cursor = self._cursor_dir(kind)
+        cursor.chmod(0o500)
+        try:
+            with pytest.raises(BoostError) as ei:
+                store.uninstall(entry["name"])
+        finally:
+            cursor.chmod(0o700)
+        assert "%s is not writable" % paths.tilde(cursor) in ei.value.message
+        assert [m["agent"] for m in rows].index("cursor") > 0
+        for m in rows:
+            assert Path(m["path"]).is_file(), m["agent"]
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        if kind == "rule":
+            assert "boost:rule:team-conventions start" in claude_md.read_text(
+                encoding="utf-8")
+        assert self._locked(kind, entry["name"])["materializations"] == rows
+
     def test_uninstall_does_not_rewrite_a_context_file_it_never_wrote(self, tap):
         # ~/.claude refused the block, so there is nothing of ours in
         # CLAUDE.md; rewriting it anyway crashed on the same locked dir.
@@ -3629,7 +3654,9 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
 @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                     reason="root ignores mode bits")
 class TestUnwritableAgentDirs:
-    """The dirs doctor and heal check are the dirs the installers write."""
+    """The dirs doctor, heal and sync check are the dirs boost writes into:
+    every linking agent's skills dir, and each dir a recorded rule or
+    workflow row materializes into — not every dir some rule could."""
 
     def _locked(self, *dirs):
         for d in dirs:
@@ -3640,7 +3667,11 @@ class TestUnwritableAgentDirs:
         for d in dirs:
             d.chmod(0o700)
 
-    def test_names_skills_rules_commands_agents_and_the_claude_dir(self, sandbox):
+    def test_names_skills_dirs_and_the_dirs_rows_write_into(self, tap):
+        store.install(_rule_entry(tap))
+        store.install(_workflow_entry(tap))
+        store.install(_workflow_entry(tap, name="reviewer",
+                                      rel="agents/reviewer.md"))
         home = paths.home()
         dirs = [home / ".cursor" / "skills", home / ".cursor" / "rules",
                 home / ".windsurf" / "commands", home / ".claude" / "agents"]
@@ -3651,7 +3682,8 @@ class TestUnwritableAgentDirs:
             self._unlock(*dirs)
         assert sorted(found) == sorted(dirs)
 
-    def test_the_claude_md_dir_is_checked(self, sandbox):
+    def test_the_claude_md_dir_is_checked(self, tap):
+        store.install(_rule_entry(tap))
         claude = paths.home() / ".claude"
         self._locked(claude)
         try:
@@ -3659,6 +3691,34 @@ class TestUnwritableAgentDirs:
         finally:
             self._unlock(claude)
         assert found == [claude]
+
+    def test_a_dir_no_row_writes_into_is_not(self, tap, entry):
+        # Skills only: nothing boost installed writes a rules/, commands/ or
+        # agents/ dir, so a read-only one belongs to whoever locked it.
+        store.install(entry)
+        home = paths.home()
+        dirs = [home / ".cursor" / "rules", home / ".claude" / "commands",
+                home / ".claude" / "agents"]
+        self._locked(*dirs)
+        try:
+            found = store.unwritable_agent_dirs()
+        finally:
+            self._unlock(*dirs)
+        assert found == []
+
+    def test_a_refused_row_names_the_dir_that_refused_it(self, tap):
+        # ~/.cursor could not create rules/, and the install said so; the
+        # dir to name afterwards is the same one, not a rules/ that does not
+        # exist.
+        cursor = paths.home() / ".cursor"
+        shutil.rmtree(cursor / "rules", ignore_errors=True)
+        self._locked(cursor)
+        try:
+            store.install(_rule_entry(tap))
+            found = store.unwritable_agent_dirs()
+        finally:
+            self._unlock(cursor)
+        assert found == [cursor]
 
     def test_a_native_store_skills_dir_and_a_missing_dir_are_not(self, sandbox):
         gemini = paths.home() / ".gemini" / "skills"
@@ -3670,6 +3730,7 @@ class TestUnwritableAgentDirs:
         assert found == []
         assert not (paths.home() / ".cursor" / "rules").exists()
 
-    def test_writable_dirs_are_not(self, sandbox):
-        (paths.home() / ".cursor" / "rules").mkdir(parents=True)
+    def test_writable_dirs_are_not(self, tap):
+        store.install(_rule_entry(tap))
+        assert (paths.home() / ".cursor" / "rules").is_dir()
         assert store.unwritable_agent_dirs() == []
