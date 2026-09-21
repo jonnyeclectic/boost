@@ -8,6 +8,8 @@ so `boost replay` can show history and roll back.
 Skill entry schema (v3):
   version, tap, source_dir, commit, sha256,
   installed_at, updated_at, pinned, quarantined, agents[], tags[]
+  (+ source_url on a `boost import`: the git URL, or "" for a local path; when
+  set, source_dir is the skill's directory inside that repo)
 """
 from __future__ import annotations
 

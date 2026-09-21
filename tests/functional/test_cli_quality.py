@@ -402,6 +402,40 @@ class TestDoctor:
         assert "1 skill installed · 1 tap synced · 4 broken links" in r.out
         assert "2 issues need attention" in r.out  # plural verb: two bad() calls
 
+    def test_missing_store_of_a_url_import_names_reinstall(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # `boost heal` only keeps a URL import's entry and points onward, since
+        # sync never touches the network — so doctor sending the reader to heal
+        # cost a second command to reach the one that clones it again.
+        src = tmp_path / "url-skill"
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: url-skill\ndescription: a skill imported by URL\n"
+            "version: 0.1.0\n---\n\nBody.\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest, sparse=True: shutil.copytree(src, dest))
+        boost("import", "https://example.invalid/skills.git")
+        shutil.rmtree(paths.store_dir() / "url-skill")
+        r = boost("doctor", expect=1)
+        line = next(ln for ln in r.out.splitlines() if "missing from store" in ln)
+        assert "skill url-skill missing from store — run `boost reinstall url-skill`" in line
+        assert "boost heal" not in line
+
+    def test_missing_store_of_a_path_import_still_names_heal(
+            self, boost, sandbox, tmp_path):
+        # A local-path import has no URL, and heal re-copies it from the path
+        # it recorded — so heal stays the remedy there.
+        src = tmp_path / "path-skill"
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: path-skill\ndescription: a skill imported by path\n"
+            "version: 0.1.0\n---\n\nBody.\n", encoding="utf-8")
+        boost("import", src)
+        shutil.rmtree(paths.store_dir() / "path-skill")
+        r = boost("doctor", expect=1)
+        assert "skill path-skill missing from store — run `boost heal`" in r.out
+
     def test_missing_lock_over_populated_store_rc1(self, boost, installed):
         # The store dir and its agent links from `installed` are still on
         # disk; only the lock record is gone. Doctor used to print
@@ -1745,11 +1779,88 @@ class TestConflict:
 # ── changelog ────────────────────────────────────────────────────────────
 
 class TestChangelog:
-    def test_fixture_commit_and_shallow_note(self, boost, installed):
+    def test_fixture_commit_and_no_shallow_note_on_a_complete_clone(
+            self, boost, installed):
+        # git ignores --depth when cloning a local path, so the fixture clone
+        # is complete. The note used to fire on any log shorter than three
+        # lines and send the user to `fetch --unshallow`, which fails on a
+        # complete repository.
         r = boost("changelog", "brainstorming")
         assert "changelog for brainstorming (fixture-tap)" in r.out
         assert "fixture skills" in r.out          # the fixture commit subject
-        assert "fetch --unshallow" in r.out       # < 3 entries → shallow note
+        assert not (paths.repos_dir() / "fixture-tap" / ".git" / "shallow").exists()
+        assert "fetch --unshallow" not in r.out
+
+    def test_shallow_note_on_a_shallow_clone(self, boost, installed):
+        # A depth-1 clone writes its tip commit into .git/shallow. Writing it
+        # by hand gives the same state, since `boost tap` cannot make a
+        # shallow clone of a local path.
+        clone = paths.repos_dir() / "fixture-tap"
+        head = subprocess.run(["git", "-C", str(clone), "rev-parse", "HEAD"],
+                              check=True, capture_output=True, text=True)
+        (clone / ".git" / "shallow").write_text(head.stdout, encoding="utf-8")
+        r = boost("changelog", "brainstorming")
+        assert "fetch --unshallow" in " ".join(r.out.split())
+
+    def test_shallow_note_on_a_deepened_clone_is_gated_on_n(
+            self, boost, installed):
+        # A clone deepened past three commits is still shallow. The note used
+        # to need a log shorter than three lines, so it went quiet here even
+        # when git returned fewer entries than -n asked for.
+        clone = paths.repos_dir() / "fixture-tap"
+        skill_md = next(p for p in clone.rglob("SKILL.md")
+                        if p.parent.name == "brainstorming")
+
+        def git(*a):
+            return subprocess.run(
+                ["git", "-C", str(clone), "-c", "user.name=Deepen",
+                 "-c", "user.email=deepen@boost.test", *a],
+                check=True, capture_output=True, text=True).stdout
+
+        for i in range(3):
+            with skill_md.open("a", encoding="utf-8") as fh:
+                fh.write("\nrevision %d\n" % i)
+            git("commit", "-qam", "revise brainstorming %d" % i)
+        # `.git/shallow` names the boundary commits. The root keeps all four
+        # in the log, the shape `fetch --deepen` leaves on a longer history.
+        root = git("rev-list", "--max-parents=0", "HEAD")
+        (clone / ".git" / "shallow").write_text(root, encoding="utf-8")
+
+        def changelog(*extra):
+            r = boost("changelog", "brainstorming", *extra)
+            return (sum("revise brainstorming" in ln or "fixture skills" in ln
+                        for ln in r.out.splitlines()),
+                    "fetch --unshallow" in " ".join(r.out.split()))
+
+        assert changelog() == (4, True)           # 4 < the default 20
+        assert changelog("-n", "5") == (4, True)   # one short of -n
+        assert changelog("-n", "4") == (4, False)  # everything asked for came back
+        assert changelog("-n", "2") == (2, False)  # 2 < 3, but not < 2
+
+    def test_a_rule_is_logged_over_its_file_not_its_directory(
+            self, boost, sibling_rules_tap):
+        # Not installed: resolved from the catalog. The sibling commit only
+        # touches rules/ci-cd/dotnet-test.mdc.
+        r = boost("changelog", "dotnet-build")
+        assert "add dotnet-build and reviewers" in r.out
+        assert "add sibling rule dotnet-test" not in r.out
+        boost("install", "dotnet-build")
+        r = boost("changelog", "dotnet-build")   # installed: resolved from the lock
+        assert "add dotnet-build and reviewers" in r.out
+        assert "add sibling rule dotnet-test" not in r.out
+        data = json.loads(boost("changelog", "dotnet-build", "--json").out)
+        assert [c["subject"] for c in data["commits"]] == [
+            "add dotnet-build and reviewers"]
+
+    def test_an_installed_workflow_resolves_through_the_lock(
+            self, boost, sibling_rules_tap):
+        # The catalog refuses the bare name: three copies in one tap. The
+        # refusal tells the user to install one with --path and retry, so
+        # the retry has to work.
+        boost("install", "csharp-reviewer", "--path", "plugins/a/agents")
+        r = boost("changelog", "csharp-reviewer")
+        assert "changelog for csharp-reviewer" in r.out
+        assert "add dotnet-build and reviewers" in r.out
 
     def test_local_import_message(self, boost, sandbox, tmp_path):
         _import_skill(boost, tmp_path, "local-one", "# Local\n\nBody.\n")

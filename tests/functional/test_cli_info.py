@@ -1005,6 +1005,35 @@ class TestHome:
         r = boost("home", "nope", expect=1)
         assert "no skill named 'nope' in any tap" in r.err
 
+    @staticmethod
+    def _github_url(tap_name):
+        cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        for tap in cfg["taps"]:
+            if tap["name"] == tap_name:
+                tap["url"] = "https://github.com/x/y"
+        paths.config_path().write_text(json.dumps(cfg), encoding="utf-8")
+
+    def test_a_rule_links_its_file_not_its_directory(self, boost,
+                                                     sibling_rules_tap):
+        # rules/ci-cd is shared with a sibling rule. Linking the folder
+        # opened a directory of other rules.
+        self._github_url("sibling-tap")
+        r = boost("home", "dotnet-build", "--print")
+        assert ("https://github.com/x/y/blob/HEAD/rules/ci-cd/dotnet-build.mdc"
+                in r.out)
+        boost("install", "dotnet-build")
+        r = boost("home", "dotnet-build", "--print")
+        assert ("https://github.com/x/y/blob/HEAD/rules/ci-cd/dotnet-build.mdc"
+                in r.out)
+
+    def test_an_installed_workflow_links_the_copy_installed(
+            self, boost, sibling_rules_tap):
+        self._github_url("sibling-tap")
+        boost("install", "csharp-reviewer", "--path", "plugins/a/agents")
+        r = boost("home", "csharp-reviewer", "--print")
+        assert ("https://github.com/x/y/blob/HEAD/plugins/a/agents/"
+                "csharp-reviewer.md" in r.out)
+
 
 # ── deps ─────────────────────────────────────────────────────────────────
 

@@ -251,9 +251,16 @@ class TestEveryZeroShardReasonNamesItself:
                                                        monkeypatch):
         # The one branch where zero really does mean "none published for
         # these" — and it must not be worded like a local misconfiguration.
-        from boost_cli.core import dense, shards
+        from boost_cli.core import dense, embed, shards
         monkeypatch.setattr(dense, "have_backend", lambda: True)
-        monkeypatch.setattr(shards, "fetch_manifest", lambda *a, **k: {})
+        # A machine whose space matches the manifest's: without that, the
+        # manifest is refused before its rows are looked at, which is a
+        # different zero with a different reason.
+        monkeypatch.setattr(embed, "provider", lambda: "local")
+        monkeypatch.setattr(embed, "model", lambda: SPACE["model"])
+        monkeypatch.setattr(embed, "dimension", lambda: 384)
+        monkeypatch.setattr(shards, "fetch_manifest",
+                            lambda *a, **k: dict(SPACE))
         monkeypatch.setattr(shards, "rows", lambda _m: {})
         out = _flat(boost("quickstart", "--dry-run").out)
         assert "import 0 shard(s)" in out
@@ -361,6 +368,138 @@ class TestQuickstartTapping:
         from boost_cli.core import config
         boost("quickstart", "--no-vectors")
         assert fake_taps["urls"] == [str(d["url"]) for d in config.DEFAULT_TAPS]
+
+
+@pytest.fixture()
+def defaults_manifest(tmp_path, monkeypatch):
+    """A keyless manifest with a row for every default registry."""
+    from boost_cli.core import config
+    rows = [{"tap": str(d["name"]), "commit": "1" * 40, "chunks": 1,
+             "bytes": 4, "sha256": "0" * 64,
+             "url": (tmp_path / "never-fetched.json").as_uri()}
+            for d in config.DEFAULT_TAPS]
+    path = tmp_path / "defaults-manifest.json"
+    path.write_text(json.dumps({"version": 1, **SPACE, "shards": rows}),
+                    encoding="utf-8")
+    monkeypatch.setenv("BOOST_SHARD_MANIFEST", path.as_uri())
+    return path
+
+
+@pytest.fixture()
+def keyed_machine(monkeypatch):
+    """The `[rag]` extra installed and VOYAGE_API_KEY exported.
+
+    The machine the card measured: its queries embed with voyage-4 at 1024-d,
+    so the keyless 384-d vectors quickstart exists to deliver are unusable
+    here — and nothing is downloaded to find that out. Returns the list every
+    attempted shard download is appended to, which must stay empty.
+    """
+    from boost_cli.core import dense, embed, shards
+    monkeypatch.setattr(dense, "have_backend", lambda: True)
+    monkeypatch.setattr(embed, "provider", lambda: "voyage")
+    monkeypatch.setattr(embed, "model", lambda: "voyage-4")
+    monkeypatch.setattr(embed, "dimension", lambda: 1024)
+    monkeypatch.setattr(embed, "local_available", lambda: True)
+    downloads: list = []
+    monkeypatch.setattr(shards, "download",
+                        lambda *a, **k: downloads.append(a))
+    return downloads
+
+
+REFUSAL = "published shards are local, this machine embeds with voyage"
+
+
+class TestQuickstartWithAKeyExported:
+    """`sync` refuses every shard as `incompatible`, and quickstart said
+    nothing about it: no line named voyage, the space, or the free path —
+    only "embed the rest locally", which with a key set bills the API."""
+
+    def _live(self, boost, monkeypatch):
+        from boost_cli.core import config, dense, rag, registry
+        _fake_add_many(monkeypatch, ["ok"] * 7)
+        names = [str(d["name"]) for d in config.DEFAULT_TAPS]
+        # Seven configured taps, so `sync` — were it reached — would stamp
+        # the same machine-level detail on seven rows.
+        monkeypatch.setattr(registry, "list_taps", lambda: [
+            registry.Tap(name=n, url="file:///x") for n in names])
+        monkeypatch.setattr(rag, "_tap_commits", lambda: {
+            n.replace("/", "__"): "1" * 40 for n in names})
+        monkeypatch.setattr(dense, "tap_commits", lambda: {})
+        return boost("quickstart")
+
+    def test_the_refusal_is_named_once_with_both_remedies(
+            self, boost, defaults_manifest, keyed_machine, monkeypatch):
+        res = self._live(boost, monkeypatch)
+        both = _flat(res.out + res.err)
+        # Once, not seven times: the reason is the machine's, not each tap's.
+        assert both.count(REFUSAL) == 1
+        assert "no vectors imported — " + REFUSAL in both
+        assert "`unset VOYAGE_API_KEY`" in both
+        assert "`boost update --shards`" in both
+        assert "paid" in both
+        # "locally" was false with a key set: reindex embeds through voyage.
+        assert "embed the rest locally" not in both
+        assert keyed_machine == []          # decided before any download
+        assert "ready" in both              # keyword search still works
+
+    def test_the_dry_run_no_longer_promises_shards_it_cannot_import(
+            self, boost, defaults_manifest, keyed_machine):
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "import 0 shard(s)" in out
+        assert "import 7 shard(s)" not in out
+        assert "(0 because %s)" % REFUSAL in out
+        assert "`unset VOYAGE_API_KEY`" in out
+
+    def test_the_dry_run_says_what_the_live_run_will(
+            self, boost, defaults_manifest, keyed_machine, monkeypatch):
+        from boost_cli.core import shards
+        fix = _flat(shards.remedy(shards.fetch_manifest()))
+        dry = _flat(boost("quickstart", "--dry-run").out)
+        res = self._live(boost, monkeypatch)
+        live = _flat(res.out + res.err)
+        assert REFUSAL in dry and REFUSAL in live
+        assert fix in dry and fix in live
+
+    def test_a_store_built_with_the_key_hears_it_cannot_take_the_shards(
+            self, boost, defaults_manifest, keyed_machine, vector_store):
+        assert vector_store()["ready"]
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "(0 because %s)" % REFUSAL in out
+        assert "unset" not in out
+        assert "cannot merge" in out
+
+    def test_the_refusal_is_muted_like_every_other_zero_reason(
+            self, capsys, monkeypatch):
+        # Its siblings — "(0 because the manifest could not be read)",
+        # "(0 because none … published)" — are muted; this one printed at
+        # full strength, in both the dry run and the live run.
+        from boost_cli.commands import quickstart
+        from boost_cli.core import bootstrap
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        monkeypatch.setenv("COLUMNS", "40")
+        outcome = bootstrap.SetupOutcome(vectors_refused=REFUSAL,
+                                         vectors_remedy="`boost x` fixes it")
+        for dry_run in (True, False):
+            capsys.readouterr()
+            quickstart._vectors_refused(outcome, dry_run=dry_run)
+            lines = capsys.readouterr().out.splitlines()
+            assert len(lines) > 2                   # the reason folded
+            for line in lines:
+                assert line.startswith("  \033[2m") and line.endswith("\033[0m")
+
+    def test_the_kill_switch_is_named_as_the_reason_and_the_remedy(
+            self, boost, defaults_manifest, monkeypatch):
+        # The extra is installed, so "no embedding backend" was false; the
+        # user switched embedding off, and that is the one thing to undo.
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        monkeypatch.setenv("BOOST_NO_EMBED", "1")
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "import 0 shard(s)" in out
+        assert "BOOST_NO_EMBED" in out
+        assert "`unset BOOST_NO_EMBED`" in out
+        assert "no embedding backend" not in out
 
 
 class TestQuickstartReadiness:
@@ -617,6 +756,33 @@ class TestFetchShards:
         # Named before any download: the 129 MB it did not spend is the point.
         assert "cannot serve this machine" in both
         assert "1024" in both or "voyage" in both
+
+    def test_a_space_mismatch_names_the_free_path_beside_the_paid_one(
+            self, boost, fixture_tap_src, manifest, keyed_machine):
+        # The hint was `dense.fix_hint(status reason)`, a table about the
+        # store, which for this user answered "install the extra" — which
+        # they have. The remedy for a refused manifest is the manifest's.
+        boost("tap", str(fixture_tap_src))
+        res = boost("reindex", "--fetch-shards", expect=1)
+        both = _flat(res.out + res.err)
+        assert "`unset VOYAGE_API_KEY`" in both
+        assert "`boost reindex --dense`" in both and "paid" in both
+        assert keyed_machine == []
+
+    def test_a_store_built_with_the_key_is_not_told_to_unset_it(
+            self, boost, fixture_tap_src, manifest, keyed_machine,
+            vector_store):
+        # The free path is a refused import for this user, and a paid store
+        # knocked offline on the way there.
+        boost("tap", str(fixture_tap_src))
+        assert vector_store()["ready"]
+        res = boost("reindex", "--fetch-shards", expect=1)
+        both = _flat(res.out + res.err)
+        assert "unset" not in both
+        assert "cannot merge" in both
+        assert "`boost reindex --dense` keeps them current" in both
+        assert "--force" not in both
+        assert keyed_machine == []
 
     def test_a_tap_with_no_published_shard_is_reported_not_embedded(
             self, boost, fixture_tap_src, manifest, monkeypatch):

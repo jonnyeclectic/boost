@@ -495,7 +495,9 @@ def cmd_doctor(argv):
     for name, entry in sorted(skills.items()):
         sdir = store.skill_store_dir(name)
         if not sdir.is_dir():
-            bad("skill", "skill %s missing from store — run `boost heal`" % name)
+            fix = ("boost reinstall %s" % name if store.is_url_import(entry)
+                   else "boost heal")
+            bad("skill", "skill %s missing from store — run `%s`" % (name, fix))
             skill_issues += 1
             continue
         if entry.get("quarantined"):
@@ -826,6 +828,17 @@ def _report_search_engine(rep) -> None:
             detail += ", live key is %s" % st["provider"]
         elif st["reason"] == "empty":
             detail += " but holds no vectors"
+        elif st["reason"] == "model-unavailable":
+            # The store is fine; the query embedder is what failed. Say which
+            # half and when, because a record from an hour ago on another
+            # network reads differently from one made by the last search.
+            from ..core import embed
+            fail = st.get("model_failure") or {}
+            detail += ", but %s" % embed.local_failure_text(fail)
+            if isinstance(fail.get("at"), (int, float)):
+                detail += ", last tried %s" % util.rel_time(
+                    datetime.fromtimestamp(fail["at"], UTC)
+                    .strftime("%Y-%m-%dT%H:%M:%SZ"))
         rep.issue("search-engine",
                   "semantic search silently off — %d-chunk vector store %s; "
                   "searches are using BM25 — %s" % (st["chunks"], detail, fix),
@@ -1374,20 +1387,16 @@ def cmd_conflict(argv):
 def cmd_changelog(argv):
     ap = cliparse.parser(
         prog="boost changelog",
-        description="Show a skill's upstream change history")
+        description="Show an item's upstream change history")
     ap.add_argument("name", metavar="NAME")
     ap.add_argument("-n", type=util.positive_int, default=20, metavar="N",
                     help="number of entries (default 20)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
-    _, bare = catalog.split_name(args.name)
-    entry = lockfile.get_skill(args.name)
-    if entry:
-        tap_name, rel = entry.get("tap", ""), entry.get("source_dir", ".")
-    else:
-        e = catalog.resolve_one(args.name)
-        tap_name, rel = e["tap"], e["rel_dir"]
+    # Lock first, all three kinds. A rule or workflow is logged over its own
+    # file, not the directory it shares with its siblings.
+    bare, _kind, tap_name, rel = store.upstream_source(args.name)
     if tap_name == "local":
         if args.json:
             print(json.dumps({"name": bare, "tap": None, "commits": []},
@@ -1413,7 +1422,11 @@ def cmd_changelog(argv):
         out.info(line)
     if not lines:
         out.warn("no history found for %s in %s" % (rel, tap.name))
-    if len(lines) < 3:
+    # Fewer entries than -n asked for means git ran out of history. On a
+    # shallow clone that end may be the cut, not the first commit, however
+    # far the clone was deepened. A short log alone proves nothing: a
+    # local-path tap is complete, and there `fetch --unshallow` fails.
+    if len(lines) < args.n and gitutil.is_shallow(tap.path):
         note = ("(shallow clone: run `git -C %s fetch --unshallow` "
                 "for full history)" % _tilde(tap.path))
         for line in out.wrap(note, max(out.term_width() - 2, 20)):

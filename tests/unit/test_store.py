@@ -862,6 +862,249 @@ class TestInstallFromPath:
         assert ei.value.message == "%s has no SKILL.md" % empty
 
 
+class TestImportProvenance:
+    """What a `boost import` records, so the lock still says where a skill came
+    from after the clone it was read out of has been deleted."""
+
+    URL = "https://git.example.test/team/skills.git"
+    SHA = "c404fbf3d21f3dbf0e48f0e1f19317287b864cf5"
+
+    def _skill(self, root, rel="alpha", version="0.1.0"):
+        d = root / rel if rel != "." else root
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(
+            "---\nname: alpha\nversion: %s\n---\n\nBody\n" % version,
+            encoding="utf-8")
+        return d
+
+    def _remote(self, tmp_path, commit=SHA):
+        root = tmp_path / "clone"
+        root.mkdir(exist_ok=True)
+        return store.RemoteSource(url=self.URL, root=root, commit=commit)
+
+    # ── repo_path ────────────────────────────────────────────────────────
+    def test_repo_path_of_the_repo_root_is_dot(self, tmp_path):
+        remote = self._remote(tmp_path)
+        assert store.repo_path(remote, remote.root) == "."
+
+    def test_repo_path_of_a_nested_skill_is_posix_and_relative(self, tmp_path):
+        remote = self._remote(tmp_path)
+        assert store.repo_path(remote, remote.root / "skills" / "alpha") \
+            == "skills/alpha"
+
+    # ── install_from_path(remote=...) ────────────────────────────────────
+    def test_a_url_import_records_url_commit_and_repo_path(self, sandbox, tmp_path):
+        remote = self._remote(tmp_path)
+        src = self._skill(remote.root, "skills/alpha")
+        store.install_from_path(src, remote=remote)
+        e = lockfile.get_skill("alpha")
+        assert (e["tap"], e["source_url"], e["commit"], e["source_dir"]) == (
+            "local", self.URL, self.SHA, "skills/alpha")
+
+    def test_a_path_import_records_an_absolute_dir_and_no_url(
+            self, sandbox, tmp_path, monkeypatch):
+        self._skill(tmp_path, "alpha")
+        monkeypatch.chdir(tmp_path)
+        store.install_from_path(Path("alpha"))
+        e = lockfile.get_skill("alpha")
+        assert (e["source_dir"], e["source_url"], e["commit"]) == (
+            str(tmp_path / "alpha"), "", "")
+
+    def test_a_path_reimport_clears_a_recorded_url(self, sandbox, tmp_path):
+        remote = self._remote(tmp_path)
+        store.install_from_path(self._skill(remote.root), remote=remote)
+        store.install_from_path(self._skill(tmp_path / "local"))
+        e = lockfile.get_skill("alpha")
+        assert (e["source_url"], e["commit"]) == ("", "")
+
+    def test_the_journal_names_the_url(self, sandbox, tmp_path):
+        remote = self._remote(tmp_path)
+        store.install_from_path(self._skill(remote.root), remote=remote)
+        ev = journal.events(1)[0]
+        assert (ev["action"], ev["source"]) == ("import", self.URL)
+
+    # ── replaced_tap ─────────────────────────────────────────────────────
+    def test_replacing_a_tap_install_reports_the_tap_it_lost(self, sandbox, tmp_path):
+        store.install_from_path(self._skill(tmp_path / "a"), tap_label="acme/repo")
+        res = store.install_from_path(self._skill(tmp_path / "b"))
+        assert res.replaced_tap == "acme/repo"
+
+    def test_a_fresh_import_replaces_nothing(self, sandbox, tmp_path):
+        assert store.install_from_path(self._skill(tmp_path)).replaced_tap is None
+
+    def test_reimporting_under_the_same_label_replaces_nothing(self, sandbox,
+                                                               tmp_path):
+        store.install_from_path(self._skill(tmp_path / "a"))
+        res = store.install_from_path(self._skill(tmp_path / "b"))
+        assert res.replaced_tap is None
+
+    # ── out_of_scope ─────────────────────────────────────────────────────
+    def test_narrowing_reports_the_links_it_left(self, sandbox, tmp_path):
+        src = self._skill(tmp_path)
+        store.install_from_path(src)
+        res = store.install_from_path(src, only_agents=["cursor"])
+        assert res.linked == ["cursor"]
+        assert res.out_of_scope == ["claude-code", "windsurf", "antigravity"]
+
+    def test_an_inherited_narrowing_still_reports_stray_links(self, sandbox,
+                                                              tmp_path):
+        # The declaration outlives the run that made it: a plain re-import
+        # keeps it, so links outside it are still outside it.
+        src = self._skill(tmp_path)
+        store.install_from_path(src)
+        store.install_from_path(src, only_agents=["cursor"])
+        res = store.install_from_path(src)
+        assert res.out_of_scope == ["claude-code", "windsurf", "antigravity"]
+
+    def test_a_fresh_narrow_import_has_no_stray_links(self, sandbox, tmp_path):
+        res = store.install_from_path(self._skill(tmp_path), only_agents=["cursor"])
+        assert res.out_of_scope == []
+
+    def test_no_narrowing_means_nothing_is_out_of_scope(self, sandbox, tmp_path):
+        src = self._skill(tmp_path)
+        store.install_from_path(src)
+        assert store.install_from_path(src).out_of_scope == []
+
+    # ── local_source_dir ─────────────────────────────────────────────────
+    def test_local_source_dir_is_the_recorded_dir(self, tmp_path):
+        src = self._skill(tmp_path)
+        assert store.local_source_dir({"source_dir": str(src)}) == src
+
+    def test_local_source_dir_is_none_once_the_skill_md_is_gone(self, tmp_path):
+        src = self._skill(tmp_path)
+        (src / "SKILL.md").unlink()
+        assert store.local_source_dir({"source_dir": str(src)}) is None
+
+    def test_local_source_dir_never_reads_an_empty_path_as_the_cwd(
+            self, tmp_path, monkeypatch):
+        self._skill(tmp_path, ".")
+        monkeypatch.chdir(tmp_path)          # a SKILL.md right here
+        assert store.local_source_dir({"source_dir": ""}) is None
+        assert store.local_source_dir({}) is None
+
+    def test_local_source_dir_ignores_a_url_imports_repo_path(
+            self, tmp_path, monkeypatch):
+        self._skill(tmp_path, "alpha")
+        monkeypatch.chdir(tmp_path)          # ./alpha/SKILL.md exists here
+        assert store.local_source_dir(
+            {"source_dir": "alpha", "source_url": self.URL}) is None
+
+    # ── is_url_import ────────────────────────────────────────────────────
+    @pytest.mark.parametrize(("entry", "expected"), [
+        ({"tap": "local", "source_url": URL}, True),
+        ({"tap": "local", "source_url": ""}, False),      # a path import
+        ({"tap": "local"}, False),                        # an older lock
+        ({"tap": "fixture-tap", "source_url": URL}, False),
+        ({"tap": "fixture-tap"}, False),
+        ({}, False),
+    ])
+    def test_is_url_import(self, entry, expected):
+        assert store.is_url_import(entry) is expected
+
+    # ── cloned_source ────────────────────────────────────────────────────
+    def test_cloned_source_asks_for_a_full_checkout_and_cleans_up(
+            self, tmp_path, monkeypatch):
+        seen = {}
+
+        def clone(url, dest, sparse=True):
+            seen.update(url=url, sparse=sparse, dest=dest)
+            dest.mkdir(parents=True)
+
+        monkeypatch.setattr(gitutil, "clone_shallow", clone)
+        monkeypatch.setattr(gitutil, "head_commit", lambda repo: self.SHA)
+        monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
+        with store.cloned_source(self.URL) as remote:
+            assert (remote.url, remote.commit) == (self.URL, self.SHA)
+            assert remote.root == seen["dest"] and remote.root.is_dir()
+        assert (seen["url"], seen["sparse"]) == (self.URL, False)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_cloned_source_cleans_up_when_the_clone_fails(self, tmp_path,
+                                                         monkeypatch):
+        def clone(url, dest, sparse=True):
+            dest.mkdir(parents=True)
+            raise BoostError("git clone failed")
+
+        monkeypatch.setattr(gitutil, "clone_shallow", clone)
+        monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
+        with pytest.raises(BoostError), store.cloned_source(self.URL):
+            pass
+        assert list(tmp_path.iterdir()) == []
+
+    # ── reinstall_from_url ───────────────────────────────────────────────
+    def _fake_clone(self, monkeypatch, tree, commit="f" * 40):
+        """Make every clone a copy of ``tree`` at ``commit``."""
+        monkeypatch.setattr(gitutil, "clone_shallow",
+                            lambda url, dest, sparse=True: shutil.copytree(tree, dest))
+        monkeypatch.setattr(gitutil, "head_commit", lambda repo: commit)
+
+    def test_reinstall_from_url_reads_the_recorded_path_at_the_new_head(
+            self, sandbox, tmp_path, monkeypatch):
+        remote = self._remote(tmp_path)
+        store.install_from_path(self._skill(remote.root, "skills/alpha"),
+                                remote=remote)
+        tree = tmp_path / "tree"
+        self._skill(tree, "skills/alpha", version="0.2.0")
+        self._fake_clone(monkeypatch, tree)
+        res = store.reinstall_from_url("alpha", lockfile.get_skill("alpha"))
+        assert res.name == "alpha"
+        e = lockfile.get_skill("alpha")
+        assert (e["version"], e["commit"], e["source_dir"], e["source_url"]) == (
+            "0.2.0", "f" * 40, "skills/alpha", self.URL)
+
+    def test_reinstall_from_url_overrides_a_pin(self, sandbox, tmp_path,
+                                                monkeypatch):
+        remote = self._remote(tmp_path)
+        store.install_from_path(self._skill(remote.root), remote=remote)
+        e = lockfile.get_skill("alpha")
+        e["pinned"] = True
+        lockfile.set_skill("alpha", e)
+        self._fake_clone(monkeypatch, remote.root)
+        store.reinstall_from_url("alpha", lockfile.get_skill("alpha"))
+        assert lockfile.get_skill("alpha")["pinned"] is True
+
+    def test_reinstall_from_url_refuses_a_path_the_repo_no_longer_has(
+            self, sandbox, tmp_path, monkeypatch):
+        remote = self._remote(tmp_path)
+        store.install_from_path(self._skill(remote.root, "skills/alpha"),
+                                remote=remote)
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        self._fake_clone(monkeypatch, empty)
+        with pytest.raises(BoostError) as ei:
+            store.reinstall_from_url("alpha", lockfile.get_skill("alpha"))
+        assert ei.value.message == "%s has no SKILL.md at skills/alpha" % self.URL
+
+    def test_reinstall_from_url_refuses_a_path_outside_the_clone(
+            self, sandbox, tmp_path, monkeypatch):
+        remote = self._remote(tmp_path)
+        store.install_from_path(self._skill(remote.root), remote=remote)
+        scratch = tmp_path / "scratch"
+        self._skill(scratch, "escape", version="6.6.6")
+        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+        self._fake_clone(monkeypatch, remote.root)
+        entry = dict(lockfile.get_skill("alpha"), source_dir="../../escape")
+        with pytest.raises(BoostError) as ei:
+            store.reinstall_from_url("alpha", entry)
+        assert ei.value.message == "%s has no SKILL.md at ../../escape" % self.URL
+        assert lockfile.get_skill("alpha")["version"] == "0.1.0"
+
+    # ── sync never drops what it cannot re-clone ─────────────────────────
+    def test_a_url_import_missing_its_store_is_kept_not_dropped(
+            self, sandbox, tmp_path):
+        remote = self._remote(tmp_path)
+        store.install_from_path(self._skill(remote.root), remote=remote)
+        shutil.rmtree(paths.store_dir() / "alpha")
+        repair = store.plan_missing_store("alpha")
+        msg = ("alpha's store dir is missing — `boost reinstall alpha` "
+               "clones it again from %s" % self.URL)
+        assert (repair.action, repair.preview, repair.applied) == (
+            "declined", msg, msg)
+        actions = store.sync_apply(store.sync_plan())
+        assert msg in actions
+        assert lockfile.get_skill("alpha")["source_url"] == self.URL
+
+
 class TestExistingSkillOwner:
     """`install_from_path` refuses to overwrite a *pinned* name but silently
     replaces an unpinned one — deliberately, since it doubles as the
@@ -3427,6 +3670,52 @@ class TestResolveLockEntry:
         assert bare == "team-conventions"
         assert kind == "rule"
         assert entry == lockfile.get_rule("team-conventions")
+
+
+class TestLockDrift:
+    """``store.lock_drift`` — how an installed entry differs from a requested
+    ``tap:name@version``; what keeps `boost bundle install` from calling an
+    install at another tap or version "already present"
+    (docs/roadmap/items/audit-bundle-findings.md)."""
+
+    ENTRY: ClassVar[dict] = {"tap": "acme/skills", "version": "1.4.0"}
+
+    def test_a_request_that_pins_nothing_never_drifts(self):
+        assert store.lock_drift(self.ENTRY, None, None) == []
+        assert store.lock_drift(self.ENTRY, "", "") == []
+
+    def test_the_same_tap_and_version_is_no_drift(self):
+        assert store.lock_drift(self.ENTRY, "acme/skills", "1.4.0") == []
+
+    def test_the_repo_tail_names_the_installed_tap(self):
+        # the tier catalog.find accepts, so `skills:x` is not "another tap"
+        assert store.lock_drift(self.ENTRY, "skills", None) == []
+
+    def test_another_tap_is_drift(self):
+        assert store.lock_drift(self.ENTRY, "other/skills", None) == [
+            ("tap", "acme/skills", "other/skills")]
+        assert store.lock_drift(self.ENTRY, "acme", None) == [
+            ("tap", "acme/skills", "acme")]
+
+    def test_another_version_is_drift(self):
+        assert store.lock_drift(self.ENTRY, None, "9.9.9") == [
+            ("version", "1.4.0", "9.9.9")]
+
+    def test_both_are_reported_tap_first(self):
+        assert store.lock_drift(self.ENTRY, "other/skills", "9.9.9") == [
+            ("tap", "acme/skills", "other/skills"),
+            ("version", "1.4.0", "9.9.9")]
+
+    def test_missing_fields_default_the_way_bundle_dump_writes_them(self):
+        # dump writes a tap-less entry as local and a version-less one @0.0.0,
+        # so what it wrote must read back as no drift
+        assert store.lock_drift({}, "local", "0.0.0") == []
+        assert store.lock_drift({"tap": None}, "local", None) == []
+        assert store.lock_drift({}, "acme/skills", "1.0") == [
+            ("tap", "local", "acme/skills"), ("version", "0.0.0", "1.0")]
+
+    def test_a_non_string_version_is_compared_as_written(self):
+        assert store.lock_drift({"tap": "t", "version": 2}, None, "2") == []
 
 
 @pytest.mark.skipif(sys.platform == "win32",

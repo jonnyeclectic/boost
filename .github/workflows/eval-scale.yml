@@ -2,8 +2,9 @@ name: eval-scale
 
 # Tier 1b: run the retrieval eval over a corpus the size of a real install.
 #
-# WHY. The required `eval` gate measures 10,152 entries. A real install carries
-# far more — 71,655 across 445 taps on the machine this was measured on — and
+# WHY. The required `eval` gate measures the twenty repos in tests/eval/taps.txt
+# (its header states their size). A real install carries far more — 71,655
+# entries across 445 taps on the machine this was measured on — and
 # the metrics do not survive the difference: at that size all four floors fail
 # (0.709 / 0.341 / 0.451 / 0.504 against 0.780 / 0.400 / 0.520 / 0.580). So the
 # bar every merge is gated on is one the project's own users' catalogues would
@@ -104,8 +105,9 @@ jobs:
             cat "$RUNNER_TEMP/scale-summary.md" || true
             echo
             echo "Compare against the required gate, which scores the same"
-            echo "queries over 10,152 entries. A gap between them is the scale"
-            echo "effect — it is not a regression in this repository."
+            echo "queries over the corpus in tests/eval/taps.txt. A gap between"
+            echo "them is the scale effect — it is not a regression in this"
+            echo "repository."
           } >> "$GITHUB_STEP_SUMMARY"
       - name: open a PR if the pins moved
         # create-pull-request opens nothing when the tree is unchanged, so this

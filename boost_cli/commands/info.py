@@ -573,7 +573,11 @@ def cmd_info(argv):
     # one file this item actually is.
     src = lock.get("source_dir") if lock else (
         (cat or {}).get("skill_md") if kind != "skill" else (cat or {}).get("rel_dir"))
-    if src:
+    if lock and lock.get("source_url"):
+        # A URL import's source_dir is a path inside that repo, not on disk.
+        out.kv("source", str(lock["source_url"])
+               + ("" if src in (None, "", ".") else " (%s)" % src))
+    elif src:
         out.kv("source", _tilde(src))
     if lock:
         if lock.get("commit"):
@@ -1028,30 +1032,34 @@ def cmd_log(argv):
 
 def cmd_home(argv):
     ap = cliparse.parser(prog="boost home",
-                                 description="Open a skill's GitHub page in the browser")
+                                 description="Open an item's GitHub page in the browser")
     ap.add_argument("name")
     ap.add_argument("--print", dest="print_only", action="store_true",
                     help="print the URL without opening a browser")
     args = ap.parse_args(argv)
-    found = lockfile.find_any(args.name)
-    lock = found[1] if found else None
-    try:
-        entry = catalog.resolve_one(args.name)
-        tap_name, rel = entry["tap"], entry["rel_dir"]
-    except BoostError:
-        if not lock:
-            raise
-        tap_name = lock.get("tap", "local")
-        rel = lock.get("source_dir") or lock.get("source_file") or "."
+    # Lock first: the catalog guesses by name, the lock knows the copy that
+    # was installed. A rule or workflow is linked to its own file.
+    _bare, kind, tap_name, rel = store.upstream_source(args.name)
     try:
         tap = registry.get(tap_name)
     except BoostError:
-        out.info(_tilde(rel))   # local import — only a path to show
+        lock = store.resolve_lock_entry(args.name)[2]
+        home = str((lock or {}).get("source_url") or "")
+        if not home:
+            out.info(_tilde(rel))   # local import — only a path to show
+            return 0
+        # A URL import: the repo it was cloned from is its home.
+        out.info(home)
+        if (home.startswith(("http://", "https://")) and not args.print_only
+                and sys.stdout.isatty()):
+            webbrowser.open(home)
         return 0
     if not tap.url.startswith(("http://", "https://")):
         out.info(_tilde(Path(tap.url) if rel == "." else Path(tap.url) / rel))
         return 0
-    url = tap.url.rstrip("/") + ("" if rel == "." else "/tree/HEAD/" + rel)
+    # GitHub serves a directory under /tree/ and a file under /blob/.
+    view = "tree" if kind == "skill" else "blob"
+    url = tap.url.rstrip("/") + ("" if rel == "." else "/%s/HEAD/%s" % (view, rel))
     out.info(url)
     if not args.print_only and sys.stdout.isatty():
         webbrowser.open(url)

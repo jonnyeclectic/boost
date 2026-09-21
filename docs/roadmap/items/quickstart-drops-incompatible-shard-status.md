@@ -2,15 +2,15 @@
 id: quickstart-drops-incompatible-shard-status
 board: code
 section: planned
-status: planned
+status: shipped
 category: Onboarding · Bug
 complexity: M
 impact: Med
 wow: 3
 note: shards.sync() returns status: "incompatible" with a fully-formed reason when the publ…
 order: 220
-owner:
-pr:
+owner: loop/quickstart-shard-status
+pr: 925
 title: quickstart silently discards the <code>incompatible</code> shard status, so a user with any API key is never told why zero vectors arrived
 ---
 <b>Measured.</b> On one machine with <code>VOYAGE_API_KEY</code> set, <code>shards.sync</code> returned 7 rows all reading <code>status: "incompatible", detail: "published shards are local, this machine embeds with voyage"</code> and <code>boost quickstart</code> rendered zero of them — while <code>boost quickstart --dry-run</code> on that same machine promised "would build the keyword index, then import 5 shard(s)".

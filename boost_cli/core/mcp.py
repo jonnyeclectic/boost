@@ -539,10 +539,14 @@ def engine_note() -> str:
                 "vectors (%s). Natural-language problem descriptions retrieve "
                 "well; you do not need to guess the skill's vocabulary."
                 % st.get("model"))
+    # "Not configured" is only true of a machine that never built vectors. A
+    # built store that is not serving (a model that cannot be fetched, a key
+    # that went missing) is a different fact, and the agent relays it.
+    state = "built but not in use" if st.get("degraded") else "not configured"
     return ("\n\nSEARCH ENGINE: BM25 keyword matching only — dense vectors are "
-            "not configured, so queries are matched on shared words rather than "
+            "%s, so queries are matched on shared words rather than "
             "meaning. Prefer concrete terms over paraphrase. To enable semantic "
-            "search, %s." % dense.fix_hint(st.get("reason", ""), st))
+            "search, %s." % (state, dense.fix_hint(st.get("reason", ""), st)))
 
 
 def handle_request(req: dict, *, version: str,

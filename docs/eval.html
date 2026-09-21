@@ -146,7 +146,7 @@
 
     <div class="stats">
       <div class="stat reveal"><b>5</b><span>Evaluation tiers</span></div>
-      <div class="stat reveal"><b>0.863</b><span>BM25 recall@10 · pinned corpus</span></div>
+      <div class="stat reveal"><b>0.841</b><span>BM25 recall@10 · pinned corpus</span></div>
       <div class="stat reveal"><b>141</b><span>Golden judgments</span></div>
       <div class="stat reveal"><b>0</b><span>Deps in the required gate</span></div>
     </div>
@@ -308,7 +308,7 @@
 
       <h3>1 &middot; The score was mostly about the corpus</h3>
       <p>The gate reported near-perfect retrieval for a long time. Growing the pinned corpus from six
-        registries to twenty &mdash; same golden set, same queries, nothing else changed &mdash;
+        registries to twenty (#372) &mdash; same golden set, same queries, nothing else changed &mdash;
         moved every metric:</p>
       <table class="contract">
         <thead><tr><th>metric</th><th>6 taps</th><th>20 taps</th><th>floor</th></tr></thead>
@@ -321,9 +321,9 @@
       </table>
       <p>Three of the four floors in force before that change fail outright on the larger corpus. A
         floor calibrated where BM25 scores 1.000 is a floor about the corpus, not about retrieval.
-        <b><code>hit@1</code> 0.473 is the honest headline</b>: at twenty taps, fewer than half of
-        these queries put the right item first. That is not a regression &mdash; it is what users
-        already had, now visible.</p>
+        <b><code>hit@1</code> 0.473 was the honest headline</b>: at twenty taps, fewer than half of
+        these queries put the right item first, and that is still true at today's pins. That is not a
+        regression &mdash; it is what users already had, now visible.</p>
 
       <h3>2 &middot; The score was also about the shape of the question</h3>
       <p>The keyword golden set grades catalog items <b>by name</b>, so its queries carry the

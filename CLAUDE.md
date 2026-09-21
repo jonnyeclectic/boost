@@ -83,14 +83,19 @@ can't flake the build, tight enough to catch a collapse. Regression-vs-baseline
 stays relaxed (`--regression-eps 1`), so the absolute floors are the real gate.
 
 **Every row of `taps.txt` pins a commit SHA**, and `scripts/eval_corpus.py`
-checks each clone out at it — the corpus is 10,731 entries, of which one
-third-party repo is 6,634 (62%), so an unpinned list left a required check
-hostage to someone else's push. CI and `make eval` must invoke the gate with
-identical arguments, not just identical floors — `-k` decides what two of them
-measure; `tests/unit/test_eval_corpus.py` parses both calls and fails the build
-if they diverge, which they had (CI floored recall alone at 0.85 against a
-measured 0.863 — a buffer of 1.15 queries out of 91 — and applied none of the
-other three). Moving a pin means regenerating the baseline; the file says how.
+checks each clone out at it — most of the corpus is one third-party repo, so an
+unpinned list left a required check hostage to someone else's push. The size
+and that share are stated once, in a block at the top of `taps.txt` that
+`--relock` and `--refresh` write from the rows; the sizes and the twenty-repo
+scores quoted above (and in the `Makefile` and `docs/eval.html`) are checked
+against the rows and `baseline.json` by `tests/unit/test_corpus_prose.py`,
+because the monthly refresh moves both and nothing else would notice. CI and
+`make eval` must invoke the gate with identical arguments, not just identical
+floors — `-k` decides what two of them measure; `tests/unit/test_eval_corpus.py`
+parses both calls and fails the build if they diverge, which they had (CI
+floored recall alone at 0.85 against a measured 0.863 — a buffer of 1.15
+queries out of 91 — and applied none of the other three). Moving a pin means
+regenerating the baseline; the file says how.
 
 **Baselines are keyed by query set** (`name@content-digest`), so one file holds
 both `golden.jsonl` and `golden-natural.jsonl` without either overwriting the
@@ -631,7 +636,15 @@ backend, built store) is missing — or `disabled`, a fourth state that is no
 missing link at all but the `BOOST_NO_EMBED` kill switch, which sits **first**
 in the ladder (`embed.provider()` reads it before any key, so every other
 remedy is a measured no-op under it) and is excluded from `degraded`, so a
-deliberate opt-out never moves doctor's exit code. `dense.fix_hint()` maps
+deliberate opt-out never moves doctor's exit code. `model-unavailable` is the
+**last** rung: the store matches, but the local model could not be fetched or
+loaded. `status()` reads a record of that failure and never probes, because
+the probe *is* the 133 MB fetch. `core/localembed.py` keeps the record in
+memory and in `cache/models/<rev>/unavailable.json`, and holds back the next
+attempt for an hour (`RETRY_AFTER`): measured on a 5-chunk store, each search
+paid one failed fetch (~3.6 s against 0.1 s) while doctor said "active".
+`boost reindex --dense` retries at once, because it is the remedy the hint
+names. `dense.ready()` still answers for the store alone. `dense.fix_hint()` maps
 whichever state it is to the one next action — `boost doctor`, `boost search`,
 the MCP `SEARCH ENGINE` line and both shard surfaces (`reindex --fetch-shards`,
 `update --shards`) all read that same table, so they can't give contradictory

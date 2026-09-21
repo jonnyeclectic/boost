@@ -8,31 +8,45 @@
 # the counts with `python3 scripts/eval_corpus.py --relock`; check the
 # distribution without a network with `--audit`.
 #
+# --- corpus size: written from the rows below by eval_corpus.py ---
+# total:   10,731 entries in 20 repos
+# targets: 921 entries in the 6 repos above the scale divider
+# largest: sickn33/antigravity-awesome-skills, 6,634 entries (61.8%)
+# next:    affaan-m/ECC, 1,621 entries (15.1%)
+# scores:  tests/eval/baseline.json, re-baselined with every move
+# --- end corpus size ---
+#
+# The block above is the only place this header states the corpus's size.
+# `--relock` and `--refresh` rewrite it with the rows, so it cannot disagree
+# with them; a sentence typed here did, the first time the monthly refresh
+# moved the pins. The sizes and twenty-repo scores quoted elsewhere (CLAUDE.md,
+# the Makefile, docs/eval.html) are checked against these rows and
+# baseline.json by tests/unit/test_corpus_prose.py.
+#
 # The golden set (golden.jsonl) grades real catalog items by NAME, so the gate
 # needs the repos that actually contain those items tapped before it can score.
 # The first six repos are the minimal set covering all 77 golden targets across
 # the skill / rule / workflow kinds. The rest exist to make the corpus a
-# realistic size, which is the whole point: over the six alone BM25 scored
-# recall@10 1.000 / hit@1 0.791, and the same gate over these twenty scores
-# 0.863 / 0.473. A user with twenty taps gets the second number, so flooring
-# against the first was measuring the corpus rather than the retrieval.
+# realistic size, which is the whole point: when #372 grew the list from six
+# repos to twenty, BM25 went from recall@10 1.000 / hit@1 0.791 to 0.863 /
+# 0.473. A user with twenty taps gets the second number, so flooring against
+# the first was measuring the corpus rather than the retrieval.
 #
 # WHY THE SHAs. This list pinned repo *names* only, and tapping shallow-clones
 # whatever the default branch points at, so the corpus was reproducible only for
 # as long as twenty third parties happened not to push. Nothing had drifted when
-# this was written — today's scores match the committed baseline exactly — but
-# the size is worth stating, because it is not what anyone assumed: these twenty
-# repos are **10,152 entries**, and ONE of them, sickn33/antigravity-awesome-
-# skills, is 6,309 of those — 62% of the gate's corpus in a single third-party
-# repository. affaan-m/ECC is another 1,616 (16%).
+# this was written, but the size was worth stating, because it was not what
+# anyone assumed: most of the gate's corpus is ONE third-party repository,
+# sickn33/antigravity-awesome-skills (the block above has its share today).
 #
-# The margin that protects is thin. BM25 scores recall@10 0.863 over this corpus;
-# CI floored it at 0.85, which is a buffer of 1.15 queries out of 91 — one golden
-# query can drop out of the top 10 and the gate still passes, two cannot. A
-# single upstream push to the repo holding 62% of the corpus could therefore turn
-# a required check red on a pull request that touched nothing to do with
-# retrieval. Pinning removes that coupling, and makes every number in this header
-# reproducible rather than "true on the day it was measured".
+# The margin that protects was thin. When #410 pinned the list, BM25 scored
+# recall@10 0.863 here and CI floored it at 0.85 — a buffer of 1.15 queries out
+# of 91: one golden query could drop out of the top 10 and the gate still pass,
+# two could not. A single upstream push to the repo holding most of the corpus
+# could therefore turn a required check red on a pull request that touched
+# nothing to do with retrieval. Pinning removes that coupling, and makes every
+# number in this file reproducible rather than "true on the day it was
+# measured".
 #
 # WHY THE COUNTS. A SHA fixes the tree; it does not fix what this project makes
 # of that tree, and it does nothing when the tree cannot be fetched at all. Both
@@ -40,11 +54,12 @@
 # direction of the error is the surprise. Measured over the 91-query required
 # set, one repo removed and everything else identical:
 #
-#   all 20 repos           10,152 entries   0.852 / 0.473 / 0.605 / 0.657
-#   minus sickn33 (62%)     3,843 entries   0.885 / 0.593 / 0.711 / 0.746
-#   minus that and ECC      2,227 entries   0.967 / 0.659 / 0.769 / 0.814
-#   minus LessUp (targets)  9,682 entries   0.676 / 0.374 / 0.483 / 0.523
-#   floors                                  0.780 / 0.400 / 0.520 / 0.580
+#   at the #410 pins        entries  recall@10 / hit@1 / MRR / nDCG@10
+#   all 20 repos             10,152  0.852 / 0.473 / 0.605 / 0.657
+#   minus sickn33 (62%)       3,843  0.885 / 0.593 / 0.711 / 0.746
+#   minus that and ECC        2,227  0.967 / 0.659 / 0.769 / 0.814
+#   minus LessUp (targets)    9,682  0.676 / 0.374 / 0.483 / 0.523
+#   floors                           0.780 / 0.400 / 0.520 / 0.580
 #
 # Losing a *scale* repo makes the gate EASIER: every metric rises and the check
 # goes green having measured a third of the intended corpus. Losing a repo that
@@ -54,8 +69,8 @@
 # before anything is scored, and an unreachable repo now exits 75 (EX_TEMPFAIL)
 # so a third party's outage does not read as a regression here.
 #
-# The same table is why the 62% is not fixed by trimming: dropping the big repo
-# raises every number. Diluting the concentration means adding breadth. The
+# The same table is why the concentration is not fixed by trimming: dropping
+# the big repo raises every number. Diluting it means adding breadth. The
 # ceiling in eval_corpus.py (MAX_SHARE) is a ratchet against making it worse.
 #
 # NOTE: `boost tap --defaults` is NOT sufficient — it taps only skill repos and

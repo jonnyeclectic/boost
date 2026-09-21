@@ -473,7 +473,7 @@ def _fetch_shards(args) -> int:
     why = shards.incompatible(manifest)
     if why:
         raise BoostError("published shards cannot serve this machine — %s" % why,
-                        hint=dense.fix_hint(dense.status().get("reason", "")))
+                        hint=shards.remedy(manifest))
     commits = rag._tap_commits()
     stored = dense.tap_commits()
     by_name = {t.name: commits.get(t.safe_name, "") for t in registry.list_taps()}
@@ -620,12 +620,28 @@ def cmd_reindex(argv):
                      wrap=True)
         else:
             failed = dense_stats.get("failed") or []
+            model_error = dense_stats.get("model_error")
+            if model_error:
+                # Before the per-tap line, and instead of its guess at a
+                # cause: "rate limit, quota" describes an API provider, and
+                # sent a local-model user looking for an account they lack.
+                # A load failure is not a network problem, so it is not told
+                # to find a better network.
+                tail = ("" if model_error.get("stage") == "load" else
+                        "; rerun `boost reindex --dense` on a network that "
+                        "reaches huggingface.co")
+                out.warn("%s — searches use BM25 until it works%s"
+                         % (embed.local_failure_text(model_error), tail),
+                         wrap=True)
             if failed:
-                out.warn("embedding failed for %d tap(s) — %d passages stored. "
+                cause = ("The local model could not be used"
+                         if model_error else
                          "The provider rejected those batches (rate limit, "
-                         "quota, or oversized input); their commits were not "
-                         "recorded, so a rerun retries them."
-                         % (len(failed), dense_stats["chunks"]))
+                         "quota, or oversized input)")
+                out.warn("embedding failed for %d tap(s) — %d passages stored. "
+                         "%s; their commits were not recorded, so a rerun "
+                         "retries them." % (len(failed), dense_stats["chunks"],
+                                            cause))
             elif not dense_stats["chunks"]:
                 # Reporting success with an empty store sent a real user chasing
                 # the wrong cause: a stale run can mark every tap "built", so the
@@ -729,11 +745,21 @@ def _reindex_dense(force, spinner=None):
     # free — they re-encode and re-key what is already on disk — so a user gets
     # the disk back without having to know either word.
     collapsed = dense.deduplicate()
+    # This command is the remedy `dense.fix_hint` names for a local model that
+    # could not be fetched, so it must actually try: searches hold a retry
+    # back for an hour after a failure, and a build whose taps are all reused
+    # embeds nothing and would otherwise never touch the model at all.
+    embed.retry_local()
     stats = dense.build(force=force, on_progress=_embed_progress(spinner))
     if migrated and isinstance(stats, dict):
         stats = stats | {"quantized": migrated["chunks"]}
     if collapsed and isinstance(stats, dict) and collapsed["freed"]:
         stats = stats | {"deduplicated": collapsed["freed"]}
+    # Read after the build, not from the retry: a first build on a machine
+    # that cannot fetch the model has nothing to retry and fails inside it.
+    failure = embed.local_failure() if embed.provider() == "local" else None
+    if failure and isinstance(stats, dict):
+        stats = stats | {"model_error": failure}
     return stats
 
 

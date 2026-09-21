@@ -2,19 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests: scripts/build_scale_corpus.py — the Tier 1b scale corpus list.
 
-WHY IT EXISTS. The required gate measures 10,152 entries; a real install carries
-~71,655, and at that size all four floors fail (0.709 / 0.341 / 0.451 / 0.504
-against 0.780 / 0.400 / 0.520 / 0.580). So every retrieval decision validated
-against the small corpus is validated at a scale users leave behind.
+WHY IT EXISTS. The required gate measures the twenty repos in taps.txt; a real
+install carries ~71,655 entries, and at that size all four floors fail (0.709 /
+0.341 / 0.451 / 0.504 against 0.780 / 0.400 / 0.520 / 0.580). So every retrieval
+decision validated against the small corpus is validated at a scale users leave
+behind.
 
 WHAT THESE TESTS ARE ACTUALLY GUARDING. Two properties, and both are the kind
 that fail silently:
 
   * The scale corpus must be the required corpus PLUS distractors. Every golden
     target lives in the required rows, and a scale list that dropped one would
-    collapse recall for a reason that is not scale — measured, dropping a single
-    target-bearing repo takes recall@10 from 0.852 to 0.676, which is
-    indistinguishable from a retrieval regression.
+    collapse recall for a reason that is not scale — measured at the #410 pins,
+    dropping a single target-bearing repo took recall@10 from 0.852 to 0.676,
+    which is indistinguishable from a retrieval regression.
   * The distractors must not be all one item kind. The curated set is 341 skill
     / 76 workflow / 26 rule registries, so largest-first would bury the rules,
     and the required list's own header records the cost: `boost tap --defaults`
@@ -217,6 +218,19 @@ class TestPinsSurviveRegeneration:
     def test_render_falls_back_to_a_bare_name(self):
         m = _load()
         assert "\ns/one\n" in m.render([], [("s/one", 10)], 10, {})
+
+    def test_the_header_states_the_required_rows_own_total(self):
+        """The header's size comes from the rows it copies, not from a literal.
+
+        It was the literal "10,152", written into this file on every run —
+        including the run the monthly refresh makes right after moving the
+        required corpus to 10,731.
+        """
+        m = _load()
+        required = ["a/x %s 1200" % ("a" * 40), "b/y %s 34" % ("b" * 40)]
+        folded = " ".join(ln.lstrip("# ") for ln in
+                          m.render(required, [], 0).splitlines())
+        assert "the required gate measures 1,234 entries" in folded
 
     def test_regenerating_after_a_refresh_is_a_no_op(self):
         """The end-to-end property, exercised rather than argued.

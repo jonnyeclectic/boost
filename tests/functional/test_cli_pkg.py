@@ -1795,6 +1795,307 @@ class TestBundleEdges:
         assert "check the path exists and is writable" in r.err
 
 
+# ── bundle: the 2026-08 CLI audit (audit-bundle-findings) ───────────────
+
+def _flat(text):
+    """Whitespace-normalised text, so an assertion survives the wrap width."""
+    return " ".join(text.split())
+
+
+class TestBundleAuditFindings:
+    """docs/roadmap/items/audit-bundle-findings.md — what a Boostfile cannot
+    carry is said out loud, an install at another tap or version is not
+    "already present", and `--dry-run` says what the real run will."""
+
+    # -- dump: local skills are named, not only commented ------------------
+
+    def test_stdout_dump_names_local_skills_on_stderr(self, boost, installed,
+                                                      tmp_path):
+        boost("import", _skill_dir(tmp_path, "ab-testing"))
+        boost("import", _skill_dir(tmp_path, "cd-thing"))
+        r = boost("bundle", "dump")
+        assert "# local skill (no tap source): ab-testing" in r.out
+        assert ("2 local skills written as comments — no tap source to "
+                "reinstall from") in r.err
+        # stdout is the Boostfile itself; the notice must not land in it
+        assert "written as comments" not in r.out
+
+    def test_file_dump_names_local_skills_in_its_report(self, boost, installed,
+                                                        tmp_path):
+        boost("import", _skill_dir(tmp_path, "ab-testing"))
+        r = boost("bundle", "dump", tmp_path / "Boostfile")
+        assert "(1 tap, 1 skill)" in r.out
+        assert ("1 local skill written as comments — no tap source to "
+                "reinstall from") in r.out
+
+    def test_a_dump_with_no_local_skills_says_nothing_about_them(
+            self, boost, installed, tmp_path):
+        r = boost("bundle", "dump", tmp_path / "Boostfile")
+        assert "local skill" not in r.out + r.err
+        assert boost("bundle", "dump").err == ""
+
+    def test_the_omission_notice_is_one_styled_warning_on_both_paths(
+            self, boost, fixture_tap_src, tmp_path, monkeypatch):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "sty-tap")
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.0.0\n---\n\nTabs.\n",
+                        "add rule")
+        boost("tap", tap_dir)
+        boost("install", "house-style")
+        monkeypatch.setenv("BOOST_COLOR", "always")
+        note = "1 rule not captured — Boostfiles carry skills only"
+        to_stdout = [ln for ln in boost("bundle", "dump").err.splitlines()
+                     if note in ln]
+        to_file = [ln for ln in boost("bundle", "dump", tmp_path / "Boostfile")
+                   .out.splitlines() if note in ln]
+        assert len(to_stdout) == 1 and to_stdout == to_file
+        assert "\x1b[" in to_stdout[0]
+
+    # -- install: the present check holds tap and version to the line -----
+
+    def test_a_line_from_another_tap_is_not_already_present(self, boost,
+                                                            installed, tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill nosuch/tap:brainstorming\n", encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert ("brainstorming: installed from fixture-tap, Boostfile wants "
+                "nosuch/tap — kept as installed") in _flat(r.out)
+        assert "already present" not in r.out
+        assert "Installed 0 skills, 1 differs from the Boostfile" in r.out
+        assert _lock()["brainstorming"]["tap"] == "fixture-tap"
+
+    def test_a_line_at_another_version_is_not_already_present(self, boost,
+                                                              installed, tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill fixture-tap:brainstorming@9.9.9\n", encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert ("brainstorming: installed 1.4.0, Boostfile wants @9.9.9 — kept "
+                "as installed") in _flat(r.out)
+        assert "Installed 0 skills, 1 differs from the Boostfile" in r.out
+        assert _lock()["brainstorming"]["version"] == "1.4.0"
+
+    def test_both_differences_share_one_warning(self, boost, installed,
+                                                tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill nosuch/tap:brainstorming@9.9.9\n"
+                      "skill fixture-tap:brainstorming@1.4.0\n", encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert ("brainstorming: installed from fixture-tap, Boostfile wants "
+                "nosuch/tap; installed 1.4.0, Boostfile wants @9.9.9 — kept as "
+                "installed") in _flat(r.out)
+        # the exact line alongside it is still simply present
+        assert "Installed 0 skills, 1 already present, 1 differs from the " \
+               "Boostfile" in r.out
+
+    def test_a_local_skill_asked_for_from_a_tap_is_drift(self, boost, tapped,
+                                                         tmp_path):
+        boost("import", _skill_dir(tmp_path / "src", "ab-testing"))
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill fixture-tap:ab-testing\n", encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert ("ab-testing: installed from local, Boostfile wants fixture-tap "
+                "— kept as installed") in _flat(r.out)
+
+    def test_the_dry_run_reports_drift_exactly_as_the_real_run(
+            self, boost, installed, tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill nosuch/tap:brainstorming\n"
+                      "skill fixture-tap:brainstorming@9.9.9\n", encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run")
+        real = boost("bundle", "install", bf)
+        assert "2 differ from the Boostfile" in real.out
+        assert dry.out.replace("would install", "Installed") == real.out
+
+    @pytest.mark.parametrize("kind, relpath, content, name", [
+        ("rule", "rules/house.mdc",
+         "---\nname: house-style\nversion: 1.0.0\n---\n\nTabs.\n",
+         "house-style"),
+        ("workflow", "commands/ship.md",
+         "---\nname: ship-it\nversion: 1.0.0\ndescription: d\n"
+         "allowed-tools: Bash\n---\n\ngo\n", "ship-it"),
+    ], ids=["rule", "workflow"])
+    def test_an_installed_rule_or_workflow_at_another_tap_is_drift(
+            self, boost, fixture_tap_src, tmp_path, kind, relpath, content,
+            name):
+        # Decided, not incidental: the drift check runs before the kind
+        # check, so a rule or workflow the Boostfile pins to another tap or
+        # version "differs" exactly as a skill does. Before it, such a line
+        # read "already installed as a rule — skipped" / "1 already present"
+        # — the reproducibility hole this card closes, for the most invasive
+        # kinds a Boostfile can reach.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "kind-tap")
+        _add_and_commit(tap_dir, relpath, content, "add " + kind)
+        boost("tap", tap_dir)
+        boost("install", name)
+        entry = lockfile.all_installed()[kind][name]
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill other:%s\nskill kind-tap:%s@9.9.9\n"
+                      % (name, name), encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        flat = _flat(r.out)
+        assert ("%s: installed from kind-tap, Boostfile wants other — kept as "
+                "installed" % name) in flat
+        assert ("%s: installed 1.0.0, Boostfile wants @9.9.9 — kept as "
+                "installed" % name) in flat
+        assert "already installed as a %s" % kind not in r.out
+        assert "Installed 0 skills, 2 differ from the Boostfile" in r.out
+        # kept, not replaced
+        assert lockfile.all_installed()[kind][name] == entry
+        # the control: the exact line is still simply present, as that kind
+        bf.write_text("skill kind-tap:%s@1.0.0\n" % name, encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert "%s is already installed as a %s — skipped" % (name, kind) \
+            in r.out
+        assert "Installed 0 skills, 1 already present" in r.out
+        assert "differ" not in r.out
+
+    # -- install: where it looked, and when there was nothing to read ------
+
+    def test_a_missing_default_boostfile_names_where_it_looked(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        from pathlib import Path
+        monkeypatch.chdir(tmp_path)
+        r = boost("bundle", "install", expect=1)
+        assert ("no Boostfile at %s\n" % paths.tilde(Path.cwd() / "Boostfile")
+                in r.err)
+
+    def test_a_dot_slash_path_keeps_its_directory(self, boost, sandbox,
+                                                  tmp_path, monkeypatch):
+        from pathlib import Path
+        monkeypatch.chdir(tmp_path)
+        r = boost("bundle", "install", "./nosuch/Boostfile", expect=1)
+        want = paths.tilde(Path.cwd() / "nosuch" / "Boostfile")
+        assert "no Boostfile at %s\n" % want in r.err
+
+    def test_an_empty_stdin_says_there_was_nothing_to_apply(self, boost, tapped,
+                                                            monkeypatch):
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
+        r = boost("bundle", "install", "-")
+        # the same spelling the journal records the run under
+        assert "nothing to apply: <stdin> has no tap or skill lines" in r.out
+        assert "Installed 0 skills" in r.out
+
+    def test_a_comment_only_file_says_so_in_both_modes(self, boost, tapped,
+                                                       tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("# just a comment\n\n", encoding="utf-8")
+        for extra in ((), ("--dry-run",)):
+            r = boost("bundle", "install", bf, *extra)
+            assert "nothing to apply:" in r.out, extra
+            assert "has no tap or skill lines" in _flat(r.out), extra
+
+    def test_a_file_with_directives_is_not_nothing_to_apply(self, boost,
+                                                            installed, tmp_path):
+        bf = tmp_path / "Boostfile"
+        boost("bundle", "dump", bf)
+        for extra in ((), ("--dry-run",)):
+            r = boost("bundle", "install", bf, *extra)
+            assert "nothing to apply" not in r.out, extra
+            assert "1 already present" in r.out, extra
+
+    # -- --dry-run says what the real run will -----------------------------
+
+    def test_dry_run_misses_a_skill_its_present_tap_lacks(self, boost, tapped,
+                                                          tmp_path):
+        # A pending `tap` line elsewhere in the file used to make every miss
+        # "cannot resolve yet" — exit 0 — where the real run fails with exit 1.
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap other https://example.invalid/other\n"
+                      "skill fixture-tap:ghost\n", encoding="utf-8")
+        r = boost("bundle", "install", bf, "--dry-run", expect=1)
+        assert "ghost not found in tap fixture-tap — skipped" in r.out
+        assert "cannot resolve yet" not in r.out
+        assert "would install 0 skills, add 1 tap, 1 would fail" in r.out
+
+    def test_dry_run_defers_only_what_a_pending_tap_could_supply(
+            self, boost, tapped, tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap acme/other https://example.invalid/other\n"
+                      "skill other:thing\n"      # the pending tap, by its tail
+                      "skill acme/other:thing2\n"  # ...and by its full name
+                      "skill thing3\n",          # unqualified: could be there
+                      encoding="utf-8")
+        r = boost("bundle", "install", bf, "--dry-run")
+        assert r.out.count("cannot resolve yet") == 3
+        assert ("would install 0 skills, add 1 tap, 3 unresolved until tapped"
+                in r.out)
+
+    def test_dry_run_defers_a_line_naming_the_tap_by_its_derived_name(
+            self, boost, sandbox, fixture_tap_src, tmp_path):
+        # The real run names a tap from its URL (`parse_spec`), not from the
+        # line's NAME: `tap myalias <dir>` is tapped as the dir's basename.
+        # A preview that only knew "myalias" called the skill line a miss
+        # (exit 1) while the real run installed it (exit 0). Preview and run
+        # cannot print the same summary — one clones, one does not — so
+        # "agree" is: same exit code, and neither calls the line a failure.
+        src = _copy_tap(fixture_tap_src, tmp_path / "newtap-src")
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap myalias %s\nskill newtap-src:brainstorming\n"
+                      % src.as_posix(), encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run")
+        assert "brainstorming — cannot resolve yet" in dry.out
+        assert "not found" not in dry.out
+        assert ("would install 0 skills, add 1 tap, 1 unresolved until tapped"
+                in dry.out)
+        assert "would fail" not in dry.out
+        real = boost("bundle", "install", bf)
+        assert "tapped newtap-src" in real.out
+        assert "installed brainstorming" in real.out
+        assert "failed" not in real.out
+        assert lockfile.installed()["brainstorming"]["tap"] == "newtap-src"
+
+    def test_dry_run_resolves_a_line_whose_derived_tap_is_already_there(
+            self, boost, sandbox, fixture_tap_src, tmp_path):
+        # Tapped once under its derived name, the tap is present: a line
+        # naming a skill it lacks misses now, in the preview as in the run.
+        src = _copy_tap(fixture_tap_src, tmp_path / "newtap-src")
+        boost("tap", src.as_posix())
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap myalias %s\nskill newtap-src:ghost\n"
+                      % src.as_posix(), encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run", expect=None)
+        assert "cannot resolve yet" not in dry.out
+        assert dry.rc != 0 and "ghost" in dry.out
+
+    def test_dry_run_survives_a_tap_line_it_cannot_parse(self, boost, tapped,
+                                                         tmp_path):
+        # A bare NAME with no URL has no derivable name: the preview keeps
+        # NAME and carries on rather than failing on the parse.
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap foo\nskill brainstorming\n", encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run")
+        assert "would tap foo" in dry.out
+        assert "cannot parse tap spec" not in dry.out + dry.err
+
+    def test_dry_run_remembers_what_it_would_install(self, boost, tapped,
+                                                     tmp_path):
+        # A later line naming the same item meets it as the real run would:
+        # present when it matches, drift when it pins another version.
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill fixture-tap:commit-messages\n"
+                      "skill fixture-tap:commit-messages@1.0.2\n"
+                      "skill fixture-tap:commit-messages@9.9.9\n",
+                      encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run")
+        assert ("would install 1 skill, 1 already present, 1 differs from "
+                "the Boostfile") in dry.out
+        real = boost("bundle", "install", bf)
+        assert ("Installed 1 skill, 1 already present, 1 differs from the "
+                "Boostfile") in real.out
+
+    def test_dry_run_version_mismatch_does_not_claim_to_install(
+            self, boost, tapped, tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill fixture-tap:brainstorming@9.9.9\n", encoding="utf-8")
+        r = boost("bundle", "install", bf, "--dry-run")
+        assert ("brainstorming: Boostfile wants @9.9.9, tap has 1.4.0 — would "
+                "install that") in _flat(r.out)
+        assert "installing that" not in r.out
+        # the same kind-aware noun the real summary uses
+        assert "would install 1 skill" in r.out
+        assert "brainstorming" not in lockfile.installed()
+
+
 # ── edge coverage: import ───────────────────────────────────────────────
 
 class TestImportEdges:
@@ -1818,6 +2119,372 @@ class TestImportEdges:
         r = boost("import", root, "--name", "ghost", expect=1)
         assert "no skill named 'ghost'" in r.err
         assert "available: alpha, beta" in r.err
+
+
+# ── import: provenance, agent scope, the multi-skill table ─────────────────
+
+_URL = "https://git.example.test/team/skills.git"
+
+
+def _flat(text):
+    """Output with wrapping undone: the import warnings fold to the pane."""
+    return " ".join(text.split())
+
+
+def _git(repo, *args):
+    return subprocess.run(
+        ["git", "-c", "user.email=t@boost.test", "-c", "user.name=t", *args],
+        cwd=str(repo), check=True, capture_output=True, text=True,
+        encoding="utf-8").stdout.strip()
+
+
+def _commit_all(repo, msg="skills"):
+    if not (repo / ".git").exists():
+        _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", msg)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+@pytest.fixture()
+def url_remote(tmp_path, monkeypatch):
+    """A real git repo that `boost import _URL` clones, standing in for GitHub.
+
+    ``clone_shallow`` is swapped for a plain ``git clone`` of the local repo, so
+    the clone is a genuine checkout with a genuine HEAD — the commit the lock
+    must record — without the test touching the network. Every clone is
+    logged, so a test can pin that import (and reinstall) still ask for a
+    full, non-sparse checkout.
+    """
+    repo = tmp_path / "remote"
+    repo.mkdir()
+    calls = []
+
+    def clone(url, dest, sparse=True):
+        calls.append((url, sparse))
+        assert url == _URL
+        subprocess.run(["git", "clone", "-q", str(repo), str(dest)],
+                       check=True, capture_output=True)
+
+    monkeypatch.setattr("boost_cli.core.gitutil.clone_shallow", clone)
+    return repo, calls
+
+
+class TestImportProvenance:
+    def test_url_import_records_the_url_and_commit_not_the_temp_clone(
+            self, boost, sandbox, url_remote):
+        repo, calls = url_remote
+        _skill_dir(repo, "url-skill")
+        head = _commit_all(repo)
+        boost("import", _URL)
+        entry = _lock()["url-skill"]
+        assert entry["tap"] == "local"
+        assert entry["source_url"] == _URL
+        assert entry["commit"] == head
+        assert entry["source_dir"] == "url-skill"
+        assert "boost-import-" not in json.dumps(entry)
+        assert calls == [(_URL, False)]        # a full checkout, never sparse
+
+    def test_url_import_of_a_repo_root_skill_records_dot(self, boost, sandbox,
+                                                         url_remote):
+        repo, _ = url_remote
+        (repo / "SKILL.md").write_text(
+            "---\nname: rooted\ndescription: a skill at the repo root\n"
+            "version: 0.2.0\n---\n\nBody.\n", encoding="utf-8")
+        _commit_all(repo)
+        boost("import", _URL)
+        assert _lock()["rooted"]["source_dir"] == "."
+
+    def test_info_shows_the_url_a_url_import_came_from(self, boost, sandbox,
+                                                        url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        head = _commit_all(repo)
+        boost("import", _URL)
+        r = boost("info", "url-skill")
+        assert re.search(r"source\s+%s \(url-skill\)" % re.escape(_URL), r.out)
+        assert re.search(r"commit\s+%s" % head[:9], r.out)
+        assert "boost-import-" not in r.out
+
+    def test_home_prints_the_url_of_a_url_import(self, boost, sandbox,
+                                                 url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        r = boost("home", "url-skill", "--print")
+        assert r.out.strip() == _URL
+
+    def test_reinstall_reclones_a_url_import(self, boost, sandbox, url_remote):
+        # The clone is deleted when import returns, so reinstall used to find
+        # nothing at the recorded path: "local source … is gone — skipped /
+        # Reinstalled 0 skills", exit 1.
+        repo, calls = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        md = repo / "url-skill" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8").replace(
+            "version: 0.1.0", "version: 0.2.0"), encoding="utf-8")
+        head = _commit_all(repo, "bump")
+        r = boost("reinstall", "url-skill")
+        assert "reinstalled url-skill (from %s at %s)" % (_URL, head[:7]) in r.out
+        assert "Reinstalled 1 skill" in r.out
+        entry = _lock()["url-skill"]
+        assert (entry["version"], entry["commit"]) == ("0.2.0", head)
+        assert entry["source_url"] == _URL
+        assert "version: 0.2.0" in (paths.store_dir() / "url-skill"
+                                    / "SKILL.md").read_text(encoding="utf-8")
+        assert calls == [(_URL, False), (_URL, False)]
+
+    def test_reinstall_names_the_url_when_the_commit_is_unknown(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # A clone git cannot read a HEAD from records no commit; the line
+        # still says where the skill came from rather than "at " and nothing.
+        src = _skill_dir(tmp_path, "url-skill")
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest, sparse=True: shutil.copytree(src, dest))
+        boost("import", _URL)
+        assert _lock()["url-skill"]["commit"] == ""
+        r = boost("reinstall", "url-skill")
+        assert "reinstalled url-skill (from %s)" % _URL in r.out
+
+    def test_reinstall_keeps_a_url_import_when_the_skill_left_the_repo(
+            self, boost, sandbox, url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _skill_dir(repo, "other")
+        _commit_all(repo)
+        boost("import", _URL, "--name", "url-skill")
+        shutil.rmtree(repo / "url-skill")
+        _commit_all(repo, "drop url-skill")
+        r = boost("reinstall", "url-skill", expect=1)
+        assert "url-skill: %s has no SKILL.md at url-skill" % _URL in r.out
+        assert "Reinstalled 0 skills" in r.out
+        assert _lock()["url-skill"]["source_url"] == _URL
+
+    def test_reinstall_refuses_a_lock_path_that_leaves_the_clone(
+            self, boost, sandbox, url_remote, tmp_path, monkeypatch):
+        # The lock is hand-editable; a source_dir climbing out of the clone
+        # must not make reinstall copy whatever sits beside it.
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        scratch = tmp_path / "scratch"
+        _skill_dir(scratch, "escape", version="6.6.6")
+        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        lock["skills"]["url-skill"]["source_dir"] = "../../escape"
+        paths.lockfile_path().write_text(json.dumps(lock), encoding="utf-8")
+        r = boost("reinstall", "url-skill", expect=1)
+        assert "has no SKILL.md at ../../escape" in r.out
+        assert _lock()["url-skill"]["version"] == "0.1.0"
+
+    def test_url_import_all_records_each_skills_path(self, boost, sandbox,
+                                                     url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo / "skills", "alpha")
+        _skill_dir(repo / "skills", "beta")
+        head = _commit_all(repo)
+        boost("import", _URL, "--all")
+        lock = _lock()
+        assert {n: (lock[n]["source_dir"], lock[n]["source_url"], lock[n]["commit"])
+                for n in ("alpha", "beta")} == {
+            "alpha": ("skills/alpha", _URL, head),
+            "beta": ("skills/beta", _URL, head)}
+
+    def test_url_clone_is_removed_after_import(self, boost, sandbox, url_remote,
+                                               monkeypatch, tmp_path):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+        boost("import", _URL)
+        assert list(scratch.iterdir()) == []
+
+    def test_local_import_records_an_absolute_source(self, boost, sandbox,
+                                                     tmp_path, monkeypatch):
+        # `boost import ./x` recorded "x", which resolves only from the
+        # directory the import ran in — reinstall from anywhere else said the
+        # source was gone.
+        _skill_dir(tmp_path, "rel-skill")
+        monkeypatch.chdir(tmp_path)
+        boost("import", "rel-skill")
+        entry = _lock()["rel-skill"]
+        assert entry["source_dir"] == str(tmp_path / "rel-skill")
+        assert entry["source_url"] == ""
+        assert entry["commit"] == ""
+        monkeypatch.chdir(sandbox)
+        r = boost("reinstall", "rel-skill")
+        assert "reinstalled rel-skill (local, from" in r.out
+
+    def test_reinstall_does_not_read_a_url_imports_path_from_the_cwd(
+            self, boost, sandbox, url_remote, tmp_path, monkeypatch):
+        # A URL import's source_dir is relative to its repo. Read as a local
+        # path it would resolve against the cwd — a different skill that
+        # happens to sit at ./url-skill must not be what reinstall installs.
+        repo, calls = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        decoy = tmp_path / "cwd"
+        _skill_dir(decoy, "url-skill", version="9.9.9")
+        monkeypatch.chdir(decoy)
+        boost("reinstall", "url-skill")
+        assert _lock()["url-skill"]["version"] == "0.1.0"
+        assert len(calls) == 2
+
+    def test_sync_keeps_a_url_import_whose_store_dir_is_missing(
+            self, boost, sandbox, url_remote):
+        # sync never clones, so it cannot repair this — but dropping the lock
+        # entry would throw away the one record of where the skill came from.
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        shutil.rmtree(paths.store_dir() / "url-skill")
+        r = boost("sync")
+        assert ("`boost reinstall url-skill` clones it again from %s" % _URL
+                in _flat(r.out))
+        assert _lock()["url-skill"]["source_url"] == _URL
+
+    def test_import_over_a_tap_install_warns_it_loses_its_update_source(
+            self, boost, installed, tapped, tmp_path):
+        copy = tmp_path / "copy" / "brainstorming"
+        shutil.copytree(tapped / "skills" / "brainstorming", copy)
+        r = boost("import", copy)
+        assert ("brainstorming was installed from fixture-tap — it is a local "
+                "import now, so `boost update` will not refresh it") in _flat(r.out)
+        assert "`boost install fixture-tap:brainstorming --force`" in _flat(r.out)
+        assert _lock()["brainstorming"]["tap"] == "local"
+        # ...and the named remedy really does put the tap's copy back.
+        boost("install", "fixture-tap:brainstorming", "--force")
+        assert _lock()["brainstorming"]["tap"] == "fixture-tap"
+
+    def test_import_all_over_a_tap_install_warns_too(self, boost, installed,
+                                                     tapped, tmp_path):
+        root = tmp_path / "many"
+        shutil.copytree(tapped / "skills" / "brainstorming",
+                        root / "brainstorming")
+        _skill_dir(root, "fresh")
+        r = boost("import", root, "--all")
+        assert _flat(r.out).count("was installed from") == 1
+        assert "brainstorming was installed from fixture-tap" in _flat(r.out)
+
+    def test_reimporting_a_local_skill_does_not_warn(self, boost, sandbox,
+                                                     tmp_path):
+        d = _skill_dir(tmp_path, "mine")
+        boost("import", d)
+        r = boost("import", d)
+        assert "was installed from" not in r.out
+
+
+class TestImportAgentScope:
+    def test_narrowing_names_the_links_it_leaves_behind(self, boost, sandbox,
+                                                        tmp_path):
+        d = _skill_dir(tmp_path, "scoped")
+        boost("import", d)
+        r = boost("import", d, "--agent", "cursor")
+        assert "linked → cursor" in r.out
+        assert ("scoped is still linked into claude-code, windsurf, antigravity, "
+                "outside the --agent scope just declared") in _flat(r.out)
+        assert "`boost sync --prune` removes those links" in _flat(r.out)
+        # What the warning names is exactly what sync --diff then reports.
+        diff = boost("sync", "--diff")
+        assert "linked outside declared scope (3)" in diff.out
+
+    def test_an_inherited_narrowing_does_not_claim_it_was_just_declared(
+            self, boost, sandbox, tmp_path):
+        # A plain re-import keeps the scope an earlier `--agent` recorded, and
+        # the stray links it reports are real — but nothing was declared on
+        # this run, so "just declared" sent the reader looking for a flag
+        # they never passed.
+        d = _skill_dir(tmp_path, "scoped")
+        boost("import", d)
+        boost("import", d, "--agent", "cursor")
+        r = boost("import", d)
+        assert ("scoped is still linked into claude-code, windsurf, antigravity, "
+                "outside the --agent scope an earlier run declared") in _flat(r.out)
+        assert "just declared" not in _flat(r.out)
+        assert "`boost sync --prune` removes those links" in _flat(r.out)
+
+    def test_a_fresh_narrow_import_leaves_nothing_to_warn_about(
+            self, boost, sandbox, tmp_path):
+        r = boost("import", _skill_dir(tmp_path, "scoped"), "--agent", "cursor")
+        assert "outside the --agent scope" not in r.out
+
+    def test_an_unnarrowed_reimport_does_not_warn(self, boost, sandbox,
+                                                  tmp_path):
+        d = _skill_dir(tmp_path, "wide")
+        boost("import", d)
+        r = boost("import", d)
+        assert "outside the --agent scope" not in r.out
+
+    def test_import_all_narrowing_warns_per_skill(self, boost, sandbox,
+                                                  tmp_path):
+        root = tmp_path / "many"
+        _skill_dir(root, "alpha")
+        _skill_dir(root, "beta")
+        boost("import", root, "--all")
+        r = boost("import", root, "--all", "--agent", "cursor")
+        assert "alpha is still linked into" in _flat(r.out)
+        assert "beta is still linked into" in _flat(r.out)
+
+
+class TestImportMultiSkillTable:
+    _LONG = ("Use when you need to design and implement an A/B test for a "
+             "product feature, including sample size and guardrail metrics")
+
+    def _root(self, tmp_path):
+        root = tmp_path / "many"
+        for n in ("alpha", "beta"):
+            (root / n).mkdir(parents=True)
+            (root / n / "SKILL.md").write_text(
+                "---\nname: %s\ndescription: %s\nversion: 0.1.0\n---\n\nBody.\n"
+                % (n, self._LONG), encoding="utf-8")
+        return root
+
+    def test_a_wide_pane_shows_the_whole_description(self, boost, sandbox,
+                                                     tmp_path, monkeypatch):
+        # A 60-character pre-slice cut rows mid-word ("an A/B tes") with
+        # ~120 columns of a 200-column pane unused.
+        monkeypatch.setenv("COLUMNS", "200")
+        r = boost("import", self._root(tmp_path), expect=1)
+        assert r.out.count(self._LONG) == 2
+
+    def test_a_narrow_pane_still_fits_the_row(self, boost, sandbox, tmp_path,
+                                              monkeypatch):
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("import", self._root(tmp_path), expect=1)
+        rows = [ln for ln in r.out.splitlines() if ln.startswith(("alpha", "beta"))]
+        assert len(rows) == 2
+        assert all(len(ln) <= 60 and ln.endswith("…") for ln in rows)
+
+
+class TestErrorFollowsItsTable:
+    def test_a_piped_error_lands_after_the_listing_it_refers_to(
+            self, sandbox, tmp_path):
+        # stdout into a pipe is block-buffered and stderr is not, so the
+        # error used to reach a merged capture before the table it follows.
+        root = tmp_path / "many"
+        _skill_dir(root, "alpha")
+        _skill_dir(root, "beta")
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        env = dict(os.environ, PYTHONPATH=repo_root, PYTHONIOENCODING="utf-8")
+        env.pop("COLUMNS", None)
+        proc = subprocess.run(
+            [sys.executable, "-m", "boost_cli", "import", str(root)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, env=env, timeout=120, check=False)
+        text = proc.stdout.decode("utf-8")
+        assert proc.returncode == 1, text
+        assert text.index("==> 2 skills in") < text.index("Error: multiple skills")
+        assert text.index("beta") < text.index("Error: multiple skills")
 
 
 class TestSnapshotEdges:

@@ -194,6 +194,16 @@ class SetupOutcome:
     unindexed: list[str] = field(default_factory=list)
     #: Items in the keyword index after this run.
     entries: int = 0
+    #: Why the published vectors cannot serve this machine, and the one thing
+    #: that would change that (``shards.remedy``); both empty when they can,
+    #: or when none were asked for. Set by :meth:`judge_vectors`, which both
+    #: the dry run and the live run call on the same manifest, so the preview
+    #: cannot promise shards the real run then refuses — it did, "import 5
+    #: shard(s)" on a machine whose every shard came back ``incompatible``.
+    #: Never part of :attr:`ok`: keyword search is the documented default, and
+    #: vectors that do not apply are a missed upgrade, not a broken setup.
+    vectors_refused: str = ""
+    vectors_remedy: str = ""
 
     @property
     def selected(self) -> int:
@@ -223,6 +233,37 @@ class SetupOutcome:
     def ok(self) -> bool:
         """Whether this run may claim the machine is ready."""
         return self.searchable and not self.every_attempt_failed
+
+    def judge_vectors(self, manifest: dict) -> bool:
+        """Record whether `manifest`'s shards can serve this machine at all.
+
+        Asked once, from the manifest alone, before any tap is looked up or
+        any byte is downloaded — the question does not depend on the tap, so
+        answering it per tap is what used to produce seven identical lines,
+        or (in quickstart) none. Returns True when the shards are usable.
+
+        ``shards`` is imported here, not at the top: `boost mcp` imports this
+        module to seed a catalog, and has no use for urllib or the manifest.
+        """
+        from . import shards
+        why = shards.incompatible(manifest)
+        if not why:
+            return True
+        self.vectors_refused = why
+        self.vectors_remedy = shards.remedy(manifest)
+        return False
+
+    def vectors_note(self, dry_run: bool = False) -> tuple[str, str]:
+        """(line, remedy) saying why no published vectors load, or ("", "").
+
+        The dry run explains the zero in its "import 0 shard(s)" line; the
+        live run says nothing arrived. Same reason, same remedy, one line each.
+        """
+        if not self.vectors_refused:
+            return "", ""
+        line = ("(0 because %s)" if dry_run
+                else "no vectors imported — %s") % self.vectors_refused
+        return line, self.vectors_remedy
 
     def _count(self, names: list[str], what: str) -> str:
         """"K of N registries <what>", naming them while they are a handful."""
