@@ -133,6 +133,48 @@ def sandbox(tmp_path, monkeypatch):
     return home
 
 
+@pytest.fixture()
+def vector_store(sandbox, monkeypatch):
+    """Write a dense store into the sandbox, as `dense.status` reads it.
+
+    Plain sqlite, `meta` plus one `chunks` row and no vec0: `status` reads
+    `meta` without the extra, so to every question short of a query this is
+    the real store — no stubbed status dict whose keys could drift from the
+    ones the code under test reads. `have_backend` is stubbed present so the
+    ladder reaches the store at all; without it a runner with no `[rag]`
+    extra stops at `no-backend` and one with it does not, and the test means
+    different things on each. Returns a writer taking the space to stamp,
+    voyage-4 by default: the store a user with VOYAGE_API_KEY has paid for.
+    ``provider=None`` stamps a store with no recorded space.
+    """
+    import json
+    import sqlite3
+
+    from boost_cli.core import dense
+    monkeypatch.setattr(dense, "have_backend", lambda: True)
+
+    def write(provider="voyage", model="voyage-4", dim=1024,
+              version=dense.INDEX_VERSION):
+        meta = {"version": version, "provider": provider, "model": model,
+                "dim": dim, "chunks": 1}
+        dense.db_path().parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(str(dense.db_path()))
+        try:
+            con.execute("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)")
+            con.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY,"
+                        " name TEXT)")
+            con.execute("INSERT INTO chunks (name) VALUES ('x')")
+            con.executemany("INSERT INTO meta (k, v) VALUES (?, ?)",
+                            [(k, json.dumps(v)) for k, v in meta.items()
+                             if v is not None])
+            con.commit()
+        finally:
+            con.close()
+        return dense.status()
+
+    return write
+
+
 class CliResult:
     def __init__(self, rc: int, out: str, err: str):
         self.rc, self.out, self.err = rc, out, err

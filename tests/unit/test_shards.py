@@ -161,6 +161,7 @@ def _machine(monkeypatch, prov, model, dim, local=True):
         monkeypatch.delenv(env, raising=False)
 
 
+@pytest.mark.usefixtures("sandbox")
 class TestRemedy:
     """The one next action for a refused manifest, read by every surface.
 
@@ -168,6 +169,9 @@ class TestRemedy:
     keyless shards, and the only advice anywhere was `boost reindex --dense` —
     which, with that key set, embeds through the paid API. The free path
     (drop the key, take the download) was never mentioned.
+
+    Sandboxed because the answer reads the store on disk: unsandboxed, these
+    tests would judge whatever store the developer's own machine holds.
     """
 
     def test_a_key_that_outranks_the_local_model_is_named_with_its_cost(
@@ -240,6 +244,69 @@ class TestRemedy:
         st = {"reason": "no-backend"}
         monkeypatch.setattr(dense, "status", lambda **k: st)
         assert shards.remedy({**SPACE}) == dense.fix_hint("no-backend")
+
+    # The free path needs somewhere to land. `dense.import_shard` merges a
+    # shard only into a store in its own space, so for a user whose vectors
+    # were built with the key, "unset it" bought a refused import ("provider
+    # mismatch: store 'voyage', shard 'local'") and knocked their paid store
+    # offline — `provider-changed`, whose hint is the `--force` rebuild that
+    # throws those vectors away. Measured on a real voyage-4 store.
+
+    def test_a_store_built_with_the_key_is_not_told_to_drop_it(
+            self, monkeypatch, vector_store):
+        _machine(monkeypatch, "voyage", "voyage-4", 1024)
+        assert vector_store()["ready"]       # a working store, not a stub
+        fix = shards.remedy({**SPACE})
+        assert "unset" not in fix
+        assert "cannot merge" in fix
+        # Keeping it current is the ordinary command, not the rebuild.
+        assert "`boost reindex --dense`" in fix and "--force" not in fix
+        assert "voyage" in fix and "paid" in fix
+
+    def test_no_store_on_disk_keeps_the_free_path(self, monkeypatch):
+        from boost_cli.core import dense
+        _machine(monkeypatch, "voyage", "voyage-4", 1024)
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        assert not dense.status()["store_exists"]
+        assert "`unset VOYAGE_API_KEY`" in shards.remedy({**SPACE})
+
+    def test_a_store_with_no_recorded_space_keeps_the_free_path(
+            self, monkeypatch, vector_store):
+        # `import_shard` lets such a store adopt the shard's space, so it is
+        # no obstacle to the download.
+        _machine(monkeypatch, "voyage", "voyage-4", 1024)
+        assert vector_store(provider=None)["store_exists"]
+        assert "`unset VOYAGE_API_KEY`" in shards.remedy({**SPACE})
+
+    def test_a_store_already_in_the_published_space_keeps_the_free_path(
+            self, monkeypatch, vector_store):
+        # Built keyless, key exported since: dropping the key is exactly
+        # what puts this store back in service, and the shards merge into it.
+        _machine(monkeypatch, "voyage", "voyage-4", 1024)
+        st = vector_store(**SPACE)
+        assert st["reason"] == "provider-changed"
+        assert "`unset VOYAGE_API_KEY`" in shards.remedy({**SPACE})
+
+    def test_a_keyless_store_of_another_model_is_another_space(
+            self, monkeypatch, vector_store):
+        # Provider alone is not the space: dropping the key would leave this
+        # store `model-changed`, and the import would refuse on the model.
+        _machine(monkeypatch, "voyage", "voyage-4", 1024)
+        vector_store(provider="local", model="other/model", dim=384)
+        assert "unset" not in shards.remedy({**SPACE})
+
+    def test_a_store_in_another_space_that_cannot_serve_defers_to_its_table(
+            self, monkeypatch, vector_store):
+        # Its own trouble comes first, in the words `boost doctor` uses for
+        # it; "keeps them current" would be false of a store that is not
+        # serving at all.
+        from boost_cli.core import dense
+        _machine(monkeypatch, "voyage", "voyage-4", 1024)
+        st = vector_store(model="voyage-3")
+        assert st["reason"] == "model-changed"
+        fix = shards.remedy({**SPACE})
+        assert fix == dense.fix_hint("model-changed", st)
+        assert "unset" not in fix
 
 
 class TestRows:

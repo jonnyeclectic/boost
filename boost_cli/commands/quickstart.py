@@ -171,7 +171,8 @@ def _vectors_refused(outcome: bootstrap.SetupOutcome,
     every row, so rendering its rows would print the reason seven times.
     """
     line, fix = outcome.vectors_note(dry_run)
-    out.info(line, wrap=True)
+    # Muted like every other zero-reason line: a missed upgrade, not a fault.
+    _muted(line)
     _muted(fix)
 
 

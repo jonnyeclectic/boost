@@ -248,6 +248,7 @@ class TestIndexFailuresAreNotNetworkFailures:
                         % (cap + 1, cap + 2))
 
 
+@pytest.mark.usefixtures("sandbox")
 class TestPublishedVectorsThisMachineCannotUse:
     """A refused manifest is judged once, and both runs read that judgement.
 

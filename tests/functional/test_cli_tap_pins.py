@@ -136,6 +136,30 @@ class TestVectorsResyncWhenATapMoves:
         assert "no matching shard" in res.out
         assert "reindex --dense" in res.out
 
+    def test_a_manifest_in_another_space_is_not_called_not_yet_published(
+            self, boost, moved, monkeypatch, vector_store):
+        # A keyed user's voyage store against the keyless manifest: `sync`
+        # answers `incompatible` for every tap, and "no matching shard yet"
+        # promised a shard that can never match this store.
+        from boost_cli.core import dense, embed, shards
+        monkeypatch.setattr(embed, "provider", lambda: "voyage")
+        monkeypatch.setattr(embed, "model", lambda: "voyage-4")
+        monkeypatch.setattr(embed, "dimension", lambda: 1024)
+        monkeypatch.setattr(embed, "local_available", lambda: True)
+        assert vector_store()["ready"]
+        monkeypatch.setattr(dense, "ready", lambda: True)
+        monkeypatch.setattr(shards, "fetch_manifest", lambda *a, **k: {
+            "version": 1, "provider": "local",
+            "model": "BAAI/bge-small-en-v1.5", "dim": 384,
+            "shards": [], "_url": "file:///x"})
+        res = boost("update", "--taps-only", "--force")
+        flat = " ".join(res.out.split())
+        assert "yet" not in flat
+        assert "stale" in flat
+        assert "cannot merge" in flat
+        assert "`boost reindex --dense` keeps them current" in flat
+        assert "unset" not in flat
+
     def test_an_unreachable_manifest_still_reports_the_staleness(
             self, boost, moved, monkeypatch):
         from boost_cli.core import dense, shards

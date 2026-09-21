@@ -243,18 +243,43 @@ def remedy(manifest: dict) -> str:
     when the local model is here to take over — without it, dropping the key
     leaves no provider at all, and the shards still cannot load.
 
+    The free path also needs somewhere to land, so the store on disk is
+    asked too. ``dense.import_shard`` merges a shard only into a store in its
+    own space: for a user whose vectors were built with the key, "unset it"
+    bought a refused import ("provider mismatch: store 'voyage', shard
+    'local'"), and knocked the paid store offline on the way — it reads as
+    ``provider-changed``, whose hint is the ``--force`` rebuild that throws
+    every one of those vectors away. That user is told the shards cannot
+    merge, and that the ordinary `boost reindex --dense` keeps their store
+    current. A store the import would adopt (no recorded space) or already
+    matches is no obstacle, and a store that is not serving at all — a
+    stale format included, though the import would replace that one — is
+    answered by its own table first, as `boost doctor` answers it.
+
     No provider at all is not this function's question: that is the dense
     store's ladder (kill switch, missing extra, missing key), and
     ``dense.fix_hint`` already answers it for `boost doctor` and `boost
     search`. A second answer here could only disagree with theirs.
     """
+    from . import dense
     prov = embed.provider()
+    st = dense.status()
     if prov is None:
-        from . import dense
-        st = dense.status()
         return dense.fix_hint(st.get("reason") or "", st)
     paid = prov in embed.KEY_ENV
     how = ("through %s's paid API" % prov) if paid else "locally"
+    built = st.get("built_provider")
+    if built and (built, st.get("built_model"), st.get("built_dim")) != (
+            manifest.get("provider"), manifest.get("model"),
+            manifest.get("dim")):
+        # The same three fields, compared the same way, as `import_shard`'s
+        # refusal — this is a forecast of that refusal, not a second rule.
+        if st.get("reason"):
+            return dense.fix_hint(st["reason"], st)
+        return ("this machine's vectors were built with %s, and the published"
+                " %s shards cannot merge into them — `boost reindex --dense`"
+                " keeps them current %s"
+                % (built, manifest.get("provider"), how))
     if manifest.get("provider") == "local" and paid and embed.local_available():
         keys = [env for name, env in embed.KEY_ENV.items()
                 if name == prov or os.environ.get(env)]

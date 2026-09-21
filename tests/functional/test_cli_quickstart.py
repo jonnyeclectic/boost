@@ -460,6 +460,34 @@ class TestQuickstartWithAKeyExported:
         assert REFUSAL in dry and REFUSAL in live
         assert fix in dry and fix in live
 
+    def test_a_store_built_with_the_key_hears_it_cannot_take_the_shards(
+            self, boost, defaults_manifest, keyed_machine, vector_store):
+        assert vector_store()["ready"]
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "(0 because %s)" % REFUSAL in out
+        assert "unset" not in out
+        assert "cannot merge" in out
+
+    def test_the_refusal_is_muted_like_every_other_zero_reason(
+            self, capsys, monkeypatch):
+        # Its siblings — "(0 because the manifest could not be read)",
+        # "(0 because none … published)" — are muted; this one printed at
+        # full strength, in both the dry run and the live run.
+        from boost_cli.commands import quickstart
+        from boost_cli.core import bootstrap
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        monkeypatch.setenv("COLUMNS", "40")
+        outcome = bootstrap.SetupOutcome(vectors_refused=REFUSAL,
+                                         vectors_remedy="`boost x` fixes it")
+        for dry_run in (True, False):
+            capsys.readouterr()
+            quickstart._vectors_refused(outcome, dry_run=dry_run)
+            lines = capsys.readouterr().out.splitlines()
+            assert len(lines) > 2                   # the reason folded
+            for line in lines:
+                assert line.startswith("  \033[2m") and line.endswith("\033[0m")
+
     def test_the_kill_switch_is_named_as_the_reason_and_the_remedy(
             self, boost, defaults_manifest, monkeypatch):
         # The extra is installed, so "no embedding backend" was false; the
@@ -739,6 +767,21 @@ class TestFetchShards:
         both = _flat(res.out + res.err)
         assert "`unset VOYAGE_API_KEY`" in both
         assert "`boost reindex --dense`" in both and "paid" in both
+        assert keyed_machine == []
+
+    def test_a_store_built_with_the_key_is_not_told_to_unset_it(
+            self, boost, fixture_tap_src, manifest, keyed_machine,
+            vector_store):
+        # The free path is a refused import for this user, and a paid store
+        # knocked offline on the way there.
+        boost("tap", str(fixture_tap_src))
+        assert vector_store()["ready"]
+        res = boost("reindex", "--fetch-shards", expect=1)
+        both = _flat(res.out + res.err)
+        assert "unset" not in both
+        assert "cannot merge" in both
+        assert "`boost reindex --dense` keeps them current" in both
+        assert "--force" not in both
         assert keyed_machine == []
 
     def test_a_tap_with_no_published_shard_is_reported_not_embedded(
