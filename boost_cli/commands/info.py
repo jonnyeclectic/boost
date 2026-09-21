@@ -1028,7 +1028,7 @@ def cmd_log(argv):
 
 def cmd_home(argv):
     ap = cliparse.parser(prog="boost home",
-                                 description="Open a skill's GitHub page in the browser")
+                                 description="Open an item's GitHub page in the browser")
     ap.add_argument("name")
     ap.add_argument("--print", dest="print_only", action="store_true",
                     help="print the URL without opening a browser")

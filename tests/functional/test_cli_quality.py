@@ -1675,6 +1675,40 @@ class TestChangelog:
         r = boost("changelog", "brainstorming")
         assert "fetch --unshallow" in " ".join(r.out.split())
 
+    def test_shallow_note_on_a_deepened_clone_is_gated_on_n(
+            self, boost, installed):
+        # A clone deepened past three commits is still shallow. The note used
+        # to need a log shorter than three lines, so it went quiet here even
+        # when git returned fewer entries than -n asked for.
+        clone = paths.repos_dir() / "fixture-tap"
+        skill_md = next(p for p in clone.rglob("SKILL.md")
+                        if p.parent.name == "brainstorming")
+
+        def git(*a):
+            return subprocess.run(
+                ["git", "-C", str(clone), "-c", "user.name=Deepen",
+                 "-c", "user.email=deepen@boost.test", *a],
+                check=True, capture_output=True, text=True).stdout
+
+        for i in range(3):
+            with skill_md.open("a", encoding="utf-8") as fh:
+                fh.write("\nrevision %d\n" % i)
+            git("commit", "-qam", "revise brainstorming %d" % i)
+        # `.git/shallow` names the boundary commits. The root keeps all four
+        # in the log, the shape `fetch --deepen` leaves on a longer history.
+        root = git("rev-list", "--max-parents=0", "HEAD")
+        (clone / ".git" / "shallow").write_text(root, encoding="utf-8")
+
+        def changelog(*extra):
+            r = boost("changelog", "brainstorming", *extra)
+            return (sum("revise brainstorming" in ln or "fixture skills" in ln
+                        for ln in r.out.splitlines()),
+                    "fetch --unshallow" in " ".join(r.out.split()))
+
+        assert changelog() == (4, True)           # 4 < the default 20
+        assert changelog("-n", "4") == (4, False)  # everything asked for came back
+        assert changelog("-n", "2") == (2, False)  # 2 < 3, but not < 2
+
     def test_a_rule_is_logged_over_its_file_not_its_directory(
             self, boost, sibling_rules_tap):
         # Not installed: resolved from the catalog. The sibling commit only

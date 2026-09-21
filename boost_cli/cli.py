@@ -82,7 +82,7 @@ COMMANDS = [
     ("preview",     "info", "info", "Render a SKILL.md with rich formatting"),
     ("explain",     "info", "info", "Explain what a skill does in plain English"),
     ("log",         "info", "info", "Git log for a skill, or boost's activity log"),
-    ("home",        "info", "info", "Open a skill's GitHub page in the browser"),
+    ("home",        "info", "info", "Open an item's GitHub page in the browser"),
     ("deps",        "info", "info", "Show dependency & conflict relationships"),
     ("tag",         "info", "info", "Custom labels for organizing skills"),
     # Registry (Taps) (5)
@@ -113,7 +113,7 @@ COMMANDS = [
     ("decay",       "chk", "quality", "Flag skills irrelevant to your current stack"),
     ("heal",        "chk", "quality", "Self-diagnose & repair the boost environment"),
     ("conflict",    "chk", "quality", "Detect contradictory rules between skills"),
-    ("changelog",   "chk", "quality", "Show a skill's upstream change history"),
+    ("changelog",   "chk", "quality", "Show an item's upstream change history"),
     ("attest",      "chk", "safety", "Display/verify the install record for skills"),
     ("health",      "chk", "quality", "Dashboard of skill-environment health"),
     ("trust",       "chk", "quality", "Manage signing keys & verify tap provenance"),

@@ -1370,7 +1370,7 @@ def cmd_conflict(argv):
 def cmd_changelog(argv):
     ap = cliparse.parser(
         prog="boost changelog",
-        description="Show a skill's upstream change history")
+        description="Show an item's upstream change history")
     ap.add_argument("name", metavar="NAME")
     ap.add_argument("-n", type=util.positive_int, default=20, metavar="N",
                     help="number of entries (default 20)")
@@ -1405,9 +1405,11 @@ def cmd_changelog(argv):
         out.info(line)
     if not lines:
         out.warn("no history found for %s in %s" % (rel, tap.name))
-    # A short log is not evidence of a shallow clone: a local-path tap is
-    # complete, and there `fetch --unshallow` fails.
-    if len(lines) < 3 and gitutil.is_shallow(tap.path):
+    # Fewer entries than -n asked for means git ran out of history. On a
+    # shallow clone that end may be the cut, not the first commit, however
+    # far the clone was deepened. A short log alone proves nothing: a
+    # local-path tap is complete, and there `fetch --unshallow` fails.
+    if len(lines) < args.n and gitutil.is_shallow(tap.path):
         note = ("(shallow clone: run `git -C %s fetch --unshallow` "
                 "for full history)" % _tilde(tap.path))
         for line in out.wrap(note, max(out.term_width() - 2, 20)):
