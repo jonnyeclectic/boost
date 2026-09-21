@@ -138,6 +138,15 @@ class TestTheIntervalRefusesToClaimCertainty:
             lo, hi = MOD.wilson(k, n)
             assert 0.0 <= lo <= hi <= 1.0, (k, n, lo, hi)
 
+    def test_the_edges_are_exact(self):
+        # In real arithmetic the bound IS 0 at k=0 and 1 at k=n. Floating
+        # point misses by ~1e-17 at some N (11, 22, 88, ...), and a lower bound
+        # of 2.8e-17 compared with `>` against a ceiling of 0 convicted a
+        # host that had made no false call at all.
+        for n in range(1, 3000):
+            assert MOD.wilson(0, n)[0] == 0.0, n
+            assert MOD.wilson(n, n)[1] == 1.0, n
+
     def test_the_point_estimate_sits_inside_its_interval(self):
         for k, n in ((1, 3), (2, 3), (5, 10), (7, 9)):
             lo, hi = MOD.wilson(k, n)
@@ -246,10 +255,14 @@ class TestTheCeilingMustBeReachable:
         assert MOD.wilson(0, need)[1] <= ceiling
         assert MOD.wilson(0, need - 1)[1] > ceiling
 
-    def test_a_ceiling_of_zero_is_never_judgeable(self):
+    # 30 happens to give a lower bound of exactly 0.0; 11, 22 and 88 are
+    # where k=0 used to come out at ~1e-17 and read as a conviction.
+    @pytest.mark.parametrize("n", [11, 22, 30, 88])
+    def test_a_ceiling_of_zero_is_never_judgeable(self, n):
         assert MOD.min_n_for_ceiling(0.0) == 0
-        m = MOD.score_host(self.ROWS, {"c1": [True] * 30, "n1": [False] * 30})
+        m = MOD.score_host(self.ROWS, {"c1": [True] * n, "n1": [False] * n})
         assert "any sample size" in (MOD.unjudgeable(m, 0.0) or "")
+        assert not [r for r in MOD.verdict(m, 0.60, 0.0) if "false-call" in r]
 
     def test_too_small_a_sample_is_inconclusive_not_a_failure(self):
         # The defect, inverted: a flawless host used to be told it FAILED.
@@ -424,19 +437,28 @@ class TestMainReportsWhatItJudged:
         from boost_cli.core import lockfile
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr(lockfile, "all_installed",
-                            lambda: {"skill": {}, "rule": {}, "workflow": {}})
+                            lambda: {"skill": {}, "rule": {"boost-first": {}},
+                                     "workflow": {}})
         monkeypatch.setattr(MOD, "claude_available", lambda: True)
         rows = MOD.load_set(MOD.DEFAULT_SET)
         call = {r["prompt"] for r in rows if r["expect"] == "call"}
+
+        # A real stream opens with the init event naming the tool surface, so
+        # the fake's does too; the prompt rides on the first line so the probe
+        # can answer from it.
+        init = json.dumps({"type": "system", "subtype": "init",
+                           "tools": ["a", "b", "c"], "mcp_servers": [{}]})
 
         def go(*argv: str, host: str = "perfect") -> tuple[int, str, str]:
             # "timeout": every should-NOT-call prompt comes back empty.
             monkeypatch.setattr(
                 MOD, "run_claude", lambda prompt, timeout, cfg=None:
-                None if host == "timeout" and prompt not in call else prompt)
+                None if host == "timeout" and prompt not in call
+                else prompt + "\n" + init)
             monkeypatch.setattr(
                 MOD, "called_boost",
-                lambda events: host == "always" or events in call)
+                lambda events: host == "always"
+                or events.split("\n", 1)[0] in call)
             rc = MOD.main(list(argv))
             cap = capsys.readouterr()
             return rc, cap.out, cap.err
@@ -510,6 +532,34 @@ class TestMainReportsWhatItJudged:
         _rc, out, err = run()
         assert "context:" in out
         assert "context:" not in err
+
+    def test_json_sends_every_context_line_to_stderr(self, run):
+        # All three lines a real run prints: the rules count, the rules
+        # caveat, and the tool surface from the init event.
+        _rc, out, err = run("--json")
+        json.loads(out)
+        assert "1 rule(s) installed" in err
+        assert "these are standing instructions" in err
+        assert "host offered 3 tool(s) across 1 MCP server(s)" in err
+        assert "host offered" not in out
+
+    def test_json_sends_a_lock_file_error_to_stderr(self, run, monkeypatch):
+        from boost_cli.core import lockfile
+
+        def broken():
+            raise OSError("unreadable")
+        monkeypatch.setattr(lockfile, "all_installed", broken)
+        _rc, out, err = run("--json")
+        json.loads(out)
+        assert "could not read the lock file" in err
+
+    def test_a_perfect_host_at_a_ceiling_of_zero_is_never_convicted(self, run):
+        # 11 runs x 8 no-call prompts = 88, where the k=0 lower bound used to
+        # come out at ~3e-18 and a flawless host was told it FAILED.
+        rc, out, _ = run("--runs", "11", "--ceiling-false-call", "0")
+        assert rc == 2
+        assert "FAIL:" not in out
+        assert "cannot be cleared at any sample size" in out
 
 
 def _defaults() -> dict:

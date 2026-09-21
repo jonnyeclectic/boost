@@ -158,6 +158,12 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
 
     ``n == 0`` returns ``(0.0, 1.0)``: no evidence is the widest interval, not
     a score of zero.
+
+    The edges are pinned rather than computed. At ``k == 0`` the lower bound
+    is exactly 0 in real arithmetic (and 1 at ``k == n`` for the upper), but
+    ``centre - half`` misses by ~1e-17 at some N — 11, 22, 88 — and a lower
+    bound of 2.8e-17 compared with ``>`` against a ceiling of 0 convicted a
+    host that had made no false call at all.
     """
     if n <= 0:
         return 0.0, 1.0
@@ -165,7 +171,9 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     d = 1 + z * z / n
     centre = (p + z * z / (2 * n)) / d
     half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
-    return max(0.0, centre - half), min(1.0, centre + half)
+    lo = 0.0 if k == 0 else max(0.0, centre - half)
+    hi = 1.0 if k == n else min(1.0, centre + half)
+    return lo, hi
 
 
 def min_n_for_ceiling(ceiling: float, z: float = 1.96) -> int:
