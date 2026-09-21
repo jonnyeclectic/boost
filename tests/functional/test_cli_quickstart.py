@@ -447,8 +447,8 @@ class TestQuickstartReadiness:
                 "tapped and %d could not be indexed"
                 % (len(seven), len(seven) - 1)) in both
         assert "check the network" in both
-        assert ("`boost doctor` names what the %d that could not be indexed"
-                % (len(seven) - 1)) in both
+        assert ("`boost doctor` names what each registry that could not be "
+                "indexed is missing") in both
 
     def test_one_unindexable_registry_is_named_as_such_and_exits_clean(
             self, boost, monkeypatch, seven):
@@ -580,7 +580,9 @@ class TestQuickstartReadinessOverRealClones:
         res = boost("quickstart", "--no-vectors", expect=1)
         both = _flat(res.out + res.err)
         assert "is not cloned" in both
-        assert "none of the 1 registries could be indexed" in both
+        assert "the registry could not be indexed" in both
+        assert "none of the 1" not in both
+        assert "`boost doctor` names what it is missing" in both
         assert "network" not in both
         # Configured by add_many before the index ran — which is why a rerun
         # skips it, and why the hint sends the user to doctor instead.

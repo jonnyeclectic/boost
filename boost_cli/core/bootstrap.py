@@ -273,19 +273,27 @@ class SetupOutcome:
                     "`boost doctor` checks every tap's clone and catalog")
         retry = "check the network, then run `boost quickstart` again"
         n = self.selected
+        # One registry is "the registry", not "none of the 1 registries". A
+        # mix of both failures needs two registries, so only these two can.
         if not self.unindexed:
-            cause, hint = "none of the %d registries could be tapped" % n, retry
+            cause = ("the registry could not be tapped" if n == 1
+                     else "none of the %d registries could be tapped" % n)
+            hint = retry
         elif not self.failed:
-            cause = "none of the %d registries could be indexed" % n
-            hint = ("their clones succeeded and they are configured, so a "
+            cause = ("the registry could not be indexed" if n == 1
+                     else "none of the %d registries could be indexed" % n)
+            hint = ("its clone succeeded and it is configured, so a rerun "
+                    "skips it — `boost doctor` names what it is missing and "
+                    "the command that fixes it" if n == 1 else
+                    "their clones succeeded and they are configured, so a "
                     "rerun skips them — `boost doctor` names what each one "
                     "is missing and the command that fixes it")
         else:
             cause = ("none of the %d registries could be set up: %d could not "
                      "be tapped and %d could not be indexed"
                      % (n, len(self.failed), len(self.unindexed)))
-            hint = ("%s; `boost doctor` names what the %d that could not be "
-                    "indexed are missing" % (retry, len(self.unindexed)))
+            hint = ("%s; `boost doctor` names what each registry that could "
+                    "not be indexed is missing" % retry)
         if self.searchable:
             # Don't call a full index empty: these items are real, they are
             # just not this run's doing.

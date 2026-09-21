@@ -18,6 +18,8 @@ tests/functional/test_cli_quickstart.py.
 """
 from __future__ import annotations
 
+import pytest
+
 from boost_cli.core import bootstrap
 
 
@@ -206,8 +208,16 @@ class TestIndexFailuresAreNotNetworkFailures:
                        "2 could not be tapped and 1 could not be indexed, so "
                        "nothing is searchable")
         assert hint == ("check the network, then run `boost quickstart` "
-                        "again; `boost doctor` names what the 1 that could "
-                        "not be indexed are missing")
+                        "again; `boost doctor` names what each registry that "
+                        "could not be indexed is missing")
+
+    @pytest.mark.parametrize("kw, want", [
+        ({"failed": ["a"]}, "the registry could not be tapped"),
+        ({"unindexed": ["a"]}, "the registry could not be indexed"),
+    ])
+    def test_one_registry_is_not_counted_as_none_of_one(self, kw, want):
+        msg, _hint = _outcome(entries=0, **kw).verdict()
+        assert want in msg and "none of the 1" not in msg
 
     def test_a_mix_beside_an_existing_index_keeps_its_items(self):
         msg, _hint = _outcome(failed=["a"], unindexed=["c"],
