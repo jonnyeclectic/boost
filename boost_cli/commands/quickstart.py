@@ -163,6 +163,19 @@ def _muted(msg: str) -> None:
         out.info(out.role(line, "muted"))
 
 
+def _vectors_refused(outcome: bootstrap.SetupOutcome,
+                     dry_run: bool = False) -> None:
+    """Say once why the published vectors do not apply here, and the fix.
+
+    Once, not per tap: `shards.sync` stamps the same machine-level detail on
+    every row, so rendering its rows would print the reason seven times.
+    """
+    line, fix = outcome.vectors_note(dry_run)
+    # Muted like every other zero-reason line: a missed upgrade, not a fault.
+    _muted(line)
+    _muted(fix)
+
+
 def cmd_quickstart(argv) -> int:
     """boost quickstart [--catalog] [--no-vectors] [--dry-run]"""
     p = cliparse.parser(
@@ -202,8 +215,13 @@ def cmd_quickstart(argv) -> int:
 
     selection = _selection(args.catalog)
     names, outcome = _tap_defaults(selection, pins, args.dry_run)
+    # Judged once, from the manifest alone, and read by both runs below. The
+    # live run used to learn it only inside `shards.sync`, whose seven
+    # `incompatible` rows it then rendered none of — while the dry run, which
+    # never asked, promised every published shard.
+    usable = manifest is not None and outcome.judge_vectors(manifest)
     if args.dry_run:
-        planned = [n for n in names if n in pins] if manifest else []
+        planned = [n for n in names if n in pins] if usable else []
         out.info("would build the keyword index, then import %d shard(s)"
                  % len(planned))
         # "0 shard(s)" reads as "none are published" when the real cause is
@@ -222,6 +240,10 @@ def cmd_quickstart(argv) -> int:
             elif manifest is None:
                 _muted("(0 because the shard manifest could not be read — "
                        "keyword search is unaffected)")
+            elif outcome.vectors_refused:
+                # Before "none published": `sync` refuses the space before it
+                # looks at a single row, so this is the zero the live run hits.
+                _vectors_refused(outcome, dry_run=True)
             else:
                 _muted("(0 because none of these registries have a "
                        "published shard yet)")
@@ -236,7 +258,7 @@ def cmd_quickstart(argv) -> int:
     (out.ok if outcome.searchable else out.warn)(
         "indexed %s items for keyword search" % format(outcome.entries, ","))
 
-    if manifest is not None:
+    if usable:
         commits = rag._tap_commits()
         stored = dense.tap_commits()
         # `_tap_commits`/`dense.tap_commits` are keyed by safe name; `sync`
@@ -248,6 +270,8 @@ def cmd_quickstart(argv) -> int:
         results = shards.sync([n for n in names if n in by_name], by_name,
                               manifest=manifest, built=built)
         _report(results)
+    elif outcome.vectors_refused:
+        _vectors_refused(outcome)
     elif args.no_vectors:
         out.info(out.role("skipped vectors as asked", "muted"))
     elif not dense.have_backend():

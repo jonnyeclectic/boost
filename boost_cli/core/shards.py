@@ -204,8 +204,13 @@ def incompatible(manifest: dict) -> str | None:
     """
     prov, mdl, dim = embed.provider(), embed.model(), embed.dimension()
     if prov is None:
-        # No backend at all: the extra is missing. That is a different remedy
-        # from a space mismatch, and `dense.fix_hint` owns the wording.
+        # No provider at all. That is a different remedy from a space
+        # mismatch, and `dense.fix_hint` owns the wording (see `remedy`). The
+        # kill switch is named rather than folded in: `provider()` reads it
+        # first, so a machine with the extra installed lands here too, and
+        # calling that "no backend" describes a machine the user does not have.
+        if not embed.enabled():
+            return "embedding is switched off by BOOST_NO_EMBED"
         return "no embedding backend on this machine"
     if manifest.get("provider") != prov:
         return ("published shards are %s, this machine embeds with %s"
@@ -217,6 +222,71 @@ def incompatible(manifest: dict) -> str | None:
         return ("published shards are %s-dimensional, this machine embeds at %s"
                 % (manifest.get("dim"), dim))
     return None
+
+
+def remedy(manifest: dict) -> str:
+    """The one next action when :func:`incompatible` refuses `manifest`.
+
+    Every surface that refuses a manifest reads this, for the reason
+    ``dense.fix_hint`` is one table: three commands answering the same refusal
+    three ways is how a user gets told to do the expensive thing. And the
+    expensive thing was the only thing anyone said. On a machine with
+    ``VOYAGE_API_KEY`` exported, the keyless shards are refused because the
+    key outranks the local model (``embed.provider``), and the advice was
+    `boost reindex --dense` — which, with that key set, embeds every chunk
+    through the paid API. Unsetting the key makes the free download work, so
+    that comes first, and keeping it is named with its cost.
+
+    Every key that outranks local is named, not only the one in force:
+    unsetting ``VOYAGE_API_KEY`` alone falls through to ``OPENAI_API_KEY``,
+    which is no nearer the published space. And the free path is only offered
+    when the local model is here to take over — without it, dropping the key
+    leaves no provider at all, and the shards still cannot load.
+
+    The free path also needs somewhere to land, so the store on disk is
+    asked too. ``dense.import_shard`` merges a shard only into a store in its
+    own space: for a user whose vectors were built with the key, "unset it"
+    bought a refused import ("provider mismatch: store 'voyage', shard
+    'local'"), and knocked the paid store offline on the way — it reads as
+    ``provider-changed``, whose hint is the ``--force`` rebuild that throws
+    every one of those vectors away. That user is told the shards cannot
+    merge, and that the ordinary `boost reindex --dense` keeps their store
+    current. A store the import would adopt (no recorded space) or already
+    matches is no obstacle, and a store that is not serving at all — a
+    stale format included, though the import would replace that one — is
+    answered by its own table first, as `boost doctor` answers it.
+
+    No provider at all is not this function's question: that is the dense
+    store's ladder (kill switch, missing extra, missing key), and
+    ``dense.fix_hint`` already answers it for `boost doctor` and `boost
+    search`. A second answer here could only disagree with theirs.
+    """
+    from . import dense
+    prov = embed.provider()
+    st = dense.status()
+    if prov is None:
+        return dense.fix_hint(st.get("reason") or "", st)
+    paid = prov in embed.KEY_ENV
+    how = ("through %s's paid API" % prov) if paid else "locally"
+    built = st.get("built_provider")
+    if built and (built, st.get("built_model"), st.get("built_dim")) != (
+            manifest.get("provider"), manifest.get("model"),
+            manifest.get("dim")):
+        # The same three fields, compared the same way, as `import_shard`'s
+        # refusal — this is a forecast of that refusal, not a second rule.
+        if st.get("reason"):
+            return dense.fix_hint(st["reason"], st)
+        return ("this machine's vectors were built with %s, and the published"
+                " %s shards cannot merge into them — `boost reindex --dense`"
+                " keeps them current %s"
+                % (built, manifest.get("provider"), how))
+    if manifest.get("provider") == "local" and paid and embed.local_available():
+        keys = [env for name, env in embed.KEY_ENV.items()
+                if name == prov or os.environ.get(env)]
+        return ("`unset %s`, then `boost update --shards` loads them free — "
+                "or keep the key%s, and `boost reindex --dense` embeds %s"
+                % (" ".join(keys), "s" if len(keys) > 1 else "", how))
+    return "`boost reindex --dense` embeds them %s instead" % how
 
 
 def rows(manifest: dict) -> dict[str, dict]:
@@ -328,7 +398,10 @@ def download(row: dict, dest: Path, manifest: dict,
 #: "imported" (vectors landed), "current" (store already holds this exact
 #: commit's vectors, nothing downloaded), "unpublished" (no row for this tap),
 #: "refused" (row existed, import said no — commit or space mismatch),
-#: "failed" (download or verification error).
+#: "failed" (download or verification error), "incompatible" (the manifest's
+#: embedding space is not this machine's, so nothing was looked up — every
+#: tap carries the same machine-level `detail`, which a caller must say once,
+#: not once per tap; :func:`remedy` is what to do about it).
 def sync(taps: list[str], commits: dict[str, str],
          manifest: dict | None = None, cache_dir: Path | None = None,
          on_event=None, built: dict[str, str] | None = None) -> list[dict]:

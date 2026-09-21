@@ -960,12 +960,21 @@ def _resync_vectors(moved: list[str]) -> None:
     commits = rag._tap_commits()
     by_name = {t.name: commits.get(t.safe_name, "")
                for t in registry.list_taps() if t.name in moved}
-    got = [r for r in shards.sync(list(by_name), by_name, manifest=manifest)
-           if r["status"] == "imported"]
+    results = shards.sync(list(by_name), by_name, manifest=manifest)
+    got = [r for r in results if r["status"] == "imported"]
     if got:
         out.ok("re-imported prebuilt vectors for %d tap(s)" % len(got))
     left = len(moved) - len(got)
-    if left:
+    if left and any(r["status"] == "incompatible" for r in results):
+        # Not "yet": a manifest in another space never matches this store,
+        # however many weeks go by. Same words as every other refusal, and
+        # wrapped before it is coloured (`- 2` pays for `out.info`'s indent).
+        msg = ("vectors for %d refreshed tap(s) are now stale, and no "
+               "published shard can replace them: %s"
+               % (left, shards.remedy(manifest)))
+        for line in out.wrap(msg, max(out.term_width() - 2, 20)):
+            out.info(out.role(line, "muted"))
+    elif left:
         out.info(out.role("%d refreshed tap(s) have no matching shard yet — "
                           "their vectors are stale until "
                           "`boost reindex --dense`" % left, "muted"))
@@ -1006,7 +1015,7 @@ def _ingest_shards(args) -> int:
     why = shards.incompatible(manifest)
     if why:
         raise BoostError("published shards cannot serve this machine — %s" % why,
-                         hint=dense.current_fix())
+                         hint=shards.remedy(manifest))
     commits = rag._tap_commits()
     stored = dense.tap_commits()
     # Both maps are keyed by tap name; the two sources are keyed by safe name.
