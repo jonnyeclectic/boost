@@ -226,8 +226,9 @@ def cmd_quickstart(argv) -> int:
             # Without the extra the manifest was read for its pins alone, and
             # losing them is the whole cost. The transport hint offers
             # `boost reindex --dense`, which needs the very extra this machine
-            # lacks, and the run already ends naming how to install it.
-            if exc.hint and want_vectors:
+            # lacks, and the run already ends naming how to install it. Every
+            # other hint (https only, retry, self-update) still applies.
+            if exc.hint and (want_vectors or exc.hint != shards.LOCAL_EMBED_HINT):
                 _muted(exc.hint)
             manifest = None
 

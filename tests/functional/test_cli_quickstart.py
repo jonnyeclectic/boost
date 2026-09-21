@@ -160,8 +160,7 @@ class TestQuickstartWithoutTheExtra:
 
         def boom(*_a, **_k):
             raise BoostError("cannot reach the manifest",
-                             hint="shards are optional — `boost reindex "
-                                  "--dense` embeds locally instead")
+                             hint=shards.LOCAL_EMBED_HINT)
 
         monkeypatch.setattr(dense, "have_backend", lambda: False)
         monkeypatch.setattr(shards, "fetch_manifest", boom)
@@ -172,6 +171,18 @@ class TestQuickstartWithoutTheExtra:
         assert "reindex --dense" not in out
         if not dry:
             assert calls["pins"] == {}
+
+    def test_a_hint_that_needs_no_extra_is_still_shown_without_it(
+            self, boost, monkeypatch):
+        # Only the local-embed hint needs the extra. A manifest URL that is
+        # not https is a fix this machine can make either way.
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "have_backend", lambda: False)
+        monkeypatch.setenv("BOOST_SHARD_MANIFEST", "http://example.invalid/m.json")
+        _fake_add_many(monkeypatch, ["ok"] * 7)
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "refusing to fetch a shard manifest over 'http'" in out
+        assert "shard URLs must be https" in out
 
     def test_the_taps_are_pinned_without_the_extra(
             self, boost, defaults_manifest, monkeypatch):

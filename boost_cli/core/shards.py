@@ -75,6 +75,12 @@ def manifest_url() -> str:
     return os.environ.get(MANIFEST_ENV) or DEFAULT_MANIFEST_URL
 
 
+# The one manifest hint that needs the [rag] extra: quickstart without it
+# read the manifest for its pins alone, and names the extra itself.
+LOCAL_EMBED_HINT = ("shards are optional — `boost reindex --dense` embeds "
+                    "locally instead")
+
+
 def _open(url: str, timeout: float):
     """Open `url`, allowing only https and file:.
 
@@ -90,8 +96,7 @@ def _open(url: str, timeout: float):
         return urllib.request.urlopen(url, timeout=timeout)  # noqa: S310  scheme checked above
     except (urllib.error.URLError, OSError) as exc:
         raise BoostError("cannot reach %s: %s" % (url, exc),
-                         hint="shards are optional — `boost reindex --dense` "
-                              "embeds locally instead") from exc
+                         hint=LOCAL_EMBED_HINT) from exc
 
 
 def _read_capped(resp, cap: int) -> bytes:

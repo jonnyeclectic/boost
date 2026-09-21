@@ -177,9 +177,10 @@ they are separate modes rather than one pass, and `--shards --taps-only` is
 refused rather than silently picking one.
 
 Because vectors are keyed to a registry's commit, `quickstart` **pins** every
-registry that has published vectors, even when the `[rag]` extra is missing and
-the vectors cannot load yet, and `boost update` skips a pinned tap rather than moving
-it out from under them (`--force` moves it anyway and drops the pin). A pinned
+registry that has published vectors, even when the `[rag]` extra is missing
+and the vectors cannot load yet, and `boost update` skips a pinned tap rather
+than moving it out from under them (`--force` moves it anyway and drops the
+pin). A pinned
 tap with *no* clone is not skipped — there is nothing to hold still, so it is
 cloned and checked out at its pin; if that pin cannot be reached the clone is
 removed rather than left on HEAD with a pin that no longer describes it, and
