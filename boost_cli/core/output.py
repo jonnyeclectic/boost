@@ -832,56 +832,59 @@ def _fit_widths(widths, numeric, avail: int, sep: int = 2, floor: int = 1,
     return widths
 
 
-#: The width a squeezed column is *preferred* to keep: `search_layout`'s own
-#: description floor, the same judgement one surface over.
-_MIN_COL = 8
-
-#: …and the least it may keep before the column goes instead: exactly one
-#: cell under the preferred floor.
+#: The narrowest a squeezed column may get before it is dropped instead: six
+#: visible characters and the ellipsis, which still carry a word.
 #:
-#: Two numbers rather than one, because collapsing them cost a column that was
-#: doing its job. With `_MIN_COL` as a hard floor, `boost hooks list` at
-#: COLUMNS=66 dropped `matcher` — 8 wide, exactly at the floor, carrying real
-#: data — although the same six columns fit at 7, and the row then measured 61
-#: into a 66-wide pane. Spending a whole 10-wide column to buy one cell is the
-#: cure being worse than the disease.
+#: Why 7: piped at COLUMNS=66, `boost hooks list` fits all six of its columns
+#: with `event` squeezed to 7 — six, as it showed before columns could be
+#: dropped at all. At 8 that pane lost `matcher`, 8 wide and carrying real
+#: data, to buy one cell, and the row measured 61 into a 66-wide pane.
 #:
-#: One cell, and no more, because the slack is what re-admits the defect: at 5
-#: or 6 `boost taps` keeps a date column rendering "2 ho…" and a URL column
-#: rendering "http…" instead of dropping them, which is the placeholder
-#: column this whole function exists to stop printing.
-_HARD_FLOOR = _MIN_COL - 1
+#: What it costs, on what boost actually prints: `boost taps` renders UPDATED
+#: as YYYY-MM-DD (`_tap_updated_display`), so a date squeezed to the floor
+#: reads "2026-0…" — the month is gone, and the cell is barely more than the
+#: placeholder this function exists to stop printing. At 6 it would read
+#: "2026-…"; at 8, "2026-09…". A URL at the floor ("https:…") says nothing.
+_MIN_COL = 7
 
 
 def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=()):
     """Choose which columns an `avail`-wide pane shows, and how wide.
 
-    Shrinking first (:func:`_fit_widths`), then dropping: a column that cannot
-    be shown at a legible width is removed **with its separator**, which is
-    the only move that recovers the width when the dead columns are leading
-    ones — `rstrip` cannot reach a gutter that has data to its right, so
-    shrinking alone left `boost hooks list` 7 columns over an 80-column pane
-    having already destroyed five of its six columns.
+    Shrinking first (:func:`_fit_widths`, down to :data:`_MIN_COL`), then
+    dropping: a column that cannot be shown at a legible width is removed
+    **with its separator**, which is the only move that recovers the width
+    when the dead columns are leading ones — `rstrip` cannot reach a gutter
+    that has data to its right, so shrinking alone left `boost hooks list` 7
+    columns over an 80-column pane having already destroyed five of its six
+    columns.
 
-    The floor is searched, not fixed: :data:`_MIN_COL` down to
-    :data:`_HARD_FLOOR`, and only then is a column dropped. A single floor
-    made the cure worse than the disease on panes where one cell was all that
-    was missing — at COLUMNS=66 `hooks list` fit on six columns at floor 7,
-    and a hard floor of 8 dropped `matcher` instead, spending a whole 10-wide
-    column to buy one cell and leaving five columns of the pane unused.
+    An empty column — header and every cell with nothing to show, like
+    `boost taps`' curated column when no tap is curated — goes before anything
+    is shrunk: it carries no data and still costs a gutter, and keeping it
+    squeezed the real date beside it (piped at COLUMNS=57, "2026-0…" where 56
+    gave "2026-09…"). Only when the row does not fit as it is: a table that
+    fits is printed exactly as it always was.
 
     Drop order is right to left, skipping `protected` (:func:`table`'s
-    ``keep``), which is never dropped: these tables put the identifier the
-    user acts on first and the chrome that repeats on every row last. The last
-    surviving column is never dropped either — an empty table is not a better
-    answer than an over-wide one — and once nothing more may go, the floor
-    stops applying, so that column clips to the pane the way it always did.
-    When every column is protected the row overflows whole, unchanged.
+    ``keep``), which is never dropped, even when empty: these tables put the
+    identifier the user acts on first and the chrome that repeats on every row
+    last. The drop loop never removes the last column either — an empty table
+    is not a better answer than an over-wide one — and once nothing more may
+    go, the floor stops applying, so that column clips to the pane the way it
+    always did. When every column is protected the row overflows whole,
+    unchanged.
 
     Returns the surviving column indexes (ascending) and their widths.
     """
     protected = set(protected)
     show = list(range(len(widths)))
+
+    def total(ws) -> int:
+        return sum(ws) + sep * (len(ws) - 1)
+
+    if total(widths) > avail:
+        show = [i for i in show if widths[i] or i in protected] or show
     order = [i for i in reversed(show) if i not in protected]
 
     def fit(floor: int):
@@ -892,12 +895,9 @@ def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=()):
                                       if i in protected])
 
     while True:
-        # Preferred floor first, then down: a row that fits at 7 must not cost
-        # a column, and one that fits at 8 must not be squeezed to 4.
-        for floor in range(_MIN_COL, _HARD_FLOOR - 1, -1):
-            fitted = fit(floor)
-            if sum(fitted) + sep * (len(fitted) - 1) <= avail:
-                return show, fitted
+        fitted = fit(_MIN_COL)
+        if total(fitted) <= avail:
+            return show, fitted
         if not order or len(show) <= 1:
             break
         show.remove(order.pop(0))
@@ -929,14 +929,15 @@ def table(rows, headers=None, stream=None, keep=(), text=()) -> None:
     terminal the widest text column is shrunk (its cells clipped with an
     ellipsis) so wide catalogs stay on one line instead of wrapping.
 
-    Shrinking stops at :data:`_MIN_COL`, and a column that cannot be shown at
-    that floor is **dropped** — the column and its separator, in the header
-    and the body alike — rather than rendered as a placeholder that costs ink
-    and carries nothing. Drop order is right to left, skipping ``keep``; the
-    last surviving column is never dropped and clips to the pane instead. See
-    :func:`_fit_columns`, and :func:`search_layout` for the same shape on the
-    search screen. Nothing is announced: a dropped column is a layout
-    decision, not an event.
+    A text column is shrunk no narrower than :data:`_MIN_COL` (7 cells), and
+    a column that cannot be shown at that floor is **dropped** — the column
+    and its separator, in the header and the body alike — rather than rendered
+    as a placeholder that costs ink and carries nothing. A column with nothing
+    in it goes first; after that the order is right to left, skipping
+    ``keep``; the last surviving column is never dropped and clips to the
+    pane instead. See :func:`_fit_columns`, and :func:`search_layout` for the
+    same shape on the search screen. Nothing is announced: a dropped column is
+    a layout decision, not an event.
 
     On a color terminal, columns are joined by a dim ``│`` separator — the
     terminal cousin of the web stat blocks' hairline borders. Non-color output
