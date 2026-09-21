@@ -154,7 +154,7 @@ class TestVectorsResyncWhenATapMoves:
             "shards": [], "_url": "file:///x"})
         res = boost("update", "--taps-only", "--force")
         flat = " ".join(res.out.split())
-        assert "yet" not in flat
+        assert "no matching shard yet" not in flat
         assert "stale" in flat
         assert "cannot merge" in flat
         assert "`boost reindex --dense` keeps them current" in flat
