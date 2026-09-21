@@ -226,6 +226,28 @@ def _wrap_lines(msg: str, lead: int) -> list[str]:
     return wrap(msg, term_width() - lead) or [msg]
 
 
+def _stdout_first(stream) -> None:
+    """Flush stdout before a line goes to any other stream.
+
+    Into a pipe stdout is block-buffered and stderr is not, so `boost import
+    many 2>&1 | cat` printed "Error: multiple skills found" above the listing
+    it refers to — the table was still sitting in stdout's buffer. Every
+    emitter that can write elsewhere calls this first, so callers never have
+    to remember. A line bound for stdout itself needs no flush and gets none.
+
+    A flush that fails (the reader closed the pipe) is swallowed: the line
+    about to be written is usually the error, and losing it to a broken stdout
+    helps nobody. The same failure still surfaces at the final flush in
+    ``cli._route``, where it is handled. With fd 1 closed at launch
+    (``boost … >&-``) Python sets ``sys.stdout`` to None: nothing is held, so
+    there is nothing to flush.
+    """
+    if stream is None or sys.stdout is None or stream is sys.stdout:
+        return
+    with contextlib.suppress(OSError, ValueError):
+        sys.stdout.flush()
+
+
 def ok(msg: str) -> None:
     """Print msg as an indented success line with a green check mark."""
     print("  " + role("✓", "success") + " " + msg)
@@ -251,6 +273,7 @@ def warn(msg: str, stream=None, wrap: bool = False) -> None:
     the second.
     """
     body = _wrap_lines(msg, 4) if wrap else [msg]
+    _stdout_first(stream)
     for i, line in enumerate(body):
         lead = "  " + role("!", "warn", stream=stream) + " " if i == 0 else "    "
         print(lead + role(line, "warn", stream=stream), file=stream)
@@ -264,6 +287,7 @@ def err(msg: str, hint: str | None = None) -> None:
     0, unindented and visually disconnected from the "hint:" label above
     them. Every line after the first is indented to align under it instead.
     """
+    _stdout_first(sys.stderr)
     print(c("Error: ", RED, BOLD) + msg, file=sys.stderr)
     if hint:
         lead = "  hint: "
@@ -278,6 +302,7 @@ def info(msg: str = "", stream=None, wrap: bool = False) -> None:
     ``wrap`` as in :func:`warn`, and it never turns the empty message into no
     output at all: a caller printing a blank spacer still gets its blank line.
     """
+    _stdout_first(stream)
     if wrap and msg:
         for line in _wrap_lines(msg, 2):
             print("  " + line, file=stream)
@@ -326,6 +351,7 @@ def heading(msg: str, stream=None) -> None:
     # Brand the section marker in the accent role (Aurora cyan — truecolor,
     # 16-color fallback, plain under NO_COLOR) so every command's headers read
     # as one system.
+    _stdout_first(stream)
     print(role("==>", "accent") + " " + c(msg, BOLD), file=stream)
 
 
@@ -1084,6 +1110,7 @@ def table(rows, headers=None, stream=None, keep=(), text=()) -> None:
         cell = _clip_visible(cell, widths[i])
         return _rpad(cell, widths[i]) if numeric[i] else _pad(cell, widths[i])
 
+    _stdout_first(stream)
     if headers:
         # Bold each header cell individually: a whole-line wrap would be
         # cancelled at the first separator's RESET on color terminals.

@@ -573,7 +573,11 @@ def cmd_info(argv):
     # one file this item actually is.
     src = lock.get("source_dir") if lock else (
         (cat or {}).get("skill_md") if kind != "skill" else (cat or {}).get("rel_dir"))
-    if src:
+    if lock and lock.get("source_url"):
+        # A URL import's source_dir is a path inside that repo, not on disk.
+        out.kv("source", str(lock["source_url"])
+               + ("" if src in (None, "", ".") else " (%s)" % src))
+    elif src:
         out.kv("source", _tilde(src))
     if lock:
         if lock.get("commit"):
@@ -1039,7 +1043,15 @@ def cmd_home(argv):
     try:
         tap = registry.get(tap_name)
     except BoostError:
-        out.info(_tilde(rel))   # local import — only a path to show
+        home = str((lock or {}).get("source_url") or "")
+        if not home:
+            out.info(_tilde(rel))   # local import — only a path to show
+            return 0
+        # A URL import: the repo it was cloned from is its home.
+        out.info(home)
+        if (home.startswith(("http://", "https://")) and not args.print_only
+                and sys.stdout.isatty()):
+            webbrowser.open(home)
         return 0
     if not tap.url.startswith(("http://", "https://")):
         out.info(_tilde(Path(tap.url) if rel == "." else Path(tap.url) / rel))

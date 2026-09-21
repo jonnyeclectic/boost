@@ -11,6 +11,7 @@ import contextlib
 import os
 import shutil
 import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from itertools import starmap
 from pathlib import Path
@@ -64,6 +65,106 @@ class InstallResult:
     # declared. The two differ when the file could not be written, and the
     # install report must show the former.
     mcp_recorded: list[str] = field(default_factory=list)
+    # The tap an import just replaced (`install_from_path` only). Importing over
+    # a tapped skill rewrites its lock entry to `local` and so drops the only
+    # thing `boost update` refreshes it from; the caller says so.
+    replaced_tap: str | None = None
+    # Agents still linked outside a declared `--agent` scope after the run
+    # (`install_from_path` only). Narrowing links into fewer agents but never
+    # removes a link — pruning stays `boost sync --prune`'s decision — so these
+    # are exactly what the next `sync --diff` reports as out of scope.
+    out_of_scope: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RemoteSource:
+    """A git URL `boost import` cloned, and the commit the clone checked out.
+
+    The clone is a temporary directory removed as soon as the import returns,
+    so its path is the one thing the lock must not record: `boost info` showed
+    it and `boost reinstall` looked for it long after it was gone. The lock
+    records this instead — the URL, the commit, and each skill's directory
+    inside the repo, which is enough to clone it again.
+    """
+
+    url: str
+    root: Path
+    commit: str
+
+
+def repo_path(remote: RemoteSource, skill_dir: Path) -> str:
+    """``skill_dir`` relative to the clone, POSIX-style; ``.`` for the root.
+
+    A module function, not a ``RemoteSource`` method, on purpose: the mutation
+    gate splits this file per top-level function and refuses to split a module
+    holding any class with a method (`scripts/mutation_shards.py`), which
+    would put the whole of store.py back on the critical path.
+    """
+    return Path(skill_dir).relative_to(remote.root).as_posix()
+
+
+@contextlib.contextmanager
+def cloned_source(url: str) -> Iterator[RemoteSource]:
+    """Clone ``url`` into a temporary directory for the length of the block.
+
+    A full checkout, not a tap's Markdown cone: an import copies whatever the
+    repo ships, assets included. The directory is removed on the way out
+    whether or not the clone or the install inside the block succeeded.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="boost-import-"))
+    try:
+        root = tmp / "repo"
+        gitutil.clone_shallow(url, root, sparse=False)
+        yield RemoteSource(url=url, root=root, commit=gitutil.head_commit(root))
+    finally:
+        with contextlib.suppress(OSError):
+            util.rmtree(tmp)
+
+
+def is_url_import(entry: dict) -> bool:
+    """Whether a lock entry is a `boost import` of a git URL.
+
+    Only a fresh clone can restore one, and sync never touches the network, so
+    its repair is `boost reinstall` where every other skill's is `boost heal`.
+    ``sync``/``heal`` and ``doctor`` both ask here, so they name the same one.
+    """
+    return entry.get("tap") == "local" and bool(entry.get("source_url"))
+
+
+def local_source_dir(entry: dict) -> Path | None:
+    """The directory a local import can be read again from, else None.
+
+    None for a URL import: its ``source_dir`` is a path inside the repo, and
+    read as a local path it would resolve against whatever directory boost
+    happens to run in. None for an empty one too, which ``Path`` turns into
+    the cwd. Otherwise the recorded directory, if it still holds a SKILL.md.
+    """
+    raw = str(entry.get("source_dir") or "")
+    if not raw or entry.get("source_url"):
+        return None
+    src = Path(raw)
+    return src if (src / "SKILL.md").is_file() else None
+
+
+def reinstall_from_url(name: str, entry: dict) -> InstallResult:
+    """Clone a URL import's repo again and reinstall ``name`` from it.
+
+    Reads the recorded path at the repo's current HEAD — the same thing a tap
+    skill's reinstall does with the tap's current checkout — and records the
+    new commit. ``force`` as for any reinstall: replacing a pinned skill is
+    what the command is for. A path that leaves the clone is refused; the lock
+    is a file anyone can edit, and ``../`` would otherwise reach whatever sits
+    beside the temporary directory.
+    """
+    url = str(entry.get("source_url") or "")
+    rel = str(entry.get("source_dir") or ".")
+    with cloned_source(url) as remote:
+        src = remote.root / rel
+        inside = src.resolve().is_relative_to(remote.root.resolve())
+        if not inside or not (src / "SKILL.md").is_file():
+            raise BoostError("%s has no SKILL.md at %s" % (url, rel),
+                             hint="re-import it from wherever it lives now")
+        return install_from_path(src, name=name, force=True, remote=remote)
 
 
 def skill_store_dir(name: str) -> Path:
@@ -1429,8 +1530,15 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
 def install_from_path(src_dir: Path, name: str | None = None,
                       tap_label: str = "local",
                       only_agents: list[str] | None = None,
-                      force: bool = False) -> InstallResult:
+                      force: bool = False,
+                      remote: RemoteSource | None = None) -> InstallResult:
     """Install directly from a local directory (used by `boost import`).
+
+    ``remote`` names the clone ``src_dir`` sits in when the import came from a
+    URL: the lock then records the URL, the commit and the path inside the
+    repo, never the temporary clone. Without it the directory is recorded
+    absolute, so a relative ``boost import ./x`` can be reinstalled from
+    anywhere rather than only from the directory it was imported in.
 
     Enforces the same pin, policy and capability gates as ``install``. It used
     to enforce none of them, so every local path in — ``import``, ``create
@@ -1469,12 +1577,20 @@ def install_from_path(src_dir: Path, name: str | None = None,
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing))
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
+    prior_tap = (existing or {}).get("tap")
+    res.replaced_tap = prior_tap if prior_tap != tap_label else None
+    linked = linked_agents(name)
+    declared = declared_agent_scope(only_agents, existing)
+    if declared:
+        res.out_of_scope = [a for a in linked if a not in declared]
     now = util.now_iso()
     lockfile.set_skill(name, {
         "version": str(meta.get("version") or "0.0.0"),
         "tap": tap_label,
-        "source_dir": str(src_dir),
-        "commit": "",
+        "source_dir": (repo_path(remote, src_dir) if remote
+                       else str(src_dir.absolute())),
+        "source_url": remote.url if remote else "",
+        "commit": remote.commit if remote else "",
         "sha256": util.sha256_dir(dest),
         "installed_at": (existing or {}).get("installed_at", now),
         "updated_at": now,
@@ -1483,14 +1599,14 @@ def install_from_path(src_dir: Path, name: str | None = None,
         "pinned": bool((existing or {}).get("pinned")),
         "quarantined": False,
         # What is on disk, not what this run linked — see install().
-        "agents": linked_agents(name),
+        "agents": linked,
         # `boost import --agent ...` narrows the same way `install` does, so it
         # has to record the same declaration — otherwise the links are narrow
         # but sync sees no scope and widens them right back.
-        "only_agents": declared_agent_scope(only_agents, existing),
+        "only_agents": declared,
         "tags": (existing or {}).get("tags", []),
     })
-    journal.log("import", name, source=str(src_dir))
+    journal.log("import", name, source=remote.url if remote else str(src_dir))
     return res
 
 
@@ -2069,9 +2185,17 @@ def plan_missing_store(name: str) -> StoreRepair:
     """How `sync` will repair `name`, whose store dir is gone. Read-only."""
     entry = lockfile.get_skill(name) or {}
     tap_name = entry.get("tap")
+    if is_url_import(entry):
+        # A URL import can be repaired only by cloning its repo again, and sync
+        # never touches the network. Dropping the entry instead would throw
+        # away the one record of where the skill came from, so keep it and
+        # name the command that can.
+        msg = ("%s's store dir is missing — `boost reinstall %s` clones it "
+               "again from %s" % (name, name, entry["source_url"]))
+        return StoreRepair("declined", msg, msg)
     if tap_name == "local":
-        src = Path(str(entry.get("source_dir") or ""))
-        if src.is_dir() and (src / "SKILL.md").is_file():
+        src = local_source_dir(entry)
+        if src is not None:
             if _pin_blocks_repair(entry, lambda: _local_source_sha(src)):
                 msg = _declined(name, "local", name)
                 return StoreRepair("declined", msg, msg)
