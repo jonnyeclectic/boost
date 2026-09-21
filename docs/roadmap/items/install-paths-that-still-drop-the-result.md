@@ -10,7 +10,7 @@ wow: 1
 note: six more install paths printed success over an agent dir that refused the link, because they threw the install result away
 order: 332
 owner: loop/install-result-callers
-pr:
+pr: 938
 title: Six install paths still printed success over an agent dir that refused the link
 ---
 <b>Found by the review of release train 4</b>, which routed bundle install, cohort apply,
