@@ -1093,3 +1093,16 @@ class TestBadgeRailAlignment:
         g = _render(query="rag")
         assert "[rule]" in "\n".join(g)
         assert out.kind_label("rule") == "[rule]"
+
+
+def test_a_status_message_keeps_a_backticked_command_whole():
+    # textwrap split `chmod u+w ~/.cursor/skills` over two lines of the pane,
+    # which leaves a command no one can copy.
+    msg = ("not linked: ~/.cursor/skills is not writable — "
+           "`chmod u+w ~/.cursor/skills`, then `boost sync` adds the link")
+    lines = [t for role, t in browse.detail_lines(
+        {"name": "x", "description": "d"}, width=30, state="ok", message=msg)
+        if "chmod" in t or "sync" in t or "linked" in t]
+    assert any("`chmod u+w ~/.cursor/skills`" in t for t in lines), lines
+    assert all(t.count("`") % 2 == 0 for t in lines), lines
+

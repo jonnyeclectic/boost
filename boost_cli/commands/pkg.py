@@ -1298,15 +1298,18 @@ def cmd_reinstall(argv: list[str]) -> int:
             if warning:
                 out.warn(warning)
             try:
-                _warn_unwritable(store.install(
-                    entry, force=True,
-                    scope=lk.get("scope", "user"), base=lk.get("base")))
+                res = store.install(entry, force=True,
+                                    scope=lk.get("scope", "user"),
+                                    base=lk.get("base"))
             except BoostError as err:
                 out.warn("%s: %s" % (name, err.message))
                 failed += 1
                 continue
+            # Success first, then what it skipped: the same order as every
+            # other branch, so a `--all` run reads the same line to line.
             out.ok("reinstalled %s %s v%s"
                    % (kind, name, entry.get("version", "0.0.0")))
+            _warn_unwritable(res)
             done += 1
             done_kinds.add(kind)
             continue
@@ -1354,12 +1357,13 @@ def cmd_reinstall(argv: list[str]) -> int:
         if warning:
             out.warn(warning)
         try:
-            _warn_unwritable(store.install(entry, force=True))
+            res = store.install(entry, force=True)
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             failed += 1
             continue
         out.ok("reinstalled %s v%s" % (name, entry.get("version", "0.0.0")))
+        _warn_unwritable(res)
         done += 1
         done_kinds.add("skill")
     # Name the kind when only one was touched; a mixed run says "items".

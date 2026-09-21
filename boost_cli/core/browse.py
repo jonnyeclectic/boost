@@ -649,7 +649,11 @@ def detail_lines(entry: dict, width: int = 60,
 
     if installed is not None or state:
         role, text = status_line(state, message, installed)
-        add(role, text)
+        # output.wrap, not textwrap: the message can carry a backticked
+        # command (`chmod u+w ~/.cursor/skills`), and a command split across
+        # two lines is not one a user can copy.
+        from . import output  # stdlib-only too; lazy to keep this module light
+        lines.extend((role, chunk) for chunk in output.wrap(text, width) or [""])
         lines.append(("blank", ""))
 
     add("head", "SOURCE")

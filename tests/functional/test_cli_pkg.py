@@ -1016,6 +1016,28 @@ class TestReinstall:
         assert "not linked: ~/.cursor/skills is not writable" in out
 
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_every_branch_says_reinstalled_before_what_it_skipped(
+            self, boost, installed, tmp_path):
+        # The tap branch warned before its "reinstalled" line and the local
+        # one after it, so one `--all` run read two ways.
+        boost("import", _skill_dir(tmp_path, "my-skill"))
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.chmod(0o500)
+        try:
+            r = boost("reinstall", "--all")
+        finally:
+            cursor.chmod(0o700)
+        lines = [ln.strip() for ln in r.out.splitlines()]
+        for name in ("brainstorming", "my-skill"):
+            done = next(i for i, ln in enumerate(lines)
+                        if "reinstalled %s" % name in ln)
+            assert lines[done + 1].startswith("! not linked:"), lines
+
+
 # ── pin / unpin ──────────────────────────────────────────────────────────
 
 class TestPinUnpin:
