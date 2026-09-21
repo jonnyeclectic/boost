@@ -159,6 +159,23 @@ def parse_specs(specs: list[str]) -> list[tuple[str, str]]:
     return [parse_spec(spec) for spec in specs]
 
 
+def tap_summary(tapped: list[tuple[str, int]]) -> str:
+    """"3 registries · 512 items" — what a tap run actually added.
+
+    A count, not a list: the per-tap `✓ tapped X (N items)` lines above it
+    already name every registry, and repeating them would make the summary
+    longer than the thing it summarises. Pure so it can be asserted on
+    directly; the surface decides where to frame it.
+    """
+    taps = len(tapped)
+    items = sum(n for _name, n in tapped)
+    # Both spellings written out rather than interpolated onto a stem:
+    # codespell reads that stem as a misspelling of "register", and an
+    # exception in the lint config costs more than one extra word here.
+    return "%d %s · %d %s" % (taps, "registry" if taps == 1 else "registries",
+                              items, "item" if items == 1 else "items")
+
+
 def list_taps() -> list[Tap]:
     """Configured taps from config.json.
 

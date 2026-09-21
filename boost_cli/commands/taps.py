@@ -31,7 +31,7 @@ from ._common import _s
 _tilde = paths.tilde
 
 
-def _tap_catalog(args) -> int:
+def _tap_catalog(args, tapped: list[tuple[str, int]] | None = None) -> int:
     """Tap every registry in the filtered catalog selection."""
     selection = _catalog_selection(args)
     if not selection:
@@ -48,7 +48,7 @@ def _tap_catalog(args) -> int:
         return 0
     focus = {str(e["name"]): e.get("focus", "") for e in selection}
     return _tap_all([str(e["url"]) for e in selection], jobs=args.jobs,
-                    focus=focus)
+                    focus=focus, tapped=tapped)
 
 
 def _print_dry_run(pairs: list[tuple[str, str]]) -> int:
@@ -86,7 +86,8 @@ def _skip_if_already_tapped(spec: str) -> bool:
 def _tap_all(urls: list[str], jobs: int | None,
              focus: dict[str, str] | None = None,
              pins: dict[str, str] | None = None,
-             curated: bool = True) -> int:
+             curated: bool = True,
+             tapped: list[tuple[str, int]] | None = None) -> int:
     """Clone many registries at once, then scan each one that arrived.
 
     The split is the whole optimisation. Cloning is network latency — 1.6 s per
@@ -115,6 +116,8 @@ def _tap_all(urls: list[str], jobs: int | None,
             continue
         journal.log("tap", tap.name)
         note = focus.get(name) or ""
+        if tapped is not None:
+            tapped.append((tap.name, len(entries)))
         out.ok("tapped %s (%d items)%s"
                % (tap.name, len(entries), " — %s" % note if note else ""))
     return rc
@@ -173,8 +176,13 @@ def cmd_tap(argv) -> int:
         p.error("provide a SPEC, --defaults, or --catalog")
 
     rc = 0
+    # What actually landed, so the run can close with a summary and a next
+    # step the way `install` does. Collected rather than recounted: the taps
+    # are already known here, and re-reading every cache to say "512 items"
+    # would cost more than the line is worth.
+    tapped: list[tuple[str, int]] = []
     if args.catalog:
-        rc |= _tap_catalog(args)
+        rc |= _tap_catalog(args, tapped)
     if args.defaults:
         if args.dry_run:
             rc |= _print_dry_run([(str(d["name"]), str(d["url"]))
@@ -187,7 +195,8 @@ def cmd_tap(argv) -> int:
             rc |= _tap_all([str(d["url"]) for d in config.DEFAULT_TAPS],
                            jobs=args.jobs,
                            focus={str(d["name"]): str(d.get("focus", ""))
-                                  for d in config.DEFAULT_TAPS})
+                                  for d in config.DEFAULT_TAPS},
+                           tapped=tapped)
     if args.spec and args.dry_run:
         rc |= _print_dry_run(registry.parse_specs(list(args.spec)))
     elif args.spec and args.at:
@@ -199,6 +208,7 @@ def cmd_tap(argv) -> int:
             tap = registry.add(args.spec[0], curated=args.curated, at=args.at)
             entries = catalog.rebuild_tap(tap)
         journal.log("tap", tap.name)
+        tapped.append((tap.name, len(entries)))
         out.ok("Tapped %s (%d items) @ %s" % (tap.name, len(entries),
                                               args.at[:7]))
     elif len(args.spec) == 1 and _skip_if_already_tapped(args.spec[0]):
@@ -208,6 +218,7 @@ def cmd_tap(argv) -> int:
             tap = registry.add(args.spec[0], curated=args.curated)
             entries = catalog.rebuild_tap(tap)
         journal.log("tap", tap.name)
+        tapped.append((tap.name, len(entries)))
         out.ok("tapped %s (%d items)" % (tap.name, len(entries)))
     elif args.spec:
         # Several specs clone through the same pool as --defaults/--catalog.
@@ -216,11 +227,33 @@ def cmd_tap(argv) -> int:
         # shards workflow tapped nothing — argparse errored, `|| true`
         # swallowed it, and the job died three steps later on "no taps
         # configured". A multi-spec surface makes the natural script correct.
-        rc |= _tap_all(list(args.spec), jobs=args.jobs, curated=args.curated)
+        rc |= _tap_all(list(args.spec), jobs=args.jobs, curated=args.curated,
+                       tapped=tapped)
+    _print_tap_next_step(tapped)
     # Refresh the TAB-completion name cache so `boost install <TAB>` sees
     # whatever this call just tapped instead of the pre-tap snapshot.
     complete.refresh_names()
     return rc
+
+
+def _print_tap_next_step(tapped: list[tuple[str, int]]) -> None:
+    """Close a successful tap the way `install` closes: a summary and one step.
+
+    `boost tap --defaults` ended on its last `✓ tapped …` row and said nothing
+    else, so the command every newcomer-facing hint routes to was the one
+    command that never named what to do next — while `install`, which a user
+    only reaches after finding their way here, closes with a framed box.
+
+    Only what actually landed is summarised, and a run that added nothing to
+    search prints nothing: when every clone failed the per-tap warnings above
+    stay the report of what went wrong, and when the registries held no items
+    "next: boost search <topic>" would send the user to an empty catalog.
+    """
+    if not sum(n for _name, n in tapped):
+        return
+    print(out.panel([registry.tap_summary(tapped),
+                     out.role("next: boost search <topic>", "muted")],
+                    title="tapped", hue="green"))
 
 
 def _untap_one(name: str, force: bool) -> int:
