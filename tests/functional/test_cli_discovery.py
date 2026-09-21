@@ -283,6 +283,35 @@ class TestSearch:
                    if "commit-messages" in ln)
         assert "fixture-tap" in top
 
+    def test_a_wide_pane_shows_both_copy_targets_whole(self, boost, tmp_path,
+                                                       monkeypatch):
+        # Two taps ship one 38-cell name, so `info` needs the `tap:name`
+        # qualifier — and at 300 columns the row used to show it as
+        # `sickn33-antigravity…:doc-coauthoring-with-structured…`, which
+        # `info` rejects. The row itself must be enough to build the command.
+        # (Two descriptions, because identical content is one search row.)
+        # Both over their caps (32, 20), and short enough that the clone
+        # stays well inside Windows' 260-character path limit.
+        name = "doc-coauthoring-with-structured-review"
+        long_tap = "sickn33-antigravity-awesome-skills"
+        for tap, desc in ((long_tap, "Coauthor documents with review"),
+                          ("short-tap", "Coauthor documents with handoff")):
+            boost("tap", _make_mirror_tap(tmp_path / tap, name, desc))
+        monkeypatch.setenv("COLUMNS", "300")
+        r = boost("search", "coauthor", "documents")
+        row = next(ln for ln in r.out.splitlines() if "sickn33" in ln)
+        cells = row.split()
+        assert "…" not in row and cells[1] == name and cells[3] == long_tap
+        boost("info", name, expect=1)                 # ambiguous unqualified
+        info = boost("info", "%s:%s" % (cells[3], cells[1]))
+        assert name in info.out and long_tap in info.out
+        # Narrow panes keep the fitted plan: capped name, no tap, in the pane.
+        monkeypatch.setenv("COLUMNS", "60")
+        narrow = boost("search", "coauthor", "documents")
+        rows = [ln for ln in narrow.out.splitlines() if "doc-coauthoring" in ln]
+        assert rows and all(output.visible_len(ln) <= 60 for ln in rows)
+        assert not any("short-tap" in ln or "sickn33" in ln for ln in rows)
+
     def test_curated_tap_gets_star(self, boost, fixture_tap_src):
         boost("tap", fixture_tap_src, "--curated")
         r = boost("search", "brainstorming")

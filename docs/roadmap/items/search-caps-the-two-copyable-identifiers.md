@@ -2,14 +2,14 @@
 id: search-caps-the-two-copyable-identifiers
 board: code
 section: planned
-status: planned
+status: shipped
 category: UX · Bug
 complexity: M
 impact: Med
 wow: 3
 note: output.search_layout (output.py:668-690) hard-caps name_w at 32 and tap_w at 20 and h…
 order: 229
-owner:
+owner: loop/search-id-caps
 pr:
 title: <code>search</code> caps the name column at 32 and the tap column at 20 at every terminal width, while the description column grows without limit
 ---
