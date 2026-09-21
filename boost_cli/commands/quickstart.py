@@ -105,10 +105,10 @@ def _tap_defaults(selection: list[dict], pins: dict[str, dict],
             entries = catalog.rebuild_tap(res["tap"])
         except BoostError as exc:
             out.warn("could not index %s: %s" % (name, exc.message))
-            # A clone that cannot be indexed is not searchable either, so it
-            # counts the same way here; the warning above already said which
-            # of the two halves failed.
-            outcome.failed.append(name)
+            # Not `failed`: the clone arrived and add_many has already written
+            # it to the config, so the verdict must not send this user to
+            # check a network that worked.
+            outcome.unindexed.append(name)
             continue
         journal.log("tap", name)
         outcome.tapped.append(name)

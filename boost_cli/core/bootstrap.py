@@ -182,18 +182,24 @@ class SetupOutcome:
     tapped: list[str] = field(default_factory=list)
     #: Registries that were already configured, so this run did nothing.
     already: list[str] = field(default_factory=list)
-    #: Registries that could not be cloned, or could not be indexed once
-    #: cloned. Both spellings are "did not become searchable", which is the
-    #: only distinction the verdict cares about — the per-registry warning
-    #: already told the user which of the two it was.
+    #: Registries that could not be cloned. Nothing of them reached the
+    #: machine, so rerunning quickstart retries them.
     failed: list[str] = field(default_factory=list)
+    #: Registries whose clone succeeded but which could not be indexed
+    #: (``rebuild_tap`` raised). Kept apart from ``failed`` because the
+    #: remedy is not the same one: ``add_many`` has already written them to
+    #: the config, so the network is not the problem and a rerun skips them
+    #: as "already tapped". Folding them into ``failed`` told a user whose
+    #: every clone had succeeded to "check the network".
+    unindexed: list[str] = field(default_factory=list)
     #: Items in the keyword index after this run.
     entries: int = 0
 
     @property
     def selected(self) -> int:
         """How many registries this run set out to handle."""
-        return len(self.tapped) + len(self.already) + len(self.failed)
+        return (len(self.tapped) + len(self.already) + len(self.failed)
+                + len(self.unindexed))
 
     @property
     def searchable(self) -> bool:
@@ -206,14 +212,24 @@ class SetupOutcome:
 
         ``already`` counts: six registries in place and the seventh 404'ing is
         a top-up that mostly worked, not a run that achieved nothing. And a
-        run that attempted nothing has not failed at anything.
+        run that attempted nothing has not failed at anything. A registry
+        that cloned but could not be indexed is not searchable either, so it
+        fails here the same way — only the advice about it differs.
         """
-        return bool(self.failed) and not self.tapped and not self.already
+        return (bool(self.failed or self.unindexed)
+                and not self.tapped and not self.already)
 
     @property
     def ok(self) -> bool:
         """Whether this run may claim the machine is ready."""
         return self.searchable and not self.every_attempt_failed
+
+    def _count(self, names: list[str], what: str) -> str:
+        """"K of N registries <what>", naming them while they are a handful."""
+        line = "%d of %d registries %s" % (len(names), self.selected, what)
+        if len(names) <= MAX_NAMED_REGISTRIES:
+            line += ": %s" % ", ".join(names)
+        return line
 
     def failure_note(self) -> str:
         """One closing line for the registries that did not make it.
@@ -222,38 +238,57 @@ class SetupOutcome:
         run those scroll past above the closing line — a green tick is the
         shape that reads as success. This is the same information where the
         eye lands. When every attempt failed the verdict itself says so, so
-        the note would only repeat it.
+        the note would only repeat it. Clone and index failures are separate
+        clauses because they are separate problems.
         """
-        if not self.failed or self.every_attempt_failed:
+        if self.every_attempt_failed:
             return ""
-        line = ("%d of %d registries could not be tapped"
-                % (len(self.failed), self.selected))
-        if len(self.failed) <= MAX_NAMED_REGISTRIES:
-            line += ": %s" % ", ".join(self.failed)
-        return line
+        parts = []
+        if self.failed:
+            parts.append(self._count(self.failed, "could not be tapped"))
+        if self.unindexed:
+            parts.append(self._count(self.unindexed, "could not be indexed"))
+        return "; ".join(parts)
 
     def verdict(self) -> tuple[str, str]:
         """(message, hint) for the closing line: the ready line, or the cause.
 
         The hint differs per cause because the remedies do. A dead network is
         retried by rerunning the command that hit it — not by `boost tap
-        --defaults`, which is a strict subset of what just failed. An empty
-        index behind registries that did arrive is a tap with no clone, no
-        catalog, or nothing boost indexes in it, and `boost doctor` names the
-        first two per tap with the command that fixes each.
+        --defaults`, which is a strict subset of what just failed. A registry
+        whose clone succeeded and would not index is not a network problem:
+        it is configured, so a rerun skips it, and what it needs depends on
+        why ``rebuild_tap`` refused (today, a clone gone by the time it was
+        read, which `boost update` restores). `boost doctor` names that per
+        tap with the command that fixes it, so the hint defers to it rather
+        than guessing a second answer that could disagree. An empty index
+        behind registries that did arrive is a tap with no clone, no catalog,
+        or nothing boost indexes in it — `boost doctor` again.
         """
         if self.ok:
             return "ready — try `boost search brainstorming`", ""
+        if not self.every_attempt_failed:
+            return ("not ready — the keyword index is empty, so `boost search` "
+                    "has nothing to answer with",
+                    "`boost doctor` checks every tap's clone and catalog")
         retry = "check the network, then run `boost quickstart` again"
-        if self.every_attempt_failed:
-            if self.searchable:
-                # Don't call a full index empty: these items are real, they
-                # are just not this run's doing.
-                return ("not ready — none of the %d registries could be "
-                        "tapped; the %s items already indexed are unaffected"
-                        % (self.selected, format(self.entries, ",")), retry)
-            return ("not ready — none of the %d registries could be tapped, "
-                    "so nothing is searchable" % self.selected, retry)
-        return ("not ready — the keyword index is empty, so `boost search` "
-                "has nothing to answer with",
-                "`boost doctor` checks every tap's clone and catalog")
+        n = self.selected
+        if not self.unindexed:
+            cause, hint = "none of the %d registries could be tapped" % n, retry
+        elif not self.failed:
+            cause = "none of the %d registries could be indexed" % n
+            hint = ("their clones succeeded and they are configured, so a "
+                    "rerun skips them — `boost doctor` names what each one "
+                    "is missing and the command that fixes it")
+        else:
+            cause = ("none of the %d registries could be set up: %d could not "
+                     "be tapped and %d could not be indexed"
+                     % (n, len(self.failed), len(self.unindexed)))
+            hint = ("%s; `boost doctor` names what the %d that could not be "
+                    "indexed are missing" % (retry, len(self.unindexed)))
+        if self.searchable:
+            # Don't call a full index empty: these items are real, they are
+            # just not this run's doing.
+            return ("not ready — %s; the %s items already indexed are "
+                    "unaffected" % (cause, format(self.entries, ",")), hint)
+        return "not ready — %s, so nothing is searchable" % cause, hint

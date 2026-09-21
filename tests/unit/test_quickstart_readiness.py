@@ -77,8 +77,29 @@ class TestSetupOutcomeVerdict:
         assert _outcome(failed=["a", "b"], entries=500).ok is False
 
     def test_selected_counts_every_bucket(self):
-        res = _outcome(tapped=["a"], already=["b", "c"], failed=["d"])
-        assert res.selected == 4
+        res = _outcome(tapped=["a"], already=["b", "c"], failed=["d"],
+                       unindexed=["e", "f", "g"])
+        assert res.selected == 7
+
+    def test_registries_that_cloned_but_would_not_index_are_not_ready(self):
+        # Nothing this run touched became searchable, so the run failed — it
+        # is only the advice (see TestIndexFailuresAreNotNetworkFailures)
+        # that differs from a clone failure.
+        res = _outcome(unindexed=["a", "b"], entries=0)
+        assert res.every_attempt_failed is True
+        assert res.ok is False
+
+    def test_unindexable_registries_fail_the_run_beside_an_existing_index(self):
+        assert _outcome(unindexed=["a"], entries=500).ok is False
+
+    def test_one_unindexable_registry_beside_a_success_is_still_ready(self):
+        res = _outcome(tapped=["a"], unindexed=["b"])
+        assert res.every_attempt_failed is False
+        assert res.ok is True
+
+    def test_one_unindexable_registry_beside_an_already_tapped_one_is_ready(
+            self):
+        assert _outcome(already=["a"], unindexed=["b"]).ok is True
 
 
 class TestSetupOutcomeMessages:
@@ -142,3 +163,74 @@ class TestSetupOutcomeMessages:
         # The dry run used a literal 12 before it shared this constant; the
         # shared value must not drift away from that without a decision.
         assert bootstrap.MAX_NAMED_REGISTRIES == 12
+
+
+class TestIndexFailuresAreNotNetworkFailures:
+    """A clone that arrived and would not index is a different problem.
+
+    `registry.add_many` writes a registry to the config as soon as its clone
+    lands, before quickstart indexes it. When every registry cloned and none
+    indexed, the verdict used to call them untappable and say "check the
+    network" — the one cause the clones had just ruled out — and rerunning
+    quickstart, the other half of that hint, skips them as already tapped.
+    """
+
+    def test_every_index_failing_points_at_doctor_not_the_network(self):
+        msg, hint = _outcome(unindexed=["a", "b", "c"], entries=0).verdict()
+        assert msg == ("not ready — none of the 3 registries could be indexed, "
+                       "so nothing is searchable")
+        assert hint == ("their clones succeeded and they are configured, so a "
+                        "rerun skips them — `boost doctor` names what each one "
+                        "is missing and the command that fixes it")
+
+    def test_every_index_failing_beside_an_existing_index_keeps_its_items(
+            self):
+        msg, hint = _outcome(unindexed=["a", "b"], entries=1500).verdict()
+        assert msg == ("not ready — none of the 2 registries could be indexed; "
+                       "the 1,500 items already indexed are unaffected")
+        assert "network" not in hint
+        assert "boost doctor" in hint
+
+    def test_a_clone_failure_still_names_the_network_and_only_the_network(
+            self):
+        # The other side of the split: nothing arrived, so a rebuild has
+        # nothing to rebuild.
+        _msg, hint = _outcome(failed=["a"], entries=0).verdict()
+        assert "network" in hint
+        assert "doctor" not in hint
+
+    def test_a_mix_of_both_names_each_count_and_each_remedy(self):
+        msg, hint = _outcome(failed=["a", "b"], unindexed=["c"],
+                             entries=0).verdict()
+        assert msg == ("not ready — none of the 3 registries could be set up: "
+                       "2 could not be tapped and 1 could not be indexed, so "
+                       "nothing is searchable")
+        assert hint == ("check the network, then run `boost quickstart` "
+                        "again; `boost doctor` names what the 1 that could "
+                        "not be indexed are missing")
+
+    def test_a_mix_beside_an_existing_index_keeps_its_items(self):
+        msg, _hint = _outcome(failed=["a"], unindexed=["c"],
+                              entries=9).verdict()
+        assert msg.endswith("1 could not be indexed; the 9 items already "
+                            "indexed are unaffected")
+
+    def test_the_note_names_an_index_failure_as_one(self):
+        note = _outcome(tapped=["a"], unindexed=["b/c"]).failure_note()
+        assert note == "1 of 2 registries could not be indexed: b/c"
+
+    def test_the_note_keeps_the_two_failures_in_separate_clauses(self):
+        note = _outcome(tapped=["a"], failed=["x/y"],
+                        unindexed=["b/c"]).failure_note()
+        assert note == ("1 of 3 registries could not be tapped: x/y; "
+                        "1 of 3 registries could not be indexed: b/c")
+
+    def test_every_index_failing_leaves_the_note_to_the_verdict(self):
+        assert _outcome(unindexed=["a", "b"], entries=0).failure_note() == ""
+
+    def test_past_the_threshold_index_failures_are_counted_not_listed(self):
+        cap = bootstrap.MAX_NAMED_REGISTRIES
+        unindexed = ["r%d" % i for i in range(cap + 1)]
+        note = _outcome(tapped=["a"], unindexed=unindexed).failure_note()
+        assert note == ("%d of %d registries could not be indexed"
+                        % (cap + 1, cap + 2))
