@@ -1409,3 +1409,39 @@ class TestMaterializedKinds:
         outline = r.out.split("Outline:", 1)[1]
         assert "dep-mgmt" not in outline
         assert "Pin transitive versions" in outline
+
+
+class TestInfoVersionRelation:
+    """`info` compares the lock's version to the catalog's as versions.
+
+    It used string inequality, so any difference, in either direction or in
+    spelling only, read as "update available".
+    """
+
+    def _set_lock_version(self, version):
+        lock_path = paths.lockfile_path()
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        lock["skills"]["brainstorming"]["version"] = version
+        lock_path.write_text(json.dumps(lock), encoding="utf-8")
+
+    def test_older_install_says_update_available(self, boost, installed):
+        self._set_lock_version("1.3.0")
+        r = boost("info", "brainstorming")
+        assert "[update available]" in r.out
+        assert re.search(r"latest\s+1\.4\.0\s+\(update available\)", r.out)
+        assert "ahead of the tap" not in r.out
+
+    def test_newer_install_is_ahead_not_an_update(self, boost, installed):
+        self._set_lock_version("1.4.1")
+        r = boost("info", "brainstorming")
+        assert "update available" not in r.out
+        assert "[ahead of tap]" in r.out
+        assert re.search(r"latest\s+1\.4\.0\s+\(older — the installed copy "
+                         r"is ahead of the tap\)", r.out)
+
+    def test_same_version_spelled_differently_is_neither(self, boost, installed):
+        self._set_lock_version("1.4")
+        r = boost("info", "brainstorming")
+        assert "update available" not in r.out
+        assert "ahead" not in r.out
+        assert not re.search(r"^\s+latest\s", r.out, re.M)

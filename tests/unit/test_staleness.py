@@ -134,3 +134,40 @@ class TestOutdatedFooter:
         assert "2 source missing" in footer
         assert "5 upstream" not in footer
         assert "5 source missing" not in footer
+
+
+class TestCatalogRelation:
+    """`boost info`'s installed-vs-catalog decision, compared as versions."""
+
+    def test_constant_values(self):
+        assert staleness.BEHIND == "behind"
+        assert staleness.AHEAD == "ahead"
+
+    def test_newer_catalog_is_behind(self):
+        assert staleness.catalog_relation("1.4.0", "1.5.0") == staleness.BEHIND
+
+    def test_older_catalog_is_ahead_not_an_update(self):
+        # The audit case: evolve --apply bumped the lock to 1.4.1 while the tap
+        # still says 1.4.0. String inequality called that "update available".
+        assert staleness.catalog_relation("1.4.1", "1.4.0") == staleness.AHEAD
+
+    def test_equal_versions_have_no_relation(self):
+        assert staleness.catalog_relation("1.4.0", "1.4.0") is None
+
+    def test_equal_versions_spelled_differently_have_no_relation(self):
+        # "1.4" and "1.4.0" differ as strings and are the same version.
+        assert staleness.catalog_relation("1.4", "1.4.0") is None
+        assert staleness.catalog_relation("1.4.0", "1.4") is None
+
+    def test_numeric_not_lexicographic(self):
+        assert staleness.catalog_relation("1.9.0", "1.10.0") == staleness.BEHIND
+        assert staleness.catalog_relation("1.10.0", "1.9.0") == staleness.AHEAD
+
+    def test_empty_catalog_version_is_no_relation(self):
+        # A catalog entry that declares no version is nothing to compare, not
+        # an "update available" to the empty string.
+        assert staleness.catalog_relation("1.4.0", "") is None
+        assert staleness.catalog_relation("0.0.0", "") is None
+
+    def test_unknown_installed_version_is_behind_a_real_one(self):
+        assert staleness.catalog_relation("?", "1.0.0") == staleness.BEHIND
