@@ -183,6 +183,39 @@ class TestRefreshMarker:
         registry.update()
         assert registry.refresh_age_days() is not None
 
+    def test_a_first_tap_starts_the_clock(self, sandbox, fake_clone):
+        # `update` was the marker's only writer, so a machine that tapped and
+        # never updated had none — and the stale-tap hint, the only line that
+        # reports drift, could never fire for it. A clone is a refresh.
+        registry.add("o/a")
+        assert registry.refresh_age_days() is not None
+        assert registry.refresh_age_days() < 1
+
+    def test_add_many_starts_the_clock_too(self, sandbox, fake_clone):
+        # The path `tap --defaults` and `quickstart` take.
+        registry.add_many(["o/a", "o/b"])
+        assert registry.refresh_age_days() is not None
+
+    def test_a_later_tap_does_not_restart_it(self, sandbox, fake_clone):
+        # Adding one tap does not refresh the ones already here, so an
+        # existing stamp is left where it is.
+        import os
+        registry.add("o/a")
+        old = time.time() - 30 * 86400
+        os.utime(paths.tap_refresh_marker(), (old, old))
+        registry.add("o/b")
+        assert 29.9 < registry.refresh_age_days() < 30.1
+
+    def test_a_tap_that_never_cloned_starts_nothing(self, sandbox,
+                                                    monkeypatch):
+        def boom(url, dest, sparse=True):
+            raise BoostError("clone failed")
+
+        monkeypatch.setattr(gitutil, "clone_shallow", boom)
+        with pytest.raises(BoostError):
+            registry.add("o/a")
+        assert registry.refresh_age_days() is None
+
     def test_a_sweep_with_no_taps_stamps_nothing(self, sandbox):
         registry.update()
         assert registry.refresh_age_days() is None

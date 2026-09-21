@@ -1697,16 +1697,25 @@ class TestHealth:
             self, boost, installed):
         # The bug: twelve minutes after tapping, health read the tap clone's
         # own git log (the upstream's commit clock, unmoved by a local sync)
-        # and reported weeks-old staleness for a brand-new clone. A tap that
-        # has only ever been *tapped*, never `update`d, has genuinely never
-        # been synced — "never" is the honest answer, not a fabricated age.
+        # and reported weeks-old staleness for a brand-new clone. The marker
+        # is the local clock, and a clone stamps it — a fresh clone IS a
+        # sync, which is what makes the stale-tap hint reachable on a machine
+        # that never runs `boost update` (stale-tap-hint-dead-for-tap-only-
+        # installs). This test read "never" here until then.
         r = boost("health")
-        assert re.search(r"last tap sync\s+never", r.out)
+        sync_line = next(ln for ln in r.out.splitlines() if "last tap sync" in ln)
+        assert "never" not in sync_line and "ago" in sync_line
         boost("update")
         r = boost("health")
         sync_line = next(ln for ln in r.out.splitlines() if "last tap sync" in ln)
         assert "never" not in sync_line
         assert "ago" in sync_line
+
+    def test_last_tap_sync_is_never_before_anything_is_tapped(self, boost,
+                                                              sandbox):
+        # The marker starts at the first clone, so a machine with no taps at
+        # all still has nothing to report — and must not fabricate an age.
+        assert re.search(r"last tap sync\s+never", boost("health").out)
 
 
 class TestDuplicateSkillDiscovery:
