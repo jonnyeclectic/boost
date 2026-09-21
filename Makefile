@@ -148,12 +148,16 @@ eval:
 # skill, graded by exemplar on every row. ADVISORY — ci.yml runs it with
 # continue-on-error and it is not in `check`. The floors sit ~10% under the
 # BM25 row tests/eval/baseline.json records (0.360 / 0.160 / 0.237 / 0.259 at
-# the current pins), and at 50 queries that is one query of slack on hit@1
-# (7 of 50 against 8), so a required gate would go red on corpus movement a
-# refresh brings. The default --regression-eps (0.02) is kept on purpose: the
-# corpus is pinned and the scores reproduce exactly, so a regression line here
-# means the ranker moved. ci.yml and eval-corpus-refresh.yml run this same
-# call; tests/unit/test_eval_corpus.py fails the build on any difference.
+# the current pins; tests/unit/test_corpus_prose.py holds this quote to it).
+# At 50 queries one query moves a metric by 0.02, one query of slack on hit@1,
+# so a required gate would go red on corpus movement a refresh brings. A
+# refresh that drops the row below a floor, or lifts it more than one query
+# above the row that floor was set on, moves the floor with it, in both
+# directions: tests/unit/test_eval_corpus.py names each one. The
+# default --regression-eps (0.02) is kept on purpose: the corpus is pinned and
+# the scores reproduce exactly, so a regression line here means the ranker
+# moved. ci.yml and eval-corpus-refresh.yml run this same call;
+# tests/unit/test_eval_corpus.py fails the build on any difference.
 eval-natural:
 	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
 	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_retrieval.py --build -k 10 \

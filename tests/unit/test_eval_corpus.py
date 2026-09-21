@@ -31,12 +31,14 @@ from __future__ import annotations
 import functools
 import importlib.util
 import json
+import math
 import os
 import re
 import shlex
 import subprocess
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -735,6 +737,111 @@ class TestTheRefreshRebaselinesEverySet:
             _committed_sets()
 
 
+#: How the natural-language floors are set: ~10% under the recorded BM25
+#: row, rounded DOWN to two places (hit@1 0.160 -> 0.14, not 0.144).
+_UNDER, _ROUNDING = 0.10, 0.01
+
+
+def _natural_queries() -> int:
+    """How many questions the natural set asks, counted as `load_golden` does."""
+    lines = (line.strip() for line in
+             _NATURAL.read_text(encoding="utf-8").splitlines())
+    return sum(1 for line in lines if line and not line.startswith("#"))
+
+
+def floors_out_of_band(floors: dict[str, float], row: dict[str, float],
+                       n: int) -> list[str]:
+    """Each floor a row more than one query from its calibration no longer fits.
+
+    Every metric is a mean over `n` questions of a per-question score in
+    [0, 1], so one question moves it by at most 1/n — at 50 questions, 0.02,
+    more than the ~10% margin on hit@1 (0.016 at 0.160). The band therefore
+    allows one query of movement either way and no more:
+
+    - UP: the floor may be one query plus ~10% (and the rounding) under the
+      row. It used to be ~20% with no query allowance, and a one-query
+      improvement on hit@1 (8 -> 9 of 50, 0.160 -> 0.180) put the unchanged
+      0.14 floor 22% under, failing a required test for a better ranker. Two
+      queries of improvement is past the band for a floor set by the rule.
+    - DOWN: the floor may equal the row. The gate breaches on `got < minimum`
+      (`check_floors`), so a floor the row meets exactly still passes, and a
+      one-query drop on hit@1 (8 -> 7 of 50) lands exactly there.
+    """
+    step, eps = 1 / n, 1e-9
+    out = []
+    for metric, minimum in sorted(floors.items()):
+        got = row[metric]
+        if minimum > got + eps:
+            out.append("%s: floor %.2f is above the row's %.3f, so the gate "
+                       "fails on the corpus it was set on" % (metric, minimum, got))
+        elif minimum < (1 - _UNDER) * got - _ROUNDING - step - eps:
+            out.append("%s: floor %.2f is more than one query plus ~10%% under "
+                       "the row's %.3f, so it no longer measures anything"
+                       % (metric, minimum, got))
+    return out
+
+
+def _folded_echo(block: str) -> str:
+    """The text a run of `echo "..."` lines prints, as one line."""
+    return " ".join(re.findall(r'^\s*echo "(.*)"\s*$', block, re.M))
+
+
+class TestTheFloorBand:
+    """The band itself, on synthetic rows: 50 questions, hit@1 floored 0.14."""
+
+    FLOOR: ClassVar[dict[str, float]] = {"hit@1": 0.14}
+
+    @pytest.mark.parametrize("hits", [7, 8, 9], ids=["down-one", "at", "up-one"])
+    def test_one_query_either_way_is_inside(self, hits):
+        # 9 of 50 is the reviewer's case: a one-query improvement that failed
+        # the old 0.8x lower bound (0.14 < 0.144).
+        assert floors_out_of_band(self.FLOOR, {"hit@1": hits / 50}, 50) == []
+
+    @pytest.mark.parametrize("hits", [6, 10], ids=["down-two", "up-two"])
+    def test_two_queries_either_way_are_outside(self, hits):
+        out = floors_out_of_band(self.FLOOR, {"hit@1": hits / 50}, 50)
+        assert len(out) == 1 and out[0].startswith("hit@1: floor 0.14 is ")
+
+    def test_the_direction_is_named(self):
+        (above,) = floors_out_of_band(self.FLOOR, {"hit@1": 6 / 50}, 50)
+        (under,) = floors_out_of_band(self.FLOOR, {"hit@1": 10 / 50}, 50)
+        assert "above the row" in above and "no longer measures" in under
+
+    def test_a_floor_the_row_meets_exactly_passes_the_gate(self):
+        # Why DOWN allows equality: the gate's own comparison.
+        ev = _eval_retrieval()
+        result = {"agg": {"overall": {"hit@1": 7 / 50}}}
+        assert ev.check_floors(result, dict(self.FLOOR)) == []
+        assert ev.check_floors(result, {"hit@1": 0.15}) != []
+
+    def test_the_query_count_scales_the_allowance(self):
+        # At 500 questions one query is 0.002, so 0.180 is nine queries up.
+        assert floors_out_of_band(self.FLOOR, {"hit@1": 0.18}, 500) != []
+
+    def test_every_floor_is_checked(self):
+        floors = {"hit@1": 0.14, "MRR": 0.21}
+        out = floors_out_of_band(floors, {"hit@1": 0.20, "MRR": 0.20}, 50)
+        assert [line.split(":")[0] for line in out] == ["MRR", "hit@1"]
+
+    @pytest.mark.parametrize("hits", range(5, 50))
+    def test_a_floor_set_by_the_rule_allows_exactly_one_query_up(self, hits):
+        # The band and the calibration rule agree for any row, not only the
+        # one committed today: set a floor ~10% under, rounded down to two
+        # places, and the row may rise one query but not two.
+        n, row = 50, hits / 50
+        floor = {"MRR": math.floor(round((1 - _UNDER) * row * 100, 6)) / 100}
+        assert floors_out_of_band(floor, {"MRR": row}, n) == []
+        assert floors_out_of_band(floor, {"MRR": row + 1 / n}, n) == []
+        assert floors_out_of_band(floor, {"MRR": row + 2 / n}, n) != []
+
+    def test_the_shipped_set_is_counted_by_its_rows(self):
+        # Comments and blank lines are not questions; 137 lines hold 50.
+        rows = [line for line in
+                _NATURAL.read_text(encoding="utf-8").splitlines()
+                if line.strip().startswith("{")]
+        assert _natural_queries() == len(rows) > 0
+
+
 class TestTheNaturalSetIsMeasured:
     """card: exemplar-graded-golden-set-runs-in-no-gate.
 
@@ -745,7 +852,8 @@ class TestTheNaturalSetIsMeasured:
     It runs ADVISORY (continue-on-error in CI, outside `make check`), and the
     reason is a count of queries. The keyword gate's recall floor sits five
     queries of 91 under its measurement; a natural-set hit@1 floor ~10% under
-    0.160 is 7 of 50 against a measured 8 — one query of slack. The refresh's
+    its row is one query under it (7 of 50 against 8, at the pins the floors
+    were set on) — one query of slack. The refresh's
     own header says corpus growth moves these numbers down, so a required
     gate that thin would redden every open pull request the month after a
     refresh. Advisory, it still prints every number and the regression line
@@ -790,18 +898,38 @@ class TestTheNaturalSetIsMeasured:
             floors.setdefault("recall@k", gate["fail_under"])
         assert set(floors) == {"recall@k", "hit@1", "MRR", "nDCG@k"}
 
-    def test_the_floors_sit_under_the_recorded_baseline(self):
-        # The row it is compared to is the one the refresh keeps current;
-        # a floor above it would be red on the day it landed.
-        ev = _eval_retrieval()
-        row = ev.baseline_for(_NATURAL)
-        assert row is not None
-        bm25 = row["engines"]["BM25 full-content"]
+    def _floors(self) -> dict[str, float]:
         gate = self._gate()
-        floors = dict(gate["floor"], **{"recall@k": gate["fail_under"]})
-        for metric, minimum in floors.items():
-            assert minimum < bm25[metric], metric
-            assert minimum >= 0.8 * bm25[metric], metric
+        return dict(gate["floor"], **{"recall@k": gate["fail_under"]})
+
+    def _row(self) -> dict[str, float]:
+        row = _eval_retrieval().baseline_for(_NATURAL)
+        assert row is not None
+        return row["engines"]["BM25 full-content"]
+
+    def test_the_floors_sit_under_the_recorded_baseline(self):
+        # The row it is compared to is the one the refresh keeps current, so
+        # a refresh that moves it more than one query from where the floors
+        # were set fails here, in either direction, naming each floor.
+        out = floors_out_of_band(self._floors(), self._row(),
+                                 _natural_queries())
+        assert out == [], (
+            "the natural-language floors no longer fit the recorded BM25 row "
+            "in tests/eval/baseline.json:\n  %s\nMove each one named to ~10%% "
+            "under the new row, rounded down to two places, in the Makefile's "
+            "eval-natural, ci.yml and eval-corpus-refresh.yml together."
+            % "\n  ".join(out))
+
+    @pytest.mark.skipif(not _REFRESH.exists(), reason="refresh workflow absent")
+    def test_the_refresh_pull_request_names_the_floor_check(self):
+        # The refresh is where the row moves, so its pull request is where a
+        # person learns the floors move with it — and in both directions,
+        # since a one-way note sends them looking only for a drop.
+        body = _step(_REFRESH.read_text(encoding="utf-8"),
+                     "assemble the pull request body")
+        name = "test_the_floors_sit_under_the_recorded_baseline"
+        assert name in body and callable(getattr(self, name, None))
+        assert "in both directions" in _folded_echo(body)
 
     def test_it_is_advisory_in_ci_and_the_keyword_gate_is_not(self):
         ci = _CI.read_text(encoding="utf-8")

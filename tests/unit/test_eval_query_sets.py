@@ -252,6 +252,64 @@ class TestAllSets:
         assert ei.value.code == 2
 
 
+def _record_builds(monkeypatch) -> list:
+    calls: list = []
+    real = rag.build
+    monkeypatch.setattr(rag, "build",
+                        lambda *a, **kw: calls.append(kw) or real(*a, **kw))
+    return calls
+
+
+class TestNothingIsBuiltForNothing:
+    """A run that cannot score anything says so before the index build.
+
+    The golden file is read AFTER `--build` (see the class below), which made
+    a typo in `--golden` cost a whole build before its FileNotFoundError —
+    about 11 s on the pinned corpus, minutes on a real ~71k-entry home.
+    """
+
+    def test_a_missing_set_fails_before_the_build(self, corpus, monkeypatch):
+        m = corpus
+        calls = _record_builds(monkeypatch)
+        typo = m.EVAL_DIR / "golden-natral.jsonl"
+        with pytest.raises(SystemExit) as ei:
+            m.main(["--golden", str(typo), "--build", *_RUN])
+        assert str(ei.value.code) == "--golden %s: no such file" % typo
+        assert calls == []
+
+    def test_a_directory_is_not_a_set(self, corpus, monkeypatch):
+        m = corpus
+        calls = _record_builds(monkeypatch)
+        with pytest.raises(SystemExit) as ei:
+            m.main(["--golden", str(m.EVAL_DIR), "--build", *_RUN])
+        assert "no such file" in str(ei.value.code)
+        assert calls == []
+
+    def test_all_sets_over_no_sets_fails_before_the_build(
+            self, corpus, monkeypatch, tmp_path):
+        # Exit 0 having scored nothing would read, to the refresh's
+        # re-baseline step, as every row moved.
+        m = corpus
+        empty = tmp_path / "no-sets"
+        empty.mkdir()
+        _touch(empty, "recommend.jsonl", "explain.jsonl")
+        monkeypatch.setattr(m, "EVAL_DIR", empty)
+        calls = _record_builds(monkeypatch)
+        with pytest.raises(SystemExit) as ei:
+            m.main(["--all-sets", "--build", "--save-baseline", *_RUN])
+        assert str(ei.value.code) == (
+            "--all-sets: no query set matches %s" % (empty / "golden*.jsonl"))
+        assert calls == []
+        assert not m.BASELINE.exists()
+
+    def test_an_existing_set_still_builds_and_scores(self, corpus, monkeypatch):
+        m = corpus
+        calls = _record_builds(monkeypatch)
+        natural = m.EVAL_DIR / "golden-natural.jsonl"
+        assert m.main(["--golden", str(natural), "--build", *_RUN]) == 0
+        assert len(calls) == 1
+
+
 class TestExemplarsResolveAgainstTheFreshIndex:
     """`--build` must come before the golden file is graded, not after."""
 

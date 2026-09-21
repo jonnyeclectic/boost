@@ -119,10 +119,13 @@ evals stay out of `check` and all degrade cleanly:
 - `make eval-natural` — the natural-language set over the same pinned corpus,
   exemplar-graded on every row. CI runs it after the required gate, with
   `continue-on-error`. Its floors sit ~10% under the recorded BM25 row
-  (0.360 / 0.160 / 0.237 / 0.259), and at 50 queries that leaves hit@1 one
-  query of slack (7 of 50 against 8), too thin for a required check a refresh
-  can move. `test_eval_corpus.py` holds the Makefile, CI and refresh calls to
-  one argv, like `eval`.
+  (0.360 / 0.160 / 0.237 / 0.259), and at 50 queries one query moves a metric
+  by 0.02, so hit@1 has one query of slack: too thin for a required check a
+  refresh can move. `test_eval_corpus.py` holds the `Makefile`, CI and refresh
+  calls to one argv, like `eval`, and fails when the row falls below a floor or
+  rises more than one query above the row that floor was set on, so the floors
+  move with the row in both directions. `test_corpus_prose.py` holds the four
+  figures above to the row.
 - `make eval-stats` — Tier 1b `ranx` paired-t-test between engines (`--stats`).
 - `make eval-explain` — Tier 2c `ragas` faithfulness for `boost explain`; needs
   the `[eval]` extra **and** a judge key (`OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`

@@ -814,8 +814,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.floor or args.fail_under is not None or args.json:
         parser.error("--all-sets takes no --floor, --fail-under or --json: "
                      "each means one query set")
+    sets = query_sets()
+    if not sets:
+        # Before any build. A run that scored nothing and exited 0 would read,
+        # to the refresh that calls it, as every row re-baselined.
+        raise SystemExit("--all-sets: no query set matches %s"
+                         % (EVAL_DIR / "golden*.jsonl"))
     worst = 0
-    for i, golden in enumerate(query_sets()):
+    for i, golden in enumerate(sets):
         one = argparse.Namespace(**vars(args))
         one.golden, one.all_sets = golden, False
         one.build = args.build and i == 0      # one corpus, one index
@@ -828,6 +834,10 @@ def main(argv: list[str] | None = None) -> int:
 def run(args: argparse.Namespace) -> int:
     """Score one query set: `main` for a single `--golden`."""
     floors = parse_floors(args.floor)          # fail fast on a bad --floor
+    # The file is READ after the build (see below), but a typo in its name must
+    # not cost a full index build first — minutes on a real ~71k-entry home.
+    if not args.golden.is_file():
+        raise SystemExit("--golden %s: no such file" % args.golden)
 
     if args.build or not rag.ready():
         if not args.json:
