@@ -10,7 +10,7 @@ wow: 1
 note: empty --feedback writes an empty section + version bump; the revision is left unpinned
 order: 266
 owner: loop/evolve-audit
-pr:
+pr: 936
 title: "<code>boost evolve</code>: CLI audit findings (2026-08)"
 ---
 <b>evolve accepts empty <code>--feedback</code> and has no stdin/file form.</b>
