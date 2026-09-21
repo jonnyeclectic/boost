@@ -392,15 +392,6 @@ def _decay_rows(cwd: Path) -> list[dict]:
 
 # --- commands ---------------------------------------------------------------
 
-def _not_writable(d: Path, block: Path) -> str:
-    """Say which directory refuses writes for `d`: itself, or the parent
-    that would not let it be created. Doctor and heal share the wording."""
-    if block == d:
-        return "%s is not writable" % _tilde(d)
-    return "%s cannot be created: %s is not writable" % (_tilde(d),
-                                                         _tilde(block))
-
-
 def cmd_doctor(argv):
     ap = cliparse.parser(
         prog="boost doctor", description="Check installation health & report issues")
@@ -458,13 +449,13 @@ def cmd_doctor(argv):
     if taps and cache_block:
         bad("cache", "%s — every command rescans its taps and cannot keep the "
             "result; make %s writable"
-            % (_not_writable(cache_dir, cache_block), _tilde(cache_block)),
+            % (paths.not_writable(cache_dir, cache_block), _tilde(cache_block)),
             wrap=True)
     # With no taps the cache line above is silent, but heal still names a
     # cache dir it cannot create, so doctor must too.
     for d in refused:
         if d != cache_dir or not taps:
-            bad("dirs", _not_writable(d, paths.refuses_writes(d) or d),
+            bad("dirs", paths.not_writable(d, paths.refuses_writes(d) or d),
                 wrap=True)
     if taps and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
@@ -1133,8 +1124,8 @@ def cmd_heal(argv):
     dry = args.dry_run
     actions: list[str] = []
 
-    # linking_agents, matching agents.ensure_agent_dirs below: a native-store
-    # agent's skills dir is never written to, so it is not a missing directory.
+    # linking_agents, not enabled_agents: a native-store agent's skills dir is
+    # never written to, so it is not a missing directory.
     wanted = [*paths.boost_dirs(), *agents.linking_agents().values()]
     missing = [d for d in wanted if not d.is_dir()]
     # A missing dir whose parent refuses the mkdir is not one heal can create,
@@ -1278,12 +1269,17 @@ def cmd_heal(argv):
     # refused mkdir left missing: heal cannot make the parent writable, so it
     # must not answer "nothing to heal" beneath the problem. The preview and
     # the run print the same line, naming the directory that refuses.
-    if registry.list_taps() and cache_stuck and cache_dir not in blocked:
-        blocked[cache_dir] = paths.refuses_writes(cache_dir) or cache_dir
+    # setdefault: a missing cache dir is already in `blocked`, named once.
+    if registry.list_taps() and cache_stuck:
+        blocked.setdefault(cache_dir,
+                           paths.refuses_writes(cache_dir) or cache_dir)
     for d, block in blocked.items():
         stuck.append(d)
-        out.warn("%s — heal does not change permissions; run `chmod u+w %s`"
-                 % (_not_writable(d, block), _tilde(block)), wrap=True)
+        out.warn("%s — heal does not %s; %s"
+                 % (paths.not_writable(d, block),
+                    "move files" if paths.in_the_way(block)
+                    else "change permissions",
+                    paths.write_remedy(block)), wrap=True)
     if not actions and not stuck and not cfg_err:
         # A duplicate this run declined to prune is something `heal` saw, can
         # fix, and deliberately left. A bare "nothing to heal" printed under

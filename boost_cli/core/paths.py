@@ -196,7 +196,7 @@ def boost_dirs() -> tuple[Path, ...]:
     """Every directory boost writes into — what :func:`ensure_dirs` creates.
 
     One list, so `boost heal --dry-run` names exactly the directories the real
-    run's :func:`ensure_dirs` makes rather than a hand-kept copy of them.
+    run's :func:`create_dirs` call makes rather than a hand-kept copy of them.
     """
     return (boost_home(), repos_dir(), cache_dir(), logs_dir(), state_dir(),
             snapshots_dir(), lock_history_dir(), profiles_dir(), store_dir())
@@ -228,10 +228,13 @@ def create_dirs(dirs) -> list[Path]:
 def nearest_existing(p: Path) -> Path:
     """`p` itself if it exists, else its closest ancestor that does.
 
-    ``os.access``, not ``Path.exists``: under a parent without search
+    ``os.path.lexists``, not ``Path.exists``: under a parent without search
     permission the stat raises, and that parent is the answer, not a crash.
+    And a dangling symlink exists: no mkdir gets past one, so it is the answer
+    too. Following it called ``~/.claude/skills -> /nonexistent`` creatable,
+    and `boost heal --dry-run` promised a mkdir its run then failed.
     """
-    while not os.access(p, os.F_OK) and p != p.parent:
+    while not os.path.lexists(p) and p != p.parent:
         p = p.parent
     return p
 
@@ -243,10 +246,43 @@ def refuses_writes(d: Path) -> Path | None:
     nearest existing ancestor, so that is the directory that refuses: a
     missing cache dir under a read-only ``~/.boost`` is blocked by
     ``~/.boost``, which no check of the cache dir alone can see. Doctor and
-    heal both ask this, so a preview and the run it previews agree. A file
-    where a directory belongs refuses too, since no mkdir gets past it.
+    heal both ask this, so a preview and the run it previews agree. A file or
+    a dangling symlink where a directory belongs refuses too, since no mkdir
+    gets past it.
     """
     here = nearest_existing(d)
     if here.is_dir() and os.access(here, os.W_OK | os.X_OK):
         return None
     return here
+
+
+def in_the_way(block: Path) -> bool:
+    """Something that is not a directory sits where a directory belongs:
+    a file, or a symlink that leads nowhere or to a file."""
+    return os.path.lexists(block) and not block.is_dir()
+
+
+def not_writable(d: Path, block: Path) -> str:
+    """Say why `d` cannot be written, given ``block = refuses_writes(d)``.
+
+    The block is `d` itself or the ancestor that would not let it be created,
+    and a directory that refuses or something that is not a directory at all.
+    Doctor, heal and install share the wording.
+    """
+    why = "%s is %s" % (tilde(block), "not a directory" if in_the_way(block)
+                        else "not writable")
+    if block == d:
+        return why
+    return "%s cannot be created: %s" % (tilde(d), why)
+
+
+def write_remedy(block: Path) -> str:
+    """The one step that clears `block`, from :func:`refuses_writes`.
+
+    A directory needs its mode changed. A file or a dangling symlink where a
+    directory belongs needs moving: ``chmod`` on a dangling link follows it
+    and fails, so advising that was advice that could not work.
+    """
+    if in_the_way(block):
+        return "move %s aside" % tilde(block)
+    return "run `chmod u+w %s`" % tilde(block)

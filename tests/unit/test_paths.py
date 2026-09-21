@@ -247,6 +247,71 @@ class TestRefusesWrites:
         assert paths.refuses_writes(f / "deeper") == f
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="creating a symlink needs a privilege on Windows")
+class TestADanglingSymlinkIsInTheWay:
+    """Following the link called ``~/.claude/skills -> /nowhere`` missing and
+    creatable, so heal's preview promised a mkdir its run then failed."""
+
+    def test_the_link_is_its_own_nearest_existing_path(self, tmp_path):
+        link = tmp_path / "skills"
+        link.symlink_to(tmp_path / "nowhere")
+        assert paths.nearest_existing(link) == link
+        assert paths.nearest_existing(link / "x") == link
+
+    def test_the_link_refuses_writes(self, tmp_path):
+        link = tmp_path / "skills"
+        link.symlink_to(tmp_path / "nowhere")
+        assert paths.refuses_writes(link) == link
+        assert paths.refuses_writes(link / "x") == link
+
+    def test_a_link_to_a_writable_dir_refuses_nothing(self, tmp_path):
+        (tmp_path / "real").mkdir()
+        link = tmp_path / "skills"
+        link.symlink_to(tmp_path / "real")
+        assert paths.refuses_writes(link) is None
+        assert not paths.in_the_way(link)
+
+    def test_the_link_is_named_as_in_the_way_with_a_remedy_that_works(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        link = tmp_path / "skills"
+        link.symlink_to(tmp_path / "nowhere")
+        assert paths.in_the_way(link)
+        assert paths.not_writable(link, link) == "~/skills is not a directory"
+        assert paths.write_remedy(link) == "move ~/skills aside"
+
+
+class TestNotWritableWording:
+    @pytest.fixture(autouse=True)
+    def _home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+    def test_a_dir_that_refuses_names_itself(self, tmp_path):
+        assert (paths.not_writable(tmp_path / "c", tmp_path / "c")
+                == "~/c is not writable")
+
+    def test_a_missing_dir_names_the_parent_that_refuses(self, tmp_path):
+        assert (paths.not_writable(tmp_path / "b" / "c", tmp_path)
+                == "~/b/c cannot be created: ~ is not writable")
+        assert paths.write_remedy(tmp_path) == "run `chmod u+w ~`"
+
+    def test_a_file_where_a_dir_belongs_is_not_a_directory(self, tmp_path):
+        f = tmp_path / "b"
+        f.write_text("x", encoding="utf-8")
+        assert (paths.not_writable(f / "c", f)
+                == "~/b/c cannot be created: ~/b is not a directory")
+        assert paths.in_the_way(f)
+        assert paths.write_remedy(f) == "move ~/b aside"
+
+    def test_a_block_that_is_not_there_is_not_in_the_way(self, tmp_path):
+        # heal's fallback when a mkdir fails that refuses_writes called fine.
+        gone = tmp_path / "gone"
+        assert not paths.in_the_way(gone)
+        assert paths.not_writable(gone, gone) == "~/gone is not writable"
+        assert paths.write_remedy(gone) == "run `chmod u+w ~/gone`"
+
+
 class TestCreateDirs:
     def test_creates_every_dir_and_refuses_none(self, tmp_path):
         want = [tmp_path / "a", tmp_path / "b" / "c"]

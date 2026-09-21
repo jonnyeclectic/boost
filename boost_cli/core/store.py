@@ -677,6 +677,25 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
         hint="uninstall it there first — a different scope cannot force-overwrite it")
 
 
+def _require_writable(name: str, *dirs: Path) -> None:
+    """Refuse an install before its first write if any write could fail.
+
+    The lock file lives in the store, so an install that cannot write there
+    can copy a skill, link it, or merge a rule into ``~/.claude/CLAUDE.md``
+    and then fail at the record: files on disk that `boost uninstall` and
+    `boost sync` never see. A rule or workflow that cannot write one agent's
+    target dir failed the same way, after the agents before it were written.
+    Asking first costs an ``access`` call per dir, and names the directory to
+    fix rather than a temp path deep in a traceback.
+    """
+    for d in (paths.store_dir(), *dirs):
+        block = paths.refuses_writes(d)
+        if block is not None:
+            raise BoostError("cannot install %s: %s"
+                             % (name, paths.not_writable(d, block)),
+                             hint="%s, then re-run" % paths.write_remedy(block))
+
+
 def _refuse_self_installing(entry: dict) -> None:
     """Refuse to half-copy an item whose repo installs itself.
 
@@ -743,7 +762,7 @@ def install(entry: dict, force: bool = False,
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
     dest = skill_store_dir(name)
-    paths.create_dirs(paths.boost_dirs())
+    _require_writable(name)
     _copy_skill(src, dest)
 
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing))
@@ -1054,9 +1073,7 @@ def _install_rule(entry: dict, force: bool = False,
     meta, body = frontmatter.parse(raw)
     claude_body = rules.render_claude_body(str(meta.get("name") or name), body)
 
-    paths.create_dirs(paths.boost_dirs())
-    materializations: list[dict] = []
-    linked: list[str] = []
+    targets: list[tuple[str, str, Path]] = []
     for agent, skills_dir in agents.materializing_agents(resolved_base).items():
         if only_agents and agent not in only_agents:
             continue
@@ -1066,6 +1083,12 @@ def _install_rule(entry: dict, force: bool = False,
         # into the user's own ~/.claude, which they control — nothing to guard.
         if resolved_base is not None:
             scopes.ensure_in_base(resolved_base, path)
+        targets.append((agent, mode, path))
+    # Every target and the lock, before the first of them is written.
+    _require_writable(name, *(path.parent for _, _, path in targets))
+    materializations: list[dict] = []
+    linked: list[str] = []
+    for agent, mode, path in targets:
         path.parent.mkdir(parents=True, exist_ok=True)
         if mode == rules.MODE_CLAUDE:
             current = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -1305,9 +1328,7 @@ def _install_workflow(entry: dict, force: bool = False,
     raw = src.read_text(encoding="utf-8", errors="replace")
     slot = workflows.detect_slot(source_rel)
 
-    paths.create_dirs(paths.boost_dirs())
-    materializations: list[dict] = []
-    linked: list[str] = []
+    targets: list[tuple[str, Path]] = []
     for agent, skills_dir in agents.materializing_agents(resolved_base).items():
         if only_agents and agent not in only_agents:
             continue
@@ -1318,6 +1339,12 @@ def _install_workflow(entry: dict, force: bool = False,
         # the user's own ~/.claude, which they control — nothing to guard.
         if resolved_base is not None:
             scopes.ensure_in_base(resolved_base, path)
+        targets.append((agent, path))
+    # As for rules: every target and the lock, before any is written.
+    _require_writable(name, *(path.parent for _, path in targets))
+    materializations: list[dict] = []
+    linked: list[str] = []
+    for agent, path in targets:
         path.parent.mkdir(parents=True, exist_ok=True)
         rendered = workflows.render(agent, slot, name, raw)
         util.atomic_write_text(path, rendered)
@@ -1413,7 +1440,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
                         hint="inspect with `boost policy list`")
     _enforce_capability_policy(name, src_dir / "SKILL.md")
     dest = skill_store_dir(name)
-    paths.create_dirs(paths.boost_dirs())
+    _require_writable(name)
     _copy_skill(src_dir, dest)
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing))
     res.score, _ = util.score_skill(dest)

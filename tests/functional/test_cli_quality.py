@@ -16,7 +16,7 @@ from datetime import datetime
 
 import pytest
 
-from boost_cli.core import agents, paths
+from boost_cli.core import agents, lockfile, paths, registry
 
 
 def _copy_tap(src, dest):
@@ -2023,8 +2023,10 @@ class TestReadOnlyBoostHomeWithNoCacheDir:
         run = boost("heal", expect=1).out
         line = ("! ~/.boost/cache cannot be created: ~/.boost is not writable "
                 "— heal does not change permissions; run `chmod u+w ~/.boost`")
-        assert line in self._flat(dry)
-        assert line in self._flat(run)
+        # Once each: the missing cache dir is both a refused mkdir and the
+        # stuck cache dir doctor flags, and heal names it as one problem.
+        assert self._flat(dry).count(line) == 1
+        assert self._flat(run).count(line) == 1
         assert "would create directory ~/.boost/cache" not in dry
         assert "would rebuild catalog cache" not in dry
         assert "rebuilt catalog cache" not in run
@@ -2047,6 +2049,19 @@ class TestReadOnlyBoostHomeWithNoCacheDir:
                                                              ro_home, argv):
         boost(*argv)
         assert not paths.cache_dir().exists()
+
+    def test_untap_names_the_directory_and_keeps_the_tap(self, boost,
+                                                       ro_home):
+        # config.save writes config.json into ~/.boost itself, so untap
+        # cannot finish here. It exited 70; now it says which dir and why,
+        # before it deletes anything.
+        r = boost("untap", "fixture-tap", expect=1)
+        out = self._flat(r.out + r.err)
+        assert "could not save ~/.boost/config.json" in out
+        assert "~/.boost is not writable" in out
+        assert "run `chmod u+w ~/.boost`, then re-run" in out
+        assert [t.name for t in registry.list_taps()] == ["fixture-tap"]
+        assert registry.get("fixture-tap").path.is_dir()
 
     def test_doctor_and_heal_name_any_boost_dir_they_cannot_create(
             self, boost, tapped):
@@ -2079,3 +2094,175 @@ class TestReadOnlyBoostHomeWithNoCacheDir:
             paths.boost_home().chmod(0o700)
         said = "~/.boost/cache cannot be created: ~/.boost is not writable"
         assert said in doc and said in run
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="chmod can't make a directory unwritable on Windows")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root ignores mode bits")
+class TestAnInstallRecordsWhatItWrites:
+    """An install must not write what its lock entry cannot record. With the
+    lock-history dir missing under a read-only ~/.boost/state, install copied
+    and linked a skill, or merged a rule into ~/.claude/CLAUDE.md, then exited
+    70 in lockfile.write: files that `uninstall` called "not installed" and
+    `sync` called "in sync"."""
+
+    RULE = "Always write tests first."
+
+    @pytest.fixture(autouse=True)
+    def _fresh_warning(self, monkeypatch):
+        # raising=False: the flag is new, so the old code fails on behaviour.
+        monkeypatch.setattr(lockfile, "_WARNED_UNSAVED", False, raising=False)
+
+    @pytest.fixture()
+    def mixed_tap(self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "mixed-tap")
+        _add_and_commit(tap_dir, "rules/team-conventions.mdc",
+                        "---\nname: team-conventions\n---\n\n%s\n" % self.RULE,
+                        "add rule")
+        _add_and_commit(tap_dir, "commands/ship-it.md",
+                        "---\nname: ship-it\n---\n\nShip it.\n", "add workflow")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")        # a lock for write() to snapshot
+        return tap_dir
+
+    @pytest.fixture()
+    def ro_history(self, mixed_tap):
+        shutil.rmtree(paths.lock_history_dir())
+        paths.state_dir().chmod(0o500)
+        yield
+        paths.state_dir().chmod(0o700)
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+
+    @staticmethod
+    def _flat(text):
+        return " ".join(text.split())
+
+    @staticmethod
+    def _claude_md():
+        f = paths.home() / ".claude" / "CLAUDE.md"
+        return f.read_text(encoding="utf-8") if f.exists() else ""
+
+    @pytest.mark.parametrize("name, section", [
+        ("tdd-workflow", "skills"), ("team-conventions", "rules"),
+        ("ship-it", "workflows")])
+    def test_a_refused_history_snapshot_still_records_the_install(
+            self, boost, ro_history, name, section):
+        r = boost("install", name)
+        assert name in lockfile.read()[section]
+        err = self._flat(r.err)
+        assert err.count("could not keep a history snapshot") == 1
+        assert "make ~/.boost/state writable" in err
+
+    def test_the_recorded_rule_leaves_with_uninstall(self, boost, ro_history):
+        boost("install", "team-conventions")
+        assert self.RULE in self._claude_md()
+        boost("uninstall", "team-conventions")
+        assert self.RULE not in self._claude_md()
+
+    @pytest.mark.parametrize("name", ["team-conventions", "ship-it"])
+    def test_a_store_that_refuses_writes_stops_the_install_before_it_writes(
+            self, boost, mixed_tap, name):
+        before = sorted(p for p in paths.home().rglob("*")
+                        if paths.boost_home() not in p.parents)
+        store = paths.store_dir()
+        store.chmod(0o500)
+        try:
+            r = boost("install", name, expect=1)
+        finally:
+            store.chmod(0o700)
+        out = self._flat(r.out + r.err)
+        assert ("cannot install %s: ~/.agents/skills is not writable" % name
+                in out)
+        assert "run `chmod u+w ~/.agents/skills`, then re-run" in out
+        after = sorted(p for p in paths.home().rglob("*")
+                       if paths.boost_home() not in p.parents)
+        assert after == before
+        assert not lockfile.find_any(name)
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+
+    @pytest.mark.parametrize("name", ["team-conventions", "ship-it"])
+    def test_one_agent_dir_that_refuses_stops_the_install_before_any_write(
+            self, boost, mixed_tap, name):
+        # claude-code comes first, so a read-only ~/.cursor let the install
+        # write CLAUDE.md (or ~/.claude/commands) and then exit 70 — on
+        # origin/main too — with no lock entry for what it had written.
+        before = sorted(p for p in paths.home().rglob("*")
+                        if paths.boost_home() not in p.parents)
+        cursor = paths.home() / ".cursor"
+        assert cursor.is_dir()
+        cursor.chmod(0o500)
+        try:
+            r = boost("install", name, expect=1)
+        finally:
+            cursor.chmod(0o700)
+        out = self._flat(r.out + r.err)
+        assert "cannot install %s: ~/.cursor/" % name in out
+        assert "cannot be created: ~/.cursor is not writable" in out
+        assert "run `chmod u+w ~/.cursor`, then re-run" in out
+        after = sorted(p for p in paths.home().rglob("*")
+                       if paths.boost_home() not in p.parents)
+        assert after == before
+        assert not lockfile.find_any(name)
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+
+    def test_a_missing_store_names_the_parent_that_refuses(self, boost,
+                                                           tapped):
+        # Not a regression: _copy_skill already refused here. It is the same
+        # check, worded the way doctor and heal word it.
+        shutil.rmtree(paths.store_dir())
+        agents_dir = paths.store_dir().parent
+        agents_dir.chmod(0o500)
+        try:
+            r = boost("install", "brainstorming", expect=1)
+        finally:
+            agents_dir.chmod(0o700)
+        out = self._flat(r.out + r.err)
+        assert ("cannot install brainstorming: ~/.agents/skills cannot be "
+                "created: ~/.agents is not writable" in out)
+        assert "run `chmod u+w ~/.agents`, then re-run" in out
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="creating a symlink needs a privilege on Windows")
+class TestHealWithSomethingInTheWay:
+    """A dangling symlink where an agent's skills dir belongs: the preview
+    promised "would create directory" and exited 0, and the run failed the
+    mkdir and advised a `chmod` that cannot work on a dangling link."""
+
+    @staticmethod
+    def _flat(text):
+        return " ".join(text.split())
+
+    def test_preview_and_run_agree_on_a_dangling_link(self, boost, sandbox,
+                                                      tmp_path):
+        link = paths.home() / ".claude" / "skills"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(tmp_path / "nowhere")
+        dry = self._flat(boost("heal", "--dry-run", expect=1).out)
+        run = self._flat(boost("heal", expect=1).out)
+        line = ("~/.claude/skills is not a directory — heal does not move "
+                "files; move ~/.claude/skills aside")
+        assert dry.count(line) == 1 and run.count(line) == 1
+        assert "would create directory ~/.claude/skills" not in dry
+        assert "chmod" not in run
+        would = dry.count("would create directory")
+        assert would, "a fresh HOME must leave other dirs to create"
+        assert "created %d missing directories" % would in run
+        assert link.is_symlink()
+
+    def test_a_dir_the_run_is_refused_is_not_counted_as_created(
+            self, boost, sandbox, monkeypatch):
+        # The preview can only ask; the mkdir can still fail (a race, a full
+        # disk). The run must count what it made, and name the rest once.
+        dry = self._flat(boost("heal", "--dry-run").out)
+        would = dry.count("would create directory")
+        refused = paths.home() / ".claude" / "skills"
+        assert "would create directory ~/.claude/skills" in dry
+        real = paths.create_dirs
+        monkeypatch.setattr(paths, "create_dirs", lambda dirs: [
+            *(d for d in dirs if d == refused),
+            *real([d for d in dirs if d != refused])])
+        run = self._flat(boost("heal", expect=1).out)
+        assert "created %d missing directories" % (would - 1) in run
+        assert run.count("~/.claude/skills is not writable") == 1

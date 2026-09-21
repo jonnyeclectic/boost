@@ -7,7 +7,7 @@ category: Robustness · Bug
 complexity: S
 impact: Low
 wow: 2
-note: "fixed: paths.refuses_writes names the directory that stops a write, including the parent of a dir a refused mkdir left missing; doctor and heal create what they can and name ~/.boost (70 → 1), heal --dry-run agrees (0 → 1); journal.log creates only its own dir, so update, compact and install finish (70 → 0)"
+note: "fixed: paths.refuses_writes names the directory that stops a write, including the parent of a dir a refused mkdir left missing; doctor and heal create what they can and name ~/.boost (70 → 1), heal --dry-run agrees (0 → 1); journal.log creates only its own dir, so update, compact and install finish (70 → 0); an install checks the store and its target dirs before its first write and a refused lock-history snapshot is a warning, so nothing lands on disk unrecorded; untap names ~/.boost (70 → 1)"
 order: 330
 owner: loop/readonly-boost-home
 pr:

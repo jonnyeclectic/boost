@@ -37,7 +37,7 @@ import sys
 
 import pytest
 
-from boost_cli.core import agents, gitutil, lockfile, paths, registry, store, util
+from boost_cli.core import agents, config, gitutil, lockfile, paths, registry, store, util
 from boost_cli.errors import BoostError
 
 # Sizes are asserted exactly, never `> 0`: the defect was an *inflated* number,
@@ -739,6 +739,19 @@ class TestHealNamesTheDirectoriesItCreates:
 
         assert named == absent
         assert all(d.is_dir() for d in wanted)
+
+    def test_heal_makes_no_skills_dir_nothing_links_into(self, boost,
+                                                          sandbox):
+        # Pinned on agents.ensure_agent_dirs until heal, its last caller, took
+        # over: an empty ~/.gemini/skills (a native-store agent) or a disabled
+        # agent's dir is one heal would later report as missing.
+        cfg = config.load()
+        cfg["agents"]["cursor"]["enabled"] = False
+        config.save(cfg)
+        boost("heal")
+        assert (sandbox / ".claude" / "skills").is_dir()
+        assert not (sandbox / ".gemini" / "skills").exists()
+        assert not (sandbox / ".cursor" / "skills").exists()
 
     def test_ensure_dirs_creates_every_boost_dir(self, sandbox):
         paths.ensure_dirs()
