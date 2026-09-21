@@ -10,9 +10,9 @@ whoever published it, and its only way to read the actual steps was to install
 into the user's real ``~/.agents/skills`` and read it off disk.
 
 That is the failure these tests are about: **installing was the only way to
-read**, which inverts the surface's own pitch. ``boost_search`` spends 10-15 s
-of LLM rerank so the top result is worth acting on rather than skimming ten,
-and then nothing let the agent look at it.
+read**, which inverts the surface's own pitch. Where AI is configured
+``boost_search`` spends 10-15 s of LLM rerank so the top result is worth
+acting on rather than skimming ten, and then nothing let the agent look at it.
 
 The body is also the only thing separating a written skill from a generated
 stub, and the catalogue holds both — indexed, not reviewed. The eval gate
@@ -216,6 +216,16 @@ class TestTheToolIsOnTheSurface:
         d = spec["description"]
         assert "install" in d          # names the alternative it replaces
         assert "truncat" in d          # discloses the cap rather than hiding it
+
+    def test_it_does_not_contrast_itself_with_a_rerank_that_may_not_run(self):
+        # "unlike boost_search costs no rerank" was false on every machine with
+        # no AI backend, where boost_search skips the rerank too. The claim
+        # that holds everywhere is about this tool alone.
+        from boost_cli.commands import configuration
+        spec = next(s for s in configuration.REGISTRY.specs()
+                    if s["name"] == "boost_read")
+        assert "unlike boost_search" not in spec["description"]
+        assert "never reranks" in spec["description"]
 
     def test_boost_info_no_longer_promises_the_whole_picture(self):
         # It returns five fields, one of which is the description boost_search

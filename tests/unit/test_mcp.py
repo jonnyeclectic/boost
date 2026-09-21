@@ -36,6 +36,19 @@ class TestRegister:
                             "inputSchema": {"type": "object"}}
         assert specs[1]["inputSchema"] == {"type": "object", "properties": {}}
 
+    def test_a_callable_description_is_rendered_on_every_listing(self):
+        # For a claim that depends on the machine: rendered when a host asks
+        # for tools/list, never frozen at registration, and a plain string
+        # beside it is served exactly as before.
+        seen = iter(["first", "second", "third"])
+        reg = mcp.Registry()
+        reg.register("live", lambda: next(seen), {"type": "object"}, _ok)
+        reg.register("fixed", "static", {"type": "object"}, _ok)
+        assert [s["description"] for s in reg.specs()] == ["first", "static"]
+        assert [s["description"] for s in reg.specs()] == ["second", "static"]
+        assert reg.specs()[1] == {"name": "fixed", "description": "static",
+                                  "inputSchema": {"type": "object"}}
+
     def test_specs_preserve_insertion_not_sorted(self):
         reg = mcp.Registry()
         for n in ("zebra", "alpha", "mid"):
@@ -111,13 +124,15 @@ class TestHandleRequest:
         assert resp["result"]["capabilities"] == {"tools": {}}
         assert resp["result"]["serverInfo"] == {"name": "boost", "version": "9.9.9"}
 
-    def test_initialize_returns_server_instructions(self):
+    def test_initialize_returns_server_instructions(self, monkeypatch):
         # MCP hosts load `instructions` into the agent's context — this is where
         # boost earns the "check for a skill before doing the work" reflex.
+        from boost_cli.core import ai
+        monkeypatch.setattr(ai, "available", lambda: True)
         resp = mcp.handle_request({"id": 1, "method": "initialize"},
                                   version="9.9.9", registry=_reg_with())
         instr = resp["result"]["instructions"]
-        assert instr.startswith(mcp.INSTRUCTIONS)
+        assert instr.startswith(mcp.instructions(ai_available=True))
         low = instr.lower()
         # ONE trigger, and it must be observable rather than a judgement call.
         # "Non-trivial work" was the old framing and it lost to its own escape
@@ -148,7 +163,7 @@ class TestHandleRequest:
         # for the task in front of you, and "am I about to write a skill?" is
         # both rarer and a different question. It survives only as a clause on
         # boost_search's own description, never as a trigger here.
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         assert "before you write a new skill" not in low
         assert "authoring" not in low
 
@@ -159,7 +174,7 @@ class TestHandleRequest:
         # false cost in the text whose whole job is making the tool worth
         # reaching for is the one lie that discredits the rest of it, and an
         # agent that budgeted a second gets a surprise instead of a decision.
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         assert "about a second" not in low
         # State it, and state why it is worth paying rather than just warning.
         assert "seconds" in low
@@ -174,7 +189,7 @@ class TestHandleRequest:
         # points at the one moment an agent cannot check it. #442 kept these
         # figures out of every tool description for exactly this reason and
         # left them here; this closes the gap rather than re-deriving it.
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         for stale in ("95%", "79%", "0.945", "0.791"):
             assert stale not in low, (
                 "INSTRUCTIONS quotes %r, a six-repo-corpus figure the eval "
@@ -187,7 +202,7 @@ class TestHandleRequest:
         # The catalog is indexed, not reviewed. #442 struck "vetted" from every
         # tool description and missed this copy, which implies the same
         # guarantee nobody performs.
-        assert "vetted" not in mcp.INSTRUCTIONS.lower()
+        assert "vetted" not in mcp.instructions(ai_available=True).lower()
 
     def test_instructions_and_tool_descriptions_agree_on_the_cost(self):
         # Two surfaces, one connect: an agent sees INSTRUCTIONS and the
@@ -195,22 +210,23 @@ class TestHandleRequest:
         # about what a search costs is visible in a way a single wrong number
         # is not. #442 set the descriptions to "10-15 seconds" while this text
         # still said "a few seconds".
-        from boost_cli.commands import configuration
-        desc = {s["name"]: s["description"] for s in configuration.REGISTRY.specs()}
-        assert "10-15 seconds" in mcp.INSTRUCTIONS
+        # Pinned for a machine where the rerank runs; the keyless half is
+        # TestTheStatedCostIsPricedPerMachine's.
+        desc = _descriptions(ai_available=True)
+        assert "10-15 seconds" in mcp.instructions(ai_available=True)
         assert "10-15 seconds" in desc["boost_search"]
-        assert "a few seconds" not in mcp.INSTRUCTIONS.lower()
+        assert "a few seconds" not in mcp.instructions(ai_available=True).lower()
         # The repeat-search cost claim is backed by rag's rerank cache; both
         # surfaces must state it, or an agent budgets 15 s for a lookup that
         # would have been free.
-        assert "answers from a local cache" in mcp.INSTRUCTIONS
+        assert "answers from a local cache" in mcp.instructions(ai_available=True)
         assert "answers from a local cache" in desc["boost_search"]
 
     def test_instructions_still_separate_the_free_tool_from_the_slow_one(self):
         # boost_list really is instant, and collapsing the two costs into one
         # number is what produced the wrong claim. Naming them separately is
         # what lets an agent reach for the cheap one freely.
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         assert "boost_list" in low and "boost_search" in low
         assert "instant" in low
 
@@ -220,8 +236,8 @@ class TestHandleRequest:
         # changes an install decision — so the hop bought a round-trip and a
         # decision point and nothing else. It stays a registered tool for
         # looking up a name from elsewhere; it is not a step.
-        assert "boost_search -> boost_install" in mcp.INSTRUCTIONS
-        assert "boost_info" not in mcp.INSTRUCTIONS
+        assert "boost_search -> boost_install" in mcp.instructions(ai_available=True)
+        assert "boost_info" not in mcp.instructions(ai_available=True)
 
     def test_protocol_version_constant(self):
         assert mcp.PROTOCOL_VERSION == "2024-11-05"
@@ -396,7 +412,8 @@ class TestEngineNote:
         on = mcp.handle_request({"id": 1, "method": "initialize"},
                                 version="9.9.9", registry=_reg_with())
         assert off["result"]["instructions"] != on["result"]["instructions"]
-        assert "SEARCH ENGINE" not in mcp.INSTRUCTIONS   # the constant stays static
+        # the fixed text names no engine; the note is appended at connect
+        assert "SEARCH ENGINE" not in mcp.instructions(ai_available=True)
 
     def test_note_never_claims_a_key_is_required(self, sandbox, monkeypatch):
         # Same stale-advice trap fix_hint exists to prevent, on a second surface.
@@ -419,14 +436,14 @@ class TestInstructionsCoverAllThreeKinds:
     """
 
     def test_instructions_name_the_three_kinds(self):
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         assert "rule" in low and "workflow" in low and "skill" in low
 
     def test_instructions_say_what_a_rule_does(self):
         # A rule is the kind that steers: it recommends a better path and
         # rules out an anti-pattern. That is the whole reason to search for
         # one, and it is not guessable from the word "rule".
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         assert "anti-pattern" in low
 
     def test_the_bound_ships_in_the_description_too(self):
@@ -435,10 +452,9 @@ class TestInstructionsCoverAllThreeKinds:
         # that says when NOT to call — was in none of the seven descriptions.
         # On a Gemini-family host the description is the only boost text
         # reliably in context, so the persuasion shipped without the bound.
-        from boost_cli.commands import configuration
-        desc = {s["name"]: s["description"]
-                for s in configuration.REGISTRY.specs()}
-        assert mcp.SKIP_IT in mcp.INSTRUCTIONS      # one sentence, two homes
+        desc = _descriptions()
+        # one sentence, two homes
+        assert mcp.SKIP_IT in mcp.instructions(ai_available=True)
         assert mcp.SKIP_IT in desc["boost_search"]
         # Concrete cases, not a judgement call: asking an agent to rate its
         # own task over-suppressed when it was tried.
@@ -494,7 +510,7 @@ class TestInstructionsBoundIsATestNotAFeeling:
                 "do not proceed")
 
     def test_the_boundary_is_stated_as_observable_properties(self):
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         assert "more than one file" in low
         assert "outlives" in low or "outlast" in low
 
@@ -504,22 +520,22 @@ class TestInstructionsBoundIsATestNotAFeeling:
         # one-line edit the skip list excuses by name. A trigger that
         # contradicts its own bound turns "check first" into "check always",
         # which is the capture this surface exists to avoid.
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         assert "commit message" not in low
 
     def test_the_original_nameable_trigger_survives(self):
         # Regression guard: the observable boundary is ADDITIVE. The name test
         # is the cheapest one an agent has and predates this change.
-        assert "has a name" in mcp.INSTRUCTIONS.lower()
+        assert "has a name" in mcp.instructions(ai_available=True).lower()
 
     def test_the_skip_list_stays_in_plain_sight(self):
         # An unbounded "check first" gets ignored wholesale. The bound is what
         # buys the rest of the guidance its credibility.
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         assert "skip it for a question" in low
 
     def test_nothing_in_the_guidance_orders_the_agent(self):
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         for coercive in self.COERCIVE:
             assert coercive not in low, (
                 "coercive framing %r: an agent that is ordered rather than "
@@ -556,9 +572,7 @@ class TestSearchDescriptionNamesTheLockInMoments:
     """
 
     def _search(self):
-        from boost_cli.commands import configuration
-        return {s["name"]: s["description"]
-                for s in configuration.REGISTRY.specs()}["boost_search"].lower()
+        return _descriptions()["boost_search"].lower()
 
     def test_names_setup_shaped_moments(self):
         desc = self._search()
@@ -672,9 +686,20 @@ class TestTheEmptyCatalogAnswersDifferentlyFromAMiss:
         assert "boost tap --defaults" in reply
 
 
-def _descriptions():
+def _descriptions(ai_available: bool = True):
+    """Every tool description, rendered for a stated machine.
+
+    boost_search's is priced per machine (`mcp.search_cost`), so reading it
+    without fixing `ai.available` would make these pins depend on whether the
+    box running the suite has `claude` on PATH or a key exported.
+    """
+    from unittest import mock
+
     from boost_cli.commands import configuration
-    return {s["name"]: s["description"] for s in configuration.REGISTRY.specs()}
+    from boost_cli.core import ai
+    with mock.patch.object(ai, "available", return_value=ai_available):
+        return {s["name"]: s["description"]
+                for s in configuration.REGISTRY.specs()}
 
 
 class TestTheAlreadyLoadedDefeater:
@@ -705,7 +730,7 @@ class TestTheAlreadyLoadedDefeater:
     """
 
     def test_the_instructions_address_what_is_already_loaded(self):
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         assert "already holding a match" in low
 
     def test_it_says_what_an_active_skill_is_rather_than_what_it_is_not(self):
@@ -716,7 +741,7 @@ class TestTheAlreadyLoadedDefeater:
         # avoid. What survives is the description an agent can check against
         # its own situation: installed earlier, matched on its own description,
         # one kind of three. The conclusion is left to the reader.
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         assert "installed on an earlier day" in low
         assert "matched on its own description" in low
         assert "one kind of three" in low
@@ -727,7 +752,7 @@ class TestTheAlreadyLoadedDefeater:
         # Order is the argument. A fourth trigger would widen the gate; this
         # narrows an exception to it, so it has to be read after the gate it
         # defeats and before the miss protocol that keeps the tool honest.
-        text = mcp.INSTRUCTIONS
+        text = mcp.instructions(ai_available=True)
         gate = text.index("WORTH THE SECONDS")
         defeater = text.index("ALREADY HOLDING A MATCH")
         miss = text.index("Finding nothing")
@@ -737,7 +762,7 @@ class TestTheAlreadyLoadedDefeater:
         # Regression guard on the shape of the change: a defeater that quietly
         # widened the trigger, or ate the bound, would be the same failure in
         # the other direction.
-        low = mcp.INSTRUCTIONS.lower()
+        low = mcp.instructions(ai_available=True).lower()
         assert "more than one file" in low
         assert "outlives this session" in low
         assert "skip it for a question" in low
@@ -1143,6 +1168,17 @@ class TestSearchSaysHowTheOrderWasProduced:
         assert "no index" in text
         assert "did NOT run" in text          # the rerank the description sells
 
+    def test_the_note_does_not_say_the_description_promised_it(self,
+                                                               monkeypatch):
+        # On a keyless machine the description now says the rerank is off
+        # (mcp.search_cost), so a note calling it "the LLM rerank named in this
+        # tool's description" would contradict the text it points at. The note
+        # is the per-call truth on both kinds of machine.
+        text = self._run(monkeypatch, rag_result=None,
+                         frontmatter=[self._entry("langchain-rag")])
+        assert "did NOT run" in text
+        assert "description" not in text.splitlines()[-1]
+
     def test_the_fallback_does_not_borrow_the_reranked_shape(self, monkeypatch):
         # The whole risk: ten lines that look exactly like a reranked ten, so
         # an agent acts on the top one because the description told it to.
@@ -1239,3 +1275,95 @@ class TestDoctorToolOnACorruptConfig:
         from boost_cli.commands import configuration
         text, is_error = configuration._tool_doctor({})
         assert is_error is False and "boost tap --defaults" in text
+
+
+class TestTheStatedCostIsPricedPerMachine:
+    """boost_search quoted "10-15 seconds — an LLM reranks every match" on every
+    machine, while `rag.rerank` returns the retrieval order without an LLM call
+    wherever `ai.available()` is False.
+
+    Measured with no AI backend over the 10,152-entry eval corpus: a median of
+    0.009 s per search, 0.069 s for the first in a fresh process. The stated
+    cost is what the "worth the seconds" gate is weighed against, so quoting
+    the rerank's price where no rerank runs talks an agent out of a free call.
+
+    Driven through `handle_request`, the path a host takes, with
+    `ai.available` fixed rather than read off the machine running the suite.
+    """
+
+    def _connect(self, monkeypatch, ai_available):
+        from boost_cli.commands import configuration
+        from boost_cli.core import ai
+        monkeypatch.setattr(ai, "available", lambda: ai_available)
+        init = mcp.handle_request({"id": 1, "method": "initialize"},
+                                  version="9.9.9",
+                                  registry=configuration.REGISTRY)
+        listing = mcp.handle_request({"id": 2, "method": "tools/list"},
+                                     version="9.9.9",
+                                     registry=configuration.REGISTRY)
+        search = next(t for t in listing["result"]["tools"]
+                      if t["name"] == "boost_search")
+        return init["result"]["instructions"], search["description"]
+
+    def test_a_keyless_machine_is_not_quoted_the_rerank_price(self,
+                                                              monkeypatch):
+        instr, desc = self._connect(monkeypatch, False)
+        for text in (instr, desc):
+            assert "10-15 seconds" not in text
+            assert "reranks every match" not in text
+            assert "no LLM call" in text
+            assert "shortlist to read" in text
+        # The gate's heading named the rerank's currency too. Its two signals
+        # stay; the heading stops pricing them in seconds nobody spends here.
+        # Scoped to the text before the engine note, whose install hint is
+        # machine state this test does not fix.
+        assert "seconds" not in instr.split("SEARCH ENGINE:")[0].lower()
+        assert "WORTH A SEARCH" in instr
+
+    def test_a_machine_with_ai_is_still_quoted_it(self, monkeypatch):
+        # The regression guard in the other direction: the rerank is the
+        # largest measured quality lever in the stack, and its price stays
+        # stated wherever it is paid.
+        instr, desc = self._connect(monkeypatch, True)
+        for text in (instr, desc):
+            assert "10-15 seconds" in text
+            assert "answers from a local cache" in text
+            assert "no LLM call" not in text
+        assert "WORTH THE SECONDS" in instr
+
+    def test_the_price_is_read_when_the_host_connects(self, monkeypatch):
+        # One registry, two machine states, two answers — so nothing froze the
+        # description when `configuration` was imported.
+        _, keyless = self._connect(monkeypatch, False)
+        _, with_ai = self._connect(monkeypatch, True)
+        assert keyless != with_ai
+
+    def test_both_surfaces_quote_one_clause(self, monkeypatch):
+        # An agent sees both texts in one context window, so they must agree
+        # on the price in either state. One clause, interpolated twice.
+        for state in (True, False):
+            for text in self._connect(monkeypatch, state):
+                assert mcp.search_cost(state) in text
+
+    def test_only_the_price_changes(self):
+        # The triggers, the two signals, the defeater and the skip list are the
+        # same on both machines — only the price and the gate's heading move. A
+        # keyless variant that also dropped the bound would widen the gate
+        # exactly where each search is cheapest.
+        def strip(text, state):
+            for moving in (mcp.search_cost(state), "WORTH THE SECONDS",
+                           "WORTH A SEARCH"):
+                text = text.replace(moving, "")
+            return text
+        assert (strip(mcp.instructions(ai_available=True), True)
+                == strip(mcp.instructions(ai_available=False), False))
+        with_ai, keyless = _descriptions(True), _descriptions(False)
+        assert (strip(with_ai.pop("boost_search"), True)
+                == strip(keyless.pop("boost_search"), False))
+        assert with_ai == keyless
+
+    def test_the_keyless_price_quotes_no_figure(self):
+        # 0.009 s is one corpus; the rerank-off path measured 0.10 s on
+        # another, and a real install is several times larger. A number here
+        # would be the one claim an agent could not check.
+        assert not re.search(r"\d", mcp.search_cost(False))

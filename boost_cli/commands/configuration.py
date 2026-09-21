@@ -20,6 +20,7 @@ from pathlib import Path
 from .. import __version__, cliparse
 from ..core import (
     agents,
+    ai,
     bootstrap,
     builtin,
     catalog,
@@ -1379,12 +1380,18 @@ REGISTRY = mcp.Registry()
 def _ranking_note(ranker: str) -> str:
     """One line naming the ranking that actually produced this order.
 
-    `boost_search`'s own description promises an LLM rerank and quotes what it
-    buys — the right skill first 95% of the time against 79% without. When no
-    AI is configured that rerank degrades to the retrieval order, and the reply
-    was byte-for-byte the shape of a reranked one: same ten lines, same
-    confidence, 79%. An agent acts on the top result because the description
-    told it to.
+    `boost_search`'s description once promised an LLM rerank on every machine
+    and quoted what it buys — the right skill first 95% of the time against 79%
+    without. When no AI is configured that rerank degrades to the retrieval
+    order, and the reply was byte-for-byte the shape of a reranked one: same
+    ten lines, same confidence, 79%. An agent acts on the top result because
+    the description told it to.
+
+    The description is now priced per machine (`mcp.search_cost`), so on a
+    keyless one it already says the rerank is off. This line still matters on
+    both: it is the per-call truth, and it covers a rerank that was available
+    at connect time and failed on this call. So it names what did not run
+    without claiming the description promised it.
 
     `rag.rerank` already computes the only thing that distinguishes the two
     cases, and its own comment says so — "the label is the only signal about
@@ -1392,10 +1399,9 @@ def _ranking_note(ranker: str) -> str:
     """
     if ranker == rag.LLM_RANKER:
         return "\n(ranked by %s)" % ranker
-    return ("\n(ranked by %s — the LLM rerank named in this tool's description "
-            "did NOT run, so this is a shortlist to read rather than a verdict "
-            "to act on. Configure ANTHROPIC_API_KEY or the `claude` CLI to "
-            "enable it.)" % ranker)
+    return ("\n(ranked by %s — the LLM rerank did NOT run, so this is a "
+            "shortlist to read rather than a verdict to act on. Configure "
+            "ANTHROPIC_API_KEY or the `claude` CLI to enable it.)" % ranker)
 
 
 # The label for the pre-RAG fallback below. `_ranking_note` needs a name for
@@ -1535,8 +1541,9 @@ def _tool_read(args: dict):
     is worth adopting had one sentence written by whoever published it, and its
     only route to the actual steps was to install into the user's real
     ``~/.agents/skills`` and read it off disk. That inverts the surface's own
-    pitch — ``boost_search`` spends 10-15 s of rerank so the top result is worth
-    acting on, and then nothing let the agent look at it.
+    pitch — where AI is configured ``boost_search`` spends 10-15 s of rerank so
+    the top result is worth acting on, and then nothing let the agent look at
+    it.
 
     The body is also the only thing separating a written skill from a generated
     stub, and the catalogue holds both: two ranked hits share the description
@@ -1704,8 +1711,7 @@ def _tool_discover_github(args: dict):
 # declarations are the only boost text reliably in context at the moment an
 # agent chooses a tool, so each one repeats the trigger, the cost and the
 # miss protocol rather than deferring to the server instructions.
-REGISTRY.register(
-    "boost_search",
+_SEARCH_PITCH = (
     "Someone has probably solved this already — one call tells you. Searches "
     "every skill, rule and workflow in every registry you have tapped and "
     "returns ranked matches, one per line: name, a [rule] or [workflow] kind "
@@ -1737,22 +1743,40 @@ REGISTRY.register(
     "apart. Read-only where it counts: it "
     "installs nothing and touches nothing you are working on, though the first "
     "search builds a local index under ~/.boost. A hit commits you to nothing "
-    "either: take what fits, discard the rest, the task stays yours. It costs "
-    "10-15 seconds — an LLM reranks every match, which is what makes the top "
-    "result worth acting on rather than skimming. Worth budgeting for, not a "
-    "surprise — and only a novel search pays it: repeating an identical "
-    "search skips the LLM and answers from a local cache. "
+    "either: take what fits, discard the rest, the task stays yours. "
+)
+_SEARCH_MISS = (
     "Coming back empty is a real answer too, not a "
     "wasted turn: it means build it yourself, now knowing nothing already "
     "covers it — and on a machine with nothing tapped yet it says so and names "
     "the one command that fixes it, rather than reporting a miss. "
-    # The bound, verbatim from `mcp.INSTRUCTIONS`: six of its seven
+    # The bound, verbatim from the server instructions: six of their seven
     # load-bearing elements were already duplicated into this description and
     # the seventh — the one that says when not to call — was in none of the
     # seven. On a Gemini-family host the description is the only boost text
     # reliably in context, so what shipped there was every persuasive element
     # and none of the restraint.
-    + mcp.SKIP_IT,
+    + mcp.SKIP_IT
+)
+
+
+def _search_description(ai_available: bool) -> str:
+    """boost_search's description, priced for the machine the host connected to.
+
+    The cost clause is ``mcp.search_cost``, the same one the server
+    instructions carry, so the two surfaces cannot disagree about the price.
+    Registered as a callable so ``tools/list`` renders it when a host connects
+    (``mcp.Registry.specs``), not when this module is imported.
+    """
+    return "%s%s %s" % (_SEARCH_PITCH, mcp.search_cost(ai_available),
+                        _SEARCH_MISS)
+
+
+REGISTRY.register(
+    "boost_search",
+    # A lambda rather than the function itself so `ai.available` is looked up
+    # on each call — the predicate `rag.rerank` branches on.
+    lambda: _search_description(ai.available()),
     {"type": "object",
      "properties": {"query": {"type": "string",
                               "description": "what you are trying to do, in "
@@ -1772,7 +1796,7 @@ REGISTRY.register(
     "kind nothing here could have loaded. boost_search is what reads the "
     "registries themselves. "
     # The cost clause names its own mechanism. Gemini CLI never delivers
-    # server `instructions` in interactive mode, so INSTRUCTIONS' "boost_list
+    # server `instructions` in interactive mode, so their "boost_list
     # is free, call it whenever" is absent on that host and this declaration
     # is the only place left to say it. "Instant" alone is a claim about the
     # clock that an agent has to take on trust; "a local file read rather
@@ -1825,8 +1849,8 @@ REGISTRY.register(
     "holds unfilled templates and stubs that echo their own name back, and "
     "those rank and render exactly like a procedure someone debugged. The body "
     "is the only thing that tells them apart. Read-only and offline — it "
-    "installs nothing, changes nothing, and unlike boost_search costs no "
-    "rerank, so it is fast. Long items are truncated at a stated character "
+    "installs nothing, changes nothing, and never reranks, so it is fast. "
+    "Long items are truncated at a stated character "
     "count and the reply says so and names the command that returns the rest; "
     "a body that arrives whole is whole.",
     {"type": "object",
@@ -1892,10 +1916,9 @@ REGISTRY.register(
                    "description": "max repositories to return (default 20)"}}},
     _tool_discover_github)
 
-# Back-compat shims: the JSON-RPC server and tests reference these names.
-_MCP_TOOLS = REGISTRY.specs()
-
-
+# Back-compat shim: the functional tests reference this name. The `_MCP_TOOLS`
+# snapshot that sat beside it is gone — taken at import, it froze boost_search's
+# machine-dependent description under whatever state held then.
 def _mcp_tool(tool: str, args: dict):
     """Run one MCP tool -> (text, is_error). (None, _) for unknown tools.
 
