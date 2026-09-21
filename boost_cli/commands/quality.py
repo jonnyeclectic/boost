@@ -683,9 +683,16 @@ def cmd_doctor(argv):
             % (dup.name, agents.display_name(dup.agent), _tilde(dup.path),
                _tilde(dup.target)), wrap=True)
 
-    for adir in enabled.values():
+    # Linking agents only: a native-store agent's skills dir (Gemini's) is
+    # never written, so its permissions are not boost's problem and `boost
+    # sync` could not act on them.
+    for adir in agents.linking_agents().values():
         if adir.is_dir() and not os.access(str(adir), os.W_OK):
-            bad("agent-dir", "agent dir %s is not writable" % _tilde(adir))
+            # A next action, like the log line below it: without one this was
+            # the only issue doctor names that nothing can act on.
+            bad("agent-dir", "agent dir %s is not writable — `chmod u+w %s`, "
+                "then `boost sync` relinks what it missed"
+                % (_tilde(adir), _tilde(adir)), wrap=True)
 
     rotation = journal.rotation_healthy()
     if not rotation:
@@ -1195,7 +1202,15 @@ def cmd_heal(argv):
         out.warn("%s — heal cannot repair it: boost is running on defaults "
                  "until the file is fixed or your taps are re-added"
                  % cfg_err, wrap=True)
-    elif not actions:
+    # Permissions are the user's to change, not heal's; but a dir heal saw and
+    # cannot fix must not sit under an all-clear.
+    stuck = [adir for adir in agents.linking_agents().values()
+             if adir.is_dir() and not os.access(str(adir), os.W_OK)]
+    for adir in stuck:
+        out.warn("agent dir %s is not writable — heal does not change "
+                 "permissions; run `chmod u+w %s`, then `boost sync`"
+                 % (_tilde(adir), _tilde(adir)), wrap=True)
+    if not actions and not stuck and not cfg_err:
         # A duplicate this run declined to prune is something `heal` saw, can
         # fix, and deliberately left. A bare "nothing to heal" printed under
         # the line offering the flag contradicts it.
@@ -1203,7 +1218,7 @@ def cmd_heal(argv):
                if declined_duplicates else "nothing to heal")
     if actions and not dry:
         journal.log("heal", "%d actions" % len(actions))
-    return 1 if cfg_err else 0
+    return 1 if cfg_err or stuck else 0
 
 
 def cmd_conflict(argv):

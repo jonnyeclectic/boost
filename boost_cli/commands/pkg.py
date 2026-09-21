@@ -260,10 +260,21 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
                % " · ".join(agents.display_name(a) for a in res.native))
     for path in res.conflicts:
         out.warn("not linked: %s exists and is not managed by boost" % _tilde(path))
+    _warn_unwritable(res)
     out.ok("lock updated (.skill-lock.json)")
     _warn_injection(res)
     _warn_secrets(res)
     _offer_mcp(res, no_mcp=no_mcp)
+
+
+def _warn_unwritable(res) -> None:
+    """Name the remedy for each agent skills dir an install could not link
+    into — every path that installs, reinstall and update included, so none
+    reports success over a link it silently skipped."""
+    for adir in res.unwritable:
+        out.warn("not linked: %s is not writable — `chmod u+w %s`, then "
+                 "`boost sync` adds the link" % (_tilde(adir), _tilde(adir)),
+                 wrap=True)
 
 
 def _boostfile_text(skills: dict[str, dict], via: str = "boost bundle dump") -> str:
@@ -1159,7 +1170,7 @@ def cmd_update(argv: list[str]) -> int:
                      "--yes` to apply" % name)
             continue
         try:
-            store.install(entry, force=True)
+            _warn_unwritable(store.install(entry, force=True))
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             continue
@@ -1245,8 +1256,9 @@ def cmd_reinstall(argv: list[str]) -> int:
             if warning:
                 out.warn(warning)
             try:
-                store.install(entry, force=True,
-                              scope=lk.get("scope", "user"), base=lk.get("base"))
+                _warn_unwritable(store.install(
+                    entry, force=True,
+                    scope=lk.get("scope", "user"), base=lk.get("base")))
             except BoostError as err:
                 out.warn("%s: %s" % (name, err.message))
                 failed += 1
@@ -1288,7 +1300,7 @@ def cmd_reinstall(argv: list[str]) -> int:
         if warning:
             out.warn(warning)
         try:
-            store.install(entry, force=True)
+            _warn_unwritable(store.install(entry, force=True))
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             failed += 1
