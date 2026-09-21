@@ -2,14 +2,14 @@
 id: identifier-columns-shrink-to-a-name-no-command-accepts
 board: code
 section: planned
-status: planned
+status: shipped
 category: UX · Bug
 complexity: M
 impact: Low
 wow: 2
 note: In the few columns before out.table drops a column, the widest one that can shrink is squeezed with an ellipsis, and in hooks list that is the name remove -n takes…
 order: 329
-owner:
+owner: loop/identifier-columns
 pr:
 title: Just before <code>out.table</code> drops a column, it shrinks the widest one with an ellipsis. In <code>hooks list</code> that is often <code>name</code>, and <code>bmad-r…</code> is not a name <code>hooks remove -n</code> accepts.
 ---
