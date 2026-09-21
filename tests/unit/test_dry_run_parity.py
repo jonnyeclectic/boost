@@ -37,7 +37,16 @@ import sys
 
 import pytest
 
-from boost_cli.core import agents, config, gitutil, lockfile, paths, registry, store, util
+from boost_cli.core import (
+    agents,
+    config,
+    gitutil,
+    lockfile,
+    paths,
+    registry,
+    store,
+    util,
+)
 from boost_cli.errors import BoostError
 
 # Sizes are asserted exactly, never `> 0`: the defect was an *inflated* number,
