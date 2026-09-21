@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -342,6 +343,33 @@ class TestCompactPredictsOnlyTrackedFreight:
         # untracked megabyte.
         assert abs(freed["bytes"] - predicted["bytes"]) < 4096
         assert (clone / "scripts" / "junk.bin").exists()
+
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="git checks symlinks out as plain files on "
+                               "Windows by default")
+    def test_symlinked_files_do_not_inflate_the_live_figure(
+            self, boost, sandbox, tmp_path):
+        """A tracked link counted its target's size before and 0 after, so
+        the live run over-reported what it freed. One link points off-cone
+        and one in-cone link dangles once its target goes. The preview
+        skipped both, and it was the true figure."""
+        src = _repo(tmp_path / "src")
+        (src / "scripts").mkdir()
+        (src / "scripts" / "big.txt").write_text("z" * 40_000, encoding="utf-8")
+        (src / "scripts" / "vendor.js").symlink_to("../node_modules/pkg.js")
+        (src / "skills" / "GUIDE.md").symlink_to("../scripts/big.txt")
+        _git(src, "add", "-A")
+        _git(src, "commit", "-qm", "links")
+        boost("tap", str(src))
+        clone = registry.list_taps()[0].path
+        gitutil.run(["-C", str(clone), "sparse-checkout", "disable"])
+
+        predicted = json.loads(boost("compact", "--dry-run", "--json").out)
+        freed = json.loads(boost("compact", "--json").out)
+
+        assert predicted["bytes"] == TRACKED_ASSET + TRACKED_VENDOR + 40_000
+        assert abs(freed["bytes"] - predicted["bytes"]) < 4096
 
 
 # ── 2. `--reclone` predicts a different thing, and declines a net total ──

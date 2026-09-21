@@ -376,8 +376,16 @@ def sha256_dir(path: Path) -> str:
 
 
 def dir_size(path: Path) -> int:
-    """Sum the byte size of every regular file under ``path``, recursively."""
-    return sum(p.stat().st_size for p in Path(path).rglob("*") if p.is_file())
+    """Sum the byte size of every regular file under ``path``, recursively.
+
+    A symlink is not a regular file, whatever it points at: ``is_file()`` and
+    ``stat()`` follow links, so a link counted its target's bytes a second
+    time, or bytes outside the tree, or nothing once it dangled. ``compact``
+    reports freed space as this before minus this after, and a link whose
+    target the narrow removed made the live figure overstate the run.
+    """
+    return sum(p.lstat().st_size for p in Path(path).rglob("*")
+               if p.is_file() and not p.is_symlink())
 
 
 def semver_tuple(v: str):
