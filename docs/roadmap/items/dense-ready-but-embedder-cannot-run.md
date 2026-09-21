@@ -10,7 +10,7 @@ wow: 3
 note: localembed.available() (localembed.py:85) tests whether onnxruntime and tokenizers *i…
 order: 205
 owner: loop/dense-embedder-cannot-run
-pr:
+pr: 921
 title: status() has no state for "ready but the embedder does not work": doctor green-ticks a tier that never ran, the search hint is suppressed, and every search re-pays the failed model fetch
 ---
 <b>Measured.</b> In a store built as provider=local/BAAI/bge-small-en-v1.5/384-d with the weights absent, <code>dense.ready()</code> returns True and <code>status()</code> returns reason=None, degraded=False, while <code>dense.retrieve()</code> returns None on every query — so <code>boost search</code> prints "1 match · ranked by full-content BM25" with no hint (guard: <code>if st.get("ready"): return</code>, discovery.py:339) and <code>boost doctor</code> prints "✓ semantic search active — local BAAI/bge-small-en-v1.5 (384-d), 5 chunks across 1 tap" and exits 0 (guard: <code>if st["ready"]:</code>, quality.py:759); each such search makes exactly one un-cached 133,093,490-byte model fetch (counted in-process: 1 urlopen, 3.72 s, versus a 0.12 s BOOST_NO_EMBED baseline, of which only 0.06 s is the onnxruntime/tokenizers import).
