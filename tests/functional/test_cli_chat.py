@@ -186,10 +186,11 @@ class TestSessionFollowUps:
         r = _session(boost, monkeypatch, "how do I write commit messages?",
                      "which of these should I install first?", args=("-k", "2"))
         (_, first), (engine, second) = _source_blocks(r.out)
-        assert first and second == first
+        assert first and second[:len(first)] == first
         # The label is what tells the wiring apart from a re-query that happens
         # to return the same rows on a small catalogue.
-        assert engine == "previous answer", "the session did not keep the turn's skills"
+        assert engine.startswith("previous answer + "), \
+            "the session did not keep the turn's skills"
 
     def test_an_ordinal_answers_with_that_row_of_the_previous_turn(
             self, boost, tapped, monkeypatch):
@@ -197,7 +198,9 @@ class TestSessionFollowUps:
                      "what about the second one?")
         (_, first), (engine, second) = _source_blocks(r.out)
         assert len(first) >= 2
-        assert (engine, second) == ("previous answer", [first[1]])
+        assert engine.startswith("previous answer + ")
+        # That row first, and the rest of the list still after it.
+        assert second[0] == first[1] and set(first) <= set(second)
 
     def test_a_new_subject_is_searched_not_carried(self, boost, tapped, monkeypatch):
         # "which one" with no pointer asks the catalogue, not the last list.

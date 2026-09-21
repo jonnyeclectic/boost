@@ -119,13 +119,16 @@ sources · ranked by hybrid RRF (BM25 + dense)
         <div>
           <h3>Expand, if it is a follow-up</h3>
           <p>“which of these should I install first?” and “what about the second one?” point at the
-            list the previous answer showed, so they are answered from that list with no new search,
-            and “the second one” is its second row. Only a pointer counts: “which one is best for
-            linting?” and “how do I create my first skill?” are new questions and get a new search.
-            Any other short question inherits the subject of the previous one. Only the immediately
-            preceding turn — two questions back is usually a different subject, and blending them
-            retrieves for neither. A skill the question names by its hyphenated catalogue name is
-            ranked first, taken from the catalogue when the previous answer did not show it.</p>
+            list the previous answer showed, so that list comes first, with “the second one” as its
+            first row. The search still runs, and its results follow, so a question misread as a
+            pointer costs order, not the answer: such a turn can list up to twice <code>-k</code>
+            skills, plus any skill the question names. Only a pointer counts: “which one is best for
+            linting?”, “how do I create my first skill?” and “how do I make this one-liner a
+            skill?” are new questions and get only the new search. Any other short question inherits the subject of the previous one. Only the
+            immediately preceding turn — two questions back is usually a different subject, and
+            blending them retrieves for neither. A skill the question names by its hyphenated
+            catalogue name is ranked first, taken from the catalogue when no search found it; after a
+            pointer it follows the list pointed at.</p>
         </div>
       </div>
       <div class="step">
