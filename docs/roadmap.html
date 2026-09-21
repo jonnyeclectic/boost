@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>60</b><span>Planned</span></div>
-      <div class="stat"><b>475</b><span>Loop finds</span></div>
+      <div class="stat"><b>61</b><span>Planned</span></div>
+      <div class="stat"><b>476</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2081,7 +2081,42 @@ Likely fix: <code>out.table</code> takes a third class of column, <i>whole or ab
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">fixed: paths.refuses_writes names the directory that stops a write, including the parent of a dir a refused mkdir left missing; doctor and heal create what they can and name ~/.boost (70 → 1), heal --dry-run agrees (0 → 1); journal.log creates only its own dir, so update, compact and install finish (70 → 0); an install checks the store and its target dirs before its first write and a refused lock-history snapshot is a warning, so nothing lands on disk unrecorded; a skill install skips an agent dir with a file or dangling link in the way, records the install and says to move it aside (70 → 0), and sync, doctor and heal name it too; untap names ~/.boost (70 → 1)</span>
+          <span class="m">fixed: paths.refuses_writes names the directory that stops a write, including the parent of a dir a refused mkdir left missing; doctor and heal create what they can and name ~/.boost (70 → 1), heal --dry-run agrees (0 → 1); journal.log creates only its own dir, so update, compact and install finish (70 → 0); an install checks the store and its target dirs before its first write and a refused lock-history snapshot is a warning, so none of the measured shapes lands on disk unrecorded; a skill install skips an agent dir with a file or dangling link in the way, records the install and says to move it aside (70 → 0), and sync, doctor and heal name it too; untap names ~/.boost (70 → 1)</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="agent-dir-shapes-install-still-trips-on">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <h3>Agent-dir shapes a skill install still trips on: a parent with no search bit, a missing dir under a read-only parent, a blocked agent dropped from the lock's scope</h3>
+        <p><b>Found by the third review of <code>read-only-boost-home-with-no-cache-dir</code>.</b> None is a regression.
+Each was measured behaving the same on <code>c7dca95c</code>.
+
+<b>A parent with no search bit.</b> With an agent dir's parent at mode <code>0o600</code>,
+<code>store.install</code> copies the skill into the store. It then crashes at exit 70 in
+<code>linked_agents</code>, where <code>(adir / name).is_symlink()</code> raises
+<code>PermissionError</code> outside <code>link_agents</code>' guard. The store dir is left
+unrecorded. Treating an <code>OSError</code> there as "not linked" would close it.
+
+<b>A missing skills dir under a read-only parent.</b> The install names a <code>chmod</code>
+target that does not exist, and <code>doctor</code> and <code>heal</code> disagree about it.
+<code>link_agents</code>' <code>PermissionError</code> branch should record the block from
+<code>paths.refuses_writes(adir)</code> and word it through <code>link_refusal</code>. doctor's
+agent-dir check should use the same function, so that it agrees with heal.
+
+<b>A blocked agent drops out of the scope.</b> After an install skips an agent as blocked, the lock's
+<code>agents</code> list leaves it out. <code>preserved_agent_scope</code> replays that list, so a
+later <code>install --force</code> never retries the agent and never says so. Only
+<code>boost sync</code> reports and repairs it.
+
+<b>Callers that drop the result.</b> <code>boost import</code> (<code>install_from_path</code>),
+<code>quarantine --release</code> and the unsideline paths (focus, profile, context, team) drop
+<code>res.blocked</code> without a word, as they already drop <code>res.unwritable</code>.
+<code>pkg._warn_unwritable(res)</code> is the existing reporter.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">Four agent-dir shapes a skill install still mishandles after the read-only-home fix; each behaves the same on c7dca95c…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
