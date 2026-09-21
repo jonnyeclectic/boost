@@ -127,18 +127,48 @@ jobs:
         run: |
           echo "::error::the eval gate refused to score the refreshed corpus (CORPUS INCOMPLETE) — its diagnosis is in the previous step"
           exit 66
+      - name: score the natural-language set on the refreshed corpus
+        id: natural
+        # `make eval-natural`, flag for flag, and advisory there too. Run
+        # BEFORE the re-baseline, so its regression lines compare the new
+        # corpus with the old one — the movement this pull request exists to
+        # show — rather than with itself.
+        continue-on-error: true
+        env:
+          BOOST_HOME: ${{ github.workspace }}/.eval-home
+        run: |
+          set -o pipefail
+          PYTHONPATH=. python scripts/eval_retrieval.py --build -k 10 \
+            --golden tests/eval/golden-natural.jsonl --fail-under 0.32 \
+            --floor hit@1=0.14 --floor MRR=0.21 --floor nDCG@k=0.23 \
+            2>&1 | tee "$RUNNER_TEMP/natural.txt"
       - name: re-baseline against the refreshed corpus
         # The baseline is a statement about a specific corpus, so it has to move
         # with it or every later run reports a regression that is only the gap
         # between two different corpora.
+        #
+        # EVERY row, not one. `--all-sets` takes the list from the directory
+        # (tests/eval/golden*.jsonl). With no flag the call re-baselined the
+        # default set alone, and the first refresh (cbc0a58b) left the
+        # natural-language row describing the corpus it replaced: on the new
+        # one that set reported "catalog.search recall@k: 0.080 -> 0.060" as a
+        # regression nobody caused.
+        #
+        # So this step now also stops, naming it, when a golden `exemplar` no
+        # longer resolves at the new pins — every natural-set row pins one.
+        # That is the intended signal, like a vanished repository stopping
+        # `--refresh`: the row needs a person to point it at the moved file,
+        # and a baseline written without it would score a different set.
         env:
           BOOST_HOME: ${{ github.workspace }}/.eval-home
         run: |
-          PYTHONPATH=. python scripts/eval_retrieval.py --save-baseline -k 10
+          PYTHONPATH=. python scripts/eval_retrieval.py --save-baseline -k 10 \
+            --all-sets
       - name: assemble the pull request body
         id: body
         env:
           GATE_OUTCOME: ${{ steps.gate.outcome }}
+          NATURAL_OUTCOME: ${{ steps.natural.outcome }}
         run: |
           {
             echo "text<<PRBODY"
@@ -159,13 +189,27 @@ jobs:
             cat "$RUNNER_TEMP/gate.txt" || true
             echo '```'
             echo
+            echo "### The natural-language set (advisory)"
+            echo
+            if [ "$NATURAL_OUTCOME" = "success" ]; then
+              echo "Clears its floors, with no regression against the old corpus."
+            else
+              echo "Misses a floor or reports a regression against the old"
+              echo "corpus. It is advisory and blocks nothing; the numbers are"
+              echo "the point."
+            fi
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/natural.txt" || true
+            echo '```'
+            echo
             echo "### What moved"
             echo
             cat "$RUNNER_TEMP/corpus-summary.md" || true
             echo
             echo "\`tests/eval/baseline.json\` is regenerated against the new"
-            echo "corpus in the same commit, because a baseline is a statement"
-            echo "about a specific corpus."
+            echo "corpus in the same commit, every query set's row of it,"
+            echo "because a baseline is a statement about a specific corpus."
             echo
             echo "Corpus sizes and twenty-repo scores quoted in prose"
             echo "(CLAUDE.md, the Makefile, \`docs/eval.html\`) are checked"

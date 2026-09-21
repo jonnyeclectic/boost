@@ -101,13 +101,28 @@ regenerating the baseline; the file says how.
 both `golden.jsonl` and `golden-natural.jsonl` without either overwriting the
 other. Before that, running the natural-language set printed eight confident
 "REGRESSION vs baseline" lines that were only the gap between two different
-question sets. Add `--floor NAME=VALUE` (repeatable) to gate any metric; a
-misspelled metric name is a hard error rather than a silently skipped floor.
-Edit `taps.txt` → regenerate `tests/eval/baseline.json`. It runs in CI's
-`lint` job (pure-stdlib BM25, no `ANTHROPIC_API_KEY`; needs network to tap). The
-opt-in evals stay out of `check` and all degrade cleanly:
+question sets. The key names the questions but not the corpus, so a pin move
+must regenerate the row of **every** set: the monthly refresh once moved only
+the keyword row, and on the new corpus the natural set then reported
+`catalog.search recall@k: 0.080 -> 0.060` as a regression nobody caused. It
+now runs `--save-baseline -k 10 --all-sets`, which reads the list from the
+directory (`tests/eval/golden*.jsonl`, see `query_sets`) rather than naming
+two files, and `tests/unit/test_eval_query_sets.py` fails while any committed
+set lacks a row at its current digest. Add `--floor NAME=VALUE` (repeatable) to
+gate any metric; a misspelled metric name is a hard error rather than a
+silently skipped floor. Edit `taps.txt` or a query set → regenerate
+`tests/eval/baseline.json`. The `eval` gate runs in CI's `lint` job
+(pure-stdlib BM25, no `ANTHROPIC_API_KEY`; needs network to tap). The opt-in
+evals stay out of `check` and all degrade cleanly:
 
 - `make eval-ai` / `eval-rec` — key-gated LLM evals (Tier 2a rerank / 2b recommend).
+- `make eval-natural` — the natural-language set over the same pinned corpus,
+  exemplar-graded on every row. CI runs it after the required gate, with
+  `continue-on-error`. Its floors sit ~10% under the recorded BM25 row
+  (0.360 / 0.160 / 0.237 / 0.259), and at 50 queries that leaves hit@1 one
+  query of slack (7 of 50 against 8), too thin for a required check a refresh
+  can move. `test_eval_corpus.py` holds the Makefile, CI and refresh calls to
+  one argv, like `eval`.
 - `make eval-stats` — Tier 1b `ranx` paired-t-test between engines (`--stats`).
 - `make eval-explain` — Tier 2c `ragas` faithfulness for `boost explain`; needs
   the `[eval]` extra **and** a judge key (`OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`

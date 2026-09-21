@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import functools
 import importlib.util
+import json
 import os
 import re
 import shlex
@@ -518,22 +519,31 @@ def _invocation(text: str) -> list[str]:
     one call is required, so a block that grew a second one is an error
     rather than a coin toss over which of them is compared.
     """
+    calls = _invocations(text)
+    assert len(calls) == 1, (
+        "expected one eval_retrieval.py call, found %d in:\n%s"
+        % (len(calls), text))
+    return calls[0]
+
+
+def _invocations(text: str) -> list[list[str]]:
+    """Every argv `scripts/eval_retrieval.py` receives from `text`, in order."""
     joined = re.sub(r"\\\r?\n", " ", text)
     calls = [line for line in joined.splitlines()
              if "eval_retrieval.py" in line
              and not line.lstrip().startswith("#")]
-    assert len(calls) == 1, (
-        "expected one eval_retrieval.py call, found %d in:\n%s"
-        % (len(calls), text))
-    words = shlex.split(calls[0])
-    first = next(i for i, word in enumerate(words)
-                 if word.endswith("eval_retrieval.py")) + 1
-    argv: list[str] = []
-    for word in words[first:]:
-        if _SHELL_CHROME.match(word):
-            break
-        argv.append(word)
-    return argv
+    out: list[list[str]] = []
+    for call in calls:
+        words = shlex.split(call)
+        first = next(i for i, word in enumerate(words)
+                     if word.endswith("eval_retrieval.py")) + 1
+        argv: list[str] = []
+        for word in words[first:]:
+            if _SHELL_CHROME.match(word):
+                break
+            argv.append(word)
+        out.append(argv)
+    return out
 
 
 def _meaning(argv: list[str]) -> dict:
@@ -614,8 +624,10 @@ class TestTheGateIsDefinedOnce:
             _step(wf, "re-baseline against the refreshed corpus")))
         gate = self._gate()
         assert rebase["save_baseline"] and not gate["save_baseline"]
-        for flag in ("k", "golden", "engines"):
+        for flag in ("k", "engines"):
             assert rebase[flag] == gate[flag], flag
+        # Which query sets it covers is TestTheRefreshRebaselinesEverySet's.
+        assert gate["golden"] in _rebaselined()
 
     @pytest.mark.parametrize("old, new", [
         ("--build -k 10", "--build -k 5"),
@@ -651,6 +663,168 @@ class TestTheGateIsDefinedOnce:
         assert old in step
         edited = step.replace(old, new)
         assert _meaning(_invocation(edited)) == self._gate()
+
+
+_EVAL_DIR = _ROOT / "tests" / "eval"
+_NATURAL = (_EVAL_DIR / "golden-natural.jsonl").resolve()
+_NATURAL_CI_STEP = "natural-language retrieval set (advisory)"
+_NATURAL_REFRESH_STEP = "score the natural-language set on the refreshed corpus"
+_REBASELINE_STEP = "re-baseline against the refreshed corpus"
+
+
+def _committed_sets() -> set[Path]:
+    """The query sets in the tree, derived here rather than by the script.
+
+    Globbed independently, so a bug in `eval_retrieval.query_sets` cannot
+    agree with itself; `test_the_script_derives_the_same_list` then pins the
+    two together.
+    """
+    return {p.resolve() for p in _EVAL_DIR.glob("golden*.jsonl")}
+
+
+def _rebaselined() -> set[Path]:
+    """The query sets the refresh's re-baseline step writes a row for."""
+    wf = _REFRESH.read_text(encoding="utf-8")
+    meaning = _meaning(_invocation(_step(wf, _REBASELINE_STEP)))
+    if meaning.get("all_sets"):
+        return {p.resolve() for p in _eval_retrieval().query_sets()}
+    return {meaning["golden"]}
+
+
+def _scored(text: str) -> set[Path]:
+    """The query sets every eval_retrieval.py call in `text` scores."""
+    return {_meaning(argv)["golden"] for argv in _invocations(text)}
+
+
+@pytest.mark.skipif(not _REFRESH.exists(), reason="refresh workflow absent")
+class TestTheRefreshRebaselinesEverySet:
+    """card: refresh-strands-the-natural-set-baseline.
+
+    The re-baseline step passed no `--golden`, and the default is the keyword
+    set, so the monthly refresh moved one row of two. Its first run left the
+    natural row describing the corpus it replaced, and on the new corpus the
+    natural set reported "REGRESSION vs baseline: catalog.search recall@k:
+    0.080 -> 0.060" for a ranker nobody had touched.
+    """
+
+    def test_every_committed_query_set_is_rebaselined(self):
+        missed = sorted(p.name for p in _committed_sets() - _rebaselined())
+        assert missed == [], "the refresh leaves these rows stale: %s" % missed
+
+    def test_every_set_the_baseline_records_is_rebaselined(self):
+        sets = json.loads((_EVAL_DIR / "baseline.json").read_text(
+            encoding="utf-8"))["sets"]
+        names = {key.rsplit("@", 1)[0] for key in sets}
+        covered = {p.name for p in _rebaselined()}
+        assert sorted(names - covered) == []
+
+    def test_every_set_a_gate_scores_is_rebaselined(self):
+        scored = set()
+        for path in (_ROOT / "Makefile", _CI, _REFRESH):
+            scored |= _scored(path.read_text(encoding="utf-8"))
+        assert sorted(p.name for p in scored - _rebaselined()) == []
+
+    def test_the_list_is_derived_not_named(self):
+        # Naming the two sets in the step would strand the third the day it
+        # is committed; `--all-sets` asks the directory instead.
+        step = _step(_REFRESH.read_text(encoding="utf-8"), _REBASELINE_STEP)
+        assert ".jsonl" not in step.split("run:", 1)[1]
+
+    def test_the_script_derives_the_same_list(self):
+        assert {p.resolve() for p in _eval_retrieval().query_sets()} == \
+            _committed_sets()
+
+
+class TestTheNaturalSetIsMeasured:
+    """card: exemplar-graded-golden-set-runs-in-no-gate.
+
+    golden-natural.jsonl is the one set graded by exemplar on every row, and
+    no Makefile target or workflow passed `--golden` — so the only way its
+    numbers were ever produced was a person typing the command.
+
+    It runs ADVISORY (continue-on-error in CI, outside `make check`), and the
+    reason is a count of queries. The keyword gate's recall floor sits five
+    queries of 91 under its measurement; a natural-set hit@1 floor ~10% under
+    0.160 is 7 of 50 against a measured 8 — one query of slack. The refresh's
+    own header says corpus growth moves these numbers down, so a required
+    gate that thin would redden every open pull request the month after a
+    refresh. Advisory, it still prints every number and the regression line
+    in every CI run.
+    """
+
+    def _gate(self) -> dict:
+        return _meaning(_invocation(_recipe("eval-natural")))
+
+    def test_ci_scores_the_natural_set(self):
+        assert _NATURAL in _scored(_CI.read_text(encoding="utf-8"))
+
+    def test_a_make_target_scores_the_natural_set(self):
+        makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
+        assert _NATURAL in _scored(makefile)
+
+    def test_the_target_scores_the_natural_set(self):
+        assert self._gate()["golden"] == _NATURAL
+
+    def test_ci_runs_the_make_invocation_flag_for_flag(self):
+        step = _step(_CI.read_text(encoding="utf-8"), _NATURAL_CI_STEP)
+        assert _meaning(_invocation(step)) == self._gate()
+
+    @pytest.mark.skipif(not _REFRESH.exists(), reason="refresh workflow absent")
+    def test_the_refresh_scores_it_with_the_same_invocation(self):
+        wf = _REFRESH.read_text(encoding="utf-8")
+        step = _step(wf, _NATURAL_REFRESH_STEP)
+        assert _meaning(_invocation(step)) == self._gate()
+
+    @pytest.mark.skipif(not _REFRESH.exists(), reason="refresh workflow absent")
+    def test_the_refresh_scores_it_before_rebaselining(self):
+        # After, it would compare the new corpus with itself and could never
+        # report the movement the refresh pull request exists to show.
+        wf = _REFRESH.read_text(encoding="utf-8")
+        assert wf.index("- name: " + _NATURAL_REFRESH_STEP) < \
+            wf.index("- name: " + _REBASELINE_STEP)
+
+    def test_it_floors_all_four_metrics(self):
+        gate = self._gate()
+        floors = dict(gate["floor"])
+        if gate["fail_under"] is not None:
+            floors.setdefault("recall@k", gate["fail_under"])
+        assert set(floors) == {"recall@k", "hit@1", "MRR", "nDCG@k"}
+
+    def test_the_floors_sit_under_the_recorded_baseline(self):
+        # The row it is compared to is the one the refresh keeps current;
+        # a floor above it would be red on the day it landed.
+        ev = _eval_retrieval()
+        row = ev.baseline_for(_NATURAL)
+        assert row is not None
+        bm25 = row["engines"]["BM25 full-content"]
+        gate = self._gate()
+        floors = dict(gate["floor"], **{"recall@k": gate["fail_under"]})
+        for metric, minimum in floors.items():
+            assert minimum < bm25[metric], metric
+            assert minimum >= 0.8 * bm25[metric], metric
+
+    def test_it_is_advisory_in_ci_and_the_keyword_gate_is_not(self):
+        ci = _CI.read_text(encoding="utf-8")
+        assert "continue-on-error: true" in _step(ci, _NATURAL_CI_STEP)
+        assert "continue-on-error" not in _step(ci, "retrieval quality gate")
+
+    def test_it_is_not_part_of_make_check(self):
+        makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
+        check = re.search(r"^check:(.*)$", makefile, re.M)
+        assert check and "eval-natural" not in check.group(1).split()
+
+    @pytest.mark.parametrize("old, new", [
+        ("--build -k 10", "--build -k 5"),
+        ("--build -k 10", "-k 10"),
+        ("tests/eval/golden-natural.jsonl", "tests/eval/golden.jsonl"),
+        ("--fail-under 0.32", "--fail-under 0.20"),
+        ("--floor hit@1=0.14", "--floor hit@1=0.02"),
+        (" --floor nDCG@k=0.23", ""),
+    ], ids=["k", "build", "golden", "fail-under", "floor-value", "floor-dropped"])
+    def test_an_edit_to_the_ci_invocation_alone_breaks_parity(self, old, new):
+        step = _step(_CI.read_text(encoding="utf-8"), _NATURAL_CI_STEP)
+        assert old in step
+        assert _meaning(_invocation(step.replace(old, new))) != self._gate()
 
 
 class TestReadingAnInvocation:

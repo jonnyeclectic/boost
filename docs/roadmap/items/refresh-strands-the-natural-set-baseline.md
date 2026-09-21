@@ -2,14 +2,14 @@
 id: refresh-strands-the-natural-set-baseline
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Retrieval eval
 complexity: M
 impact: Med
 wow: 3
 note: eval-corpus-refresh.yml:119 runs eval_retrieval.py --save-baseline -k 10 with no --go…
 order: 227
-owner:
+owner: loop/natural-set-gated
 pr:
 title: The corpus refresh re-baselines only golden.jsonl, so golden-natural.jsonl's baseline silently describes a corpus that no longer exists
 ---

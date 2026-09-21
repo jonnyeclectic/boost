@@ -2,14 +2,14 @@
 id: exemplar-graded-golden-set-runs-in-no-gate
 board: code
 section: planned
-status: planned
+status: shipped
 category: Tech-debt
 complexity: M
 impact: Med
 wow: 3
 note: The 50-row natural-language golden set is the one place where the project's content-c…
 order: 242
-owner:
+owner: loop/natural-set-gated
 pr:
 title: golden-natural.jsonl — the only fully exemplar-graded query set — is invoked by no make target and no workflow, so its numbers can only be produced by a human typing the command
 ---
