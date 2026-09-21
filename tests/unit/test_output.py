@@ -848,6 +848,60 @@ class TestHelpers:
         assert cap.err == "  ! routed\n  hint\n"
 
 
+class _TtyBuffer(io.StringIO):
+    """A writable stream that reports itself as a terminal."""
+
+    def isatty(self):
+        return True
+
+
+class TestWarnColourFollowsItsStream:
+    """A warning routed to stderr is coloured by what stderr is, not stdout.
+
+    `boost bundle dump > Boostfile` sends its notice to a terminal while
+    stdout is a file; `2>log` sends it to a file while stdout is a terminal
+    (docs/roadmap/items/audit-bundle-findings.md). Asking stdout printed the
+    first plain and wrote escape codes into the second.
+    """
+
+    def test_a_terminal_stderr_is_coloured_while_stdout_is_a_file(
+            self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        err = _TtyBuffer()
+        output.warn("notice", stream=err)
+        text = err.getvalue()
+        # both the marker and the message are painted
+        assert text.count(output.RESET) == 2
+        assert output.visible_len(text.rstrip("\n")) == len("  ! notice")
+        assert sys.stdout.getvalue() == ""
+
+    def test_a_redirected_stderr_stays_plain_while_stdout_is_a_terminal(
+            self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", _TtyBuffer())
+        err = io.StringIO()
+        output.warn("notice", stream=err)
+        assert err.getvalue() == "  ! notice\n"
+
+    def test_wrapped_continuations_follow_the_stream_too(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", _TtyBuffer())
+        monkeypatch.setattr(output, "term_width", lambda default=80: 20)
+        err = io.StringIO()
+        output.warn("one two three four five six seven", stream=err, wrap=True)
+        assert "\x1b[" not in err.getvalue()
+        assert len(err.getvalue().splitlines()) > 1
+
+    def test_the_default_stream_is_still_stdout_and_judged_by_it(
+            self, monkeypatch):
+        tty = _TtyBuffer()
+        monkeypatch.setattr(sys, "stdout", tty)
+        output.warn("notice")
+        assert tty.getvalue().count(output.RESET) == 2
+        plain = io.StringIO()
+        monkeypatch.setattr(sys, "stdout", plain)
+        output.warn("notice")
+        assert plain.getvalue() == "  ! notice\n"
+
+
 class TestPlain:
     """Control characters are stripped from text boost did not author.
 

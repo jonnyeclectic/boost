@@ -2,14 +2,14 @@
 id: audit-bundle-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · UX
 complexity: M
 impact: Med
 wow: 1
 note: mismatched tap/version lines count "already present" — the Boostfile stops being reproducible
 order: 252
-owner:
+owner: loop/bundle-audit
 pr:
 title: "boost bundle: CLI audit findings (2026-08)"
 ---
@@ -49,6 +49,38 @@ Boostfile&rdquo;</em> &mdash; pathlib normalises <code>./Boostfile</code> to the
 <em>&ldquo;Installed 0 skills&rdquo;</em>, exit 0, with no hint that nothing was parsed. Fix: display
 the resolved path through the existing <code>_tilde()</code>, and warn when zero tap/skill lines were
 read (keeping exit 0).
+
+<br><br><b>Shipped (loop/bundle-audit).</b> All four reproduced on <code>a316c6b9</code> before
+any change, with the fixture tap and two imported skills: the dump said <em>&ldquo;&#10003; wrote
+Boostfile.local (1 tap, 1 skill)&rdquo;</em> and nothing else; <code>bf2</code> (the two lines
+above) gave <em>&ldquo;Installed 0 skills, 2 already present&rdquo;</em>, exit 0, and its
+<code>--dry-run</code> <em>&ldquo;would install 0 items, 2 already present&rdquo;</em>;
+<code>bundle install</code> with no file said <em>&ldquo;no Boostfile at Boostfile&rdquo;</em>; an
+empty stdin said <em>&ldquo;Installed 0 skills&rdquo;</em>. Now: the dump names <em>&ldquo;2 local
+skills written as comments &mdash; no tap source to reinstall from&rdquo;</em> on both paths, through
+<code>out.warn</code>; each mismatched line warns <em>&ldquo;installed from fixture-tap, Boostfile
+wants nosuch/tap &mdash; kept as installed&rdquo;</em> (or the version form), is not reinstalled, and
+the summary says <em>&ldquo;2 differ from the Boostfile&rdquo;</em> instead of calling it present;
+the missing-file error shows the absolute path; a file with no directives warns <em>&ldquo;nothing to
+apply&rdquo;</em>. Exit codes unchanged. The tap/version test is <code>store.lock_drift</code>,
+using the same <code>catalog.tap_matches</code> rule as <code>resolve_lock_entry</code>, so a
+dump&rarr;install round trip still reads back as present.
+
+<br><br><b>Two more found while fixing these.</b> (1) The one-line style fix was not enough:
+<code>out.warn(msg, stream=sys.stderr)</code> chose colour by asking <em>stdout</em>, so
+<code>bundle dump &gt; Boostfile</code> printed the notice plain on a terminal and
+<code>bundle dump 2&gt;log</code> wrote escape codes into the log (measured with a fake TTY on each
+stream). <code>warn</code> now asks the stream it writes to, which also fixes the other
+<code>stream=sys.stderr</code> callers in discovery, info and intelligence. (2) The
+<code>--dry-run</code> from #835 did not match the real run: with a <code>tap</code> line for a new
+registry in the file, <code>skill fixture-tap:ghost</code> (a tap already present, without that
+skill) printed <em>&ldquo;cannot resolve yet; its tap would be added by this same file&rdquo;</em> and
+exited 0, where the real run says <em>&ldquo;ghost not found in tap fixture-tap &mdash;
+skipped&rdquo;</em> and exits 1. The preview now defers only a line whose tap this file would add (or
+an unqualified one while any would be added), counts those as <em>&ldquo;N unresolved until
+tapped&rdquo;</em>, says <em>&ldquo;would install that&rdquo;</em> instead of <em>&ldquo;installing
+that&rdquo;</em> on a version mismatch, and uses the same kind-aware noun as the real summary
+(<em>&ldquo;would install 1 skill&rdquo;</em>, not <em>&ldquo;1 item&rdquo;</em>).
 
 <br><br>Found by the 2026-08 CLI audit; repro in the audit log. All behaviour-only &mdash; regenerate
 <code>docs/commands.html</code> only if the <code>bundle</code> summary in <code>cli.py</code>

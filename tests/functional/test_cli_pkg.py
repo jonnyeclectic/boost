@@ -1795,6 +1795,216 @@ class TestBundleEdges:
         assert "check the path exists and is writable" in r.err
 
 
+# ── bundle: the 2026-08 CLI audit (audit-bundle-findings) ───────────────
+
+def _flat(text):
+    """Whitespace-normalised text, so an assertion survives the wrap width."""
+    return " ".join(text.split())
+
+
+class TestBundleAuditFindings:
+    """docs/roadmap/items/audit-bundle-findings.md — what a Boostfile cannot
+    carry is said out loud, an install at another tap or version is not
+    "already present", and `--dry-run` says what the real run will."""
+
+    # -- dump: local skills are named, not only commented ------------------
+
+    def test_stdout_dump_names_local_skills_on_stderr(self, boost, installed,
+                                                      tmp_path):
+        boost("import", _skill_dir(tmp_path, "ab-testing"))
+        boost("import", _skill_dir(tmp_path, "cd-thing"))
+        r = boost("bundle", "dump")
+        assert "# local skill (no tap source): ab-testing" in r.out
+        assert ("2 local skills written as comments — no tap source to "
+                "reinstall from") in r.err
+        # stdout is the Boostfile itself; the notice must not land in it
+        assert "written as comments" not in r.out
+
+    def test_file_dump_names_local_skills_in_its_report(self, boost, installed,
+                                                        tmp_path):
+        boost("import", _skill_dir(tmp_path, "ab-testing"))
+        r = boost("bundle", "dump", tmp_path / "Boostfile")
+        assert "(1 tap, 1 skill)" in r.out
+        assert ("1 local skill written as comments — no tap source to "
+                "reinstall from") in r.out
+
+    def test_a_dump_with_no_local_skills_says_nothing_about_them(
+            self, boost, installed, tmp_path):
+        r = boost("bundle", "dump", tmp_path / "Boostfile")
+        assert "local skill" not in r.out + r.err
+        assert boost("bundle", "dump").err == ""
+
+    def test_the_omission_notice_is_one_styled_warning_on_both_paths(
+            self, boost, fixture_tap_src, tmp_path, monkeypatch):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "sty-tap")
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.0.0\n---\n\nTabs.\n",
+                        "add rule")
+        boost("tap", tap_dir)
+        boost("install", "house-style")
+        monkeypatch.setenv("BOOST_COLOR", "always")
+        note = "1 rule not captured — Boostfiles carry skills only"
+        to_stdout = [ln for ln in boost("bundle", "dump").err.splitlines()
+                     if note in ln]
+        to_file = [ln for ln in boost("bundle", "dump", tmp_path / "Boostfile")
+                   .out.splitlines() if note in ln]
+        assert len(to_stdout) == 1 and to_stdout == to_file
+        assert "\x1b[" in to_stdout[0]
+
+    # -- install: the present check holds tap and version to the line -----
+
+    def test_a_line_from_another_tap_is_not_already_present(self, boost,
+                                                            installed, tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill nosuch/tap:brainstorming\n", encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert ("brainstorming: installed from fixture-tap, Boostfile wants "
+                "nosuch/tap — kept as installed") in _flat(r.out)
+        assert "already present" not in r.out
+        assert "Installed 0 skills, 1 differs from the Boostfile" in r.out
+        assert _lock()["brainstorming"]["tap"] == "fixture-tap"
+
+    def test_a_line_at_another_version_is_not_already_present(self, boost,
+                                                              installed, tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill fixture-tap:brainstorming@9.9.9\n", encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert ("brainstorming: installed 1.4.0, Boostfile wants @9.9.9 — kept "
+                "as installed") in _flat(r.out)
+        assert "Installed 0 skills, 1 differs from the Boostfile" in r.out
+        assert _lock()["brainstorming"]["version"] == "1.4.0"
+
+    def test_both_differences_share_one_warning(self, boost, installed,
+                                                tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill nosuch/tap:brainstorming@9.9.9\n"
+                      "skill fixture-tap:brainstorming@1.4.0\n", encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert ("brainstorming: installed from fixture-tap, Boostfile wants "
+                "nosuch/tap; installed 1.4.0, Boostfile wants @9.9.9 — kept as "
+                "installed") in _flat(r.out)
+        # the exact line alongside it is still simply present
+        assert "Installed 0 skills, 1 already present, 1 differs from the " \
+               "Boostfile" in r.out
+
+    def test_a_local_skill_asked_for_from_a_tap_is_drift(self, boost, tapped,
+                                                         tmp_path):
+        boost("import", _skill_dir(tmp_path / "src", "ab-testing"))
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill fixture-tap:ab-testing\n", encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert ("ab-testing: installed from local, Boostfile wants fixture-tap "
+                "— kept as installed") in _flat(r.out)
+
+    def test_the_dry_run_reports_drift_exactly_as_the_real_run(
+            self, boost, installed, tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill nosuch/tap:brainstorming\n"
+                      "skill fixture-tap:brainstorming@9.9.9\n", encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run")
+        real = boost("bundle", "install", bf)
+        assert "2 differ from the Boostfile" in real.out
+        assert dry.out.replace("would install", "Installed") == real.out
+
+    # -- install: where it looked, and when there was nothing to read ------
+
+    def test_a_missing_default_boostfile_names_where_it_looked(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        from pathlib import Path
+        monkeypatch.chdir(tmp_path)
+        r = boost("bundle", "install", expect=1)
+        assert ("no Boostfile at %s\n" % paths.tilde(Path.cwd() / "Boostfile")
+                in r.err)
+
+    def test_a_dot_slash_path_keeps_its_directory(self, boost, sandbox,
+                                                  tmp_path, monkeypatch):
+        from pathlib import Path
+        monkeypatch.chdir(tmp_path)
+        r = boost("bundle", "install", "./nosuch/Boostfile", expect=1)
+        want = paths.tilde(Path.cwd() / "nosuch" / "Boostfile")
+        assert "no Boostfile at %s\n" % want in r.err
+
+    def test_an_empty_stdin_says_there_was_nothing_to_apply(self, boost, tapped,
+                                                            monkeypatch):
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
+        r = boost("bundle", "install", "-")
+        assert "nothing to apply: stdin has no tap or skill lines" in r.out
+        assert "Installed 0 skills" in r.out
+
+    def test_a_comment_only_file_says_so_in_both_modes(self, boost, tapped,
+                                                       tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("# just a comment\n\n", encoding="utf-8")
+        for extra in ((), ("--dry-run",)):
+            r = boost("bundle", "install", bf, *extra)
+            assert "nothing to apply:" in r.out, extra
+            assert "has no tap or skill lines" in _flat(r.out), extra
+
+    def test_a_file_with_directives_is_not_nothing_to_apply(self, boost,
+                                                            installed, tmp_path):
+        bf = tmp_path / "Boostfile"
+        boost("bundle", "dump", bf)
+        for extra in ((), ("--dry-run",)):
+            r = boost("bundle", "install", bf, *extra)
+            assert "nothing to apply" not in r.out, extra
+            assert "1 already present" in r.out, extra
+
+    # -- --dry-run says what the real run will -----------------------------
+
+    def test_dry_run_misses_a_skill_its_present_tap_lacks(self, boost, tapped,
+                                                          tmp_path):
+        # A pending `tap` line elsewhere in the file used to make every miss
+        # "cannot resolve yet" — exit 0 — where the real run fails with exit 1.
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap other https://example.invalid/other\n"
+                      "skill fixture-tap:ghost\n", encoding="utf-8")
+        r = boost("bundle", "install", bf, "--dry-run", expect=1)
+        assert "ghost not found in tap fixture-tap — skipped" in r.out
+        assert "cannot resolve yet" not in r.out
+        assert "would install 0 skills, add 1 tap, 1 would fail" in r.out
+
+    def test_dry_run_defers_only_what_a_pending_tap_could_supply(
+            self, boost, tapped, tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap acme/other https://example.invalid/other\n"
+                      "skill other:thing\n"      # the pending tap, by its tail
+                      "skill acme/other:thing2\n"  # ...and by its full name
+                      "skill thing3\n",          # unqualified: could be there
+                      encoding="utf-8")
+        r = boost("bundle", "install", bf, "--dry-run")
+        assert r.out.count("cannot resolve yet") == 3
+        assert ("would install 0 skills, add 1 tap, 3 unresolved until tapped"
+                in r.out)
+
+    def test_dry_run_remembers_what_it_would_install(self, boost, tapped,
+                                                     tmp_path):
+        # A later line naming the same item meets it as the real run would:
+        # present when it matches, drift when it pins another version.
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill fixture-tap:commit-messages\n"
+                      "skill fixture-tap:commit-messages@1.0.2\n"
+                      "skill fixture-tap:commit-messages@9.9.9\n",
+                      encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run")
+        assert ("would install 1 skill, 1 already present, 1 differs from "
+                "the Boostfile") in dry.out
+        real = boost("bundle", "install", bf)
+        assert ("Installed 1 skill, 1 already present, 1 differs from the "
+                "Boostfile") in real.out
+
+    def test_dry_run_version_mismatch_does_not_claim_to_install(
+            self, boost, tapped, tmp_path):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill fixture-tap:brainstorming@9.9.9\n", encoding="utf-8")
+        r = boost("bundle", "install", bf, "--dry-run")
+        assert ("brainstorming: Boostfile wants @9.9.9, tap has 1.4.0 — would "
+                "install that") in _flat(r.out)
+        assert "installing that" not in r.out
+        # the same kind-aware noun the real summary uses
+        assert "would install 1 skill" in r.out
+        assert "brainstorming" not in lockfile.installed()
+
+
 # ── edge coverage: import ───────────────────────────────────────────────
 
 class TestImportEdges:

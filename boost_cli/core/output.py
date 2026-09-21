@@ -243,11 +243,17 @@ def warn(msg: str, stream=None, wrap: bool = False) -> None:
     long line is prose: `pulse`'s `source=` paths and `fingerprint`'s hash are
     data, and folding those destroys the information the line exists to carry.
     Prose hints pass it; data lines do not.
+
+    Colour is decided by the stream the line is written to, not by stdout:
+    `boost bundle dump > Boostfile` sends its notice to a terminal while
+    stdout is a file, and `2>log` sends it to a file while stdout is a
+    terminal. Asking stdout left the first plain and wrote escape codes into
+    the second.
     """
     body = _wrap_lines(msg, 4) if wrap else [msg]
     for i, line in enumerate(body):
-        lead = "  " + role("!", "warn") + " " if i == 0 else "    "
-        print(lead + role(line, "warn"), file=stream)
+        lead = "  " + role("!", "warn", stream=stream) + " " if i == 0 else "    "
+        print(lead + role(line, "warn", stream=stream), file=stream)
 
 
 def err(msg: str, hint: str | None = None) -> None:
