@@ -10,7 +10,7 @@ wow: 2
 note: without [rag] quickstart taps unpinned at HEAD, and a rerun can never pin them
 order: 285
 owner: loop/quickstart-audit
-pr:
+pr: 935
 title: "boost quickstart: CLI audit findings (2026-08)"
 ---
 <b>Without the <code>[rag]</code> extra, quickstart taps unpinned at HEAD &mdash; and the rerun it promises cannot fix it.</b> <code>cmd_quickstart</code> only fetches the manifest (the source of pins) when <code>want_vectors</code> is true (<code>boost_cli/commands/quickstart.py:145-152</code>), so on a machine without a dense backend the six new taps land with <code>pin: null</code> while the output ends <em>&ldquo;&hellip;install the extra&hellip;, then <code>boost quickstart</code> again&rdquo;</em>. The second run prints <code>&lt;tap&gt; already tapped</code> for all seven (<code>registry.add_many</code> skips existing taps, never re-pins), and once the extra is present <code>shards.sync</code> refuses every mismatched commit: <code>refused (tap is at X, shard is for Y)</code>. That contradicts the module's own docstring &mdash; &ldquo;Pinning is the whole point&rdquo;. Fix: fetch the manifest and pin regardless of <code>dense.have_backend()</code> (pinning is a network-and-config operation, not an embedding one), and on rerun retarget already-tapped registries via <code>shards.ingest</code> instead of skipping them. Update README.md (quickstart section, ~line 145) and docs/semantic-search.md (~line 63).
