@@ -146,25 +146,41 @@ def expand_query(question: str, history: Sequence[Turn]) -> str:
 
 
 # Phrases that point back at the list the previous answer showed. Deliberately
-# narrow: "those flaky tests" is a new subject, "those skills" is a reference.
+# narrow, because a false match replaces a correct search with a stale list:
+# "those flaky tests" is a new subject, "those skills" is a reference; "which
+# one is best for linting?" asks the catalogue, "which one of these" asks the
+# list; "the other SKILL.md field" is a new subject, "from the others" is not.
 _REFERS = re.compile(
-    r"\b(?:(?:of|between|among|from|compare)\s+(?:these|those|them|both|the\s+others?)"
-    r"|the\s+others?"
+    r"\b(?:(?:of|between|among|from|compare)\s+(?:these|those|them|both)"
+    r"|(?:of|between|among|from|than|to|about|vs\.?|versus|compared?)\s+the\s+others"
     r"|(?:these|those)\s+(?:ones?|skills?|options?|results?|matches)"
-    r"|(?:which|that|this)\s+one)\b", re.IGNORECASE)
+    r"|(?:that|this)\s+one)\b", re.IGNORECASE)
 
-# "the second one", "#3", "number 2" — one row of the previous list.
+# "the second one", "the 2nd skill?" — one row of the previous list. The
+# ordinal needs a pointer in front ("the", "that", "this", or nothing but the
+# ordinal in the whole question): "my first skill" is a new subject. With a
+# noun rather than "one" it must also end the clause, because "the last skill I
+# should install for linting" is a new question that happens to say "the last".
 _ORDINAL = re.compile(
-    r"\b(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)\s+"
-    r"(?:one|skill|option|result|match)\b|#\s*(\d+)\b|\bnumber\s+(\d+)\b",
+    r"(?:\b(?:the|that|this)\s+|^\W*(?:and\s+)?)"
+    r"(?P<word>first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)\s+"
+    r"(?:one\b|(?:skill|option|result|match)\b(?=\s*(?:[?.!,;]|$)))",
     re.IGNORECASE)
+
+# "#3", "number 2" — only where a row number can stand: the whole question, or
+# after a word that takes one ("about #3", "is number 1 any good"). After any
+# other word it numbers something else: "how do I review PR #2?".
+_ROW_NUMBER = re.compile(
+    r"(?:^\W*|\b(?:about|and|is|try|install|use|pick|choose|vs|or|than|with)\s+)"
+    r"(?:#\s*|number\s+)(?P<n>\d+)\b", re.IGNORECASE)
 _ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
              "1st": 1, "2nd": 2, "3rd": 3, "4th": 4, "5th": 5}
 
 
 def is_referential(question: str) -> bool:
     """Whether ``question`` points back at the previous answer's list."""
-    return bool(_REFERS.search(question) or _ORDINAL.search(question))
+    return bool(_REFERS.search(question) or _ORDINAL.search(question)
+                or _ROW_NUMBER.search(question))
 
 
 def referenced(question: str, previous: Sequence[dict]) -> list[dict] | None:
@@ -172,25 +188,27 @@ def referenced(question: str, previous: Sequence[dict]) -> list[dict] | None:
 
     An ordinal narrows to its one row, numbered as the answer numbered it. A
     word ordinal past the end still refers to the list, so it gets the whole
-    list. A number past the end does not: "how do I review PR #42?" names a
-    pull request, not a row, and gets an ordinary search.
+    list. A number past the end does not: "what about #42?" is not a row of
+    five, and gets an ordinary search.
     """
     if not previous or not is_referential(question):
         return None
-    m = _ORDINAL.search(question)
-    if m:
-        word, *digits = m.groups()
-        if not word:
-            n = int(next(d for d in digits if d))
-        elif word.lower() == "last":
-            n = len(previous)
-        else:
-            n = _ORDINALS[word.lower()]
-        if 1 <= n <= len(previous):
-            return [previous[n - 1]]
-        if not word and not _REFERS.search(question):
-            return None
-    return list(previous)
+    word = _ORDINAL.search(question)
+    number = _ROW_NUMBER.search(question)
+    if word:
+        w = word.group("word").lower()
+        n = len(previous) if w == "last" else _ORDINALS[w]
+    elif number:
+        n = int(number.group("n"))
+    else:
+        return list(previous)
+    if 1 <= n <= len(previous):
+        return [previous[n - 1]]
+    # Past the end, a word ordinal still points at the list; a number numbers
+    # something else unless the question also points back.
+    if word or _REFERS.search(question):
+        return list(previous)
+    return None
 
 
 def _name(entry: dict) -> str:
@@ -248,12 +266,16 @@ def retrieve(question: str, history: Sequence[Turn] = (),
     "the second one") is answered from that answer's skills without searching
     at all: the audit measured "which of these should I install first?" coming
     back with nothing from the turn before. A skill the question names by name
-    is ranked first either way.
+    is ranked first either way, and on both paths it may come from the
+    catalogue: "is pre-commit better than those skills?" points at the list
+    and names a skill the list never showed, and an answer about it is only
+    grounded if it is among the sources.
     """
     previous = list(history[-1].skills) if history else []
     carried = referenced(question, previous)
     if carried is not None:
-        return promote_named(question, carried, previous)[:k], "previous answer"
+        return (promote_named(question, carried, previous, catalog.all_entries())[:k],
+                "previous answer")
     query = expand_query(question, history)
     entries = catalog.all_entries()
     hits, engine = rag.retrieve_any(query, k=k, entries=entries)

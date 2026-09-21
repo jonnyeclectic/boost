@@ -43,21 +43,27 @@ only. Add <code>-k</code> as an alias of <code>--limit</code> to <code>cmd_searc
 <code>docs/commands.html</code> and update <code>docs/chat.html</code>. Found by the 2026-08 CLI
 audit (cluster <code>search-k-alias</code>); repro in the audit log.
 
-<br><br><b>Shipped.</b> Measured on a 15-skill sandbox catalogue (the fixture tap plus a synthetic
-tap carrying the audit's names), with <code>BOOST_NO_AI=1</code> and stdin piped. Turn 3,
-<em>"which of these should I install first?"</em>, used to share 1 of 5 skills with the turn
-before; it now answers from that turn's list, 5 of 5, sourced as <code>previous answer</code>, and
-<em>"what about the second one?"</em> answers with that one row. A number past the end of the
-list (<em>"how do I review PR #42?"</em>) is a normal search, not a row. A follow-up that points back
-(<em>"of these"</em>, <em>"the others"</em>, <em>"that one"</em>, <em>"#2"</em>) is answered from
-the skills the previous answer showed, so the seven-word gate no longer matters for it. A skill the
+<br><br><b>Shipped.</b> Measured on a sandbox catalogue (the fixture tap plus a synthetic
+tap carrying the audit's names), with <code>BOOST_NO_AI=1</code> and stdin piped. After
+<em>"how do I review a diff?"</em>, <em>"which of these should I install first?"</em> used to share
+1 of 5 skills with the turn before; it now answers from that turn's list, 5 of 5, sourced as
+<code>previous answer</code>, and <em>"what about the second one?"</em> answers with that one row.
+Only a pointer counts: <em>"of these"</em>, <em>"from the others"</em>, <em>"that one"</em>,
+<em>"those skills"</em>, <em>"the second one"</em>, <em>"about #2"</em>. A new question that merely
+uses one of those words is searched as before, and returns what main returns:
+<em>"how do I create my first skill?"</em>, <em>"which one is best for setting up pre-commit hooks
+for linting?"</em>, <em>"how do I scaffold the other SKILL.md frontmatter?"</em>, <em>"what's the
+last skill I should install for linting"</em>, <em>"how do I review PR #2?"</em>. A skill the
 question names is ranked first, taken from the rows the user was just shown, then the ranked hits,
-then the catalogue. A one-word name only counts when the previous answer showed it. Without AI,
-chat now suggests only <em>"what does X actually do?"</em>, the one follow-up the plain list of
-matches can answer. One claim did not reproduce: on this catalogue <code>orch-review</code> was
-already first for <em>"what does orch-review actually do?"</em>, so the ordering the audit saw
-depends on the real catalogue; exact-name ranking is pinned by a unit test that puts the named
-skill third.
+then the catalogue, on both paths: <em>"is pre-commit better than those skills?"</em> keeps the
+previous list and puts <code>pre-commit</code> first, so an AI answer about it is grounded. A
+one-word name only counts when the previous answer showed it. Without AI, chat now suggests only
+<em>"what does X actually do?"</em>, the one follow-up the plain list of matches can answer. The
+audit's ordering for that question (<code>orch-refine-code</code> above <code>orch-review</code>)
+depends on the catalogue: it reproduces where a sibling's description repeats the question's
+terms (<code>orch-refine-code</code>: <em>"what does the reviewer actually want changed"</em>).
+There main ranks <code>orch-refine-code</code> first and this change ranks <code>orch-review</code>
+first.
 
 Piped stdin now gets no <code>"&gt; "</code> prompt and no typing hint (4 prompt lines in stdout
 before, 0 after, and <code>chat &lt; /dev/null</code> no longer ends <code>"\n&gt; \n"</code>),

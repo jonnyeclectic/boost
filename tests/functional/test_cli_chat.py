@@ -145,14 +145,15 @@ def _session(boost, monkeypatch, *lines, tty=False, args=()):
 
 
 def _source_blocks(out):
-    """Each answer's cited names, in order — one list per answered question."""
-    blocks = []
+    """Each answer's ``(engine, cited names)``, in order — one per answered question."""
+    blocks: list[tuple[str, list[str]]] = []
     for line in out.splitlines():
-        if "sources · ranked by" in line:
-            blocks.append([])
+        ranked = re.search(r"sources · ranked by (.+)", line)
+        if ranked:
+            blocks.append((ranked.group(1).strip(), []))
         m = re.match(r"\s+\d+\. (\S+)  ", line)
         if m and blocks:
-            blocks[-1].append(m.group(1))
+            blocks[-1][1].append(m.group(1))
     return blocks
 
 
@@ -184,8 +185,27 @@ class TestSessionFollowUps:
             self, boost, tapped, monkeypatch):
         r = _session(boost, monkeypatch, "how do I write commit messages?",
                      "which of these should I install first?", args=("-k", "2"))
-        first, second = _source_blocks(r.out)
+        (_, first), (engine, second) = _source_blocks(r.out)
         assert first and second == first
+        # The label is what tells the wiring apart from a re-query that happens
+        # to return the same rows on a small catalogue.
+        assert engine == "previous answer", "the session did not keep the turn's skills"
+
+    def test_an_ordinal_answers_with_that_row_of_the_previous_turn(
+            self, boost, tapped, monkeypatch):
+        r = _session(boost, monkeypatch, "how do I write commit messages?",
+                     "what about the second one?")
+        (_, first), (engine, second) = _source_blocks(r.out)
+        assert len(first) >= 2
+        assert (engine, second) == ("previous answer", [first[1]])
+
+    def test_a_new_subject_is_searched_not_carried(self, boost, tapped, monkeypatch):
+        # "which one" with no pointer asks the catalogue, not the last list.
+        r = _session(boost, monkeypatch, "how do I write commit messages?",
+                     "which one is best for test-driven development?")
+        _, (engine, second) = _source_blocks(r.out)
+        assert engine != "previous answer"
+        assert second and second[0] == "tdd-workflow"
 
     def test_without_ai_it_only_suggests_what_it_can_answer(
             self, boost, tapped, monkeypatch):

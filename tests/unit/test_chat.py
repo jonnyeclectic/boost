@@ -527,20 +527,44 @@ class TestReferentialFollowUps:
         chat.retrieve("and for python?", [_turn()])
         assert ranker == ["how do I review a diff? and for python?"]
 
+    # New subjects that happen to use a pointer word. A plain search answered
+    # each correctly, and the previous list took each over while the detector
+    # matched an ordinal with no pointer ("my first skill") or with a clause
+    # after it ("the last skill I should install"), a bare "the other(s)",
+    # "which one" anywhere, and any "#N" in range.
+    NEW_SUBJECTS = (
+        "how do I create my first skill?",
+        "should I add a second skill for linting?",
+        "which one is best for setting up pre-commit hooks for linting?",
+        "which one handles pdfs?",
+        "how do I scaffold the other SKILL.md frontmatter?",
+        "what's the last skill I should install for linting",
+        "how do I review PR #2?",
+        "how do I fix issue number 2",
+    )
+
     @pytest.mark.parametrize("question", [
         "how do I fix those flaky tests in CI?",
         "which skill writes commit messages?",
         "install it first",
+        *NEW_SUBJECTS,
     ])
     def test_ordinary_questions_are_not_referential(self, question):
         assert not chat.is_referential(question)
+
+    @pytest.mark.parametrize("question", NEW_SUBJECTS)
+    def test_a_new_subject_is_searched_not_carried(self, ranker, question):
+        entries, engine = chat.retrieve(question, [_turn()])
+        assert engine == "BM25 full-content", "answered from the previous list"
+        assert _names(entries) == _names(UNRELATED)
+        assert len(ranker) == 1
 
     @pytest.mark.parametrize("question", [
         "which of these should I install first?",
         "how is it different from the others?",
         "what about the others?",
         "compare them",
-        "which one handles pdfs?",
+        "which one of these handles pdfs?",
         "any of those skills free?",
         "what about the second one?",
         "#2",
@@ -560,6 +584,21 @@ class TestReferentialFollowUps:
 
 class TestExactNameRanksFirst:
     """Asking about a skill by name puts that skill first."""
+
+    def test_a_named_skill_the_previous_answer_never_showed_joins_it(self, ranker):
+        # Points at the list and names a skill outside it. Without the
+        # catalogue the named skill is unreachable, and an AI answer about it
+        # is then rejected as naming something outside the sources.
+        entries, engine = chat.retrieve("is mercury-mcp better than those skills?",
+                                        [_turn()])
+        assert engine == "previous answer"
+        assert ranker == [], "re-queried the catalogue for a referential follow-up"
+        assert _names(entries) == ["mercury-mcp", *_names(SHOWN)]
+
+    def test_an_ordinal_row_keeps_a_skill_the_question_names(self, ranker):
+        entries, _ = chat.retrieve("is the second one better than write-concisely?",
+                                   [_turn()])
+        assert _names(entries) == ["write-concisely", "code-reviewer"]
 
     def test_a_named_hit_moves_to_the_top(self, ranker, monkeypatch):
         monkeypatch.setattr(chat.rag, "retrieve_any", lambda q, k=60, entries=None, **kw: (
