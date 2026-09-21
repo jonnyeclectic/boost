@@ -64,8 +64,9 @@ corpus: `scripts/ensure_eval_corpus.sh` first taps the pinned repo list in
 **twenty** repos: the first six cover every golden target, the rest exist so the
 corpus is a realistic size. That matters more than it sounds — over the six
 alone (743 entries) BM25 scores 0.978 / 0.791 / 0.854 / 0.882, and over the
-twenty (10,152) it scores **0.852 / 0.473 / 0.605 / 0.657** on the same golden
-set, so three of the four old floors fail once the corpus stops being tiny.
+twenty (10,731) it scores **0.841 / 0.484 / 0.607 / 0.655** on the same golden
+set (what `tests/eval/baseline.json` records), so three of the four old floors
+fail once the corpus stops being tiny.
 
 **The ranked list de-duplicates on the content hash, not the name.** A grade key
 decides both relevance and identity, and keying identity on the name collapsed
@@ -81,8 +82,8 @@ can't flake the build, tight enough to catch a collapse. Regression-vs-baseline
 stays relaxed (`--regression-eps 1`), so the absolute floors are the real gate.
 
 **Every row of `taps.txt` pins a commit SHA**, and `scripts/eval_corpus.py`
-checks each clone out at it — the corpus is 10,152 entries, of which one
-third-party repo is 6,309 (62%), so an unpinned list left a required check
+checks each clone out at it — the corpus is 10,731 entries, of which one
+third-party repo is 6,634 (62%), so an unpinned list left a required check
 hostage to someone else's push. CI and `make eval` must invoke the gate with
 identical arguments, not just identical floors — `-k` decides what two of them
 measure; `tests/unit/test_eval_corpus.py` parses both calls and fails the build
