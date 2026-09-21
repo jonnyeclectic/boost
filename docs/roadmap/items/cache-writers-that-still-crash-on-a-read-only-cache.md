@@ -10,7 +10,7 @@ wow: 2
 note: "fixed: refresh_names replaces _names.txt through atomic_write_text and warns once when it cannot write at all (heal/update/untap/tap 70 → 0 on a 444 file); reindex in a 500 cache dir prints one error naming the dir and `chmod u+w ~/.boost/cache` (70 → 1)"
 order: 328
 owner: loop/cache-writers
-pr:
+pr: 919
 title: Two cache writers still crash on what one <code>sudo boost</code> leaves behind. A read-only <code>_names.txt</code> fails <code>heal</code>, <code>update</code> and <code>untap</code> at exit 70 while <code>doctor</code> says healthy.
 ---
 <b>Measured</b> on <code>a316c6b</code>, a sandbox HOME with one fixture tap and <code>brainstorming</code> installed. The same results on <code>16de514</code> show this predates #889.
