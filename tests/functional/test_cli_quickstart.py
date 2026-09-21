@@ -7,9 +7,11 @@ failure modes are expensive rather than loud:
 
 * quickstart must never start a multi-hour local embed on a user's behalf. It
   reports the taps with no published shard and leaves them alone.
-* neither command may reach the network as a side effect of being asked what it
-  would do. `--dry-run` taps nothing, and a machine with no embedding backend
-  never fetches a manifest it could not use.
+* neither command may change anything as a side effect of being asked what it
+  would do. `--dry-run` taps nothing, and `--no-vectors` never fetches a
+  manifest. Without the `[rag]` extra the manifest is still read, for its
+  pins: the run ends by promising that installing the extra and rerunning
+  brings the vectors, and a tap left at HEAD would make that a lie.
 
 Every test here runs against the sandbox HOME and a manifest served from a
 `file:` URL, so nothing in the suite depends on a release existing.
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 import pytest
 
@@ -134,17 +137,80 @@ class TestQuickstartCatalog:
 
 
 class TestQuickstartWithoutTheExtra:
-    """The default install: no `rag` extra, so no vectors and no fetch."""
+    """The default install: no `rag` extra, so no vectors — but still pins."""
 
-    def test_it_does_not_fetch_a_manifest_it_could_not_use(self, boost,
-                                                           monkeypatch):
-        # Pointed at a URL that would fail loudly if it were opened.
+    def test_an_unreadable_manifest_still_taps(self, boost, monkeypatch):
+        # Pointed at a URL that fails: the pins are lost, the taps are not.
         monkeypatch.setenv("BOOST_SHARD_MANIFEST",
                            "https://127.0.0.1:1/manifest.json")
         from boost_cli.core import dense
         monkeypatch.setattr(dense, "have_backend", lambda: False)
         res = boost("quickstart", "--dry-run")
         assert "would tap" in res.out
+        assert " @ " not in res.out
+
+    def test_the_taps_are_pinned_without_the_extra(
+            self, boost, defaults_manifest, monkeypatch):
+        """The six taps landed `pin: null`, and the rerun could not fix it.
+
+        `add_many` skips a configured tap, so the second run printed "already
+        tapped" seven times, and `sync` then refused every shard built for a
+        commit the tap had moved past.
+        """
+        from boost_cli.core import config, dense, shards
+        monkeypatch.setattr(dense, "have_backend", lambda: False)
+        calls = _fake_add_many(monkeypatch, ["ok"] * 7)
+        synced: list = []
+        monkeypatch.setattr(shards, "sync",
+                            lambda *a, **k: synced.append(a) or [])
+        res = boost("quickstart")
+        assert calls["pins"] == {str(d["name"]): "1" * 40
+                                 for d in config.DEFAULT_TAPS}
+        assert "@ 1111111" in res.out
+        # Pinned, not imported: no vectors can load without the extra.
+        assert synced == []
+        assert "then `boost quickstart` again" in _flat(res.out)
+
+    def test_the_dry_run_shows_the_pins_the_live_run_uses(
+            self, boost, defaults_manifest, monkeypatch):
+        from boost_cli.core import config, dense
+        monkeypatch.setattr(dense, "have_backend", lambda: False)
+        out = boost("quickstart", "--dry-run").out
+        for d in config.DEFAULT_TAPS:
+            assert "would tap %s @ 1111111" % d["name"] in out
+        assert "import 0 shard(s)" in out
+
+    @pytest.mark.parametrize("dry", [True, False])
+    def test_no_vectors_reads_no_manifest_and_pins_nothing(
+            self, boost, defaults_manifest, monkeypatch, dry):
+        # The opt-out: taps that track HEAD, so `boost update` moves them.
+        from boost_cli.core import dense, shards
+        monkeypatch.setattr(dense, "have_backend", lambda: False)
+        calls = _fake_add_many(monkeypatch, ["ok"] * 7)
+        fetched: list = []
+        monkeypatch.setattr(shards, "fetch_manifest",
+                            lambda *a, **k: fetched.append(a) or {})
+        res = boost("quickstart", "--no-vectors", *(["--dry-run"] if dry
+                                                     else []))
+        assert fetched == []
+        assert " @ " not in res.out
+        if not dry:
+            assert calls["pins"] == {}
+
+    def test_both_lines_print_the_command_doctor_prints(
+            self, boost, monkeypatch):
+        # quickstart hard-coded a pipx line while doctor and search read
+        # `dense.fix_hint`: two answers to one question.
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "have_backend", lambda: False)
+        _fake_add_many(monkeypatch, ["ok"] * 7)
+        cmd = re.search(r"`[^`]*\[rag\][^`]*`",
+                        dense.fix_hint("no-backend")).group(0)
+        dry = _flat(boost("quickstart", "--dry-run").out)
+        live = _flat(boost("quickstart").out)
+        assert cmd in dry and cmd in live
+        assert (dry.count("boost-skill-cli[rag]")
+                == live.count("boost-skill-cli[rag]") == 1)
 
     def test_zero_shards_says_why_it_is_zero(self, boost, monkeypatch):
         """"import 0 shard(s)" reads as "none are published".
@@ -172,6 +238,48 @@ class TestQuickstartWithoutTheExtra:
         assert "--no-vectors was asked for" in out
         # It must not blame the missing extra for a flag the user passed.
         assert "boost-skill-cli[rag]" not in out
+
+
+class TestATapThatMovedPastItsVectors:
+    """The rerun after installing the extra, on a tap no longer at its shard.
+
+    A registry first tapped before quickstart pinned anything sits at HEAD,
+    and any tap falls behind once a weekly republish moves the manifest.
+    `sync` refuses those shards, and the only remedy named was hours of local
+    embedding, while `update --shards` moves the tap and downloads them.
+    """
+
+    @pytest.fixture()
+    def space_matches(self, monkeypatch):
+        from boost_cli.core import shards
+        monkeypatch.setattr(shards, "incompatible", lambda _m: None)
+
+    def test_the_refusal_is_marked_as_a_commit_that_moved(
+            self, manifest, space_matches):
+        from boost_cli.core import shards
+        rows = shards.sync(["a/b"], {"a/b": "2" * 40},
+                           manifest=shards.fetch_manifest())
+        assert rows[0]["status"] == "refused"
+        assert rows[0]["commit_moved"] is True
+
+    def test_the_report_names_update_shards(self, manifest, space_matches,
+                                            capsys):
+        from boost_cli.commands import quickstart
+        from boost_cli.core import shards
+        quickstart._report(shards.sync(["a/b"], {"a/b": "2" * 40},
+                                       manifest=shards.fetch_manifest()))
+        out = capsys.readouterr().out
+        assert "a/b: shard refused (tap is at 2222222" in out
+        assert "moved past their vectors: `boost update --shards`" in out
+
+    def test_other_refusals_do_not_send_the_user_to_move_taps(self, capsys):
+        # A refused space or an import that said no is not fixed by moving.
+        from boost_cli.commands import quickstart
+        quickstart._report([{"tap": "a/b", "status": "refused",
+                             "detail": "provider mismatch"},
+                            {"tap": "c/d", "status": "failed",
+                             "detail": "sha256 mismatch"}])
+        assert "update --shards" not in capsys.readouterr().out
 
 
 def _flat(text: str) -> str:

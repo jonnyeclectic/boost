@@ -2,14 +2,14 @@
 id: audit-quickstart-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: without [rag] quickstart taps unpinned at HEAD, and a rerun can never pin them
 order: 285
-owner:
+owner: loop/quickstart-audit
 pr:
 title: "boost quickstart: CLI audit findings (2026-08)"
 ---

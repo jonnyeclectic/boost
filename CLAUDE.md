@@ -301,7 +301,7 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   information the line exists to carry, and a hash split across two lines
   cannot be compared by eye. **A backtick span is one atomic token**, spaces
   and all — `doctor` and `search` both interpolate `dense.fix_hint()`, whose
-  answers end in `pip install 'boost-skill-cli[rag]'`, and a wrap that splits
+  answers end in `pip install "boost-skill-cli[rag]"`, and a wrap that splits
   that hands the user a command which does not run. A token wider than the pane
   overflows whole rather than breaking. Wrap *before* adding color: `out.role`
   brackets its argument with a start code and a reset, so coloring first and

@@ -144,6 +144,13 @@ def _report(results: list[dict]) -> None:
             out.info(out.role("%s: %s%s" % (r["tap"], label,
                                             " (%s)" % detail if detail else ""),
                               "muted"))
+    if any(r.get("commit_moved") for r in results):
+        # A tap that moved past its vectors has a cheaper fix than embedding:
+        # the manifest names the commit they describe, and `update --shards`
+        # moves the tap there. A registry first tapped before quickstart
+        # pinned anything lands here, and so does any tap once a week's
+        # republish moves the manifest past it.
+        out.info("taps that moved past their vectors: `boost update --shards`")
     left = [r["tap"] for r in results
             if r["status"] not in ("imported", "current")]
     if left:
@@ -193,10 +200,17 @@ def cmd_quickstart(argv) -> int:
     manifest = None
     pins: dict[str, dict] = {}
     want_vectors = not args.no_vectors and dense.have_backend()
-    if want_vectors:
-        # Fetched first because it decides how the taps are pinned. A failure
-        # here is not fatal: keyword search is the documented default and works
-        # without a single vector.
+    # Fetched first because it decides how the taps are pinned — and fetched
+    # without the extra too. Pinning is config, not embedding, and the line a
+    # machine without the extra ends on promises that installing it and
+    # rerunning brings the vectors. A rerun cannot keep that promise alone:
+    # `add_many` skips a tap already configured, so a registry first tapped at
+    # HEAD stays at HEAD, and `sync` refuses every shard built for a commit it
+    # is not at. Only `--no-vectors` opts out, and it leaves the taps
+    # unpinned, so `boost update` keeps moving them. A failure here is not
+    # fatal: keyword search is the documented default and works without a
+    # single vector.
+    if not args.no_vectors:
         try:
             with spin.Spinner("reading the shard manifest"):
                 manifest = shards.fetch_manifest()
@@ -219,7 +233,10 @@ def cmd_quickstart(argv) -> int:
     # live run used to learn it only inside `shards.sync`, whose seven
     # `incompatible` rows it then rendered none of — while the dry run, which
     # never asked, promised every published shard.
-    usable = manifest is not None and outcome.judge_vectors(manifest)
+    # Only with the extra: without it the manifest was read for its pins, and
+    # the missing extra is the reason no vector loads, said in its own words.
+    usable = (want_vectors and manifest is not None
+              and outcome.judge_vectors(manifest))
     if args.dry_run:
         planned = [n for n in names if n in pins] if usable else []
         out.info("would build the keyword index, then import %d shard(s)"
@@ -233,10 +250,9 @@ def cmd_quickstart(argv) -> int:
                 out.info(out.role("(0 because --no-vectors was asked for)",
                                   "muted"))
             elif not dense.have_backend():
-                out.info("0 because semantic search needs the extra: "
-                         "`pipx inject boost-skill-cli "
-                         "\"boost-skill-cli[rag]\"` — keyword search works "
-                         "without it", wrap=True)
+                out.info("0 because semantic search needs the extra: `%s` — "
+                         "keyword search works without it"
+                         % dense.install_extra(), wrap=True)
             elif manifest is None:
                 _muted("(0 because the shard manifest could not be read — "
                        "keyword search is unaffected)")
@@ -275,9 +291,8 @@ def cmd_quickstart(argv) -> int:
     elif args.no_vectors:
         out.info(out.role("skipped vectors as asked", "muted"))
     elif not dense.have_backend():
-        out.info("semantic search needs the extra: "
-                 "`pipx inject boost-skill-cli \"boost-skill-cli[rag]\"`, "
-                 "then `boost quickstart` again")
+        out.info("semantic search needs the extra: `%s`, then `boost "
+                 "quickstart` again" % dense.install_extra(), wrap=True)
     elif want_vectors:
         # The whole vector step was skipped, and the only word about it was a
         # warning many screens back. Without this the run ends "✓ ready" as

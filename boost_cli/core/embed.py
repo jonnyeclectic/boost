@@ -218,8 +218,12 @@ def fallback_note() -> str:
     """
     if not enabled():
         return "dense search is off (BOOST_NO_EMBED) — using the BM25 engine"
-    return ("dense search needs the `[rag]` extra — `pip install "
-            "boost-skill-cli[rag]`; using the BM25 full-content engine")
+    # `dense` imports this module, so it is asked here rather than at the top.
+    # Its answer is the one doctor and search print; this line used to spell
+    # the command unquoted, which zsh rejects with "no matches found".
+    from . import dense
+    return ("dense search needs the `[rag]` extra — `%s`; using the BM25 "
+            "full-content engine" % dense.install_extra())
 
 
 def embed(texts: list[str], input_type: str | None = None,

@@ -144,7 +144,9 @@ boost quickstart                                     # downloads prebuilt vector
 
 `boost quickstart` is the fast path: it taps the starter registries **pinned to
 the commits the published vectors were built from**, then downloads and imports
-those vectors. Embedding is ~1.2 s/chunk on CPU — hours for a real corpus —
+those vectors. It pins them even before the extra is installed, so running it
+again once the extra is in place picks up the vectors; `--no-vectors` leaves the
+taps unpinned, following their branch. Embedding is ~1.2 s/chunk on CPU — hours for a real corpus —
 and importing the same rows takes 0.12 s, so the difference between the two is
 the difference between semantic search being available and being reachable.
 

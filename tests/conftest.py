@@ -136,6 +136,12 @@ def sandbox(tmp_path, monkeypatch):
     # be up to date. Same contract again: no test reaches the network as a side
     # effect of checking what a command prints.
     monkeypatch.setenv("BOOST_NO_NET", "1")
+    # `boost quickstart` reads the shard manifest for its pins whether or not
+    # the `[rag]` extra is here, so without this every quickstart test would
+    # fetch the real one from GitHub. A file that does not exist fails fast
+    # and offline; a test that means to read a manifest serves its own.
+    monkeypatch.setenv("BOOST_SHARD_MANIFEST",
+                       (tmp_path / "no-manifest.json").as_uri())
     monkeypatch.delenv("VOYAGE_API_KEY", raising=False)   # no real embed calls
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("BOOST_NO_EMBED", raising=False)

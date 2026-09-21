@@ -453,7 +453,10 @@ def sync(taps: list[str], commits: dict[str, str],
         if local and str(row.get("commit")) != local:
             # Caught here as well as in `import_shard` so the download is
             # skipped rather than paid for and then thrown away.
+            # `commit_moved` names the refusal `update --shards` can fix by
+            # moving the tap, apart from a refused space or a corrupt shard.
             results.append({"tap": tap, "status": "refused",
+                            "commit_moved": True,
                             "detail": "tap is at %s, shard is for %s"
                                       % (local[:7], str(row["commit"])[:7])})
             _emit(on_event, tap, "refused", "commit moved")
