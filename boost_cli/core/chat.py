@@ -296,9 +296,9 @@ def retrieve(question: str, history: Sequence[Turn] = (),
     with nothing from the turn before. It never *replaces* the search, though.
     The same search runs, and its results follow the carried rows, so a
     question misread as a pointer ("this one-liner", "PRs #2 and #3") loses
-    order, not the answer. That makes such a turn longer than ``k``: at most
-    ``k`` carried rows, then a skill named but never shown, then the search's
-    ``k``.
+    order, not the answer. That makes such a turn longer than ``k``: ``k``
+    carried rows (plus any the question names that fell past ``k``), then a
+    skill named but never shown, then the search's ``k``.
 
     A skill the question names is ranked first on an ordinary search, and may
     come from the catalogue: "is pre-commit better than those skills?" names a
