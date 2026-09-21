@@ -289,6 +289,19 @@ def human_size(n: int) -> str:
     return str(size)
 
 
+def head_lines(text: str, cap: int) -> tuple[list[str], int]:
+    """The first `cap` lines of `text`, and how many were left out.
+
+    A preview that silently stops is worse than a short one: `onboard
+    --dry-run` cut every file at 24 lines with no marker, so its lock preview
+    ended mid-object and read as a truncated *file* rather than a truncated
+    *view* of one. Callers print the remainder; returning the count rather than
+    a formatted ellipsis keeps the wording with the emitter that owns the pane.
+    """
+    lines = text.splitlines()
+    return lines[:cap], max(len(lines) - cap, 0)
+
+
 def _slug_or_none(name: str) -> str | None:
     return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or None
 
