@@ -12,7 +12,9 @@ keyless install gets.
 """
 from __future__ import annotations
 
+import io
 import json
+import re
 
 
 class TestChatRequiresATap:
@@ -127,3 +129,77 @@ class TestLimit:
         assert "must be >= 1" in r.err
         r = boost("chat", "-k", "-1", "skills", expect=2)
         assert "must be >= 1" in r.err
+
+
+class _FakeTtyStdin(io.StringIO):
+    """Scripted stdin that claims to be a terminal, so the prompt fires."""
+
+    def isatty(self):
+        return True
+
+
+def _session(boost, monkeypatch, *lines, tty=False, args=()):
+    text = "".join(line + "\n" for line in lines)
+    monkeypatch.setattr("sys.stdin", _FakeTtyStdin(text) if tty else io.StringIO(text))
+    return boost("chat", *args)
+
+
+def _source_blocks(out):
+    """Each answer's cited names, in order — one list per answered question."""
+    blocks = []
+    for line in out.splitlines():
+        if "sources · ranked by" in line:
+            blocks.append([])
+        m = re.match(r"\s+\d+\. (\S+)  ", line)
+        if m and blocks:
+            blocks[-1].append(m.group(1))
+    return blocks
+
+
+class TestPipedSession:
+    """A script piping questions in gets answers, not prompt chrome.
+
+    The 2026-08 audit captured three "> " lines in stdout with stdin piped.
+    """
+
+    def test_no_prompt_reaches_piped_stdout(self, boost, tapped, monkeypatch):
+        r = _session(boost, monkeypatch, "brainstorming ideas", "commit messages")
+        assert "brainstorming" in r.out, "the questions were not answered"
+        assert "> " not in r.out
+        assert "Ctrl-D" not in r.out, "typing instructions with nobody typing"
+
+    def test_empty_piped_stdin_prints_no_prompt(self, boost, tapped, monkeypatch):
+        r = _session(boost, monkeypatch)
+        assert "> " not in r.out
+        assert not r.out.endswith("\n\n"), "a blank line closing a prompt never shown"
+
+    def test_a_terminal_still_gets_the_prompt(self, boost, tapped, monkeypatch):
+        r = _session(boost, monkeypatch, "brainstorming ideas", tty=True)
+        assert r.out.count("> ") == 2, "one prompt per read, including the one hit by EOF"
+        assert "Ctrl-D to exit" in r.out
+
+
+class TestSessionFollowUps:
+    def test_which_of_these_answers_from_the_previous_turn(
+            self, boost, tapped, monkeypatch):
+        r = _session(boost, monkeypatch, "how do I write commit messages?",
+                     "which of these should I install first?", args=("-k", "2"))
+        first, second = _source_blocks(r.out)
+        assert first and second == first
+
+    def test_without_ai_it_only_suggests_what_it_can_answer(
+            self, boost, tapped, monkeypatch):
+        r = _session(boost, monkeypatch, "how do I write commit messages?")
+        tries = [l.strip() for l in r.out.splitlines() if l.strip().startswith("try:")]
+        assert tries and all("actually do?" in t for t in tries), tries
+
+    def test_with_ai_it_suggests_the_comparisons_too(self, boost, tapped, monkeypatch):
+        from boost_cli.core import ai
+        monkeypatch.setattr(ai, "available", lambda: True)
+        monkeypatch.setattr(ai, "ask", lambda *a, **kw: None)
+        r = _session(boost, monkeypatch, "how do I write commit messages?")
+        assert "different from the others?" in r.out
+
+    def test_a_blank_line_ends_the_session(self, boost, tapped, monkeypatch):
+        r = _session(boost, monkeypatch, "", "how do I write commit messages?")
+        assert "sources" not in r.out, "answered a question after the blank line"

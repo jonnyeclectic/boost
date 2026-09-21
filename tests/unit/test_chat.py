@@ -411,3 +411,228 @@ class TestLongDescriptionsAreReadable:
         line = chat._describe(entry)
         assert "\n" not in line and "\\n" not in line
         assert "first second third fourth" in line
+
+
+# The previous turn, as the session stores it: the question, the reply, and the
+# skills that reply drew on — which is what a follow-up like "which of these"
+# is pointing at.
+SHOWN: list[dict] = [
+    _entry("orch-review", "Review a diff for correctness"),
+    _entry("code-reviewer", "Reviews a diff for bugs and style"),
+    _entry("teach", "Explain a concept step by step"),
+]
+UNRELATED: list[dict] = [
+    _entry("mercury-mcp", "Install the Mercury MCP server"),
+    _entry("write-concisely", "Say what the thing actually does"),
+]
+
+
+def _turn(skills=SHOWN) -> chat.Turn:
+    return chat.Turn("how do I review a diff?", "…", skills)
+
+
+@pytest.fixture()
+def ranker(monkeypatch):
+    """Drive the real :func:`chat.retrieve` over a fixed catalogue.
+
+    Unlike ``retrieved``, this does not replace ``retrieve`` — the referential
+    and exact-name logic lives inside it, so a test that stubs it out measures
+    nothing. The engine returns ``UNRELATED`` for every query, which is what a
+    follow-up with no searchable terms of its own gets from a real ranker, and
+    records each query it was asked.
+    """
+    queries: list[str] = []
+    catalogue = SHOWN + UNRELATED
+
+    def fake_retrieve_any(query, k=60, entries=None, **kw):
+        queries.append(query)
+        return [{"entry": e} for e in UNRELATED][:k], "BM25 full-content"
+
+    monkeypatch.setattr(catalog, "all_entries", lambda: catalogue)
+    monkeypatch.setattr(chat.rag, "retrieve_any", fake_retrieve_any)
+    return queries
+
+
+def _names(entries) -> list[str]:
+    return [e["name"] for e in entries]
+
+
+class TestReferentialFollowUps:
+    """A follow-up that points back at the last answer is answered from it.
+
+    The 2026-08 audit: chat's own suggestion "which of these should I install
+    first?" re-queried the catalogue and came back with nothing from the turn
+    before — and at seven words it never even reached expand_query's gate.
+    """
+
+    def test_which_of_these_answers_from_the_previous_skills(self, ranker):
+        entries, engine = chat.retrieve("which of these should I install first?",
+                                        [_turn()])
+        assert _names(entries) == _names(SHOWN)
+        assert engine == "previous answer"
+        assert ranker == [], "re-queried the catalogue for a referential follow-up"
+
+    def test_the_others_is_referential(self, ranker):
+        entries, _ = chat.retrieve("how is code-reviewer different from the others?",
+                                   [_turn()])
+        # Same set, and the skill it names leads.
+        assert _names(entries) == ["code-reviewer", "orch-review", "teach"]
+
+    @pytest.mark.parametrize("question, name", [
+        ("what about the second one?", "code-reviewer"),
+        ("tell me about #3", "teach"),
+        ("is number 1 any good", "orch-review"),
+        ("what does the last one do?", "teach"),
+        ("and the 2nd skill?", "code-reviewer"),
+        ("the first one", "orch-review"),
+        ("the third skill", "teach"),
+        ("3rd option?", "teach"),
+        ("1st result", "orch-review"),
+    ])
+    def test_an_ordinal_picks_that_row(self, ranker, question, name):
+        entries, _ = chat.retrieve(question, [_turn()])
+        assert _names(entries) == [name]
+
+    def test_a_word_ordinal_past_the_end_keeps_the_whole_set(self, ranker):
+        entries, _ = chat.retrieve("what about the fifth one?", [_turn()])
+        assert _names(entries) == _names(SHOWN)
+        assert ranker == []
+
+    @pytest.mark.parametrize("question", [
+        "how do I review PR #42?", "what about #0?", "is number 9 any good"])
+    def test_a_number_past_the_end_is_not_a_row(self, ranker, question):
+        # "#42" is a pull request, not the 42nd of three rows.
+        entries, _ = chat.retrieve(question, [_turn()])
+        assert _names(entries) == _names(UNRELATED)
+
+    def test_a_number_past_the_end_still_honours_a_pointer(self, ranker):
+        entries, _ = chat.retrieve("which of these fixes #42?", [_turn()])
+        assert _names(entries) == _names(SHOWN)
+
+    def test_k_still_bounds_a_carried_set(self, ranker):
+        entries, _ = chat.retrieve("which of these?", [_turn()], k=2)
+        assert _names(entries) == ["orch-review", "code-reviewer"]
+
+    def test_without_history_it_is_an_ordinary_query(self, ranker):
+        entries, engine = chat.retrieve("which of these should I install first?")
+        assert _names(entries) == _names(UNRELATED)
+        assert engine == "BM25 full-content"
+
+    def test_a_previous_turn_with_no_skills_falls_back_to_retrieval(self, ranker):
+        chat.retrieve("which of these should I install first?", [_turn(())])
+        # ...and the long referential question still inherits its subject.
+        assert ranker == ["how do I review a diff? which of these should I install first?"]
+
+    def test_a_non_referential_short_followup_still_expands(self, ranker):
+        chat.retrieve("and for python?", [_turn()])
+        assert ranker == ["how do I review a diff? and for python?"]
+
+    @pytest.mark.parametrize("question", [
+        "how do I fix those flaky tests in CI?",
+        "which skill writes commit messages?",
+        "install it first",
+    ])
+    def test_ordinary_questions_are_not_referential(self, question):
+        assert not chat.is_referential(question)
+
+    @pytest.mark.parametrize("question", [
+        "which of these should I install first?",
+        "how is it different from the others?",
+        "what about the others?",
+        "compare them",
+        "which one handles pdfs?",
+        "any of those skills free?",
+        "what about the second one?",
+        "#2",
+    ])
+    def test_referential_questions_are_recognised(self, question):
+        assert chat.is_referential(question)
+
+    def test_a_long_referential_question_is_still_expanded(self):
+        history = [chat.Turn("how do I review a diff", "...")]
+        q = "which of these should I install first?"
+        assert chat.expand_query(q, history) == "how do I review a diff " + q
+
+    def test_the_session_keeps_what_each_turn_drew_on(self):
+        assert chat.Turn("q", "a").skills == ()
+        assert _turn().skills == SHOWN
+
+
+class TestExactNameRanksFirst:
+    """Asking about a skill by name puts that skill first."""
+
+    def test_a_named_hit_moves_to_the_top(self, ranker, monkeypatch):
+        monkeypatch.setattr(chat.rag, "retrieve_any", lambda q, k=60, entries=None, **kw: (
+            [{"entry": e} for e in [*UNRELATED, SHOWN[0]]], "BM25 full-content"))
+        entries, _ = chat.retrieve("what does orch-review actually do?")
+        assert _names(entries) == ["orch-review", "mercury-mcp", "write-concisely"]
+
+    def test_a_named_skill_the_ranker_missed_is_pulled_from_the_catalogue(
+            self, ranker):
+        entries, _ = chat.retrieve("what does orch-review actually do?", k=2)
+        assert _names(entries) == ["orch-review", "mercury-mcp"]
+
+    def test_a_one_word_name_counts_when_it_was_just_shown(self, ranker):
+        # Single words are only names when the user was just shown one: "teach"
+        # in an arbitrary question is English.
+        entries, _ = chat.retrieve("what does teach do?", [_turn()])
+        assert _names(entries)[0] == "teach"
+        entries, _ = chat.retrieve("what does teach do?")
+        assert "teach" not in _names(entries)
+
+    def test_the_row_the_user_saw_wins_over_a_namesake(self, ranker, monkeypatch):
+        other = _entry("orch-review", "A different tap's copy", tap="other/tap")
+        monkeypatch.setattr(chat.rag, "retrieve_any", lambda q, k=60, entries=None, **kw: (
+            [{"entry": other}] + [{"entry": e} for e in UNRELATED], "BM25 full-content"))
+        entries, _ = chat.retrieve("what does orch-review do?", [_turn()])
+        assert entries[0] is SHOWN[0]
+        assert other in entries, "the namesake was dropped rather than ranked after"
+
+    def test_an_equal_row_from_a_reloaded_catalogue_is_listed_once(self):
+        reloaded = [dict(e) for e in SHOWN]
+        ranked = chat.promote_named("what does teach do?", reloaded, previous=SHOWN)
+        assert _names(ranked) == ["teach", "orch-review", "code-reviewer"]
+
+    def test_no_name_leaves_the_ranking_alone(self):
+        assert chat.promote_named("review my diff", UNRELATED) == UNRELATED
+
+    def test_names_lead_in_the_order_the_question_gives_them(self):
+        ranked = chat.promote_named("teach vs orch-review", SHOWN, previous=SHOWN)
+        assert _names(ranked) == ["teach", "orch-review", "code-reviewer"]
+
+    def test_the_frontmatter_floor_is_promoted_too(self, ranker, monkeypatch):
+        monkeypatch.setattr(chat.rag, "retrieve_any",
+                            lambda q, k=60, entries=None, **kw: (None, "none"))
+        monkeypatch.setattr(catalog, "search",
+                            lambda q: [(e, 1.0) for e in [*UNRELATED, SHOWN[1]]])
+        entries, engine = chat.retrieve("what does code-reviewer do?")
+        assert engine == "frontmatter scan"
+        assert _names(entries)[0] == "code-reviewer"
+
+
+class TestSuggestionsAreAnswerable:
+    """Without AI, only suggest what the extractive answer can actually answer."""
+
+    def test_without_ai_only_the_lookup_question_is_offered(self):
+        assert chat.suggest_followups(SHOWN, with_ai=False) == [
+            "what does orch-review actually do?"]
+
+    def test_without_ai_no_results_suggests_nothing(self):
+        assert chat.suggest_followups([], with_ai=False) == []
+
+    def test_a_nameless_row_offers_no_lookup(self):
+        assert chat.suggest_followups([{"tap": "a/b"}], with_ai=False) == []
+        assert chat.suggest_followups([{"tap": "a/b"}], with_ai=True) == [
+            "which of these should I install first?"]
+
+    def test_with_ai_the_comparisons_are_offered(self):
+        out = chat.suggest_followups(SHOWN, with_ai=True)
+        assert "which of these should I install first?" in out
+        assert any("different from the others" in s for s in out)
+
+    def test_the_offered_question_is_answered_about_that_skill(self, ranker, no_ai):
+        # The contract that matters: chat's own suggestion, typed back in,
+        # answers about the skill it names.
+        q = chat.suggest_followups(UNRELATED, with_ai=False)[0]
+        reply = chat.answer(q, [chat.Turn("x", "y", UNRELATED[::-1])])
+        assert reply.skills[0]["name"] == UNRELATED[0]["name"]

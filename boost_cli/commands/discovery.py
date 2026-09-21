@@ -109,7 +109,7 @@ def cmd_search(argv):
                    help="rerank the top hits with Claude")
     p.add_argument("--category", default="",
                    help="only show entries whose category matches (case-insensitive)")
-    p.add_argument("--limit", type=util.positive_int, default=15,
+    p.add_argument("-k", "--limit", type=util.positive_int, default=15,
                    help="max results (default 15)")
     p.add_argument("--collapse-near-duplicates", action="store_true",
                    dest="collapse_dupes",
