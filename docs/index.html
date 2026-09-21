@@ -990,7 +990,7 @@ exec $SHELL -l</pre>
 pipx install boost-skill-cli
 <span class="tv">boost</span> --version
 
-<span class="cm"># taps the 7 starter registries and loads prebuilt vectors</span>
+<span class="cm"># taps the 7 starter registries and builds the index</span>
 <span class="tv">boost</span> <span class="tc">quickstart</span>
 <span class="tv">boost</span> <span class="tc">search</span> brainstorming
 
@@ -1128,7 +1128,7 @@ const COMMANDS = [
   ["attest","chk","Display/verify the install record for skills"],
   ["health","chk","Dashboard of skill-environment health"],
   ["trust","chk","Manage signing keys & verify tap provenance"],
-  ["quickstart","cfg","Tap the starter registries and load prebuilt vectors"],
+  ["quickstart","cfg","Tap the starter registries and index them for search"],
   ["config","cfg","Display or modify boost configuration"],
   ["clean","cfg","Clear stale caches & broken symlinks"],
   ["compact","cfg","Shrink tap clones to the files boost indexes"],
