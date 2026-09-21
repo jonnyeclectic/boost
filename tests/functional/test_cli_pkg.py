@@ -660,6 +660,34 @@ class TestUpdate:
         wf = paths.home() / ".claude" / "commands" / "ship-it.md"
         assert "go v2" in wf.read_text(encoding="utf-8")
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_upgrade_names_a_dir_that_refused_it(self, boost,
+                                                     fixture_tap_src, tmp_path):
+        # update discarded the install result for rules and workflows, so a
+        # refresh a locked dir refused printed "upgraded" and nothing else.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "locked-rule-tap")
+        _add_and_commit(tap_dir, "rules/team.mdc",
+                        "---\nname: team-rules\nversion: 1.0.0\n---\n\nv1 body\n",
+                        "add rule")
+        boost("tap", tap_dir)
+        boost("install", "team-rules")
+        _add_and_commit(tap_dir, "rules/team.mdc",
+                        "---\nname: team-rules\nversion: 1.1.0\n---\n\nv2 body\n",
+                        "bump rule")
+        rules_dir = paths.home() / ".cursor" / "rules"
+        rules_dir.chmod(0o500)
+        try:
+            r = boost("update")
+        finally:
+            rules_dir.chmod(0o700)
+        out = " ".join(r.out.split())
+        assert "upgraded rule team-rules v1.0.0 → v1.1.0" in out
+        assert ("not written: ~/.cursor/rules is not writable — "
+                "`chmod u+w ~/.cursor/rules`, then `boost sync` writes it") in out
+
 
 class TestUpdatePinnedMessaging:
     """CLAUDE.md's own words for a silent state change: "the failure that

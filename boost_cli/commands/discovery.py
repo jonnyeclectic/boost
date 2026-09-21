@@ -2017,8 +2017,9 @@ def cmd_browse(argv):
         for conflict in res.conflicts:
             out.warn("conflict: %s exists and is not a symlink" % _tilde(conflict))
         for adir in res.unwritable:
-            out.warn("not linked: %s is not writable — `chmod u+w %s`, then "
-                     "`boost sync`" % (_tilde(adir), _tilde(adir)))
+            out.warn("not %s: %s is not writable — `chmod u+w %s`, then "
+                     "`boost sync`" % ("linked" if res.kind == "skill" else "written",
+                                       _tilde(adir), _tilde(adir)))
     return 0
 
 
