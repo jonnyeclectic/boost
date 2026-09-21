@@ -122,15 +122,21 @@ dist-check:
 # 0.000 passed.
 #
 # The floors are calibrated against a TWENTY-tap corpus, not the six it used to
-# be. Over six repos BM25 scored 1.000 / 0.791 / 0.854 / 0.882; over twenty it
-# scores 0.863 / 0.473 / 0.607 / 0.662 on the same golden set. The second set is
-# what a real user sees, so flooring against the first was measuring the corpus
-# rather than the retrieval — three of the four old floors fail outright once
-# the corpus is realistic. Each floor now sits ~10% below its measured value:
-# loose enough that upstream repo drift cannot flake the build, tight enough
-# that a collapse fails it. Regression-vs-baseline stays relaxed
-# (--regression-eps 1) because the corpus tracks upstream HEAD rather than
-# pinned commits; the absolute floors are the real gate.
+# be. Over the six (921 entries) BM25 scores 0.989 / 0.769 / 0.848 / 0.880;
+# over twenty it scores 0.841 / 0.484 / 0.607 / 0.655 on the same golden set,
+# which is what tests/eval/baseline.json records at the current pins. The
+# second set is what a real user sees, so flooring against the first was
+# measuring the corpus rather than the retrieval — three of the four old floors
+# fail outright once the corpus is realistic. Each floor now sits ~10% below
+# its measured value: loose enough that a query or two cannot flake the build,
+# tight enough that a collapse fails it. Regression-vs-baseline stays relaxed
+# (--regression-eps 1); the absolute floors are the real gate. (It was relaxed
+# while the corpus tracked upstream HEAD. tests/eval/taps.txt pins a commit per
+# row now, so that is no longer the reason.)
+#
+# ci.yml and eval-corpus-refresh.yml run this same eval_retrieval.py call.
+# tests/unit/test_eval_corpus.py parses all three with the script's own parser
+# and fails the build on any difference, -k and --golden included.
 eval:
 	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
 	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_retrieval.py --build -k 10 \

@@ -229,12 +229,14 @@ jobs:
       # ANTHROPIC_API_KEY). Regression-vs-baseline stays relaxed
       # (--regression-eps 1); the absolute floors are the real gate.
       #
-      # THE FLAGS MUST MATCH `make eval` — tests/unit/test_eval_corpus.py fails
-      # the build if they drift. They had drifted: this step floored recall alone
-      # at 0.85 and claimed "measured 1.000 over the pinned corpus, wide margin",
-      # while the corpus actually scores 0.863 — a buffer of 1.15 queries out of
-      # 91. So the required check was tighter than the documented gate on one
-      # metric and absent on the other three, the ones that exist to catch a
+      # THE eval_retrieval.py CALL MUST MATCH `make eval`, flag for flag.
+      # tests/unit/test_eval_corpus.py parses both with the script's own parser
+      # and fails the build on any difference. Its first version compared the
+      # floor values alone, so a -k 5 here turned this check red (recall@k
+      # 0.841 -> 0.742 against 0.78) with that test still green. Before that
+      # the floors themselves had drifted: this step floored recall alone at
+      # 0.85, against a measured 0.863 — a buffer of 1.15 queries out of 91 —
+      # and floored nothing else, not even the metrics that exist to catch a
       # ranker that finds the answer every time and never ranks it first.
       # PYTHONPATH=. makes boost_cli importable without an editable install.
       #

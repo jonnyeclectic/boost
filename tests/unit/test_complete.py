@@ -10,11 +10,14 @@ worse than one that returns nothing.
 from __future__ import annotations
 
 import json
+import os
+import sys
+from pathlib import Path
 
 import pytest
 
 from boost_cli.cli import COMMANDS
-from boost_cli.core import complete, config, paths, registry
+from boost_cli.core import complete, config, paths, registry, util
 
 
 def _entry(name, tap):
@@ -142,6 +145,130 @@ class TestItNeverFailsLoudly:
     def test_no_words_is_not_an_error(self, sandbox):
         assert complete.candidates([], COMMANDS) == []
         assert complete.candidates(["boost"], COMMANDS) == []
+
+
+class TestANamesFileBoostCannotWrite:
+    """`_names.txt` is rewritten by tap, untap, update and heal. Written in
+    place, a copy one `sudo boost` run left read-only made all four exit 70
+    while doctor said healthy (cache-writers-that-still-crash-on-a-read-only-
+    cache). The completion list is a convenience: failing to keep it must
+    never fail the command that asked for it."""
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows refuses to replace a read-only file")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_read_only_names_file_is_replaced_not_refused(self, sandbox,
+                                                            capsys):
+        _tap("t", ["one", "two"])
+        complete.refresh_names()
+        complete.names_file().chmod(0o444)
+        _tap("t", ["one", "three", "two"])
+        capsys.readouterr()
+        assert complete.refresh_names() == 3
+        assert complete.names_file().read_text(encoding="utf-8") \
+            == "one\nthree\ntwo"
+        assert os.access(complete.names_file(), os.W_OK)   # boost owns it now
+        assert capsys.readouterr().err == ""
+
+    def test_a_read_only_dir_falls_back_to_the_in_place_write(
+            self, sandbox, monkeypatch, capsys):
+        # A replace needs the directory writable; an in-place write does not,
+        # so a writable file in a read-only dir must still be kept current.
+        _tap("t", ["one", "two"])
+        complete.refresh_names()
+        _tap("t", ["one", "three", "two"])
+        capsys.readouterr()
+
+        def refuse(path, text, encoding="utf-8"):
+            raise PermissionError(13, "Permission denied", str(path))
+
+        monkeypatch.setattr(util, "atomic_write_text", refuse)
+        assert complete.refresh_names() == 3
+        assert complete.names_file().read_text(encoding="utf-8") \
+            == "one\nthree\ntwo"
+        assert capsys.readouterr().err == ""
+
+    def test_a_cache_dir_it_cannot_create_is_not_a_crash(
+            self, sandbox, monkeypatch, capsys):
+        # A read-only ~/.boost with no cache dir refuses the mkdir itself;
+        # that has to land in the same tolerance as a refused write.
+        _tap("t", ["one", "two"])
+        capsys.readouterr()
+
+        def refuse():
+            raise PermissionError(13, "Permission denied",
+                                  str(paths.cache_dir()))
+
+        monkeypatch.setattr(complete.paths, "ensure_dirs", refuse)
+        monkeypatch.setattr(Path, "write_text",
+                            lambda self, *a, **k: refuse())
+        assert complete.refresh_names() == 2
+        assert "could not save the completion list" \
+            in " ".join(capsys.readouterr().err.split())
+
+    def test_a_write_that_fails_warns_once_and_carries_on(
+            self, sandbox, monkeypatch, capsys):
+        _tap("t", ["one", "two"])
+        capsys.readouterr()
+
+        def refuse(path, text, encoding="utf-8"):
+            raise PermissionError(13, "Permission denied", str(path))
+
+        monkeypatch.setattr(util, "atomic_write_text", refuse)
+        monkeypatch.setattr(Path, "write_text",
+                            lambda self, *a, **k: refuse(self, ""))
+        assert complete.refresh_names() == 2
+        assert complete.refresh_names() == 2       # a second call, same run
+        cap = capsys.readouterr()
+        assert cap.out == ""                       # stdout may be --json
+        err = " ".join(cap.err.split())
+        assert "! could not save the completion list (Permission denied)" \
+            in err
+        assert "tab completion may offer stale names; make %s writable" \
+            % paths.tilde(complete.names_file().parent) in err
+        assert err.count("could not save") == 1    # once, not per call
+        # With no file to read, TAB offers nothing rather than a traceback.
+        assert complete.candidates(["boost", "install", ""], COMMANDS) == []
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't remove the owner's own read access "
+                               "on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unreadable_names_file_is_rebuilt_not_read_as_empty(
+            self, sandbox):
+        # What a root-owned 0600 copy looks like to the user: TAB offered
+        # nothing, silently, because only a missing file was rebuilt.
+        _tap("t", ["one", "two"])
+        complete.refresh_names()
+        complete.names_file().chmod(0o000)
+        try:
+            got = complete.candidates(["boost", "install", ""], COMMANDS)
+        finally:
+            if not os.access(complete.names_file(), os.R_OK):
+                complete.names_file().chmod(0o600)
+        assert got == ["one", "two"]
+        assert os.access(complete.names_file(), os.R_OK)   # replaced
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unreadable_file_it_cannot_replace_offers_nothing(
+            self, sandbox, capsys):
+        _tap("t", ["one", "two"])
+        complete.refresh_names()
+        complete.names_file().chmod(0o000)
+        paths.cache_dir().chmod(0o500)
+        try:
+            got = complete._cached_names()
+        finally:
+            paths.cache_dir().chmod(0o700)
+            complete.names_file().chmod(0o600)
+        assert got == []
+        assert "could not save the completion list" \
+            in " ".join(capsys.readouterr().err.split())
 
 
 class TestCandidatesAreShellSafe:

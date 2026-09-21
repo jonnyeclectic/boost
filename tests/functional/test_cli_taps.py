@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
+
+import pytest
 
 from boost_cli.core import config, paths, staleness, util
 
@@ -278,6 +282,28 @@ class TestUntap:
         assert not clone.exists()
         assert not cache.exists()
         assert json.loads(paths.config_path().read_text(encoding="utf-8"))["taps"] == []
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_cache_dir_it_cannot_write_is_a_warning(self, boost, tapped):
+        # In a cache dir boost cannot write, untap exited 70 unlinking the
+        # tap's cache file, after the tap was already deregistered.
+        cache = paths.cache_dir() / "fixture-tap.json"
+        paths.cache_dir().chmod(0o500)
+        try:
+            r = boost("untap", "fixture-tap")
+        finally:
+            paths.cache_dir().chmod(0o700)
+        assert "untapped fixture-tap" in r.out
+        assert "could not remove the catalog cache for fixture-tap " \
+            "(Permission denied)" in " ".join(r.err.split())
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+        assert "no taps configured" in boost("taps").out
+        assert cache.is_file()
+        boost("clean")                    # the leftover is a stale tap cache
+        assert not cache.exists()
 
     def test_clean_untap_no_dependents(self, boost, tapped):
         r = boost("untap", "fixture-tap")

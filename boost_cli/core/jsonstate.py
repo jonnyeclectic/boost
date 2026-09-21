@@ -26,10 +26,17 @@ def read_object(path: Path) -> tuple[dict | None, str | None]:
 
     Returns ``(data, None)`` when the file is missing (``data`` is ``None``)
     or holds a valid JSON object. Returns ``(None, message)`` when the file
-    exists but can't be read as one — unreadable, invalid JSON, or valid JSON
-    that isn't an object — where ``message`` names the file and the
-    underlying error so a caller can warn instead of quietly treating
+    exists but can't be read as one — unreadable, not UTF-8, invalid JSON, or
+    valid JSON that isn't an object — where ``message`` names the file and
+    the underlying error so a caller can warn instead of quietly treating
     corruption the same as "nothing here yet".
+
+    Not UTF-8 is its own branch because a failed decode raises
+    ``UnicodeDecodeError``, a ``ValueError`` that is neither an ``OSError``
+    nor a ``JSONDecodeError``: two stray bytes in config.json used to crash
+    every command, ``boost doctor`` included. Any reader of a state file
+    should come through here rather than pair its own ``read_text`` with
+    ``json.loads``, so a hole like that is closed in one place.
     """
     if not path.exists():
         return None, None
@@ -37,6 +44,8 @@ def read_object(path: Path) -> tuple[dict | None, str | None]:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         return None, "%s: %s" % (path, exc)
+    except UnicodeDecodeError as exc:
+        return None, "%s: not valid UTF-8 (%s)" % (path, exc)
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:

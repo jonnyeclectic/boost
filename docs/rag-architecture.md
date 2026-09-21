@@ -261,8 +261,9 @@ The flat `if/elif` dispatcher is now an **extensible registry** (`boost_cli/core
    `{name, description, inputSchema}` via `REGISTRY.register(...)` (or the `@REGISTRY.tool(...)`
    decorator). The JSON-RPC server iterates it: `tools/list` returns `REGISTRY.specs()` and `tools/call`
    dispatches through `REGISTRY.call(name, args)` — an unknown tool returns `(None, False)` in exactly one
-   place, so the server answers a single `-32602 unknown tool` error. `_MCP_TOOLS` and `_mcp_tool` remain
-   as thin back-compat shims over the registry.
+   place, so the server answers a single `-32602 unknown tool` error. `_mcp_tool` remains as a thin
+   back-compat shim over the registry. `tools/list` renders `REGISTRY.specs()` on every call rather than
+   from a list frozen at import, so a tool's description can state what it costs on this machine.
 2. **First reach-out tool (done), behind graceful degradation** (the `core/ai.py` pattern — probe, else a
    helpful message, never raise):
    - **`boost_discover_github`** — GitHub code-search for `SKILL.md` repos to grow the corpus, via the

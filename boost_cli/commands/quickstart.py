@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from .. import cliparse, spin
 from ..core import (
+    bootstrap,
     catalog,
     complete,
     config,
@@ -48,15 +49,23 @@ def _selection(catalog_scope: bool) -> list[dict]:
 
 
 def _tap_defaults(selection: list[dict], pins: dict[str, dict],
-                  dry_run: bool) -> list[str]:
+                  dry_run: bool) -> tuple[list[str], bootstrap.SetupOutcome]:
     """Tap the selected registries, pinned to a shard's commit when one exists.
 
-    Returns the tap names that are configured afterwards, tapped here or not.
+    Returns the selected tap names and what happened to each. The names are
+    the *selection*, not the result — a registry whose clone failed is still
+    in them — and they used to be all this returned, which is how seven failed
+    clones ended in "✓ ready": nothing downstream could tell a working machine
+    from an unreachable one. The outcome is the result; see
+    `bootstrap.SetupOutcome`. A dry run changes nothing, so its outcome is
+    empty.
+
     Pinning is the whole point: tapping HEAD and then fetching a shard is the
     ordering that produces a commit mismatch on every registry that moved since
     the last shard run.
     """
     names = [str(d["name"]) for d in selection]
+    outcome = bootstrap.SetupOutcome()
     commits = {name: str(pins[name].get("commit")) for name in names
                if name in pins}
     if dry_run:
@@ -64,18 +73,18 @@ def _tap_defaults(selection: list[dict], pins: dict[str, dict],
         pending = [n for n in names if n not in existing]
         # Over the whole catalogue a line each is a wall of text, so past a handful
         # the dry run reports the shape instead of the list.
-        if len(pending) > 12:
+        if len(pending) > bootstrap.MAX_NAMED_REGISTRIES:
             out.info("would tap %d registries (%d pinned to a published "
                      "shard's commit)"
                      % (len(pending), sum(1 for n in pending if n in commits)))
-            return names
+            return names, outcome
         for name in names:
             if name in existing:
                 out.info(out.role("%s already tapped" % name, "muted"))
                 continue
             at = commits.get(name)
             out.info("would tap %s%s" % (name, " @ %s" % at[:7] if at else ""))
-        return names
+        return names, outcome
     # One pool, one config write: seven sequential clones is ~11 s of waiting
     # for work that takes ~2 s done together, and the first thing a new user
     # sees should not be a progress bar.
@@ -86,20 +95,27 @@ def _tap_defaults(selection: list[dict], pins: dict[str, dict],
         name = res["name"]
         if res.get("skipped"):
             out.info(out.role("%s already tapped" % name, "muted"))
+            outcome.already.append(name)
             continue
         if not res.get("ok"):
             out.warn("could not tap %s: %s" % (name, res.get("error", "")))
+            outcome.failed.append(name)
             continue
         try:
             entries = catalog.rebuild_tap(res["tap"])
         except BoostError as exc:
             out.warn("could not index %s: %s" % (name, exc.message))
+            # Not `failed`: the clone arrived and add_many has already written
+            # it to the config, so the verdict must not send this user to
+            # check a network that worked.
+            outcome.unindexed.append(name)
             continue
         journal.log("tap", name)
+        outcome.tapped.append(name)
         at = commits.get(name)
         out.ok("tapped %s (%d items)%s"
                % (name, len(entries), " @ %s" % at[:7] if at else ""))
-    return names
+    return names, outcome
 
 
 def _report(results: list[dict]) -> None:
@@ -185,7 +201,7 @@ def cmd_quickstart(argv) -> int:
             manifest = None
 
     selection = _selection(args.catalog)
-    names = _tap_defaults(selection, pins, args.dry_run)
+    names, outcome = _tap_defaults(selection, pins, args.dry_run)
     if args.dry_run:
         planned = [n for n in names if n in pins] if manifest else []
         out.info("would build the keyword index, then import %d shard(s)"
@@ -213,8 +229,12 @@ def cmd_quickstart(argv) -> int:
 
     with spin.Spinner("building the keyword index"):
         stats = rag.build()
-    out.ok("indexed %s items for keyword search" % format(
-        int(stats.get("entries", 0)), ","))
+    outcome.entries = int(stats.get("entries", 0))
+    # A tick on "indexed 0 items" is half of the contradiction this command
+    # used to print; the other half is the "ready" line below. Both turn on
+    # the same fact, so they cannot disagree.
+    (out.ok if outcome.searchable else out.warn)(
+        "indexed %s items for keyword search" % format(outcome.entries, ","))
 
     if manifest is not None:
         commits = rag._tap_commits()
@@ -243,5 +263,14 @@ def cmd_quickstart(argv) -> int:
                "--dense` builds them locally")
 
     complete.refresh_names()
-    out.ok("ready — try `boost search brainstorming`")
-    return 0
+    note = outcome.failure_note()
+    if note:
+        out.warn(note, wrap=True)
+    message, hint = outcome.verdict()
+    if outcome.ok:
+        out.ok(message)
+        return 0
+    # Raised rather than returned so the failure wears the same `Error:`/`hint:`
+    # shape as `boost search`'s own "no taps configured" — the command a user
+    # runs next, and the one README's install snippet runs next.
+    raise BoostError(message, hint=hint)

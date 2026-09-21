@@ -12,6 +12,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass, field
+from itertools import starmap
 from pathlib import Path
 
 from ..errors import BoostError
@@ -1944,6 +1945,167 @@ def _pinned_repair_blocked(entry: dict, source_sha: str | None) -> bool:
     return source_sha is None or source_sha != entry.get("sha256")
 
 
+def _pin_blocks_repair(entry: dict, source_sha) -> bool:
+    """:func:`_pinned_repair_blocked`, with the sha computed only if it matters.
+
+    ``source_sha`` is a *callable*. Hashing a tap source goes through
+    :func:`source_dir_for`, which calls ``gitutil.materialize`` — a
+    ``sparse-checkout add``, i.e. a write and sometimes a network fetch. The
+    eager call was harmless on the apply path (the install materializes anyway)
+    and is not on the preview path, where it would make `heal --dry-run` widen
+    a clone's cone. An unpinned entry can never be blocked, so it never needs
+    the answer.
+    """
+    if not entry.get("pinned"):
+        return False
+    return _pinned_repair_blocked(entry, source_sha())
+
+
+@dataclass(frozen=True)
+class StoreRepair:
+    """The branch `sync_apply` will take for one missing skill, rule or workflow.
+
+    Both the repair and its preview read this, so they cannot disagree about
+    *which* repair happens — the defect it exists to close was `heal --dry-run`
+    printing "would restore X from its tap (or drop it from the lock)" on a
+    state where the live run demonstrably reinstalls, offering an alternative
+    that never fired. Tense is still each caller's business; the decision is not.
+
+    ``preview`` is a prediction, not a promise: an install can still fail (a
+    tap clone removed between the two calls), and a failed install falls
+    through to the drop. That residue is the honest kind — it names the branch
+    the run will *attempt*, rather than listing both and committing to neither.
+    """
+
+    action: str                     #: local | tap | declined | drop
+    preview: str
+    applied: str
+    warning: str | None = None
+    cat_entry: dict | None = None   #: what a "tap" repair installs
+    src: Path | None = None         #: what a "local" repair installs from
+    scope: str = "user"             #: where a rule/workflow re-materializes
+    base: str | None = None
+
+
+_DROPPED = "dropped %s from lock (store dir missing, source gone)"
+_GONE = ("%s %s has a missing materialization but its source is gone — "
+         "run `boost update` or reinstall")
+
+
+def _declined(label: str, where: str, name: str) -> str:
+    return ("%s is pinned and its %s source has moved — repair declined "
+            "(unpin, or `boost reinstall %s` to accept the new content)"
+            % (label, where, name))
+
+
+def _lock_source(name: str, tap_name: str, entry: dict,
+                 kind: str | None = None) -> tuple[dict | None, str | None]:
+    """The catalog entry a repair would reinstall ``name`` from, and a warning.
+
+    ``(None, None)`` when the tap cannot answer, which both callers treat as a
+    source that is gone.
+    """
+    from . import catalog
+    try:
+        matches = [e for e in catalog.find(name) if e["tap"] == tap_name
+                   and (kind is None or e.get("kind", "skill") == kind)]
+        return catalog.select_lock_source(matches, entry)
+    except BoostError:
+        return None, None
+
+
+def plan_missing_store(name: str) -> StoreRepair:
+    """How `sync` will repair `name`, whose store dir is gone. Read-only."""
+    entry = lockfile.get_skill(name) or {}
+    tap_name = entry.get("tap")
+    if tap_name == "local":
+        src = Path(str(entry.get("source_dir") or ""))
+        if src.is_dir() and (src / "SKILL.md").is_file():
+            if _pin_blocks_repair(entry, lambda: _local_source_sha(src)):
+                msg = _declined(name, "local", name)
+                return StoreRepair("declined", msg, msg)
+            return StoreRepair(
+                "local", src=src,
+                preview="would reinstall %s from local source %s" % (name, src),
+                applied="reinstalled missing %s from local source %s" % (name, src))
+    elif tap_name:
+        cat_entry, warning = _lock_source(name, tap_name, entry)
+        if cat_entry:
+            if _pin_blocks_repair(entry, lambda: _skill_source_sha(cat_entry)):
+                msg = _declined(name, "tap", name)
+                return StoreRepair("declined", msg, msg, warning=warning)
+            return StoreRepair(
+                "tap", cat_entry=cat_entry, warning=warning,
+                preview="would reinstall %s from %s" % (name, tap_name),
+                applied="reinstalled missing %s from %s" % (name, tap_name))
+    return StoreRepair(
+        "drop",
+        preview="would drop %s from the lock (store dir missing, source gone)" % name,
+        applied=_DROPPED % name)
+
+
+def plan_missing_materialization(kind: str, name: str) -> StoreRepair:
+    """How `sync` will repair a rule/workflow whose files are gone. Read-only."""
+    getter = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+    entry = getter(name) or {}
+    tap_name = entry.get("tap")
+    if tap_name and tap_name != "local":
+        cat_entry, warning = _lock_source(name, tap_name, entry, kind=kind)
+        if cat_entry:
+            if _pin_blocks_repair(
+                    entry, lambda: _source_text_sha(tap_name, cat_entry)):
+                msg = _declined("%s %s" % (kind, name), "tap", name)
+                return StoreRepair("declined", msg, msg, warning=warning)
+            # The lock's scope/base, so a project rule repairs into its repo,
+            # not wherever sync happens to run.
+            return StoreRepair(
+                "tap", cat_entry=cat_entry, warning=warning,
+                scope=entry.get("scope", "user"), base=entry.get("base"),
+                preview="would re-materialize %s %s from %s" % (kind, name, tap_name),
+                applied="re-materialized %s %s from %s" % (kind, name, tap_name))
+    # One sentence in both tenses because it has only one: this branch repairs
+    # nothing, it reports. A "would ..." here would invent an action.
+    return StoreRepair("drop", preview=_GONE % (kind, name),
+                       applied=_GONE % (kind, name))
+
+
+def _local_source_sha(src: Path) -> str | None:
+    """sha256 of a local skill's source directory, or None if unreadable."""
+    try:
+        return util.sha256_dir(src)
+    except OSError:
+        return None
+
+
+def sync_preview(plan: dict[str, list]) -> list[str]:
+    """What :func:`sync_apply` would report, without applying any of it.
+
+    Only the buckets whose repair *branches* live here; `missing_links` and
+    `stale_links` do one unconditional thing each and stay with their caller,
+    which filters them against the links it has already reported.
+    """
+    lines = []
+    # `sync_apply` re-records only while the lock file is *missing* — a corrupt
+    # one is left for `boost replay` — and only a dir that still has a
+    # SKILL.md. The preview used to say "would re-record" either way.
+    if plan.get("unrecorded_store") and lockfile.check().problem == "missing":
+        for name in plan["unrecorded_store"]:
+            if (skill_store_dir(name) / "SKILL.md").is_file():
+                lines.append("would re-record %s, which the lock file has lost"
+                             % name)
+            else:
+                lines.append("would leave %s unrecorded (no SKILL.md to record)"
+                             % name)
+    repairs = [plan_missing_store(name) for name in plan.get("missing_store", [])]
+    repairs += starmap(plan_missing_materialization,
+                       plan.get("missing_materializations", []))
+    for repair in repairs:
+        if repair.warning:
+            lines.append(repair.warning)
+        lines.append(repair.preview)
+    return lines
+
+
 def recover_unrecorded(name: str) -> str | None:
     """Re-record one store dir the lock has lost; return how, or None.
 
@@ -2023,82 +2185,45 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
             # them — planned vs. applied.
             actions.append("removed stale link %s" % paths.tilde(path))
     for name in plan["missing_store"]:
-        entry = lockfile.get_skill(name) or {}
-        tap_name = entry.get("tap")
-        restored = False
-        if tap_name == "local":
-            src = Path(str(entry.get("source_dir") or ""))
-            if src.is_dir() and (src / "SKILL.md").is_file():
-                try:
-                    source_sha = util.sha256_dir(src)
-                except OSError:
-                    source_sha = None
-                if _pinned_repair_blocked(entry, source_sha):
-                    actions.append(
-                        "%s is pinned and its local source has moved — repair "
-                        "declined (unpin, or `boost reinstall %s` to accept "
-                        "the new content)" % (name, name))
-                    continue
-                try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
-                    install_from_path(src, name=name, force=True)
-                    actions.append(
-                        "reinstalled missing %s from local source %s" % (name, src))
-                    restored = True
-                except BoostError:
-                    pass
-        elif tap_name and tap_name != "local":
-            try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
-                from . import catalog
-                matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
-                cat_entry, warning = catalog.select_lock_source(matches, entry)
-                if warning:
-                    actions.append(warning)
-                if cat_entry:
-                    if _pinned_repair_blocked(entry, _skill_source_sha(cat_entry)):
-                        actions.append(
-                            "%s is pinned and its tap source has moved — repair "
-                            "declined (unpin, or `boost reinstall %s` to accept "
-                            "the new content)" % (name, name))
-                        continue
-                    install(cat_entry, force=True)
-                    actions.append("reinstalled missing %s from %s" % (name, tap_name))
-                    restored = True
-            except BoostError:
-                pass
-        if not restored:
-            lockfile.remove_skill(name)
-            actions.append("dropped %s from lock (store dir missing, source gone)" % name)
+        # The branch is decided in one place, so `sync_preview` words the same
+        # decision rather than re-deriving (and mis-deriving) it.
+        repair = plan_missing_store(name)
+        if repair.warning:
+            actions.append(repair.warning)
+        if repair.action == "declined":
+            actions.append(repair.applied)
+            continue
+        try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
+            if repair.src is not None:
+                install_from_path(repair.src, name=name, force=True)
+                actions.append(repair.applied)
+                continue
+            if repair.cat_entry is not None:
+                install(repair.cat_entry, force=True)
+                actions.append(repair.applied)
+                continue
+        except BoostError:
+            # The one place the preview can be wrong, and deliberately: a
+            # source readable a moment ago is gone now, so the run falls
+            # through to the drop.
+            pass
+        lockfile.remove_skill(name)
+        actions.append(_DROPPED % name)
     for kind, name in plan.get("missing_materializations", []):
-        getter = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
-        entry = getter(name) or {}
-        tap_name = entry.get("tap")
-        if tap_name and tap_name != "local":
+        mat = plan_missing_materialization(kind, name)
+        if mat.warning:
+            actions.append(mat.warning)
+        if mat.action == "declined":
+            actions.append(mat.applied)
+            continue
+        if mat.cat_entry is not None:
             try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
-                from . import catalog
-                matches = [e for e in catalog.find(name)
-                           if e["tap"] == tap_name and e.get("kind", "skill") == kind]
-                cat_entry, warning = catalog.select_lock_source(matches, entry)
-                if warning:
-                    actions.append(warning)
-                if cat_entry:
-                    if _pinned_repair_blocked(
-                            entry, _source_text_sha(tap_name, cat_entry)):
-                        actions.append(
-                            "%s %s is pinned and its tap source has moved — "
-                            "repair declined (unpin, or `boost reinstall %s` to "
-                            "accept the new content)" % (kind, name, name))
-                        continue
-                    # preserve the original scope/base so a project rule repairs
-                    # into its repo, not wherever sync happens to run.
-                    install(cat_entry, force=True,
-                            scope=entry.get("scope", "user"), base=entry.get("base"))
-                    actions.append("re-materialized %s %s from %s"
-                                   % (kind, name, tap_name))
-                    continue
+                install(mat.cat_entry, force=True, scope=mat.scope, base=mat.base)
+                actions.append(mat.applied)
+                continue
             except BoostError:
                 pass
-        actions.append("%s %s has a missing materialization but its source is "
-                       "gone — run `boost update` or reinstall" % (kind, name))
+        actions.append(_GONE % (kind, name))
     if actions:
         journal.log("sync", "%d fixes" % len(actions))
     return actions

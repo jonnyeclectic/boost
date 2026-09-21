@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, frontmatter, gitutil, output, paths, registry, util
+from . import config, frontmatter, gitutil, jsonstate, output, paths, registry, util
 
 # Bumped whenever a scan starts recording something the previous scan did not,
 # so 460 caches on a real machine invalidate on read instead of needing a
@@ -254,7 +254,6 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
         raise BoostError("tap %s is not cloned" % tap.name,
                         hint="run `boost update %s`" % tap.name)
     entries = scan_dir(tap.path, tap.name, tap.curated)
-    paths.ensure_dirs()
     payload = json.dumps({
         "tap": tap.name,
         "url": tap.url,
@@ -271,7 +270,10 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
     # back to the in-place write that always worked there. If neither lands
     # (a full disk), the scan in hand is still the answer: a cache is a
     # speed-up, and failing to keep one is never an error (see load_tap).
+    # That includes a cache dir it cannot create under a read-only ~/.boost,
+    # which exited 70 here before `reindex` reached the error it owes.
     try:
+        paths.ensure_dirs()
         util.atomic_write_text(tap.cache_file, payload)
     except OSError:
         try:
@@ -280,10 +282,15 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
             # Once per tap per process: a command loads a tap more than once.
             if tap.name not in _UNSAVED:
                 _UNSAVED.add(tap.name)
+                # Name the nearest directory that exists: when the cache
+                # dir itself could not be created, it is its parent that
+                # refuses, which is what rag._unsaved names too.
+                where = tap.cache_file.parent
+                while not where.exists() and where != where.parent:
+                    where = where.parent
                 output.warn("could not save the catalog cache for %s (%s) — "
                             "this command uses a fresh scan; make %s writable"
-                            % (tap.name, e.strerror or e,
-                               tap.cache_file.parent),
+                            % (tap.name, e.strerror or e, paths.tilde(where)),
                             stream=sys.stderr, wrap=True)
     # Drop the mtime-keyed cache so a rebuild is visible to an immediately
     # following load even when the filesystem mtime granularity is coarse.
@@ -323,9 +330,8 @@ def _cached_tap(tap: registry.Tap) -> tuple[list[dict], bool] | None:
     cached = _ENTRY_CACHE.get(key)
     if cached is not None and cached[0] == stamp:
         return cached[1], cached[2]
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    data = jsonstate.read_object(p)[0]
+    if data is None:
         _ENTRY_CACHE.pop(key, None)
         return None
     skills = data.get("skills", [])

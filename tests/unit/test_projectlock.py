@@ -136,3 +136,11 @@ def test_there_is_no_history_directory(tmp_path):
     projectlock.set_skill(tmp_path, "a", _entry("2.0.0"))
     assert sorted(p.name for p in (tmp_path / ".boost").iterdir()) == \
         ["skill-lock.json"]
+
+
+def test_a_lock_that_is_not_utf8_is_preserved_not_a_crash(tmp_path):
+    p = projectlock.lock_path(tmp_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\xff\xfe")
+    assert projectlock.read(tmp_path)["skills"] == {}
+    assert p.with_name(p.name + ".corrupt").read_bytes() == b"\xff\xfe"

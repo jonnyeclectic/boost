@@ -433,6 +433,30 @@ class TestACacheBoostCannotWrite:
         fresh = json.loads(tap.cache_file.read_text(encoding="utf-8"))
         assert fresh["format"] == catalog.CACHE_FORMAT
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't remove the owner's own read access "
+                               "on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unreadable_cache_file_is_replaced_not_refused(
+            self, sandbox, fixture_tap_src):
+        # The card's own repro (unreadable-tap-cache-healthy-doctor-crashing-
+        # heal): a cache left at mode 000 by one `sudo boost` run was exit 70
+        # on search, browse, info, update and heal. A read that fails is a
+        # cache miss, and the rescan replaces the file with one boost owns.
+        tap = registry.add(str(fixture_tap_src))
+        catalog.rebuild_tap(tap)
+        tap.cache_file.chmod(0o000)
+        try:
+            entries = catalog.load_tap(tap)
+        finally:
+            if not os.access(tap.cache_file, os.R_OK):
+                tap.cache_file.chmod(0o600)
+        assert [e["name"] for e in entries] == FIXTURE_NAMES
+        assert os.access(tap.cache_file, os.R_OK | os.W_OK)
+        fresh = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        assert fresh["format"] == catalog.CACHE_FORMAT
+
     def test_a_read_only_dir_falls_back_to_the_in_place_write(
             self, sandbox, fixture_tap_src, monkeypatch, capsys):
         # A replace needs the directory writable; the old in-place write did
@@ -476,8 +500,35 @@ class TestACacheBoostCannotWrite:
         # Folded to the pane, not one long line (wrap=True).
         assert len(cap.err.strip().splitlines()) > 1
         assert "(Permission denied)" in err
-        assert "make %s writable" % tap.cache_file.parent in err
+        assert "make %s writable" % paths.tilde(tap.cache_file.parent) in err
         assert err.count("could not save") == 1            # once, not per load
+
+    def test_a_cache_dir_it_cannot_create_still_serves_the_scan(
+            self, sandbox, fixture_tap_src, monkeypatch, capsys):
+        # ~/.boost read-only and no cache dir: creating the dir is refused
+        # too. That was exit 70 from `search`, `info` and `reindex`, the last
+        # before rag._save could name ~/.boost as the directory to fix.
+        tap = registry.add(str(fixture_tap_src))
+        for f in paths.cache_dir().iterdir():
+            f.unlink()
+        paths.cache_dir().rmdir()
+        capsys.readouterr()
+
+        def refuse():
+            raise PermissionError(13, "Permission denied",
+                                  str(paths.cache_dir()))
+
+        monkeypatch.setattr(catalog.paths, "ensure_dirs", refuse)
+        entries = catalog.rebuild_tap(tap)
+        catalog.rebuild_tap(tap)                 # a second load, same command
+        assert [e["name"] for e in entries] == FIXTURE_NAMES
+        assert not paths.cache_dir().exists()
+        err = " ".join(capsys.readouterr().err.split())
+        assert "! could not save the catalog cache for fixture-tap" in err
+        assert err.count("could not save") == 1
+        # The cache dir does not exist, so the directory to fix is the
+        # nearest one that does: ~/.boost, as rag._unsaved names it.
+        assert "make %s writable" % paths.tilde(paths.boost_home()) in err
 
 
 class TestEntrySetCache:

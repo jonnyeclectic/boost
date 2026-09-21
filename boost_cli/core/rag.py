@@ -37,7 +37,18 @@ try:  # TypedDict lives in typing on 3.9+, kept optional for safety
 except ImportError:  # pragma: no cover - 3.9+ always has it
     TypedDict = None  # type: ignore
 
-from . import ai, catalog, config, frontmatter, gitutil, paths, registry, util
+from ..errors import BoostError
+from . import (
+    ai,
+    catalog,
+    config,
+    frontmatter,
+    gitutil,
+    jsonstate,
+    paths,
+    registry,
+    util,
+)
 
 # v2: `snip` stores a larger head of the matched chunk (not just SNIP_WIDTH
 # chars) so `retrieve` can window it onto the query terms; bump forces a
@@ -257,11 +268,10 @@ def _tap_commits() -> dict[str, str]:
     commits: dict[str, str] = {}
     for t in registry.list_taps():
         commit = ""
-        try:
+        # ValueError covers both invalid JSON and bytes that are not UTF-8.
+        with contextlib.suppress(OSError, ValueError):
             data = json.loads(t.cache_file.read_text(encoding="utf-8"))
             commit = str(data.get("commit") or "")
-        except (OSError, json.JSONDecodeError):
-            pass
         if not commit and t.is_cloned:
             commit = gitutil.head_commit(t.path)
         commits[t.safe_name] = commit
@@ -753,16 +763,40 @@ def _save(docs: list[dict], commits: dict[str, str]) -> dict:
         "stats": stats,
         "docs": meta_docs,
     }
-    paths.ensure_dirs()
     p = index_path()
     # Atomic swap: a bare write_text here can leave a truncated/corrupt index
     # on disk if the process dies mid-write or a query reads concurrently.
-    _write_postings(postings)
-    util.atomic_write_text(p, json.dumps(payload))
+    try:
+        paths.ensure_dirs()
+        _write_postings(postings)
+        util.atomic_write_text(p, json.dumps(payload))
+    except OSError as e:
+        raise _unsaved(e) from e
     # Drop the mtime-keyed cache so a reindex is visible to an immediately
     # following query even when the filesystem mtime granularity is coarse.
     _CACHE.pop(str(p), None)
     return stats
+
+
+def _unsaved(e: OSError) -> BoostError:
+    """The error for an index this process could not write to disk.
+
+    Unlike a tap cache (catalog.rebuild_tap), the index is not a side effect
+    here: `boost reindex` exists to write it, so failing to is an error. It
+    used to surface as exit 70 and a crash report for a PermissionError on
+    the temp file, in a cache dir doctor already flags. The directory named is
+    the one the write was refused in, so a missing cache dir under a read-only
+    ~/.boost names ~/.boost. `reindex` only gets here in that state because
+    catalog.rebuild_tap tolerates the same refused mkdir while loading taps.
+    chmod is offered only for a permission error, since it cannot help a full
+    or read-only disk.
+    """
+    where = paths.tilde(Path(e.filename).parent if e.filename
+                        else paths.cache_dir())
+    return BoostError("could not save the search index in %s (%s)"
+                      % (where, e.strerror or e),
+                      hint=("run `chmod u+w %s`" % where
+                            if isinstance(e, PermissionError) else None))
 
 
 def _now() -> str:
@@ -789,11 +823,8 @@ def _load_raw() -> dict | None:
     cached = _CACHE.get(key)
     if isinstance(cached, tuple) and cached[0] == stamp:
         return cached[1]  # type: ignore[return-value]
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(data, dict) or data.get("version") != INDEX_VERSION:
+    data = jsonstate.read_object(p)[0]
+    if data is None or data.get("version") != INDEX_VERSION:
         return None
     _CACHE[key] = (stamp, data)
     return data
@@ -1325,11 +1356,7 @@ RERANK_CACHE_CAP = 200
 
 def _rerank_cache_load() -> dict:
     """The cache as a dict, ``{}`` for missing/corrupt — never an error."""
-    try:
-        data = json.loads(rerank_cache_path().read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return jsonstate.read_object(rerank_cache_path())[0] or {}
 
 
 def _rerank_cache_get(key: str) -> list | None:

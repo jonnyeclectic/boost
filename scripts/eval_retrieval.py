@@ -743,7 +743,14 @@ def print_stats_human(report, order: list[str], k: int) -> None:
 
 # --------------------------------------------------------------- main
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The gate's flags, and what each one means.
+
+    Its own function so `tests/unit/test_eval_corpus.py` can parse the
+    invocations in the Makefile and the workflows with this parser and compare
+    what they MEAN: `-k10` and `-k 10` are one gate, and a `-k 5` in ci.yml is
+    a different one even with every floor unchanged.
+    """
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN)
@@ -771,7 +778,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--worksheet", action="store_true",
                     help="list the golden rows still graded by name whose name "
                          "resolves to several bodies, with the candidates")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     floors = parse_floors(args.floor)          # fail fast on a bad --floor
     rows = load_golden(args.golden)
@@ -811,7 +822,7 @@ def main(argv: list[str] | None = None) -> int:
     # warning and is scored. Still no flag of its own: a flag is a way for
     # `make eval` and ci.yml to disagree about what the required gate checks,
     # which is the failure `tests/unit/test_eval_corpus.py` already exists to
-    # catch on the floors. Placed after `--worksheet`, which reads identities
+    # catch, flag for flag. Placed after `--worksheet`, which reads identities
     # rather than text and is a developer tool, not a gate.
     problem = corpus_refusal(rag.index_completeness())
     if problem is not None:

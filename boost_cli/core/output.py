@@ -716,19 +716,36 @@ def search_layout(cols: int | None, names: Sequence[str],
     info owner/repo:name`` need whole, and a 20-cell tap cap left
     ``sickn33/antigravity…`` in a pipe that has room for anything.
 
-    Sizing: the name column fits the widest shown name (capped at 32), the
-    kind column the widest shown kind label (capped at ``[workflow]``'s 10),
-    the tap column the widest shown tap (capped at 20). The description gets
-    the remainder.
+    Sizing: the kind column fits the widest shown kind label (capped at
+    ``[workflow]``'s 10); the name and tap columns fit the widest shown name
+    and tap, **whole** when the pane has room, and the description gets the
+    remainder.
 
-    Drop priority when narrow — provenance is the first luxury, prose the
-    last: the tap goes below 84 columns or whenever it would leave the
-    description under 24 cells; then the description shrinks toward its floor
-    of 8; then the name cap tightens 32 → 24 → 16 → 12; the kind column is
-    dropped outright below 48 columns. The meter, the mark column, the name
-    and the curated tail are never dropped. Every row assembled from the plan
-    measures within ``cols`` (indent included) for any terminal 40 cells wide
-    or more.
+    The name and the tap are the two copy targets — ``boost info tap:name``
+    is built from them — so the description gives way before either is
+    clipped. The plan is the first of these that leaves the description at
+    least 24 cells:
+
+    1. name whole, tap whole;
+    2. name whole, tap capped at 20;
+    3. name capped at 32, tap whole;
+    4. name capped at 32, tap capped at 20;
+    5. tap dropped, name whole;
+    6. tap dropped, name capped at 32.
+
+    An identifier is shown whole or at its cap, never in between:
+    ``sickn33/antigravity-awesome-ski…`` is exactly as useless to paste as
+    ``sickn33/antigravity…``, so a longer clip would spend prose on nothing.
+    When a page's names fit 32 cells and its taps 20, every step above is the
+    same plan, and this is the capped layout unchanged at every width.
+
+    Past step 6 — the narrow panes — provenance is the first luxury and prose
+    the last: the tap is already gone (and never shows below 84 columns);
+    then the description shrinks toward its floor of 8; then the name cap
+    tightens 32 → 24 → 16 → 12; the kind column is dropped outright below 48
+    columns. The meter, the mark column, the name and the curated tail are
+    never dropped. Every row assembled from the plan measures within ``cols``
+    (indent included) for any terminal 40 cells wide or more.
     """
     if cols is None:
         return SearchLayout(
@@ -737,26 +754,30 @@ def search_layout(cols: int | None, names: Sequence[str],
             tap_w=max((visible_len(t) for t in taps), default=0),
             desc_w=_UNPANED)
     avail = cols - _SEARCH_INDENT - _SEARCH_FIXED
-    name_w = min(max((visible_len(n) for n in names), default=1), 32)
     kind_w = 0
     if cols >= 48:
         kind_w = min(max((visible_len(kind_label(k)) for k in kinds), default=0), 10)
-    tap_w = 0
-    if cols >= 84:
-        tap_w = min(max((visible_len(t) for t in taps), default=0), 20)
 
-    def desc_room(nw: int) -> int:
+    def desc_room(nw: int, tw: int) -> int:
         return (avail - nw - 2 - (kind_w + 2 if kind_w else 0)
-                - (tap_w + 2 if tap_w else 0))
+                - (tw + 2 if tw else 0))
 
-    if tap_w and desc_room(name_w) < 24:
-        tap_w = 0
+    name_whole = max((visible_len(n) for n in names), default=1)
+    tap_whole = 0
+    if cols >= 84:
+        tap_whole = max((visible_len(t) for t in taps), default=0)
+    name_cap, tap_cap = min(name_whole, 32), min(tap_whole, 20)
+    for name_w, tap_w in ((name_whole, tap_whole), (name_whole, tap_cap),
+                          (name_cap, tap_whole), (name_cap, tap_cap),
+                          (name_whole, 0), (name_cap, 0)):
+        if desc_room(name_w, tap_w) >= 24:
+            break
     for cap in (24, 16, 12):
-        if desc_room(name_w) >= 8:
+        if desc_room(name_w, tap_w) >= 8:
             break
         name_w = min(name_w, cap)
     return SearchLayout(cols=cols, name_w=name_w, kind_w=kind_w, tap_w=tap_w,
-                        desc_w=max(8, desc_room(name_w)))
+                        desc_w=max(8, desc_room(name_w, tap_w)))
 
 
 def format_search_row(name: str, desc: str, kind: str, tap: str, frac: float,

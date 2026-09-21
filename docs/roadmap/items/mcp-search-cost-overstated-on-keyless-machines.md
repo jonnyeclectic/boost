@@ -2,15 +2,15 @@
 id: mcp-search-cost-overstated-on-keyless-machines
 board: code
 section: planned
-status: planned
+status: shipped
 category: Interop
 complexity: M
 impact: Med
 wow: 3
 note: boost_search's description and INSTRUCTIONS both state the cost as a flat "10-15 seco…
 order: 217
-owner:
-pr:
+owner: loop/mcp-search-cost
+pr: 917
 title: boost_search advertises "10-15 seconds" unconditionally; with no AI configured it is 0.013 s median and the rerank never runs
 ---
 <b>Measured.</b> With no AI backend available, boost_search over 20 distinct queries against the 10,152-entry eval corpus returned in a median of 0.0134 s (min 0.0057 s, max 0.1206 s, and 0.075 s for the first search in a fresh process) while both MCP surfaces state an unconditional "10-15 seconds — an LLM reranks every match" — because rag.py:1129 returns the retrieval order untouched when <code>ai.available()</code> is False, so no LLM call is ever made.

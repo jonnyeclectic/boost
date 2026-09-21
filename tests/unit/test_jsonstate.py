@@ -53,6 +53,17 @@ class TestReadObject:
         assert str(p) in err
 
 
+    def test_invalid_utf8_is_error_not_a_crash(self, tmp_path):
+        # A decode failure is a ValueError, not an OSError or a
+        # JSONDecodeError, so it sailed past both guards and took down every
+        # command that reads config.json — `boost doctor` included.
+        p = tmp_path / "f.json"
+        p.write_bytes(b"\xff\xfe")
+        data, err = jsonstate.read_object(p)
+        assert data is None
+        assert err.startswith(str(p) + ": not valid UTF-8 (")
+
+
 class TestIsCorrupt:
     def test_missing_file_is_not_corrupt(self, tmp_path):
         assert jsonstate.is_corrupt(tmp_path / "nope.json") is False
@@ -65,6 +76,11 @@ class TestIsCorrupt:
     def test_invalid_json_is_corrupt(self, tmp_path):
         p = tmp_path / "f.json"
         p.write_text("not json", encoding="utf-8")
+        assert jsonstate.is_corrupt(p) is True
+
+    def test_invalid_utf8_is_corrupt(self, tmp_path):
+        p = tmp_path / "f.json"
+        p.write_bytes(b"\xff\xfe")
         assert jsonstate.is_corrupt(p) is True
 
 

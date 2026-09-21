@@ -348,7 +348,7 @@ class TestTheRuleDoesNotDriftFromTheMcpSurface:
     """One shelf, three surfaces — and only this one survives a host that
     drops the other two.
 
-    A phrase added to `INSTRUCTIONS` and not mirrored here is precisely how
+    A phrase added to the server instructions and not mirrored here is precisely how
     this rule came to ship a trigger its siblings had already retired. Pinning
     parity is the part of this change that outlives the wording.
     """
@@ -357,10 +357,13 @@ class TestTheRuleDoesNotDriftFromTheMcpSurface:
               "turns out to be a large one", "one kind of three",
               "the task stays yours")
 
+    @pytest.mark.parametrize("ai_available", [True, False])
     @pytest.mark.parametrize("phrase", PARITY)
-    def test_a_load_bearing_phrase_sits_on_both_surfaces(self, phrase):
+    def test_a_load_bearing_phrase_sits_on_both_surfaces(self, phrase,
+                                                         ai_available):
         from boost_cli.core import mcp
-        assert phrase in mcp.INSTRUCTIONS.lower(), (
+        text = mcp.instructions(ai_available=ai_available).lower()
+        assert phrase in text, (
             "%r left the MCP instructions — retire it from the rule in the "
             "same change, or the two surfaces disagree" % phrase)
         assert phrase in _rule_body(), (
@@ -407,3 +410,33 @@ class TestASkippedCheckLeavesATrace:
                          "required before", "do not proceed", "is never enough",
                          "must report", "always report"):
             assert coercive not in low, coercive
+
+
+class TestTheRulePricesBothKindsOfMachine:
+    """The rule said `boost_search` "costs ten to fifteen seconds" on every
+    machine, and it is standing text in a context file, so it cannot ask which
+    machine it is on. With no AI backend `rag.rerank` makes no LLM call and a
+    search took a median of 0.009 s over the 10,152-entry eval corpus. The MCP
+    surfaces now price it per machine at connect time (`mcp.search_cost`); the
+    rule has to be true on both and point at the text that knows.
+    """
+
+    def test_it_quotes_the_rerank_price_only_where_a_rerank_runs(self):
+        low = _rule_body()
+        assert "ten to fifteen seconds where an ai backend is available" in low
+        assert "skips the rerank" in low
+        assert "its own tool description says which applies" in low
+
+    def test_it_agrees_with_the_keyless_mcp_text(self):
+        # The same outcome on both surfaces: an agent that read the rule and
+        # then a keyless search reply must not see two stories.
+        from boost_cli.core import mcp
+        assert "shortlist to read" in _rule_body()
+        assert "shortlist to read" in mcp.search_cost(False)
+
+    def test_the_signals_are_not_priced_in_seconds_a_keyless_machine_never_spends(
+            self):
+        # "Two more signals earn the seconds" priced the gate in the rerank's
+        # currency. The signals still bound the call on both machines; they
+        # just no longer name a cost one of them does not pay.
+        assert "the seconds" not in _rule_body()

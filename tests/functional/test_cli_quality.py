@@ -111,6 +111,48 @@ class TestDoctor:
         assert "nothing to heal" not in r.out
         assert "heal cannot repair it" in r.out.replace("\n    ", " ")
 
+    def test_a_config_that_is_not_utf8_is_an_issue_not_a_crash(
+            self, boost, installed):
+        # The decode failure is a ValueError that no guard caught, so this was
+        # a traceback out of `logs.configure` — the one command meant to
+        # diagnose a broken config could not start.
+        paths.config_path().write_bytes(b"\xff\xfe")
+        r = boost("doctor", expect=1)
+        flat = " ".join(r.out.split())
+        assert "not valid UTF-8" in flat
+        assert "1 tap clone on disk is not listed" in flat
+        assert "ready to set up" not in flat
+        d = json.loads(boost("doctor", "--json", expect=1).out)
+        assert [c["name"] for c in d["checks"] if c["status"] == "issue"] == ["config"]
+        boost("list")          # every other command runs on defaults
+
+    @pytest.mark.parametrize("taps", ['"x"', "null", "{}"])
+    def test_a_taps_that_is_not_a_list_is_an_issue(self, boost, installed,
+                                                   taps):
+        # `list_taps` reads these as no taps, so doctor called the machine
+        # "ready to set up" while `--help` (for "x") called it configured.
+        paths.config_path().write_text('{"taps": %s}' % taps, encoding="utf-8")
+        r = boost("doctor", expect=1)
+        flat = " ".join(r.out.split())
+        assert 'expected "taps" to be a list' in flat
+        assert "1 tap clone on disk is not listed" in flat
+        assert "ready to set up" not in flat
+        r = boost("heal", expect=1)
+        flat = " ".join(r.out.split())
+        assert "heal cannot repair it" in flat
+        assert "nothing to heal" not in flat
+
+    def test_re_adding_a_tap_over_a_non_list_taps_repairs_the_file(
+            self, boost, installed, tapped):
+        # doctor's advice is "re-add your taps", and `boost tap` crashed
+        # appending to the string. Now the write moves the file aside first.
+        paths.config_path().write_text('{"taps": "x"}', encoding="utf-8")
+        boost("tap", tapped)
+        aside = paths.config_path().with_name("config.json.corrupt")
+        assert aside.read_text(encoding="utf-8") == '{"taps": "x"}'
+        r = boost("doctor")
+        assert "1 tap cloned & cached" in r.out
+
     @pytest.mark.skipif(sys.platform == "win32",
                         reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
@@ -181,6 +223,49 @@ class TestDoctor:
         finally:
             paths.cache_dir().chmod(0o700)
         assert "would rebuild catalog cache" not in dry   # the run won't
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows refuses to replace a read-only file")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_read_only_names_file_crashes_nothing(self, boost, installed,
+                                                    fixture_tap_src):
+        # The card's repro (cache-writers-that-still-crash-on-a-read-only-
+        # cache): doctor said healthy while heal, update, untap and a repeat
+        # tap all exited 70 writing `_names.txt` in place.
+        from boost_cli.core import complete
+        names = complete.names_file()
+        names.chmod(0o444)
+        assert "● healthy" in boost("doctor").out
+        boost("heal")
+        assert os.access(names, os.W_OK)          # replaced, not refused
+        for argv in (("update",), ("untap", "fixture-tap"),
+                     ("tap", fixture_tap_src), ("tap", fixture_tap_src)):
+            names.chmod(0o444)
+            r = boost(*argv)
+            assert "could not save" not in r.out + r.err, argv
+        assert "brainstorming" in names.read_text(encoding="utf-8")
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_names_file_it_cannot_write_or_replace_is_a_warning(
+            self, boost, tapped):
+        # Read-only file in a read-only dir: neither the replace nor the
+        # in-place write can land, and `update` must still finish.
+        from boost_cli.core import complete
+        complete.names_file().chmod(0o444)
+        paths.cache_dir().chmod(0o500)
+        try:
+            r = boost("update")
+        finally:
+            paths.cache_dir().chmod(0o700)
+            complete.names_file().chmod(0o600)
+        err = " ".join(r.err.split())
+        assert "could not save the completion list (Permission denied)" in err
+        assert not list(paths.logs_dir().glob("crash-*.log"))
 
     @pytest.mark.skipif(sys.platform == "win32",
                         reason="chmod can't make a directory unwritable on Windows")
@@ -382,6 +467,14 @@ class TestDoctor:
         assert "lock file is corrupt — restore with `boost replay`" in r.out
         assert "lock file parses (v3)" not in r.out
         assert "lock file integrity OK" not in r.out
+
+    def test_a_lock_that_is_not_utf8_is_corrupt_not_a_crash(self, boost,
+                                                             installed):
+        # list, doctor, sync, heal, install and verify all exited 70 on it.
+        paths.lockfile_path().write_bytes(b"\xff\xfe")
+        r = boost("doctor", expect=1)
+        assert "lock file is corrupt — restore with `boost replay`" in r.out
+        boost("list")
 
     def test_wrong_schema_lock_rc1(self, boost, installed):
         paths.lockfile_path().write_text(
@@ -1871,3 +1964,24 @@ class TestDuplicateSkillDiscovery:
         r = boost("heal", "--prune-duplicates")
         assert "duplicate skill discovery" not in r.out
         assert (gem / "SKILL.md").is_file()
+
+
+class TestStateFilesThatAreNotUtf8:
+    """One bad byte in a file boost keeps for itself is a corrupt file, never
+    a traceback: each of these took a command down at exit 70."""
+
+    def test_a_policy_file_reads_as_defaults(self, boost, tapped):
+        paths.policy_path().write_bytes(b"\xff\xfe")
+        boost("install", "brainstorming")
+
+    @pytest.mark.parametrize("which", ["tap", "index"])
+    def test_a_search_cache_is_rebuilt(self, boost, tapped, which):
+        boost("search", "brainstorm")          # builds both caches
+        from boost_cli.core import rag, registry
+        bad = (rag.index_path() if which == "index"
+               else registry.list_taps()[0].cache_file)
+        assert bad.is_file()
+        bad.write_bytes(b"\xff\xfe")
+        r = boost("search", "brainstorm")
+        assert "brainstorming" in r.out
+        boost("info", "brainstorming")

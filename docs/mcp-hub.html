@@ -523,7 +523,7 @@ REGISTRY.register(
     {<span class="tok">"type"</span>: <span class="tok">"object"</span>, <span class="tok">"properties"</span>: {…}},
     _tool_discover_github)          <span class="cm"># ← the only edit</span>
 
-_MCP_TOOLS = REGISTRY.specs()       <span class="cm"># list stays in sync</span></pre>
+REGISTRY.specs()                <span class="cm"># rendered per call</span></pre>
         </div>
       </div>
     </div>
@@ -709,10 +709,12 @@ _MCP_TOOLS = REGISTRY.specs()       <span class="cm"># list stays in sync</span>
             are.</p></div>
         </details>
         <details class="card tech">
-          <summary>Back-compat: <code>_MCP_TOOLS</code> / <code>_mcp_tool</code> <span class="topic-tag">no churn</span></summary>
-          <div class="body"><p><code>_MCP_TOOLS = REGISTRY.specs()</code> and a one-line
-            <code>_mcp_tool()</code> that delegates to <code>REGISTRY.call()</code> preserve the two
-            symbols the server loop and the existing test suite reference. The refactor is
+          <summary>Back-compat: <code>_mcp_tool</code> <span class="topic-tag">no churn</span></summary>
+          <div class="body"><p>A one-line <code>_mcp_tool()</code> that delegates to
+            <code>REGISTRY.call()</code> preserves the symbol the server loop and the existing test
+            suite reference. (<code>_MCP_TOOLS</code>, a list frozen at import, was later removed:
+            <code>tools/list</code> renders <code>REGISTRY.specs()</code> on every call, so a
+            tool's description can say what it costs on the machine the host connects from.) The refactor is
             behaviour-preserving: the
             <code>tools/list</code> order is unchanged for the first five tools, and only the new
             sixth entry is appended — so <code>TestMcp</code> needed a single one-line assertion

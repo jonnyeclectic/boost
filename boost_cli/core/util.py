@@ -289,6 +289,19 @@ def human_size(n: int) -> str:
     return str(size)
 
 
+def head_lines(text: str, cap: int) -> tuple[list[str], int]:
+    """The first `cap` lines of `text`, and how many were left out.
+
+    A preview that silently stops is worse than a short one: `onboard
+    --dry-run` cut every file at 24 lines with no marker, so its lock preview
+    ended mid-object and read as a truncated *file* rather than a truncated
+    *view* of one. Callers print the remainder; returning the count rather than
+    a formatted ellipsis keeps the wording with the emitter that owns the pane.
+    """
+    lines = text.splitlines()
+    return lines[:cap], max(len(lines) - cap, 0)
+
+
 def _slug_or_none(name: str) -> str | None:
     return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or None
 
@@ -363,8 +376,49 @@ def sha256_dir(path: Path) -> str:
 
 
 def dir_size(path: Path) -> int:
-    """Sum the byte size of every regular file under ``path``, recursively."""
-    return sum(p.stat().st_size for p in Path(path).rglob("*") if p.is_file())
+    """Sum the byte size of every regular file under ``path``, recursively.
+
+    A symlink is not a regular file, whatever it points at: this is what the
+    tree occupies on disk. Following links counted a target's bytes a second
+    time, or bytes outside the tree, or nothing once it dangled, and
+    ``compact`` reports freed space as this before minus this after, so a
+    link whose target the narrow removed made its live figure overstate the
+    run. What a *copy* of the tree will hold is :func:`copied_files`.
+    """
+    return sum(p.lstat().st_size for p in Path(path).rglob("*")
+               if p.is_file() and not p.is_symlink())
+
+
+def copied_files(path: Path) -> list[Path]:
+    """The files ``install`` will copy out of ``path``, in walk order.
+
+    ``store`` installs with ``shutil.copytree(symlinks=False, ignore=
+    ignore_patterns(*IGNORED))``: every link is copied as what it points at,
+    a linked *directory* included, and an ``IGNORED`` name is skipped at any
+    depth. ``Path.rglob`` does not descend through a directory link, so sizing
+    a skill from the tap that way said 61 B and 1 file for a skill that
+    installs as 861 B and 2. A dangling link copies nothing (copytree fails on
+    it, and the failure belongs to install, not to a size estimate). Two
+    paths to one directory are two copies, as they are to copytree; only a
+    directory that resolves to one of its own ancestors — a link cycle — is
+    not descended, so the walk cannot hang.
+    """
+    top = Path(path)
+    files: list[Path] = []
+    for root, dirs, names in os.walk(path, followlinks=True):
+        here = Path(root)
+        real = os.path.realpath(here)
+        if here != top and any(os.path.realpath(p) == real
+                               for p in here.parents
+                               if p == top or top in p.parents):
+            dirs.clear()
+            continue
+        dirs[:] = [d for d in dirs if d not in IGNORED]
+        for name in names:
+            f = Path(root) / name
+            if name not in IGNORED and f.is_file():
+                files.append(f)
+    return files
 
 
 def semver_tuple(v: str):

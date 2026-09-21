@@ -8,10 +8,12 @@ asserting exact output shapes, exit codes, and on-disk cache effects.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 import types
 
@@ -282,6 +284,35 @@ class TestSearch:
         top = next(ln for ln in piped.out.splitlines()
                    if "commit-messages" in ln)
         assert "fixture-tap" in top
+
+    def test_a_wide_pane_shows_both_copy_targets_whole(self, boost, tmp_path,
+                                                       monkeypatch):
+        # Two taps ship one 38-cell name, so `info` needs the `tap:name`
+        # qualifier — and at 300 columns the row used to show it as
+        # `sickn33-antigravity…:doc-coauthoring-with-structured…`, which
+        # `info` rejects. The row itself must be enough to build the command.
+        # (Two descriptions, because identical content is one search row.)
+        # Both over their caps (32, 20), and short enough that the clone
+        # stays well inside Windows' 260-character path limit.
+        name = "doc-coauthoring-with-structured-review"
+        long_tap = "sickn33-antigravity-awesome-skills"
+        for tap, desc in ((long_tap, "Coauthor documents with review"),
+                          ("short-tap", "Coauthor documents with handoff")):
+            boost("tap", _make_mirror_tap(tmp_path / tap, name, desc))
+        monkeypatch.setenv("COLUMNS", "300")
+        r = boost("search", "coauthor", "documents")
+        row = next(ln for ln in r.out.splitlines() if "sickn33" in ln)
+        cells = row.split()
+        assert "…" not in row and cells[1] == name and cells[3] == long_tap
+        boost("info", name, expect=1)                 # ambiguous unqualified
+        info = boost("info", "%s:%s" % (cells[3], cells[1]))
+        assert name in info.out and long_tap in info.out
+        # Narrow panes keep the fitted plan: capped name, no tap, in the pane.
+        monkeypatch.setenv("COLUMNS", "60")
+        narrow = boost("search", "coauthor", "documents")
+        rows = [ln for ln in narrow.out.splitlines() if "doc-coauthoring" in ln]
+        assert rows and all(output.visible_len(ln) <= 60 for ln in rows)
+        assert not any("short-tap" in ln or "sickn33" in ln for ln in rows)
 
     def test_curated_tap_gets_star(self, boost, fixture_tap_src):
         boost("tap", fixture_tap_src, "--curated")
@@ -2149,6 +2180,55 @@ class TestReindex:
         r = boost("reindex")
         assert "indexed" in r.out and "passages" in r.out
         assert rag.ready() is True
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unwritable_cache_dir_is_one_error_not_a_crash(self, boost,
+                                                               tapped):
+        # search, browse, info and update degrade in a cache dir boost cannot
+        # write; reindex exited 70 with a PermissionError crash report.
+        from boost_cli.core import rag
+        boost("reindex")
+        before = rag.index_path().read_bytes()
+        paths.cache_dir().chmod(0o500)
+        try:
+            r = boost("reindex", "--force", expect=1)
+        finally:
+            paths.cache_dir().chmod(0o700)
+        assert r.err.splitlines() == [
+            "Error: could not save the search index in ~/.boost/cache "
+            "(Permission denied)",
+            "  hint: run `chmod u+w ~/.boost/cache`"]
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+        # The index already there is untouched, and search still reads it.
+        assert rag.index_path().read_bytes() == before
+        assert rag.ready() is True
+        assert not list(paths.cache_dir().glob(".rag_postings.sqlite.*.tmp"))
+        boost("reindex", "--force")               # and once it is writable
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_cache_dir_it_cannot_create_names_boost_home(self, boost,
+                                                           tapped):
+        # A cloned tap, no cache dir and a read-only ~/.boost: rebuild_tap
+        # exited 70 creating the dir before the index could say what to fix.
+        shutil.rmtree(paths.cache_dir())
+        paths.boost_home().chmod(0o500)
+        try:
+            r = boost("reindex", expect=1)
+        finally:
+            paths.boost_home().chmod(0o700)
+        assert "could not save the catalog cache for fixture-tap" \
+            in " ".join(r.err.split())
+        assert r.err.splitlines()[-2:] == [
+            "Error: could not save the search index in ~/.boost "
+            "(Permission denied)",
+            "  hint: run `chmod u+w ~/.boost`"]
+        assert not list(paths.logs_dir().glob("crash-*.log"))
 
     def test_json_stats(self, boost, tapped):
         r = boost("reindex", "--json")

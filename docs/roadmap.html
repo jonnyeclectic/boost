@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>57</b><span>Planned</span></div>
-      <div class="stat"><b>472</b><span>Loop finds</span></div>
+      <div class="stat"><b>60</b><span>Planned</span></div>
+      <div class="stat"><b>475</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1407,48 +1407,14 @@ SCOPE LIMIT #2: the shared $TMPDIR/eval-home is materialised at the PRE-refresh 
       </article>
 
       <article class="cap rcard" id="gate-parity-test-ignores-k-and-golden">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Retrieval eval</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Retrieval eval</span></div>
         <h3>The CI-vs-Makefile floor-parity test compares only the floor VALUES, so changing <code>-k</code> in ci.yml turns a PASS into a FAIL with the test still green</h3>
-        <p><b>Measured.</b> Changing <code>-k 10</code> to <code>-k 5</code> in ci.yml alone leaves <code>TestTheGateIsDefinedOnce</code> at "2 passed" while the required gate flips from exit 0 to exit 1 — recall@k drops 0.852 to 0.753 against the 0.780 floor — and <code>make eval</code> stays green; the same test catches a floor-VALUE edit (hit@1 0.40 -&gt; 0.10) with "1 failed", proving the guard runs and simply cannot see <code>-k</code>.
-
-<b>Reproduce it.</b>
-
-<code>cd &lt;repo&gt;</code><br>
-<code># 1. the k=5 vs k=10 measurement, against the shared read-only corpus:</code><br>
-<code>H=$TMPDIR/audit-k; rm -rf "$H"; mkdir -p "$H/.boost"</code><br>
-<code>cp -R "$TMPDIR/eval-home/cache" "$H/.boost/cache"; cp "$TMPDIR/eval-home/config.json" "$H/.boost/config.json"</code><br>
-<code>export HOME=$H BOOST_HOME=$H/.boost BOOST_NO_AI=1</code><br>
-<code>.venv/bin/python scripts/eval_retrieval.py -k 10 --fail-under 0.78 --floor hit@1=0.40 --floor MRR=0.52 --floor nDCG@k=0.58 --regression-eps 1 | tail -8</code><br>
-<code>.venv/bin/python scripts/eval_retrieval.py -k 5  --fail-under 0.78 --floor hit@1=0.40 --floor MRR=0.52 --floor nDCG@k=0.58 --regression-eps 1 | tail -8</code><br>
-<code># 2. the parity-test blindness, in a scratch copy (never edit the repo):</code><br>
-…
-
-<b>What adversarial verification corrected.</b> This card's numbers are the re-measured ones, not the ones first reported.
-
-Four stated details are wrong. The defect itself reproduces exactly.
-
-1. <code>why_it_matters</code> says a <code>-k</code> edit is "a silent redefinition of three of the four floored metrics". Measured, it is TWO: recall@k (0.852 -&gt; 0.753) and nDCG@k (0.657 -&gt; 0.624). hit@1 and MRR are k-independent by construction — <code>scripts/eval_retrieval.py:111-112</code> reads <code>"hit@1": lambda r, rel, k: hit_at_1(r, rel)</code> and <code>"MRR": lambda r, rel, k: reciprocal_rank(r, rel)</code>, both discarding <code>k</code> — and both measured identical at 0.473 / 0.605 at k=10 and k=5. (The <code>claim</code> field says "recall@k and nDCG@k", which is right; only <code>why_it_matters</code> contradicts it.)
-
-2. "The comment block in ci.yml (twelve lines at :232-243)". The FLAGS-MUST-MATCH paragraph is EIGHT lines, <code>.github/workflows/ci.yml:232-239</code>. Line :240 is a bare <code>#</code> and :241 onward is the unrelated "THE CLONES ARE CACHED" block about cache availability.
-
-3. C's stated mechanism is stale. "dropping <code>--regression-eps 1</code> restores the 0.02 default, so upstream corpus drift reddens every open PR" — <code>tests/eval/taps.txt</code> now pins a 40-char commit SHA per row, so upstream HEAD can no longer move the corpus. Measured: dropping the flag today exits 0 with no REGRESSION lines.
-
-<b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
-
-SOURCE VERIFIED, NOT ALREADY_FIXED. <code>tests/unit/test_eval_corpus.py:404-412</code> still reads exactly as claimed: <code>_flags</code> does <code>re.findall(r"--floor\s+([\w@]+)=([\d.]+)", text)</code> plus <code>re.search(r"--fail-under\s+([\d.]+)", text)</code> and returns only that dict. <code>.github/workflows/ci.yml:232</code> still says "THE FLAGS MUST MATCH <code>make eval</code> — tests/unit/test_eval_corpus.py fails the build if they drift." Both file:line references in the finding are accurate.
-
-NO SECOND GUARD EXISTS. <code>_flags</code> is the only comparison of ci.yml against the Makefile anywhere in the file (used at lines 423 and 439, the two tests in the class), and grepping <code>tests/unit</code> + <code>tests/functional</code> for any <code>-k</code> parity assertion found only unrelated <code>dense.retrieve(k=10)</code> and <code>boost chat -k</code> arg-validation tests.
-
-NOT A DUPLICATE, BUT NAME THE ORIGIN CARD. <code>docs/roadmap/items/eval-corpus-was-not-actually-pinned.md</code> (status: shipped) is the card that INTRODUCED this parity test, and its body overclaims: "a unit test now compares the flags in <code>Makefile</code> and <code>ci.yml</code> and fails the build when they disagree — the drift was invisible precisely because two files each looked right on their own." That sentence is what this finding falsifies for three of the four flags. A card author should link it as the contradicted claim, not merge into it. I re-checked all 432 titles and grepped every item body for <code>TestTheGateIsDefinedOnce</code>, <code>test_eval_corpus</code>, <code>FLAGS MUST MATCH</code>, <code>_flags</code>, <code>regression-eps</code>, <code>golden-natural</code>, and for files mentioning both <code>ci.yml</code> and <code>Makefile</code> — the only hit is that origin card.
-
-<b>Why it is worth doing.</b> The comment block in ci.yml (twelve lines at :232-243) and the test's own docstring both promise that the required check and the documented gate cannot diverge — that promise is why nobody re-reads the two invocations. It holds for one of the four flags that decide the gate. A <code>-k</code> edit in either file is a silent redefinition of three of the four floored metrics, and the measured gap at k=5 (0.753 vs a 0.780 floor) is on the failing side, so the first symptom is a red required check on an unrelated PR with a green <code>make eval</code> locally.
-
-<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em></p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/gate-parity-test-ignores-k-and-golden.md">Write-up &middot; gate-parity-test-ignores-k-and-golden.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
-          <span class="m">ci.yml:232 says "THE FLAGS MUST MATCH make eval — tests/unit/test_eval_corpus.py fail…</span>
+          <span class="m">the parity test now parses the whole eval_retrieval.py call in the Makefile, ci.yml and the refresh workflow with the script's own parser; a -k 5 in ci.yml alone fails it</span>
         </div>
       </article>
 
@@ -1530,46 +1496,9 @@ Nothing else in the finding is wrong. 0/91 vs 50/50, the 27 undecided rows / 62 
       </article>
 
       <article class="cap rcard" id="mcp-search-cost-overstated-on-keyless-machines">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Interop</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop</span></div>
         <h3>boost_search advertises "10-15 seconds" unconditionally; with no AI configured it is 0.013 s median and the rerank never runs</h3>
-        <p><b>Measured.</b> With no AI backend available, boost_search over 20 distinct queries against the 10,152-entry eval corpus returned in a median of 0.0134 s (min 0.0057 s, max 0.1206 s, and 0.075 s for the first search in a fresh process) while both MCP surfaces state an unconditional "10-15 seconds — an LLM reranks every match" — because rag.py:1129 returns the retrieval order untouched when <code>ai.available()</code> is False, so no LLM call is ever made.
-
-<b>Reproduce it.</b>
-
-<code>cd &lt;repo&gt;</code><br>
-<code>export HOME=$TMPDIR/audit-mcp-surface &amp;&amp; mkdir -p "$HOME"</code><br>
-<code>export BOOST_HOME=$TMPDIR/eval-home &amp;&amp; export BOOST_NO_AI=1</code><br>
-<code>.venv/bin/python -c '</code><br>
-<code>import time, statistics</code><br>
-<code>from boost_cli.commands import configuration as c</code><br>
-<code>from boost_cli.core import ai</code><br>
-<code>print("ai.available() -&gt;", ai.available(), "(rag.py:1129 returns the retrieval order unreranked when False)")</code><br>
-<code>Q=["set up code review","add commit conventions","write a migration","debug flaky tests","python testing","react hooks","terraform module","docker compose","ci pipeline","security audit","api documentation","database schema","kubernetes deploy","git hooks","typescript lint","rust async","llm prompt","data pipeline","monorepo build","code"]</code><br>
-…
-
-<b>What adversarial verification corrected.</b> This card's numbers are the re-measured ones, not the ones first reported.
-
-1. THE HEADLINE MULTIPLIER IS MISLABELED. "790x-2,240x over-stated at the median" mixes two statistics: 2,240x is 15s / 0.0067s, the finder's MIN, not its median. At the finder's own median (0.0126s) the range is 794x-1,190x; at my reproduced median (0.0134s) it is 746x-1,119x. A card must say ~750x-1,200x at the median, or drop the point multiplier entirely (see notes on corpus scope).
-
-2. configuration.py:1271-1290 is wrong for <code>_ranking_note</code>. It is at lines 1275-1294 (def at 1275).
-
-3. mcp.py:428-447 for <code>engine_note</code> — the def is at line 427 (body 427-447).
-
-Everything else in the finding checked out exactly: rag.py:1129 is verbatim <code>if not ai.available():</code> followed by <code>return hits[:limit], engine</code>; tests/unit/test_mcp.py:200-201 and :545 are the exact assertions quoted; the quote from mcp-search-hid-which-ranking-ran.md ("A boost installed with pipx has neither inside its venv unless the key is exported, so the silent path is the common one rather than the edge case") is verbatim; the captured reply line is verbatim; and both surfaces do carry "10-15 seconds" as an unconditional literal with no hedge for machine state.
-
-<b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
-
-SCOPE LIMITS OF MY REPRO — a card author must not overstate any of these:
-
-1. CORPUS-DEPENDENCE OF THE MULTIPLIER. My timings are against the 20-tap / 10,152-entry eval corpus. The repo's OWN shipped card <code>mcp-search-cost-was-understated.md</code> measured the same rerank-off path at 0.10 s — ~8x slower than my median — which yields 117x-170x, not three orders of magnitude. The real user install is ~71,700 items (7x the eval corpus again). The defect is unaffected, but the headline number is not robust: write it as "two to three orders of magnitude, corpus-dependent" and name the corpus, never a bare "2,240x".
-
-2. THE 10-15 s NUMERATOR IS INHERITED, NOT RE-MEASURED. I could not verify it here. With BOOST_NO_AI unset, <code>ai.available()</code> returned True (the <code>claude</code> shim is on PATH) yet the rerank still fell through to BM25 at 0.80-0.94 s and the reply carried the "did NOT run" note — a sandbox CLI-shim artifact, not evidence about real machines. The 11.7-17.0 s figure comes from <code>mcp-search-cost-was-understated.md</code>, not from me.
-
-3. BOOST_NO_AI=1 IS A PROXY, AND THE "COMMON CASE" PREMISE IS INHERITED. On this machine <code>claude</code> is on PATH, so <code>ai.available()</code> is naturally True and the keyless state was simulated. The proxy is fair — <code>available()</code> is <code>enabled() and (has_cli() or ANTHROPIC_API_KEY)</code>, and both routes hit the identical rag.py:1129 branch — but I did NOT observe a keyless machine. The "pipx has neither inside its venv" premise is the sibling card's assertion restated, and it is loose reasoning: <code>has_cli()</code> calls <code>shutil.which</code>, which reads PATH, not the venv.
-
-<b>Why it is worth doing.</b> The stated cost is not decoration — mcp.py's own comment calls it load-bearing ("The stated COST kills the hesitation over an unknown-price call") and it is the sole justification for the "WORTH THE SECONDS" gate that tells an agent to search only when the request touches more than one file or outlives the session. On the machine this repo calls the common one there are no seconds, so the gate suppresses a free call on a false price — the mirror of the defect the mcp-search-cost-was-understated card fixed in the other direction, and with the same consequence: "a wrong cost in the one paragraph whose job is to make the tool worth reaching for discredits everything around it." An agent that …
-
-<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em></p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/mcp-search-cost-overstated-on-keyless-machines.md">Write-up &middot; mcp-search-cost-overstated-on-keyless-machines.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -1660,43 +1589,9 @@ CARD-AUTHOR WARNINGS: - Do NOT fix this by appending <code>("incompatible", …)
       </article>
 
       <article class="cap rcard" id="quickstart-says-ready-exit-0-after-every-tap-failed">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Onboarding · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Onboarding · Bug</span></div>
         <h3>With every registry unreachable, quickstart prints "✓ indexed 0 items" and "✓ ready", exits 0 — and the command it recommends exits 1</h3>
-        <p><b>Measured.</b> On a machine that cannot reach any registry, <code>boost quickstart</code> fails 0-for-7 clones, prints "✓ indexed 0 items for keyword search" and "✓ ready — try <code>boost search brainstorming</code>", and exits 0 — while the very next line of README's own install snippet (README.md:22-23 is <code>boost quickstart</code> followed by <code>boost search</code>) exits 1 with "Error: no taps configured — nothing to search"; <code>cmd_quickstart</code> has no failure counter at all, so <code>out.ok</code> at quickstart.py:197 and :220 and <code>return 0</code> at :221 are unreachable-by-failure.
-
-<b>Reproduce it.</b>
-
-<code>cd &lt;repo&gt;</code><br>
-<code>export HOME=$TMPDIR/audit-qs-f2 ; export BOOST_HOME=$HOME/.boost ; mkdir -p "$HOME"</code><br>
-<code>printf '[url "https://no-such-host.invalid/"]\n\tinsteadOf = https://github.com/\n' &gt; "$HOME/.gitconfig"</code><br>
-<code>BOOST() { .venv/bin/python -c "import sys;sys.path.insert(0,'&lt;repo&gt;');from boost_cli.cli import main;sys.exit(main(sys.argv[1:]))" "$@"; }</code><br>
-<code>BOOST quickstart ; echo "QUICKSTART_EXIT=$?"</code><br>
-<code>BOOST search brainstorming ; echo "SEARCH_EXIT=$?"</code><br>
-<code>BOOST doctor | tail -6</code>
-
-<b>What adversarial verification corrected.</b> This card's numbers are the re-measured ones, not the ones first reported.
-
-Two process nits in the finding's own prose; neither is a defect number and neither belongs on a card.
-
-1. <code>not_carded_check</code> says "Read all 318 <code>^title:</code> lines". The real count is 432: <code>ls docs/roadmap/items/*.md | wc -l</code> = 432 and <code>grep -h '^title:' docs/roadmap/items/*.md | wc -l</code> = 432. The conclusion still holds — I re-ran the dedupe check myself over all 432.
-
-2. <code>evidence</code> says "lines 195-220 run unconditionally and end <code>return 0</code>". <code>return 0</code> is line <b>221</b>; the file is 221 lines long. Lines 195-220 are correct for the unconditional block; the return is one line past it.
-
-Every defect-bearing figure is right: <code>quickstart.py:91</code> is the <code>out.warn("could not tap %s: %s"...)</code> + <code>continue</code>; <code>:197</code> is <code>out.ok("indexed %s items for keyword search")</code>; <code>:220</code> is <code>out.ok("ready — try \</code>boost search brainstorming\<code>")</code>; <code>:3</code> is the "one command from empty machine to working search" docstring; <code>config.DEFAULT_TAPS</code> is exactly 7 registries in the order printed; <code>tests/functional/test_cli_quickstart.py:217</code> is <code>test_it_reports_each_outcome_and_survives_a_bad_registry</code> with <code>assert both.count("tapped ") &gt;= 2</code> at :224 and <code>assert "ready" in both</code> at :225, and it passes today.
-
-<b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
-
-Dedupe check I ran myself: only 5 of the 432 item files mention quickstart. <code>audit-quickstart-findings.md</code> is unpinned-taps-without-[rag] plus the three <code>[rag]</code> hint wordings — no exit codes, no success lines. <code>shard-refresh-skips-processed-commits.md</code> is rerun re-downloads. <code>published-shards-have-no-consumer.md</code>, <code>publish-the-keyword-index.md</code> and the stale-prose card are the 463/464 count and shard reachability. I also read the exit-0 family (<code>audit-verify-drift-…exit-0</code>, <code>audit-clean-counts-failed-removals-…exits 0</code>, <code>audit-tap-findings</code>, <code>one-dead-tap-broke-every-update</code>) — all per-command, none quickstart. Not carded.
-
-Two things a card author must not get wrong:
-
-1. <b>The fix condition is "no taps configured afterwards", not "zero clones succeeded".</b> <code>registry.add_many</code> returns <code>skipped: True</code> for a registry already tapped, and <code>_tap_defaults</code> returns <code>names</code> (every selected registry, tapped here or not) — it discards outcomes entirely. So on a clean rerun where all 7 are already tapped, *zero* results carry <code>ok: True</code>. A naive <code>count(ok) == 0 -&gt; return 1</code> would make every successful rerun exit 1. Gate on <code>registry.list_taps()</code> being empty (or <code>stats["entries"] == 0</code>) instead. I ran <code>test_it_reports_each_outcome_and_survives_a_bad_registry</code> and it passes today; that test asserts <code>both.count("tapped ") &gt;= 2</code> and <code>"ready" in both</code>, so a fix that only fires at total failure keeps it green, as the finding says.
-
-2.
-
-<b>Why it is worth doing.</b> This is the first command a new user runs and the first one a Dockerfile, CI job or setup script runs. Exit 0 means every automated caller records a successful install of a boost that cannot search anything; a human sees seven warnings scroll past and two green ticks at the bottom, which is the shape that reads as success. The command's own docstring promises "working search" and delivers zero items while claiming ready. A fix is a failure counter: when 0 taps succeeded, say so and return non-zero — leaving the partial-failure behaviour (and its existing test) untouched.
-
-<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CONFIRMED</b>. No fix is prescribed here — the measurement is the contribution.</em></p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/quickstart-says-ready-exit-0-after-every-tap-failed.md">Write-up &middot; quickstart-says-ready-exit-0-after-every-tap-failed.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -1848,41 +1743,9 @@ BLAST RADIUS — do not overstate it in the card. The natural set is NOT wired i
       </article>
 
       <article class="cap rcard" id="search-caps-the-two-copyable-identifiers">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">UX · Bug</span></div>
         <h3><code>search</code> caps the name column at 32 and the tap column at 20 at every terminal width, while the description column grows without limit</h3>
-        <p><b>Measured.</b> At COLUMNS=300 the same two <code>doc-coauthoring</code> rows render their tap as <code>anthropics/skills</code> and <code>sickn33/antigravity…</code> in <code>search</code> while <code>browse</code> prints both taps in full on the identical terminal — and <code>./boost info 'sickn33/antigravity…:doc-coauthoring'</code> returns "Error: no tap named 'sickn33/antigravity…'", so the qualifier <code>info</code> demands cannot be built from the row <code>search</code> shows. Across the 10,152-entry corpus, 714 rows (7.03%) have at least one clipped copy target — a name over 32 cells, or a required tap qualifier over 20 cells — and because <code>name_w</code> and <code>tap_w</code> are <code>min(..., 32)</code> and <code>min(..., 20)</code> with no width term, that 7.03% does not shrink at any terminal width, while the description column grows from 27 cells at 84 columns to 443 at 500.
-
-<b>Reproduce it.</b>
-
-<code>cd &lt;repo&gt;</code><br>
-<code>export BOOST_HOME=$TMPDIR/eval-home</code><br>
-<code>python3 -c "import sys;sys.path.insert(0,'.');from boost_cli.core import output as o;[print('cols=%-4d name_w=%d tap_w=%d desc_w=%d'%(c,(l:=o.search_layout(c,['doc-coauthoring'],['skill'],['sickn33/antigravity-awesome-skills'])).name_w,l.tap_w,l.desc_w)) for c in (84,140,300,500)]"</code><br>
-<code>COLUMNS=300 ./boost search "wordpress seo blogwriting" | head -1</code><br>
-<code>./boost info 'wordpress-centric-high-seo-optim…'</code><br>
-<code>COLUMNS=300 ./boost search doc-coauthoring | sed -n '2,3p'</code><br>
-…
-
-<b>What adversarial verification corrected.</b> This card's numbers are the re-measured ones, not the ones first reported.
-
-Three cosmetic errors; none touches the defect or any headline number.
-
-1. The finder's layout table is labelled as evidence for BOTH caps but shows <code>name_w=15</code> at every width, because it passes the 15-char name <code>doc-coauthoring</code>. That table demonstrates only the tap cap. The name cap needs a &gt;32-char name; my second table (name_w=32 at cols=84/140/300/500) is the missing half.
-
-2. The finder's repro line pastes <code>wordpress-centric-high-seo-optim…</code> (an extra <code>m</code>); the cell search actually renders is <code>wordpress-centric-high-seo-opti…</code> (31 chars + ellipsis = 32 cells). Both error, but the repro string is not what is on screen. Use the 31+ellipsis form.
-
-3. "browse's plain table prints it in full" — the BEHAVIOR is correct and I verified it, but there is no <code>--plain</code> flag on browse (<code>Error: unrecognized arguments: --plain</code>). The plain table is what browse falls back to when stdout is not a TTY. Also add <code>boost list</code> and <code>boost taps</code>, which likewise print full tap names via the width-aware <code>out.table</code>.
-
-Everything else re-derived exactly: 487 / 379 / 77.8% / 25 into 10 / 10,152 / 162 / 333 / 3.28% / 102 / 17 of 20 (85%) / real name 54 chars.
-
-<b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
-
-SCOPE LIMIT ON THE 25-into-10 COLLISION — the most important caveat for a card author. That figure is a property of the NAME LIST in <code>boost_cli/data/registries.json</code>, not an observed screen. I measured the 20-tap eval corpus and found ZERO colliding tap cells (<code>{}</code>). Nobody has seen two identical <code>anthropics/claude-c…</code> cells side by side; it requires a machine that has tapped both repos and a query that hits both. So the finding's <code>why_it_matters</code> sentence "two rows from different repos are indistinguishable on screen" is an INFERENCE, not a measurement — a card must word it as "25 of the 487 shipped registries would render as one of 10 identical cells if co-tapped", never as an observed fact. The DEMONSTRATED defect is truncation-breaks-paste (the doc-coauthoring chain above), which is fully reproduced.
-
-MITIGATIONS (why Med and not High): every failure path recovers in one command. The name miss prints closest matches, which included the real 54-char name. The ambiguity error prints BOTH full tap names. <code>search --json</code> carries the full tap verbatim (verified: <code>('doc-coauthoring', 'sickn33/antigravity-awesome-skills')</code>), and <code>browse</code>/<code>list</code>/<code>taps</code> print both identifiers in full.
-
-<b>Why it is worth doing.</b> <code>search</code> is the front door and the row is what a user copies. At real catalogue scale its provenance column stops being an identifier: 25 shipped registries render as one of 10 identical cells, so two rows from different repos are indistinguishable on screen — and the tap is precisely what disambiguates the 102 names that live in more than one tap. The information exists (<code>search --json</code> carries the full tap, <code>browse</code>'s plain table prints it in full, and the ambiguity error names both taps), so the claim is that search's human path withholds the copy target, not that it is unreachable — but the user only learns that after the command they typed has failed.
-
-<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CONFIRMED</b>. No fix is prescribed here — the measurement is the contribution.</em></p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/search-caps-the-two-copyable-identifiers.md">Write-up &middot; search-caps-the-two-copyable-identifiers.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -1995,7 +1858,7 @@ MITIGATIONS (why Med and not High): every failure path recovers in one command. 
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
-          <span class="m">Doctor's tap check is elif not tap.cache_file.exists(): (quality.py:420) — existence …</span>
+          <span class="m">fixed by #889 (the cache is replaced, not rewritten in place: search/browse/info/update/heal 70 → 0 for mode 400 and 000) and the #909 train (b1b1bca, eeb2c76: doctor and heal both name an unwritable cache dir; heal no longer claims a rebuild it did not do) — re-measured on a316c6b</span>
         </div>
       </article>
 
@@ -2123,18 +1986,14 @@ Floor-margin exposure, with that qualification attached: hit@1 measures 44/91 = 
       </article>
 
       <article class="cap rcard" id="hooks-list-drops-the-name-before-the-host">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">UX · Bug</span></div>
         <h3>At a narrow pane <code>boost hooks list</code> drops <code>name</code>, the argument <code>hooks remove -n</code> takes, while <code>host</code> and <code>scope</code> survive</h3>
-        <p><b>Measured.</b> With the two hooks <code>boost bmad autopilot</code> installs (<code>bmad</code>, <code>bmad-route</code>), <code>COLUMNS=65 boost hooks list</code> prints <code>host scope event command</code>: the column dropped second, after <code>matcher</code>, is <code>name</code>, while <code>host</code> prints the same word on every row. <code>out.table</code> drops right to left, skipping <code>keep=</code>, and <code>name</code> sits in the middle of this table.
-
-Protecting it is not the fix. PR 902 tried <code>keep=("command", "name")</code> and it re-opened the overflow that PR closed: when both protected columns together outgrow the pane, nothing is left that may drop, and the row prints past the edge (<code>bmad-route</code> plus a 72-cell command printed 84 wide at 80). <code>tests/functional/test_cli_hooks.py::test_list_fits_the_pane_with_a_long_name_and_command</code> pins that.
-
-Candidate shapes, not decided: put <code>name</code> first in this table, so right-to-left dropping reaches it last; or give <code>out.table</code> a drop order separate from <code>keep=</code> (drop-last rather than never-drop). The name is always available in <code>boost hooks list --json</code> in the meantime.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/hooks-list-drops-the-name-before-the-host.md">Write-up &middot; hooks-list-drops-the-name-before-the-host.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">At a narrow pane `boost hooks list` drops `name` — the argument `hooks remove -n` takes — while `host` and `scope` survive…</span>
+          <span class="m">fixed — `name` now leads the table, so a narrow pane drops it after `host`, `scope`, `event` and `matcher`, never before</span>
         </div>
       </article>
 
@@ -2175,20 +2034,58 @@ for an agent it skipped is not established here.</p>
       </article>
 
       <article class="cap rcard" id="config-json-edge-shapes-crash-or-disagree">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
         <h3>Two <code>config.json</code> shapes still slip past the corrupt-config handling. Invalid UTF-8 crashes every command, <code>doctor</code> included. <code>{"taps": "x"}</code> is a fresh install to <code>doctor</code> and a configured machine to <code>--help</code>.</h3>
-        <p><b>Measured</b> on the 2026-09-21 release train, which carries PR 888 (corrupt <code>config.json</code> is an issue, not a fresh install) and PR 904 (the first-run pointer).
-
-<b>Invalid UTF-8 crashes everything.</b> <code>printf '\xff\xfe' &gt; ~/.boost/config.json; boost doctor</code> prints a traceback ending in <code>UnicodeDecodeError</code>. <code>main</code> behaves the same, so this predates both PRs. <code>jsonstate.read_object</code> catches <code>OSError</code> and <code>JSONDecodeError</code>, but not the <code>ValueError</code> a failed decode raises. So the one command meant to diagnose a broken config cannot start. Only the <code>--help</code> pointer survives, because it sits behind <code>contextlib.suppress</code>.
-
-<b>A non-list <code>taps</code> gets two answers.</b> With <code>{"taps": "x"}</code>, <code>config.first_run()</code> treats the file as configured, so <code>--help</code> shows no "new here?". But <code>config.check()</code> passes it, and <code>list_taps</code> yields nothing, so <code>doctor</code> says "ready to set up — tap a registry". The two agree on <code>[]</code>, <code>null</code>, <code>{}</code>, <code>{"taps": []}</code>, <code>{"taps": {}}</code> and an unreadable file.
-
-Likely fix: <code>read_object</code> returns a decode failure as an error message, like a parse failure. And <code>check()</code> flags a <code>taps</code> that is not a list, so that doctor, heal and the pointer all read it as the same kind of broken file. Found by the release-train review.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/config-json-edge-shapes-crash-or-disagree.md">Write-up &middot; config-json-edge-shapes-crash-or-disagree.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">A config.json holding invalid UTF-8 crashes every command, doctor included; {"taps": "x"} reads as a fresh install to doctor and as configured to --help…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="cache-writers-that-still-crash-on-a-read-only-cache">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
+        <h3>Two cache writers still crash on what one <code>sudo boost</code> leaves behind. A read-only <code>_names.txt</code> fails <code>heal</code>, <code>update</code> and <code>untap</code> at exit 70 while <code>doctor</code> says healthy.</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/cache-writers-that-still-crash-on-a-read-only-cache.md">Write-up &middot; cache-writers-that-still-crash-on-a-read-only-cache.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">fixed: refresh_names replaces _names.txt through atomic_write_text and warns once when it cannot write at all (heal/update/untap/tap 70 → 0 on a 444 file); reindex in a 500 cache dir prints one error naming the dir and `chmod u+w ~/.boost/cache` (70 → 1)</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="identifier-columns-shrink-to-a-name-no-command-accepts">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <h3>Just before <code>out.table</code> drops a column, it shrinks the widest one with an ellipsis. In <code>hooks list</code> that is often <code>name</code>, and <code>bmad-r…</code> is not a name <code>hooks remove -n</code> accepts.</h3>
+        <p><b>Measured</b> on the branch that moved <code>name</code> to the front of <code>boost hooks list</code>, with the autopilot's hook names (<code>bmad</code>, <code>bmad-route</code>) piped at <code>COLUMNS</code> 40–100. <code>name</code> now shows at 52 widths, where it showed at 27. At 24 of those it is shortened, e.g. <code>bmad-r…</code>, in the widths 49–51, 57–59, 65–67, 74–79 and 83–91, the card's own width of 65 included. Before the reorder the same happened at 13 of 27.
+
+The cause is the fitter's shrink-before-drop rule (<code>output._fit_columns</code>). Before it drops a column, it shrinks the widest one that can still shrink, down to <code>_MIN_COL</code>. For prose that is the right trade. For an identifier, a clipped value is worse than an absent one, because it reads like data and is not: <code>boost hooks remove -n bmad-r…</code> removes nothing. <code>keep=</code> cannot express "may drop, never shrink". It means never drop and never shrink, and two such columns together can outgrow the pane, the overflow PR 902 closed.
+
+Likely fix: <code>out.table</code> takes a third class of column, <i>whole or absent</i>. The fitter never shrinks it and drops it in right-to-left order like any other column. <code>hooks list</code> would mark <code>name</code>, and <code>taps</code> and <code>list</code> would mark their NAME columns, the other arguments people copy. Measure every caller before and after: wide panes must stay byte-identical.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">In the few columns before out.table drops a column, the widest one that can shrink is squeezed with an ellipsis, and in hooks list that is the name remove -n takes…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="read-only-boost-home-with-no-cache-dir">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <h3>Under a read-only <code>~/.boost</code> with no cache dir, <code>update</code>, <code>heal</code> and <code>doctor</code> crash at exit 70, and <code>heal --dry-run</code> says 0 for a run that crashes</h3>
+        <p><b>Measured</b> on the second release train and on <code>a316c6b</code>, where it behaves the same. Setup: tap the fixture, then <code>rm -rf ~/.boost/cache; chmod 500 ~/.boost</code>. <code>search</code>, <code>info</code> and <code>browse</code> now exit 0 (<code>cache-writers-that-still-crash-on-a-read-only-cache</code>), and <code>reindex</code> exits 1 naming <code>~/.boost</code>. But <code>update</code>, <code>heal</code> and <code>doctor</code> exit 70 with crash reports. <code>update</code> dies in <code>journal.log</code>'s <code>ensure_dirs</code>. The command whose job is to name the problem, <code>doctor</code>, is one that crashes.
+
+<code>heal --dry-run</code> exits 0 in that state ("would rebuild catalog cache …") while <code>heal</code> exits 70. The cache-dir check heal and doctor gained in the first release train asks whether an <i>existing</i> directory refuses writes, deliberately, so that a missing one is not called unwritable. A missing cache dir under a parent that refuses the mkdir is a third case that neither branch names.
+
+Likely fix: <code>paths.ensure_dirs</code> callers on the doctor, heal, update and journal paths tolerate a refused mkdir, like <code>rebuild_tap</code> now does. Doctor and heal then name the nearest existing directory that refuses writes, which is what <code>rag._unsaved</code> already does. The preview and the run must agree.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">With ~/.boost read-only and no cache dir, update, heal and doctor exit 70; heal --dry-run exits 0 while heal exits 70…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -5297,45 +5194,14 @@ exactly why plausible similarity was not accepted as evidence.</p>
       </article>
 
       <article class="cap rcard" id="audit-dry-runs-disagree-with-the-real-run-compact-counts-bytes-it">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>Dry-runs disagree with the real run: <code>compact</code>, <code>heal</code> and <code>onboard</code> previews mispredict</h3>
-        <p>A dry-run's one job is to say what the real run will do, and five previews demonstrably don't.
-Sharpest case: with an untracked 1&nbsp;MiB <code>scripts/junk.bin</code> planted in a tap clone,
-<code>compact minio/skills --dry-run</code> prints <em>&ldquo;would free 1.0MB&rdquo;</em> &mdash; then
-<code>compact minio/skills</code> prints <em>&ldquo;&#10003; every tap is already compact&rdquo;</em> and the
-file is still there. <code>_freight_bytes</code> (<code>boost_cli/commands/configuration.py:268-275</code>)
-counts by <code>rglob</code>, but <code>git sparse-checkout reapply</code> only drops <em>tracked</em> paths
-outside the cone, so untracked bytes are promised and never freed. <code>compact --dry-run --reclone</code>
-compounds it: identical output with or without <code>--reclone</code>, although a reclone would drop the
-clone's whole <code>.git</code>.
-
-<code>heal</code> mispredicts its own branch: with a store copy deleted, <code>heal --dry-run</code> says
-<em>&ldquo;would restore brainstorming &hellip; (or drop it from the lock)&rdquo;</em> while the live run on the
-same state prints <em>&ldquo;&#10003; reinstalled missing brainstorming from sickn33/&hellip;&rdquo;</em> &mdash; the
-&ldquo;drop&rdquo; alternative never fired. And on a fresh HOME it says only <em>&ldquo;would create 4 missing
-directories&rdquo;</em>, the one heal action that never names its paths, so nothing in the preview says
-<code>~/.agents/skills</code> and the agent skill dirs are what get written.
-
-<code>onboard --dry-run</code> truncates each file preview at 24 lines with no marker
-(<code>configuration.py:630</code> is <code>splitlines()[:24]</code>) &mdash; the lock preview ends mid-object
-&mdash; and <code>--dry-run --pr</code> on a directory that is not a git repository exits 0 with no PR plan and
-no precondition failure, because the dry-run early return at <code>configuration.py:624</code> sits before
-the git-repo check at <code>:636</code>. The repo already treats preview/apply divergence as a correctness
-defect: the shipped item <em>dry-run-promised-a-link-nobody-makes</em> (PR 460) fixed the same class for
-<code>install --dry-run</code>.
-
-Fix per the verified recommendation: compute <code>_freight_bytes</code> from the <code>git ls-files</code>
-intersection so the dry run predicts what <code>reapply</code> removes, and estimate <code>.git</code> bytes
-when <code>--reclone</code> is given; word heal's restore line from the branch <code>sync_apply</code> will take
-and name the directories; have onboard print <em>&ldquo;&hellip; N more lines&rdquo;</em> past 24 lines and run the
-read-only <code>--pr</code> precondition checks before the dry-run return. Docs: README.md lines 268-274
-(<code>boost compact --dry-run</code>). Found by the 2026-08 CLI audit (cluster dry-run-fidelity); repro in
-the audit log.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-dry-runs-disagree-with-the-real-run-compact-counts-bytes-it.md">Write-up &middot; audit-dry-runs-disagree-with-the-real-run-compact-counts-bytes-it.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">compact --dry-run promises "would free 1.0MB"; the live run frees nothing</span>
+          <span class="m">fixed — compact counts only what reapply removes and previews a reclone as one; heal words the branch sync takes and names its directories; onboard marks its cut and checks --pr first</span>
         </div>
       </article>
 

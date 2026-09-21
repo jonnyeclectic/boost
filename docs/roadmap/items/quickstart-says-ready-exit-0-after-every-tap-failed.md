@@ -2,15 +2,15 @@
 id: quickstart-says-ready-exit-0-after-every-tap-failed
 board: code
 section: planned
-status: planned
+status: shipped
 category: Onboarding · Bug
 complexity: L
 impact: High
 wow: 4
 note: cmd_quickstart warns per failed clone but never tracks failures: it unconditionally r…
 order: 222
-owner:
-pr:
+owner: loop/quickstart-exit
+pr: 914
 title: With every registry unreachable, quickstart prints "✓ indexed 0 items" and "✓ ready", exits 0 — and the command it recommends exits 1
 ---
 <b>Measured.</b> On a machine that cannot reach any registry, <code>boost quickstart</code> fails 0-for-7 clones, prints "✓ indexed 0 items for keyword search" and "✓ ready — try <code>boost search brainstorming</code>", and exits 0 — while the very next line of README's own install snippet (README.md:22-23 is <code>boost quickstart</code> followed by <code>boost search</code>) exits 1 with "Error: no taps configured — nothing to search"; <code>cmd_quickstart</code> has no failure counter at all, so <code>out.ok</code> at quickstart.py:197 and :220 and <code>return 0</code> at :221 are unreachable-by-failure.
