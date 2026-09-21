@@ -828,6 +828,27 @@ def _report_search_engine(rep) -> None:
                   hint=fix, wrap=True)
         return
 
+    if st["reason"] == "disabled":
+        # A deliberate opt-out, not a fault, so it stays a note and doctor
+        # stays green: BOOST_NO_EMBED is documented as the hard kill switch,
+        # and the CI job that sets it is the one caller that most needs a
+        # zero exit code. Say the vectors are still there, because the user
+        # who turned it off is the user deciding whether to turn it back on.
+        held = ""
+        if st["store_exists"] and st["chunks"]:
+            # "still on disk", not "intact": the switch shadows every rung
+            # below it, so a store that is *also* stale (version/model/dim
+            # changed) reaches this line too, and unsetting the switch would
+            # turn it red rather than green. Say what is measured — the
+            # vectors were not discarded — and let the next status say more.
+            held = (" — the %d-chunk vector store is still on disk"
+                    % st["chunks"])
+        rep.note("search-engine",
+                 "semantic search off by BOOST_NO_EMBED — using the "
+                 "full-content BM25 engine%s (%s)" % (held, fix),
+                 hint=fix, wrap=True)
+        return
+
     rep.note("search-engine",
              "semantic search not configured — using the full-content BM25 "
              "engine (%s)" % fix, hint=fix, wrap=True)

@@ -518,11 +518,18 @@ def tap_commits() -> dict[str, str]:
 # is how a surface ends up telling a user to set an API key that the [rag]
 # extra's local model already made unnecessary.
 _FIX = {
+    # First rung, and deliberately above `no-backend`: BOOST_NO_EMBED is read
+    # inside `embed.provider()` before any key or backend is looked at, so
+    # every other remedy in this table is a measured no-op while it is set.
+    # Telling that user to install a 133 MB extra, or to export a key, is the
+    # failure mode this whole table exists to prevent.
+    "disabled": "unset the kill switch: `unset BOOST_NO_EMBED`",
     "no-backend": "install the extra: `pip install 'boost-skill-cli[rag]'`",
     # Names the keyless remedy first: since the [rag] extra carries a local
     # embedding model, an API key is the quality ceiling, not the entry fee.
     # This reason means "no key AND no local backend", which in practice is a
-    # partial install or BOOST_NO_EMBED.
+    # partial install — the extra present but its model backend not importable.
+    # The kill switch is no longer one of these: it has its own rung above.
     "no-key": ("reinstall the extra: `pip install 'boost-skill-cli[rag]'` "
                "(or set VOYAGE_API_KEY / OPENAI_API_KEY for a larger model)"),
     "no-store": "build it: `boost reindex --dense`",
@@ -593,6 +600,12 @@ def status(*, count: bool = False) -> dict:
     *silently* today, because :func:`rag.retrieve_any` floors to BM25 and
     returns. ``reason`` names which link is missing so a caller can say so.
 
+    ``disabled`` is a fourth state and not a missing link at all: it is the
+    ``BOOST_NO_EMBED`` kill switch, which :func:`embed.provider` reads before
+    any key. It used to read as ``no-key``, which made every remedy this module
+    offers inert — measured on a 5-chunk voyage-4 store, exporting the key the
+    hint named produced a byte-identical status and the byte-identical hint.
+
     ``degraded`` is the load-bearing distinction: a user who never configured
     dense search is *healthy* (BM25 is the documented default), while a user
     who did all three steps and is still on BM25 has a real problem no other
@@ -615,8 +628,14 @@ def status(*, count: bool = False) -> dict:
 
     # Order matters: report the *first* missing link, so the message names the
     # next action rather than a downstream symptom of the same gap.
-    if not have_be:
-        reason: str | None = "no-backend"
+    if not embed.enabled():
+        # The kill switch outranks every other rung because `provider()` reads
+        # it first: with BOOST_NO_EMBED set, installing the extra and exporting
+        # a key both leave this status byte-identical, so naming any other link
+        # would send the user to a remedy that provably cannot work.
+        reason: str | None = "disabled"
+    elif not have_be:
+        reason = "no-backend"
     elif prov is None:
         reason = "no-key"
     elif not store_exists:
@@ -639,8 +658,14 @@ def status(*, count: bool = False) -> dict:
     # that stops them serving (a dropped extra, an unset key, a changed model)
     # is a real fault. Without a store there is nothing to have regressed:
     # "no-store" is an unfinished setup, and it is the one reason that implies
-    # store_exists is False, so this single clause covers every case.
-    degraded = store_exists and reason is not None
+    # store_exists is False, so that side needs no clause of its own.
+    #
+    # "disabled" is the exception, and the only one: the user turned dense off
+    # on purpose, so a store sitting idle behind their own kill switch is not a
+    # fault and must not move an exit code. Counting it did — `boost doctor`
+    # returned 1 forever on any machine that set BOOST_NO_EMBED after building
+    # a store, which breaks it as a CI gate for exactly the user who opted out.
+    degraded = store_exists and reason is not None and reason != "disabled"
 
     return {
         "backend": have_be,

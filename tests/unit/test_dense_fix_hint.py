@@ -21,6 +21,7 @@ from boost_cli.core import dense
 # function. Kept as a literal rather than introspected: the point is to fail
 # when the two drift, and a derived list would drift along with it.
 ALL_REASONS = [
+    "disabled",
     "no-backend",
     "no-key",
     "no-store",
@@ -56,10 +57,14 @@ class TestWording:
     """Each hint names an action; none of them lies about needing a key."""
 
     @pytest.mark.parametrize("reason", ALL_REASONS)
-    def test_hint_names_a_boost_or_pip_command(self, reason):
+    def test_hint_names_a_runnable_command(self, reason):
         hint = dense.fix_hint(reason)
         assert "`" in hint, "%r gives no command to run: %r" % (reason, hint)
-        assert "boost reindex" in hint or "pip install" in hint
+        # Three families, because the third one is the point: the kill switch
+        # is fixed by neither pip nor boost, and a rule that admitted only
+        # those two is what left BOOST_NO_EMBED advertising an API key.
+        assert any(cmd in hint for cmd in
+                   ("boost reindex", "pip install", "unset BOOST_NO_EMBED")), hint
 
     def test_missing_backend_says_install_not_set_a_key(self):
         # The [rag] extra carries a local embedding model, so the extra alone is
@@ -84,6 +89,42 @@ class TestWording:
         # A store built under different settings is not repaired incrementally;
         # without --force `reindex` sees a store and leaves the stale one.
         assert "--force" in dense.fix_hint(reason)
+
+
+class TestKillSwitch:
+    """BOOST_NO_EMBED is the user's own decision, and every other remedy is inert under it.
+
+    `embed.provider()` reads the switch before any key or backend, so on a
+    machine that set it the previous "no-key" remedy was a measured no-op:
+    against a 5-chunk voyage-4 store, exporting VOYAGE_API_KEY produced a
+    byte-identical status dict and the byte-identical hint.
+    """
+
+    def test_it_names_the_switch_and_nothing_else(self):
+        hint = dense.fix_hint("disabled")
+        assert "unset BOOST_NO_EMBED" in hint
+        assert "pip install" not in hint
+        assert "VOYAGE_API_KEY" not in hint and "OPENAI_API_KEY" not in hint
+        assert "reindex" not in hint
+
+    def test_a_built_store_does_not_reach_the_key_remedy(self):
+        # `fix_hint`'s store-aware branch is keyed on "no-key"; a built store
+        # behind the kill switch must not inherit it, or the user is told to
+        # export a key that provider() never reads.
+        st = {"reason": "disabled", "built_provider": "voyage",
+              "built_model": "voyage-4", "chunks": 5, "store_exists": True}
+        assert dense.fix_hint("disabled", st) == dense._FIX["disabled"]
+
+    @pytest.mark.parametrize("cols", [40, 50, 60, 80])
+    def test_the_command_survives_a_narrow_pane(self, cols):
+        # Backtick spans are atomic tokens for `out.wrap`, so assert the
+        # wrapping rather than a length: a `unset BOOST_NO_EMBED` split across
+        # two lines is not a command anyone can run.
+        from boost_cli.core import output as out
+        span = "`%s`" % dense._FIX["disabled"].split("`")[1]
+        lines = out.wrap("semantic search is off — %s" % dense.fix_hint("disabled"),
+                         cols)
+        assert any(span in line for line in lines), lines
 
 
 class TestNoKeyReadsTheStore:
