@@ -935,7 +935,8 @@ def _fit_widths(widths, numeric, avail: int, sep: int = 2, floor: int = 1,
     fits `avail` columns (or nothing text-like is left to shrink). Numeric
     columns are never squeezed — a truncated number is a wrong number — and
     neither are the `protected` indexes, whose cells are identifiers rather
-    than prose (see :func:`table`'s ``keep``), so a narrow pane spends its
+    than prose: :func:`table`'s ``keep`` and ``whole`` columns alike, which
+    :func:`_fit_columns` passes in together. A narrow pane spends its
     shrinking on chrome first."""
     widths = list(widths)
     if not widths:
@@ -1068,9 +1069,10 @@ def table(rows, headers=None, stream=None, keep=(), text=(),
     as a placeholder that costs ink and carries nothing. A column with nothing
     in it goes first; after that the order is right to left, skipping
     ``keep``; the last surviving column is never dropped and clips to the
-    pane instead, unless it is ``keep`` or ``whole``, which overflow. See :func:`_fit_columns`, and :func:`search_layout` for the
-    same shape on the search screen. Nothing is announced: a dropped column is
-    a layout decision, not an event.
+    pane instead, unless it is ``keep`` or ``whole``, which overflow. See
+    :func:`_fit_columns`, and :func:`search_layout` for the same shape on the
+    search screen. Nothing is announced: a dropped column is a layout
+    decision, not an event.
 
     On a color terminal, columns are joined by a dim ``│`` separator — the
     terminal cousin of the web stat blocks' hairline borders. Non-color output

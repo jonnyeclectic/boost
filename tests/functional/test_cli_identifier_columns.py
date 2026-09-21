@@ -79,3 +79,51 @@ def test_browse_fallback_never_clips_a_skill_name(boost, tapped, monkeypatch):
     for cols in PANES:
         monkeypatch.setenv("COLUMNS", str(cols))
         assert _cells(boost("browse").out, "name") == names, cols
+
+
+# The other tables whose leading column is the handle a later command takes.
+# The cohort and tag fixtures make the identifier the widest text column on
+# purpose: the old fitter shrank the widest column first, so a short one would
+# never have been clipped and the case could not fail. Each case below does
+# fail with `whole=` removed from its call site.
+_SKILLS = ["brainstorming", "commit-messages", "jira-integration",
+           "tdd-workflow"]
+
+
+def _install_all(boost):
+    for name in _SKILLS:
+        boost("install", name)
+
+
+def _two_cohorts(boost):
+    for name in ("platform-early-adopters-pilot", "security-review-canary"):
+        boost("cohort", "create", name, "--skills", "tdd-workflow",
+              "--percent", "50")
+
+
+def _two_tags(boost):
+    boost("install", "brainstorming")
+    boost("tag", "brainstorming", "+needs-security-review-first",
+          "+frontend-platform-team")
+
+
+@pytest.mark.parametrize("setup, argv, column", [
+    pytest.param(_install_all, ("attest",), "NAME", id="attest"),
+    pytest.param(_two_cohorts, ("cohort", "list"), "COHORT", id="cohort"),
+    pytest.param(_two_tags, ("tag", "--list"), "TAG", id="tag-list"),
+    pytest.param(None, ("tap", "--catalog", "--dry-run"), "NAME",
+                 id="tap-catalog-dry-run"),
+])
+def test_leading_identifier_is_never_clipped(boost, tapped, monkeypatch,
+                                             setup, argv, column):
+    if setup:
+        setup(boost)
+    # With no pane nothing is fitted, so this is every identifier in full.
+    monkeypatch.delenv("COLUMNS", raising=False)
+    whole = _cells(boost(*argv).out, column)
+    assert whole and all("…" not in c for t in whole for c in t), whole
+    # No kept neighbour, so the identifier is the last column standing and
+    # is never dropped: every width must show all of it, whole.
+    for cols in PANES:
+        monkeypatch.setenv("COLUMNS", str(cols))
+        assert _cells(boost(*argv).out, column) == whole, cols
