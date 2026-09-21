@@ -1597,6 +1597,9 @@ def _tool_install(args: dict):
         lines.append("not linked, directory not writable: %s — ask the user to "
                      "`chmod u+w` it, then `boost sync`"
                      % ", ".join(res.unwritable))
+    for adir, block in res.blocked:
+        lines.append("not linked: %s — ask the user to %s, then `boost sync`"
+                     % store.link_refusal(adir, block))
     # The same prompt-injection and secret scan `boost install` runs. This path
     # needs it more, not less: nobody is watching a terminal here, and the skill
     # was chosen and installed by an agent acting on its own. The install still

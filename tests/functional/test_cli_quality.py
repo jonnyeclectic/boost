@@ -2266,3 +2266,112 @@ class TestHealWithSomethingInTheWay:
         run = self._flat(boost("heal", expect=1).out)
         assert "created %d missing directories" % (would - 1) in run
         assert run.count("~/.claude/skills is not writable") == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="creating a symlink needs a privilege on Windows")
+class TestAnInstallPastSomethingInTheWay:
+    """A dangling ~/.claude/skills, or a file at ~/.claude: link_agents' mkdir
+    raised FileExistsError after the skill was copied, so install exited 70
+    with the skill in the store and no lock entry. `uninstall` then said "not
+    installed" and a second install crashed the same way. origin/main too."""
+
+    @pytest.fixture()
+    def claude(self, boost, tapped):
+        d = paths.home() / ".claude"
+        if d.exists():
+            shutil.rmtree(d)
+        yield d
+        assert not list(paths.logs_dir().glob("crash-*.log"))
+
+    @staticmethod
+    def _flat(text):
+        return " ".join(text.split())
+
+    @pytest.mark.parametrize("shape, block", [
+        ("dangling", "~/.claude/skills"), ("file", "~/.claude")])
+    def test_the_install_is_recorded_and_names_the_move(
+            self, boost, claude, tmp_path, shape, block):
+        if shape == "dangling":
+            claude.mkdir()
+            (claude / "skills").symlink_to(tmp_path / "nowhere")
+            why = "~/.claude/skills is not a directory"
+        else:
+            claude.write_text("not a dir\n", encoding="utf-8")
+            why = ("~/.claude/skills cannot be created: ~/.claude is not a "
+                   "directory")
+        r = boost("install", "brainstorming")
+        out = self._flat(r.out + r.err)
+        assert ("not linked: %s — move %s aside, then `boost sync` adds the "
+                "link" % (why, block) in out)
+        assert "chmod" not in out
+        rec = lockfile.get_skill("brainstorming")
+        assert rec is not None
+        assert "claude-code" not in rec["agents"]
+        assert rec["agents"], "the other agents are still linked"
+        # Recorded, so the store copy is boost's to remove again.
+        boost("uninstall", "brainstorming")
+        assert not (paths.store_dir() / "brainstorming").exists()
+        assert lockfile.get_skill("brainstorming") is None
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="chmod can't make a directory unwritable on Windows")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root ignores mode bits")
+class TestSyncSaysWhyARuleWasNotRematerialized:
+    """With the rule's source still in its tap and ~/.cursor/rules refusing
+    writes, `boost sync` said "its source is gone — run `boost update`": the
+    install's own error landed in a catch-all that assumed the source."""
+
+    RULE = "Always write tests first."
+
+    def test_the_install_error_is_the_reported_cause(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "rule-tap")
+        _add_and_commit(tap_dir, "rules/team-conventions.mdc",
+                        "---\nname: team-conventions\n---\n\n%s\n" % self.RULE,
+                        "add rule")
+        boost("tap", tap_dir)
+        boost("install", "team-conventions")
+        rules_dir = paths.home() / ".cursor" / "rules"
+        (rules_dir / "team-conventions.mdc").unlink()
+        rules_dir.chmod(0o500)
+        try:
+            text = self._flat(boost("sync").out)
+            actions = json.loads(boost("sync", "--json").out)["actions"]
+        finally:
+            rules_dir.chmod(0o700)
+        cause = ("rule team-conventions was not re-materialized: cannot "
+                 "install team-conventions: ~/.cursor/rules is not writable — "
+                 "run `chmod u+w ~/.cursor/rules`, then re-run")
+        assert cause in text
+        assert cause in actions
+        assert "source is gone" not in text + " ".join(actions)
+        # And once the dir takes writes again, the same sync repairs it.
+        assert "re-materialized rule team-conventions" in boost("sync").out
+        assert (rules_dir / "team-conventions.mdc").is_file()
+
+    @staticmethod
+    def _flat(text):
+        return " ".join(text.split())
+
+
+class TestDoctorAndHealAgreeOnAFileAtTheCachePath:
+    """A file where ~/.boost/cache belongs: heal said "move ~/.boost/cache
+    aside" while doctor said "make ~/.boost/cache writable", which no chmod
+    of a file achieves."""
+
+    def test_both_say_move_it_aside(self, boost, tapped):
+        cache = paths.cache_dir()
+        shutil.rmtree(cache)
+        cache.write_text("x\n", encoding="utf-8")
+        doc = " ".join(boost("doctor", expect=1).out.split())
+        heal = " ".join(boost("heal", "--dry-run", expect=1).out.split())
+        assert ("~/.boost/cache is not a directory — every command rescans its "
+                "taps and cannot keep the result; move ~/.boost/cache aside"
+                in doc)
+        assert ("run `boost update fixture-tap` once ~/.boost/cache is moved "
+                "aside" in doc)
+        assert "writable" not in doc
+        assert "move ~/.boost/cache aside" in heal

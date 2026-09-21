@@ -1993,6 +1993,9 @@ def cmd_browse(argv):
         for adir in res.unwritable:
             out.warn("not linked: %s is not writable — `chmod u+w %s`, then "
                      "`boost sync`" % (_tilde(adir), _tilde(adir)))
+        for adir, block in res.blocked:
+            out.warn("not linked: %s — %s, then `boost sync`"
+                     % store.link_refusal(adir, block), wrap=True)
     return 0
 
 

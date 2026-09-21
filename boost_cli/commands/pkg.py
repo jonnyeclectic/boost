@@ -275,6 +275,9 @@ def _warn_unwritable(res) -> None:
         out.warn("not linked: %s is not writable — `chmod u+w %s`, then "
                  "`boost sync` adds the link" % (_tilde(adir), _tilde(adir)),
                  wrap=True)
+    for adir, block in res.blocked:
+        out.warn("not linked: %s — %s, then `boost sync` adds the link"
+                 % store.link_refusal(adir, block), wrap=True)
 
 
 def _boostfile_text(skills: dict[str, dict], via: str = "boost bundle dump") -> str:

@@ -435,6 +435,9 @@ def cmd_doctor(argv):
     # same problem, fixed in that directory rather than the one never made.
     cache_dir = paths.cache_dir()
     cache_block = paths.refuses_writes(cache_dir)
+    # A file or dangling link at the cache path is moved, not chmodded: heal
+    # says so, and the two must not prescribe different fixes.
+    cache_moved = cache_block is not None and paths.in_the_way(cache_block)
     taps = registry.list_taps()
     tap_ok = 0
     for tap in taps:
@@ -442,14 +445,17 @@ def cmd_doctor(argv):
             bad("tap", "tap %s not cloned — run `boost update`" % tap.name)
         elif not tap.cache_file.exists():
             bad("tap", "tap %s has no catalog cache — run `boost update %s`%s"
-                % (tap.name, tap.name, " once %s is writable"
-                   % _tilde(cache_block) if cache_block else ""), wrap=True)
+                % (tap.name, tap.name, " once %s is %s"
+                   % (_tilde(cache_block), "moved aside" if cache_moved
+                      else "writable") if cache_block else ""), wrap=True)
         else:
             tap_ok += 1
     if taps and cache_block:
         bad("cache", "%s — every command rescans its taps and cannot keep the "
-            "result; make %s writable"
-            % (paths.not_writable(cache_dir, cache_block), _tilde(cache_block)),
+            "result; %s"
+            % (paths.not_writable(cache_dir, cache_block),
+               paths.write_remedy(cache_block) if cache_moved
+               else "make %s writable" % _tilde(cache_block)),
             wrap=True)
     # With no taps the cache line above is silent, but heal still names a
     # cache dir it cannot create, so doctor must too.

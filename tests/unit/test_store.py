@@ -3,6 +3,7 @@
 """Unit tests: boost_cli/core/store.py — install/uninstall/link/sync (no CLI)."""
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shutil
@@ -3458,3 +3459,108 @@ class TestAnUnwritableAgentDirIsSkipped:
 
     def test_a_writable_dir_reports_nothing_unwritable(self, tap, entry):
         assert store.install(entry).unwritable == []
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="creating a symlink needs a privilege on Windows")
+class TestSomethingInTheWayOfAnAgentDirIsSkipped:
+    """A dangling symlink or a file where an agent's skills dir belongs made
+    the mkdir raise FileExistsError after the store copy, so the install
+    exited 70 and the lock recorded nothing. No chmod clears it, so it is
+    reported apart from `unwritable`, with the move that does."""
+
+    def test_a_dangling_agent_dir(self, tap, entry, tmp_path):
+        cursor = paths.home() / ".cursor" / "skills"
+        if cursor.is_dir():
+            shutil.rmtree(cursor)
+        cursor.parent.mkdir(parents=True, exist_ok=True)
+        cursor.symlink_to(tmp_path / "nowhere")
+        res = store.install(entry)
+        assert res.blocked == [(str(cursor), str(cursor))]
+        assert res.unwritable == []
+        assert set(res.linked) == set(LINKED_AGENTS) - {"cursor"}
+        assert lockfile.get_skill("brainstorming") is not None
+        assert store.link_refusal(*res.blocked[0]) == (
+            "~/.cursor/skills is not a directory",
+            "move ~/.cursor/skills aside")
+
+    def test_a_file_above_the_agent_dir_names_the_file(self, tap, entry):
+        cursor = paths.home() / ".cursor"
+        if cursor.exists():
+            shutil.rmtree(cursor)
+        cursor.write_text("x\n", encoding="utf-8")
+        res = store.install(entry)
+        assert res.blocked == [(str(cursor / "skills"), str(cursor))]
+        assert store.link_refusal(*res.blocked[0]) == (
+            "~/.cursor/skills cannot be created: ~/.cursor is not a directory",
+            "move ~/.cursor aside")
+
+
+class TestALinkFailureNothingExplainsStaysLoud:
+    """Only a path in the way is skipped. Any other OSError from the mkdir is
+    not understood, so it propagates rather than turning into a silent skip."""
+
+    @pytest.mark.parametrize("block", [None, "a real directory"])
+    def test_it_propagates(self, tap, monkeypatch, tmp_path, block):
+        real_mkdir = Path.mkdir
+
+        def mkdir(self, *a, **kw):
+            if self.name == "skills" and self.parent.name == ".cursor":
+                raise OSError(errno.EIO, "I/O error", str(self))
+            return real_mkdir(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "mkdir", mkdir)
+        monkeypatch.setattr(paths, "refuses_writes",
+                            lambda _d: tmp_path if block else None)
+        with pytest.raises(OSError, match="I/O error"):
+            store.link_agents("brainstorming")
+
+
+class TestSyncReportsWhyAMaterializationWasNotRepaired:
+    """The install's own BoostError is the cause sync reports. `_GONE`
+    ("its source is gone") is for a catalogue entry that is really missing."""
+
+    def test_the_error_and_its_hint_are_the_action(self, sandbox, monkeypatch):
+        repair = store.StoreRepair("tap", preview="p", applied="repaired",
+                                   cat_entry={"name": "team-conventions"})
+        monkeypatch.setattr(store, "plan_missing_materialization",
+                            lambda kind, name: repair)
+
+        def refuse(*_a, **_kw):
+            raise BoostError("cannot install team-conventions: X is not "
+                             "writable", hint="run `chmod u+w X`, then re-run")
+
+        monkeypatch.setattr(store, "install", refuse)
+        plan = {"missing_links": [], "stale_links": [], "missing_store": [],
+                "missing_materializations": [("rule", "team-conventions")]}
+        assert store.sync_apply(plan) == [
+            "rule team-conventions was not re-materialized: cannot install "
+            "team-conventions: X is not writable — run `chmod u+w X`, then "
+            "re-run"]
+
+    def test_an_error_with_no_hint_gets_no_dash(self, sandbox, monkeypatch):
+        repair = store.StoreRepair("tap", preview="p", applied="repaired",
+                                   cat_entry={"name": "ship-it"})
+        monkeypatch.setattr(store, "plan_missing_materialization",
+                            lambda kind, name: repair)
+
+        def refuse(*_a, **_kw):
+            raise BoostError("boom")
+
+        monkeypatch.setattr(store, "install", refuse)
+        plan = {"missing_links": [], "stale_links": [], "missing_store": [],
+                "missing_materializations": [("workflow", "ship-it")]}
+        assert store.sync_apply(plan) == [
+            "workflow ship-it was not re-materialized: boom"]
+
+    def test_a_missing_catalogue_entry_is_gone(self, sandbox, monkeypatch):
+        repair = store.StoreRepair("drop", preview="p", applied="a")
+        monkeypatch.setattr(store, "plan_missing_materialization",
+                            lambda kind, name: repair)
+        monkeypatch.setattr(store, "install", lambda *_a, **_kw: pytest.fail(
+            "nothing to install from"))
+        plan = {"missing_links": [], "stale_links": [], "missing_store": [],
+                "missing_materializations": [("rule", "team-conventions")]}
+        assert store.sync_apply(plan) == [
+            "rule team-conventions has a missing materialization but its "
+            "source is gone — run `boost update` or reinstall"]

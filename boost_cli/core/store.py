@@ -43,6 +43,11 @@ class InstallResult:
     # the wrong owner, say). Kept apart from `conflicts`: nothing is in the
     # way, the directory itself refuses, and the remedy is different.
     unwritable: list[str] = field(default_factory=list)
+    # (agent dir, what blocks it) where something that is not a directory sits
+    # at or above the agent's skills dir: a dangling ``~/.claude/skills``
+    # symlink, or a file at ``~/.claude``. No mode change clears that, so it
+    # is kept apart from `unwritable` and worded with `paths.write_remedy`.
+    blocked: list[tuple[str, str]] = field(default_factory=list)
     # Agents that can already use this skill without a symlink because they read
     # the canonical store directly (agents.native_store_agents). Kept apart from
     # `linked` so the lock records only real links, while the install report can
@@ -232,8 +237,29 @@ def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
             # caller names the remedy.
             res.unwritable.append(str(adir))
             continue
+        except OSError:
+            # A dangling symlink or a file where the agent dir belongs: the
+            # mkdir raises FileExistsError or NotADirectoryError. It escaped
+            # here after `_copy_skill` had run, so the install exited 70 with
+            # the skill in the store and no lock entry. Skip it the same way.
+            # Anything else is not understood, so it stays loud.
+            block = paths.refuses_writes(adir)
+            if block is None or not paths.in_the_way(block):
+                raise
+            res.blocked.append((str(adir), str(block)))
+            continue
         res.linked.append(agent)
     return res
+
+
+def link_refusal(adir: str, block: str) -> tuple[str, str]:
+    """Why a link in `adir` was refused, and the one step that clears it.
+
+    For a ``res.blocked`` pair. Every surface that reports one words it here,
+    so none of them tells the user to ``chmod`` a dangling symlink.
+    """
+    return (paths.not_writable(Path(adir), Path(block)),
+            paths.write_remedy(Path(block)))
 
 
 def preserved_agent_scope(only_agents: list[str] | None,
@@ -2243,14 +2269,19 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
         if mat.action == "declined":
             actions.append(mat.applied)
             continue
-        if mat.cat_entry is not None:
-            try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
-                install(mat.cat_entry, force=True, scope=mat.scope, base=mat.base)
-                actions.append(mat.applied)
-                continue
-            except BoostError:
-                pass
-        actions.append(_GONE % (kind, name))
+        if mat.cat_entry is None:
+            actions.append(_GONE % (kind, name))
+            continue
+        try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
+            install(mat.cat_entry, force=True, scope=mat.scope, base=mat.base)
+            actions.append(mat.applied)
+        except BoostError as err:
+            # The source is there; the install said why it stopped (a target
+            # dir that refuses writes, say). Reporting `_GONE` here sent the
+            # user to `boost update` for a problem in ~/.cursor/rules.
+            actions.append("%s %s was not re-materialized: %s%s"
+                           % (kind, name, err.message,
+                              " — %s" % err.hint if err.hint else ""))
     if actions:
         journal.log("sync", "%d fixes" % len(actions))
     return actions
