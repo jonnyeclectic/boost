@@ -207,7 +207,7 @@ class TestSessionFollowUps:
         r = _session(boost, monkeypatch, "how do I write commit messages?",
                      "which one is best for test-driven development?")
         _, (engine, second) = _source_blocks(r.out)
-        assert engine != "previous answer"
+        assert not engine.startswith("previous answer")
         assert second and second[0] == "tdd-workflow"
 
     def test_without_ai_it_only_suggests_what_it_can_answer(

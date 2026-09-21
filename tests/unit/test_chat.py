@@ -526,6 +526,9 @@ NEW_SUBJECTS = (
     "what is number 1 for linting in the catalogue?",
     "what's the best of both worlds for testing?",
     "how do I merge steps #1 and #2 of my setup?",
+    "try bug #2 vs #3",
+    "is ticket #2 worse than #3?",
+    "compare pull request #2 with #3",
 )
 
 # Follow-ups that point at the previous answer, with the row each one leads
@@ -544,6 +547,17 @@ POINTERS = (
     ("tell me about #3", "teach"),
     ("is number 1 any good", "orch-review"),
     ("what does the last one do?", "teach"),
+    ("and second one?", "code-reviewer"),
+    ("or #3?", "teach"),
+    ("and #3?", "teach"),
+    ("try #2", "code-reviewer"),
+    ("install #3", "teach"),
+    ("how does it work with #2?", "code-reviewer"),
+    ("is #3 better than #2?", "teach"),
+    ("is it better than #2?", "code-reviewer"),
+    ("how does it stack up vs #3?", "teach"),
+    ("which one among them?", "orch-review"),
+    ("is teach better than those skills?", "teach"),
 )
 
 
@@ -601,6 +615,14 @@ class TestReferentialFollowUps:
     def test_a_number_past_the_end_still_honours_a_pointer(self, ranker):
         entries, _ = chat.retrieve("which of these fixes #42?", [_turn()])
         assert _names(entries)[:3] == _names(SHOWN)
+
+    def test_a_name_the_previous_answer_showed_past_k_still_leads(self, ranker):
+        # k=2 carries two rows; "teach" was the third. The question names it,
+        # and it was on screen, so it leads rather than falling off the end.
+        entries, engine = chat.retrieve("is teach better than those skills?",
+                                        [_turn()], k=2)
+        assert engine.startswith("previous answer")
+        assert _names(entries)[:3] == ["teach", "orch-review", "code-reviewer"]
 
     def test_k_bounds_the_carried_rows_and_the_search_alike(self, ranker):
         entries, _ = chat.retrieve("which of these?", [_turn()], k=2)

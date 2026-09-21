@@ -1294,8 +1294,10 @@ def cmd_chat(argv: list[str]) -> int:
     ap.add_argument("question", nargs="*", metavar="QUESTION",
                     help="ask once and exit; omit for an interactive session")
     ap.add_argument("-k", "--limit", type=util.positive_int, default=chat_engine.TOP_K,
-                    metavar="N", help="candidate skills to consider (default %d)"
-                                      % chat_engine.TOP_K)
+                    metavar="N",
+                    help="candidate skills per search (default %d); a follow-up "
+                         "that points back also keeps the previous list"
+                         % chat_engine.TOP_K)
     ap.add_argument("--no-sources", action="store_true",
                     help="hide the citation block under each answer")
     ap.add_argument("--json", action="store_true", dest="as_json",
