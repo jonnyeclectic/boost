@@ -10,7 +10,7 @@ wow: 1
 note: exactly one epilog= exists in all of boost_cli; ~30 commands ship bare positionals
 order: 241
 owner: loop/help-strings
-pr:
+pr: 943
 title: "Sweep: positionals/<code>--json</code> lack help strings and no command help shows examples (~30 cmds)"
 ---
 Across roughly thirty commands the help screens end at the options table with undocumented arguments.
