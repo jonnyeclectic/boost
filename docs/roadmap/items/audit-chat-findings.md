@@ -10,7 +10,7 @@ wow: 2
 note: chat follow-ups like "which of these" lead with the previous turn; no "&gt; " prompt on piped stdin; search takes -k
 order: 255
 owner: loop/chat-audit
-pr:
+pr: 932
 title: "boost chat: CLI audit findings (2026-08)"
 ---
 <b>Referential follow-ups retrieve unrelated skills — including the suggestions chat itself prints.</b>
