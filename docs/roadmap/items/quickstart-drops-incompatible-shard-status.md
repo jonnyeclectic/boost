@@ -2,14 +2,14 @@
 id: quickstart-drops-incompatible-shard-status
 board: code
 section: planned
-status: planned
+status: shipped
 category: Onboarding · Bug
 complexity: M
 impact: Med
 wow: 3
 note: shards.sync() returns status: "incompatible" with a fully-formed reason when the publ…
 order: 220
-owner:
+owner: loop/quickstart-shard-status
 pr:
 title: quickstart silently discards the <code>incompatible</code> shard status, so a user with any API key is never told why zero vectors arrived
 ---
