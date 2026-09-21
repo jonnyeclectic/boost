@@ -449,14 +449,17 @@ def read_text_arg(value: str, flag: str, stdin=None) -> str:
     """
     if value == "-":
         stream = stdin if stdin is not None else sys.stdin
+        empty = ("%s - read nothing from stdin" % flag,
+                 "pipe the text in, or pass it as the value itself")
+        if stream is None:
+            # fd 0 closed at launch (`<&-`): Python sets sys.stdin to None.
+            raise BoostError(empty[0], hint=empty[1])
         # The bytes underneath, decoded the way the `@FILE` arm decodes: a
         # text stream's strict decode raises UnicodeDecodeError on a stray
         # byte, and that is a traceback, not a BoostError.
         raw = getattr(stream, "buffer", None)
         text = (raw.read().decode("utf-8", errors="replace") if raw is not None
                 else stream.read())
-        empty = ("%s - read nothing from stdin" % flag,
-                 "pipe the text in, or pass it as the value itself")
     elif value.startswith("@"):
         name = value[1:]
         hint = ("`%s @FILE` reads FILE; pass the text itself, or `-` to read "

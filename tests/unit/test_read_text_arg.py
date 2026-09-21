@@ -66,6 +66,12 @@ class TestStdin:
         stream = io.TextIOWrapper(io.BytesIO(b"\xff ok"), encoding="utf-8")
         assert util.read_text_arg("-", "--feedback", stdin=stream) == "\ufffd ok"
 
+    def test_a_closed_stdin_is_refused_not_a_traceback(self, monkeypatch):
+        # `<&-` closes fd 0 before Python starts, and sys.stdin is None.
+        monkeypatch.setattr(sys, "stdin", None)
+        with pytest.raises(BoostError, match="read nothing from stdin"):
+            util.read_text_arg("-", "--feedback")
+
     def test_a_stream_with_no_byte_layer_is_read_as_text(self):
         assert util.read_text_arg("-", "--feedback",
                                   stdin=io.StringIO("é ok\n")) == "é ok"
