@@ -1005,7 +1005,7 @@ def _ingest_shards(args) -> int:
     why = shards.incompatible(manifest)
     if why:
         raise BoostError("published shards cannot serve this machine — %s" % why,
-                         hint=dense.fix_hint(dense.status().get("reason", "")))
+                         hint=dense.current_fix())
     commits = rag._tap_commits()
     stored = dense.tap_commits()
     # Both maps are keyed by tap name; the two sources are keyed by safe name.

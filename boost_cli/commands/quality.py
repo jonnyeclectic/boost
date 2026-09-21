@@ -826,6 +826,17 @@ def _report_search_engine(rep) -> None:
             detail += ", live key is %s" % st["provider"]
         elif st["reason"] == "empty":
             detail += " but holds no vectors"
+        elif st["reason"] == "model-unavailable":
+            # The store is fine; the query embedder is what failed. Say which
+            # half and when, because a record from an hour ago on another
+            # network reads differently from one made by the last search.
+            from ..core import embed
+            fail = st.get("model_failure") or {}
+            detail += ", but %s" % embed.local_failure_text(fail)
+            if isinstance(fail.get("at"), (int, float)):
+                detail += ", last tried %s" % util.rel_time(
+                    datetime.fromtimestamp(fail["at"], UTC)
+                    .strftime("%Y-%m-%dT%H:%M:%SZ"))
         rep.issue("search-engine",
                   "semantic search silently off — %d-chunk vector store %s; "
                   "searches are using BM25 — %s" % (st["chunks"], detail, fix),

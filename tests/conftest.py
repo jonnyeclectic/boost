@@ -93,6 +93,23 @@ def _reset_ai_last_failure():
     ai._last_failure = None
 
 
+@pytest.fixture(autouse=True)
+def _reset_localembed_failure():
+    """Clear the local model's in-process failure record between tests.
+
+    Same leak as `ai._last_failure` above: the marker file lives under each
+    test's sandbox HOME and goes with it, but the in-process copy is a module
+    global, and `dense.status()` reads it first — one test's failed fetch would
+    turn the next test's healthy local store into `model-unavailable`.
+    """
+    from boost_cli.core import localembed
+    localembed._failure = None
+    localembed._fetch_error = ""
+    yield
+    localembed._failure = None
+    localembed._fetch_error = ""
+
+
 @pytest.fixture()
 def sandbox(tmp_path, monkeypatch):
     """A fresh fake $HOME; returns its Path."""
