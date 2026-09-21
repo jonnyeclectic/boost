@@ -2,14 +2,14 @@
 id: corpus-refresh-updates-data-not-prose
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Retrieval eval
 complexity: S
 impact: Low
 wow: 2
 note: .github/workflows/eval-corpus-refresh.yml regenerates taps.txt's data rows and baseli…
 order: 201
-owner:
+owner: loop/corpus-refresh-prose
 pr:
 title: The monthly corpus refresh rewrote the pins and the baseline but left every documented number stale — taps.txt now contradicts its own header, and nothing checks it
 ---
