@@ -2,14 +2,14 @@
 id: cache-writers-that-still-crash-on-a-read-only-cache
 board: code
 section: planned
-status: planned
+status: shipped
 category: Robustness · Bug
 complexity: S
 impact: Med
 wow: 2
 note: A read-only _names.txt makes heal, update, untap and a repeat tap exit 70 while doctor says healthy; reindex exits 70 in a read-only cache dir…
 order: 328
-owner:
+owner: loop/cache-writers
 pr:
 title: Two cache writers still crash on what one <code>sudo boost</code> leaves behind. A read-only <code>_names.txt</code> fails <code>heal</code>, <code>update</code> and <code>untap</code> at exit 70 while <code>doctor</code> says healthy.
 ---
