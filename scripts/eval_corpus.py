@@ -7,10 +7,10 @@ WHY THIS EXISTS. `tests/eval/taps.txt` used to pin repository NAMES. Tapping is
 a shallow clone of whatever the default branch points at, so the corpus the
 required `eval` gate scores against was a moving target: the list was written
 recording **743** entries and the same 20 repos later resolved to **3,843**, a
-5.2x growth nobody caused by editing a file. `affaan-m/ECC` alone is 1,616 of
+5.2x growth nobody caused by editing a file. `affaan-m/ECC` alone was 1,616 of
 them, so one third-party repository can move the gate's number by itself.
 
-That is not academic. Measured on a clean 20-tap install, BM25 scores recall@10
+That is not academic. Measured on a clean 20-tap install, BM25 scored recall@10
 **0.912** against a floor of **0.85** — a margin of +0.062. Unpinned growth
 spends that margin quietly, and the first thing anyone would see is a required
 gate failing on a pull request that touched nothing to do with retrieval.
@@ -27,11 +27,12 @@ that is not the one its floors were set on — and the direction of the error is
 the surprise. Measured over the 91-query required set, one repo removed and
 everything else identical:
 
-    all 20 repos           10,152 entries   0.852 / 0.473 / 0.605 / 0.657
-    minus sickn33 (62%)     3,843 entries   0.885 / 0.593 / 0.711 / 0.746
-    minus that and ECC      2,227 entries   0.967 / 0.659 / 0.769 / 0.814
-    minus LessUp (targets)  9,682 entries   0.676 / 0.374 / 0.483 / 0.523
-    floors                                  0.780 / 0.400 / 0.520 / 0.580
+    at the #410 pins        entries  recall@10 / hit@1 / MRR / nDCG@10
+    all 20 repos             10,152  0.852 / 0.473 / 0.605 / 0.657
+    minus sickn33 (62%)       3,843  0.885 / 0.593 / 0.711 / 0.746
+    minus that and ECC        2,227  0.967 / 0.659 / 0.769 / 0.814
+    minus LessUp (targets)    9,682  0.676 / 0.374 / 0.483 / 0.523
+    floors                           0.780 / 0.400 / 0.520 / 0.580
 
 Losing a *scale* repo makes the gate EASIER — all four metrics rise and the
 check goes green having measured a third of the intended corpus. Losing a repo
@@ -105,12 +106,24 @@ EXIT_DRIFT = 1
 EXIT_UNAVAILABLE = 75
 
 # No single repository may hold more than this share of the corpus. Measured,
-# not chosen: sickn33/antigravity-awesome-skills is 62.1% of the 10,152 entries
-# today. So this is a ratchet against making the concentration worse — not a
-# claim that 62% is a healthy number, which it is not. Diluting it means adding
-# breadth, never dropping the big repo: the table above shows that dropping it
-# raises every metric, so "rebalancing" by trimming would flatter the gate.
+# not chosen: sickn33/antigravity-awesome-skills held 62.1% at the #410 pins,
+# and `--audit` prints its share now. So this is a ratchet against making the
+# concentration worse — not a claim that 62% is a healthy number, which it is
+# not. Diluting it means adding breadth, never dropping the big repo: the table
+# above shows that dropping it raises every metric, so "rebalancing" by
+# trimming would flatter the gate.
 MAX_SHARE = 0.65
+
+# taps.txt states its own size between these two lines, and every rewrite of
+# the rows (`relock_text`, so `--relock` and `--refresh`) rewrites it. It used
+# to be a sentence someone typed, and the first monthly refresh (cbc0a58b)
+# moved the rows and left it stating the old total, fifty lines above the rows
+# that said otherwise. A list without the two lines is left without them —
+# taps-scale.txt is generated, and its generator owns its header.
+SIZE_START = "# --- corpus size: written from the rows below by eval_corpus.py ---"
+SIZE_END = "# --- end corpus size ---"
+# The rows above this line hold every golden target; the rest are scale.
+SCALE_DIVIDER = "# --- scale"
 
 
 class CorpusError(RuntimeError):
@@ -185,6 +198,45 @@ def shares(rows: Sequence[Row]) -> list[tuple[str, int, float]]:
         return []
     return sorted(((repo, n, n / total) for repo, n in counted),
                   key=lambda row: (-row[1], row[0]))
+
+
+def size_lines(text: str) -> list[str]:
+    """The corpus-size block's body, from the rows of ``text`` alone.
+
+    The scores are not stated: `--refresh` writes this before the eval runs,
+    so the only true thing it can say about them is where they are.
+    """
+    ranked = shares(parse_taps(text))
+    total = sum(n for _r, n, _s in ranked)
+    lines = ["# total:   %s entries in %d repos" % (f"{total:,}", len(ranked))]
+    head, divider, _tail = text.partition("\n" + SCALE_DIVIDER)
+    if divider:
+        targets = [n for _r, _s, n in parse_taps(head) if n is not None]
+        lines.append("# targets: %s entries in the %d repos above the scale "
+                     "divider" % (f"{sum(targets):,}", len(targets)))
+    # strict=False: a list of one repo has a largest and no runner-up.
+    labels = ("largest:", "next:   ")
+    for label, (repo, count, share) in zip(labels, ranked, strict=False):
+        lines.append("# %s %s, %s entries (%.1f%%)"
+                     % (label, repo, f"{count:,}", share * 100))
+    lines.append("# scores:  tests/eval/baseline.json, re-baselined with every "
+                 "move")
+    return lines
+
+
+def with_size(text: str) -> str:
+    """``text`` with its corpus-size block rewritten from its rows.
+
+    A list without the block is returned unchanged rather than given one.
+    """
+    lines = text.splitlines()
+    try:
+        start = lines.index(SIZE_START)
+        end = lines.index(SIZE_END, start)
+    except ValueError:
+        return text
+    lines[start + 1:end] = size_lines(text)
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
 
 
 def check_concentration(rows: Sequence[Row]) -> str | None:
@@ -370,9 +422,10 @@ def _report_failures(failures: Sequence[CorpusError], total_rows: int) -> int:
         for f in unavailable:
             print("  %s — %s" % (f.repo, f.detail))
         print("The gate cannot run, and scoring the repos that ARE reachable is\n"
-              "not a fallback: measured, dropping the largest repo alone moves\n"
-              "BM25 recall@10 0.852 -> 0.885 and hit@1 0.473 -> 0.593, so a\n"
-              "partial corpus clears the floors MORE easily than the real one.")
+              "not a fallback: measured at the #410 pins, dropping the largest\n"
+              "repo alone moved BM25 recall@10 0.852 -> 0.885 and hit@1\n"
+              "0.473 -> 0.593, so a partial corpus clears the floors MORE\n"
+              "easily than the real one.")
     if drift:
         print("\nCORPUS DRIFT — what materialised is not what taps.txt pins.")
         for f in drift:
@@ -393,7 +446,9 @@ def relock_text(text: str, counts: dict[str, int],
     """Rewrite each pinned row's entry count — and its SHA when ``shas`` says so.
 
     A whole-file rewrite would lose the header, which is where the reasoning
-    lives; this touches only rows it has a new count for. A count is never
+    lives; this touches only rows it has a new count for, and the one part of
+    the header written from them — taps.txt's corpus-size block (``with_size``),
+    which is how --relock and --refresh keep it true. A count is never
     written without a SHA — beside an unpinned repo it would describe a tree
     free to change underneath it — but the SHA may come from ``shas`` rather
     than from the row, which is how ``--refresh`` closes a row that arrived
@@ -437,7 +492,7 @@ def relock_text(text: str, counts: dict[str, int],
                 "refusing to write %s: %r is not a 40-character commit SHA"
                 % (repo, sha))
         out.append("%-*s %s %5d" % (width, repo, sha, counts[repo]))
-    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+    return with_size("\n".join(out) + ("\n" if text.endswith("\n") else ""))
 
 
 def frozen_rows(taps: Path, required: Path = DEFAULT_TAPS) -> set[str]:
@@ -550,7 +605,7 @@ def _refresh(taps: Path, summary_path: str | None = None) -> int:
     # Rows another file owns are neither measured nor written — skipping the
     # measurement is not just an optimisation here, it is what keeps the two
     # tiers pinned to one set of trees. It also saves re-cloning the required
-    # corpus, whose largest member is 6,309 entries.
+    # corpus, most of which is one repository.
     frozen = frozen_rows(taps)
     failures: list[CorpusError] = []
     shas: dict[str, str] = {}
