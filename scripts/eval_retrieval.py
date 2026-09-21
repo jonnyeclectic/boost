@@ -24,7 +24,13 @@ the math, this asks "does the right skill actually come back for a real question
   gate      --fail-under floors mean recall@k; --floor NAME=VALUE floors any
             metric and is repeatable. recall alone could not fail a build for a
             ranker scoring recall@10 1.000 with hit@1 0.000 — always finding the
-            answer, never ranking it first (a `make eval` target).
+            answer, never ranking it first (a `make eval` target). Before any
+            of that, the corpus itself is checked: an index whose documents
+            carry no body is refused (exit 66) rather than scored by any run
+            that floors a metric or pins a baseline, because the floors are
+            calibrated on the pinned corpus's full text and a body-less run
+            cleared them by MORE. A run that binds neither is warned and
+            scored. See `corpus_refusal`.
 
 Tier 1b (opt-in, offline): --stats runs a paired Student's t-test between the
 engines with `ranx`, so a metric gap is reported as statistically *significant*
@@ -53,6 +59,7 @@ import hashlib
 import json
 import math
 import os
+import shlex
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
@@ -60,7 +67,7 @@ from pathlib import Path
 # Run from a source checkout without an install.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from boost_cli.core import ai, catalog, dense, rag
+from boost_cli.core import ai, catalog, dense, paths, rag
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_GOLDEN = ROOT / "tests" / "eval" / "golden.jsonl"
@@ -530,6 +537,92 @@ def check_floors(result: dict, floors: dict[str, float]) -> list[str]:
     return breaches
 
 
+# sysexits.h EX_NOINPUT — "an input file did not exist or was not readable",
+# which is this defect exactly: the files the catalog names are not on disk.
+# Deliberately NOT 75. scripts/eval_corpus.py and taps.txt spend EX_TEMPFAIL on
+# "a third party is unavailable, re-run later", both scripts run in the same
+# ci.yml step, and a corpus missing its clones locally is not repaired by
+# waiting — a shared code would not say which of the two had happened.
+EX_NOINPUT = 66
+
+ENSURE = ROOT / "scripts" / "ensure_eval_corpus.sh"
+
+
+def corpus_refusal(completeness: dict | None) -> str | None:
+    """What is wrong with this index's corpus, or ``None`` when nothing is.
+
+    THE GATE HAD NO CHECK THAT THE CORPUS CONTAINED THE CORPUS. A catalog
+    cache outlives the clone it was built from — ``catalog.load_tap`` serves a
+    stale cache when the clone is gone, deliberately, so a missing repository
+    costs a catalogue entry's *body* and not the entry — and ``rag.read_body``
+    then degrades that entry to its name and description, also deliberately.
+    Both degradations are right on their own. Stacked under a gate that reads
+    neither, they let ``make eval`` index the identical entry count across the
+    identical tap count under the identical "BM25 full-content" label and floor
+    four metrics on a corpus that is frontmatter only.
+
+    Measured on the pinned 20-tap corpus, with ``$BOOST_HOME/repos`` moved
+    aside and the cache and sentinel intact: 10,731 of 10,731 documents carry
+    no body, mean document length falls 862.2 -> 41.4 tokens (95.2% of the
+    scored text absent) — and all four floors PASS, at 0.852 / 0.582 / 0.684 /
+    0.717 against the intact corpus's 0.841 / 0.484 / 0.607 / 0.655. The
+    body-less run scores HIGHER, so the loss reads as an improvement. It is not
+    mysterious: BM25 normalises by ``avg_len``, which falls with the documents,
+    so a corpus that shrinks uniformly nearly keeps its rank *set* — recall@10
+    moves by one query (0.841 -> 0.852) while hit@1 moves by nine (0.484 ->
+    0.582). What the loss really costs is the ordering, which is the half the
+    floors were extended to cover. A *partial* loss was not measured, so the
+    message claims a direction only for the total one.
+
+    Gated on the DOCUMENT count, not on ``body_share``: that is a share of the
+    tokens this index does hold, and it reads 0.0 for an empty index as well as
+    for a body-less one (see ``rag.index_completeness``). "How many documents
+    could not be read" is the question, and it has one honest answer. The
+    tokens are quoted as a count for the same reason — a share printed at
+    ``%.1f`` read "100.0% ... body text" one document short of complete.
+
+    Strict — any missing body is a problem. The pinned corpus measures exactly
+    zero, because every entry was scanned out of a clone that is still on disk,
+    so there is no tolerance to spend and a tolerance would only decide how
+    much of the corpus may go missing unnoticed. Whether the problem refuses the
+    run or only warns is ``main``'s call: it depends on what the run binds.
+    """
+    if not completeness:
+        return None                      # no index at all — downstream says so
+    missing = int(completeness.get("metadata_only") or 0)
+    if not missing:
+        return None
+    docs = int(completeness.get("docs") or 0)
+    text = (
+        "  %d of %d indexed documents carry no body, so each was indexed as its\n"
+        "  name and description alone — its catalog entry names no file, or a file\n"
+        "  that is not on disk. Those stand-ins are %d of the index's %d tokens.\n"
+        "  The floors are calibrated against the full text of the pinned corpus;\n"
+        "  over frontmatter they attest to nothing. "
+        % (missing, docs, int(completeness.get("metadata_only_tokens") or 0),
+           int(completeness.get("tokens") or 0)))
+    if missing >= docs:
+        return text + ("With every body missing, all four\n"
+                       "  metrics measured HIGHER than on the full corpus, so "
+                       "the loss reads as\n  an improvement.")
+    return text + ("How far a partial loss moves\n"
+                   "  them has not been measured.")
+
+
+def corpus_remedy(home: Path, python: str) -> str:
+    """The command that re-materialises the pinned corpus in ``home``.
+
+    Spelled out in full because the gate's real caller sets neither variable
+    outside its own recipe: `make eval` hands BOOST_HOME and PYTHON to
+    ensure_eval_corpus.sh inline, so the bare `FORCE=1 bash
+    scripts/ensure_eval_corpus.sh` this used to print ran against `~/.boost` —
+    a developer's real home — under whatever `python3` was first on PATH, and
+    left the corpus it was meant to repair exactly as broken.
+    """
+    return "FORCE=1 BOOST_HOME=%s PYTHON=%s bash %s" % (
+        shlex.quote(str(home)), shlex.quote(python), shlex.quote(str(ENSURE)))
+
+
 def check_regressions(results: list[dict], eps: float,
                       golden: Path) -> list[str]:
     base = baseline_for(golden)
@@ -688,8 +781,12 @@ def main(argv: list[str] | None = None) -> int:
             print("building BM25 index over the tapped catalog ...", flush=True)
         stats = rag.build(catalog.all_entries(), force=args.build)
         if not args.json:
+            # Flushed like the line above it: piped (CI, `make eval | tail`)
+            # stdout is block-buffered while stderr is not, so an unflushed
+            # build line lands *after* a refusal written to stderr — the log
+            # then reads as though the corpus check ran before the build.
             print("  indexed %d entries -> %d chunks across %d taps"
-                  % (stats["entries"], stats["docs"], stats["taps"]))
+                  % (stats["entries"], stats["docs"], stats["taps"]), flush=True)
 
     if args.worksheet:
         sheet = exemplar_worksheet(rows, catalog.all_entries(), rag.content_hashes())
@@ -706,6 +803,27 @@ def main(argv: list[str] | None = None) -> int:
                     print("          %s" % cand["description"][:96])
             print()
         return 0
+
+    # Before anything is scored. A run whose numbers BIND something — a floor,
+    # or a baseline every later run is compared to — refuses; a run that binds
+    # nothing (`make eval-ai`, `--stats`, a natural-language `--golden` run,
+    # some against a developer's real home) gets the same diagnosis as a
+    # warning and is scored. Still no flag of its own: a flag is a way for
+    # `make eval` and ci.yml to disagree about what the required gate checks,
+    # which is the failure `tests/unit/test_eval_corpus.py` already exists to
+    # catch on the floors. Placed after `--worksheet`, which reads identities
+    # rather than text and is a developer tool, not a gate.
+    problem = corpus_refusal(rag.index_completeness())
+    if problem is not None:
+        fix = "  Fix: " + corpus_remedy(paths.boost_home().resolve(),
+                                        sys.executable)
+        if floors or args.fail_under is not None or args.save_baseline:
+            print("\nCORPUS INCOMPLETE — refusing to score.\n%s\n%s"
+                  % (problem, fix), file=sys.stderr)
+            return EX_NOINPUT
+        print("\nwarning: CORPUS INCOMPLETE — scoring anyway, because this run "
+              "floors nothing\nand pins no baseline. Do not read what follows "
+              "as the gate's numbers.\n%s\n%s" % (problem, fix), file=sys.stderr)
 
     if args.rerank:
         return run_rerank_lift(rows, args.k, args.json)

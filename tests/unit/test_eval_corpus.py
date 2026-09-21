@@ -440,6 +440,22 @@ class TestTheGateIsDefinedOnce:
 
 
 class TestPinningAClone:
+    def test_a_directory_that_is_not_a_clone_is_refused(self, tmp_path):
+        # Without its own .git, `git -C` walks UP to the nearest enclosing
+        # repository. Under `make eval` that is the boost checkout itself
+        # (.eval-home sits inside it), and the forced checkout would act on
+        # the developer's working tree.
+        m = _load()
+        outer, shas = _repo(tmp_path)
+        inner = outer / "repos" / "owner__repo"
+        inner.mkdir(parents=True)
+        with pytest.raises(m.CorpusError) as exc:
+            m.pin_clone(inner, shas[0])
+        assert exc.value.kind == m.UNAVAILABLE
+        assert "not a git clone" in exc.value.detail
+        assert _git(outer, "rev-parse", "HEAD") == shas[-1], \
+            "pin_clone moved the enclosing repository"
+
     def test_a_sha_already_present_is_checked_out_without_fetching(
             self, tmp_path, monkeypatch):
         m = _load()
@@ -480,6 +496,22 @@ class TestPinningAClone:
         assert ei.value.kind == m.UNAVAILABLE
         assert path.name in str(ei.value)
 
+    def test_re_pinning_restores_a_deleted_tracked_file(self, tmp_path):
+        """The pin names a tree, not just a commit HEAD happens to sit on.
+
+        A plain `checkout --detach` onto the commit HEAD already names is a
+        no-op for the working tree, so a SKILL.md deleted by hand stayed
+        deleted: the next --ensure rescanned one entry short and exited DRIFT,
+        which is the one remedy the eval gate's refusal points at.
+        """
+        m = _load()
+        path, shas = _repo(tmp_path)
+        m.pin_clone(path, shas[1])
+        (path / "SKILL.md").unlink()
+        m.pin_clone(path, shas[1])
+        assert (path / "SKILL.md").is_file()
+        assert (path / "SKILL.md").read_text(encoding="utf-8") == "# second\n"
+
     def test_has_commit_is_false_for_a_tree_not_a_commit(self, tmp_path):
         # `cat-file -e <sha>` alone passes for any object; the pin must reject a
         # tree or blob SHA rather than checking out something meaningless.
@@ -487,6 +519,179 @@ class TestPinningAClone:
         path, _shas = _repo(tmp_path)
         tree = _git(path, "rev-parse", "HEAD^{tree}")
         assert m.has_commit(path, tree) is False
+
+
+def _skills_repo(tmp_path, name, skills=("alpha", "beta")):
+    """A real git repo holding ``skills/<n>/SKILL.md`` — what `scan_dir` finds."""
+    path = tmp_path / name
+    path.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    for cfg in (("user.email", "t@example.test"), ("user.name", "T"),
+                ("commit.gpgsign", "false")):
+        _git(path, "config", *cfg)
+    for skill in skills:
+        md = path / "skills" / skill / "SKILL.md"
+        md.parent.mkdir(parents=True)
+        md.write_text("---\nname: %s\ndescription: %s from %s\n---\n\n"
+                      "The %s body.\n" % (skill, skill, name, skill),
+                      encoding="utf-8")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-q", "-m", "skills")
+    return path, _git(path, "rev-parse", "HEAD")
+
+
+@pytest.fixture()
+def pinned_corpus(tmp_path, sandbox):
+    """Two local taps, configured and materialised by a real --ensure.
+
+    Local paths rather than owner/repo so nothing reaches the network, but the
+    clone, the config row, the pin and the rescan are all the real ones.
+    Returns ``(module, taps_file, {tap name: (origin, sha)})``.
+    """
+    from boost_cli.core import registry
+    m = _load()
+    origins = {}
+    lines = []
+    for name in ("one-skills", "two-skills"):
+        origin, sha = _skills_repo(tmp_path, name)
+        tap = registry.add(str(origin))
+        origins[tap.name] = (origin, sha)
+        lines.append("%s %s 2" % (tap.name, sha))
+    taps = tmp_path / "taps.txt"
+    taps.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert m.main(["--ensure", "--taps", str(taps)]) == 0
+    return m, taps, origins
+
+
+class TestEnsureRepairsWhatTheGateRefuses:
+    """The eval gate's refusal names `--ensure` as the fix, so it has to be one.
+
+    The card's own state — `repos/` reclaimed, `config.json`, the catalog
+    caches and the sentinel intact — reached `_materialise`, which found every
+    tap still configured, skipped `registry.add`, and ran `git -C` in a
+    directory that no longer existed. Every row then read "the pin in
+    tests/eval/taps.txt is stale" and the run exited 75 as CORPUS UNAVAILABLE,
+    blaming twenty third parties for a directory deleted by hand. The false
+    green became a false red, and the remedy repaired nothing.
+    """
+
+    def test_a_configured_tap_whose_clone_is_gone_is_re_cloned(
+            self, pinned_corpus, capsys):
+        from boost_cli.core import registry, util
+        m, taps, origins = pinned_corpus
+        name = sorted(origins)[0]
+        tap = registry.get(name)
+        util.rmtree(tap.path)
+        assert registry.get(name).name == name, "config.json must survive"
+        assert m.main(["--ensure", "--taps", str(taps)]) == 0, \
+            capsys.readouterr().out
+        assert _git(tap.path, "rev-parse", "HEAD") == origins[name][1]
+        assert (tap.path / "skills" / "alpha" / "SKILL.md").is_file()
+
+    def test_a_whole_reclaimed_repos_tree_is_re_cloned(
+            self, pinned_corpus, capsys):
+        from boost_cli.core import paths, util
+        m, taps, origins = pinned_corpus
+        for child in paths.repos_dir().iterdir():
+            util.rmtree(child)
+        assert m.main(["--ensure", "--taps", str(taps)]) == 0, \
+            capsys.readouterr().out
+        assert sorted(c.name for c in paths.repos_dir().iterdir()) \
+            == sorted(origins)
+
+    def test_an_empty_directory_where_the_clone_was_is_re_cloned(
+            self, pinned_corpus, capsys):
+        # `is_cloned` is `is_dir()`, so an emptied clone directory read as a
+        # clone: the update was skipped and git ran in a directory with no
+        # repository of its own.
+        from boost_cli.core import registry, util
+        m, taps, origins = pinned_corpus
+        name = sorted(origins)[0]
+        tap = registry.get(name)
+        util.rmtree(tap.path)
+        tap.path.mkdir()
+        assert m.main(["--ensure", "--taps", str(taps)]) == 0, \
+            capsys.readouterr().out
+        assert _git(tap.path, "rev-parse", "HEAD") == origins[name][1]
+
+    def test_a_non_clone_directory_with_files_is_not_deleted(
+            self, pinned_corpus, capsys):
+        # Someone else's files are not a clone to be replaced: say so and
+        # leave them, rather than delete them to make room.
+        from boost_cli.core import registry, util
+        m, taps, origins = pinned_corpus
+        name = sorted(origins)[0]
+        tap = registry.get(name)
+        util.rmtree(tap.path)
+        tap.path.mkdir()
+        (tap.path / "notes.txt").write_text("mine\n", encoding="utf-8")
+        assert m.main(["--ensure", "--taps", str(taps)]) != 0
+        assert "not a git clone" in capsys.readouterr().out
+        assert (tap.path / "notes.txt").read_text(encoding="utf-8") == "mine\n"
+
+    def test_a_deleted_skill_md_is_restored_rather_than_drifted(
+            self, pinned_corpus, capsys):
+        from boost_cli.core import registry
+        m, taps, origins = pinned_corpus
+        md = registry.get(sorted(origins)[1]).path / "skills" / "beta" / "SKILL.md"
+        md.unlink()
+        assert m.main(["--ensure", "--taps", str(taps)]) == 0, \
+            capsys.readouterr().out
+        assert md.is_file()
+
+    def test_a_clone_that_cannot_be_re_made_is_still_unavailability(
+            self, pinned_corpus, capsys):
+        """Exit 75 keeps its meaning: the tree is not obtainable here and now."""
+        import shutil
+
+        from boost_cli.core import registry, util
+        m, taps, origins = pinned_corpus
+        name = sorted(origins)[0]
+        util.rmtree(registry.get(name).path)
+        shutil.rmtree(origins[name][0])
+        assert m.main(["--ensure", "--taps", str(taps)]) == m.EXIT_UNAVAILABLE
+        out = capsys.readouterr().out
+        assert "CORPUS UNAVAILABLE" in out and name in out
+
+
+@pytest.mark.skipif(os.name == "nt" or not _ENSURE.exists(),
+                    reason="POSIX shell wrapper")
+class TestTheCardScenarioRepairsItself:
+    """The reproduction from the review, through the real wrapper and --ensure.
+
+    No stub interpreter: the stub the sentinel tests use creates
+    `repos/owner__repo` itself, which is exactly how the broken re-tap passed.
+    """
+
+    def test_an_emptied_repos_tree_under_a_live_sentinel_is_re_cloned(
+            self, pinned_corpus, tmp_path):
+        from boost_cli.core import paths, util
+        _m, taps, origins = pinned_corpus
+        root = tmp_path / "root"
+        (root / "scripts").mkdir(parents=True)
+        (root / "tests" / "eval").mkdir(parents=True)
+        for script in ("ensure_eval_corpus.sh", "eval_corpus.py"):
+            (root / "scripts" / script).write_text(
+                (_ROOT / "scripts" / script).read_text(encoding="utf-8"),
+                encoding="utf-8")
+        (root / "tests" / "eval" / "taps.txt").write_text(
+            taps.read_text(encoding="utf-8"), encoding="utf-8")
+        # The wrapper puts its own root on PYTHONPATH; point that at this tree.
+        (root / "boost_cli").symlink_to(_ROOT / "boost_cli")
+        env = dict(os.environ, PYTHON=sys.executable)
+        env.pop("FORCE", None)
+        wrapper = ["bash", str(root / "scripts" / "ensure_eval_corpus.sh")]
+        first = subprocess.run(wrapper, capture_output=True, text=True, env=env)
+        assert first.returncode == 0, first.stdout + first.stderr
+        assert (paths.boost_home() / ".eval-corpus-ready").is_file()
+        for child in paths.repos_dir().iterdir():
+            util.rmtree(child)
+        again = subprocess.run(wrapper, capture_output=True, text=True, env=env)
+        assert again.returncode == 0, again.stdout + again.stderr
+        assert "re-tapping" in again.stderr
+        assert "stale" not in again.stdout
+        assert sorted(c.name for c in paths.repos_dir().iterdir()) \
+            == sorted(origins)
 
 
 @pytest.mark.skipif(os.name == "nt" or not _ENSURE.exists(),
@@ -511,19 +716,24 @@ class TestTheSentinelIsKeyedOnTheTapList:
             _ENSURE.read_text(encoding="utf-8"), encoding="utf-8")
         # The wrapper calls the interpreter twice — once with `-c` to digest the
         # tap list, once to run --ensure. The stub delegates the first to real
-        # Python and records the second, so no corpus is materialised.
+        # Python and records the second, so no corpus is materialised. It does
+        # create the clone directory a real --ensure would, because the sentinel
+        # is honoured only over a non-empty `repos/` — see
+        # test_eval_corpus_bodies.TestTheSentinelDoesNotOutliveTheClones.
+        home = tmp_path / "home"
         stub = tmp_path / "stub.py"
         stub.write_text(
             "#!%s\n"
-            "import subprocess, sys\n"
+            "import os, subprocess, sys\n"
             "a = sys.argv[1:]\n"
             "if a and a[0] == '-c':\n"
             "    sys.exit(subprocess.run([sys.executable] + a).returncode)\n"
-            "open(%r, 'a').write('ensure\\n')\n" % (sys.executable, str(calls)),
+            "open(%r, 'a').write('ensure\\n')\n"
+            "os.makedirs(%r, exist_ok=True)\n"
+            % (sys.executable, str(calls), str(home / "repos" / "owner__repo")),
             encoding="utf-8")
         stub.chmod(0o755)
-        env = dict(os.environ, BOOST_HOME=str(tmp_path / "home"),
-                   PYTHON=str(stub))
+        env = dict(os.environ, BOOST_HOME=str(home), PYTHON=str(stub))
         env.pop("FORCE", None)
         res = subprocess.run(
             ["bash", str(root / "scripts" / "ensure_eval_corpus.sh")],

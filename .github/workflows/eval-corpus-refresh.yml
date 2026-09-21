@@ -100,15 +100,33 @@ jobs:
         # Deliberately non-blocking. A corpus that no longer clears the floors
         # is exactly the finding this job exists to surface, and a failed job
         # surfaces it to nobody.
+        #
+        # The exit code is recorded as well as the outcome, because `outcome`
+        # is binary and one failure is not a verdict: 66 is the gate REFUSING
+        # to score an index whose entries' bodies are not on disk
+        # (`corpus_refusal` in scripts/eval_retrieval.py). That is a broken
+        # corpus on this runner, and the banner below would have called it
+        # "does NOT clear the floors".
         continue-on-error: true
         env:
           BOOST_HOME: ${{ github.workspace }}/.eval-home
         run: |
           set -o pipefail
+          rc=0
           PYTHONPATH=. python scripts/eval_retrieval.py --build -k 10 \
             --fail-under 0.78 --floor hit@1=0.40 --floor MRR=0.52 \
             --floor nDCG@k=0.58 --regression-eps 1 \
-            2>&1 | tee "$RUNNER_TEMP/gate.txt"
+            2>&1 | tee "$RUNNER_TEMP/gate.txt" || rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+      - name: the refreshed corpus could be scored at all
+        # A refusal is not a measurement, so it must not reach a pull request
+        # as one. Fail the job here instead — the way an unreachable repository
+        # fails `--refresh` above — with the diagnosis in the step before.
+        if: steps.gate.outputs.rc == '66'
+        run: |
+          echo "::error::the eval gate refused to score the refreshed corpus (CORPUS INCOMPLETE) — its diagnosis is in the previous step"
+          exit 66
       - name: re-baseline against the refreshed corpus
         # The baseline is a statement about a specific corpus, so it has to move
         # with it or every later run reports a regression that is only the gap
