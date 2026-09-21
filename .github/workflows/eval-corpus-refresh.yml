@@ -216,7 +216,10 @@ jobs:
             echo "against the new rows and baseline by"
             echo "\`tests/unit/test_corpus_prose.py\`. If it fails here, update"
             echo "the figures it names in this branch, and re-measure any score"
-            echo "quoted beside them."
+            echo "quoted beside them. The natural-language floors in the"
+            echo "Makefile, ci.yml and this workflow must stay under the new"
+            echo "natural row; \`test_the_floors_sit_under_the_recorded_baseline\`"
+            echo "in \`tests/unit/test_eval_corpus.py\` names any that do not."
             echo
             echo "**This PR arrives with no check runs.** \`create-pull-request\`"
             echo "pushes with \`GITHUB_TOKEN\`, and a \`GITHUB_TOKEN\` push never"
