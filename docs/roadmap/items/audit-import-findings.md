@@ -10,7 +10,7 @@ wow: 1
 note: import turns a tap install into "local" silently; a URL import records a deleted temp path
 order: 271
 owner: loop/import-audit
-pr:
+pr: 927
 title: "<code>boost import</code>: CLI audit findings (2026-08)"
 ---
 <b>import loses provenance, both ways</b> <em>(med)</em>. Importing over a tap-installed skill
