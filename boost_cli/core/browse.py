@@ -658,9 +658,15 @@ def detail_lines(entry: dict, width: int = 60,
         # whole and nothing leaves the pane.
         from . import output  # stdlib-only too; lazy to keep this module light
         for chunk in output.wrap(text, width) or [""]:
-            lines.extend((role, part) for part in (
-                textwrap.wrap(chunk, width) if output.visible_len(chunk) > width
-                else [chunk]))
+            parts = [chunk]
+            if output.visible_len(chunk) > width:
+                # output.wrap glues trailing punctuation to a code span, so a
+                # command exactly as wide as the pane arrives one column over.
+                # Drop the comma, not the command.
+                bare = chunk.rstrip(",.;:")
+                parts = ([bare] if output.visible_len(bare) <= width
+                         else textwrap.wrap(chunk, width))
+            lines.extend((role, part) for part in parts)
         lines.append(("blank", ""))
 
     add("head", "SOURCE")

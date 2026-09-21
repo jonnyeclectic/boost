@@ -1116,3 +1116,16 @@ def test_a_status_token_wider_than_the_pane_still_fits_it():
     assert all(len(t) <= 30 for t in lines), lines
     assert "".join(lines).count("a-very-long-skill-name") >= 1
 
+
+def test_a_command_exactly_as_wide_as_the_pane_is_not_split_by_its_comma():
+    # "`chmod u+w ~/.windsurf/skills`," is 31 columns for a 30-column pane:
+    # the glued comma sent the span to the textwrap fallback, which split
+    # the command it exists to keep whole.
+    cmd = "`chmod u+w ~/.windsurf/skills`"
+    assert len(cmd) == 30
+    msg = "not linked: ~/.windsurf/skills is not writable — %s, then `boost sync`" % cmd
+    lines = [t for role, t in browse.detail_lines(
+        {"name": "x"}, width=30, state="ok", message=msg)]
+    assert cmd in lines, lines
+    assert all(len(t) <= 30 for t in lines), lines
+
