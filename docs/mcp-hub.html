@@ -661,7 +661,10 @@ REGISTRY.specs()                <span class="cm"># rendered per call</span></pre
             <code>text</code> is the human-readable result; <code>is_error</code> becomes the MCP
             <code>result.isError</code> flag. A handler may return <code>text is None</code> to mean
             "no result," which the server renders identically to an unknown tool — so the
-            <code>-32602</code> path lives in exactly one place. Handlers close over the core engine
+            unknown-tool <code>-32602</code> lives in exactly one place. (The shape checks
+            earlier in <code>handle_request</code> — a malformed <code>params</code>, a
+            non-string <code>name</code>, a non-object <code>arguments</code> — emit their own
+            <code>-32602</code> naming the field at fault, before any handler is reached.) Handlers close over the core engine
             (<code>rag</code>, <code>catalog</code>, <code>store</code>) but the registry knows
             nothing about them.</p></div>
         </details>

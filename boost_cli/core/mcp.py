@@ -549,19 +549,61 @@ def engine_note() -> str:
             "search, %s." % (state, dense.fix_hint(st.get("reason", ""), st)))
 
 
-def handle_request(req: dict, *, version: str,
-                   registry: Registry) -> dict | None:
-    """Map one parsed JSON-RPC request to its response dict.
+def _rpc_error(rid: object, code: int, message: str) -> dict:
+    """One JSON-RPC error response. Every refusal on this path is this shape."""
+    return {"jsonrpc": "2.0", "id": rid,
+            "error": {"code": code, "message": message}}
 
-    Returns ``None`` for a notification (a request with no ``id``) — the caller
+
+def handle_request(req: object, *, version: str,
+                   registry: Registry) -> dict | None:
+    """Map one parsed JSON-RPC message to its response dict.
+
+    Returns ``None`` for a notification (a message with no ``id``) — the caller
     sends nothing back. Handlers that raise during ``tools/call`` are turned into
     an error *result* (``isError``) rather than a protocol error, so a failing
     tool never kills the session.
+
+    ``req`` is whatever ``json.loads`` produced, which is why it is typed
+    ``object`` rather than ``dict``. **A line that parses is not a request.** A
+    JSON-RPC batch array, a bare scalar, a string and ``null`` are all valid
+    JSON, and each used to reach ``req.get("method")`` unguarded: the
+    ``AttributeError`` escaped every handler into boost's top-level crash
+    handler, which exits 70 after writing a crash report and puts *nothing* on
+    stdout — so the host got no answer to that message and no answer to
+    anything after it, because the process was gone. Measured at rc 70 with
+    zero bytes of stdout for each of ``[{...}]``, ``5``, ``"hello"``, ``null``
+    and ``params: ["boost_list"]``. Each is now one ``-32600`` and the loop
+    lives, which is what :func:`serve_stdio` already did for a line that does
+    not parse at all (``-32700``).
+
+    A batch array is refused rather than unpacked: boost's server has never
+    implemented JSON-RPC batching, and an array answered with silence would
+    look to a host exactly like the crash this replaces.
+
+    **The id of a message with no readable id is ``null``**, per JSON-RPC 2.0
+    §5 — "if there was an error in detecting the id it MUST be Null" — and it
+    is the convention ``serve_stdio`` already uses for a parse error, so a host
+    sees one answer to "the message was unusable" rather than two. Echoing a
+    guess would be worse than null: a host correlates on the id, and an id
+    invented from an array's first element would resolve a *different*
+    request's promise. An object that merely has a bad ``method`` or ``params``
+    still has its own id, and that one is echoed — the host can correlate it.
     """
-    method = str(req.get("method", ""))
+    if not isinstance(req, dict):
+        return _rpc_error(
+            None, -32600,
+            "invalid request: expected a JSON-RPC request object")
     if "id" not in req:  # notification (e.g. notifications/initialized)
         return None
-    resp: dict = {"jsonrpc": "2.0", "id": req.get("id")}
+    rid = req.get("id")
+    method = req.get("method")
+    # Missing or non-string `method` is an Invalid Request, not an unknown
+    # method: `{"id": 1}` used to answer `-32601 method not found: ` — the same
+    # unguarded-shape assumption, reported as the wrong thing.
+    if not isinstance(method, str):
+        return _rpc_error(rid, -32600, 'invalid request: "method" must be a string')
+    resp: dict = {"jsonrpc": "2.0", "id": rid}
     if method == "initialize":
         from . import ai
         instr = instructions(ai_available=ai.available()) + engine_note()
@@ -574,10 +616,32 @@ def handle_request(req: dict, *, version: str,
     elif method == "tools/list":
         resp["result"] = {"tools": registry.specs()}
     elif method == "tools/call":
-        params = req.get("params") or {}
-        tool = str(params.get("name", ""))
+        # `params` is optional, so absent/null is {} — but a *present* array,
+        # string or number is malformed, and used to take the session down on
+        # `params.get("name")` exactly as a non-object message did. The bad
+        # `arguments` shapes did not crash the server; they reached the handler
+        # and surfaced as an isError result reading "'list' object has no
+        # attribute 'get'" — a Python traceback fragment handed to an agent as
+        # advice — while a handler that ignores its arguments reported plain
+        # success. -32602 names what was wrong with the call instead.
+        params = req.get("params")
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            return _rpc_error(rid, -32602,
+                              'invalid params: "params" must be an object')
+        tool = params.get("name")
+        if not isinstance(tool, str):
+            return _rpc_error(rid, -32602,
+                              'invalid params: "name" must be a string')
+        arguments = params.get("arguments")
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            return _rpc_error(rid, -32602,
+                              'invalid params: "arguments" must be an object')
         try:
-            text, is_err = registry.call(tool, params.get("arguments") or {})
+            text, is_err = registry.call(tool, arguments)
         except BoostError as e:
             text = "Error: %s" % e.message + ("\nhint: %s" % e.hint if e.hint else "")
             is_err = True
