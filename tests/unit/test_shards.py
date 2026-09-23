@@ -157,6 +157,7 @@ def _machine(monkeypatch, prov, model, dim, local=True):
     monkeypatch.setattr(shards.embed, "model", lambda: model)
     monkeypatch.setattr(shards.embed, "dimension", lambda: dim)
     monkeypatch.setattr(shards.embed, "local_available", lambda: local)
+    monkeypatch.setattr(shards.embed, "local_installed", lambda: local)
     for env in shards.embed.KEY_ENV.values():
         monkeypatch.delenv(env, raising=False)
 

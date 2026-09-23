@@ -35,6 +35,7 @@ def keyed(boost, tapped, tmp_path, monkeypatch):
     every attempted shard download is appended to; it must stay empty.
     """
     monkeypatch.setattr(dense, "have_backend", lambda: True)
+    monkeypatch.setattr(embed, "local_installed", lambda: True)
     monkeypatch.setattr(embed, "local_available", lambda: True)
     monkeypatch.setenv("VOYAGE_API_KEY", "not-a-real-key")
     rows = [{"tap": "a/b", "commit": "1" * 40, "chunks": 1, "bytes": 4,

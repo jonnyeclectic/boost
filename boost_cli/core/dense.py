@@ -593,13 +593,14 @@ def free_shard_path(prov: str | None) -> str | None:
     space), is what lets `boost update --shards` load them.
 
     None when ``prov`` is not a paid provider, or when the local model is not
-    importable: dropping the key then leaves no provider at all, and the shards
+    installed: dropping the key then leaves no provider at all, and the shards
     still cannot load. A pure function of the environment — no manifest, no
-    network — because `boost search` prints it, and search must not fetch to
-    word a hint. `shards.remedy` and `fix_hint` both return it, so the two
+    network, and no ONNX runtime (`embed.local_installed` looks the packages
+    up rather than importing them) — because `boost search` prints it, and
+    search must neither fetch nor load a backend to word a hint. `shards.remedy` and `fix_hint` both return it, so the two
     surfaces that answer this state cannot drift into two answers.
     """
-    if prov not in embed.KEY_ENV or not embed.local_available():
+    if prov not in embed.KEY_ENV or not embed.local_installed():
         return None
     keys = [env for name, env in embed.KEY_ENV.items()
             if name == prov or os.environ.get(env)]

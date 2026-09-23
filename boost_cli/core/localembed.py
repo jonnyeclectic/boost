@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import importlib.util
 import json
 import shutil
 import time
@@ -118,6 +119,29 @@ def _deps():
 def available() -> bool:
     """True when the runtime and tokenizer libraries are importable."""
     return _deps()[0] is not None
+
+
+def installed() -> bool:
+    """True when both packages are on the path, *without* importing them.
+
+    The same question `available` answers, asked by a caller that is only
+    going to name the local model rather than run it: `dense.free_shard_path`
+    words a hint for `boost search` and `boost doctor`, and importing an ONNX
+    runtime to decide the wording charges every one of those runs for a
+    backend they never touch. ``find_spec`` is a metapath lookup — it locates
+    a module without executing it.
+
+    A package that is present but broken answers True here and False in
+    `available`; that is the right trade for a hint, and the embedding path
+    still asks `available` before it embeds.
+    """
+    try:
+        return all(importlib.util.find_spec(name) is not None
+                   for name in ("onnxruntime", "tokenizers"))
+    except (ImportError, ValueError):
+        # find_spec raises for a namespace package with no spec, and for a
+        # parent that is not importable. Either way there is no backend.
+        return False
 
 
 def model_dir() -> Path:

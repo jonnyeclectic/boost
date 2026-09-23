@@ -296,7 +296,7 @@ class TestKeyedMachineWithNoStore:
     def keyed(self, monkeypatch):
         """A status for the state, with the local model importable."""
         from boost_cli.core import embed
-        monkeypatch.setattr(embed, "local_available", lambda: True)
+        monkeypatch.setattr(embed, "local_installed", lambda: True)
         for env in embed.KEY_ENV.values():
             monkeypatch.delenv(env, raising=False)
 
@@ -342,6 +342,7 @@ class TestKeyedMachineWithNoStore:
         # manifest they are refused. One line, not two that happen to agree.
         from boost_cli.core import embed, shards
         monkeypatch.setattr(dense, "have_backend", lambda: True)
+        monkeypatch.setattr(embed, "local_installed", lambda: True)
         monkeypatch.setattr(embed, "local_available", lambda: True)
         monkeypatch.setenv("VOYAGE_API_KEY", "v")
         st = dense.status()
@@ -355,7 +356,7 @@ class TestKeyedMachineWithNoStore:
         # Drop the key with nothing to take over and `provider()` is None:
         # the published vectors still cannot load. The table stands.
         from boost_cli.core import embed
-        monkeypatch.setattr(embed, "local_available", lambda: False)
+        monkeypatch.setattr(embed, "local_installed", lambda: False)
         assert dense.fix_hint("no-store", keyed()) == _table("no-store")
 
     def test_a_keyless_machine_keeps_the_table(self, keyed):
@@ -396,7 +397,7 @@ class TestKeyedMachineWithNoStore:
                    for line in lines), lines
         assert any("`boost update --shards`" in line for line in lines), lines
 
-    @pytest.mark.parametrize("cols", [50, 60, 80])
+    @pytest.mark.parametrize("cols", [40, 50, 60, 80])
     def test_it_wraps_within_the_pane(self, keyed, monkeypatch, cols):
         # Same invariant TestFitsANarrowTerminal holds for the table; this
         # answer bypasses the table, so it needs its own guard.
@@ -406,3 +407,85 @@ class TestKeyedMachineWithNoStore:
         hint = dense.fix_hint("no-store", keyed())
         lines = out.wrap("semantic search is off — %s" % hint, cols - 2)
         assert all(out.visible_len(line) <= cols - 2 for line in lines), lines
+
+
+class TestWordingTheHintLoadsNoBackend:
+    """Naming the local model must not import the ONNX runtime.
+
+    `boost search` and `boost doctor` print this hint on a keyed machine with
+    no store, and the machines that reach it are exactly the ones that have
+    the `[rag]` extra installed — so asking "can the local model take over?"
+    by importing it charges every one of those runs for a backend the command
+    never uses. The question is whether the packages are *there*, which
+    `importlib.util.find_spec` answers without executing them.
+    """
+
+    @pytest.fixture()
+    def counted(self, monkeypatch):
+        """Count every import of the backend, and force the packages present."""
+        from boost_cli.core import embed, localembed
+        calls: list = []
+
+        def _deps():
+            calls.append(1)
+            return object(), object()
+
+        monkeypatch.setattr(localembed, "_deps", _deps)
+        monkeypatch.setattr(localembed, "installed", lambda: True)
+        embed.reset_local_cache()
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        yield calls
+        embed.reset_local_cache()
+
+    def test_the_free_path_is_worded_without_importing_the_runtime(self,
+                                                                    counted):
+        assert "`unset VOYAGE_API_KEY`" in (dense.free_shard_path("voyage") or "")
+        assert counted == [], "the hint imported the embedding backend"
+
+    def test_a_backend_this_process_already_loaded_is_not_asked_again(
+            self, counted, monkeypatch):
+        # Once `local_available` has run, the memoised answer is the honest
+        # one — importable, not merely present — and costs nothing.
+        from boost_cli.core import embed
+        assert embed.local_available() is True
+        assert counted == [1]
+        assert embed.local_installed() is True
+        assert counted == [1]
+
+    def test_a_backend_that_failed_to_import_is_not_installed(self, monkeypatch):
+        from boost_cli.core import embed, localembed
+        monkeypatch.setattr(localembed, "available", lambda: False)
+        embed.reset_local_cache()
+        assert embed.local_available() is False
+        # `installed` would say yes; the memoised failure outranks it.
+        monkeypatch.setattr(localembed, "installed", lambda: True)
+        assert embed.local_installed() is False
+        embed.reset_local_cache()
+
+    @pytest.mark.parametrize("missing", ["onnxruntime", "tokenizers"])
+    def test_either_package_missing_means_no_local_model(self, monkeypatch,
+                                                          missing):
+        import importlib.util
+
+        from boost_cli.core import embed, localembed
+        real = importlib.util.find_spec
+        monkeypatch.setattr(importlib.util, "find_spec",
+                            lambda n, *a: None if n == missing else real("json"))
+        embed.reset_local_cache()
+        assert localembed.installed() is False
+        embed.reset_local_cache()
+
+    def test_a_package_the_import_system_refuses_to_locate_is_not_a_crash(
+            self, monkeypatch):
+        # `find_spec` raises rather than returning None for a few shapes (a
+        # module in `sys.modules` with no spec, an unimportable parent). A
+        # hint must not turn that into a traceback out of `boost search`.
+        import importlib.util
+
+        from boost_cli.core import embed, localembed
+        monkeypatch.setattr(importlib.util, "find_spec",
+                            lambda *a: (_ for _ in ()).throw(ValueError("no spec")))
+        embed.reset_local_cache()
+        assert localembed.installed() is False
+        embed.reset_local_cache()
