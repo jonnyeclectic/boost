@@ -10,6 +10,7 @@ wow: 4
 note: A single failed build job deletes ~10 unrelated registries from the published manifest, and their assets stay on the release, orphaned…
 order: 337
 owner: loop/shard-carry-forward-gaps
+pr: 958
 title: One failed shard-build job silently drops its whole chunk from the published manifest
 ---
 <b>Found by the audit of the repo's own automation, and confirmed live on the current release.</b>
