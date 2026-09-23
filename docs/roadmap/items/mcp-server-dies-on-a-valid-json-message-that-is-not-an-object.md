@@ -10,6 +10,7 @@ wow: 4
 note: One batch array or stray scalar takes the whole tool surface offline for the session, with no JSON-RPC error the host can report…
 order: 339
 owner: loop/mcp-request-shape
+pr: 953
 title: One valid-JSON message that is not an object kills the whole MCP session
 ---
 <b>Found by the audit of the MCP surface.</b> <code>serve_stdio</code> answers unparseable JSON
