@@ -546,7 +546,11 @@ def keyed_machine(monkeypatch):
     monkeypatch.setattr(embed, "provider", lambda: "voyage")
     monkeypatch.setattr(embed, "model", lambda: "voyage-4")
     monkeypatch.setattr(embed, "dimension", lambda: 1024)
+    # Both seams: `remedy` words the free path from `local_installed`
+    # (the look-up that imports nothing), and the embedding path that
+    # would follow the advice still asks `local_available`.
     monkeypatch.setattr(embed, "local_available", lambda: True)
+    monkeypatch.setattr(embed, "local_installed", lambda: True)
     downloads: list = []
     monkeypatch.setattr(shards, "download",
                         lambda *a, **k: downloads.append(a))
@@ -1034,3 +1038,185 @@ class TestTapAt:
         # every shard refused later for a reason three steps away.
         boost("tap", str(fixture_tap_src), "--at", "b" * 40, expect=1)
         assert registry.list_taps() == []
+
+
+class TestTheShardDownloadIsNamed:
+    """Before and during: what the shard step downloads, in one phrase.
+
+    The dry run printed "import 459 shard(s)" and never the 1.5 GB those rows
+    add up to, though it had already read the manifest that carries every
+    row's `bytes`; the live run then downloaded them with no line at all
+    until the last one landed. And the preview counted every tap with a row,
+    so on a rerun over current vectors it promised imports the run skipped.
+    `defaults_manifest` gives each of the seven defaults a 4-byte row.
+    """
+
+    @pytest.fixture()
+    def keyless(self, monkeypatch):
+        from boost_cli.core import dense, embed
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        monkeypatch.setattr(embed, "provider", lambda: "local")
+        monkeypatch.setattr(embed, "model", lambda: SPACE["model"])
+        monkeypatch.setattr(embed, "dimension", lambda: 384)
+
+    @staticmethod
+    def _configured(monkeypatch, at, built=None):
+        """Taps already configured: name -> commit, and the store's commits."""
+        from boost_cli.core import dense, rag, registry
+        monkeypatch.setattr(registry, "list_taps", lambda: [
+            registry.Tap(name=n, url="file:///x") for n in at])
+        monkeypatch.setattr(rag, "_tap_commits", lambda: {
+            n.replace("/", "__"): c for n, c in at.items()})
+        monkeypatch.setattr(dense, "tap_commits", lambda: {
+            n.replace("/", "__"): c for n, c in (built or {}).items()})
+
+    def _live(self, boost, monkeypatch, built=None):
+        """A live run whose seven taps land at their pins; downloads faked."""
+        from boost_cli.core import config, dense, shards
+        _fake_add_many(monkeypatch, ["ok"] * 7)
+        self._configured(monkeypatch,
+                         {str(d["name"]): "1" * 40 for d in config.DEFAULT_TAPS},
+                         built)
+        fetched: list = []
+
+        def download(row, dest, manifest, timeout=300.0):
+            fetched.append(row["tap"])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("{}", encoding="utf-8")
+            return dest
+
+        monkeypatch.setattr(shards, "download", download)
+        monkeypatch.setattr(dense, "import_shard",
+                            lambda shard, commit="": (True, ""))
+        return boost("quickstart"), fetched
+
+    def test_the_dry_run_names_what_the_import_downloads(
+            self, boost, sandbox, defaults_manifest, keyless):
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "then import 7 shard(s) (28B)" in out
+        # Planning reads the tap caches and the vector store; it writes
+        # neither, and taps nothing.
+        assert not (sandbox / ".boost" / "repos").exists()
+        assert not (sandbox / ".boost" / "cache" / "rag_vectors.sqlite").exists()
+
+    def test_the_catalog_dry_run_sums_only_rows_for_taps_it_will_tap(
+            self, boost, defaults_manifest, keyless):
+        from boost_cli.core import config
+        catalogued = {e["name"] for e in config.load_registry_catalog()
+                      if not e.get("list_only")}
+        rows = sum(1 for d in config.DEFAULT_TAPS if d["name"] in catalogued)
+        out = _flat(boost("quickstart", "--catalog", "--dry-run").out)
+        assert "then import %d shard(s) (%dB)" % (rows, 4 * rows) in out
+
+    def test_a_shard_already_built_is_not_counted_or_sized(
+            self, boost, defaults_manifest, keyless, monkeypatch):
+        at = {"anthropics/skills": "1" * 40}
+        self._configured(monkeypatch, at, built=at)
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "then import 6 shard(s) (24B)" in out
+        assert "1 shard already up to date — nothing to fetch" in out
+
+    def test_a_tap_that_moved_past_its_row_is_not_counted(
+            self, boost, defaults_manifest, keyless, monkeypatch):
+        self._configured(monkeypatch, {"anthropics/skills": "2" * 40})
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "then import 6 shard(s) (24B)" in out
+        assert "1 tap(s) moved past their vectors" in out
+        assert "`boost update --shards`" in out
+
+    def test_a_rerun_over_current_vectors_plans_nothing_and_says_why(
+            self, boost, defaults_manifest, keyless, monkeypatch):
+        from boost_cli.core import config
+        at = {str(d["name"]): "1" * 40 for d in config.DEFAULT_TAPS}
+        self._configured(monkeypatch, at, built=at)
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "then import 0 shard(s)" in out
+        assert "import 0 shard(s) (" not in out
+        assert "7 shards already up to date — nothing to fetch" in out
+        # Every tap has a row: the zero is not the manifest's.
+        assert "none of these registries have a published shard" not in out
+
+    def test_every_tap_moved_is_a_zero_the_manifest_is_not_blamed_for(
+            self, boost, defaults_manifest, keyless, monkeypatch):
+        from boost_cli.core import config
+        self._configured(monkeypatch, {str(d["name"]): "2" * 40
+                                       for d in config.DEFAULT_TAPS})
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "then import 0 shard(s)" in out
+        assert "7 tap(s) moved past their vectors" in out
+        assert "none of these registries have a published shard" not in out
+
+    def test_a_registry_not_tapped_yet_is_judged_at_its_pin(
+            self, boost, defaults_manifest, keyless, monkeypatch):
+        # The store still holds vectors for a registry that is not tapped
+        # (untapped, say). The live run taps it at its pin, finds them
+        # current and fetches nothing; judged at "" the preview would count
+        # a download that never happens.
+        self._configured(monkeypatch, {},
+                         built={"anthropics/skills": "1" * 40})
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "then import 6 shard(s) (24B)" in out
+        assert "1 shard already up to date" in out
+
+    def test_a_row_without_a_size_makes_the_total_a_floor(
+            self, boost, defaults_manifest, keyless):
+        data = json.loads(defaults_manifest.read_text(encoding="utf-8"))
+        del data["shards"][0]["bytes"]
+        defaults_manifest.write_text(json.dumps(data), encoding="utf-8")
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "then import 7 shard(s) (at least 24B)" in out
+
+    def test_the_live_run_says_what_it_fetches_and_counts_each_one(
+            self, boost, defaults_manifest, keyless, monkeypatch):
+        from boost_cli.core import config
+        res, fetched = self._live(boost, monkeypatch)
+        lines = [ln.strip() for ln in res.out.splitlines()]
+        names = [str(d["name"]) for d in config.DEFAULT_TAPS]
+        assert fetched == names
+        head = lines.index("fetching 7 shard(s) (28B)")
+        # One numbered line per download, in order, after the total.
+        assert lines[head + 1:head + 8] == [
+            "fetching %s 4B (%d/7)" % (n, i) for i, n in enumerate(names, 1)]
+        assert "imported 7 prebuilt shards" in res.out
+
+    def test_the_dry_run_and_the_live_run_agree(
+            self, boost, defaults_manifest, keyless, monkeypatch):
+        at = {"anthropics/skills": "1" * 40}
+        self._configured(monkeypatch, at, built=at)
+        dry = _flat(boost("quickstart", "--dry-run").out)
+        res, fetched = self._live(boost, monkeypatch, built=at)
+        planned = re.search(r"then import (\d+ shard\(s\) \([^)]*\))",
+                            dry).group(1)
+        assert "fetching %s" % planned in _flat(res.out)
+        assert planned.startswith("%d shard(s)" % len(fetched))
+
+    def test_a_single_download_is_announced_too(
+            self, boost, defaults_manifest, keyless, monkeypatch):
+        from boost_cli.core import config
+        at = {str(d["name"]): "1" * 40 for d in config.DEFAULT_TAPS[1:]}
+        res, fetched = self._live(boost, monkeypatch, built=at)
+        lines = [ln.strip() for ln in res.out.splitlines()]
+        assert fetched == [str(config.DEFAULT_TAPS[0]["name"])]
+        assert "fetching 1 shard(s) (4B)" in lines
+        assert "fetching %s 4B (1/1)" % fetched[0] in lines
+
+    def test_a_live_run_with_nothing_to_fetch_prints_no_fetch_line(
+            self, boost, defaults_manifest, keyless, monkeypatch):
+        from boost_cli.core import config
+        at = {str(d["name"]): "1" * 40 for d in config.DEFAULT_TAPS}
+        res, fetched = self._live(boost, monkeypatch, built=at)
+        assert fetched == []
+        assert "fetching" not in res.out
+        assert "7 shards already up to date" in res.out
+
+    def test_progress_is_one_line_per_download_and_nothing_else(self, capsys):
+        from boost_cli.commands import quickstart
+        event = quickstart._progress(3)
+        for status in ("current", "unpublished", "refused", "failed",
+                       "imported"):
+            event("a/b", status, "detail")
+        assert capsys.readouterr().out == ""
+        event("a/b", "downloading", "")
+        event("c/d", "downloading", "1.0KB")
+        assert [ln.strip() for ln in capsys.readouterr().out.splitlines()] == [
+            "fetching a/b (1/3)", "fetching c/d 1.0KB (2/3)"]

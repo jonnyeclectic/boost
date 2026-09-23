@@ -290,6 +290,21 @@ jobs:
             ${{ github.workspace }}/.eval-home/repos
             ${{ github.workspace }}/.eval-home/config.json
           key: eval-corpus-${{ hashFiles('tests/eval/taps.txt') }}
+      # The natural-language set over the same corpus: `make eval-natural`,
+      # flag for flag (tests/unit/test_eval_corpus.py). Advisory, so a red
+      # here marks the step and not the job — its hit@1 floor has one query
+      # of slack out of 50, too thin for a required check the monthly refresh
+      # can move. Before this step nothing in the repository ran the set at
+      # all. Placed after the cache save, so it can never decide what is
+      # cached; --build again because the target has to work on its own.
+      - name: natural-language retrieval set (advisory)
+        continue-on-error: true
+        env:
+          BOOST_HOME: ${{ github.workspace }}/.eval-home
+        run: |
+          PYTHONPATH=. python scripts/eval_retrieval.py --build -k 10 \
+            --golden tests/eval/golden-natural.jsonl --fail-under 0.32 \
+            --floor hit@1=0.14 --floor MRR=0.21 --floor nDCG@k=0.23
 
   evals:
     # Evaluation-harness gate: recall@5/@10, MRR, nDCG@5/@10 with graded (3/2/1)

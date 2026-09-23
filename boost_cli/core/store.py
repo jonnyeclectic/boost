@@ -362,7 +362,11 @@ def source_dir_for(entry: dict) -> Path:
 def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
     """Symlink store/<name> into each linking agent dir. Returns result with
     .linked (agent names), .conflicts (paths that were real files/dirs) and
-    .native (agents that read the store directly and needed no link)."""
+    .native (agents that read the store directly and needed no link).
+
+    A link that already leads to the store copy is left alone and counts as
+    linked, so a dir that refuses writes only refuses a link that needs one:
+    a missing link, or one pointing elsewhere."""
     res = InstallResult(name=name, dest=skill_store_dir(name))
     target = skill_store_dir(name)
     # Deliberately NOT filtered by `only`. That list scopes which agents get a
@@ -380,6 +384,14 @@ def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
         try:
             adir.mkdir(parents=True, exist_ok=True)
             if link.is_symlink():
+                if _already_links(link, target):
+                    # Already right, so there is nothing to write. Re-creating
+                    # it anyway needed a writable dir: in one that refuses
+                    # writes, the unlink raised PermissionError and a reinstall
+                    # printed "not linked" over a link still on disk, still
+                    # pointing at the store, and still in the lock's `agents`.
+                    res.linked.append(agent)
+                    continue
                 link.unlink()
             elif link.exists():
                 res.conflicts.append(str(link))
@@ -405,6 +417,36 @@ def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
             continue
         res.linked.append(agent)
     return res
+
+
+def _already_links(link: Path, target: Path) -> bool:
+    """True if the symlink ``link`` already leads to ``target``.
+
+    Asks about this one skill's store dir, not the store as a whole the way
+    :func:`resolves_into_store` does: a link to another skill's copy is wrong
+    and must still be replaced.
+
+    **Both sides are resolved**, for the reason :func:`resolves_into_store`
+    gives: under macOS's ``/tmp`` or ``/var/folders`` a link written as
+    ``/tmp/.../x`` resolves to ``/private/tmp/.../x``, so comparing it against
+    a nominal ``target`` never matches. The whole chain is followed, so a link
+    that reaches the store through an alias counts too.
+
+    Fails closed: a dangling link, a loop, or a target that is not there is
+    not linked, and takes the old unlink-and-recreate path. Only the
+    *target*'s strictness carries that: a dangling link resolves leniently to
+    a path nothing is at, which cannot equal a store dir that resolved
+    strictly, while a store dir that is missing raises and answers False for
+    every link at once.
+    """
+    try:
+        have = normalize_link_target(link.resolve())
+        want = normalize_link_target(target.resolve(strict=True))
+    except (OSError, RuntimeError):
+        # RuntimeError: Python 3.12 raises it for a symlink loop, and it is
+        # not an OSError (see resolves_into_store).
+        return False
+    return have == want
 
 
 def link_refusal(adir: str, block: str) -> tuple[str, str]:

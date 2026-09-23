@@ -607,7 +607,8 @@ def cmd_policy(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=("list", "set", "unset", "check"),
                    help="what to do (default: list)")
-    p.add_argument("key", nargs="?", help="policy key, e.g. min_quality_score")
+    p.add_argument("key", nargs="?",
+                   help="policy key: " + ", ".join(sorted(policy.DEFAULTS)))
     p.add_argument("value", nargs="?", help="new value (JSON, comma list, or string)")
     p.add_argument("--json", action="store_true",
                    help="machine-readable output")

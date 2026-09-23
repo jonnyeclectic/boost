@@ -75,7 +75,7 @@ COMMANDS = [
     ("stats",       "find", "discovery", "Install statistics & trend for a single skill"),
     ("count",       "find", "discovery", "Quick summary of installed / available / taps"),
     # Skill Information (10)
-    ("list",        "info", "info", "List installed skills"),
+    ("list",        "info", "info", "List installed skills, rules and workflows"),
     ("info",        "info", "info", "Show detailed info about a skill"),
     ("cat",         "info", "info", "Print a skill or rule's contents"),
     ("edit",        "info", "info", "Open a skill's SKILL.md in your editor"),

@@ -30,12 +30,15 @@ from __future__ import annotations
 
 import functools
 import importlib.util
+import json
+import math
 import os
 import re
 import shlex
 import subprocess
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -518,22 +521,31 @@ def _invocation(text: str) -> list[str]:
     one call is required, so a block that grew a second one is an error
     rather than a coin toss over which of them is compared.
     """
+    calls = _invocations(text)
+    assert len(calls) == 1, (
+        "expected one eval_retrieval.py call, found %d in:\n%s"
+        % (len(calls), text))
+    return calls[0]
+
+
+def _invocations(text: str) -> list[list[str]]:
+    """Every argv `scripts/eval_retrieval.py` receives from `text`, in order."""
     joined = re.sub(r"\\\r?\n", " ", text)
     calls = [line for line in joined.splitlines()
              if "eval_retrieval.py" in line
              and not line.lstrip().startswith("#")]
-    assert len(calls) == 1, (
-        "expected one eval_retrieval.py call, found %d in:\n%s"
-        % (len(calls), text))
-    words = shlex.split(calls[0])
-    first = next(i for i, word in enumerate(words)
-                 if word.endswith("eval_retrieval.py")) + 1
-    argv: list[str] = []
-    for word in words[first:]:
-        if _SHELL_CHROME.match(word):
-            break
-        argv.append(word)
-    return argv
+    out: list[list[str]] = []
+    for call in calls:
+        words = shlex.split(call)
+        first = next(i for i, word in enumerate(words)
+                     if word.endswith("eval_retrieval.py")) + 1
+        argv: list[str] = []
+        for word in words[first:]:
+            if _SHELL_CHROME.match(word):
+                break
+            argv.append(word)
+        out.append(argv)
+    return out
 
 
 def _meaning(argv: list[str]) -> dict:
@@ -614,8 +626,10 @@ class TestTheGateIsDefinedOnce:
             _step(wf, "re-baseline against the refreshed corpus")))
         gate = self._gate()
         assert rebase["save_baseline"] and not gate["save_baseline"]
-        for flag in ("k", "golden", "engines"):
+        for flag in ("k", "engines"):
             assert rebase[flag] == gate[flag], flag
+        # Which query sets it covers is TestTheRefreshRebaselinesEverySet's.
+        assert gate["golden"] in _rebaselined()
 
     @pytest.mark.parametrize("old, new", [
         ("--build -k 10", "--build -k 5"),
@@ -651,6 +665,294 @@ class TestTheGateIsDefinedOnce:
         assert old in step
         edited = step.replace(old, new)
         assert _meaning(_invocation(edited)) == self._gate()
+
+
+_EVAL_DIR = _ROOT / "tests" / "eval"
+_NATURAL = (_EVAL_DIR / "golden-natural.jsonl").resolve()
+_NATURAL_CI_STEP = "natural-language retrieval set (advisory)"
+_NATURAL_REFRESH_STEP = "score the natural-language set on the refreshed corpus"
+_REBASELINE_STEP = "re-baseline against the refreshed corpus"
+
+
+def _committed_sets() -> set[Path]:
+    """The query sets in the tree, derived here rather than by the script.
+
+    Globbed independently, so a bug in `eval_retrieval.query_sets` cannot
+    agree with itself; `test_the_script_derives_the_same_list` then pins the
+    two together.
+    """
+    return {p.resolve() for p in _EVAL_DIR.glob("golden*.jsonl")}
+
+
+def _rebaselined() -> set[Path]:
+    """The query sets the refresh's re-baseline step writes a row for."""
+    wf = _REFRESH.read_text(encoding="utf-8")
+    meaning = _meaning(_invocation(_step(wf, _REBASELINE_STEP)))
+    if meaning.get("all_sets"):
+        return {p.resolve() for p in _eval_retrieval().query_sets()}
+    return {meaning["golden"]}
+
+
+def _scored(text: str) -> set[Path]:
+    """The query sets every eval_retrieval.py call in `text` scores."""
+    return {_meaning(argv)["golden"] for argv in _invocations(text)}
+
+
+@pytest.mark.skipif(not _REFRESH.exists(), reason="refresh workflow absent")
+class TestTheRefreshRebaselinesEverySet:
+    """card: refresh-strands-the-natural-set-baseline.
+
+    The re-baseline step passed no `--golden`, and the default is the keyword
+    set, so the monthly refresh moved one row of two. Its first run left the
+    natural row describing the corpus it replaced, and on the new corpus the
+    natural set reported "REGRESSION vs baseline: catalog.search recall@k:
+    0.080 -> 0.060" for a ranker nobody had touched.
+    """
+
+    def test_every_committed_query_set_is_rebaselined(self):
+        missed = sorted(p.name for p in _committed_sets() - _rebaselined())
+        assert missed == [], "the refresh leaves these rows stale: %s" % missed
+
+    def test_every_set_the_baseline_records_is_rebaselined(self):
+        sets = json.loads((_EVAL_DIR / "baseline.json").read_text(
+            encoding="utf-8"))["sets"]
+        names = {key.rsplit("@", 1)[0] for key in sets}
+        covered = {p.name for p in _rebaselined()}
+        assert sorted(names - covered) == []
+
+    def test_every_set_a_gate_scores_is_rebaselined(self):
+        scored = set()
+        for path in (_ROOT / "Makefile", _CI, _REFRESH):
+            scored |= _scored(path.read_text(encoding="utf-8"))
+        assert sorted(p.name for p in scored - _rebaselined()) == []
+
+    def test_the_list_is_derived_not_named(self):
+        # Naming the two sets in the step would strand the third the day it
+        # is committed; `--all-sets` asks the directory instead.
+        step = _step(_REFRESH.read_text(encoding="utf-8"), _REBASELINE_STEP)
+        assert ".jsonl" not in step.split("run:", 1)[1]
+
+    def test_the_script_derives_the_same_list(self):
+        assert {p.resolve() for p in _eval_retrieval().query_sets()} == \
+            _committed_sets()
+
+
+#: How the natural-language floors are set: ~10% under the recorded BM25
+#: row, rounded DOWN to two places (hit@1 0.160 -> 0.14, not 0.144).
+_UNDER, _ROUNDING = 0.10, 0.01
+
+
+def _natural_queries() -> int:
+    """How many questions the natural set asks, counted as `load_golden` does."""
+    lines = (line.strip() for line in
+             _NATURAL.read_text(encoding="utf-8").splitlines())
+    return sum(1 for line in lines if line and not line.startswith("#"))
+
+
+def floors_out_of_band(floors: dict[str, float], row: dict[str, float],
+                       n: int) -> list[str]:
+    """Each floor a row more than one query from its calibration no longer fits.
+
+    Every metric is a mean over `n` questions of a per-question score in
+    [0, 1], so one question moves it by at most 1/n — at 50 questions, 0.02,
+    more than the ~10% margin on hit@1 (0.016 at 0.160). The band therefore
+    allows one query of movement either way and no more:
+
+    - UP: the floor may be one query plus ~10% (and the rounding) under the
+      row. It used to be ~20% with no query allowance, and a one-query
+      improvement on hit@1 (8 -> 9 of 50, 0.160 -> 0.180) put the unchanged
+      0.14 floor 22% under, failing a required test for a better ranker. Two
+      queries of improvement is past the band for a floor set by the rule.
+    - DOWN: the floor may equal the row. The gate breaches on `got < minimum`
+      (`check_floors`), so a floor the row meets exactly still passes, and a
+      one-query drop on hit@1 (8 -> 7 of 50) lands exactly there.
+    """
+    step, eps = 1 / n, 1e-9
+    out = []
+    for metric, minimum in sorted(floors.items()):
+        got = row[metric]
+        if minimum > got + eps:
+            out.append("%s: floor %.2f is above the row's %.3f, so the gate "
+                       "fails on the corpus it was set on" % (metric, minimum, got))
+        elif minimum < (1 - _UNDER) * got - _ROUNDING - step - eps:
+            out.append("%s: floor %.2f is more than one query plus ~10%% under "
+                       "the row's %.3f, so it no longer measures anything"
+                       % (metric, minimum, got))
+    return out
+
+
+def _folded_echo(block: str) -> str:
+    """The text a run of `echo "..."` lines prints, as one line."""
+    return " ".join(re.findall(r'^\s*echo "(.*)"\s*$', block, re.M))
+
+
+class TestTheFloorBand:
+    """The band itself, on synthetic rows: 50 questions, hit@1 floored 0.14."""
+
+    FLOOR: ClassVar[dict[str, float]] = {"hit@1": 0.14}
+
+    @pytest.mark.parametrize("hits", [7, 8, 9], ids=["down-one", "at", "up-one"])
+    def test_one_query_either_way_is_inside(self, hits):
+        # 9 of 50 is the reviewer's case: a one-query improvement that failed
+        # the old 0.8x lower bound (0.14 < 0.144).
+        assert floors_out_of_band(self.FLOOR, {"hit@1": hits / 50}, 50) == []
+
+    @pytest.mark.parametrize("hits", [6, 10], ids=["down-two", "up-two"])
+    def test_two_queries_either_way_are_outside(self, hits):
+        out = floors_out_of_band(self.FLOOR, {"hit@1": hits / 50}, 50)
+        assert len(out) == 1 and out[0].startswith("hit@1: floor 0.14 is ")
+
+    def test_the_direction_is_named(self):
+        (above,) = floors_out_of_band(self.FLOOR, {"hit@1": 6 / 50}, 50)
+        (under,) = floors_out_of_band(self.FLOOR, {"hit@1": 10 / 50}, 50)
+        assert "above the row" in above and "no longer measures" in under
+
+    def test_a_floor_the_row_meets_exactly_passes_the_gate(self):
+        # Why DOWN allows equality: the gate's own comparison.
+        ev = _eval_retrieval()
+        result = {"agg": {"overall": {"hit@1": 7 / 50}}}
+        assert ev.check_floors(result, dict(self.FLOOR)) == []
+        assert ev.check_floors(result, {"hit@1": 0.15}) != []
+
+    def test_the_query_count_scales_the_allowance(self):
+        # At 500 questions one query is 0.002, so 0.180 is nine queries up.
+        assert floors_out_of_band(self.FLOOR, {"hit@1": 0.18}, 500) != []
+
+    def test_every_floor_is_checked(self):
+        floors = {"hit@1": 0.14, "MRR": 0.21}
+        out = floors_out_of_band(floors, {"hit@1": 0.20, "MRR": 0.20}, 50)
+        assert [line.split(":")[0] for line in out] == ["MRR", "hit@1"]
+
+    @pytest.mark.parametrize("hits", range(5, 50))
+    def test_a_floor_set_by_the_rule_allows_exactly_one_query_up(self, hits):
+        # The band and the calibration rule agree for any row, not only the
+        # one committed today: set a floor ~10% under, rounded down to two
+        # places, and the row may rise one query but not two.
+        n, row = 50, hits / 50
+        floor = {"MRR": math.floor(round((1 - _UNDER) * row * 100, 6)) / 100}
+        assert floors_out_of_band(floor, {"MRR": row}, n) == []
+        assert floors_out_of_band(floor, {"MRR": row + 1 / n}, n) == []
+        assert floors_out_of_band(floor, {"MRR": row + 2 / n}, n) != []
+
+    def test_the_shipped_set_is_counted_by_its_rows(self):
+        # Comments and blank lines are not questions; 137 lines hold 50.
+        rows = [line for line in
+                _NATURAL.read_text(encoding="utf-8").splitlines()
+                if line.strip().startswith("{")]
+        assert _natural_queries() == len(rows) > 0
+
+
+class TestTheNaturalSetIsMeasured:
+    """card: exemplar-graded-golden-set-runs-in-no-gate.
+
+    golden-natural.jsonl is the one set graded by exemplar on every row, and
+    no Makefile target or workflow passed `--golden` — so the only way its
+    numbers were ever produced was a person typing the command.
+
+    It runs ADVISORY (continue-on-error in CI, outside `make check`), and the
+    reason is a count of queries. The keyword gate's recall floor sits five
+    queries of 91 under its measurement; a natural-set hit@1 floor ~10% under
+    its row is one query under it (7 of 50 against 8, at the pins the floors
+    were set on) — one query of slack. The refresh's
+    own header says corpus growth moves these numbers down, so a required
+    gate that thin would redden every open pull request the month after a
+    refresh. Advisory, it still prints every number and the regression line
+    in every CI run.
+    """
+
+    def _gate(self) -> dict:
+        return _meaning(_invocation(_recipe("eval-natural")))
+
+    def test_ci_scores_the_natural_set(self):
+        assert _NATURAL in _scored(_CI.read_text(encoding="utf-8"))
+
+    def test_a_make_target_scores_the_natural_set(self):
+        makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
+        assert _NATURAL in _scored(makefile)
+
+    def test_the_target_scores_the_natural_set(self):
+        assert self._gate()["golden"] == _NATURAL
+
+    def test_ci_runs_the_make_invocation_flag_for_flag(self):
+        step = _step(_CI.read_text(encoding="utf-8"), _NATURAL_CI_STEP)
+        assert _meaning(_invocation(step)) == self._gate()
+
+    @pytest.mark.skipif(not _REFRESH.exists(), reason="refresh workflow absent")
+    def test_the_refresh_scores_it_with_the_same_invocation(self):
+        wf = _REFRESH.read_text(encoding="utf-8")
+        step = _step(wf, _NATURAL_REFRESH_STEP)
+        assert _meaning(_invocation(step)) == self._gate()
+
+    @pytest.mark.skipif(not _REFRESH.exists(), reason="refresh workflow absent")
+    def test_the_refresh_scores_it_before_rebaselining(self):
+        # After, it would compare the new corpus with itself and could never
+        # report the movement the refresh pull request exists to show.
+        wf = _REFRESH.read_text(encoding="utf-8")
+        assert wf.index("- name: " + _NATURAL_REFRESH_STEP) < \
+            wf.index("- name: " + _REBASELINE_STEP)
+
+    def test_it_floors_all_four_metrics(self):
+        gate = self._gate()
+        floors = dict(gate["floor"])
+        if gate["fail_under"] is not None:
+            floors.setdefault("recall@k", gate["fail_under"])
+        assert set(floors) == {"recall@k", "hit@1", "MRR", "nDCG@k"}
+
+    def _floors(self) -> dict[str, float]:
+        gate = self._gate()
+        return dict(gate["floor"], **{"recall@k": gate["fail_under"]})
+
+    def _row(self) -> dict[str, float]:
+        row = _eval_retrieval().baseline_for(_NATURAL)
+        assert row is not None
+        return row["engines"]["BM25 full-content"]
+
+    def test_the_floors_sit_under_the_recorded_baseline(self):
+        # The row it is compared to is the one the refresh keeps current, so
+        # a refresh that moves it more than one query from where the floors
+        # were set fails here, in either direction, naming each floor.
+        out = floors_out_of_band(self._floors(), self._row(),
+                                 _natural_queries())
+        assert out == [], (
+            "the natural-language floors no longer fit the recorded BM25 row "
+            "in tests/eval/baseline.json:\n  %s\nMove each one named to ~10%% "
+            "under the new row, rounded down to two places, in the Makefile's "
+            "eval-natural, ci.yml and eval-corpus-refresh.yml together."
+            % "\n  ".join(out))
+
+    @pytest.mark.skipif(not _REFRESH.exists(), reason="refresh workflow absent")
+    def test_the_refresh_pull_request_names_the_floor_check(self):
+        # The refresh is where the row moves, so its pull request is where a
+        # person learns the floors move with it — and in both directions,
+        # since a one-way note sends them looking only for a drop.
+        body = _step(_REFRESH.read_text(encoding="utf-8"),
+                     "assemble the pull request body")
+        name = "test_the_floors_sit_under_the_recorded_baseline"
+        assert name in body and callable(getattr(self, name, None))
+        assert "in both directions" in _folded_echo(body)
+
+    def test_it_is_advisory_in_ci_and_the_keyword_gate_is_not(self):
+        ci = _CI.read_text(encoding="utf-8")
+        assert "continue-on-error: true" in _step(ci, _NATURAL_CI_STEP)
+        assert "continue-on-error" not in _step(ci, "retrieval quality gate")
+
+    def test_it_is_not_part_of_make_check(self):
+        makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
+        check = re.search(r"^check:(.*)$", makefile, re.M)
+        assert check and "eval-natural" not in check.group(1).split()
+
+    @pytest.mark.parametrize("old, new", [
+        ("--build -k 10", "--build -k 5"),
+        ("--build -k 10", "-k 10"),
+        ("tests/eval/golden-natural.jsonl", "tests/eval/golden.jsonl"),
+        ("--fail-under 0.32", "--fail-under 0.20"),
+        ("--floor hit@1=0.14", "--floor hit@1=0.02"),
+        (" --floor nDCG@k=0.23", ""),
+    ], ids=["k", "build", "golden", "fail-under", "floor-value", "floor-dropped"])
+    def test_an_edit_to_the_ci_invocation_alone_breaks_parity(self, old, new):
+        step = _step(_CI.read_text(encoding="utf-8"), _NATURAL_CI_STEP)
+        assert old in step
+        assert _meaning(_invocation(step.replace(old, new))) != self._gate()
 
 
 class TestReadingAnInvocation:

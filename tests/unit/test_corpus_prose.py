@@ -47,8 +47,10 @@ QUOTED = (
     ("CLAUDE.md", "over the twenty ({total})"),
     ("CLAUDE.md", "over the six alone ({targets} entries"),
     ("CLAUDE.md", "**{bm25}**"),
+    ("CLAUDE.md", "recorded BM25 row ({natural_bm25})"),
     ("Makefile", "Over the six ({targets} entries)"),
     ("Makefile", "over twenty it scores {bm25}"),
+    ("Makefile", "records ({natural_bm25} at the current pins"),
     ("docs/eval.html", "<b>{recall}</b><span>BM25 recall@10"),
 )
 
@@ -97,10 +99,17 @@ def _counts(text: str) -> list[int]:
     return out
 
 
-def _bm25() -> dict[str, float]:
+def _bm25(query_set: str = "golden.jsonl") -> dict[str, float]:
+    """The BM25 row baseline.json records for one query set, by file name."""
     sets = json.loads(_BASELINE.read_text(encoding="utf-8"))["sets"]
-    (golden,) = [v for k, v in sets.items() if k.startswith("golden.jsonl@")]
-    return golden["engines"]["BM25 full-content"]
+    (row,) = [v for k, v in sets.items() if k.startswith(query_set + "@")]
+    return row["engines"]["BM25 full-content"]
+
+
+def _four(row: dict[str, float]) -> str:
+    """recall@k / hit@1 / MRR / nDCG@k, as the prose quotes them."""
+    return " / ".join("%.3f" % row[k]
+                      for k in ("recall@k", "hit@1", "MRR", "nDCG@k"))
 
 
 def _figures() -> dict[str, str]:
@@ -111,8 +120,10 @@ def _figures() -> dict[str, str]:
     return {
         "total": f"{sum(_counts(text)):,}",
         "targets": f"{sum(_counts(head)):,}",
-        "bm25": " / ".join("%.3f" % bm25[k]
-                           for k in ("recall@k", "hit@1", "MRR", "nDCG@k")),
+        "bm25": _four(bm25),
+        # The natural-language set's row: the refresh moves it too, and
+        # `make eval-natural`'s floors are calibrated on the figures quoted.
+        "natural_bm25": _four(_bm25("golden-natural.jsonl")),
         "recall": "%.3f" % bm25["recall@k"],
     }
 
@@ -206,6 +217,21 @@ class TestTheCheckItself:
     def test_subsets_and_real_installs_are_not_totals(self):
         text = "921 entries\n3,843 entries\n71,655 entries\n"
         assert stale_totals(text, 10_731) == []
+
+    def test_each_set_is_read_from_its_own_row(self):
+        # The keyword and natural rows are different measurements; a figure
+        # read from the wrong one would pass while quoting the other set.
+        figures = _figures()
+        assert figures["bm25"] == _four(_bm25("golden.jsonl"))
+        assert figures["natural_bm25"] == _four(_bm25("golden-natural.jsonl"))
+        assert figures["bm25"] != figures["natural_bm25"]
+
+    def test_a_set_prefix_is_not_another_sets_name(self):
+        # "golden.jsonl@" must not match "golden-natural.jsonl@", or the
+        # one-row unpacking above picks whichever it meets.
+        sets = json.loads(_BASELINE.read_text(encoding="utf-8"))["sets"]
+        assert sum(k.startswith("golden.jsonl@") for k in sets) == 1
+        assert sum(k.startswith("golden-natural.jsonl@") for k in sets) == 1
 
     def test_folding_joins_a_wrapped_comment(self):
         assert _folded("# measures\n# 10,731 entries") == \

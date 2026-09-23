@@ -932,7 +932,7 @@ def cmd_lint(argv):
     ap.add_argument("--tap", metavar="TAP", help="lint every skill in a tap's clone")
     ap.add_argument("--min", type=util.score_int, default=40, dest="min_score", metavar="N",
                     help="minimum passing score, 0-100 (default 40)")
-    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     targets: list[tuple[str, Path]] = []
@@ -1011,8 +1011,9 @@ def cmd_drift(argv):
     ap = cliparse.parser(
         prog="boost drift",
         description="Detect installed skills diverging from source")
-    ap.add_argument("names", nargs="*", metavar="NAME")
-    ap.add_argument("--json", action="store_true")
+    ap.add_argument("names", nargs="*", metavar="NAME",
+                    help="installed skill, rule or workflow (default: all)")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     # Same rule as `boost verify`: a missing/corrupt/wrong-schema lock over a
@@ -1047,8 +1048,10 @@ def cmd_drift(argv):
 def cmd_test(argv):
     ap = cliparse.parser(
         prog="boost test",
-        description="Validate installed skills against quality checks")
-    ap.add_argument("names", nargs="*", metavar="NAME")
+        description="Validate installed skills against quality checks "
+                    "(exits 1 when any skill fails)")
+    ap.add_argument("names", nargs="*", metavar="NAME",
+                    help="installed skill (default: all)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
@@ -1103,7 +1106,7 @@ def cmd_fingerprint(argv):
         description="Deterministic hash of the skill environment")
     ap.add_argument("--verbose", action="store_true",
                     help="show the hashed components")
-    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     digest, comps, incomplete = _fingerprint()
@@ -1130,7 +1133,7 @@ def cmd_decay(argv):
     ap = cliparse.parser(
         prog="boost decay",
         description="Flag skills irrelevant to your current stack")
-    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     rows = _decay_rows(Path.cwd())
@@ -1346,8 +1349,9 @@ def cmd_heal(argv):
 def cmd_conflict(argv):
     ap = cliparse.parser(
         prog="boost conflict",
-        description="Detect contradictory rules between skills")
-    ap.add_argument("--json", action="store_true")
+        description="Detect contradictory rules between skills "
+                    "(exits 1 when any conflict is found)")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     # Quarantine removes a skill's active links/materialization on purpose
@@ -1453,7 +1457,8 @@ def cmd_changelog(argv):
     ap = cliparse.parser(
         prog="boost changelog",
         description="Show an item's upstream change history")
-    ap.add_argument("name", metavar="NAME")
+    ap.add_argument("name", metavar="NAME",
+                    help="skill, rule or workflow, installed or in a tap")
     ap.add_argument("-n", type=util.positive_int, default=20, metavar="N",
                     help="number of entries (default 20)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")

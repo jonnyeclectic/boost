@@ -2,15 +2,15 @@
 id: quickstart-shard-download-invisible-in-preview-and-run
 board: code
 section: planned
-status: planned
+status: shipped
 category: Onboarding · Bug
 complexity: M
 impact: Med
 wow: 3
 note: shards.sync() takes an on_event progress callback and both other callers pass one; qu…
 order: 223
-owner:
-pr:
+owner: loop/quickstart-shard-size
+pr: 946
 title: The shard download is invisible both before and during: <code>--catalog --dry-run</code> never names the 1,604.8 MB, and the live fetch passes no progress callback and has no spinner
 ---
 <b>Measured.</b> On a virgin HOME, <code>boost quickstart --catalog --dry-run</code> prints exactly two lines — "would tap 464 registries (459 pinned to a published shard's commit)" and "would build the keyword index, then import 459 shard(s)" — and never names the 1,604.8 MB (1,604,753,775 bytes) those same 459 manifest rows sum to, although the dry-run has already read the manifest that carries every row's <code>bytes</code> and <code>shards._size_label()</code> exists to format it.

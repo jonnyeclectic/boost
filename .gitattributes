@@ -4,3 +4,10 @@
 boost_cli/data/registries.json linguist-generated=true
 docs/roadmap.html              linguist-generated=true
 docs/design-roadmap.html       linguist-generated=true
+
+# The retrieval query sets are identified by a digest of their BYTES
+# (scripts/eval_retrieval.py `golden_key`), and tests/eval/baseline.json is
+# keyed on it. A CRLF checkout (core.autocrlf on a Windows runner) is a
+# different digest for the same questions: no baseline found, and
+# tests/unit/test_eval_query_sets.py red on that runner alone.
+tests/eval/*.jsonl text eol=lf

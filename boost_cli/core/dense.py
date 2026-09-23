@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -562,6 +563,9 @@ _FIX = {
     "no-key": ("reinstall the extra: `%s` "
                "(or set VOYAGE_API_KEY / OPENAI_API_KEY for a larger model)"
                % _INSTALL),
+    # Keyless, or keyed with no local model to fall back on. A key that
+    # outranks an installed local model is answered by `free_shard_path`
+    # instead: with it in force, this build goes through the paid API.
     "no-store": "build it: `boost reindex --dense`",
     "version-changed": "rebuild it: `boost reindex --dense --force`",
     "provider-changed": "rebuild it: `boost reindex --dense --force`",
@@ -575,6 +579,35 @@ _FIX = {
     "model-unavailable": ("retry the local model (a 133 MB download from "
                           "huggingface.co): `boost reindex --dense`"),
 }
+
+
+def free_shard_path(prov: str | None) -> str | None:
+    """Drop the key and take the published vectors, or None if that cannot work.
+
+    The free route for a machine whose API key outranks an installed local
+    model: `embed.provider` prefers any key, so the published shards — keyless
+    by policy, 384-d local vectors — are refused while it is set, and `boost
+    reindex --dense` embeds through the paid API instead. Unsetting every key
+    that outranks local, not only the one in force (dropping ``VOYAGE_API_KEY``
+    alone falls through to ``OPENAI_API_KEY``, which is no nearer the published
+    space), is what lets `boost update --shards` load them.
+
+    None when ``prov`` is not a paid provider, or when the local model is not
+    installed: dropping the key then leaves no provider at all, and the shards
+    still cannot load. A pure function of the environment — no manifest, no
+    network, and no ONNX runtime (`embed.local_installed` looks the packages
+    up rather than importing them) — because `boost search` prints it, and
+    search must neither fetch nor load a backend to word a hint. `shards.remedy` and `fix_hint` both return it, so the two
+    surfaces that answer this state cannot drift into two answers.
+    """
+    if prov not in embed.KEY_ENV or not embed.local_installed():
+        return None
+    keys = [env for name, env in embed.KEY_ENV.items()
+            if name == prov or os.environ.get(env)]
+    return ("`unset %s`, then `boost update --shards` loads the published "
+            "vectors free — or keep the key%s, and `boost reindex --dense` "
+            "embeds through %s's paid API"
+            % (" ".join(keys), "s" if len(keys) > 1 else "", prov))
 
 
 def fix_hint(reason: str, status: dict | None = None) -> str:
@@ -594,9 +627,22 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
     both land here. ``built_provider`` is what separates them, and it lives in
     the status dict.
 
+    ``no-store`` needs the status too. With a key in force and the local model
+    installed, the table's "build it" is the paid build, while `boost
+    quickstart` and `boost update --shards` (through ``shards.remedy``) tell
+    the same user to drop the key and download the vectors free. Doctor and
+    search now give that answer as well, read off ``status["provider"]`` — the
+    live provider, not a manifest. It cannot reach a user whose vectors were
+    built with the key: ``no-store`` means there is no store, so a store in
+    any space lands on a different reason and keeps its own answer.
+
     Backwards compatible on purpose — every existing single-argument call keeps
     the table's answer, so a caller with no status in hand is never worse off.
     """
+    if reason == "no-store" and status:
+        free = free_shard_path(status.get("provider"))
+        if free:
+            return free
     if reason == "no-key" and status:
         env = embed.KEY_ENV.get(status.get("built_provider") or "")
         # `chunks` guards the unfinished-install case: without vectors on disk

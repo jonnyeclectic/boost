@@ -86,7 +86,7 @@ def cmd_audit(argv):
                      "(scans SKILL.md plus %s files under each skill; "
                      "materialized rules/workflows are scanned whole)"
                      % "/".join(sorted(_SCAN_SUFFIXES)))
-    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--skills", action="store_true",
                     help="trust/staleness report for installed skills instead "
                          "of the content scan")
@@ -383,9 +383,11 @@ def _render_trust_audit(installed, findings, counts, rc: int) -> int:
 def cmd_verify(argv):
     ap = cliparse.parser(
         prog="boost verify",
-        description="Validate skill quality & lock-file integrity")
-    ap.add_argument("names", nargs="*", metavar="NAME")
-    ap.add_argument("--json", action="store_true")
+        description="Validate skill quality & lock-file integrity "
+                    "(exits 1 when any item fails)")
+    ap.add_argument("names", nargs="*", metavar="NAME",
+                    help="installed item, user or project scope (default: all)")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     # Before trusting anything the lock file says: a missing/corrupt/wrong-
@@ -492,7 +494,8 @@ def cmd_quarantine(argv):
     ap = cliparse.parser(
         prog="boost quarantine",
         description="Isolate a problematic skill, rule or workflow without uninstalling")
-    ap.add_argument("name", nargs="?", metavar="NAME")
+    ap.add_argument("name", nargs="?", metavar="NAME",
+                    help="installed skill, rule or workflow to isolate")
     ap.add_argument("--release", metavar="NAME",
                     help="re-link a quarantined skill")
     ap.add_argument("--list", action="store_true", dest="list_mode",
@@ -611,10 +614,12 @@ def cmd_attest(argv):
     ap = cliparse.parser(
         prog="boost attest",
         description="Display/verify the install record for skills")
-    ap.add_argument("name", nargs="?", metavar="NAME")
+    ap.add_argument("name", nargs="?", metavar="NAME",
+                    help="installed skill, rule or workflow (default: all)")
     ap.add_argument("--verify", action="store_true",
-                    help="check sha & journal record for each skill")
-    ap.add_argument("--json", action="store_true")
+                    help="check sha & journal record for each skill "
+                         "(exits 1 on a failure)")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     targets = _iter_installed_all([args.name] if args.name else None)

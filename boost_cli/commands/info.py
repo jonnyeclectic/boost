@@ -433,7 +433,8 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
 def cmd_info(argv):
     ap = cliparse.parser(prog="boost info",
                                  description="Show detailed info about a skill")
-    ap.add_argument("name")
+    ap.add_argument("name", help="skill, rule or workflow, installed or in a "
+                                 "tap (owner/repo:name picks the tap)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
     # The name may arrive tap-qualified (`owner/repo:skill`) — exactly what the
@@ -638,7 +639,8 @@ def cmd_info(argv):
 def cmd_cat(argv):
     ap = cliparse.parser(prog="boost cat",
                                  description="Print a skill or rule's contents")
-    ap.add_argument("name")
+    ap.add_argument("name", help="skill, rule or workflow: the installed copy, "
+                                 "else the tap's (owner/repo:name picks the tap)")
     ap.add_argument("--raw", action="store_true", help="no styling even on a TTY")
     args = ap.parse_args(argv)
     text, _kind, _lock, _cat = _resolve_text(args.name)
@@ -660,7 +662,8 @@ def cmd_cat(argv):
 def cmd_edit(argv):
     ap = cliparse.parser(prog="boost edit",
                                  description="Open a skill's SKILL.md in your editor")
-    ap.add_argument("name")
+    ap.add_argument("name", help="installed skill to open in $VISUAL or "
+                                 "$EDITOR")
     args = ap.parse_args(argv)
     # `args.name` may be tap-qualified (`owner/repo:skill`); resolve to the
     # bare name the lock keys on, honoring the qualifier against the
@@ -765,7 +768,8 @@ def _render_markdown(body: str) -> None:
 def cmd_preview(argv):
     ap = cliparse.parser(prog="boost preview",
                                  description="Render a SKILL.md with rich formatting")
-    ap.add_argument("name")
+    ap.add_argument("name", help="skill, rule or workflow: the installed copy, "
+                                 "else the tap's (raw text when piped)")
     args = ap.parse_args(argv)
     text, _kind, lock, cat = _resolve_text(args.name)
     meta, body = frontmatter.parse(text)
@@ -820,7 +824,7 @@ def _explanation_is_faithful(reply: str, source: str) -> bool:
 def cmd_explain(argv):
     ap = cliparse.parser(prog="boost explain",
                                  description="Explain what a skill does in plain English")
-    ap.add_argument("name")
+    ap.add_argument("name", help="skill, rule or workflow, installed or in a tap")
     args = ap.parse_args(argv)
     _qualifier, _bare = catalog.split_name(args.name)
     text, _kind, _lock, _cat = _resolve_text(args.name)
@@ -1050,7 +1054,8 @@ def cmd_log(argv):
 def cmd_home(argv):
     ap = cliparse.parser(prog="boost home",
                                  description="Open an item's GitHub page in the browser")
-    ap.add_argument("name")
+    ap.add_argument("name", help="skill, rule or workflow, installed or in a "
+                                 "tap")
     ap.add_argument("--print", dest="print_only", action="store_true",
                     help="print the URL without opening a browser")
     args = ap.parse_args(argv)

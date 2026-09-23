@@ -122,7 +122,11 @@ class TestUpdateShards:
         monkeypatch.setattr(embed, "provider", lambda: "voyage")
         monkeypatch.setattr(embed, "model", lambda: "voyage-4")
         monkeypatch.setattr(embed, "dimension", lambda: 1024)
+        # Both seams: `remedy` words the free path from `local_installed`
+        # (the look-up that imports nothing), and the embedding path that
+        # would follow the advice still asks `local_available`.
         monkeypatch.setattr(embed, "local_available", lambda: True)
+        monkeypatch.setattr(embed, "local_installed", lambda: True)
         res = boost("update", "--shards", expect=1)
         both = " ".join((res.out + res.err).split())
         assert "`unset VOYAGE_API_KEY`" in both
@@ -140,7 +144,11 @@ class TestUpdateShards:
         monkeypatch.setattr(embed, "provider", lambda: "voyage")
         monkeypatch.setattr(embed, "model", lambda: "voyage-4")
         monkeypatch.setattr(embed, "dimension", lambda: 1024)
+        # Both seams: `remedy` words the free path from `local_installed`
+        # (the look-up that imports nothing), and the embedding path that
+        # would follow the advice still asks `local_available`.
         monkeypatch.setattr(embed, "local_available", lambda: True)
+        monkeypatch.setattr(embed, "local_installed", lambda: True)
         assert vector_store()["ready"]
         res = boost("update", "--shards", expect=1)
         both = " ".join((res.out + res.err).split())

@@ -20,7 +20,9 @@ the math, this asks "does the right skill actually come back for a real question
             baseline is a statement about a specific list of questions: grading
             the natural-language set against the keyword set's numbers reported
             eight confident regressions that were only the difference between
-            two question sets.
+            two question sets. --all-sets runs once per committed set
+            (tests/eval/golden*.jsonl, see `query_sets`), which is how the
+            monthly corpus refresh moves every row rather than one.
   gate      --fail-under floors mean recall@k; --floor NAME=VALUE floors any
             metric and is repeatable. recall alone could not fail a build for a
             ranker scoring recall@10 1.000 with hit@1 0.000 — always finding the
@@ -47,6 +49,7 @@ mirroring boost's BOOST_NO_AI contract.
 Usage:
   python3 scripts/eval_retrieval.py --build            # build index, then eval
   python3 scripts/eval_retrieval.py --save-baseline    # pin a baseline
+  python3 scripts/eval_retrieval.py --save-baseline --all-sets  # pin every set
   python3 scripts/eval_retrieval.py --fail-under 0.85  # CI gate on recall@k
   python3 scripts/eval_retrieval.py --floor hit@1=0.65 # gate any metric
   python3 scripts/eval_retrieval.py --build --stats    # Tier 1b significance
@@ -70,8 +73,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from boost_cli.core import ai, catalog, dense, paths, rag
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_GOLDEN = ROOT / "tests" / "eval" / "golden.jsonl"
-BASELINE = ROOT / "tests" / "eval" / "baseline.json"
+EVAL_DIR = ROOT / "tests" / "eval"
+DEFAULT_GOLDEN = EVAL_DIR / "golden.jsonl"
+BASELINE = EVAL_DIR / "baseline.json"
 KINDS = ("skill", "rule", "workflow")
 
 # Rankers yield catalog ENTRIES, not names: the grading key depends on the
@@ -272,6 +276,19 @@ def dedupe_keys(keys):
             seen.add(key)
             out.append(key)
     return out
+
+
+def query_sets(directory: Path | None = None) -> list[Path]:
+    """Every committed retrieval query set: ``golden*.jsonl``, by name.
+
+    Derived from the directory rather than listed, because a list is what
+    stranded a baseline: the monthly corpus refresh re-baselined the default
+    set alone, so the natural-language row went on describing the corpus it
+    replaced and reported a regression nobody caused. The same directory holds
+    the recommend, explain and tool-call sets, which are not retrieval
+    judgments, so the prefix is the boundary.
+    """
+    return sorted((directory or EVAL_DIR).glob("golden*.jsonl"))
 
 
 def load_golden(path: Path, hashes: dict | None = None) -> list[dict]:
@@ -753,7 +770,12 @@ def build_parser() -> argparse.ArgumentParser:
     """
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN)
+    which = ap.add_mutually_exclusive_group()
+    which.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN)
+    which.add_argument("--all-sets", action="store_true",
+                       help="run once per committed query set "
+                            "(tests/eval/golden*.jsonl), building the index "
+                            "at most once; takes no floors and no --json")
     ap.add_argument("-k", type=int, default=10, help="cutoff for @k metrics")
     ap.add_argument("--engines", default="auto",
                     help="comma list of catalog,bm25,dense,hybrid (default: auto)")
@@ -782,10 +804,40 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not args.all_sets:
+        return run(args)
+    # A floor is calibrated on one set — the keyword floors fail the natural
+    # set by construction — and --json would print one document per set into
+    # a stream its reader parses as one.
+    if args.floor or args.fail_under is not None or args.json:
+        parser.error("--all-sets takes no --floor, --fail-under or --json: "
+                     "each means one query set")
+    sets = query_sets()
+    if not sets:
+        # Before any build. A run that scored nothing and exited 0 would read,
+        # to the refresh that calls it, as every row re-baselined.
+        raise SystemExit("--all-sets: no query set matches %s"
+                         % (EVAL_DIR / "golden*.jsonl"))
+    worst = 0
+    for i, golden in enumerate(sets):
+        one = argparse.Namespace(**vars(args))
+        one.golden, one.all_sets = golden, False
+        one.build = args.build and i == 0      # one corpus, one index
+        print("\n##### query set: %s" % golden.name, flush=True)
+        # max, so a refusal (66) outranks a regression (1) whatever the order.
+        worst = max(worst, run(one))
+    return worst
 
+
+def run(args: argparse.Namespace) -> int:
+    """Score one query set: `main` for a single `--golden`."""
     floors = parse_floors(args.floor)          # fail fast on a bad --floor
-    rows = load_golden(args.golden)
+    # The file is READ after the build (see below), but a typo in its name must
+    # not cost a full index build first — minutes on a real ~71k-entry home.
+    if not args.golden.is_file():
+        raise SystemExit("--golden %s: no such file" % args.golden)
 
     if args.build or not rag.ready():
         if not args.json:
@@ -798,6 +850,12 @@ def main(argv: list[str] | None = None) -> int:
             # then reads as though the corpus check ran before the build.
             print("  indexed %d entries -> %d chunks across %d taps"
                   % (stats["entries"], stats["docs"], stats["taps"]), flush=True)
+
+    # After the build, never before: an exemplar row resolves through the
+    # index's content hashes, so read first it died on a home with no index
+    # ("resolves to no indexed entry" — every row of the natural set) and was
+    # graded against the OLD bodies on a home whose pins had since moved.
+    rows = load_golden(args.golden)
 
     if args.worksheet:
         sheet = exemplar_worksheet(rows, catalog.all_entries(), rag.content_hashes())

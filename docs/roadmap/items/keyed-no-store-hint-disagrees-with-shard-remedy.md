@@ -2,15 +2,15 @@
 id: keyed-no-store-hint-disagrees-with-shard-remedy
 board: code
 section: planned
-status: planned
+status: shipped
 category: Consistency · Bug
 complexity: S
 impact: Low
 wow: 2
 note: On a keyed machine with no vector store, doctor and search say "build it" (paid), while quickstart and update --shards say to unset the key and download free…
 order: 331
-owner:
-pr:
+owner: loop/keyed-no-store-hint
+pr: 947
 title: With an API key exported and no vector store yet, <code>doctor</code> and <code>search</code> send the user to a paid build while <code>quickstart</code> offers the free download
 ---
 <b>Found while verifying the quickstart shard-status fix.</b> After that fix, <code>shards.remedy()</code>

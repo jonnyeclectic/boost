@@ -580,7 +580,8 @@ def cmd_uninstall(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost uninstall",
         description="Remove an installed skill, rule, or workflow")
-    ap.add_argument("names", nargs="+", metavar="NAME")
+    ap.add_argument("names", nargs="+", metavar="NAME",
+                    help="installed skill, rule or workflow (several allowed)")
     ap.add_argument("--local", dest="scope", action="store_const",
                     const=scopes.SCOPE_PROJECT, default=None,
                     help="remove from this repo rather than your user config")
@@ -1004,7 +1005,10 @@ def _resync_vectors(moved: list[str]) -> None:
     commits = rag._tap_commits()
     by_name = {t.name: commits.get(t.safe_name, "")
                for t in registry.list_taps() if t.name in moved}
-    results = shards.sync(list(by_name), by_name, manifest=manifest)
+    # The one `sync` caller that printed nothing while it downloaded: a
+    # `boost update` that moved forty taps fetched forty shards in silence.
+    results = shards.sync(list(by_name), by_name, manifest=manifest,
+                          on_event=_ingest_event)
     got = [r for r in results if r["status"] == "imported"]
     if got:
         out.ok("re-imported prebuilt vectors for %d tap(s)" % len(got))
@@ -1261,7 +1265,8 @@ def cmd_reinstall(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost reinstall",
                                  description="Reinstall an installed skill, "
                                              "rule or workflow (force)")
-    ap.add_argument("names", nargs="*", metavar="NAME")
+    ap.add_argument("names", nargs="*", metavar="NAME",
+                    help="installed skill, rule or workflow (or pass --all)")
     ap.add_argument("--all", action="store_true",
                     help="reinstall every installed skill, rule and workflow")
     args = ap.parse_args(argv)
@@ -1390,7 +1395,9 @@ def cmd_reinstall(argv: list[str]) -> int:
 def cmd_bundle(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost bundle",
                                  description="Export/install skill sets via a Boostfile")
-    ap.add_argument("action", choices=("dump", "install"))
+    ap.add_argument("action", choices=("dump", "install"),
+                    help="dump installed skills to a Boostfile, or install "
+                         "from one")
     ap.add_argument("file", nargs="?", metavar="FILE",
                     help="Boostfile (dump: default stdout; "
                          "install: default ./Boostfile, '-' = stdin)")
@@ -1662,7 +1669,8 @@ def cmd_import(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost import",
         description="Import skills from a GitHub URL or local path")
-    ap.add_argument("source", metavar="URL_OR_PATH")
+    ap.add_argument("source", metavar="URL_OR_PATH",
+                    help="git URL (http(s)://, git@, ssh://) or a local directory")
     group = ap.add_mutually_exclusive_group()
     group.add_argument("--name", metavar="N",
                        help="skill to pick when several are found (or a rename)")
@@ -1772,7 +1780,8 @@ def _import_root(root: Path, name: str | None, do_all: bool,
 def cmd_pin(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost pin",
                                  description="Pin a skill, rule or workflow to its current version")
-    ap.add_argument("name", metavar="NAME")
+    ap.add_argument("name", metavar="NAME",
+                    help="installed skill, rule or workflow")
     ap.add_argument("--commit", action="store_true",
                     help="also freeze the exact source commit (integrity pin)")
     args = ap.parse_args(argv)
@@ -1790,7 +1799,8 @@ def cmd_pin(argv: list[str]) -> int:
 def cmd_unpin(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost unpin",
                                  description="Allow a pinned skill, rule or workflow to update again")
-    ap.add_argument("name", metavar="NAME")
+    ap.add_argument("name", metavar="NAME",
+                    help="pinned skill, rule or workflow")
     args = ap.parse_args(argv)
     # Releasing the version pin releases the commit pin with it — a commit pin
     # only makes sense while the skill is otherwise frozen. The commit pin is
@@ -1840,7 +1850,9 @@ def _set_pin(name: str, pinned: bool) -> int:
 def cmd_snapshot(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost snapshot",
                                  description="Save & restore whole skill environments")
-    ap.add_argument("action", choices=("save", "list", "restore"))
+    ap.add_argument("action", choices=("save", "list", "restore"),
+                    help="save the current environment, list snapshots, or "
+                         "restore one")
     ap.add_argument("arg", nargs="?", metavar="LABEL|ID",
                     help="label for save, snapshot id for restore")
     ap.add_argument("--json", action="store_true",

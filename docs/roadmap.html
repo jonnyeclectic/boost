@@ -1498,41 +1498,9 @@ Nothing else in the finding is wrong. 0/91 vs 50/50, the 27 undecided rows / 62 
       </article>
 
       <article class="cap rcard" id="quickstart-shard-download-invisible-in-preview-and-run">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Onboarding · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Onboarding · Bug</span></div>
         <h3>The shard download is invisible both before and during: <code>--catalog --dry-run</code> never names the 1,604.8 MB, and the live fetch passes no progress callback and has no spinner</h3>
-        <p><b>Measured.</b> On a virgin HOME, <code>boost quickstart --catalog --dry-run</code> prints exactly two lines — "would tap 464 registries (459 pinned to a published shard's commit)" and "would build the keyword index, then import 459 shard(s)" — and never names the 1,604.8 MB (1,604,753,775 bytes) those same 459 manifest rows sum to, although the dry-run has already read the manifest that carries every row's <code>bytes</code> and <code>shards._size_label()</code> exists to format it.
-
-<b>Reproduce it.</b>
-
-<code>cd &lt;repo&gt;</code><br>
-<code>grep -n 'on_event' boost_cli/commands/quickstart.py            # -&gt; no matches</code><br>
-<code>grep -n 'on_event' boost_cli/commands/discovery.py boost_cli/commands/pkg.py</code><br>
-<code>sed -n '195,215p' boost_cli/commands/quickstart.py             # Spinner at 195, bare sync at 209</code><br>
-<code>curl -sSL -o $TMPDIR/mf.json https://github.com/jonnyeclectic/boost/releases/download/shards-latest/manifest.json</code><br>
-<code>python3 -c "import json;d=json.load(open('$TMPDIR/mf.json'));print(len(d['shards']),'rows', '%.1f MB' % (sum(r.get('bytes',0) for r in d['shards'])/1e6))"</code><br>
-<code>export HOME=$TMPDIR/audit-qs-f3 ; export BOOST_HOME=$HOME/.boost ; mkdir -p "$HOME"</code><br>
-<code>env HOME="$HOME" BOOST_HOME="$BOOST_HOME" BOOST_SHARD_MANIFEST="file://$TMPDIR/mf.json" \</code><br>
-…
-
-<b>What adversarial verification corrected.</b> This card's numbers are the re-measured ones, not the ones first reported.
-
-One stated detail is wrong: "<code>shards.sync()</code> … both other callers pass one."
-
-<code>shards.sync</code> has THREE call sites, and only ONE passes <code>on_event</code>: - <code>boost_cli/commands/discovery.py:409</code> (sync) — passes <code>on_event=None if args.as_json else _shard_event</code> at :414. ✓ - <code>boost_cli/commands/quickstart.py:209</code> (sync) — passes none, no Spinner. ✗ - <code>boost_cli/commands/pkg.py:941</code> (<code>_resync_vectors</code>) — <code>shards.sync(list(by_name), by_name, manifest=manifest)</code>, passes NO <code>on_event</code> and is inside no Spinner either. ✗
-
-The finding's second citation, <code>pkg.py:997</code>, is the <code>on_event=</code> line of a <code>shards.ingest(</code> call that starts at <code>pkg.py:993</code> — not a <code>sync</code> caller. Both quoted line numbers (414, 997) are accurate as lines; the framing "both other [sync] callers pass one" is not, and so is the implied "quickstart is the lone outlier".
-
-Everything else re-derived and correct to the digit: 459 manifest rows; 1,604,753,775 bytes = 1604.8 MB (1530.4 MiB); the five per-default byte counts and chunk counts verbatim; expo/skills and K-Dense-AI/scientific-agent-skills have NO ROW; 17,088,844 = 17.1 MB for the seven defaults; the two dry-run lines verbatim including "464 registries" / "459 shard(s)"; the <code>--catalog</code> help text verbatim.
-
-<b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
-
-SCOPE LIMITS OF MY REPRO — a card must not overstate these: 1. The live silence was measured on the SEVEN DEFAULTS only, and the sandbox proxy truncates response bodies (every shard ended "failed verification" — bytes were received and hashed, then rejected). My 2.19 s gap ([3.93s] "indexed 962 items" -&gt; [6.12s] first shard line) is a LOWER BOUND; a complete 17.1 MB fetch takes longer. The finder measured 2.53 s and 1.98 s — same shape. 2. <code>--catalog</code> was NEVER exercised live by me (it would pull 1.6 GB, and the proxy truncates). 1,604.8 MB is manifest arithmetic — the sum of <code>bytes</code> over all 459 rows — not a stopwatched transfer. It is the right number for a virgin HOME, where no row is "current" and all 459 download, but write it as a sum, not as a measurement. 3. The dry-run repro requires <code>dense.have_backend()</code> True (the repo <code>.venv</code> has <code>[rag]</code>). Without the extra the manifest is never fetched and the dry-run prints a different "0 because …" line — a different defect, already carded in audit-quickstart-findings.md. 4. The live run needs the REAL manifest URL. With <code>BOOST_SHARD_MANIFEST=file://…</code> the host check refuses every shard ("shard URL … is not on the manifest's own host") and no download is attempted, so that override is fine for the dry-run repro but useless for timing the live path.
-
-FIX SCOPE IS WIDER THAN THE FINDING SAYS: because <code>pkg.py:941</code> (<code>_resync_vectors</code>) is also a silent <code>shards.sync</code> caller, a fix that only touches quickstart leaves two of three sync sites inconsistent.
-
-<b>Why it is worth doing.</b> <code>--catalog</code> is the one expensive, mostly-irreversible decision quickstart offers a brand-new user, and both surfaces that exist to describe it — <code>--help</code> and <code>--dry-run</code> — omit its dominant cost. A user on a laptop tether or a metered link is asked to approve "459 shard(s)" with no way to learn that means 1.6 GB, and once it starts there is no spinner, no per-shard line and no byte counter to tell them how far along it is or that anything is happening at all. Every ingredient of the fix is already in the file: pass <code>_shard_event</code>-style <code>on_event</code>, and sum <code>row['bytes']</code> through the existing <code>_size_label</code> in the dry-run line.
-
-<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em></p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/quickstart-shard-download-invisible-in-preview-and-run.md">Write-up &middot; quickstart-shard-download-invisible-in-preview-and-run.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -1578,47 +1546,9 @@ FIX SCOPE IS WIDER THAN THE FINDING SAYS: because <code>pkg.py:941</code> (<code
       </article>
 
       <article class="cap rcard" id="refresh-strands-the-natural-set-baseline">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Retrieval eval</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Retrieval eval</span></div>
         <h3>The corpus refresh re-baselines only golden.jsonl, so golden-natural.jsonl's baseline silently describes a corpus that no longer exists</h3>
-        <p><b>Measured.</b> On the corpus tests/eval/taps.txt pins today (10,731 entries, 20 taps), <code>eval_retrieval.py --golden tests/eval/golden-natural.jsonl -k 10</code> exits 1 and prints "REGRESSION vs baseline: catalog.search recall@k: 0.080 -&gt; 0.060 (-0.020)" — while the keyword set on that identical corpus exits 0 and reproduces its baseline to four decimals (0.841/0.484/0.607/0.655), because the September refresh commit cbc0a58b moved golden.jsonl's baseline and left golden-natural.jsonl's describing the 10,152-entry corpus it replaced.
-
-<b>Reproduce it.</b>
-
-<code>cd &lt;repo&gt;</code><br>
-<code># 1. the refresh re-baselines with no --golden, and the default is golden.jsonl</code><br>
-<code>sed -n '112,119p' .github/workflows/eval-corpus-refresh.yml</code><br>
-<code>grep -n 'DEFAULT_GOLDEN\|--golden' scripts/eval_retrieval.py</code><br>
-<code># 2. the refresh commit changed ONLY the golden.jsonl set</code><br>
-<code>git show cbc0a58b -- tests/eval/baseline.json | grep -nE 'golden|^[-+] *"(recall|hit)'</code><br>
-<code># 3. the natural baseline still holds pre-refresh numbers</code><br>
-<code>python3 -c "</code><br>
-<code>import json;s=json.load(open('tests/eval/baseline.json'))['sets']</code><br>
-<code>for k,v in s.items(): print(k, v['engines']['BM25 full-content'])"</code><br>
-<code># 4. and they reproduce exactly on the PRE-refresh corpus</code><br>
-<code>export BOOST_HOME=$TMPDIR/eval-home</code><br>
-…
-
-<b>What adversarial verification corrected.</b> This card's numbers are the re-measured ones, not the ones first reported.
-
-The mechanism and every load-bearing measurement are correct. Four stated details are wrong:
-
-1. LINE NUMBER. <code>if drop &gt; eps:</code> is at scripts/eval_retrieval.py:545, not 546. (The other three cited lines are exact: DEFAULT_GOLDEN at 66, <code>--golden</code> default at 656, <code>--regression-eps</code> default 0.02 at 668, and the workflow's bare <code>--save-baseline</code> at eval-corpus-refresh.yml:119.)
-
-2. ROADMAP FILENAME. The finding's not_carded_check names <code>nothing-refreshes-the-eval-corpus-pins</code>; no such file exists. That string is the card's TITLE. The file is docs/roadmap/items/eval-corpus-pins-have-no-refresh-path.md (status: shipped, pr: 431). Its conclusion still stands — I read it, and its only baseline sentence is "regenerate <code>baseline.json</code>", singular, with nothing about which sets a refresh maintains.
-
-3. TITLE COUNT. "Checked all 318 titles" — there are 432 item files (405 <code>board: code</code>, 27 <code>board: design</code>). I re-ran the not-carded check over all 432 and reached the same conclusion.
-
-4. UNDERSTATED, NOT OVERSTATED — the important one. The finding frames the false regression as a future risk ("a 2-query shift (0.040) reports a confident REGRESSION"). It is not future. On the corpus the current taps.txt pins, the natural set ALREADY exits 1 today with <code>REGRESSION vs baseline: catalog.search recall@k: 0.080 -&gt; 0.060 (-0.020)</code> — the drop computes to 0.020000000000000004, which clears eps=0.02.
-
-<b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
-
-SCOPE OF MY REPRO — what it does and does not settle. - It settles the mechanism completely: I read the current workflow and argparse default, walked every commit that ever touched baseline.json, and confirmed cbc0a58b is the first to move one set of two. - It settles the consequence empirically, which the finding did not: I built the post-refresh corpus (network fetch of the 8 moved pins onto copies of the shared clones, in HOME=$TMPDIR/verify-5, since deleted) and got a real exit-1 false regression on the natural set with a clean exit-0 control on the keyword set. That pair is the card's evidence — one command, two sets, same corpus, opposite results. - Measurement noise seen: BM25 MRR on the natural set came out 0.235 on the --build run and 0.237 on the next run against the same index. Do not quote the natural set's post-refresh MRR to three decimals in a card. recall@k (0.360), hit@1 (0.160) and the catalog.search regression line were stable across both runs.
-
-BLAST RADIUS — do not overstate it in the card. The natural set is NOT wired into any gate. <code>make eval</code> and CI run golden.jsonl only, and both pass <code>--regression-eps 1</code>, so the required gate is untouched and stays green. grep for golden-natural across *.py/*.yml/Makefile/*.sh finds it only in tests/unit/test_eval_baseline.py and test_eval_grading.py (which test the harness, not the corpus) plus CLAUDE.md and roadmap prose.
-
-<b>Why it is worth doing.</b> CLAUDE.md documents baseline keying as the fix for exactly this class of bug: "Before that, running the natural-language set printed eight confident 'REGRESSION vs baseline' lines that were only the gap between two different question sets." The key was made query-set-aware but not corpus-aware, and the monthly refresh only maintains one of the two sets. The natural set is the only instrument the project has for measuring whether a user's plain-English question finds the right skill (it scores BM25 at recall 0.360 / hit@1 0.160, and 0.077 / 0.000 on its 13 workflow rows) — so it is the set that matters most for judging the keyless-dense work, and its reference point is now silently wrong.
-
-<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em></p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/refresh-strands-the-natural-set-baseline.md">Write-up &middot; refresh-strands-the-natural-set-baseline.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -1784,34 +1714,9 @@ BLAST RADIUS — do not overstate it in the card. The natural set is NOT wired i
       </article>
 
       <article class="cap rcard" id="exemplar-graded-golden-set-runs-in-no-gate">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Tech-debt</span></div>
         <h3>golden-natural.jsonl — the only fully exemplar-graded query set — is invoked by no make target and no workflow, so its numbers can only be produced by a human typing the command</h3>
-        <p><b>Measured.</b> Running the natural set today against the same 20-tap eval corpus prints "REGRESSION vs baseline: catalog.search recall@k: 0.080 -&gt; 0.060 (-0.020)" (BM25 MRR 0.2447 -&gt; 0.237, nDCG 0.2640 -&gt; 0.259) — the snapshot has already drifted, and no Makefile target or workflow passes <code>--golden</code>, so nothing in the repo can ever emit that line.
-
-<b>Reproduce it.</b>
-
-<code>cd &lt;repo&gt;</code><br>
-<code>grep -n natural Makefile ; echo "makefile grep exit $?"</code><br>
-<code>grep -rn natural .github/workflows/ ; echo "workflow grep exit $?"</code><br>
-<code>grep -rn 'golden-natural' Makefile .github/workflows/ scripts/ tests/ | sed -n '1,20p'</code><br>
-<code>sed -n '1,23p' tests/unit/test_eval_baseline.py</code><br>
-<code>python3 -c "import json,hashlib,pathlib; b=json.load(open('tests/eval/baseline.json')); print('baseline keys:',list(b['sets'])); print('current digests:',[p+'@'+hashlib.sha256(pathlib.Path('tests/eval/'+p).read_bytes()).hexdigest()[:12] for p in ('golden.jsonl','golden-natural.jsonl')])"</code>
-
-<b>What adversarial verification corrected.</b> This card's numbers are the re-measured ones, not the ones first reported.
-
-1. BASELINE NUMBERS ARE WRONG. The claim says the golden-natural row carries "0.350 / 0.160 / 0.245 / 0.259". It does not. tests/eval/baseline.json's <code>golden-natural.jsonl@0d91b0cd8e41</code> BM25 row is <b>0.360 / 0.160 / 0.2447 / 0.2640</b>. The quoted 0.350/0.160/0.245/0.259 are the *pre-migration* ("name-graded (before)") figures at docs/roadmap/items/golden-set-grades-by-name-not-by-skill.md:125; the baseline holds the *post*-migration row from line 126-127 (0.360 / 0.160 / 0.245 / 0.264). The claim read the wrong line of the card.
-
-2. "the only tests that touch it are explicitly synthetic" IS WRONG. tests/unit/test_eval_grading.py reads the REAL shipped file in three live assertions: <code>test_the_shipped_set_has_nothing_left_to_decide</code> (line 217-228, asserts len(rows) == 50 and no unpinned row) and class <code>TestTheMigrationIsFinished</code> (line 247+): <code>test_every_row_pins_an_exemplar</code>, <code>test_every_exemplar_is_well_formed</code>, <code>test_no_exemplar_is_a_localised_copy</code>. Only tests/unit/test_eval_baseline.py is synthetic. The defect survives the correction, because those tests grade the file's SHAPE (row count, exemplar presence and syntax) and never run retrieval — so they cannot move or invalidate a single number in the baseline row. The accurate statement is: automation pins the query set's shape, nothing re-measures its scores.
-
-3.
-
-<b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
-
-Scope and limits of my repro: - The structural half (no <code>--golden</code> in any Makefile target or workflow; <code>--golden</code> defaults to golden.jsonl at scripts/eval_retrieval.py:66/:656) is exhaustive over Makefile, .github/workflows/ and scripts/ — read, not inferred. - The drift measurement was run against a PRIVATE COPY of the shared 20-tap eval corpus (I copied cache/ + config.json into $TMPDIR/lens2-exemplar and never wrote to the shared home). I did not verify that this corpus is byte-identical to the one that produced the committed baseline row: Makefile:130-133 says the corpus "tracks upstream HEAD rather than pinned commits", while CLAUDE.md says every taps.txt row pins a SHA — the repo disagrees with itself there and I did not resolve it. So the -0.020 delta could be corpus movement rather than ranker movement. That distinction does not affect the finding: corpus movement is exactly the thing a re-run is supposed to report, and no re-run happens. - I did not run <code>make eval</code>, <code>make check</code>, or any workflow; I read their recipes. - I did not measure how long a <code>make eval-natural</code> would add (the eval corpus was already materialised for me, so I never paid the tap cost). - <code>catalog.search</code>'s numbers here are near the floor of resolution (3 of 50 queries vs 4 of 50), so its -0.020 is one query; the BM25 MRR/nDCG drift is below the default 0.02 eps and would not have been flagged even if someone ran it.
-
-<b>Why it is worth doing.</b> CLAUDE.md documents the two-set design ("Baselines are keyed by query set (name@content-digest), so one file holds both golden.jsonl and golden-natural.jsonl without either overwriting the other") as if both sets are exercised. Only one is. The set that received 50 hand-made relevance judgments — the project's best available measurement of retrieval quality, and the one whose grading key actually identifies a skill — contributes to no gate and no scheduled monitor, so the investment decays silently. Adding a <code>make eval-natural</code> target (or a non-blocking scheduled run alongside eval-stats.yml) would cost one recipe and turn a frozen snapshot back into a signal.
-
-<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em></p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/exemplar-graded-golden-set-runs-in-no-gate.md">Write-up &middot; exemplar-graded-golden-set-runs-in-no-gate.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -1955,21 +1860,9 @@ Floor-margin exposure, with that qualification attached: hit@1 measures 44/91 = 
       </article>
 
       <article class="cap rcard" id="keyed-no-store-hint-disagrees-with-shard-remedy">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Consistency · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Consistency · Bug</span></div>
         <h3>With an API key exported and no vector store yet, <code>doctor</code> and <code>search</code> send the user to a paid build while <code>quickstart</code> offers the free download</h3>
-        <p><b>Found while verifying the quickstart shard-status fix.</b> After that fix, <code>shards.remedy()</code>
-tells a keyed machine with no store to <code>unset VOYAGE_API_KEY</code> and run
-<code>boost update --shards</code>, which downloads the published keyless vectors for free.
-<code>boost doctor</code> and <code>boost search</code> read <code>dense.fix_hint("no-store")</code>
-instead, which says <em>build it: <code>boost reindex --dense</code></em>. With a key in force,
-that embeds the whole catalogue through the paid API.
-
-That leaves two commands giving the same user contradictory advice, which is the thing
-<code>fix_hint</code> exists to prevent. <b>Fix direction:</b> when the reason is
-<code>no-store</code> and a key outranks the local model, have <code>fix_hint</code> answer with
-<code>shards.remedy()</code> (or the same table row), so <code>doctor</code>, <code>search</code>,
-<code>quickstart</code> and <code>update --shards</code> give one answer. Keep the manifest fetch off
-the search path: <code>search</code> must not touch the network to word a hint.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/keyed-no-store-hint-disagrees-with-shard-remedy.md">Write-up &middot; keyed-no-store-hint-disagrees-with-shard-remedy.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -2070,20 +1963,9 @@ wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every ins
       </article>
 
       <article class="cap rcard" id="a-correct-link-in-a-locked-dir-reads-as-refused">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
         <h3>A reinstall into a locked skills dir says "not linked" over a link that is already there and correct</h3>
-        <p><b>Found by the review of <code>install-paths-that-still-drop-the-result</code>.</b>
-<code>store.link_agents</code> unlinks and re-creates every symlink it manages, even one that already
-resolves to the store copy. In a skills dir that refuses writes, the unlink raises
-<code>PermissionError</code>, so the agent goes into <code>res.unwritable</code>. <code>boost reinstall</code>
-then prints <em>not linked: ~/.cursor/skills is not writable</em> while the old link is still on disk,
-still points into the store, and the lock still records the agent in <code>agents</code>. The tap
-branch of reinstall has done this since #931. The local and URL branches say it now too, because they
-report the result at all.
-
-<b>Fix direction.</b> In <code>link_agents</code>, treat an existing symlink that already resolves to the
-target as linked, and skip the unlink and re-create. A link that points elsewhere, or no link, still
-needs the write and is still refused.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/a-correct-link-in-a-locked-dir-reads-as-refused.md">Write-up &middot; a-correct-link-in-a-locked-dir-reads-as-refused.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -5416,35 +5298,9 @@ audit (cluster <code>project-scope-readers</code>); repro in the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-sweep-positionals-json-lack-help-strings-and-no-command-help">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>Sweep: positionals/<code>--json</code> lack help strings and no command help shows examples (~30 cmds)</h3>
-        <p>Across roughly thirty commands the help screens end at the options table with undocumented arguments.
-Observed verbatim: <code>help cohort</code> prints <code>{list,create,delete,status,apply}</code> with no help
-string for the action; <code>test --help</code> shows <code>positional arguments:</code> then <code>NAME</code>
-with nothing after it; <code>conflict --help</code> and <code>attest --help</code> each list <code>--json</code>
-with an empty help line; <code>edit</code>/<code>explain</code>/<code>home</code> give <code>name</code> no text
-(so <code>docs/commands.html</code> renders <code>&lt;code&gt;name&lt;/code&gt;&lt;span&gt;&lt;/span&gt;</code>).
-No help screen in the audit shows an Examples block. The gaps hide real contracts: <code>run</code> never
-mentions its SDK/key prerequisites (only the runtime error does), <code>discover --help</code> never says a
-query hits GitHub live while bare/<code>--local</code> read the cache, <code>conflict</code>'s exit-1-on-findings
-is undocumented, <code>cohort status</code> is an unadvertised alias of <code>list</code>, and <code>policy</code>'s
-11 valid keys appear only in the error hint after a wrong <code>set</code>.
-
-Verification confirmed this is omission, not style: the mechanism works and is used exactly once &mdash;
-the only <code>epilog=</code> in all of <code>boost_cli</code> is cohort's membership-hash paragraph
-(<code>team.py:74</code>), and <code>team.py:77</code> adds the action positional with no <code>help=</code>.
-Nothing in CLAUDE.md declares terse help deliberate, and the content gap is unchanged at
-<code>COLUMNS=60</code> under a TTY, so it is not a rendering artifact.
-
-Fix as one sweep PR: add <code>help=</code> to every bare positional (action choices, <code>NAME</code>,
-<code>--json</code>) and an Examples epilog per parser &mdash; <code>cliparse.parser</code> forwards
-<code>**kwargs</code> to argparse, so no plumbing is needed. Extend
-<code>scripts/build_command_reference.py</code> to render <code>parser.epilog</code> (lines 119/137 render
-description and per-arg help but currently drop the epilog) and fail <code>--check</code> on empty help
-strings, then regenerate <code>docs/commands.html</code>. Document the defaults (cohort/profile default action
-= <code>list</code>) and the <code>cohort status</code> alias while there; the <code>list</code> summary in
-<code>cli.py</code> COMMANDS should also say "skills, rules and workflows" to match its own description.
-Found by the 2026-08 CLI audit (cluster help-examples-sweep); repro in the audit log.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-sweep-positionals-json-lack-help-strings-and-no-command-help.md">Write-up &middot; audit-sweep-positionals-json-lack-help-strings-and-no-command-help.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>

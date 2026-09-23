@@ -28,6 +28,7 @@ from ..core import (
     rag,
     registry,
     shards,
+    util,
 )
 from ..core import output as out
 from ..errors import BoostError
@@ -183,6 +184,81 @@ def _vectors_refused(outcome: bootstrap.SetupOutcome,
     _muted(fix)
 
 
+def _sync_inputs(names: list[str], pins: dict[str, dict] | None = None
+                 ) -> tuple[list[str], dict[str, str], dict[str, str]]:
+    """The (taps, commits, built) `shards.sync` is called with, for `names`.
+
+    `_tap_commits`/`dense.tap_commits` are keyed by safe name; `sync` speaks
+    tap names. The live run passes no `pins`: every tap is configured and at
+    the commit its clone says. The dry run passes them, because a registry it
+    has not tapped yet will be tapped at exactly that commit (`add_many`'s
+    `pins=`), and that is the commit `sync` will then compare against.
+    """
+    safe = {t.name: t.safe_name for t in registry.list_taps()}
+    have, stored = rag._tap_commits(), dense.tap_commits()
+    commits = {n: have.get(s, "") for n, s in safe.items()}
+    for name in names:
+        if pins is not None and name not in safe and name in pins:
+            safe[name] = registry.Tap(name=name, url="").safe_name
+            commits[name] = str(pins[name].get("commit") or "")
+    built = {n: stored.get(s, "") for n, s in safe.items()}
+    return [n for n in names if n in safe], commits, built
+
+
+def _fetch_phrase(steps: list[dict]) -> str:
+    """"N shard(s)", with what they weigh when the manifest says.
+
+    The dry run and the live run print this one phrase, so a preview cannot
+    promise a count or a size the run then contradicts. The size is the
+    manifest's own `bytes`; a row without one makes the sum a floor, and it
+    is called one.
+    """
+    count = sum(1 for s in steps if s["status"] == "download")
+    size, unsized = shards.download_bytes(steps)
+    if not size:
+        return "%d shard(s)" % count
+    return "%d shard(s) (%s%s)" % (count, "at least " if unsized else "",
+                                  util.human_size(size))
+
+
+def _planned_rest(steps: list[dict]) -> bool:
+    """Name what the dry run will not fetch, and why; True if it said anything.
+
+    Once the preview counts only real downloads, its zero stops meaning "none
+    published": a rerun whose vectors are all current plans nothing, and so
+    does a tap that moved past its row. Both get the words the live run's
+    `_report` gives them, so the preview does not blame the manifest.
+    """
+    current = sum(1 for s in steps if s["status"] == "current")
+    moved = sum(1 for s in steps if s.get("commit_moved"))
+    if current:
+        _muted("%d shard%s already up to date — nothing to fetch"
+               % (current, "" if current == 1 else "s"))
+    if moved:
+        _muted("%d tap(s) moved past their vectors, so their shards would be "
+               "refused: `boost update --shards`" % moved)
+    return bool(current or moved)
+
+
+def _progress(total: int):
+    """An `on_event` for `shards.sync`: one short line per download.
+
+    Muted and numbered, so 459 of them read as a counter rather than a wall,
+    and silent for every other status — `_report` says what each shard did
+    once the loop is over, and repeating it per tap here said it twice.
+    """
+    done = [0]
+
+    def event(tap: str, status: str, detail: str) -> None:
+        if status != "downloading":
+            return
+        done[0] += 1
+        out.info(out.role("fetching %s%s (%d/%d)"
+                          % (tap, " %s" % detail if detail else "",
+                             done[0], total), "muted"))
+    return event
+
+
 def cmd_quickstart(argv) -> int:
     """boost quickstart [--catalog] [--no-vectors] [--dry-run]"""
     p = cliparse.parser(
@@ -243,14 +319,19 @@ def cmd_quickstart(argv) -> int:
     usable = (want_vectors and manifest is not None
               and outcome.judge_vectors(manifest))
     if args.dry_run:
-        planned = [n for n in names if n in pins] if usable else []
-        out.info("would build the keyword index, then import %d shard(s)"
-                 % len(planned))
+        steps: list[dict] = []
+        if usable and manifest is not None:
+            taps, commits, built = _sync_inputs(names, pins)
+            steps = shards.plan(taps, commits, manifest, built)
+        planned = [s for s in steps if s["status"] == "download"]
+        out.info("would build the keyword index, then import %s"
+                 % _fetch_phrase(steps))
+        said = _planned_rest(steps)
         # "0 shard(s)" reads as "none are published" when the real cause is
         # local, and --dry-run is exactly what a cautious new user runs first.
         # The live path already explains both cases; without this the preview
         # is the one surface that reports the symptom and withholds the reason.
-        if not planned:
+        if not planned and not said:
             if args.no_vectors:
                 out.info(out.role("(0 because --no-vectors was asked for)",
                                   "muted"))
@@ -279,17 +360,17 @@ def cmd_quickstart(argv) -> int:
     (out.ok if outcome.searchable else out.warn)(
         "indexed %s items for keyword search" % format(outcome.entries, ","))
 
-    if usable:
-        commits = rag._tap_commits()
-        stored = dense.tap_commits()
-        # `_tap_commits`/`dense.tap_commits` are keyed by safe name; `sync`
-        # speaks tap names.
-        by_name = {t.name: commits.get(t.safe_name, "")
-                   for t in registry.list_taps()}
-        built = {t.name: stored.get(t.safe_name, "")
-                 for t in registry.list_taps()}
-        results = shards.sync([n for n in names if n in by_name], by_name,
-                              manifest=manifest, built=built)
+    if usable and manifest is not None:
+        taps, commits, built = _sync_inputs(names)
+        # Said before the first byte moves, in the words the dry run used:
+        # the download is the one step here that can take minutes, and it
+        # used to run without a line until it was over.
+        steps = shards.plan(taps, commits, manifest, built)
+        fetch = sum(1 for s in steps if s["status"] == "download")
+        if fetch:
+            _muted("fetching %s" % _fetch_phrase(steps))
+        results = shards.sync(taps, commits, manifest=manifest, built=built,
+                              on_event=_progress(fetch))
         _report(results)
     elif outcome.vectors_refused:
         _vectors_refused(outcome)

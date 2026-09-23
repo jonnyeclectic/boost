@@ -298,6 +298,9 @@ class TestDoctor:
                         reason="root ignores mode bits")
     def test_reinstall_names_the_link_it_could_not_make(self, boost, installed):
         cursor = paths.home() / ".cursor" / "skills"
+        # Missing, so the reinstall has a link to make. A link already there
+        # and correct needs no write, and is not refused.
+        (cursor / "brainstorming").unlink()
         cursor.chmod(0o500)
         try:
             r = boost("reinstall", "brainstorming")
@@ -305,6 +308,26 @@ class TestDoctor:
             cursor.chmod(0o700)
         assert "not linked: ~/.cursor/skills is not writable" in r.out.replace(
             "\n    ", " ")
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_reinstall_says_nothing_about_a_link_that_is_already_right(
+            self, boost, installed):
+        # The link is on disk and leads to the store; only the dir is locked.
+        # This printed "not linked" over it, while the lock kept the agent.
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.chmod(0o500)
+        try:
+            r = boost("reinstall", "brainstorming")
+        finally:
+            cursor.chmod(0o700)
+        assert "reinstalled brainstorming v1.4.0" in r.out
+        assert "not linked" not in r.out
+        assert (cursor / "brainstorming").resolve() == (
+            paths.store_dir() / "brainstorming").resolve()
+        assert "cursor" in _lock()["brainstorming"]["agents"]
 
     def test_reinstall_names_a_conflict_it_left_in_place(self, boost,
                                                          installed):

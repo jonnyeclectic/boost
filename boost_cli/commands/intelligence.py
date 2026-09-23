@@ -321,7 +321,8 @@ def cmd_simulate(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost simulate",
         description="Preview how a skill would change Claude's behavior")
-    ap.add_argument("name", metavar="NAME")
+    ap.add_argument("name", metavar="NAME",
+                    help="skill, installed or in a tap")
     ap.add_argument("--task", metavar="TEXT",
                     help="task to simulate (default: a typical coding task)")
     args = ap.parse_args(argv)
@@ -753,7 +754,7 @@ def cmd_evolve(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost evolve",
         description="Iteratively improve a skill from feedback")
-    ap.add_argument("name", metavar="NAME")
+    ap.add_argument("name", metavar="NAME", help="installed skill to revise")
     ap.add_argument("--feedback", required=True, metavar="TEXT",
                     help="what should change, in plain English; `-` reads "
                          "it from stdin, `@FILE` from a file")
@@ -892,16 +893,17 @@ def cmd_context(argv: list[str]) -> int:
     # overwrite a flag given before the action.
     ap.add_argument("--json", action="store_true", dest="top_json",
                     help="machine-readable output (bare `context` = status)")
-    sub = ap.add_subparsers(dest="action", metavar="ACTION")
+    sub = ap.add_subparsers(dest="action", metavar="ACTION",
+                            help="what to do (default: status)")
     sp = sub.add_parser("status", help="show rules, enabled flag & branch")
-    sp.add_argument("--json", action="store_true")
+    sp.add_argument("--json", action="store_true", help="machine-readable output")
     sub.add_parser("enable", help="turn on branch-aware activation (runs apply)")
     sub.add_parser("disable", help="turn it off and relink all mapped skills")
     sp = sub.add_parser("map", help="map a branch pattern to skills")
     sp.add_argument("pattern", help="fnmatch branch pattern, e.g. 'feature/*'")
     sp.add_argument("skills", help="comma-separated skill names")
     sp = sub.add_parser("unmap", help="remove a branch pattern rule")
-    sp.add_argument("pattern")
+    sp.add_argument("pattern", help="the pattern exactly as it was mapped")
     sub.add_parser("apply", help="link/unlink mapped skills for this branch")
     args = ap.parse_args(argv)
 
@@ -1083,7 +1085,7 @@ def cmd_focus(argv: list[str]) -> int:
     ap.add_argument("--clear", action="store_true",
                     help="end the session and relink everything")
     ap.add_argument("--status", action="store_true", help="show current focus")
-    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     state_path = paths.state_dir() / _FOCUS_STATE
@@ -1174,7 +1176,7 @@ def cmd_impact(argv: list[str]) -> int:
         description="Correlate a skill's install date with repo activity")
     ap.add_argument("name", nargs="?", metavar="NAME",
                     help="one skill (default: all installed)")
-    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     git = gitutil.branch_state()

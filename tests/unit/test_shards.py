@@ -157,6 +157,7 @@ def _machine(monkeypatch, prov, model, dim, local=True):
     monkeypatch.setattr(shards.embed, "model", lambda: model)
     monkeypatch.setattr(shards.embed, "dimension", lambda: dim)
     monkeypatch.setattr(shards.embed, "local_available", lambda: local)
+    monkeypatch.setattr(shards.embed, "local_installed", lambda: local)
     for env in shards.embed.KEY_ENV.values():
         monkeypatch.delenv(env, raising=False)
 
@@ -518,6 +519,101 @@ class TestSync:
         # falsely stamp the shard-sync marker via the `any(... == "imported")`
         # check, and must not have tried to download anything either.
         assert res[0]["status"] == "current"
+
+
+_ROW = {"tap": "a/b", "commit": "1" * 40, "url": "file:///a", "sha256": "0",
+        "bytes": 100}
+
+
+@pytest.mark.usefixtures("sandbox")
+class TestPlan:
+    """What `sync` will do, decided before a byte moves — and `sync` does it.
+
+    `boost quickstart --dry-run` counts and sizes its preview from this, so
+    a step it classifies wrongly is a promise the live run breaks.
+    """
+
+    def _plan(self, commits, built=None, taps=("a/b",)):
+        return shards.plan(list(taps), commits, {"shards": [_ROW]}, built)
+
+    def test_a_tap_without_a_row_is_unpublished(self):
+        assert self._plan({}, taps=["z/z"]) == [
+            {"tap": "z/z", "status": "unpublished"}]
+
+    def test_a_tap_at_the_row_with_vectors_built_there_is_current(self):
+        steps = self._plan({"a/b": "1" * 40}, built={"a/b": "1" * 40})
+        assert steps == [{"tap": "a/b", "status": "current", "row": _ROW}]
+
+    def test_vectors_built_at_another_commit_are_downloaded_again(self):
+        steps = self._plan({"a/b": "1" * 40}, built={"a/b": "9" * 40})
+        assert [s["status"] for s in steps] == ["download"]
+
+    def test_a_tap_that_moved_past_its_row_is_refused_before_download(self):
+        steps = self._plan({"a/b": "2" * 40})
+        assert steps == [{"tap": "a/b", "status": "refused",
+                          "commit_moved": True,
+                          "detail": "tap is at 2222222, shard is for 1111111",
+                          "row": _ROW}]
+
+    def test_a_tap_with_no_known_commit_is_downloaded(self):
+        # `sync` has always fetched here and left the verdict to
+        # `import_shard`; the plan must not quietly start refusing.
+        assert self._plan({})[0]["status"] == "download"
+        assert self._plan({})[0]["row"] is _ROW
+
+    def test_sync_does_what_the_plan_says_and_reports_it_without_the_row(
+            self, tmp_path, monkeypatch):
+        rows = {tap: _shard_file(tmp_path, tap, "1" * 40)[1]
+                for tap in ("a/b", "c/d", "e/f")}
+        manifest = shards.fetch_manifest(
+            _manifest(tmp_path, list(rows.values())).as_uri())
+        monkeypatch.setattr(shards, "incompatible", lambda _m: None)
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "import_shard",
+                            lambda shard, commit: (True, "ok"))
+        fetched, events = [], []
+        real = shards.download
+
+        def download(row, dest, manifest, timeout=300.0):
+            fetched.append(row["tap"])
+            return real(row, dest, manifest, timeout)
+
+        monkeypatch.setattr(shards, "download", download)
+        taps = ["a/b", "c/d", "e/f", "z/z"]
+        commits = {"a/b": "1" * 40, "c/d": "2" * 40, "e/f": "1" * 40}
+        built = {"a/b": "1" * 40}
+        steps = shards.plan(taps, commits, manifest, built)
+        res = shards.sync(taps, commits, manifest=manifest, built=built,
+                          cache_dir=tmp_path / "cache",
+                          on_event=lambda t, s, d: events.append((t, s, d)))
+        assert fetched == [s["tap"] for s in steps
+                           if s["status"] == "download"] == ["e/f"]
+        assert [r["status"] for r in res] == ["current", "refused",
+                                              "imported", "unpublished"]
+        assert all("row" not in r for r in res)
+        assert ("c/d", "refused", "commit moved") in events
+        assert ("a/b", "current", "") in events
+        assert ("z/z", "unpublished", "") in events
+
+
+class TestDownloadBytes:
+    def test_only_download_steps_are_summed(self):
+        steps = [{"tap": "a", "status": "download", "row": {"bytes": 10}},
+                 {"tap": "b", "status": "current", "row": {"bytes": 1000}},
+                 {"tap": "c", "status": "refused", "row": {"bytes": 1000}},
+                 {"tap": "d", "status": "unpublished"},
+                 {"tap": "e", "status": "download", "row": {"bytes": 5}}]
+        assert shards.download_bytes(steps) == (15, 0)
+
+    @pytest.mark.parametrize("size", [None, 0, -3, "big", 1.5])
+    def test_a_row_without_a_usable_size_is_counted_not_summed(self, size):
+        row = {} if size is None else {"bytes": size}
+        steps = [{"tap": "a", "status": "download", "row": {"bytes": 7}},
+                 {"tap": "b", "status": "download", "row": row}]
+        assert shards.download_bytes(steps) == (7, 1)
+
+    def test_nothing_to_download_weighs_nothing(self):
+        assert shards.download_bytes([]) == (0, 0)
 
 
 class _StreamedResponse:
