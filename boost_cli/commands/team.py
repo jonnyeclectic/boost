@@ -81,7 +81,8 @@ def cmd_cohort(argv) -> int:
                "rollout lands on the same half of the team every time. "
                "This machine evaluates its own membership locally.")
     p.add_argument("action", nargs="?", default="list",
-                   choices=["list", "create", "delete", "status", "apply"])
+                   choices=["list", "create", "delete", "status", "apply"],
+                   help="what to do (default: list; status is the same as list)")
     p.add_argument("name", nargs="?", help="cohort name")
     p.add_argument("--skills", action="append", default=[],
                    help="comma-separated skill names (repeatable)")
@@ -305,7 +306,8 @@ def cmd_profile(argv) -> int:
         prog="boost profile",
         description="Named skill profiles for context switching")
     p.add_argument("action", nargs="?", default="list",
-                   choices=["list", "save", "use", "show", "diff", "delete"])
+                   choices=["list", "save", "use", "show", "diff", "delete"],
+                   help="what to do (default: list)")
     p.add_argument("name", nargs="?", help="profile name")
     p.add_argument("--prune", action="store_true",
                    help="with `use`: fully uninstall skills not in the profile")
@@ -557,7 +559,8 @@ def cmd_protocol(argv) -> int:
         prog="boost protocol",
         description="Manage the boost:// one-click-install handler")
     p.add_argument("action", nargs="?", default="status",
-                   choices=["status", "register", "unregister", "open"])
+                   choices=["status", "register", "unregister", "open"],
+                   help="what to do (default: status)")
     p.add_argument("url", nargs="?", help="a boost:// URL (for `open`)")
     args = p.parse_args(argv)
     system = platform.system()
@@ -723,7 +726,9 @@ def cmd_replay(argv) -> int:
         prog="boost replay",
         description="View version history & roll back skills")
     p.add_argument("action", nargs="?", default="list",
-                   choices=["list", "show", "rollback"])
+                   choices=["list", "show", "rollback"],
+                   help="what to do (default: list; rollback restores skills "
+                        "only)")
     p.add_argument("id", nargs="?", help="history entry id (from `boost replay list`)")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)

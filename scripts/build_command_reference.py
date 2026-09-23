@@ -11,6 +11,9 @@ never drift from the code. Regenerated exactly like the roadmap:
     python3 scripts/build_command_reference.py            # write docs/commands.html
     python3 scripts/build_command_reference.py --check    # fail (exit 1) on drift
 
+``--check`` also fails when any argument of any command has no help text,
+because the page and ``--help`` would both show it bare.
+
 The ``--check`` form runs in CI and in tests/unit/test_command_reference_fresh.py.
 
 Why introspect the parser instead of scraping ``--help`` text: argparse's
@@ -53,12 +56,15 @@ GROUP_LABELS = {
 }
 
 
-def _capture_parser(name: str, module: str):
-    """Return the ArgumentParser a command builds (by spying on cliparse.parser).
+def _capture_parsers(name: str, module: str) -> list:
+    """Every ArgumentParser a command builds (by spying on cliparse.parser).
 
     Calls ``cmd_*(["--help"])`` so the command builds its parser and argparse
-    raises SystemExit *before* any command logic runs; the parser it created is
-    recorded by the spy. Output is swallowed — this has no side effects.
+    raises SystemExit *before* any command logic runs; each parser it created is
+    recorded by the spy, in creation order. Output is swallowed — this has no
+    side effects. Sub-parsers are not in the list: ``add_subparsers()`` builds
+    them with ``type(self)(**kwargs)``, never through ``cliparse.parser``, so
+    :func:`_walk` reaches them from their parent instead.
     """
     fn = "cmd_" + name.replace("-", "_")
     mod = importlib.import_module("boost_cli.commands.%s" % module)
@@ -78,7 +84,61 @@ def _capture_parser(name: str, module: str):
             getattr(mod, fn)(["--help"])
     finally:
         cliparse.parser = real
-    return created[0] if created else None  # main parser is created first
+    return created
+
+
+def _capture_parser(name: str, module: str):
+    """The command's main parser — the first one it creates — or None."""
+    created = _capture_parsers(name, module)
+    return created[0] if created else None
+
+
+def _walk(parser):
+    """``parser`` and every sub-parser under it, depth first."""
+    yield parser
+    for act in parser._actions:
+        if isinstance(act, argparse._SubParsersAction):
+            seen: set[int] = set()
+            for sub in act.choices.values():
+                if id(sub) not in seen:   # an alias maps to the same parser
+                    seen.add(id(sub))
+                    yield from _walk(sub)
+
+
+def undocumented(parser) -> list[str]:
+    """``"prog: ARG"`` for each argument under ``parser`` with no help text.
+
+    Covers positionals and options alike, in ``parser`` and every sub-parser
+    below it. A sub-command counts too: ``add_parser`` without ``help=`` is
+    left out of its parent's listing entirely. ``-h`` and arguments hidden with
+    ``argparse.SUPPRESS`` are skipped; a whitespace-only help is empty.
+    """
+    found: list[str] = []
+    for p in _walk(parser):
+        for act in p._actions:
+            if isinstance(act, argparse._HelpAction) or act.help == argparse.SUPPRESS:
+                continue
+            if not (act.help or "").strip():
+                found.append("%s: %s" % (p.prog, ", ".join(act.option_strings)
+                                         or _metavar(act)))
+            if isinstance(act, argparse._SubParsersAction):
+                helped = {c.dest for c in act._choices_actions
+                          if (c.help or "").strip()}
+                firsts: dict[int, str] = {}   # aliases follow their name
+                for sub, sp in act.choices.items():
+                    firsts.setdefault(id(sp), sub)
+                found.extend("%s: %s" % (p.prog, sub) for sub in firsts.values()
+                             if sub not in helped)
+    return found
+
+
+def missing_help() -> list[str]:
+    """:func:`undocumented` over every parser of every command in COMMANDS."""
+    found: list[str] = []
+    for name, _group, module, _summary in cli.COMMANDS:
+        for parser in _capture_parsers(name, module):
+            found.extend(undocumented(parser))
+    return found
 
 
 def _metavar(act) -> str:
@@ -153,6 +213,10 @@ def _extract(name: str, group: str, module: str, summary: str) -> dict:
     parser = _capture_parser(name, module)
     prog = parser.prog if parser else "boost %s" % name
     description = (parser.description or "").strip() if parser else ""
+    # argparse prints the epilog after the options, and --help is what this
+    # page mirrors; cohort's note that membership is a deterministic hash was
+    # in `boost cohort --help` and nowhere on the page.
+    epilog = (parser.epilog or "").strip() if parser else ""
     pos, opt = _visible_actions(parser) if parser else ([], [])
 
     syn = [prog, *_opt_syn_parts(parser, opt)]
@@ -177,6 +241,7 @@ def _extract(name: str, group: str, module: str, summary: str) -> dict:
         "synopsis": " ".join(syn),
         "positionals": rows(pos, False),
         "options": rows(opt, True),
+        "epilog": epilog,
     }
 
 
@@ -236,6 +301,8 @@ def render() -> str:
                 sec.append('        <div class="args">')
                 sec.append(_rows_html(c["options"]))
                 sec.append('        </div>')
+            if c["epilog"]:
+                sec.append('        <p class="epilog">%s</p>' % html.escape(c["epilog"]))
             sec.append('      </section>')
             body.append("\n".join(sec))
         nav.append('    </div>')
@@ -313,6 +380,7 @@ _PAGE = """<!DOCTYPE html>
             border: 1px solid var(--line); overflow-x: auto; font-size: 12.5px; color: var(--cyan);
             white-space: pre-wrap; word-break: break-word; }
   .desc { margin: 0 0 12px; color: var(--text-2); font-size: 13.5px; }
+  .epilog { margin: 12px 0 0; color: var(--text-2); font-size: 13.5px; }
   .args-h { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .14em;
             text-transform: uppercase; color: var(--text-2); margin: 12px 0 6px; }
   .args { display: grid; gap: 6px; }
@@ -420,11 +488,20 @@ def main(argv: list[str] | None = None) -> int:
         description="Regenerate the command reference (docs/commands.html).")
     parser.add_argument(
         "--check", action="store_true",
-        help="verify committed HTML matches a fresh render; exit 1 on drift.")
+        help="verify committed HTML matches a fresh render and every "
+             "argument has help text; exit 1 otherwise.")
     args = parser.parse_args(argv)
 
     fresh = render()
     if args.check:
+        bare = missing_help()
+        if bare:
+            print("ERROR: %d argument(s) have no help text, so --help and "
+                  "docs/commands.html show them bare:" % len(bare),
+                  file=sys.stderr)
+            for line in bare:
+                print("    " + line, file=sys.stderr)
+            return 1
         current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
         if current != fresh:
             print(
