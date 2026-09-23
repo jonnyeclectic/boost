@@ -263,6 +263,22 @@ class TestUntrustworthyMeasurement:
         out = capsys.readouterr().out
         assert rc == 1 and "sqlite_vec" in out
 
+    def test_unmeasured_outranks_a_leak_when_both_happen(self, monkeypatch,
+                                                          capsys):
+        # Both are non-zero, so the gate fails either way; which code it
+        # exits with is the claim being pinned. A run that is partly dark
+        # reports dark, because the leak it *did* see says nothing about
+        # the commands it never measured -- and a rule stated in the
+        # docstring with no test is a rule that can be undone silently.
+        mod = _load()
+        leaky = _CLEAN + "import time:  150 |  150 |   sqlite_vec\n"
+        _patch_run(monkeypatch, mod, [(1, _BROKEN), (0, leaky)])
+        rc = mod.main([])
+        out = capsys.readouterr().out
+        assert rc == 2, "a partly dark run reported as a plain leak"
+        assert "sqlite_vec" in out
+        assert "exited 1" in out
+
 
 class TestDiagnosticStderr:
     def test_keeps_only_non_importtime_lines(self):
