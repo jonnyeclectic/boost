@@ -433,10 +433,14 @@ def _already_links(link: Path, target: Path) -> bool:
     that reaches the store through an alias counts too.
 
     Fails closed: a dangling link, a loop, or a target that is not there is
-    not linked, and takes the old unlink-and-recreate path.
+    not linked, and takes the old unlink-and-recreate path. Only the
+    *target*'s strictness carries that: a dangling link resolves leniently to
+    a path nothing is at, which cannot equal a store dir that resolved
+    strictly, while a store dir that is missing raises and answers False for
+    every link at once.
     """
     try:
-        have = normalize_link_target(link.resolve(strict=True))
+        have = normalize_link_target(link.resolve())
         want = normalize_link_target(target.resolve(strict=True))
     except (OSError, RuntimeError):
         # RuntimeError: Python 3.12 raises it for a symlink loop, and it is
