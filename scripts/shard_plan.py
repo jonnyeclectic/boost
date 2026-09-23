@@ -92,10 +92,23 @@ def plan(scope: str, jobs: int, include_lists: bool = False) -> list[list[str]]:
         # The pinned corpus every other gate measures against: one job per
         # registry, because there are twenty of them and no packing is needed.
         import subprocess
-        out = subprocess.run(
-            [sys.executable, str(Path(__file__).with_name("eval_corpus.py")),
-             "--list-repos"], check=True, capture_output=True, text=True).stdout
-        return [[name] for name in out.split()]
+        helper = str(Path(__file__).with_name("eval_corpus.py"))
+        proc = subprocess.run([sys.executable, helper, "--list-repos"],
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise SystemExit(
+                "shard_plan: `%s --list-repos` exited %d: %s"
+                % (helper, proc.returncode, proc.stderr.strip()))
+        names = proc.stdout.split()
+        if not names:
+            # The catalog branch below already refuses an empty plan. This one
+            # did not, and an empty matrix is a shards run that publishes
+            # nothing and reports success — the same vacuous pass the eval
+            # corpus exists to prevent.
+            raise SystemExit(
+                "shard_plan: the eval corpus listed no repositories — "
+                "tests/eval/taps.txt is empty or unreadable")
+        return [[name] for name in names]
     rows = catalog_rows(include_lists=include_lists)
     if not rows:
         raise SystemExit("the bundled registry catalogue is empty")

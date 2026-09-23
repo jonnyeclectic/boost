@@ -2,13 +2,14 @@
 id: import-budget-gate-passes-when-boost-cannot-import
 board: code
 section: planned
-status: planned
+status: shipped
 category: CI · Bug
 complexity: S
 impact: Medium
 wow: 3
 note: A required check that asserts a name is absent, and reports OK when nothing ran at all…
 order: 335
+owner: loop/import-budget-exit-code
 title: The import-budget gate reports OK when the command it measures never ran
 ---
 <b>Found by the audit of the repo's own automation.</b> <code>scripts/import_budget.py</code>'s
