@@ -10,6 +10,7 @@ wow: 3
 note: Two tools, one session, opposite answers about the same first-run machine…
 order: 340
 owner: loop/mcp-doctor-counts-configured-taps
+pr: 959
 title: boost_doctor certifies a machine healthy that boost_search calls untapped
 ---
 <b>Found by the audit of the MCP surface.</b> <code>_tool_doctor</code> counts taps with
