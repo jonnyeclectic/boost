@@ -274,6 +274,17 @@ jobs:
           # registry the build jobs reported unchanged are carried forward from
           # it, because their assets are still on the release byte for byte.
           # Missing on the first run — the one week nothing can be reused.
+          #
+          # It carries one more population, and that one is about THIS file:
+          # `fail-fast: false` above means a job can die, and a job that dies
+          # uploads neither shards nor an `unchanged` file, so the publish job
+          # hears nothing at all about its ~10 registries. Rebuilding the
+          # manifest from what arrived therefore deleted their rows while
+          # `--clobber` kept their assets — 8 orphaned shards and 245.5 MB on
+          # the 2026-09-20 release. A registry nobody reported on keeps its
+          # published row; one that has left the bundled catalogue does not,
+          # and `publish_shards.py` prints both counts, so a manifest that
+          # shrinks says so in this job's log.
           carry=()
           if curl -fsSL --max-time 60 -o previous-manifest.json \
                "https://github.com/$REPO/releases/download/shards-latest/manifest.json"; then

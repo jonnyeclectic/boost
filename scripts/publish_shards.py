@@ -17,12 +17,29 @@ Three subcommands, matching the three halves of publishing:
 
     publish_shards.py manifest --shard-dir DIR --repo owner/repo [--tag TAG]
                               [--carry-forward PREV.json --unchanged FILE...]
+                              [--known FILE...]
         Digest the shards in DIR and write the manifest that `core.shards`
         reads: schema version, the embedding space they all share, and one row
         per shard with its registry commit, size, sha256 and download URL. With
         `--carry-forward`, rows from the previous manifest survive for the
         registries the build jobs reported unchanged — their assets are still
-        on the release, byte for byte, so the old row is the right row.
+        on the release, byte for byte, so the old row is the right row — and
+        for the registries no job reported on at all, which is a different
+        thing (see below).
+
+WHAT SILENCE MEANS. The build matrix is `fail-fast: false`, so a job that dies
+takes its ~10 registries' evidence with it: no fresh shard, no `unchanged` line,
+nothing. A manifest rebuilt from the evidence alone therefore dropped them while
+`--clobber` left their assets on the release — measured on the release of
+2026-09-20 as 8 orphaned shards, 245.5 MB, one of them the 199 MB registry that
+takes 2 h 07 m to rebuild — and every user of those registries went back to
+embedding locally. So a run answers for a registry in one of four ways, and only
+the third is silence worth carrying: **rebuilt** (a fresh shard here),
+**unchanged** (a job said so, and its commit agrees with the row), **unreported**
+(nobody said anything, and it is still in `--known`), **gone** (nobody said
+anything and it has left the catalogue — dropped, so the index cannot grow
+forever). The counts for the last two are printed, because a manifest that
+shrinks quietly is the whole bug.
 
 WHY THE MANIFEST IS GENERATED AND NOT WRITTEN BY HAND. Three of its fields are
 load-bearing at import time and unguessable: `sha256` is what makes a download
@@ -55,7 +72,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from boost_cli.core import dense, gitutil, registry, shards
+from boost_cli.core import config, dense, gitutil, registry, shards
 from boost_cli.errors import BoostError
 
 DEFAULT_TAG = "shards-latest"
@@ -160,28 +177,87 @@ def _fresh_row(path: Path, repo: str, tag: str) -> tuple[dict, dict]:
     return row, _space(shard)
 
 
-def _carried_rows(prev_path: str, unchanged_files: list[str],
-                  fresh_taps: set[str], space: dict | None
-                  ) -> tuple[list[dict], dict | None]:
-    """Rows from the previous manifest for registries reported unchanged.
+def known_registries(paths: list[str] | None) -> set[str]:
+    """Which registries still count as registries, for carry-forward.
 
-    Returns ``(rows, previous_space)``. Every guard here refuses rather than
-    degrades: a row is carried only for the exact commit the job saw, only
-    when the previous manifest is in this run's embedding space, and never
-    for a registry a fresh shard already describes.
+    ``None`` — no ``--known`` at all — means the bundled catalogue, which is
+    the same list ``shard_plan.py`` builds the run's matrix from, so the
+    publish job needs no extra plumbing to answer "has this registry left the
+    catalogue?". An explicit (possibly empty) list overrides it, which is what
+    makes the decision testable and gives a scoped run an escape hatch.
+
+    A file is one name per line; ``#`` comments and blank lines are skipped and
+    anything after the first field is ignored, so the ``tap commit`` files the
+    build jobs already write can be handed over unchanged.
+    """
+    if paths is None:
+        names = {str(e.get("name") or "")
+                 for e in config.load_registry_catalog()}
+        names.discard("")
+        if not names:
+            print("the bundled registry catalogue is unreadable — carrying "
+                  "nothing forward for unreported registries", file=sys.stderr)
+        return names
+    out: set[str] = set()
+    for name in paths:
+        try:
+            text = Path(name).read_text(encoding="utf-8")
+        except OSError as exc:
+            print("cannot read %s (%s) — its registries count as unknown, so "
+                  "a row nobody reported on is dropped rather than carried"
+                  % (name, exc), file=sys.stderr)
+            continue
+        for line in text.splitlines():
+            fields = line.split("#", 1)[0].split()
+            if fields:
+                out.add(fields[0])
+    return out
+
+
+def _names(taps: list[str], cap: int = 8) -> str:
+    """A log-sized rendering of a tap list: the first few, then a count."""
+    shown = ", ".join(taps[:cap])
+    return shown + ("" if len(taps) <= cap
+                    else " and %d more" % (len(taps) - cap))
+
+
+def _carried_rows(prev_path: str, unchanged_files: list[str],
+                  fresh_taps: set[str], space: dict | None,
+                  known: set[str]
+                  ) -> tuple[list[dict], dict | None, dict]:
+    """Rows from the previous manifest that this run has no better answer for.
+
+    Returns ``(rows, previous_space, report)``, where `report` counts the two
+    interesting populations for the log: ``silent`` (registries no job
+    reported on, carried) and ``gone`` (registries no job reported on that
+    have left the catalogue, dropped).
+
+    FOUR STATES, ONE CARRY-FORWARD. A run reports on a registry by rebuilding
+    it (a fresh shard) or by naming it in an ``unchanged-*.txt``. Anything else
+    is silence, and silence has two causes that must not be treated alike: a
+    build job that failed — ``fail-fast: false``, so ~10 registries vanish from
+    the evidence while their assets stay on the release — and a registry that
+    has left the catalogue. The first keeps last week's row; only the second is
+    dropped.
+
+    Every guard here still refuses rather than degrades, down both paths: an
+    unreadable previous manifest and one in another embedding space carry
+    nothing at all, and a row whose commit disagrees with the job that reported
+    it is refused — and must not return through the silent path, because that
+    registry *was* reported on.
     """
     try:
         prev = json.loads(Path(prev_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         print("previous manifest unreadable (%s) — carrying nothing forward"
               % exc, file=sys.stderr)
-        return [], None
+        return [], None, {}
     prev_space = _space(prev)
     if space is not None and prev_space != space:
         print("previous manifest is %s, this run is %s — carrying nothing "
               "forward" % (_fmt_space(prev_space), _fmt_space(space)),
               file=sys.stderr)
-        return [], prev_space
+        return [], prev_space, {}
     wanted: dict[str, str] = {}
     for name in unchanged_files:
         try:
@@ -206,7 +282,16 @@ def _carried_rows(prev_path: str, unchanged_files: list[str],
             # the registry is no longer at. Re-embedded next run.
             continue
         out.append(dict(row))
-    return out, prev_space
+    # Everything above answers to evidence. What follows answers to its
+    # absence: a registry named by no fresh shard and no unchanged file was
+    # never reported on, so its published row stands — unless it has left the
+    # catalogue, which is the one silence that means "gone".
+    reported = set(fresh_taps) | set(wanted)
+    silent = shards.unreported(prev, reported, known)
+    out.extend(dict(silent[tap]) for tap in sorted(silent))
+    gone = sorted(tap for tap in index
+                  if tap not in reported and tap not in silent)
+    return out, prev_space, {"silent": sorted(silent), "gone": gone}
 
 
 def cmd_manifest(args: argparse.Namespace) -> int:
@@ -230,9 +315,11 @@ def cmd_manifest(args: argparse.Namespace) -> int:
                 "per manifest" % (path.name, _fmt_space(space),
                                   _fmt_space(first or {})))
     carried = 0
+    report: dict = {}
     if args.carry_forward:
-        old, prev_space = _carried_rows(args.carry_forward, args.unchanged,
-                                        {r["tap"] for r in rows}, first)
+        old, prev_space, report = _carried_rows(
+            args.carry_forward, args.unchanged, {r["tap"] for r in rows},
+            first, known_registries(args.known))
         rows.extend(old)
         carried = len(old)
         if first is None and old:
@@ -254,9 +341,25 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     dest = Path(args.out)
     dest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     total = sum(int(r.get("chunks") or 0) for r in rows)
-    print("manifest: %d shard(s) (%d fresh, %d carried forward), %s chunks, "
-          "%s -> %s" % (len(rows), len(rows) - carried, carried,
-                        format(total, ","), _fmt_space(first), dest))
+    silent = report.get("silent") or []
+    gone = report.get("gone") or []
+    # Both directions, always, because a silently shrinking manifest is the
+    # failure this reporting exists to make visible: how many rows were kept
+    # for jobs that never reported, and how many were let go.
+    print("manifest: %d shard(s) (%d fresh, %d carried unchanged, %d carried "
+          "for registries no job reported), %s chunks, %s -> %s"
+          % (len(rows), len(rows) - carried, carried - len(silent),
+             len(silent), format(total, ","), _fmt_space(first), dest))
+    if silent:
+        print("::warning::no build job reported on %d registr%s — their job "
+              "failed or never ran, so last week's published row was carried "
+              "forward: %s"
+              % (len(silent), "y" if len(silent) == 1 else "ies",
+                 _names(silent)), file=sys.stderr)
+    if gone:
+        print("dropped %d published row(s) for registr%s no longer in the "
+              "catalogue: %s" % (len(gone), "y" if len(gone) == 1 else "ies",
+                                 _names(gone)), file=sys.stderr)
     return 0
 
 
@@ -293,6 +396,11 @@ def main(argv: list[str] | None = None) -> int:
     mf.add_argument("--unchanged", nargs="*", default=[], metavar="FILE",
                     help="`tap commit` files written by "
                          "`publish_shards.py unchanged` in the build jobs")
+    mf.add_argument("--known", nargs="*", default=None, metavar="FILE",
+                    help="registries that still exist, one name per line "
+                         "(default: the bundled catalogue). A published row "
+                         "survives a run that never reported on it only for "
+                         "these; `--known` with no file carries none.")
     mf.set_defaults(func=cmd_manifest)
 
     args = p.parse_args(argv)

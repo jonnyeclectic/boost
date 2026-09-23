@@ -2,13 +2,14 @@
 id: one-failed-shard-job-drops-registries-from-the-manifest
 board: code
 section: planned
-status: planned
+status: shipped
 category: Shards · Bug
 complexity: M
 impact: High
 wow: 4
 note: A single failed build job deletes ~10 unrelated registries from the published manifest, and their assets stay on the release, orphaned…
 order: 337
+owner: loop/shard-carry-forward-gaps
 title: One failed shard-build job silently drops its whole chunk from the published manifest
 ---
 <b>Found by the audit of the repo's own automation, and confirmed live on the current release.</b>
@@ -24,6 +25,10 @@ The assets stay on the release (<code>gh release upload --clobber</code> replace
 so the result is a set of orphaned shard files no manifest names, and every user of those registries
 sent back to embedding them locally — ~1.2 s per chunk against a 0.12 s import.
 <br><br>
-<b>Fix.</b> Carry forward from the previous manifest for any registry the run did not report on at
-all, rather than only for the ones an <code>unchanged</code> file names; and make the publish job
-say plainly how many rows it carried for jobs that did not report.
+<b>Fix.</b> <code>shards.unreported</code> makes silence its own answer: a registry named by no fresh
+shard and no <code>unchanged</code> line keeps its published row, and only one that has left the
+bundled catalogue is dropped. The publish job prints both counts, so a manifest that shrinks says so
+in the log. Measured on the release of 2026-09-20 before the fix: 453 manifest rows against 461
+<code>.shard.json</code> assets — <b>8 registries, 245.5 MB orphaned</b>, among them the 199 MB
+<code>sickn33/antigravity-awesome-skills</code> whose rebuild is the run's 2 h 07 m critical path.
+All eight were still in the catalogue, so all eight would have been carried.

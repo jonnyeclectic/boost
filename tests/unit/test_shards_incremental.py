@@ -157,7 +157,7 @@ class TestManifestCarryForward:
             body, encoding="utf-8")
 
     def _run(self, tmp_path, fresh, previous_rows, unchanged_lines,
-             prev_over=None):
+             prev_over=None, known=None):
         shard_dir = tmp_path / "shards"
         shard_dir.mkdir()
         for tap, commit in fresh:
@@ -170,10 +170,14 @@ class TestManifestCarryForward:
         unch.write_text("".join("%s %s\n" % l for l in unchanged_lines),
                         encoding="utf-8")
         out = tmp_path / "manifest.json"
-        rc = publish_shards.main([
-            "manifest", "--shard-dir", str(shard_dir), "--repo", "o/r",
-            "--out", str(out), "--carry-forward", str(prev),
-            "--unchanged", str(unch)])
+        argv = ["manifest", "--shard-dir", str(shard_dir), "--repo", "o/r",
+                "--out", str(out), "--carry-forward", str(prev),
+                "--unchanged", str(unch)]
+        if known is not None:
+            kf = tmp_path / "known.txt"
+            kf.write_text("".join(n + "\n" for n in known), encoding="utf-8")
+            argv += ["--known", str(kf)]
+        rc = publish_shards.main(argv)
         return rc, (json.loads(out.read_text(encoding="utf-8"))
                     if out.exists() else None)
 
@@ -206,13 +210,18 @@ class TestManifestCarryForward:
         assert rc == 0
         assert [r["tap"] for r in m["shards"]] == ["o/a"]
 
-    def test_a_registry_neither_fresh_nor_unchanged_is_dropped(self, tmp_path):
-        # Removed from the catalogue, or failed to tap this week: the row goes,
-        # rather than a stale index growing forever. The asset stays on the
-        # release, harmless, and comes back the week the registry does.
+    def test_a_registry_that_left_the_catalogue_is_dropped(self, tmp_path):
+        # Removed from the catalogue: the row goes, rather than a stale index
+        # growing forever. The asset stays on the release, harmless, and comes
+        # back the week the registry does. Note what this is NOT — a registry
+        # still catalogued that no job reported on keeps its row
+        # (`test_shards_carry_forward.py`); the two cases look identical from
+        # inside the publish job and only `--known` tells them apart, so this
+        # one says which it means rather than relying on a name the real
+        # catalogue happens not to hold.
         rc, m = self._run(tmp_path, fresh=[("o/a", A)],
                           previous_rows=[_row("o/gone", A)],
-                          unchanged_lines=[])
+                          unchanged_lines=[], known=["o/a"])
         assert rc == 0
         assert [r["tap"] for r in m["shards"]] == ["o/a"]
 
