@@ -20,6 +20,7 @@ from pathlib import Path
 from .. import cliparse
 from ..core import (
     ai,
+    builtin,
     capabilities,
     catalog,
     config,
@@ -314,10 +315,13 @@ def cmd_list(argv):
         # The `boost tap --defaults` half of the hint is itself only useful
         # when there is nothing tapped yet — with registries already
         # configured, the fix is `search`+`install`, not tapping more of them.
+        # Counted the way every other setup message counts: boost's own tap is
+        # not a registry the user configured, and `registry.list_taps()` here
+        # dropped the half of the hint that a builtin-only machine needs.
         print(out.empty_state(
             "no %ss installed" % (args.kind or "skill")
             + (" with tag #%s" % args.tag.lstrip("#") if args.tag else ""),
-            hint=("boost search <topic>" if registry.list_taps()
+            hint=("boost search <topic>" if builtin.configured_tap_count()
                  else "boost tap --defaults && boost search <topic>")))
         return 0
     if skills:

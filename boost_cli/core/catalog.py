@@ -29,7 +29,17 @@ import sys
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, frontmatter, gitutil, jsonstate, output, paths, registry, util
+from . import (
+    builtin,
+    config,
+    frontmatter,
+    gitutil,
+    jsonstate,
+    output,
+    paths,
+    registry,
+    util,
+)
 
 # Bumped whenever a scan starts recording something the previous scan did not,
 # so 460 caches on a real machine invalidate on read instead of needing a
@@ -750,7 +760,11 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 else all_entries())
             if fuzzy:
                 hint = "closest matches: " + ", ".join(fuzzy)
-            elif not registry.list_taps():
+            elif not builtin.configured_tap_count():
+                # Not `registry.list_taps()`: boost's own tap ships with the
+                # wheel and is appended on a machine the user has tapped
+                # nothing on, which silenced this hint exactly where a new
+                # user needs it.
                 hint = "no taps configured — start with `boost tap --defaults`"
         raise BoostError("no skill named %r in any tap" % name, hint=hint)
     if len(matches) > 1:

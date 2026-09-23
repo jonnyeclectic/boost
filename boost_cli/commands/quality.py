@@ -24,6 +24,7 @@ from .. import cliparse
 from ..core import (
     agents,
     ai,
+    builtin,
     catalog,
     claude_settings,
     complete,
@@ -438,7 +439,16 @@ def cmd_doctor(argv):
     # A file or dangling link at the cache path is moved, not chmodded: heal
     # says so, and the two must not prescribe different fixes.
     cache_moved = cache_block is not None and paths.in_the_way(cache_block)
+    # `taps` is the literal clone list — every row config.json holds, boost's
+    # own `boost/builtin` among them — and the loop below asks clone-and-cache
+    # questions of each, which is exactly what it is for. `configured` is the
+    # different question "has this user set boost up yet", and it is the one
+    # the setup note and the verdict turn on: counting the builtin there
+    # reported "1 tap cloned & cached · ● healthy" on the machine `boost mcp`
+    # leaves behind, while `boost search` on the same HOME said nothing was
+    # tapped. Same helper as the MCP tools now.
     taps = registry.list_taps()
+    configured = builtin.configured_tap_count()
     tap_ok = 0
     for tap in taps:
         if not tap.is_cloned:
@@ -463,11 +473,11 @@ def cmd_doctor(argv):
         if d != cache_dir or not taps:
             bad("dirs", paths.not_writable(d, paths.refuses_writes(d) or d),
                 wrap=True)
-    if taps and tap_ok == len(taps):
+    if configured and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
                                               "" if cache_block
                                               else " & cached"))
-    elif not taps and not cfg_err:
+    elif not configured and not cfg_err:
         # `boost tap --defaults` leads, and it is the same command in the same
         # order that `boost search`'s error, `mcp.no_results` and the MCP
         # `boost_doctor` tool all name. A user who hits two of these surfaces
@@ -807,7 +817,7 @@ def cmd_doctor(argv):
     # MCP `boost_doctor` tool already refused to say "healthy" here; this is
     # the CLI half of the same rule.
     issues = rep.issues
-    if issues == 0 and not taps:
+    if issues == 0 and not configured:
         rep.verdict(True, "ready to set up — tap a registry to make boost "
                           "searchable")
     else:
