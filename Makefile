@@ -10,7 +10,7 @@ PYTEST    := $(VENV)/bin/pytest
 # pinned taps out of the developer's real ~/.boost.
 EVAL_HOME := $(CURDIR)/.eval-home
 
-.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo carousel clean-test eval eval-ai eval-rec eval-stats eval-explain eval-tools evals evals-baseline evals-golden evals-online audit dist-check bdd bench bench-cli fuzz post-deploy
+.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo carousel clean-test eval eval-natural eval-ai eval-rec eval-stats eval-explain eval-tools evals evals-baseline evals-golden evals-online audit dist-check bdd bench bench-cli fuzz post-deploy
 
 # Every tool comes from a hash-pinned requirements/*.txt — the same files CI
 # installs (see scripts/lock_toolchain.py). pip enforces the hashes, so a dev
@@ -142,6 +142,27 @@ eval:
 	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_retrieval.py --build -k 10 \
 	  --fail-under 0.78 --floor hit@1=0.40 --floor MRR=0.52 --floor nDCG@k=0.58 \
 	  --regression-eps 1
+
+# The natural-language set (tests/eval/golden-natural.jsonl) over the same
+# pinned corpus: 50 questions that describe a problem instead of naming the
+# skill, graded by exemplar on every row. ADVISORY — ci.yml runs it with
+# continue-on-error and it is not in `check`. The floors sit ~10% under the
+# BM25 row tests/eval/baseline.json records (0.360 / 0.160 / 0.237 / 0.259 at
+# the current pins; tests/unit/test_corpus_prose.py holds this quote to it).
+# At 50 queries one query moves a metric by 0.02, one query of slack on hit@1,
+# so a required gate would go red on corpus movement a refresh brings. A
+# refresh that drops the row below a floor, or lifts it more than one query
+# above the row that floor was set on, moves the floor with it, in both
+# directions: tests/unit/test_eval_corpus.py names each one. The
+# default --regression-eps (0.02) is kept on purpose: the corpus is pinned and
+# the scores reproduce exactly, so a regression line here means the ranker
+# moved. ci.yml and eval-corpus-refresh.yml run this same call;
+# tests/unit/test_eval_corpus.py fails the build on any difference.
+eval-natural:
+	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
+	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_retrieval.py --build -k 10 \
+	  --golden tests/eval/golden-natural.jsonl --fail-under 0.32 \
+	  --floor hit@1=0.14 --floor MRR=0.21 --floor nDCG@k=0.23
 
 # Tier 2a: LLM rerank lift over BM25 on the same golden set. Opt-in and
 # key-gated — needs the `claude` CLI on PATH or ANTHROPIC_API_KEY; skips

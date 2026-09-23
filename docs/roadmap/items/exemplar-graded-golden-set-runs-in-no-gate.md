@@ -2,15 +2,15 @@
 id: exemplar-graded-golden-set-runs-in-no-gate
 board: code
 section: planned
-status: planned
+status: shipped
 category: Tech-debt
 complexity: M
 impact: Med
 wow: 3
 note: The 50-row natural-language golden set is the one place where the project's content-c…
 order: 242
-owner:
-pr:
+owner: loop/natural-set-gated
+pr: 942
 title: golden-natural.jsonl — the only fully exemplar-graded query set — is invoked by no make target and no workflow, so its numbers can only be produced by a human typing the command
 ---
 <b>Measured.</b> Running the natural set today against the same 20-tap eval corpus prints "REGRESSION vs baseline: catalog.search recall@k: 0.080 -&gt; 0.060 (-0.020)" (BM25 MRR 0.2447 -&gt; 0.237, nDCG 0.2640 -&gt; 0.259) — the snapshot has already drifted, and no Makefile target or workflow passes <code>--golden</code>, so nothing in the repo can ever emit that line.

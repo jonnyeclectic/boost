@@ -2,15 +2,15 @@
 id: refresh-strands-the-natural-set-baseline
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Retrieval eval
 complexity: M
 impact: Med
 wow: 3
 note: eval-corpus-refresh.yml:119 runs eval_retrieval.py --save-baseline -k 10 with no --go…
 order: 227
-owner:
-pr:
+owner: loop/natural-set-gated
+pr: 942
 title: The corpus refresh re-baselines only golden.jsonl, so golden-natural.jsonl's baseline silently describes a corpus that no longer exists
 ---
 <b>Measured.</b> On the corpus tests/eval/taps.txt pins today (10,731 entries, 20 taps), <code>eval_retrieval.py --golden tests/eval/golden-natural.jsonl -k 10</code> exits 1 and prints "REGRESSION vs baseline: catalog.search recall@k: 0.080 -&gt; 0.060 (-0.020)" — while the keyword set on that identical corpus exits 0 and reproduces its baseline to four decimals (0.841/0.484/0.607/0.655), because the September refresh commit cbc0a58b moved golden.jsonl's baseline and left golden-natural.jsonl's describing the 10,152-entry corpus it replaced.
