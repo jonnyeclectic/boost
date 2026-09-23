@@ -69,7 +69,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
-          fetch-depth: 0    # all tags — the guard reads them
+          fetch-depth: 0    # all tags — the guard reads them, and
+                            # refuses a shallow checkout rather than
+                            # read its empty tag list as 'untagged'
           persist-credentials: false
 
       - name: skip a commit PyPI already has

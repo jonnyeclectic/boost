@@ -4,6 +4,8 @@
 boost_cli/data/registries.json linguist-generated=true
 docs/roadmap.html              linguist-generated=true
 docs/design-roadmap.html       linguist-generated=true
+docs/commands.html             linguist-generated=true
+docs/vex/openvex.json          linguist-generated=true
 
 # The retrieval query sets are identified by a digest of their BYTES
 # (scripts/eval_retrieval.py `golden_key`), and tests/eval/baseline.json is

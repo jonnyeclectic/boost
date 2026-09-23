@@ -318,6 +318,142 @@ class TestHandleRequest:
         assert seen == {}   # no 'arguments' -> {}
 
 
+# Valid JSON that is not a JSON-RPC request object — the shapes a host can put
+# on the wire that used to end the session.
+_NOT_OBJECTS = [
+    pytest.param([{"jsonrpc": "2.0", "id": 1, "method": "ping"}],
+                 id="batch-array"),
+    pytest.param(5, id="bare-int"),
+    pytest.param("hello", id="string"),
+    pytest.param(None, id="null"),
+    pytest.param(True, id="bool"),
+    pytest.param([], id="empty-array"),
+]
+
+
+class TestRequestShape:
+    """A line that parses as JSON but is not a JSON-RPC request object.
+
+    Every one of these used to reach ``req.get("method")`` unguarded: the
+    AttributeError escaped handle_request, landed in boost's top-level crash
+    handler, and took the whole session down — measured at rc 70 with zero
+    bytes on stdout and no answer to anything sent afterwards. JSON-RPC 2.0 §5
+    asks for one -32600 Invalid Request, which is what boost already gets right
+    for a line that does not parse at all (-32700).
+    """
+
+    @pytest.mark.parametrize("req", _NOT_OBJECTS)
+    def test_a_non_object_message_is_one_invalid_request(self, req):
+        resp = mcp.handle_request(req, version="1.0", registry=_reg_with())
+        # Never None: None means "notification, send nothing", and a host that
+        # sent a request id is waiting for a line.
+        assert resp is not None
+        assert resp["jsonrpc"] == "2.0"
+        assert resp["error"] == {
+            "code": -32600,
+            "message": "invalid request: expected a JSON-RPC request object"}
+        assert "result" not in resp
+
+    @pytest.mark.parametrize("req", _NOT_OBJECTS)
+    def test_a_message_with_no_readable_id_answers_with_a_null_id(self, req):
+        # §5: when the id cannot be detected it MUST be null — and it is what
+        # serve_stdio already sends for -32700, so a host sees one convention.
+        resp = mcp.handle_request(req, version="1.0", registry=_reg_with())
+        assert resp["id"] is None
+
+    def test_a_missing_method_is_invalid_request_not_method_not_found(self):
+        # Measured before the fix: -32601 "method not found: " — the same
+        # unguarded-shape assumption, reported as the wrong thing.
+        resp = mcp.handle_request({"jsonrpc": "2.0", "id": 1}, version="1.0",
+                                  registry=_reg_with())
+        assert resp["error"] == {
+            "code": -32600, "message": 'invalid request: "method" must be a string'}
+        assert "result" not in resp
+
+    def test_a_non_string_method_is_invalid_request(self):
+        resp = mcp.handle_request({"jsonrpc": "2.0", "id": 2, "method": 5},
+                                  version="1.0", registry=_reg_with())
+        assert resp["error"]["code"] == -32600
+        assert resp["error"]["message"] == 'invalid request: "method" must be a string'
+
+    def test_a_readable_id_is_echoed_rather_than_nulled(self):
+        # The other half of the id decision: a malformed *object* still has an
+        # id the host can correlate, so nulling it would lose the correlation.
+        resp = mcp.handle_request({"jsonrpc": "2.0", "id": "abc"},
+                                  version="1.0", registry=_reg_with())
+        assert resp["id"] == "abc"
+
+    def test_a_methodless_notification_is_still_answered_with_silence(self):
+        # No id means notification, and a notification is never replied to —
+        # the shape check must not turn one into a line on stdout.
+        assert mcp.handle_request({"jsonrpc": "2.0"}, version="1.0",
+                                  registry=_reg_with()) is None
+
+    @pytest.mark.parametrize("params", [
+        pytest.param(["echo"], id="array"),
+        pytest.param("echo", id="string"),
+        pytest.param(5, id="int"),
+        pytest.param(True, id="bool"),
+    ])
+    def test_non_object_params_is_invalid_params(self, params):
+        resp = mcp.handle_request(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params},
+            version="1.0", registry=_reg_with())
+        assert resp["error"] == {
+            "code": -32602, "message": 'invalid params: "params" must be an object'}
+        assert resp["id"] == 1
+        assert "result" not in resp
+
+    @pytest.mark.parametrize("params", [
+        pytest.param(None, id="null"),
+        pytest.param({}, id="empty-object"),
+    ])
+    def test_absent_params_is_not_malformed(self, params):
+        # `params` is optional in JSON-RPC; only a present non-object is bad.
+        # Missing `name` is a params error, not "unknown tool ''".
+        resp = mcp.handle_request(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params},
+            version="1.0", registry=_reg_with())
+        assert resp["error"] == {
+            "code": -32602, "message": 'invalid params: "name" must be a string'}
+
+    def test_a_non_string_tool_name_is_invalid_params(self):
+        # Before: str()-ed into the reply as `unknown tool "{'x': 1}"`, which
+        # tells the agent the wrong thing about what it sent.
+        resp = mcp.handle_request(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+             "params": {"name": {"x": 1}}},
+            version="1.0", registry=_reg_with())
+        assert resp["error"] == {
+            "code": -32602, "message": 'invalid params: "name" must be a string'}
+
+    @pytest.mark.parametrize("arguments", [
+        pytest.param(["x"], id="array"),
+        pytest.param("x", id="string"),
+        pytest.param(5, id="int"),
+    ])
+    def test_non_object_arguments_is_invalid_params(self, arguments):
+        # Before: the handler's own `args.get` raised, the generic except turned
+        # it into an isError result reading "'list' object has no attribute
+        # 'get'" — a Python traceback fragment handed to an agent as advice —
+        # and a handler that ignores its arguments reported plain success.
+        resp = mcp.handle_request(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+             "params": {"name": "echo", "arguments": arguments}},
+            version="1.0", registry=_reg_with())
+        assert resp["error"] == {
+            "code": -32602,
+            "message": 'invalid params: "arguments" must be an object'}
+        assert "result" not in resp
+
+    def test_null_arguments_still_calls_the_tool(self):
+        resp = mcp.handle_request(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+             "params": {"name": "echo", "arguments": None}},
+            version="1.0", registry=_reg_with())
+        assert resp["result"]["content"][0]["text"] == "hi ?"
+
+
 class TestServeStdio:
     def _run(self, lines, registry=None, version="1.0"):
         out = io.StringIO()
@@ -347,6 +483,33 @@ class TestServeStdio:
         assert resps[0]["error"]["code"] == -32700
         assert resps[0]["id"] is None
         assert resps[1]["id"] == 2
+
+    @pytest.mark.parametrize("bad", [
+        pytest.param('[{"jsonrpc":"2.0","id":1,"method":"ping"}]', id="batch-array"),
+        pytest.param("5", id="bare-int"),
+        pytest.param('"hello"', id="string"),
+        pytest.param("null", id="null"),
+    ])
+    def test_a_non_object_line_answers_and_the_loop_survives(self, bad):
+        # The whole point of the card: measured at rc 70 / 0 bytes / no answer
+        # to the next line. One error out, and the next request still served.
+        code, resps = self._run([bad, json.dumps({"id": 99, "method": "ping"})])
+        assert code == 0
+        assert len(resps) == 2
+        assert resps[0]["error"]["code"] == -32600
+        assert resps[0]["id"] is None
+        assert resps[1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+    def test_a_malformed_params_line_answers_and_the_loop_survives(self):
+        code, resps = self._run([
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": ["echo"]}),
+            json.dumps({"id": 99, "method": "ping"}),
+        ])
+        assert code == 0
+        assert [r["id"] for r in resps] == [1, 99]
+        assert resps[0]["error"]["code"] == -32602
+        assert "result" not in resps[0]
 
     def test_full_sequence_and_version_passthrough(self):
         _code, resps = self._run([

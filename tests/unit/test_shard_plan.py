@@ -123,3 +123,48 @@ class TestCli:
         assert len(matrix) <= shard_plan.MAX_MATRIX_JOBS
         packed = sum(len(chunk.split()) for chunk in matrix)
         assert packed == len(shard_plan.catalog_rows())
+
+
+class TestEvalScopeRefusesAnUnusablePlan:
+    """The sibling of the import-budget bug, found by the same sweep.
+
+    ``plan("eval")`` shells out to ``eval_corpus.py --list-repos``. The status
+    was checked (``check=True``), but an empty stdout was not: an empty matrix
+    is a shards run that publishes nothing and reports success, which is the
+    same vacuous pass — and the ``catalog`` branch two lines below already
+    refused it.
+    """
+
+    def _fake_helper(self, monkeypatch, rc: int, stdout: str, stderr: str = ""):
+        import subprocess as _sp
+        real = _sp.run
+
+        def run(argv, **kwargs):
+            if any(str(a).endswith("eval_corpus.py") for a in argv):
+                return _sp.CompletedProcess(argv, rc, stdout, stderr)
+            return real(argv, **kwargs)
+
+        monkeypatch.setattr(_sp, "run", run)
+
+    def test_a_listed_corpus_plans_one_job_per_repo(self, monkeypatch):
+        self._fake_helper(monkeypatch, 0, "o/a o/b o/c\n")
+        assert shard_plan.plan("eval", jobs=4) == [["o/a"], ["o/b"], ["o/c"]]
+
+    def test_an_empty_listing_is_refused(self, monkeypatch):
+        self._fake_helper(monkeypatch, 0, "\n")
+        with pytest.raises(SystemExit) as exc:
+            shard_plan.plan("eval", jobs=4)
+        assert "listed no repositories" in str(exc.value)
+
+    def test_a_failed_listing_names_the_command_and_stderr(self, monkeypatch):
+        # Not a vacuous pass before this change — `check=True` did raise — but
+        # it raised CalledProcessError, whose repr says "returned non-zero exit
+        # status 2" and prints none of the captured stderr. This pins the
+        # message, not the failure.
+        self._fake_helper(monkeypatch, 2, "", "taps.txt: No such file")
+        with pytest.raises(SystemExit) as exc:
+            shard_plan.plan("eval", jobs=4)
+        message = str(exc.value)
+        assert "exited 2" in message
+        assert "eval_corpus.py" in message
+        assert "No such file" in message

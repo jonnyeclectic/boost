@@ -119,7 +119,8 @@ def _materialized_text(name: str, kind: str, entry: dict):
                 "%s %s has been modified since install — its materialized "
                 "content no longer matches the lock file" % (kind, name),
                 hint="inspect with `boost verify %s`, then `boost reinstall "
-                     "%s` to restore the locked copy" % (name, name))
+                     "%s` to restore the locked copy" % (name, name),
+                wrap=True)
         if st == integrity.STATUS_MISSING:
             raise BoostError(
                 "%s %s is in the lock file but its materialized artifacts "

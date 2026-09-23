@@ -82,6 +82,25 @@ class TestOneAnswer:
         assert "build it: `boost reindex --dense`" not in both
         assert keyed == []
 
+    @pytest.mark.parametrize("cols", [40, 60, 80])
+    @pytest.mark.parametrize("argv", [("update", "--shards"),
+                                      ("reindex", "--fetch-shards")],
+                             ids=["update", "reindex"])
+    def test_the_refusal_and_its_remedy_fit_the_pane(self, boost, keyed,
+                                                      monkeypatch, argv, cols):
+        # The surface that refuses is the one that printed a 111-column
+        # message and a 173-column hint at every width. The refusal now
+        # names what failed and nothing else; the reason joins the remedy
+        # in the hint, which folds.
+        from boost_cli.core import output as out
+        monkeypatch.setattr(out, "term_width", lambda: cols)
+        res = boost(*argv, expect=1)
+        over = [ln for ln in res.err.split("\n") if out.visible_len(ln) > cols]
+        assert not over, over
+        flat = _flat(res.err)
+        assert "Error: published shards cannot serve this machine" in flat
+        assert "`unset VOYAGE_API_KEY`" in flat
+
     def test_the_mcp_engine_note_says_it_too(self, keyed):
         # `boost mcp` hands the agent the same hint in its instructions.
         from boost_cli.core import mcp

@@ -223,7 +223,7 @@ def enforce(name: str, entry: dict | None = None) -> None:
                 "%s has been modified since install — its content no longer "
                 "matches the lock file" % name,
                 hint="inspect with `boost verify %s`, then `boost reinstall %s` "
-                     "to restore the locked copy" % (name, name))
+                     "to restore the locked copy" % (name, name), wrap=True)
         if st == STATUS_MISSING:
             raise BoostError(
                 "%s is in the lock file but its store directory is gone" % name,

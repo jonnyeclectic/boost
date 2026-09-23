@@ -1220,3 +1220,68 @@ class TestTheShardDownloadIsNamed:
         event("c/d", "downloading", "1.0KB")
         assert [ln.strip() for ln in capsys.readouterr().out.splitlines()] == [
             "fetching a/b (1/3)", "fetching c/d 1.0KB (2/3)"]
+
+
+class TestThePreviewHeadlineFitsThePane:
+    """The one prose line on the preview that did not fold.
+
+    Naming the download size made the headline long — "would build the
+    keyword index, then import 7 shard(s) (at least 71.5MB)" is 73 columns —
+    while every line printed under it already folded, and its live twin
+    (`fetching …`, a `_muted` line) folded too. One phrase rendered two ways
+    on the same surface is the inconsistency; the pane is the measurement.
+    """
+
+    @pytest.fixture()
+    def keyless(self, monkeypatch):
+        from boost_cli.core import dense, embed
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        monkeypatch.setattr(embed, "provider", lambda: "local")
+        monkeypatch.setattr(embed, "model", lambda: SPACE["model"])
+        monkeypatch.setattr(embed, "dimension", lambda: 384)
+
+    PHRASE = "would build the keyword index, then import 7 shard(s) (28B)"
+
+    @staticmethod
+    def _headline(text: str) -> list[str]:
+        """The headline and its continuations, however many lines it took.
+
+        Only this block is asked to fit: the `would tap <registry> @ <sha>`
+        lines above it are data, and CLAUDE.md's rule is that data overflows
+        whole rather than folding.
+        """
+        lines = text.split("\n")
+        start = next(i for i, ln in enumerate(lines)
+                     if "would build the keyword index" in ln)
+        block: list[str] = []
+        for ln in lines[start:start + 4]:
+            block.append(ln)
+            if "would build the keyword index, then import 7 shard(s) (28B)" \
+                    in " ".join(" ".join(block).split()):
+                break
+        return block
+
+    @pytest.mark.parametrize("cols", [40, 60, 80])
+    def test_the_headline_folds_to_the_pane(self, boost, sandbox,
+                                            defaults_manifest, keyless,
+                                            monkeypatch, cols):
+        from boost_cli.core import output as out
+        monkeypatch.setattr(out, "term_width", lambda: cols)
+        res = boost("quickstart", "--dry-run")
+        block = self._headline(res.out)
+        assert all(out.visible_len(ln) <= cols for ln in block), block
+        # Folded, not truncated: the phrase is still there, whole.
+        assert self.PHRASE in _flat(" ".join(block))
+
+    @pytest.mark.parametrize("cols", [40, 60])
+    def test_the_size_itself_is_never_broken(self, boost, sandbox,
+                                             defaults_manifest, keyless,
+                                             monkeypatch, cols):
+        # Where the phrase folds is the wrapper's business; the size is one
+        # token and must land on one line, like any other atomic span. Which
+        # line it lands on depends on the pane, so that is not asserted.
+        from boost_cli.core import output as out
+        monkeypatch.setattr(out, "term_width", lambda: cols)
+        block = self._headline(boost("quickstart", "--dry-run").out)
+        assert len(block) > 1, block
+        assert any("(28B)" in ln for ln in block), block

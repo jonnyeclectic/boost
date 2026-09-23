@@ -33,8 +33,11 @@ Usage::
 
     python3 scripts/release_guard.py --project boost-skill-cli
 
-Writes ``proceed=true|false`` to ``$GITHUB_OUTPUT`` and always exits 0 — "there
-is nothing to release" is a normal outcome, not a build failure.
+Writes ``proceed=true|false`` to ``$GITHUB_OUTPUT`` and exits 0 whichever way it
+decided — "there is nothing to release" is a normal outcome, not a build
+failure. The one non-zero exit is 2, for a ``--tag`` argument that is not a
+single tag name: there is no verdict to reach on input the caller got wrong,
+and exiting 2 fails the guard job, which skips the release job.
 """
 from __future__ import annotations
 
@@ -62,17 +65,70 @@ def version_of(tag: str) -> str | None:
     return m.group(1) if m else None
 
 
-def git_tags_at(ref: str = "HEAD") -> list[str]:
-    """Tags pointing at `ref`. Empty on any git failure — an unreadable tag
-    list must not be mistaken for "no tags, go ahead"; `decide` is told
-    separately when the lookup itself failed."""
+class TagLookupError(RuntimeError):
+    """git could not be asked, or would not say, which tags point at a ref.
+
+    A distinct exception because the one value this must never collapse into
+    is the empty list: `decide` reads that as "this commit carries no tag,
+    publish it", which is the answer that ships a version twice. Its message
+    names the git call that failed, so the reason survives all the way to the
+    workflow annotation.
+    """
+
+
+def _git(args: list[str]) -> str:
+    """Run a read-only git command, or raise TagLookupError naming it.
+
+    stderr is captured rather than discarded: "exit 128" alone does not
+    distinguish "not a git repository" from "bad revision", and the person
+    reading a skipped release needs to know which.
+    """
+    cmd = ["git", *args]
+    shown = " ".join(cmd)
     try:
-        out = subprocess.check_output(["git", "tag", "--points-at", ref],
-                                      stderr=subprocess.DEVNULL)
-    except (OSError, subprocess.CalledProcessError) as e:
-        print("  ! could not list tags at %s: %s" % (ref, e))
-        return []
-    return [ln.strip() for ln in out.decode("utf-8").splitlines() if ln.strip()]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except OSError as e:
+        raise TagLookupError("`%s` could not be run: %s" % (shown, e)) from e
+    if proc.returncode != 0:
+        raise TagLookupError(
+            "`%s` failed (exit %d): %s"
+            % (shown, proc.returncode, proc.stderr.strip() or "no stderr"))
+    return proc.stdout
+
+
+def git_tags_at(ref: str = "HEAD") -> list[str]:
+    """Tags pointing at `ref`, or raise TagLookupError.
+
+    Raising is the whole point: an unreadable tag list must not be mistaken
+    for "no tags, go ahead". `decide` refuses when it is told the lookup
+    failed, and an empty list here means git looked and found nothing — a
+    genuinely untagged commit, which releases as usual.
+
+    A shallow checkout is the quiet case, because git does not fail on it:
+    `git tag --points-at` succeeds and reports nothing from a tag list that
+    was never fetched. publish.yml checks out with `fetch-depth: 0  # all tags
+    — the guard reads them`; this is what makes that comment load-bearing
+    rather than aspirational.
+    """
+    if _git(["rev-parse", "--is-shallow-repository"]).strip() == "true":
+        raise TagLookupError(
+            "`git rev-parse --is-shallow-repository` says this is a shallow "
+            "checkout, so `git tag --points-at %s` reports a tag list that "
+            "was never fetched — check out with fetch-depth: 0" % ref)
+    out = _git(["tag", "--points-at", ref])
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+
+def malformed_tags(tags: Sequence[str]) -> list[str]:
+    """The `--tag` values that are not a single tag name.
+
+    `--tag "$(git tag --points-at HEAD)"` puts every tag into ONE argument,
+    or — with no tags — an empty one. Neither matches TAG_RE, so `decide`
+    used to answer "carries no release tag, go ahead": the guard cleared a
+    commit its own caller had just told it was tagged. There is nothing to
+    decide on input like that, so `main` refuses it.
+    """
+    return [t for t in tags if len(t.split()) != 1]
 
 
 def pypi_has(project: str, version: str, attempts: int = 3) -> bool | None:
@@ -91,7 +147,15 @@ def pypi_has(project: str, version: str, attempts: int = 3) -> bool | None:
     for attempt in range(attempts):
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-                return 200 <= resp.status < 300
+                if 200 <= resp.status < 300:
+                    return True
+                # Not reachable through the stock opener (urlopen raises on
+                # >= 400 and follows 3xx), which is exactly why it mattered:
+                # `return 200 <= resp.status < 300` spelled "a status I do not
+                # understand" as False, and False here means "not published,
+                # release it". Unknown is None, like every other unknown.
+                print("  ! PyPI %s: unexpected HTTP %s" % (version, resp.status))
+                return None
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return False
@@ -106,13 +170,26 @@ def pypi_has(project: str, version: str, attempts: int = 3) -> bool | None:
     return None
 
 
-def decide(tags: Sequence[str], project: str,
-           probe: Callable[[str, str], bool | None]) -> tuple[bool, str]:
+def decide(tags: Sequence[str] | None, project: str,
+           probe: Callable[[str, str], bool | None],
+           lookup_error: str | None = None) -> tuple[bool, str]:
     """(proceed, reason) for a commit carrying `tags`.
+
+    `tags` is None when the tag list could not be read at all, which is NOT
+    the same as an empty list and is the one input that refuses without
+    asking PyPI anything: with no tag list there is no version to ask about,
+    and "I could not look" must not read as "there was nothing there".
+    `lookup_error` carries which git call failed, so the refusal says so.
 
     Pure apart from `probe`, which is what makes the decision testable without
     touching the network.
     """
+    if tags is None:
+        return False, ("the tags on this commit could not be read (%s) — "
+                       "skipping rather than risk a duplicate release; fix the "
+                       "checkout and re-run this workflow, or dispatch it "
+                       "manually" % (lookup_error or "reason not recorded"))
+
     versions = [v for v in (version_of(t) for t in tags) if v]
     if not versions:
         if tags:
@@ -162,13 +239,35 @@ def main(argv: list[str] | None = None) -> int:
                          "`git tag --points-at <ref>` reports.")
     args = ap.parse_args(argv)
 
-    tags = args.tags if args.tags is not None else git_tags_at(args.ref)
-    proceed, reason = decide(tags, args.project, pypi_has)
+    tags: list[str] | None
+    lookup_error: str | None = None
+    if args.tags is not None:
+        bad = malformed_tags(args.tags)
+        if bad:
+            print("error: --tag takes one tag name, and %s %s not. Pass a "
+                  "separate --tag per tag rather than one argument holding "
+                  "several."
+                  % (", ".join(repr(b) for b in bad),
+                     "is" if len(bad) == 1 else "are"))
+            return 2
+        tags = list(args.tags)
+    else:
+        try:
+            tags = git_tags_at(args.ref)
+        except TagLookupError as exc:
+            tags, lookup_error = None, str(exc)
+
+    proceed, reason = decide(tags, args.project, pypi_has, lookup_error)
 
     print("release guard: %s" % reason)
     print("release guard: %s" % ("RELEASE" if proceed else "SKIP"))
     emit("proceed", "true" if proceed else "false")
-    if not proceed:
+    if lookup_error is not None:
+        # An annotation, not a notice: the guard could not run, which is a
+        # different event from "there was nothing to release" and should not
+        # sink into a run log alongside every routine skip.
+        print("::error title=release guard could not read tags::%s" % reason)
+    elif not proceed:
         print("::notice title=release skipped::%s" % reason)
     return 0
 

@@ -395,7 +395,7 @@ def _route(argv: list[str]) -> int:
         except BoostError as e:
             logs.get_logger().info("BoostError: %s", e.message)
             rc = 1
-            out.err(e.message, hint=e.hint)
+            out.err(e.message, hint=e.hint, wrap=getattr(e, "wrap", False))
             return rc
         except KeyboardInterrupt:
             logs.get_logger().debug("interrupted by user")

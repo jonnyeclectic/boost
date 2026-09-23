@@ -753,8 +753,11 @@ class TestIndex:
                 returncode=1, stdout="", stderr=raw))
         r = boost("index", expect=1)
         assert "GitHub code search failed" in r.err
+        # The hint folds to the pane, so it is compared with its wrapping
+        # collapsed; the backtick command inside it stays one span.
         assert ("GitHub rate limit hit — wait a minute or authenticate: "
-                "`gh auth login` / GH_TOKEN") in r.err
+                "`gh auth login` / GH_TOKEN") in " ".join(r.err.split())
+        assert "`gh auth login`" in r.err
         assert "API rate limit exceeded" not in r.err
 
     def test_zero_results_keeps_the_previous_index(self, boost, sandbox,
