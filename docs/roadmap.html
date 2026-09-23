@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>66</b><span>Planned</span></div>
-      <div class="stat"><b>483</b><span>Loop finds</span></div>
+      <div class="stat"><b>75</b><span>Planned</span></div>
+      <div class="stat"><b>492</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1983,6 +1983,237 @@ wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every ins
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">Every other emitter folds to the pane; the one that prints a failure printed its remedy at 173 columns…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="import-budget-gate-passes-when-boost-cannot-import">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI · Bug</span></div>
+        <h3>The import-budget gate reports OK when the command it measures never ran</h3>
+        <p><b>Found by the audit of the repo's own automation.</b> <code>scripts/import_budget.py</code>'s
+<code>imported_modules()</code> runs <code>python -X importtime -c 'from boost_cli.cli import main;
+main([...])'</code> in a subprocess and parses <code>proc.stderr</code>, discarding
+<code>proc.returncode</code>. If that subprocess dies — a broken <code>boost_cli.cli</code> import, a
+command removed from <code>COMMANDS</code>, a crash inside argument parsing — the stderr it did emit
+names no denylisted module, <code>leaks_for()</code> returns nothing, and the script prints
+<code>import-budget: OK</code> and exits 0.
+<br><br>
+Measured: pointing the script's <code>ROOT</code> at a directory holding no <code>boost_cli</code> at
+all still printed <code>import-budget: OK — no heavy/optional module imported by 4 common
+commands</code> and returned 0. It is a required check on every pull request
+(<code>ci.yml</code>'s <code>lint</code> job), and the assertion it exists to make is a
+<i>name is absent</i> assertion, which is exactly the shape that passes vacuously when nothing runs.
+The realistic harm is the partial case: one measured command starts failing early, is silently no
+longer measured, and a top-level <code>sqlite_vec</code> or <code>dense</code> import added after
+that point is never seen again.
+<br><br>
+<b>Fix.</b> Fail on a non-zero return code, naming the command and its stderr, and assert each
+measured command produced a plausible module count rather than an empty parse.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">A required check that asserts a name is absent, and reports OK when nothing ran at all…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="release-guard-fails-open-when-it-cannot-read-tags">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Release · Bug</span></div>
+        <h3>The release guard fails open when it cannot read the commit's tags</h3>
+        <p><b>Found by the audit of the repo's own automation.</b> <code>scripts/release_guard.py</code>'s
+<code>git_tags_at()</code> swallows every <code>OSError</code> and <code>CalledProcessError</code>
+from <code>git tag --points-at &lt;ref&gt;</code> and returns an empty list, which
+<code>decide()</code> then reads as "this commit carries no tag, so publishing is fine". Its own
+docstring says the opposite: <i>an unreadable tag list must not be mistaken for "no tags, go
+ahead"</i>, and promises <code>decide</code> is told separately when the lookup itself failed. It is
+not.
+<br><br>
+<code>publish.yml</code> is a fully automated PyPI publisher — guard, then release-drafter (which
+publishes a GitHub Release and its tag), then build, then Trusted Publishing upload — and this guard
+is the only thing between two triggers resolving to the same <code>main</code> tip and shipping the
+same version twice.
+<br><br>
+<b>Fix.</b> Return the failure as a distinct value (or raise), and make <code>decide</code> refuse
+on it, with a test that a git invocation which exits non-zero blocks rather than clears.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">The one check that stops a publish reads an unreadable tag list as "no tags, go ahead" — against its own docstring…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="one-failed-shard-job-drops-registries-from-the-manifest">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Shards · Bug</span></div>
+        <h3>One failed shard-build job silently drops its whole chunk from the published manifest</h3>
+        <p><b>Found by the audit of the repo's own automation, and confirmed live on the current release.</b>
+<code>shards.yml</code>'s build matrix is <code>fail-fast: false</code> and bin-packs the catalogue
+into ~60 jobs of roughly ten registries each. Every job writes an <code>unchanged-N.txt</code> and
+uploads it beside its fresh shards; the publish job runs under <code>if: !cancelled()</code> and
+rebuilds <code>manifest.json</code> <b>from scratch</b> out of whatever artifacts arrived. A job that
+failed uploads neither, so <code>publish_shards.py manifest --carry-forward</code> never hears about
+its registries — and carry-forward is driven only by the <code>unchanged-*.txt</code> files that
+exist, so last week's perfectly good rows for those registries are dropped rather than carried.
+<br><br>
+The assets stay on the release (<code>gh release upload --clobber</code> replaces and never deletes),
+so the result is a set of orphaned shard files no manifest names, and every user of those registries
+sent back to embedding them locally — ~1.2 s per chunk against a 0.12 s import.
+<br><br>
+<b>Fix.</b> Carry forward from the previous manifest for any registry the run did not report on at
+all, rather than only for the ones an <code>unchanged</code> file names; and make the publish job
+say plainly how many rows it carried for jobs that did not report.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">A single failed build job deletes ~10 unrelated registries from the published manifest, and their assets stay on the release, orphaned…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="ci-summary-reports-the-wrong-coverage-gate">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI · Docs</span></div>
+        <h3>The CI job summary reports the coverage gate as 80% when it is 90%</h3>
+        <p><b>Found by the audit of the repo's own automation.</b> The <code>tests</code> job's summary step in
+<code>.github/workflows/ci.yml</code> prints the measured percentage beside a hard-coded
+<code>gate: 80%</code>, while the gate that actually applies is <code>fail_under = 90</code> in
+<code>pyproject.toml</code>. So a run at 90.4% reads as comfortably clear when it is four tenths of a
+point from red. The summary is the one place the number is read without opening the log.
+<br><br>
+<b>Fix.</b> Read the threshold from <code>pyproject.toml</code> rather than restating it, and pin the
+two together in <code>tests/unit/test_eval_corpus.py</code>'s style — the repo already fails the
+build when CI and the Makefile state a floor differently.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">The summary a maintainer reads without opening the log says the gate is 80% when it is 90%…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-server-dies-on-a-valid-json-message-that-is-not-an-object">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · Bug</span></div>
+        <h3>One valid-JSON message that is not an object kills the whole MCP session</h3>
+        <p><b>Found by the audit of the MCP surface.</b> <code>serve_stdio</code> answers unparseable JSON
+correctly with <code>-32700</code> and keeps looping, but a line that parses into anything other
+than an object — a JSON-RPC batch array, a bare scalar, a string, <code>null</code> — reaches
+<code>handle_request</code>, which calls <code>req.get("method")</code> with no shape check. The
+<code>AttributeError</code> escapes every handler and lands in boost's top-level crash handler: exit
+70, a crash report under <code>~/.boost/logs</code>, and <b>nothing on stdout</b>. The host gets no
+response to that id and no response to anything after it — the session is dead. A second site has
+the same shape one branch down: in <code>tools/call</code>, <code>params.get("name", "")</code> sits
+outside the try that wraps the call, so <code>{"method":"tools/call","params":["boost_list"]}</code>
+kills the server identically.
+<br><br>
+Measured at <code>origin/main</code>: each of <code>[{...}]</code>, <code>5</code>,
+<code>"hello"</code>, <code>null</code> and the malformed <code>params</code> gives
+<code>rc=70</code> with zero bytes of stdout, and a well-formed request on the next line is never
+answered. JSON-RPC 2.0 §5 asks for a single <code>-32600</code> Invalid Request here — which boost
+already gets right for a parse failure.
+<br><br>
+<b>Fix.</b> Return <code>-32600</code> when the message is not an object, guard
+<code>params</code> with an <code>isinstance</code> check, and add both shapes to the
+<code>serve_stdio</code> round-trip tests beside the existing parse-error case.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">One batch array or stray scalar takes the whole tool surface offline for the session, with no JSON-RPC error the host can report…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-doctor-says-healthy-where-mcp-search-says-nothing-is-tapped">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · Bug</span></div>
+        <h3>boost_doctor certifies a machine healthy that boost_search calls untapped</h3>
+        <p><b>Found by the audit of the MCP surface.</b> <code>_tool_doctor</code> counts taps with
+<code>registry.list_taps()</code>, which includes boost's own wheel-shipped <code>boost/builtin</code>
+tap, while <code>mcp.no_results</code> and <code>mcp.coverage_line</code> count with
+<code>builtin.configured_tap_count()</code>, which deliberately excludes it. On a machine holding the
+builtin tap and nothing else — exactly what <code>boost mcp</code> leaves behind when the user
+accepts the boost-first rule and has not yet run <code>boost tap --defaults</code> — an agent calling
+both tools in one session is told <code>taps: 1 (1 items available)</code> and <i>healthy — no issues
+found</i> by one, and <i>nothing is tapped yet, so there is no catalog to search</i> by the other.
+<br><br>
+The requirement is already written down in the code that breaks it: <code>_tool_doctor</code>'s own
+comment says <i>same command, same order, as mcp.no_results: an agent that calls both tools in one
+session must not see the recommendation flipped</i>, and
+<code>configured_tap_count</code>'s docstring claims <code>boost_doctor</code> asks through it. It
+does not.
+<br><br>
+<b>Fix.</b> Count with <code>builtin.configured_tap_count()</code> for the "is anything configured"
+question, keeping <code>list_taps()</code> where the literal clone list is meant, and test both tools
+against one builtin-only HOME.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">Two tools, one session, opposite answers about the same first-run machine…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="manifest-in-prunes-only-the-root-copy">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Packaging · Bug</span></div>
+        <h3>MANIFEST.in prunes only the root copy, so dev-local files ship in the sdist</h3>
+        <p><b>Found by the audit of packaging, and confirmed against the artifact on PyPI.</b>
+<code>MANIFEST.in</code> opens by saying everything below it is dev-only and should never ship, then
+writes <code>prune .claude</code> and <code>exclude package.json package-lock.json</code>. Both
+patterns are root-relative, so they match <code>./.claude/</code> and <code>./package.json</code>
+and miss <code>docs/.claude/settings.local.json</code> and <code>tests/visual/package.json</code>,
+which setuptools-scm's file finder adds because they are tracked. Both ship in every release.
+<br><br>
+Today's contents are harmless, which is the reason to fix it now rather than after someone adds a
+machine-specific path or a tool allowlist to a checked-in agent-permission file.
+<br><br>
+<b>Fix.</b> Use recursive patterns (<code>global-exclude</code> / <code>prune</code> per path), and
+add a test that builds an sdist and fails on any <code>.claude</code> or <code>node_modules</code>
+member, so the rule is enforced rather than stated.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">A maintainer's local agent-permission file ships to PyPI under a directive written to prevent exactly that…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-miss-reply-echoes-the-whole-query">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · UX</span></div>
+        <h3>A search that finds nothing echoes the whole query back into the agent's context</h3>
+        <p><b>Found by the audit of the MCP surface.</b> <code>mcp.no_results</code> returns
+<code>"no skills match %r" % query</code>, unbounded, and the miss reply is the one an agent hits
+repeatedly while it rephrases. Every miss therefore costs context in proportion to the query rather
+than a fixed line — a 1:1 amplifier on a surface where the result rendering elsewhere is measured
+and capped. A 100,000-character query comes back whole.
+<br><br>
+<b>Fix.</b> Truncate the echoed query the way the result rows are already truncated, and pin the cap
+in the round-trip tests.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">The one reply an agent hits repeatedly while rephrasing costs context in proportion to the query…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-session-dies-on-a-deeply-nested-json-line">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · Bug</span></div>
+        <h3>A deeply nested JSON line kills the MCP session, because the parse guard names one exception</h3>
+        <p><b>Found while fixing <code>mcp-server-dies-on-a-valid-json-message-that-is-not-an-object</code>, and
+left for its own card because it is the parse layer rather than the shape layer.</b>
+<code>serve_stdio</code> wraps <code>json.loads</code> in <code>except json.JSONDecodeError</code>
+and answers <code>-32700</code>, which is right for malformed JSON. A sufficiently nested line
+raises <code>RecursionError</code> instead, which the guard does not name, so it escapes exactly as
+the shape crashes did: exit 70, a crash report, nothing on stdout, and the session over.
+<br><br>
+Measured: object nesting 100,000 deep parses fine; at 1,000,000 (a ~7 MB line) CPython raises
+<code>RecursionError: Stack overflow (used 16352 kB) while decoding a JSON object</code>.
+<br><br>
+<b>Fix.</b> Catch the recursion failure beside the decode failure — or bound the line length before
+parsing, which also caps the memory one client line can cost — answer <code>-32700</code>, and keep
+the loop alive. Pin it with a round-trip test that sends a deep line and then a well-formed request,
+asserting the second is answered.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">The parse layer catches JSONDecodeError, and a deep enough line raises RecursionError instead…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
