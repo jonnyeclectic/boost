@@ -688,6 +688,11 @@ def read_line(stream, *, limit: int = MAX_LINE_CHARS) -> tuple[str | None, bool]
     ``UnicodeDecodeError`` on bytes that are not UTF-8, which ends the session
     cleanly for the same reason rather than resyncing: a text stream's decoder
     state after that failure is not defined.
+
+    **The drain does not catch ``KeyboardInterrupt``**, though the first read
+    does. Ctrl-C ends the session on every other read path, and swallowing it
+    here would answer ``-32700`` and keep serving — a different meaning for
+    the same key depending on how long the client's line happened to be.
     """
     try:
         chunk = stream.readline(limit + 1)
@@ -701,7 +706,7 @@ def read_line(stream, *, limit: int = MAX_LINE_CHARS) -> tuple[str | None, bool]
         while not chunk.endswith("\n"):
             try:
                 chunk = stream.readline(limit)
-            except (KeyboardInterrupt, OSError, ValueError):
+            except (OSError, ValueError):
                 break
             if not chunk:              # the line never ends: input did
                 break

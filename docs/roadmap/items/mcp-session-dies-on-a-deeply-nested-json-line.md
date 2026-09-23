@@ -19,7 +19,7 @@ and answers <code>-32700</code>, which is right for malformed JSON. A sufficient
 raises <code>RecursionError</code> instead, which the guard does not name, so it escapes exactly as
 the shape crashes did: exit 70, a crash report, nothing on stdout, and the session over.
 <br><br>
-Measured: object nesting 100,000 deep parses fine; at 1,000,000 (a ~7 MB line) CPython raises
+Measured on CPython 3.14.7: object nesting 100,000 deep parses fine; at 1,000,000 (a ~7 MB line) it raises
 <code>RecursionError: Stack overflow (used 16352 kB) while decoding a JSON object</code>.
 <br><br>
 <b>Fix.</b> Catch the recursion failure beside the decode failure — or bound the line length before

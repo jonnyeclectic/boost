@@ -525,7 +525,7 @@ class TestServeStdio:
     @pytest.mark.parametrize("first", [
         pytest.param(json.dumps({"id": 1, "method": "ping"}), id="a-request"),
         pytest.param("x" * ((1 << 20) + 10), id="an-oversized-line"),
-        pytest.param('{"a":' * 150_000 + "1" + "}" * 150_000, id="a-deep-line"),
+        pytest.param("[" * 500_000 + "1" + "]" * 500_000, id="a-deep-line"),
     ])
     def test_send_failure_stops_loop(self, first):
         # Every path that writes has to notice a dead stdout, including the two
@@ -1568,11 +1568,14 @@ class TestServeStdioReadPath:
         # 70 with 0 bytes of stdout and a crash report, and never answered the
         # well-formed request on the next line.
         #
-        # 150_000 deep is past the JSON recursion cliff on both interpreters
-        # measured here — 3.13.15 fails from depth 9_999 (59_995 chars),
-        # 3.14.7 from 116_161 (696_967) — and, at 900_001 chars, is still
-        # inside the 1 MiB bound, so it exercises the catch, not the bound.
-        deep = '{"a":' * 150_000 + "1" + "}" * 150_000
+        # Array nesting, not object nesting: both hit the same decoder
+        # cliff, and `[`/`]` costs 2 chars per level against `{"a":`/`}`'s 6,
+        # so the same 1 MiB bound buys 4.5x the depth. 500_000 deep is far
+        # past the cliff on both interpreters measured here — 3.13.15 fails
+        # from depth 9_999, 3.14.7 from 116_161 — and, at 1_000_001 chars, is
+        # still inside the bound, so it exercises the catch, not the bound.
+        # A runner whose cliff sits higher than ours still lands inside it.
+        deep = "[" * 500_000 + "1" + "]" * 500_000
         assert len(deep) < _LIMIT
         code, resps = self._run(
             deep + "\n" + json.dumps({"id": 99, "method": "ping"}) + "\n")
@@ -1718,3 +1721,31 @@ class TestReadLine:
                 raise OSError("pipe went away")
 
         assert mcp.read_line(DiesOnDrain(), limit=10) == (None, True)
+
+    def test_ctrl_c_during_the_drain_still_ends_the_session(self):
+        # Ctrl-C ends the session on every other read path. Catching it here
+        # too would answer -32700 and keep serving, so the same key would
+        # mean two different things depending on how long the client's line
+        # happened to be.
+        class InterruptedOnDrain:
+            def __init__(self):
+                self.n = 0
+
+            def readline(self, size=-1):
+                self.n += 1
+                if self.n == 1:
+                    return "a" * (size or 0)
+                raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            mcp.read_line(InterruptedOnDrain(), limit=10)
+
+    def test_bytes_that_are_not_utf8_end_the_session_cleanly(self):
+        # The documented `ValueError` arm covers `UnicodeDecodeError` by
+        # subclass; a text stream's decoder state after that failure is not
+        # defined, so the session ends rather than resyncing.
+        class NotUtf8:
+            def readline(self, size=-1):
+                raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+        assert mcp.read_line(NotUtf8()) == (None, False)
