@@ -2351,3 +2351,111 @@ class TestWrapBoundaries:
         # 21-column token, which cannot break and lands on a line of its own.
         assert not any("`alpha` between `beta`" in ln for ln in lines)
         assert all(output.visible_len(ln) <= 16 for ln in lines)
+
+
+class TestErrorAndHintWrap:
+    """A refusal folds to the pane, and its remedy stays runnable.
+
+    The same free-path sentence `boost doctor` and `boost search` already fold
+    reaches the user through `BoostError` on `boost update --shards` and
+    `boost reindex --fetch-shards`, where it printed at 173 columns whatever
+    the pane was. Wrapping is not opt-in here: every `err` line is chrome —
+    the one line read before deciding what to do next.
+    """
+
+    HINT = ("`unset VOYAGE_API_KEY`, then `boost update --shards` loads the "
+            "published vectors free — or keep the key, and `boost reindex "
+            "--dense` embeds through voyage's paid API")
+    MSG = ("published shards cannot serve this machine — published shards "
+           "are local, this machine embeds with voyage")
+
+    def _err(self, capsys, monkeypatch, msg, hint=None, cols=40):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: cols)
+        output.err(msg, hint)
+        return capsys.readouterr().err.rstrip("\n").split("\n")
+
+    def test_a_prose_message_folds_when_the_caller_says_so(self, capsys,
+                                                            monkeypatch):
+        # Opt-in, like `warn(wrap=True)`: a refusal that is a sentence folds
+        # and its continuations align under the `Error: ` label.
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: 40)
+        output.err(self.MSG, wrap=True)
+        lines = capsys.readouterr().err.rstrip("\n").split("\n")
+        assert len(lines) > 1
+        assert all(output.visible_len(ln) <= 40 for ln in lines), lines
+        assert lines[0].startswith("Error: ")
+        assert all(ln.startswith(" " * len("Error: ")) for ln in lines[1:])
+        assert not lines[1].startswith("Error:")
+
+    def test_the_message_is_not_folded(self, capsys, monkeypatch):
+        # A message is a label and its data — `no such directory: <path>` —
+        # and folding moves the path off the label that names it. Data
+        # overflows whole; only the remedy below it wraps.
+        assert self._err(capsys, monkeypatch, self.MSG) == [
+            "Error: " + self.MSG]
+
+    @pytest.mark.parametrize("cols", [40, 60, 80])
+    def test_the_hint_fits_the_pane(self, capsys, monkeypatch, cols):
+        hint = self._err(capsys, monkeypatch, "short", self.HINT, cols=cols)[1:]
+        assert len(hint) > 1
+        assert all(output.visible_len(ln) <= cols for ln in hint), hint
+
+    def test_a_command_in_the_hint_is_never_split(self, capsys, monkeypatch):
+        lines = self._err(capsys, monkeypatch, "short", self.HINT)
+        # More than one line, or this asserts nothing: an unwrapped hint
+        # holds every span trivially.
+        assert len(lines) > 2, lines
+        for span in ("`unset VOYAGE_API_KEY`", "`boost update --shards`",
+                     "`boost reindex --dense`"):
+            assert any(span in ln for ln in lines), (span, lines)
+
+    def test_a_path_stays_beside_the_label_that_names_it(self, capsys,
+                                                          monkeypatch):
+        # What the eleven tests across five files assert, in one place.
+        path = "/srv/skills/" + "x" * 60
+        assert self._err(capsys, monkeypatch, "no such directory: " + path) \
+            == ["Error: no such directory: " + path]
+
+    def test_continuations_align_under_the_hint_label(self, capsys,
+                                                       monkeypatch):
+        hint = self._err(capsys, monkeypatch, "short", self.HINT)[1:]
+        # Without this the assertion below is `all([])` on an unwrapped hint.
+        assert len(hint) > 1, hint
+        assert hint[0].startswith("  hint: ")
+        assert all(ln.startswith(" " * len("  hint: ")) for ln in hint[1:])
+
+    def test_a_multi_line_hint_keeps_the_breaks_its_author_chose(
+            self, capsys, monkeypatch):
+        # gh's own failure text arrives with newlines in it; they are the
+        # author's paragraph breaks, and wrapping must fold within them.
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: 80)
+        output.err("failed", "first line\nsecond line")
+        lines = capsys.readouterr().err.rstrip("\n").split("\n")
+        assert lines[1] == "  hint: first line"
+        assert lines[2] == "        second line"
+
+    def test_a_token_wider_than_the_pane_overflows_whole(self, capsys,
+                                                          monkeypatch):
+        # CLAUDE.md's rule, on the half that wraps: a span wider than the
+        # pane is not broken. A 64-character fingerprint must stay
+        # comparable by eye even at 40 columns.
+        digest = "a" * 64
+        lines = self._err(capsys, monkeypatch, "digest mismatch",
+                          "compare `%s` by eye" % digest)
+        assert any(digest in ln for ln in lines), lines
+
+    def test_a_blank_line_inside_a_hint_survives(self, capsys, monkeypatch):
+        # A blank paragraph break is a line the author wrote, not an empty
+        # wrap result to drop.
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: 80)
+        output.err("boom", "first\n\nsecond")
+        lines = capsys.readouterr().err.rstrip("\n").split("\n")
+        assert lines[1:] == ["  hint: first", "        ", "        second"]
+
+    def test_a_short_error_is_still_one_line(self, capsys, monkeypatch):
+        assert self._err(capsys, monkeypatch, "no such skill: x") == [
+            "Error: no such skill: x"]

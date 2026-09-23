@@ -1434,7 +1434,8 @@ def quantize() -> dict | None:
             raise BoostError(
                 "quantize copied %d of %d vectors — store left unchanged"
                 % (moved, before),
-                hint="rebuild instead: `boost reindex --dense --force`")
+                hint="rebuild instead: `boost reindex --dense --force`",
+                wrap=True)
         con.execute("DROP TABLE IF EXISTS vec_chunks")
         _write_meta(con, {"chunks": before})
         con.commit()

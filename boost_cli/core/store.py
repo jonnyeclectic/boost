@@ -1060,7 +1060,7 @@ def _refuse_self_installing(entry: dict) -> None:
         "%s comes from %s, which installs itself — boost would copy its "
         "Markdown and leave a skill that cannot run"
         % (entry.get("name", "?"), entry.get("tap", "?")),
-        hint="run the registry's own installer: %s" % cmd)
+        hint="run the registry's own installer: %s" % cmd, wrap=True)
 
 
 def install(entry: dict, force: bool = False,
