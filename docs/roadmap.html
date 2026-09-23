@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>73</b><span>Planned</span></div>
-      <div class="stat"><b>490</b><span>Loop finds</span></div>
+      <div class="stat"><b>74</b><span>Planned</span></div>
+      <div class="stat"><b>491</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2177,6 +2177,31 @@ in the round-trip tests.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">The one reply an agent hits repeatedly while rephrasing costs context in proportion to the query…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-session-dies-on-a-deeply-nested-json-line">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · Bug</span></div>
+        <h3>A deeply nested JSON line kills the MCP session, because the parse guard names one exception</h3>
+        <p><b>Found while fixing <code>mcp-server-dies-on-a-valid-json-message-that-is-not-an-object</code>, and
+left for its own card because it is the parse layer rather than the shape layer.</b>
+<code>serve_stdio</code> wraps <code>json.loads</code> in <code>except json.JSONDecodeError</code>
+and answers <code>-32700</code>, which is right for malformed JSON. A sufficiently nested line
+raises <code>RecursionError</code> instead, which the guard does not name, so it escapes exactly as
+the shape crashes did: exit 70, a crash report, nothing on stdout, and the session over.
+<br><br>
+Measured: object nesting 100,000 deep parses fine; at 1,000,000 (a ~7 MB line) CPython raises
+<code>RecursionError: Stack overflow (used 16352 kB) while decoding a JSON object</code>.
+<br><br>
+<b>Fix.</b> Catch the recursion failure beside the decode failure — or bound the line length before
+parsing, which also caps the memory one client line can cost — answer <code>-32700</code>, and keep
+the loop alive. Pin it with a round-trip test that sends a deep line and then a well-formed request,
+asserting the second is answered.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">The parse layer catches JSONDecodeError, and a deep enough line raises RecursionError instead…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
