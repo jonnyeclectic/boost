@@ -123,6 +123,26 @@ def local_available() -> bool:
     return _backend() is not None
 
 
+def local_installed() -> bool:
+    """True when the local backend's packages are on the path.
+
+    `local_available` answers this by importing the ONNX runtime, which is
+    right for a caller about to embed and wrong for one about to *name* the
+    local model: `dense.free_shard_path` words the keyed-machine hint that
+    `boost search` and `boost doctor` print, and loading a runtime to choose
+    a sentence costs every such run a backend it never uses.
+
+    The memoised answer wins when this process already has one — no reason to
+    ask twice, and a backend that failed to import is not "installed" for the
+    purpose of a remedy. Otherwise `localembed.installed` looks the modules up
+    without executing them.
+    """
+    if _backend_cache is not None:
+        return _backend_cache is not _BACKEND_MISSING
+    from . import localembed
+    return localembed.installed()
+
+
 def local_failure() -> dict | None:
     """The last failed fetch or load of the local model, or None.
 

@@ -546,7 +546,11 @@ def keyed_machine(monkeypatch):
     monkeypatch.setattr(embed, "provider", lambda: "voyage")
     monkeypatch.setattr(embed, "model", lambda: "voyage-4")
     monkeypatch.setattr(embed, "dimension", lambda: 1024)
+    # Both seams: `remedy` words the free path from `local_installed`
+    # (the look-up that imports nothing), and the embedding path that
+    # would follow the advice still asks `local_available`.
     monkeypatch.setattr(embed, "local_available", lambda: True)
+    monkeypatch.setattr(embed, "local_installed", lambda: True)
     downloads: list = []
     monkeypatch.setattr(shards, "download",
                         lambda *a, **k: downloads.append(a))

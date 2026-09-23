@@ -264,7 +264,11 @@ class TestPublishedVectorsThisMachineCannotUse:
         monkeypatch.setattr(embed, "provider", lambda: prov)
         monkeypatch.setattr(embed, "model", lambda: model)
         monkeypatch.setattr(embed, "dimension", lambda: dim)
+        # Both seams: `remedy` words the free path from `local_installed`
+        # (the look-up that imports nothing), and the embedding path that
+        # would follow the advice still asks `local_available`.
         monkeypatch.setattr(embed, "local_available", lambda: True)
+        monkeypatch.setattr(embed, "local_installed", lambda: True)
 
     def test_a_usable_manifest_is_accepted_and_records_nothing(
             self, monkeypatch):

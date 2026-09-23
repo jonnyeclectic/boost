@@ -204,8 +204,10 @@ class TestNoKeyReadsTheStore:
 
     @pytest.mark.parametrize("reason", [r for r in ALL_REASONS if r != "no-key"])
     def test_other_reasons_ignore_the_status_dict(self, reason):
-        # Only "no-key" is ambiguous. If a status dict started steering the
-        # rest, the "these never chain" property would be back in play.
+        # Only "no-key" reads the built store. ("no-store" reads the live
+        # provider, which this dict leaves out — see TestKeyedMachineWithNoStore.)
+        # If a status dict started steering the rest, the "these never chain"
+        # property would be back in play.
         assert dense.fix_hint(reason, self._status(reason=reason)) == _table(reason)
 
     def test_the_env_var_names_come_from_embed_not_a_local_copy(self):
@@ -276,3 +278,214 @@ class TestFitsANarrowTerminal:
         for line in textwrap.wrap(msg, self.NARROW, break_long_words=False,
                                   break_on_hyphens=False):
             assert len(line) <= self.NARROW, "overflowing line: %r" % line
+
+
+class TestKeyedMachineWithNoStore:
+    """A key that outranks the local model, and no vectors on disk yet.
+
+    `boost doctor` and `boost search` answered this state from the table —
+    "build it: `boost reindex --dense`" — which with the key in force embeds
+    the whole catalogue through the paid API. `boost quickstart`, `boost
+    update --shards` and `boost reindex --fetch-shards` read
+    `shards.remedy()`, which told the same user to unset the key and take the
+    published vectors for free. Two answers to one state is the thing this
+    function exists to prevent, and the one doctor gave was the costly one.
+    """
+
+    @pytest.fixture()
+    def keyed(self, monkeypatch):
+        """A status for the state, with the local model importable."""
+        from boost_cli.core import embed
+        monkeypatch.setattr(embed, "local_installed", lambda: True)
+        for env in embed.KEY_ENV.values():
+            monkeypatch.delenv(env, raising=False)
+
+        def make(provider="voyage", **over):
+            st = {"reason": "no-store", "provider": provider,
+                  "store_exists": False, "built_provider": None,
+                  "chunks": None}
+            st.update(over)
+            return st
+
+        return make
+
+    def test_the_free_path_comes_first(self, keyed):
+        hint = dense.fix_hint("no-store", keyed())
+        assert "`unset VOYAGE_API_KEY`" in hint
+        assert "`boost update --shards`" in hint
+        assert hint.index("`unset") < hint.index("`boost reindex --dense`")
+
+    def test_keeping_the_key_is_named_with_its_cost(self, keyed):
+        hint = dense.fix_hint("no-store", keyed())
+        tail = hint.split("`boost reindex --dense`")[1]
+        assert "voyage" in tail and "paid" in tail
+
+    def test_every_key_that_outranks_local_is_named(self, keyed, monkeypatch):
+        # Unsetting VOYAGE alone falls through to OPENAI, which is no nearer
+        # the published space: a remedy that names one key is a no-op here.
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        monkeypatch.setenv("OPENAI_API_KEY", "o")
+        hint = dense.fix_hint("no-store", keyed())
+        assert "`unset VOYAGE_API_KEY OPENAI_API_KEY`" in hint
+        assert "keep the keys," in hint
+
+    def test_only_the_key_in_force_is_named(self, keyed):
+        hint = dense.fix_hint("no-store", keyed("openai"))
+        assert "`unset OPENAI_API_KEY`" in hint
+        assert "VOYAGE" not in hint
+        assert "openai's paid API" in hint
+
+    def test_it_is_the_answer_the_shard_surfaces_give(self, sandbox,
+                                                       monkeypatch):
+        # The real status of a keyed machine with no store, not a stub, and
+        # the remedy quickstart and `update --shards` print for the keyless
+        # manifest they are refused. One line, not two that happen to agree.
+        from boost_cli.core import embed, shards
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        monkeypatch.setattr(embed, "local_installed", lambda: True)
+        monkeypatch.setattr(embed, "local_available", lambda: True)
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        st = dense.status()
+        assert (st["reason"], st["provider"]) == ("no-store", "voyage")
+        space = {"provider": "local", "model": embed.LOCAL_MODEL,
+                 "dim": embed.LOCAL_DIM}
+        assert dense.fix_hint("no-store", st) == shards.remedy(space)
+
+    def test_without_the_local_model_there_is_no_free_path(self, keyed,
+                                                            monkeypatch):
+        # Drop the key with nothing to take over and `provider()` is None:
+        # the published vectors still cannot load. The table stands.
+        from boost_cli.core import embed
+        monkeypatch.setattr(embed, "local_installed", lambda: False)
+        assert dense.fix_hint("no-store", keyed()) == _table("no-store")
+
+    def test_a_keyless_machine_keeps_the_table(self, keyed):
+        # No key outranks anything: building is the free path already.
+        assert dense.fix_hint("no-store", keyed("local")) == _table("no-store")
+
+    def test_a_status_that_does_not_name_a_provider_keeps_the_table(self):
+        # Callers that stub a two-key status (the MCP note's tests do) must
+        # not be read as keyed.
+        st = {"ready": False, "reason": "no-store"}
+        assert dense.fix_hint("no-store", st) == _table("no-store")
+
+    @pytest.mark.parametrize("reason", ["version-changed", "provider-changed",
+                                        "model-changed", "dim-changed", "empty"])
+    def test_a_keyed_user_with_a_store_is_never_told_to_unset(self, keyed,
+                                                               reason):
+        # #925's rule: vectors built with the key are not merged into by the
+        # keyless shards, so "unset it" buys a refused import. `no-store`
+        # means no store, so a store in any space lands on these reasons.
+        st = keyed(reason=reason, store_exists=True,
+                   built_provider="voyage", chunks=5)
+        assert "unset" not in dense.fix_hint(reason, st)
+
+    def test_the_state_is_read_from_the_status_not_the_reason_alone(self):
+        # Every single-argument caller keeps the table's answer.
+        assert dense.fix_hint("no-store") == _table("no-store")
+
+    @pytest.mark.parametrize("cols", [40, 50, 60, 80])
+    def test_both_keys_stay_one_runnable_span(self, keyed, monkeypatch, cols):
+        # The longest atomic span this hint can hold is the two-key `unset`;
+        # `- 2` is the indent `out.info` adds, as `boost search` budgets it.
+        from boost_cli.core import output as out
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        monkeypatch.setenv("OPENAI_API_KEY", "o")
+        hint = dense.fix_hint("no-store", keyed())
+        lines = out.wrap("semantic search is off — %s" % hint, cols - 2)
+        assert any("`unset VOYAGE_API_KEY OPENAI_API_KEY`" in line
+                   for line in lines), lines
+        assert any("`boost update --shards`" in line for line in lines), lines
+
+    @pytest.mark.parametrize("cols", [40, 50, 60, 80])
+    def test_it_wraps_within_the_pane(self, keyed, monkeypatch, cols):
+        # Same invariant TestFitsANarrowTerminal holds for the table; this
+        # answer bypasses the table, so it needs its own guard.
+        from boost_cli.core import output as out
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        monkeypatch.setenv("OPENAI_API_KEY", "o")
+        hint = dense.fix_hint("no-store", keyed())
+        lines = out.wrap("semantic search is off — %s" % hint, cols - 2)
+        assert all(out.visible_len(line) <= cols - 2 for line in lines), lines
+
+
+class TestWordingTheHintLoadsNoBackend:
+    """Naming the local model must not import the ONNX runtime.
+
+    `boost search` and `boost doctor` print this hint on a keyed machine with
+    no store, and the machines that reach it are exactly the ones that have
+    the `[rag]` extra installed — so asking "can the local model take over?"
+    by importing it charges every one of those runs for a backend the command
+    never uses. The question is whether the packages are *there*, which
+    `importlib.util.find_spec` answers without executing them.
+    """
+
+    @pytest.fixture()
+    def counted(self, monkeypatch):
+        """Count every import of the backend, and force the packages present."""
+        from boost_cli.core import embed, localembed
+        calls: list = []
+
+        def _deps():
+            calls.append(1)
+            return object(), object()
+
+        monkeypatch.setattr(localembed, "_deps", _deps)
+        monkeypatch.setattr(localembed, "installed", lambda: True)
+        embed.reset_local_cache()
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        yield calls
+        embed.reset_local_cache()
+
+    def test_the_free_path_is_worded_without_importing_the_runtime(self,
+                                                                    counted):
+        assert "`unset VOYAGE_API_KEY`" in (dense.free_shard_path("voyage") or "")
+        assert counted == [], "the hint imported the embedding backend"
+
+    def test_a_backend_this_process_already_loaded_is_not_asked_again(
+            self, counted, monkeypatch):
+        # Once `local_available` has run, the memoised answer is the honest
+        # one — importable, not merely present — and costs nothing.
+        from boost_cli.core import embed
+        assert embed.local_available() is True
+        assert counted == [1]
+        assert embed.local_installed() is True
+        assert counted == [1]
+
+    def test_a_backend_that_failed_to_import_is_not_installed(self, monkeypatch):
+        from boost_cli.core import embed, localembed
+        monkeypatch.setattr(localembed, "available", lambda: False)
+        embed.reset_local_cache()
+        assert embed.local_available() is False
+        # `installed` would say yes; the memoised failure outranks it.
+        monkeypatch.setattr(localembed, "installed", lambda: True)
+        assert embed.local_installed() is False
+        embed.reset_local_cache()
+
+    @pytest.mark.parametrize("missing", ["onnxruntime", "tokenizers"])
+    def test_either_package_missing_means_no_local_model(self, monkeypatch,
+                                                          missing):
+        import importlib.util
+
+        from boost_cli.core import embed, localembed
+        real = importlib.util.find_spec
+        monkeypatch.setattr(importlib.util, "find_spec",
+                            lambda n, *a: None if n == missing else real("json"))
+        embed.reset_local_cache()
+        assert localembed.installed() is False
+        embed.reset_local_cache()
+
+    def test_a_package_the_import_system_refuses_to_locate_is_not_a_crash(
+            self, monkeypatch):
+        # `find_spec` raises rather than returning None for a few shapes (a
+        # module in `sys.modules` with no spec, an unimportable parent). A
+        # hint must not turn that into a traceback out of `boost search`.
+        import importlib.util
+
+        from boost_cli.core import embed, localembed
+        monkeypatch.setattr(importlib.util, "find_spec",
+                            lambda *a: (_ for _ in ()).throw(ValueError("no spec")))
+        embed.reset_local_cache()
+        assert localembed.installed() is False
+        embed.reset_local_cache()

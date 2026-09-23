@@ -261,6 +261,10 @@ def remedy(manifest: dict) -> str:
     stale format included, though the import would replace that one — is
     answered by its own table first, as `boost doctor` answers it.
 
+    The free path's wording is ``dense.free_shard_path``'s, not this
+    function's: `boost doctor` and `boost search` give it too, for a keyed
+    machine with no store, and one string cannot disagree with itself.
+
     No provider at all is not this function's question: that is the dense
     store's ladder (kill switch, missing extra, missing key), and
     ``dense.fix_hint`` already answers it for `boost doctor` and `boost
@@ -285,12 +289,12 @@ def remedy(manifest: dict) -> str:
                 " %s shards cannot merge into them — `boost reindex --dense`"
                 " keeps them current %s"
                 % (built, manifest.get("provider"), how))
-    if manifest.get("provider") == "local" and paid and embed.local_available():
-        keys = [env for name, env in embed.KEY_ENV.items()
-                if name == prov or os.environ.get(env)]
-        return ("`unset %s`, then `boost update --shards` loads them free — "
-                "or keep the key%s, and `boost reindex --dense` embeds %s"
-                % (" ".join(keys), "s" if len(keys) > 1 else "", how))
+    if manifest.get("provider") == "local":
+        # The words `dense.fix_hint` gives a keyed machine with no store, so
+        # `boost doctor` and `boost search` say what this says.
+        free = dense.free_shard_path(prov)
+        if free:
+            return free
     return "`boost reindex --dense` embeds them %s instead" % how
 
 
