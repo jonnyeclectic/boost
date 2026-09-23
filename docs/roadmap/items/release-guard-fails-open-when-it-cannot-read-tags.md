@@ -2,13 +2,15 @@
 id: release-guard-fails-open-when-it-cannot-read-tags
 board: code
 section: planned
-status: planned
+status: shipped
 category: Release · Bug
 complexity: S
 impact: Medium
 wow: 3
 note: The one check that stops a publish reads an unreadable tag list as "no tags, go ahead" — against its own docstring…
 order: 336
+owner: loop/release-guard-fails-closed
+pr: 955
 title: The release guard fails open when it cannot read the commit's tags
 ---
 <b>Found by the audit of the repo's own automation.</b> <code>scripts/release_guard.py</code>'s
