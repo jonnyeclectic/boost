@@ -2,13 +2,14 @@
 id: mcp-session-dies-on-a-deeply-nested-json-line
 board: code
 section: planned
-status: planned
+status: shipped
 category: MCP · Bug
 complexity: S
 impact: Low
 wow: 2
 note: The parse layer catches JSONDecodeError, and a deep enough line raises RecursionError instead…
 order: 343
+owner: loop/mcp-deep-json-line
 title: A deeply nested JSON line kills the MCP session, because the parse guard names one exception
 ---
 <b>Found while fixing <code>mcp-server-dies-on-a-valid-json-message-that-is-not-an-object</code>, and
