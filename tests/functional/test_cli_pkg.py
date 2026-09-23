@@ -1006,6 +1006,8 @@ class TestReinstall:
         # the install result away and printed a clean "reinstalled".
         boost("import", _skill_dir(tmp_path, "my-skill"))
         cursor = paths.home() / ".cursor" / "skills"
+        # Missing, so there is a link to refuse: one already correct is kept.
+        (cursor / "my-skill").unlink()
         cursor.chmod(0o500)
         try:
             r = boost("reinstall", "my-skill")
@@ -1026,6 +1028,8 @@ class TestReinstall:
         # one after it, so one `--all` run read two ways.
         boost("import", _skill_dir(tmp_path, "my-skill"))
         cursor = paths.home() / ".cursor" / "skills"
+        for name in ("brainstorming", "my-skill"):
+            (cursor / name).unlink()     # a link to make, so one to refuse
         cursor.chmod(0o500)
         try:
             r = boost("reinstall", "--all")
@@ -2355,6 +2359,7 @@ class TestImportProvenance:
         _commit_all(repo)
         boost("import", _URL)
         cursor = paths.home() / ".cursor" / "skills"
+        (cursor / "url-skill").unlink()  # a link to make, so one to refuse
         cursor.chmod(0o500)
         try:
             r = boost("reinstall", "url-skill")

@@ -2,15 +2,15 @@
 id: a-correct-link-in-a-locked-dir-reads-as-refused
 board: code
 section: planned
-status: planned
+status: shipped
 category: Robustness · Bug
 complexity: S
 impact: Low
 wow: 2
 note: A reinstall into a locked skills dir says "not linked" while the right link is still on disk and the lock records the agent…
 order: 333
-owner:
-pr:
+owner: loop/correct-link-not-refused
+pr: 945
 title: A reinstall into a locked skills dir says "not linked" over a link that is already there and correct
 ---
 <b>Found by the review of <code>install-paths-that-still-drop-the-result</code>.</b>

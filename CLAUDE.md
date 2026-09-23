@@ -470,6 +470,12 @@ for code you write:
   one hop lands in another agent's dir. It resolves **both sides**: on macOS a
   `$HOME` under `/var/folders` resolves to `/private/var/...`, so resolving
   only the target compares a real path against a nominal one and never matches.
+  `store._already_links` is the third, and asks the narrowest question: does
+  this link lead to *this skill's* store dir? `link_agents` leaves such a link
+  exactly as written rather than re-creating it — which is what lets a
+  reinstall succeed in a skills dir that refuses writes — so a link into the
+  store that leads to a different skill is still replaced, and a chained link
+  that resolves to the right copy is kept as it stands.
 - **Antigravity CLI (`agy`) is Gemini's successor and is NOT a native-store
   agent.** It shares the `~/.gemini` tree but reads neither `~/.agents/skills`
   nor — for CLI scope — the shared `~/.gemini/skills`, so it takes real

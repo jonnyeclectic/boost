@@ -2007,20 +2007,9 @@ wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every ins
       </article>
 
       <article class="cap rcard" id="a-correct-link-in-a-locked-dir-reads-as-refused">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
         <h3>A reinstall into a locked skills dir says "not linked" over a link that is already there and correct</h3>
-        <p><b>Found by the review of <code>install-paths-that-still-drop-the-result</code>.</b>
-<code>store.link_agents</code> unlinks and re-creates every symlink it manages, even one that already
-resolves to the store copy. In a skills dir that refuses writes, the unlink raises
-<code>PermissionError</code>, so the agent goes into <code>res.unwritable</code>. <code>boost reinstall</code>
-then prints <em>not linked: ~/.cursor/skills is not writable</em> while the old link is still on disk,
-still points into the store, and the lock still records the agent in <code>agents</code>. The tap
-branch of reinstall has done this since #931. The local and URL branches say it now too, because they
-report the result at all.
-
-<b>Fix direction.</b> In <code>link_agents</code>, treat an existing symlink that already resolves to the
-target as linked, and skip the unlink and re-create. A link that points elsewhere, or no link, still
-needs the write and is still refused.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/a-correct-link-in-a-locked-dir-reads-as-refused.md">Write-up &middot; a-correct-link-in-a-locked-dir-reads-as-refused.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
