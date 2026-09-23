@@ -322,11 +322,14 @@ class TestGitTagsAt:
             guard.git_tags_at("definitely-not-a-ref-9f8e7d")
         assert "git tag --points-at definitely-not-a-ref-9f8e7d" in str(exc.value)
 
-    def test_a_missing_git_binary_raises(self, monkeypatch):
-        def no_git(*_a, **_k):
-            raise OSError(2, "No such file or directory: 'git'")
-
-        monkeypatch.setattr(guard.subprocess, "run", no_git)
+    def test_a_missing_git_binary_raises(self, monkeypatch, tmp_path):
+        # Patch the PATH the guard resolves `git` on, not
+        # `guard.subprocess.run` -- that name is the stdlib module object, so
+        # replacing it swaps `subprocess.run` for the whole process. It is
+        # restored and the suite runs serially, so nothing breaks today; it
+        # would break under in-process parallelism or any plugin that shells
+        # out while the fake is installed.
+        monkeypatch.setenv("PATH", str(tmp_path))
         with pytest.raises(guard.TagLookupError) as exc:
             guard.git_tags_at()
         assert "could not be run" in str(exc.value)
