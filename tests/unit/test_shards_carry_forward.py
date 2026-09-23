@@ -224,6 +224,15 @@ class TestManifestCarriesTheSilent:
         assert "1 fresh" in both and "1 carried unchanged" in both
         assert "1 carried for registries no job reported" in both
         assert "o/c" in both and "o/gone" in both
+        # The dropped count must name only what really left the catalogue:
+        # without the `tap not in silent` clause it reads 2 and names o/c,
+        # the row this change exists to carry.
+        assert "dropped 1 published row(s)" in both, both
+        # The dropped line must name only what really left the catalogue:
+        # without the `tap not in silent` clause it reads 2 and names o/c,
+        # the row this change exists to carry.
+        dropped = next(ln for ln in both.splitlines() if "dropped" in ln)
+        assert "o/gone" in dropped and "o/c" not in dropped, dropped
 
     def test_nothing_at_all_is_still_an_error(self, tmp_path):
         rc, _ = self._run(tmp_path, fresh=[], previous_rows=[],

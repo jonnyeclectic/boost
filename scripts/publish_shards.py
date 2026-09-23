@@ -180,10 +180,14 @@ def _fresh_row(path: Path, repo: str, tag: str) -> tuple[dict, dict]:
 def known_registries(paths: list[str] | None) -> set[str]:
     """Which registries still count as registries, for carry-forward.
 
-    ``None`` — no ``--known`` at all — means the bundled catalogue, which is
-    the same list ``shard_plan.py`` builds the run's matrix from, so the
+    ``None`` — no ``--known`` at all — means the bundled catalogue, a
+    superset of the list ``shard_plan.py`` builds the run's matrix from (it
+    skips ``list_only`` entries, which have no items to embed), so the
     publish job needs no extra plumbing to answer "has this registry left the
-    catalogue?". An explicit (possibly empty) list overrides it, which is what
+    catalogue?". A superset is the safe direction here: a registry that is
+    known but never in the matrix is carried rather than dropped, and a
+    carried row is still refused by ``dense.import_shard`` unless its commit
+    matches. An explicit (possibly empty) list overrides it, which is what
     makes the decision testable and gives a scoped run an escape hatch.
 
     A file is one name per line; ``#`` comments and blank lines are skipped and
@@ -288,6 +292,11 @@ def _carried_rows(prev_path: str, unchanged_files: list[str],
     # catalogue, which is the one silence that means "gone".
     reported = set(fresh_taps) | set(wanted)
     silent = shards.unreported(prev, reported, known)
+    # `dict(...)` on both carry paths, for the same reason the line above
+    # copies: the rows come out of the previous manifest, and a later edit of
+    # the new one must not reach back into it. Not observable from outside --
+    # `prev` is parsed here and discarded -- so it is defensive symmetry
+    # rather than a tested behaviour.
     out.extend(dict(silent[tap]) for tap in sorted(silent))
     gone = sorted(tap for tap in index
                   if tap not in reported and tap not in silent)
@@ -355,11 +364,11 @@ def cmd_manifest(args: argparse.Namespace) -> int:
               "failed or never ran, so last week's published row was carried "
               "forward: %s"
               % (len(silent), "y" if len(silent) == 1 else "ies",
-                 _names(silent)), file=sys.stderr)
+                 _names(silent)))
     if gone:
         print("dropped %d published row(s) for registr%s no longer in the "
               "catalogue: %s" % (len(gone), "y" if len(gone) == 1 else "ies",
-                                 _names(gone)), file=sys.stderr)
+                                 _names(gone)))
     return 0
 
 
