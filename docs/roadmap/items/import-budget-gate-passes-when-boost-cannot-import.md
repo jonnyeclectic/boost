@@ -10,6 +10,7 @@ wow: 3
 note: A required check that asserts a name is absent, and reports OK when nothing ran at all…
 order: 335
 owner: loop/import-budget-exit-code
+pr: 954
 title: The import-budget gate reports OK when the command it measures never ran
 ---
 <b>Found by the audit of the repo's own automation.</b> <code>scripts/import_budget.py</code>'s
