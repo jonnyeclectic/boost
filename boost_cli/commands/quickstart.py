@@ -324,8 +324,13 @@ def cmd_quickstart(argv) -> int:
             taps, commits, built = _sync_inputs(names, pins)
             steps = shards.plan(taps, commits, manifest, built)
         planned = [s for s in steps if s["status"] == "download"]
+        # `wrap=True` because the size made this line long: "then import 7
+        # shard(s) (at least 71.5MB)" overflows a 60-column pane, and every
+        # line printed under it (`_planned_rest`, `_vectors_refused`) already
+        # folds. Its live twin is a `_muted` line, so preview and run now
+        # render the same phrase the same way.
         out.info("would build the keyword index, then import %s"
-                 % _fetch_phrase(steps))
+                 % _fetch_phrase(steps), wrap=True)
         said = _planned_rest(steps)
         # "0 shard(s)" reads as "none are published" when the real cause is
         # local, and --dry-run is exactly what a cautious new user runs first.

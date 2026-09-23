@@ -472,8 +472,11 @@ def _fetch_shards(args) -> int:
     manifest = shards.fetch_manifest()
     why = shards.incompatible(manifest)
     if why:
-        raise BoostError("published shards cannot serve this machine — %s" % why,
-                        hint=shards.remedy(manifest))
+        # `wrap=True`: this refusal is a sentence, not a label and a
+        # path, and it printed at 111 columns with a 173-column hint
+        # under it at every pane width.
+        raise BoostError("published shards cannot serve this machine — %s"
+                        % why, hint=shards.remedy(manifest), wrap=True)
     commits = rag._tap_commits()
     stored = dense.tap_commits()
     by_name = {t.name: commits.get(t.safe_name, "") for t in registry.list_taps()}

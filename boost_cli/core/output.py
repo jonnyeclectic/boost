@@ -279,20 +279,45 @@ def warn(msg: str, stream=None, wrap: bool = False) -> None:
         print(lead + role(line, "warn", stream=stream), file=stream)
 
 
-def err(msg: str, hint: str | None = None) -> None:
+def err(msg: str, hint: str | None = None, wrap: bool = False) -> None:
     """Print `Error: msg` to stderr, plus a dim hint line when given.
 
     A hint that carries its own newlines — gh's own multi-line failure text,
     passed through as-is — used to print continuation lines flush at column
     0, unindented and visually disconnected from the "hint:" label above
     them. Every line after the first is indented to align under it instead.
+
+    **The hint always wraps; the message only when the caller says it is
+    prose**, which is the chrome/data split CLAUDE.md draws, applied to a
+    line that carries one of each. A hint is a remedy sentence by
+    construction — the same strings `dense.fix_hint` hands `boost doctor`
+    and `boost search`, which fold them — and one of those reached here
+    through ``BoostError`` at 173 columns while the surfaces beside it
+    printed it at 40. A message is *usually* a label and a path (`no such
+    directory: /very/long/...`), and folding that moves the path off the
+    label it names: eleven tests across five files assert the adjacency, and
+    a user greps for it. So ``wrap`` is opt-in per call site, exactly as it
+    is for :func:`warn`, :func:`info` and :func:`dim`; a message that is a
+    sentence passes it, and everything else overflows whole, as an over-wide
+    token does inside :func:`wrap`.
+
+    Each line the caller supplied is wrapped on its own, so a multi-line
+    hint keeps the breaks its author chose.
     """
     _stdout_first(sys.stderr)
-    print(c("Error: ", RED, BOLD) + msg, file=sys.stderr)
+    head = "Error: "
+    body = _wrap_lines(msg, len(head)) if wrap else [msg]
+    print(c(head, RED, BOLD) + body[0], file=sys.stderr)
+    for line in body[1:]:
+        print(" " * len(head) + line, file=sys.stderr)
     if hint:
         lead = "  hint: "
-        body = ("\n" + " " * len(lead)).join(hint.splitlines())
-        print(c(lead + body, DIM), file=sys.stderr)
+        lines: list[str] = []
+        # `if hint` above guarantees splitlines() is non-empty.
+        for para in hint.splitlines():
+            lines.extend(_wrap_lines(para, len(lead)) if para else [""])
+        print(c(lead + ("\n" + " " * len(lead)).join(lines), DIM),
+              file=sys.stderr)
 
 
 def info(msg: str = "", stream=None, wrap: bool = False) -> None:
