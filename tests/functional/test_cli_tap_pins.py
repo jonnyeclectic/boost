@@ -15,6 +15,7 @@ never refreshed says nothing at all.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 
@@ -122,6 +123,27 @@ class TestVectorsResyncWhenATapMoves:
         # The commit handed to sync must be where the tap landed, not where it
         # was: a shard is only importable against the tree it describes.
         assert list(seen["commits"].values()) == [moved]
+
+    def test_the_resync_download_is_reported_as_it_happens(
+            self, boost, moved, monkeypatch):
+        # The one `sync` caller that passed no `on_event`: an update that
+        # moved forty taps fetched forty shards without a line.
+        from boost_cli.core import dense, shards
+
+        def sync(taps, commits, manifest=None, cache_dir=None, on_event=None):
+            for t in taps:
+                if on_event is not None:
+                    on_event(t, "downloading", "2.0KB")
+            return [{"tap": t, "status": "imported", "detail": "ok",
+                     "chunks": 5} for t in taps]
+
+        monkeypatch.setattr(dense, "ready", lambda: True)
+        monkeypatch.setattr(shards, "fetch_manifest", lambda *a, **k: {
+            "version": 1, "provider": "local", "model": "m", "dim": 384,
+            "shards": [], "_url": "file:///x"})
+        monkeypatch.setattr(shards, "sync", sync)
+        res = boost("update", "--taps-only", "--force")
+        assert re.search(r"fetching \S+ 2\.0KB", res.out)
 
     def test_no_matching_shard_says_the_vectors_are_stale(self, boost, moved,
                                                           monkeypatch):

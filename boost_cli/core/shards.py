@@ -399,6 +399,71 @@ def download(row: dict, dest: Path, manifest: dict,
     return dest
 
 
+def plan(taps: list[str], commits: dict[str, str], manifest: dict,
+         built: dict[str, str] | None = None) -> list[dict]:
+    """What :func:`sync` will do with each of `taps`, decided before a byte moves.
+
+    One step per tap, in order: ``{"tap", "status", ...}`` where `status` is
+    "unpublished" (no row), "current" (the store already holds this exact
+    commit's vectors), "refused" (the tap moved past its row — `commit_moved`
+    and `detail` say so) or "download" (the row `sync` will fetch). Every step
+    with a row carries it as ``row``.
+
+    Its own function so a preview and the run it previews give one answer.
+    `boost quickstart --dry-run` counted every tap with a row, so a rerun over
+    a machine whose vectors were all current promised seven imports and then
+    fetched nothing, and neither run named what the download would cost —
+    for `--catalog`, the sum of 459 rows' `bytes`. The embedding-space check
+    stays the caller's (:func:`incompatible`), as it is in `sync`: a manifest
+    from another space plans nothing however its rows read.
+    """
+    index = rows(manifest)
+    built = built or {}
+    steps: list[dict] = []
+    for tap in taps:
+        row = index.get(tap)
+        if row is None:
+            steps.append({"tap": tap, "status": "unpublished"})
+            continue
+        local = commits.get(tap, "")
+        want = str(row.get("commit") or "")
+        if want and local == want == built.get(tap, ""):
+            steps.append({"tap": tap, "status": "current", "row": row})
+            continue
+        if local and want != local:
+            # Caught before the download rather than paid for and then thrown
+            # away by `import_shard`. `commit_moved` names the refusal
+            # `update --shards` can fix by moving the tap, apart from a
+            # refused space or a corrupt shard.
+            steps.append({"tap": tap, "status": "refused",
+                          "commit_moved": True,
+                          "detail": "tap is at %s, shard is for %s"
+                                    % (local[:7], want[:7]),
+                          "row": row})
+            continue
+        steps.append({"tap": tap, "status": "download", "row": row})
+    return steps
+
+
+def download_bytes(steps: list[dict]) -> tuple[int, int]:
+    """(bytes, unsized) for the "download" steps of a :func:`plan`.
+
+    `bytes` sums the manifest's own sizes; `unsized` counts rows that carry
+    none, so a caller can say "at least" rather than present a partial sum as
+    the whole cost. Same test for a usable size as :func:`_size_label`.
+    """
+    total = unsized = 0
+    for step in steps:
+        if step["status"] != "download":
+            continue
+        size = step["row"].get("bytes")
+        if isinstance(size, int) and size > 0:
+            total += size
+        else:
+            unsized += 1
+    return total, unsized
+
+
 #: One shard's outcome. `status` is the vocabulary both callers render:
 #: "imported" (vectors landed), "current" (store already holds this exact
 #: commit's vectors, nothing downloaded), "unpublished" (no row for this tap),
@@ -436,36 +501,19 @@ def sync(taps: list[str], commits: dict[str, str],
     if why:
         return [{"tap": t, "status": "incompatible", "detail": why}
                 for t in taps]
-    index = rows(manifest)
     cache_dir = cache_dir or (paths.cache_dir() / "shards")
-    built = built or {}
     # Annotated because the rows are not uniform: only an imported shard
     # carries `chunks`, and inference from the first append would fix the value
     # type as `str`.
     results: list[dict] = []
-    for tap in taps:
-        row = index.get(tap)
-        if row is None:
-            results.append({"tap": tap, "status": "unpublished"})
-            _emit(on_event, tap, "unpublished", "")
+    for step in plan(taps, commits, manifest, built):
+        tap = step["tap"]
+        if step["status"] != "download":
+            results.append({k: v for k, v in step.items() if k != "row"})
+            _emit(on_event, tap, step["status"],
+                  "commit moved" if step.get("commit_moved") else "")
             continue
-        local = commits.get(tap, "")
-        want = str(row.get("commit") or "")
-        if want and local == want == built.get(tap, ""):
-            results.append({"tap": tap, "status": "current"})
-            _emit(on_event, tap, "current", "")
-            continue
-        if local and str(row.get("commit")) != local:
-            # Caught here as well as in `import_shard` so the download is
-            # skipped rather than paid for and then thrown away.
-            # `commit_moved` names the refusal `update --shards` can fix by
-            # moving the tap, apart from a refused space or a corrupt shard.
-            results.append({"tap": tap, "status": "refused",
-                            "commit_moved": True,
-                            "detail": "tap is at %s, shard is for %s"
-                                      % (local[:7], str(row["commit"])[:7])})
-            _emit(on_event, tap, "refused", "commit moved")
-            continue
+        row, local = step["row"], commits.get(tap, "")
         dest = cache_dir / (tap.replace("/", "__") + ".shard.json")
         try:
             _emit(on_event, tap, "downloading", _size_label(row))
