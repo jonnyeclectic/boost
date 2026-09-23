@@ -208,6 +208,7 @@ drifts from its source (CI fails the build otherwise):
 | `docs/roadmap.html` | one file per item (`board: code`) under `docs/roadmap/items/` | `python3 scripts/build_roadmap.py` |
 | `docs/design-roadmap.html` | one file per item (`board: design`) under `docs/roadmap/items/` | `python3 scripts/build_roadmap.py` |
 | `docs/commands.html` | the CLI itself — `COMMANDS` + each command's argparse parser | `python3 scripts/build_command_reference.py` |
+| `docs/vex/openvex.json` | one file per statement under `docs/vex/statements/` plus `docs/vex/meta.md` | `python3 scripts/build_vex.py` |
 
 Or regenerate everything at once with `make generate`. CI runs the matching
 `--check` for each and fails on drift; the same guards live in

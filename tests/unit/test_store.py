@@ -3876,6 +3876,35 @@ class TestALinkThatIsAlreadyRightIsNotRewritten:
         store.install(brainstorming, force=True)
         assert link.resolve() == store.skill_store_dir("brainstorming").resolve()
 
+    @pytest.mark.parametrize("side", ["link", "target"])
+    @pytest.mark.parametrize("exc", [OSError("resolve refused"),
+                                     RuntimeError("symlink loop")])
+    def test_a_resolve_that_raises_is_not_linked(self, brainstorming,
+                                                 monkeypatch, exc, side):
+        # How this handler is reached differs by interpreter: 3.12 raises
+        # RuntimeError for a symlink loop, while on 3.13 a *non-strict*
+        # resolve of a loop does not raise at all — it returns the path
+        # unchanged (measured: `resolve()` answers, `resolve(strict=True)`
+        # raises OSError 62) — so only a resolve that genuinely fails gets
+        # here. Forcing each exception on each side covers the branch on
+        # every version, and pins what it must answer: not linked, so the
+        # caller replaces the link.
+        link = _link("cursor")
+        target = store.skill_store_dir("brainstorming")
+        # By identity, not by name: both paths end in "brainstorming", so a
+        # name guard would answer for whichever resolve ran first and leave
+        # the other arm of the `try` unexercised.
+        raiser = link if side == "link" else target
+        real = Path.resolve
+
+        def raising(self, *a, **kw):
+            if self == raiser:
+                raise exc
+            return real(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "resolve", raising)
+        assert store._already_links(link, target) is False
+
 
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="creating a symlink needs a privilege on Windows")
