@@ -2091,16 +2091,9 @@ member, so the rule is enforced rather than stated.</p>
       </article>
 
       <article class="cap rcard" id="mcp-miss-reply-echoes-the-whole-query">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">MCP · UX</span></div>
         <h3>A search that finds nothing echoes the whole query back into the agent's context</h3>
-        <p><b>Found by the audit of the MCP surface.</b> <code>mcp.no_results</code> returns
-<code>"no skills match %r" % query</code>, unbounded, and the miss reply is the one an agent hits
-repeatedly while it rephrases. Every miss therefore costs context in proportion to the query rather
-than a fixed line — a 1:1 amplifier on a surface where the result rendering elsewhere is measured
-and capped. A 100,000-character query comes back whole.
-<br><br>
-<b>Fix.</b> Truncate the echoed query the way the result rows are already truncated, and pin the cap
-in the round-trip tests.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/mcp-miss-reply-echoes-the-whole-query.md">Write-up &middot; mcp-miss-reply-echoes-the-whole-query.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>

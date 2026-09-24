@@ -857,6 +857,67 @@ class TestTheEmptyCatalogAnswersDifferentlyFromAMiss:
         assert "boost tap --defaults" in reply
 
 
+class TestTheMissReplyDoesNotCostWhatTheQueryCost:
+    """The miss is the reply an agent hits repeatedly while it rephrases, and
+    it echoed the query back whole. That made the one *recurring* reply on this
+    surface the only unbounded one — a 1:1 amplifier beside a body capped at
+    READ_LIMIT and a description capped at chat.DESC_CHARS.
+    """
+
+    def test_a_real_query_is_echoed_unchanged(self):
+        # 120 sits above the longest query this repo grades itself on (87
+        # characters, over 141 rows of tests/eval/golden*.jsonl), so the cap
+        # must never fire on a question anyone actually asks. The functional
+        # suite pins the short form byte for byte.
+        q = "x" * mcp.QUERY_ECHO_CHARS
+        assert mcp.no_results(q, tapped=4) == "no skills match %r" % q
+
+    def test_a_huge_query_comes_back_bounded(self):
+        reply = mcp.no_results("word " * 40000, tapped=4)
+        assert len(reply) < 200, len(reply)
+        assert reply.endswith("…'")
+
+    def test_the_bound_holds_for_a_query_with_no_spaces_to_cut_on(self):
+        # rsplit(" ") finds no boundary inside the budget, so the cut has to
+        # fall back to a hard one rather than returning the whole string.
+        reply = mcp.no_results("z" * 100000, tapped=4)
+        assert len(reply) < 200, len(reply)
+
+    def test_newlines_are_collapsed_before_the_cut_not_after(self):
+        # repr expands what it cannot print, so a bound applied to text that
+        # still holds newlines is not a bound: 120 of them render as 240
+        # characters of backslash-n.
+        reply = mcp.no_results("\n" * 100000, tapped=4)
+        assert "\\n" not in reply
+        assert len(reply) < 200, len(reply)
+
+    def test_an_unsearchable_term_is_bounded_too(self):
+        # Same amplifier by the other road: `dropped` holds words split off
+        # the query, so a query with no whitespace is one enormous term.
+        reply = mcp.no_results("q", tapped=4, dropped=["!" * 100000])
+        assert len(reply) < 400, len(reply)
+
+    def test_many_unsearchable_terms_are_counted_not_listed(self):
+        reply = mcp.no_results("q", tapped=4,
+                               dropped=["!%d" % i for i in range(500)])
+        assert "and 492 more" in reply
+        assert len(reply) < 400, len(reply)
+
+    def test_a_short_dropped_list_is_still_listed_in_full(self):
+        reply = mcp.no_results("q", tapped=4, dropped=["c++", "R"])
+        assert "'c++', 'R'" in reply
+        # "2 or more ASCII letters" is in the same sentence, so count the
+        # quoted terms rather than grepping for the word "more".
+        assert reply.count("'") == 4, reply
+
+    def test_echo_cuts_on_a_word_boundary_when_there_is_one(self):
+        cut = mcp.echo("alpha bravo charlie delta", limit=12)
+        assert cut == "alpha bravo …"
+
+    def test_echo_leaves_text_inside_the_budget_alone(self):
+        assert mcp.echo("alpha bravo", limit=12) == "alpha bravo"
+
+
 def _descriptions(ai_available: bool = True):
     """Every tool description, rendered for a stated machine.
 

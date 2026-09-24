@@ -499,6 +499,45 @@ def overlap_note(installed_hits: int, total_hits: int) -> str:
             % (installed_hits, total_hits))
 
 
+# What an agent is allowed to have read back to it out of its own query.
+#
+# The miss reply is the one an agent hits repeatedly while it rephrases, and
+# `"no skills match %r" % query` made its cost proportional to the query — a
+# 1:1 amplifier on the surface where every other rendering is measured and
+# capped (:data:`READ_LIMIT` for a body, ``chat.DESC_CHARS`` for a
+# description). A 100,000-character query came back whole, once per attempt.
+#
+# 120 is measured against the queries this repo grades itself on: 141 rows
+# across `tests/eval/golden.jsonl` and `golden-natural.jsonl`, longest 87
+# characters. So the cap never fires on a question anyone has actually asked,
+# and the reply stays byte-identical for them — which matters, because the
+# short form is pinned in the functional suite.
+QUERY_ECHO_CHARS = 120
+
+# How many unsearchable terms the ``dropped`` branch names before it counts
+# the rest. Same amplifier by the other road: `dropped` holds words split off
+# the query, so one query with no whitespace is one enormous term, and a
+# pathological query is arbitrarily many of them.
+ECHO_TERMS = 8
+
+
+def echo(text: str, *, limit: int = QUERY_ECHO_CHARS) -> str:
+    """The caller's own text, bounded, ready for ``%r``.
+
+    Whitespace is collapsed first so that a multi-line query costs its
+    characters once rather than again as ``\n`` escapes — ``repr`` expands
+    what it cannot print, so the bound has to be applied to text that will not
+    grow. The cut lands on a word boundary when there is one inside the budget
+    and hard otherwise, the way ``chat._describe`` cuts a description, and the
+    ellipsis is the notice: unlike :func:`read_reply` there is no second half
+    to fetch, and nothing here is payload the agent will act on.
+    """
+    one = " ".join(text.split())
+    if len(one) <= limit:
+        return one
+    return (one[:limit].rsplit(" ", 1)[0] or one[:limit]) + " …"
+
+
 def no_results(query: str, *, tapped: int,
                dropped: Sequence[str] = ()) -> str:
     """The reply for a search that returned nothing.
@@ -521,14 +560,20 @@ def no_results(query: str, *, tapped: int,
     what makes the wrong answer worse here than on the CLI. It reports what
     happened and the rule, so a retry is possible. The setup branch still wins:
     an untapped machine could not have matched anything either way.
+
+    Both echoing branches are bounded by :func:`echo` — see
+    :data:`QUERY_ECHO_CHARS` for why the one reply an agent hits repeatedly
+    must not cost it in proportion to what it typed.
     """
     if tapped > 0 and dropped:
+        shown = ", ".join("%r" % echo(t) for t in dropped[:ECHO_TERMS])
+        if len(dropped) > ECHO_TERMS:
+            shown += " and %d more" % (len(dropped) - ECHO_TERMS)
         return ("%s did not reach the index, so nothing was searched — a term "
                 "needs 2 or more ASCII letters or digits. Retry with a "
-                "plain-word description of the task."
-                % ", ".join("%r" % t for t in dropped))
+                "plain-word description of the task." % shown)
     if tapped > 0:
-        return "no skills match %r" % query
+        return "no skills match %r" % echo(query)
     # Addressed to the user via the agent, and naming ONE command. Telling an
     # agent to run `boost mcp --seed` itself would have it re-register the
     # server with every CLI on PATH as a side effect, and would step straight
