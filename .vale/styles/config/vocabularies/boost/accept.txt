@@ -178,6 +178,7 @@ unkilled
 unlinking
 unpatched
 unregister
+unreferenced
 unremediated
 unstaged
 untap

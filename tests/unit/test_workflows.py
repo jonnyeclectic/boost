@@ -99,6 +99,20 @@ class TestWorkflowTarget:
                                       "ship", base=Path("/repo"))
         assert p == Path("/repo/.claude/commands/ship.md")
 
+    def test_a_declared_dotdir_overrides_the_derived_project_root(self):
+        # Same contract as `rules.rule_target`: passed in, never looked up, so
+        # this module needs no config read to stay correct for an agent whose
+        # user dir moves with an env var.
+        p = workflows.workflow_target(Path("/opt/moved/skills"), "commands",
+                                      "ship", base=Path("/repo"),
+                                      agent="claude-code", dotdir=".claude")
+        assert p == Path("/repo/.claude/commands/ship.md")
+
+    def test_a_declared_dotdir_is_ignored_in_user_scope(self):
+        p = workflows.workflow_target(Path("/opt/moved/skills"), "commands",
+                                      "ship", dotdir=".claude")
+        assert p == Path("/opt/moved/commands/ship.md")
+
     def test_project_scope_subagent_under_repo(self):
         p = workflows.workflow_target(Path("/h/.claude/skills"), "agents",
                                       "rev", base=Path("/repo"))

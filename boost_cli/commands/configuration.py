@@ -1623,7 +1623,13 @@ def _tool_install(args: dict):
 def _tool_doctor(args: dict):
     plan = store.sync_plan()
     issues = sum(len(v) for v in plan.values())
+    # Two different questions, and answering the second with the first is what
+    # made this tool disagree with every other one. `taps` is the literal clone
+    # list — the rows config.json holds, boost's own among them. `tapped` is
+    # "has this user configured anything", which `_tool_search` and
+    # `_tool_list` already ask through `builtin.configured_tap_count`.
     taps = registry.list_taps()
+    tapped = builtin.configured_tap_count()
     everything = lockfile.all_installed()
     lines = ["installed skills: %d" % len(everything["skill"]),
              "installed rules: %d · workflows: %d"
@@ -1636,8 +1642,8 @@ def _tool_doctor(args: dict):
              # concatenated every tap's cache — 71,655 entries on a real
              # install — to produce this one integer; `kind_counts` does the
              # same reads without the accumulation.
-             "taps: %d (%d items available)"
-             % (len(taps), sum(catalog.kind_counts().values()))]
+             mcp.tap_line(tapped=tapped, total=len(taps),
+                          items=sum(catalog.kind_counts().values()))]
     for key, vals in plan.items():
         if vals:
             lines.append("%s: %s" % (key, ", ".join(str(v) for v in vals)))
@@ -1667,7 +1673,7 @@ def _tool_doctor(args: dict):
         lines.append("%s — boost is running on defaults, so the user's taps are "
                      "not listed; ask the user to repair the file or re-add "
                      "their taps (run `boost doctor` for details)" % cfg_err)
-    elif not taps:
+    elif not tapped:
         # Same command, same order, as mcp.no_results: an agent that calls
         # both tools in one session must not see the recommendation flipped
         # and read it as two different fixes. `boost tap --defaults` leads
@@ -1677,7 +1683,7 @@ def _tool_doctor(args: dict):
                      "the user to run `boost tap --defaults` to add the "
                      "recommended ones")
     if total == 0:
-        if taps:
+        if tapped:
             lines.append("healthy — no issues found")
     elif mat_issues or cfg_err:
         lines.append("%d issue(s) — run `boost doctor` for details" % total)
@@ -1874,9 +1880,8 @@ REGISTRY.register(
     "Turn a skill you found with boost_search into permanent capability: copied "
     "into the canonical store and wired into every agent you have enabled, in "
     "one step — Claude Code, Cursor, Windsurf and Antigravity CLI by "
-    "symlink, Gemini CLI by reading that same store directly. Prefer it to "
-    "pasting instructions into "
-    "a prompt, which lasts one "
+    "symlink, Gemini CLI and Codex by reading that same store directly. "
+    "Prefer it to pasting instructions into a prompt, which lasts one "
     "session and helps nobody else: an installed skill is version-tracked, "
     "survives restarts, updates cleanly, and your team can install the "
     "identical thing by name. Worth knowing before you call it: what happens "
@@ -2045,9 +2050,24 @@ def _offer_boost_first(hosts: list[str]) -> None:
         return                      # already installed; do not re-ask
     body = (builtin.source_dir() / (builtin.BUILTIN_RULES[0] + ".mdc"))
     scoped_agents = {builtin.AGENT_FOR_HOST.get(h) for h in hosts}
+    # materializing_agents, not enabled_agents: this is a *rule*, so the
+    # preview has to be built from the set the rule install actually writes to,
+    # or it names a path nothing ever creates. AGENT_FOR_HOST lists only
+    # claude-code and gemini today and both materialize rules, so the two sets
+    # coincide and this is a guard rather than a fix.
+    #
+    # Note what it does and does not cover. `only_agents` below is
+    # `scoped_agents`, not this filtered list, so a skills-only agent added to
+    # AGENT_FOR_HOST would be dropped from the preview and still passed to the
+    # install, where `narrow_materializing` drops it again — silently, since
+    # the intersection is non-empty as long as one real agent remains. If it
+    # were the *only* scoped agent, `targets` is empty and the early return
+    # below means the offer is never made and `store.install` never runs. So
+    # the failure this prevents is a printed path that no install backs, not a
+    # refusal.
     targets = [str(rules.rule_target(agent, skills_dir,
                                      builtin.BUILTIN_RULES[0])[1])
-               for agent, skills_dir in agents.enabled_agents().items()
+               for agent, skills_dir in agents.materializing_agents().items()
                if agent in scoped_agents]
     if not targets:
         return

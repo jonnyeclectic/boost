@@ -9,7 +9,7 @@ from . import config, paths
 
 DISPLAY = {"claude-code": "Claude Code", "windsurf": "Windsurf",
            "cursor": "Cursor", "gemini": "Gemini CLI",
-           "antigravity": "Antigravity CLI"}
+           "antigravity": "Antigravity CLI", "codex": "Codex"}
 
 
 def known_agents() -> dict[str, dict]:
@@ -32,8 +32,52 @@ def known_agents() -> dict[str, dict]:
             # agent where only the skills surface is known — see
             # :func:`materializing_agents`.
             "skills_only": bool(spec.get("skills_only", False)),
+            # Defaults True. False marks an agent whose *rules* surface is
+            # verified but whose slash-command format is not, so it takes rules
+            # and skills but no workflows — a finer cut than `skills_only`,
+            # which turns both off. See :func:`workflow_agents`.
+            "workflows": bool(spec.get("workflows", True)),
+            # Defaults False: assume an agent shown the same skill through two
+            # of its discovery tiers will complain about it, because Gemini CLI
+            # does. True marks one that collapses them instead — see
+            # :func:`dedupes_by_path`.
+            "dedupes_by_path": bool(spec.get("dedupes_by_path", False)),
+            # Defaults "": derive the repo-local dotdir from the user dir, as
+            # every agent with a fixed path can. A non-empty value declares it
+            # — see :func:`project_dotdir`.
+            "project_dir": str(spec.get("project_dir", "")),
         }
     return out
+
+
+def project_dotdir(agent: str, skills_dir) -> str:
+    """The repo-local directory name `agent` uses under a project base.
+
+    Normally derived: ``~/.claude/skills`` -> ``.claude``, so an agent someone
+    added by hand in ``config.json`` lands in the project under the name it
+    uses at home. That derivation assumes the user dir is a fixed path, and
+    Codex's is not — its default is ``${CODEX_HOME:-~/.codex}/skills``. Under a
+    relocated ``CODEX_HOME=/opt/codexhome`` the derivation yields ``codexhome``,
+    so `boost install --local` would write ``<repo>/codexhome/skills/<name>``
+    and report success. Codex's project skill root is the literal
+    ``<project>/.codex/skills`` whatever ``CODEX_HOME`` says, so that copy is
+    somewhere it never reads; and the *project* lock is a committed file, so
+    the row records a repo-relative path that one machine's environment
+    invented. The spec therefore declares the name, and this returns the
+    declared one whenever there is one.
+
+    A declared value is a path segment boost joins under the project base, and
+    ``config.json`` is user-editable, so it is checked rather than trusted: one
+    component, no separator, no ``.``/``..``. A value that fails goes back to
+    the derived name instead of escaping the repo — `scopes.ensure_in_base`
+    would catch an escape at install time, but as a crash at the end of a
+    command rather than a name that makes sense, and the sweeps that walk
+    project roots never reach that check at all.
+    """
+    declared = (known_agents().get(agent) or {}).get("project_dir") or ""
+    if declared in ("", ".", "..") or "/" in declared or "\\" in declared:
+        return Path(skills_dir).parent.name
+    return declared
 
 
 def enabled_agents() -> dict[str, Path]:
@@ -45,18 +89,23 @@ def linking_agents() -> dict[str, Path]:
     """The enabled agents that need a skill *symlinked* into their own dir.
 
     Most agents do: they only look inside their own config directory, so a
-    skill is invisible until boost links it there. Gemini CLI is the exception —
-    it implements the Agent Skills standard and discovers ``~/.agents/skills``
-    directly, which is exactly :func:`paths.store_dir`. Linking for it would put
-    the same skill in two of its discovery tiers, and since the ``.agents``
-    alias out-ranks ``.gemini/skills`` within the user tier, the copy boost
-    linked could never win — it would only make Gemini log a "Skill conflict
-    detected" line per skill, every session.
+    skill is invisible until boost links it there. Gemini CLI and Codex are the
+    exceptions — both discover ``~/.agents/skills`` directly, which is exactly
+    :func:`paths.store_dir`. Linking for them would put the same skill in two of
+    their discovery tiers, and since the ``.agents`` alias out-ranks
+    ``.gemini/skills`` within Gemini's user tier, the copy boost linked could
+    never win — it would only make Gemini log a "Skill conflict detected" line
+    per skill, every session. Codex collapses the pair silently instead (see
+    :func:`dedupes_by_path`), so there the cost is redundant work rather than
+    noise; not linking is right either way.
 
     So this is the set to iterate for anything symlink-shaped (link, unlink,
-    stale-link sweeps, coverage checks). :func:`enabled_agents` remains the set
-    for everything that materializes *into* an agent's dotdir — rules and
-    workflows — because those have no canonical store to be read from.
+    stale-link sweeps, coverage checks) — including the sweep in
+    :func:`store.sync_plan`, whose only ownership test is ``points_into_store``:
+    over a native-store agent's skills dir it would delete links boost never
+    created. What materializes *into* an agent's dotdir is a different set again
+    (:func:`materializing_agents` for rules, :func:`workflow_agents` for
+    workflows), because those have no canonical store to be read from.
     """
     return {n: s["dir"] for n, s in known_agents().items()
             if s["enabled"] and s["links_skills"]}
@@ -99,6 +148,45 @@ def materializing_agents(base=None) -> dict[str, Path]:
     """
     return {n: d for n, d in agents_for_scope(base).items()
             if not known_agents()[n]["skills_only"]}
+
+
+def workflow_agents(base=None) -> dict[str, Path]:
+    """Agents a *workflow* may be written into: :func:`materializing_agents`
+    minus those with no verified slash-command format.
+
+    Rules and workflows are not one surface. An agent can document exactly
+    where its standing instructions live and still have no user-installable
+    command format at all, and `skills_only` cannot express that — it turns
+    both off, which would under-claim a surface boost has verified.
+
+    Codex CLI is the case. Its instructions file is `AGENTS.md`
+    (:data:`rules.CONTEXT_FILES`), but 0.156.1 ships no `prompts/` or
+    `commands/` directory, no command subcommand, and its plugin importer
+    *rewrites* a Claude `commands/*.md` into a `SKILL.md` on disk rather than
+    running it as a command. A Markdown file dropped in `~/.codex/commands/`
+    would be installed, reported, and never loaded.
+    """
+    return {n: d for n, d in materializing_agents(base).items()
+            if known_agents()[n]["workflows"]}
+
+
+def dedupes_by_path() -> set[str]:
+    """Agents that collapse two discovery entries resolving to the same file.
+
+    The assumption everywhere else is Gemini CLI's behaviour: show it one skill
+    through two tiers and it logs a "Skill conflict detected" line per skill per
+    session, which is what :func:`store.duplicate_discovery` exists to warn
+    about. Codex CLI de-duplicates by *resolved* path instead — a symlink in
+    `~/.codex/skills` pointing at a store skill is listed exactly once, under
+    the canonical path, with no warning (verified against 0.156.1 via
+    `codex debug prompt-input` and the app-server's `skills/list`). Reporting
+    that as an issue would be a false positive, so these agents are skipped.
+
+    It is deliberately not a reason to start linking: see the `codex` entry in
+    :data:`config.DEFAULTS`.
+    """
+    return {n for n, s in known_agents().items()
+            if s["enabled"] and s["dedupes_by_path"]}
 
 
 def native_store_agents() -> dict[str, Path]:

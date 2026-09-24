@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from boost_cli.core import config, paths, typedvalue
+from boost_cli.core import agents, config, paths, typedvalue
 from boost_cli.errors import BoostError
 
 
@@ -41,7 +41,7 @@ class TestLoadDefaults:
         # declaration order, and each new agent is appended so an existing
         # config.json's key order keeps matching the defaults' prefix.
         assert list(cfg["agents"]) == ["claude-code", "windsurf", "cursor",
-                                       "gemini", "antigravity"]
+                                       "gemini", "antigravity", "codex"]
         assert cfg["agents"]["cursor"] == {"dir": "~/.cursor/skills",
                                            "enabled": True}
         # links_skills False is the whole point of the gemini entry: it reads
@@ -57,6 +57,30 @@ class TestLoadDefaults:
         assert cfg["agents"]["antigravity"] == {
             "dir": "~/.gemini/antigravity-cli/skills", "enabled": True,
             "project_scope": False, "skills_only": True}
+        # Codex CLI — and the ChatGPT desktop app, which ships the same binary
+        # under bundle id com.openai.codex. Native-store like gemini
+        # (~/.agents/skills is one of its skill roots), rules via AGENTS.md but
+        # no slash-command format, and it collapses a duplicate on the resolved
+        # path instead of warning. Its dir is the one that is not a literal:
+        # Codex reads $CODEX_HOME and only defaults it to ~/.codex, and a rule
+        # written to the default when it has moved is a file Codex never opens.
+        # `project_dir` is declared rather than derived for the same reason:
+        # every other agent's repo dotdir falls out of its user dir, and
+        # Codex's user dir moves.
+        assert cfg["agents"]["codex"] == {
+            "dir": "${CODEX_HOME:-~/.codex}/skills", "enabled": True,
+            "links_skills": False, "workflows": False,
+            "dedupes_by_path": True, "project_dir": ".codex"}
+
+    def test_the_codex_dir_follows_codex_home(self, sandbox, monkeypatch,
+                                              tmp_path):
+        # The default is a template, so pin that it is actually resolved — a
+        # literal "~/.codex/skills" would pass every name-level assertion.
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "moved"))
+        assert agents.known_agents()["codex"]["dir"] == tmp_path / "moved" / "skills"
+        monkeypatch.delenv("CODEX_HOME")
+        assert agents.known_agents()["codex"]["dir"] == (
+            paths.home() / ".codex" / "skills")
 
 
 class TestDeepMerge:

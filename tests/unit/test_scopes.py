@@ -192,6 +192,34 @@ def test_skill_target_project_scope_lands_in_the_repo(tmp_path):
         tmp_path / ".claude" / "skills" / "brainstorm"
 
 
+def test_agent_root_takes_an_explicit_dotdir_over_the_derived_one(tmp_path):
+    # Codex's user dir moves with $CODEX_HOME; its repo dir does not. Deriving
+    # from a relocated user dir gives `<repo>/moved/skills`, which Codex never
+    # reads and which the *committed* lock would then record.
+    assert scopes.agent_root(Path("/elsewhere/moved/skills"), tmp_path,
+                             ".codex") == tmp_path / ".codex"
+
+
+def test_an_explicit_dotdir_is_ignored_in_user_scope(tmp_path):
+    # User scope's answer is the real parent on disk — overriding it there
+    # would write to a directory the agent does not read.
+    assert scopes.agent_root(Path("/elsewhere/moved/skills"), None,
+                             ".codex") == Path("/elsewhere/moved")
+
+
+def test_skill_target_threads_the_dotdir_through(tmp_path):
+    assert scopes.skill_target(Path("/elsewhere/moved/skills"), "brainstorm",
+                               base=tmp_path, dotdir=".codex") == \
+        tmp_path / ".codex" / "skills" / "brainstorm"
+
+
+def test_skill_target_still_derives_when_no_dotdir_is_given(tmp_path):
+    # The override is opt-in: every agent with a fixed user dir keeps deriving.
+    assert scopes.skill_target(Path("/home/u/.cursor/skills"), "brainstorm",
+                               base=tmp_path) == \
+        tmp_path / ".cursor" / "skills" / "brainstorm"
+
+
 def test_skill_target_carries_a_nonstandard_leaf_name(tmp_path):
     # An agent configured with a different folder name keeps it in the project.
     assert scopes.skill_target(Path("/home/u/.zed/prompts"), "x", base=tmp_path) == \

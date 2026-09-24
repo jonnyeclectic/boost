@@ -1185,14 +1185,20 @@ def _install_project_skill(entry: dict, force: bool = False,
 
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
+    explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
-    # agents_for_scope, not enabled_agents: project scope derives a repo-local
-    # dotdir from the agent's own, which holds for every agent whose skills dir
-    # sits one level under it. Antigravity's sits two, so it is excluded rather
-    # than given an invented `<repo>/antigravity-cli/`.
-    targets = [(agent, scopes.skill_target(skills_dir, name, base=resolved_base))
-               for agent, skills_dir in agents.agents_for_scope(resolved_base).items()
-               if not only_agents or agent in only_agents]
+    # agents_for_scope, not enabled_agents: project scope puts each agent under
+    # a repo-local dotdir, and Antigravity's user layout is two levels deep with
+    # no known project path, so it is excluded rather than given an invented
+    # `<repo>/antigravity-cli/`. The dotdir itself comes from
+    # agents.project_dotdir rather than from this dir, because a dir that can
+    # move at runtime must not move the repo path — see that function.
+    targets = [(agent, scopes.skill_target(
+                    skills_dir, name, base=resolved_base,
+                    dotdir=agents.project_dotdir(agent, skills_dir)))
+               for agent, skills_dir in narrow_project_agents(
+                   agents.agents_for_scope(resolved_base), only_agents, name,
+                   explicit=explicit_agents).items()]
 
     # Refuse to write through a symlink that leaves the repo. An agent dir like
     # ``.claude/skills`` is committed, so a hostile clone can ship it as a
@@ -1218,7 +1224,10 @@ def _install_project_skill(entry: dict, force: bool = False,
 
     materializations: list[dict] = []
     linked: list[str] = []
-    first: Path | None = None
+    # `narrow_project_agents` above refuses an empty set, so there is always a
+    # first target — the result fields below (`sha256`, `dest`, the score, the
+    # MCP scan) all read one real directory and used to be reachable with None.
+    first: Path = targets[0][1]
     for agent, dest in targets:
         _copy_skill(src, dest)
         # Relative, because this record is committed and read on machines where
@@ -1226,12 +1235,6 @@ def _install_project_skill(entry: dict, force: bool = False,
         materializations.append(
             {"agent": agent, "path": scopes.relative_to_base(resolved_base, dest)})
         linked.append(agent)
-        if first is None:
-            first = dest
-
-    if first is None:
-        raise BoostError("no enabled agents to install %s into" % name,
-                        hint="enable one with `boost config`")
 
     # A filtered reinstall (`--force --agent cursor`) refreshes only the agents
     # it names. Carrying the untouched ones forward keeps the lock describing
@@ -1328,8 +1331,15 @@ def project_sync_plan(base=None) -> dict[str, list]:
             path = scopes.resolve_in_base(resolved_base, m.get("path"))
             if path is None or not path.is_dir():
                 plan["missing"].append((name, m.get("agent", "?")))
-    for skills_dir in agents.enabled_agents().values():
-        root = scopes.agent_root(skills_dir, resolved_base) / Path(skills_dir).name
+    # project_agents, and the declared dotdir: the scan must look exactly where
+    # the install writes. Walking enabled_agents() reached `<repo>/antigravity-cli`,
+    # a path project install never writes, and deriving the dotdir would miss
+    # a relocated Codex's real `<repo>/.codex` — reporting nothing while a copy
+    # sat there unreferenced.
+    for agent, skills_dir in agents.project_agents().items():
+        root = (scopes.agent_root(skills_dir, resolved_base,
+                                  agents.project_dotdir(agent, skills_dir))
+                / Path(skills_dir).name)
         if not root.is_dir():
             continue
         for child in sorted(root.iterdir()):
@@ -1382,6 +1392,132 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
     return actions
 
 
+def narrow_project_agents(scoped: dict, only_agents, name: str,
+                          *, explicit: bool) -> dict:
+    """Apply an ``--agent`` narrowing to a project-scope skill's agent set.
+
+    The skill-shaped twin of :func:`narrow_materializing`, extracted so the
+    live install and `install --dry-run` refuse in the same words at the same
+    point. They did not: the preview printed its "would install … into <repo>"
+    header with zero ``copy →`` lines and exited 0 where the run raised, which
+    is the one thing a preview must not do.
+
+    ``scoped`` is `agents.agents_for_scope(base)` — agent name to its
+    repo-local skills dir. Returns the kept subset, in the caller's order.
+    """
+    kept = {a: d for a, d in scoped.items() if not only_agents or a in only_agents}
+    if not kept:
+        # Same provenance problem `narrow_materializing` has, at the third
+        # replay site. `preserved_agent_scope` has already turned a *recorded*
+        # scope into `only_agents` by the time this runs, so the old "no
+        # enabled agents" was wrong twice over: an agent narrowed away is
+        # usually enabled, and attributing the narrowing to nothing at all left
+        # the user with no way to tell a flag they typed from one the lock
+        # replayed for them.
+        known = agents.known_agents()
+        if only_agents:
+            listed = ", ".join(sorted(only_agents))
+            why = ("--agent " + listed) if explicit \
+                else "its recorded agents (%s)" % listed
+            # The same `no_surface` split `narrow_materializing` makes, for the
+            # same reason: at project scope the usual cause is `project_scope:
+            # False` — an agent that is enabled and whose user-scope layout has
+            # no repo-local equivalent — and telling that user to enable it
+            # names a setting that is already true and would change nothing.
+            no_surface = [n for n in only_agents
+                          if n in known and known[n]["enabled"]]
+            widen = ("widen with `boost install %s --local --force "
+                     "--agent <name>`" % name)
+            # No `no_surface` means every named agent is *disabled*, and then
+            # widening is the wrong first move: `narrow_materializing` says
+            # "enable one …, or widen …" on that same input, and the twins
+            # disagreeing on one shape is how a user learns to distrust both.
+            # The widen clause stays either way — a recorded scope is a thing
+            # the user may never have typed.
+            hint = ("%s has no repo-local skills path, so %s"
+                    % (", ".join(sorted(no_surface)), widen)) if no_surface \
+                else ("enable one with `boost config set "
+                      "agents.<name>.enabled true`, or %s" % widen)
+        else:
+            why = "no enabled agent takes a project-scope skill"
+            # Un-narrowed, so every candidate was dropped by the scope itself.
+            # If some are enabled, enabling is not the remedy either. "at user
+            # scope" rather than "without `--local`" because `--local` is an
+            # alias for `--scope project`, and naming one spelling tells half
+            # the users to drop a flag they did not pass.
+            live = [n for n, spec in known.items() if spec["enabled"]]
+            hint = ("no enabled agent has a repo-local skills path (%s) — "
+                    "install at user scope instead" % ", ".join(sorted(live))
+                    if live
+                    else "enable one with "
+                         "`boost config set agents.<name>.enabled true`")
+        raise BoostError("no agent left to install %s into: %s" % (name, why),
+                        hint=hint)
+    return kept
+
+
+def narrow_materializing(targets: dict, only_agents, name: str, kind: str,
+                          *, explicit: bool) -> dict:
+    """Apply an ``--agent`` narrowing to a rule/workflow target set, or refuse.
+
+    An empty intersection is not an empty install: everything after the loop
+    still runs, so `boost install <workflow> --agent codex` wrote a lock row
+    with zero materializations, exited 0, and printed "(no enabled agents)"
+    about an agent that is enabled. Nothing downstream could see it either —
+    `sync_plan` asks ``any(... for m in materializations)`` and `any([])` is
+    False, so doctor called the phantom fully materialized and uninstall
+    removed nothing.
+
+    `--agent` names a *known* agent, which is the only thing `_check_agents`
+    can check; whether that agent takes this kind is per-kind and resolved
+    here. So the error says which of the two it is.
+
+    ``explicit`` is keyword-only and has no default on purpose. It defaulted to
+    True, which is the very wording this argument exists to suppress, and both
+    call sites pass it — so the default was a wrong answer waiting for a third
+    caller to forget the argument, and it would have been wrong silently.
+
+    ``explicit`` is False when the narrowing came from the lock rather than the
+    command line. `preserved_agent_scope` replays a recorded scope before this
+    runs, so the two are indistinguishable by the time the guard fires, and
+    disabling the one agent a rule was installed for made `boost update` report
+    ``--agent codex`` at a user who had typed no such flag. It still refuses —
+    returning ``{}`` is what wrote the phantom row this guard exists to stop —
+    but it says where the narrowing came from and how to widen it.
+
+    The refusal is ``not kept``, not ``only_agents and not kept``: an empty
+    target set is a phantom row whichever way it got empty. Guarding only the
+    narrowing left the *config* route open — every rule-capable agent disabled,
+    or every candidate ``skills_only``, or (for a workflow) every candidate
+    ``workflows: false`` — where ``only_agents`` is None, the loop body never
+    runs, and `set_rule`/`set_workflow` still write ``materializations: []``
+    and exit 0. `_install_project_skill` has guarded its un-narrowed case since
+    it was written; these two had not.
+    """
+    kept = {n: d for n, d in targets.items()
+            if not only_agents or n in only_agents}
+    if not kept:
+        if not only_agents:
+            raise BoostError(
+                "no agent left to install %s %s into: no enabled agent takes a %s"
+                % (kind, name, kind),
+                hint="enable one with `boost config set agents.<name>.enabled true`")
+        known = agents.known_agents()
+        no_surface = [n for n in only_agents
+                      if n in known and known[n]["enabled"]]
+        listed = ", ".join(sorted(only_agents))
+        hint = ("%s cannot take a %s — see `boost config get agents`"
+                % (", ".join(sorted(no_surface)), kind) if no_surface
+                else "enable one with `boost config set agents.<name>.enabled true`")
+        if not explicit:
+            hint += ", or widen with `boost install %s --force --agent <name>`" % name
+        raise BoostError(
+            "no agent left to install %s %s into: %s"
+            % (kind, name, ("--agent " + listed) if explicit
+               else "its recorded agents (%s)" % listed), hint=hint)
+    return kept
+
+
 def _install_rule(entry: dict, force: bool = False,
                   only_agents: list[str] | None = None,
                   scope: str = "user", base=None,
@@ -1405,6 +1541,7 @@ def _install_rule(entry: dict, force: bool = False,
     resolved_base = _require_project_base(scope, base, "rule %s" % name)
     existing = lockfile.get_rule(name)
     _check_scope_conflict(name, existing, scope, resolved_base, force)
+    explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 
     violations = policy.check_install(entry, len(lockfile.installed()))
@@ -1431,10 +1568,13 @@ def _install_rule(entry: dict, force: bool = False,
     unwritable: list[str] = []
     blocked: list[tuple[str, str]] = []
     refused: list[dict] = []
-    for agent, skills_dir in agents.materializing_agents(resolved_base).items():
-        if only_agents and agent not in only_agents:
-            continue
-        mode, path = rules.rule_target(agent, skills_dir, name, base=resolved_base)
+    targets = narrow_materializing(agents.materializing_agents(resolved_base),
+                                    only_agents, name, "rule",
+                                    explicit=explicit_agents)
+    for agent, skills_dir in targets.items():
+        mode, path = rules.rule_target(
+            agent, skills_dir, name, base=resolved_base,
+            dotdir=agents.project_dotdir(agent, skills_dir))
         # Project scope writes into the repo, so a committed agent dir could be
         # a symlink escaping it (see scopes.ensure_in_base). User scope writes
         # into the user's own ~/.claude, which they control — nothing to guard.
@@ -1741,6 +1881,7 @@ def _install_workflow(entry: dict, force: bool = False,
     resolved_base = _require_project_base(scope, base, "workflow %s" % name)
     existing = lockfile.get_workflow(name)
     _check_scope_conflict(name, existing, scope, resolved_base, force)
+    explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 
     violations = policy.check_install(entry, len(lockfile.installed()))
@@ -1766,11 +1907,17 @@ def _install_workflow(entry: dict, force: bool = False,
     unwritable: list[str] = []
     blocked: list[tuple[str, str]] = []
     refused: list[dict] = []
-    for agent, skills_dir in agents.materializing_agents(resolved_base).items():
-        if only_agents and agent not in only_agents:
-            continue
-        path = workflows.workflow_target(skills_dir, slot, name,
-                                         base=resolved_base, agent=agent)
+    # workflow_agents, not materializing_agents: an agent can have a verified
+    # rules surface and no slash-command format at all (Codex), and installing
+    # into a directory it never reads would report a command that does not
+    # exist. See agents.workflow_agents.
+    targets = narrow_materializing(agents.workflow_agents(resolved_base),
+                                    only_agents, name, "workflow",
+                                    explicit=explicit_agents)
+    for agent, skills_dir in targets.items():
+        path = workflows.workflow_target(
+            skills_dir, slot, name, base=resolved_base, agent=agent,
+            dotdir=agents.project_dotdir(agent, skills_dir))
         # Project scope writes into the repo; a committed agent dir could be a
         # symlink escaping it (see scopes.ensure_in_base). User scope writes into
         # the user's own ~/.claude, which they control — nothing to guard.
@@ -2099,6 +2246,10 @@ def duplicate_discovery() -> list[DuplicateDiscovery]:
     same skill offered twice. Gemini CLI answers that with a "Skill conflict
     detected" line per skill, every session — the symptom this detects.
 
+    Not every such agent pays that cost: one that de-duplicates by resolved
+    path collapses the two entries silently, so there is nothing to warn about
+    and it is skipped (:func:`agents.dedupes_by_path`).
+
     Boost does not create these: it stopped linking into a native-store agent,
     and `sync_plan` never asks for such a link. Another installer's copy is far
     likelier, and the warning costs the user the same either way — so the test
@@ -2113,7 +2264,13 @@ def duplicate_discovery() -> list[DuplicateDiscovery]:
     """
     found: list[DuplicateDiscovery] = []
     store_root = paths.store_dir()
+    collapses = agents.dedupes_by_path()
     for agent, adir in agents.native_store_agents().items():
+        # An agent that de-duplicates by resolved path shows the skill once and
+        # says nothing, so there is no symptom to report. See
+        # agents.dedupes_by_path.
+        if agent in collapses:
+            continue
         if not adir.is_dir():
             continue
         for entry in sorted(adir.iterdir()):
@@ -2326,7 +2483,14 @@ def sync_plan() -> dict[str, list]:
                     and child.name not in lock):
                 plan["orphaned_store" if vouches else "unrecorded_store"].append(
                     child.name)
-    for adir in agents.enabled_agents().values():
+    # linking_agents, not enabled_agents: boost only ever creates a symlink in
+    # an agent it links for, so a link in a native-store agent's skills dir was
+    # put there by something else — and the sweep's only ownership test is
+    # `points_into_store`, which such a link passes. `boost sync` would have
+    # deleted another tool's files without `--prune-duplicates` ever being
+    # typed. Same "topology, not ownership" line as duplicate_discovery, which
+    # reports those entries and removes nothing.
+    for adir in agents.linking_agents().values():
         if not adir.is_dir():
             continue
         for link in adir.iterdir():

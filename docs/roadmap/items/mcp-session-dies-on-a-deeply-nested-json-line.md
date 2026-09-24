@@ -2,13 +2,15 @@
 id: mcp-session-dies-on-a-deeply-nested-json-line
 board: code
 section: planned
-status: planned
+status: shipped
 category: MCP · Bug
 complexity: S
 impact: Low
 wow: 2
 note: The parse layer catches JSONDecodeError, and a deep enough line raises RecursionError instead…
 order: 343
+owner: loop/mcp-deep-json-line
+pr: 960
 title: A deeply nested JSON line kills the MCP session, because the parse guard names one exception
 ---
 <b>Found while fixing <code>mcp-server-dies-on-a-valid-json-message-that-is-not-an-object</code>, and
@@ -18,7 +20,7 @@ and answers <code>-32700</code>, which is right for malformed JSON. A sufficient
 raises <code>RecursionError</code> instead, which the guard does not name, so it escapes exactly as
 the shape crashes did: exit 70, a crash report, nothing on stdout, and the session over.
 <br><br>
-Measured: object nesting 100,000 deep parses fine; at 1,000,000 (a ~7 MB line) CPython raises
+Measured on CPython 3.14.7: object nesting 100,000 deep parses fine; at 1,000,000 (a ~7 MB line) it raises
 <code>RecursionError: Stack overflow (used 16352 kB) while decoding a JSON object</code>.
 <br><br>
 <b>Fix.</b> Catch the recursion failure beside the decode failure — or bound the line length before

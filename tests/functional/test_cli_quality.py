@@ -91,6 +91,29 @@ class TestDoctor:
         assert "● healthy" not in r.out
         assert "ready to set up" in r.out
 
+    def test_the_builtin_tap_alone_does_not_make_a_machine_set_up(
+            self, boost):
+        """boost's own tap is not a registry the user tapped.
+
+        `boost mcp` materializes `boost/builtin` when the user accepts the
+        boost-first rule, which left a machine holding one tap and no catalog.
+        The CLI counted it with `registry.list_taps()` and reported
+        "1 tap cloned & cached" / "● healthy", while `boost_search` on the
+        same HOME reported a setup state — the same split the MCP tool had.
+        """
+        from boost_cli.core import builtin, catalog
+        builtin.ensure_tap()
+        catalog.kind_counts()          # any catalog read caches the tap, as
+        r = boost("doctor")            # `boost mcp`'s own run does
+        assert "● healthy" not in r.out
+        assert "ready to set up" in r.out
+        assert "no registries tapped" in r.out
+        assert "1 tap cloned" not in r.out
+        d = json.loads(boost("doctor", "--json").out)
+        assert d["ok"] is True                       # a setup state, not a fault
+        taps = [c for c in d["checks"] if c["name"] == "taps"]
+        assert [c["status"] for c in taps] == ["info"]   # the untapped shape
+
     def test_a_corrupt_config_is_an_issue_not_a_fresh_install(
             self, boost, installed):
         from boost_cli.core import paths
@@ -482,6 +505,29 @@ class TestDoctor:
         assert "everything in sync" in r.out
         jira_link = paths.home() / ".claude" / "skills" / "jira-integration"
         assert not jira_link.exists()               # sync must not have relinked it
+
+    def test_a_stale_native_store_row_is_not_reported_as_unlinked(
+            self, boost, installed):
+        """A lock written before an agent became native-store must not go red.
+
+        The lock's `agents` is measured by `store.linked_agents`, which walks
+        linking agents only — so `codex` can appear there only on a lock
+        written when it still linked. Doctor looked the name up in the
+        *enabled* set, found `~/.codex/skills`, saw no symlink, and reported
+        "not linked for codex — run `boost sync`". Sync reads the linking set
+        and answers "everything in sync", so the two contradicted each other
+        and no command could clear it.
+        """
+        from boost_cli.core import lockfile
+        lock = lockfile.read()
+        _name, entry = next(iter(lock["skills"].items()))
+        entry["agents"] = [*entry.get("agents", []), "codex"]
+        lockfile.write(lock)
+
+        r = boost("doctor")
+        assert "not linked for codex" not in r.out
+        assert "● healthy" in r.out
+        assert "everything in sync" in boost("sync").out
 
     def test_a_foreign_broken_link_is_reported_but_not_an_issue(
             self, boost, installed):

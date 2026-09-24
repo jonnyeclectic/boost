@@ -70,12 +70,22 @@ def is_builtin(tap_name: str) -> bool:
 def configured_tap_count() -> int:
     """Taps the USER configured — the builtin does not count.
 
-    ``mcp.no_results`` and ``boost_doctor`` both ask "has this user configured
-    anything yet" by counting taps, and print the one-command setup path when
-    the answer is zero. boost's own tap must not answer that question for
-    them: a machine holding nothing but ``boost-first`` has an effectively
-    empty catalog, and suppressing the setup message there would strand a new
-    user with a search that can never match.
+    Every surface that asks "has this user configured anything yet" counts
+    here and prints the one-command setup path when the answer is zero:
+    ``mcp.no_results`` (boost_search), ``mcp.coverage_line`` (boost_list),
+    ``commands.configuration._tool_doctor`` (boost_doctor), CLI
+    ``boost doctor``, ``boost list``'s empty state and ``catalog.resolve_one``'s
+    miss hint. boost's own tap must not answer that question for them: a
+    machine holding nothing but ``boost-first`` has an effectively empty
+    catalog, and suppressing the setup message there would strand a new user
+    with a search that can never match.
+
+    That list is the point of the helper, and it was once aspirational — this
+    docstring named ``boost_doctor`` while ``boost_doctor`` counted with
+    ``registry.list_taps()``, so one session got ``taps: 1`` and *healthy*
+    from one tool and *nothing is tapped yet* from the next. Anything asking
+    about the literal clone list — is it cloned, is its cache built, what is
+    its commit — still wants :func:`registry.list_taps`.
     """
     return sum(1 for tap in registry.list_taps() if not is_builtin(tap.name))
 

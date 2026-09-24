@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from boost_cli.core import paths
+from boost_cli.errors import BoostError
 
 
 class TestHomeDerivation:
@@ -85,6 +86,73 @@ class TestExpand:
     def test_tilde_user_not_expanded(self, sandbox):
         # only ~ and ~/ forms are special; ~user is left as-is
         assert paths.expand("~other") == Path("~other")
+
+    def test_a_leading_env_var_wins_over_the_fallback(self, sandbox,
+                                                      monkeypatch, tmp_path):
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "elsewhere"))
+        assert paths.expand("${CODEX_HOME:-~/.codex}/skills") == (
+            tmp_path / "elsewhere" / "skills")
+
+    def test_an_unset_var_falls_back_and_the_fallback_still_expands(
+            self, sandbox, monkeypatch):
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        assert paths.expand("${CODEX_HOME:-~/.codex}/skills") == (
+            sandbox / ".codex" / "skills")
+
+    def test_an_empty_var_falls_back_like_the_shell(self, sandbox, monkeypatch):
+        # `${VAR:-x}`, not `${VAR-x}`: an exported-but-empty CODEX_HOME would
+        # otherwise resolve the agent dir to a bare "skills" relative path.
+        monkeypatch.setenv("CODEX_HOME", "")
+        assert paths.expand("${CODEX_HOME:-~/.codex}/skills") == (
+            sandbox / ".codex" / "skills")
+
+    def test_a_var_with_no_fallback_raises_when_unset(self, sandbox, monkeypatch):
+        """Both non-raising answers were measured, and both are worse.
+
+        The shell's is the empty string, turning ``${NOPE}/skills`` into
+        ``/skills``: a directory at the filesystem root, refused with
+        PermissionError on a normal box and created for real in a container
+        running as root. Leaving the reference literal makes the path
+        *relative* instead, and that one is worse still — ``boost install
+        brainstorming`` created ``./${NOPE}/skills/brainstorming`` under the
+        working directory, recorded the agent in the lock and printed
+        "Installed 1 new skill", so a second working directory got a second
+        copy and nothing ever said why.
+        """
+        monkeypatch.delenv("BOOST_TEST_NOPE", raising=False)
+        with pytest.raises(BoostError) as e:
+            paths.expand("${BOOST_TEST_NOPE}/x")
+        assert "BOOST_TEST_NOPE" in str(e.value)
+        # The message has to carry the remedy, because the value is in a config
+        # file rather than on the command line the user just typed.
+        assert "${BOOST_TEST_NOPE:-" in (e.value.hint or "")
+
+    def test_an_explicitly_empty_fallback_is_honoured(self, sandbox, monkeypatch):
+        # `${VAR:-}` is the user asking for the shell behaviour by name, which
+        # is a different thing from omitting the fallback entirely.
+        monkeypatch.delenv("BOOST_TEST_NOPE", raising=False)
+        assert paths.expand("${BOOST_TEST_NOPE:-}/x") == Path("/x")
+
+    def test_a_var_with_no_fallback_still_expands_when_set(
+            self, sandbox, monkeypatch, tmp_path):
+        # The literal is the *unset* path only — a set var with no fallback is
+        # the ordinary case and must still resolve.
+        monkeypatch.setenv("BOOST_TEST_NOPE", str(tmp_path))
+        assert paths.expand("${BOOST_TEST_NOPE}/x") == tmp_path / "x"
+
+    def test_a_nested_fallback_is_not_supported(self, sandbox, monkeypatch):
+        # Documented, not silently plausible: the fallback stops at the first
+        # `}`, so `${A:-${B}}` yields the literal `${B}` rather than B's value.
+        monkeypatch.delenv("BOOST_TEST_A", raising=False)
+        monkeypatch.setenv("BOOST_TEST_B", "/real")
+        assert paths.expand("${BOOST_TEST_A:-${BOOST_TEST_B}}/x") == \
+            Path("${BOOST_TEST_B}/x")
+
+    def test_only_a_leading_reference_is_expanded(self, sandbox, monkeypatch):
+        # Deliberately not a general template: an interior `${...}` is a
+        # literal, so nothing else boost stores a path in changes meaning.
+        monkeypatch.setenv("CODEX_HOME", "/elsewhere")
+        assert paths.expand("~/a/${CODEX_HOME}") == sandbox / "a" / "${CODEX_HOME}"
 
 
 class TestTilde:

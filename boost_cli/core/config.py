@@ -53,6 +53,58 @@ DEFAULTS = {
         "antigravity": {"dir": "~/.gemini/antigravity-cli/skills",
                         "enabled": True, "project_scope": False,
                         "skills_only": True},
+        # Codex CLI (`codex`) — and the ChatGPT desktop app, which is the same
+        # target: /Applications/ChatGPT.app carries bundle id `com.openai.codex`,
+        # ships its own `codex` binary and launches it with CODEX_HOME.
+        #
+        # `links_skills: False` for the same reason as gemini, verified against
+        # Codex CLI 0.156.1: `codex debug prompt-input` renders the literal
+        # <skills_instructions> block with its skill-roots table, and
+        # `$HOME/.agents/skills` — exactly paths.store_dir() — is one of the
+        # roots. Every skill boost has already installed is visible to Codex
+        # with no symlink. Proven $HOME-derived rather than hardcoded by
+        # re-running under a sandbox HOME: the root moved with it.
+        #
+        # Unlike gemini, linking anyway would not cost a conflict line — Codex
+        # de-duplicates by *resolved* path, so a link to a store skill collapses
+        # into the one real entry. Not linking is still right, and for a better
+        # reason: the store root follows HOME while `~/.codex/skills` is only
+        # the ${CODEX_HOME:-~/.codex} default, so a user who moves CODEX_HOME
+        # keeps their skills either way. See agents.dedupes_by_path for what
+        # that dedup means for `boost doctor`.
+        #
+        # The dir still anchors the non-symlink surfaces: `$CODEX_HOME/AGENTS.md`
+        # is where a rule materializes (rules.CONTEXT_FILES), and
+        # `<repo>/.codex/skills` is a real Codex repo-scope root, so project
+        # scope is left on. Hence the `${CODEX_HOME:-~/.codex}` dir rather than
+        # a literal `~/.codex` (paths.expand resolves it at call time): skills
+        # reach a relocated Codex regardless, but a rule written to the default
+        # path would be a file that CLI never opens, reported as installed.
+        #
+        # `project_dir` is what makes that safe for *project* scope, and it is
+        # the one place a movable dir would otherwise leak. scopes.agent_root
+        # derives a repo-local dotdir from `basename(dirname(dir))`, which is
+        # `.codex` only while CODEX_HOME is unset. Relocate it and two things
+        # go wrong, both measured: the project copy lands in a dotless
+        # `<repo>/<basename>/skills`, which is not the repo-scope root Codex
+        # reads — that is the literal `<project>/.codex/skills` whatever
+        # CODEX_HOME says — so the install reports success over a skill the CLI
+        # never sees; and the *committed* project lock records that
+        # repo-relative name, so one developer's environment variable is
+        # checked in for everyone who clones. The name is known, so it is
+        # declared rather than derived. Antigravity answers the same derivation
+        # hazard by leaving project scope off; here the path is known, so it is
+        # named.
+        #
+        # `workflows: False` — Codex 0.156.1 has no user-installable slash
+        # command format: there is no `~/.codex/prompts` or `~/.codex/commands`,
+        # no prompt/command subcommand, and its own plugin importer *rewrites* a
+        # Claude `commands/*.md` into a SKILL.md on disk rather than running it.
+        # Writing `~/.codex/commands/<name>.md` would be a file the agent
+        # silently never loads. Rules are kept because AGENTS.md is verified.
+        "codex": {"dir": "${CODEX_HOME:-~/.codex}/skills", "enabled": True,
+                  "links_skills": False, "workflows": False,
+                  "dedupes_by_path": True, "project_dir": ".codex"},
     },
     "taps": [],  # [{"name": "owner/repo", "url": "...", "curated": bool}]
     "ai": {

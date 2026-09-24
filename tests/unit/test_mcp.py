@@ -522,7 +522,15 @@ class TestServeStdio:
         assert [t["name"] for t in resps[1]["result"]["tools"]] == ["echo"]
         assert resps[2]["result"]["content"][0]["text"] == "hi z"
 
-    def test_send_failure_stops_loop(self):
+    @pytest.mark.parametrize("first", [
+        pytest.param(json.dumps({"id": 1, "method": "ping"}), id="a-request"),
+        pytest.param("x" * ((1 << 20) + 10), id="an-oversized-line"),
+        pytest.param("[" * 500_000 + "1" + "]" * 500_000, id="a-deep-line"),
+    ])
+    def test_send_failure_stops_loop(self, first):
+        # Every path that writes has to notice a dead stdout, including the two
+        # refusals on the read path: a host that hung up is the loop's cue to
+        # stop, not a second thing to fail on.
         class BrokenOut:
             def write(self, _s):
                 raise BrokenPipeError()
@@ -530,7 +538,7 @@ class TestServeStdio:
                 pass
         code = mcp.serve_stdio(
             _reg_with(), version="1.0",
-            stdin=io.StringIO(json.dumps({"id": 1, "method": "ping"}) + "\n"),
+            stdin=io.StringIO(first + "\n" + json.dumps({"id": 2, "method": "ping"}) + "\n"),
             stdout=BrokenOut())
         assert code == 0   # a dead stdout ends the loop cleanly
 
@@ -1418,6 +1426,34 @@ class TestDoctorCountsWithoutBuildingTheList:
         assert "3 items available" in text
 
 
+class TestDoctorTapLine:
+    """The one line `boost_doctor` opens its verdict with.
+
+    Its leading number is what an agent reads as "how many registries can
+    answer me", so it is the CONFIGURED count — the same number
+    `mcp.no_results` and `mcp.coverage_line` key their setup sentence on. The
+    items count stays the whole catalog, boost's own tap included, so the two
+    numbers have to explain each other rather than contradict.
+    """
+
+    def test_the_ordinary_machine_reads_exactly_as_before(self):
+        assert mcp.tap_line(tapped=3, total=3, items=120) == \
+            "taps: 3 (120 items available)"
+
+    def test_none_of_them_the_users(self):
+        # `boost mcp` leaves this behind: boost's own tap, nothing else.
+        assert mcp.tap_line(tapped=0, total=1, items=1) == \
+            "taps: 0 + boost's own (1 items available)"
+
+    def test_the_builtin_sits_beside_real_taps(self):
+        assert mcp.tap_line(tapped=5, total=6, items=900) == \
+            "taps: 5 + boost's own (900 items available)"
+
+    def test_the_empty_machine_is_unchanged(self):
+        assert mcp.tap_line(tapped=0, total=0, items=0) == \
+            "taps: 0 (0 items available)"
+
+
 class TestDoctorToolOnACorruptConfig:
     """The MCP twin of CLI doctor's `config` issue: with config.json
     unreadable, "no registries tapped — run `boost tap --defaults`" would send
@@ -1530,3 +1566,214 @@ class TestTheStatedCostIsPricedPerMachine:
         # another, and a real install is several times larger. A number here
         # would be the one claim an agent could not check.
         assert not re.search(r"\d", mcp.search_cost(False))
+
+
+# The bound the read path enforces, written out as a literal so these tests
+# describe the same number from the outside; `mcp.MAX_LINE_CHARS` is pinned to
+# it separately.
+_LIMIT = 1 << 20
+
+
+class TestServeStdioReadPath:
+    """Reading a client line is its own failure surface, separate from the shape.
+
+    The shape guards in :func:`mcp.handle_request` only run on a line that
+    parsed. Everything here happens before that: a line too deeply nested for
+    the decoder, a line too long to hold in memory, a stdin that stopped being
+    readable. Each of these took the session down at exit 70 with nothing on
+    stdout, which to a host is indistinguishable from the crashes the shape
+    card just closed.
+    """
+
+    def _run(self, text, registry=None):
+        out = io.StringIO()
+        code = mcp.serve_stdio(registry or _reg_with(), version="1.0",
+                               stdin=io.StringIO(text), stdout=out)
+        return code, [json.loads(x) for x in out.getvalue().splitlines()]
+
+    def test_a_deeply_nested_line_answers_and_the_loop_survives(self):
+        # Measured on this tree: `boost mcp --stdio` fed one such line exited
+        # 70 with 0 bytes of stdout and a crash report, and never answered the
+        # well-formed request on the next line.
+        #
+        # Array nesting, not object nesting: both hit the same decoder
+        # cliff, and `[`/`]` costs 2 chars per level against `{"a":`/`}`'s 6,
+        # so the same 1 MiB bound buys 4.5x the depth. 500_000 deep is far
+        # past the cliff on both interpreters measured here — 3.13.15 fails
+        # from depth 9_999, 3.14.7 from 116_161 — and, at 1_000_001 chars, is
+        # still inside the bound, so it exercises the catch, not the bound.
+        # A runner whose cliff sits higher than ours still lands inside it.
+        deep = "[" * 500_000 + "1" + "]" * 500_000
+        assert len(deep) < _LIMIT
+        code, resps = self._run(
+            deep + "\n" + json.dumps({"id": 99, "method": "ping"}) + "\n")
+        assert code == 0
+        assert len(resps) == 2
+        assert resps[0]["error"]["code"] == -32700
+        assert resps[0]["id"] is None
+        assert resps[1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+    def test_an_oversized_line_is_refused_once_and_the_loop_survives(self):
+        # Valid JSON, and a request the server would otherwise answer — the
+        # bound is a deliberate refusal of a message that is simply too big,
+        # not a second spelling of "malformed".
+        fat = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping",
+                          "pad": "x" * (_LIMIT + 1000)})
+        assert len(fat) > _LIMIT
+        code, resps = self._run(
+            fat + "\n" + json.dumps({"id": 99, "method": "ping"}) + "\n")
+        assert code == 0
+        assert len(resps) == 2          # answered once, not once per chunk read
+        assert resps[0]["error"]["code"] == -32700
+        assert resps[0]["id"] is None
+        assert str(_LIMIT) in resps[0]["error"]["message"]
+        assert resps[1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+    def test_the_bound_caps_what_one_line_can_buffer(self):
+        """The half of the fix the exception catch cannot buy.
+
+        Catching the decode failure still lets a client hand the server an
+        arbitrarily long line first; only a bounded read caps what one line
+        costs in memory.
+        """
+        class Recorder:
+            def __init__(self, text):
+                self.buf = io.StringIO(text)
+                self.sizes = []
+
+            def readline(self, size=-1):
+                self.sizes.append(size)
+                return self.buf.readline(size)
+
+        stdin = Recorder("x" * (5 * _LIMIT) + "\n"
+                         + json.dumps({"id": 9, "method": "ping"}) + "\n")
+        out = io.StringIO()
+        code = mcp.serve_stdio(_reg_with(), version="1.0",
+                               stdin=stdin, stdout=out)
+        assert code == 0
+        assert stdin.sizes                       # the loop did read
+        assert all(0 < s <= _LIMIT + 1 for s in stdin.sizes), stdin.sizes
+        resps = [json.loads(x) for x in out.getvalue().splitlines()]
+        assert resps[-1] == {"jsonrpc": "2.0", "id": 9, "result": {}}
+
+    def test_a_final_line_without_a_newline_is_still_answered(self):
+        # A host that closes its pipe straight after writing the last request
+        # leaves the final line unterminated; it is a whole message and is
+        # answered as one.
+        code, resps = self._run(json.dumps({"id": 1, "method": "ping"}))
+        assert code == 0
+        assert resps == [{"jsonrpc": "2.0", "id": 1, "result": {}}]
+
+    def test_a_line_of_nul_bytes_is_one_parse_error(self):
+        code, resps = self._run(
+            "\x00" * 64 + "\n" + json.dumps({"id": 2, "method": "ping"}) + "\n")
+        assert code == 0
+        assert [r["id"] for r in resps] == [None, 2]
+        assert resps[0]["error"]["code"] == -32700
+
+    def test_a_stdin_that_stops_being_readable_ends_the_loop_cleanly(self):
+        """A closed stdin mid-session is an ordinary end, not a crash.
+
+        ``readline`` on a closed stream raises ``ValueError`` — not
+        ``OSError`` — so it escaped the read guard into the top-level handler,
+        turning "the host went away" into exit 70 and a crash report.
+        """
+        class ClosedAfterOne:
+            def __init__(self):
+                self.n = 0
+
+            def readline(self, size=-1):
+                self.n += 1
+                if self.n == 1:
+                    return json.dumps({"id": 1, "method": "ping"}) + "\n"
+                raise ValueError("I/O operation on closed file")
+
+        out = io.StringIO()
+        code = mcp.serve_stdio(_reg_with(), version="1.0",
+                               stdin=ClosedAfterOne(), stdout=out)
+        assert code == 0
+        assert [json.loads(x)["id"]
+                for x in out.getvalue().splitlines()] == [1]
+
+
+class TestReadLine:
+    """`mcp.read_line` — one bounded, newline-delimited read."""
+
+    def test_the_documented_bound_is_one_mebibyte(self):
+        # ~1000x the largest message any boost tool schema can receive (a
+        # search query, a skill name), and small enough that one hostile line
+        # cannot be a memory cost worth worrying about.
+        assert mcp.MAX_LINE_CHARS == 1 << 20
+
+    def test_a_normal_line_comes_back_whole(self):
+        assert mcp.read_line(io.StringIO("hi\nthere\n")) == ("hi\n", False)
+
+    def test_eof_is_not_an_over_limit_line(self):
+        assert mcp.read_line(io.StringIO("")) == (None, False)
+
+    def test_a_line_exactly_at_the_limit_is_returned(self):
+        assert mcp.read_line(io.StringIO("a" * 9 + "\n"),
+                             limit=10) == ("a" * 9 + "\n", False)
+
+    def test_one_character_over_the_limit_is_refused(self):
+        s = io.StringIO("a" * 10 + "\nnext\n")
+        assert mcp.read_line(s, limit=10) == (None, True)
+        assert mcp.read_line(s, limit=10) == ("next\n", False)   # resynced
+
+    def test_a_long_line_is_drained_so_the_next_line_is_a_message(self):
+        s = io.StringIO("a" * 500 + "\nnext\n")
+        assert mcp.read_line(s, limit=10) == (None, True)
+        assert mcp.read_line(s, limit=10) == ("next\n", False)
+
+    def test_a_line_that_never_ends_drains_to_eof(self):
+        s = io.StringIO("a" * 500)
+        assert mcp.read_line(s, limit=10) == (None, True)
+        assert mcp.read_line(s, limit=10) == (None, False)
+
+    def test_an_unreadable_stream_reads_as_end_of_input(self):
+        class Bad:
+            def readline(self, size=-1):
+                raise ValueError("I/O operation on closed file")
+
+        assert mcp.read_line(Bad()) == (None, False)
+
+    def test_a_stream_that_dies_during_the_drain_still_reports_the_long_line(self):
+        class DiesOnDrain:
+            def __init__(self):
+                self.n = 0
+
+            def readline(self, size=-1):
+                self.n += 1
+                if self.n == 1:
+                    return "a" * (size or 0)
+                raise OSError("pipe went away")
+
+        assert mcp.read_line(DiesOnDrain(), limit=10) == (None, True)
+
+    def test_ctrl_c_during_the_drain_still_ends_the_session(self):
+        # Ctrl-C ends the session on every other read path. Catching it here
+        # too would answer -32700 and keep serving, so the same key would
+        # mean two different things depending on how long the client's line
+        # happened to be.
+        class InterruptedOnDrain:
+            def __init__(self):
+                self.n = 0
+
+            def readline(self, size=-1):
+                self.n += 1
+                if self.n == 1:
+                    return "a" * (size or 0)
+                raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            mcp.read_line(InterruptedOnDrain(), limit=10)
+
+    def test_bytes_that_are_not_utf8_end_the_session_cleanly(self):
+        # The documented `ValueError` arm covers `UnicodeDecodeError` by
+        # subclass; a text stream's decoder state after that failure is not
+        # defined, so the session ends rather than resyncing.
+        class NotUtf8:
+            def readline(self, size=-1):
+                raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+        assert mcp.read_line(NotUtf8()) == (None, False)

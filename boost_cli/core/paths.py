@@ -17,8 +17,11 @@ Layout:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from pathlib import Path
+
+from boost_cli.errors import BoostError
 
 
 def home() -> Path:
@@ -26,8 +29,45 @@ def home() -> Path:
     return Path(os.environ.get("HOME") or str(Path.home()))
 
 
+_LEADING_ENV = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
 def expand(p: str) -> Path:
-    """Expand a leading ~ against home() (which respects the HOME env var)."""
+    """Expand a leading ``${VAR}`` / ``${VAR:-fallback}``, then a leading ``~``.
+
+    The ``~`` half resolves against home() (which respects the HOME env var), so
+    sandboxed tests keep working. The environment half exists because one agent
+    dir is not a fixed path: Codex reads ``$CODEX_HOME`` and only defaults it to
+    ``~/.codex``, so a user who relocated it would otherwise get boost's
+    ``AGENTS.md`` written to a directory Codex never opens — and reported as a
+    success. Only a *leading* reference is expanded, and only this one syntax:
+    the point is to make one config default honest, not to turn every stored
+    path into a template. An unset or empty var falls back, as in the shell.
+
+    ``${VAR}`` with no fallback and nothing in the environment **raises**,
+    because neither of the two answers that do not raise is safe and both were
+    measured. The shell's answer is the empty string, which turns
+    ``${NOPE}/skills`` into ``/skills``: an absolute path at the filesystem
+    root, refused with ``PermissionError`` on a normal POSIX box and created
+    for real in a container running as root. Leaving the reference literal
+    gives a *relative* ``${NOPE}/skills``, and that one was worse — measured,
+    boost created ``./${NOPE}/skills/brainstorming`` under the working
+    directory, wrote the agent into the lock and printed ``Installed 1 new
+    skill``, so a second working directory got a second copy and nothing ever
+    said why. A reference boost cannot resolve is a broken config value, so it
+    is named as one. An explicitly empty fallback (``${NOPE:-}``) is the user
+    asking for the shell behaviour and still gets it; nesting is not supported,
+    the fallback stopping at the first ``}``.
+    """
+    m = _LEADING_ENV.match(p)
+    if m:
+        value = os.environ.get(m.group(1)) or m.group(2)
+        if value is None:
+            raise BoostError(
+                "%s is not set and %r gives it no fallback" % (m.group(1), p),
+                hint="write ${%s:-<default>} so the path resolves without it"
+                     % m.group(1), wrap=True)
+        p = value + p[m.end():]
     if p == "~":
         return home()
     if p.startswith("~/"):

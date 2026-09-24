@@ -1330,14 +1330,15 @@ class TestMcp:
         assert by_id[7]["error"]["code"] == -32602
 
         assert "installed brainstorming v1.4.0 from fixture-tap" in text(8)
-        # gemini reads the canonical store directly, so it is never symlinked —
-        # but the response MUST still say the skill reached it. A Gemini agent
-        # that sees only "linked agents: claude-code, windsurf, cursor" concludes
-        # the install missed it and rebuilds the work by hand, which is the one
-        # failure this tool exists to prevent.
+        # gemini and codex read the canonical store directly, so neither is
+        # ever symlinked — but the response MUST still say the skill reached
+        # them. An agent that sees only "linked agents: claude-code, windsurf,
+        # cursor" concludes the install missed it and rebuilds the work by
+        # hand, which is the one failure this tool exists to prevent.
         assert "linked agents: claude-code, windsurf, cursor" in text(8)
         assert "available without linking" in text(8)
-        assert text(8).rstrip().endswith("directly): gemini\nquality score: 95/100")
+        assert text(8).rstrip().endswith(
+            "directly): gemini, codex\nquality score: 95/100")
         assert "quality score:" in text(8)
         assert "brainstorming v1.4.0 (fixture-tap)" in text(9)
         assert "installed: yes" in text(10)
@@ -1420,6 +1421,39 @@ class TestMcp:
         assert "taps: 0" in text
         assert "healthy — no issues found" not in text
         assert "nothing is searchable yet" in text
+
+    def test_the_builtin_only_machine_gets_one_answer_from_every_tool(
+            self, sandbox):
+        # `boost mcp` leaves exactly this behind when the user accepts the
+        # boost-first rule: boost's own tap and nothing else. Every tool an
+        # agent can reach in that session must name the SAME next command.
+        # boost_doctor used to certify it "healthy — no issues found" under
+        # "taps: 1 (1 items available)" while boost_search, in the same
+        # session, said nothing was tapped — because doctor counted with
+        # `registry.list_taps()` and the other two with
+        # `builtin.configured_tap_count()`.
+        from boost_cli.commands import configuration
+        from boost_cli.core import builtin, registry
+        builtin.ensure_tap()
+        assert [t.name for t in registry.list_taps()] == [builtin.BUILTIN_TAP]
+
+        doctor, _e = configuration._mcp_tool("boost_doctor", {})
+        # A query the one shipped rule does not answer. boost_search CAN hit
+        # here — `boost-first` is a real indexed item — which is why the
+        # disagreement had to be settled on the count rather than on whether a
+        # search happened to return something.
+        search, _e = configuration._mcp_tool(
+            "boost_search", {"query": "kubernetes helm chart autoscaling"})
+        listing, _e = configuration._mcp_tool("boost_list", {})
+
+        for reply in (doctor, search, listing):
+            assert "boost tap --defaults" in reply
+        assert "healthy — no issues found" not in doctor
+        assert "nothing is searchable yet" in doctor
+        # The count an agent reads as "how many registries can answer me" is
+        # the configured one; the builtin's single item still shows up under
+        # "items available", so the two numbers have to explain each other.
+        assert "taps: 0 + boost's own (1 items available)" in doctor
 
     def test_boost_doctor_reads_a_non_list_taps_as_a_broken_config(
             self, sandbox):

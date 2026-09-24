@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>492</b><span>Loop finds</span></div>
+      <div class="stat"><b>78</b><span>Planned</span></div>
+      <div class="stat"><b>497</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2011,24 +2011,9 @@ wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every ins
       </article>
 
       <article class="cap rcard" id="one-failed-shard-job-drops-registries-from-the-manifest">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Shards · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Shards · Bug</span></div>
         <h3>One failed shard-build job silently drops its whole chunk from the published manifest</h3>
-        <p><b>Found by the audit of the repo's own automation, and confirmed live on the current release.</b>
-<code>shards.yml</code>'s build matrix is <code>fail-fast: false</code> and bin-packs the catalogue
-into ~60 jobs of roughly ten registries each. Every job writes an <code>unchanged-N.txt</code> and
-uploads it beside its fresh shards; the publish job runs under <code>if: !cancelled()</code> and
-rebuilds <code>manifest.json</code> <b>from scratch</b> out of whatever artifacts arrived. A job that
-failed uploads neither, so <code>publish_shards.py manifest --carry-forward</code> never hears about
-its registries — and carry-forward is driven only by the <code>unchanged-*.txt</code> files that
-exist, so last week's perfectly good rows for those registries are dropped rather than carried.
-<br><br>
-The assets stay on the release (<code>gh release upload --clobber</code> replaces and never deletes),
-so the result is a set of orphaned shard files no manifest names, and every user of those registries
-sent back to embedding them locally — ~1.2 s per chunk against a 0.12 s import.
-<br><br>
-<b>Fix.</b> Carry forward from the previous manifest for any registry the run did not report on at
-all, rather than only for the ones an <code>unchanged</code> file names; and make the publish job
-say plainly how many rows it carried for jobs that did not report.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/one-failed-shard-job-drops-registries-from-the-manifest.md">Write-up &middot; one-failed-shard-job-drops-registries-from-the-manifest.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -2070,26 +2055,9 @@ build when CI and the Makefile state a floor differently.</p>
       </article>
 
       <article class="cap rcard" id="mcp-doctor-says-healthy-where-mcp-search-says-nothing-is-tapped">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">MCP · Bug</span></div>
         <h3>boost_doctor certifies a machine healthy that boost_search calls untapped</h3>
-        <p><b>Found by the audit of the MCP surface.</b> <code>_tool_doctor</code> counts taps with
-<code>registry.list_taps()</code>, which includes boost's own wheel-shipped <code>boost/builtin</code>
-tap, while <code>mcp.no_results</code> and <code>mcp.coverage_line</code> count with
-<code>builtin.configured_tap_count()</code>, which deliberately excludes it. On a machine holding the
-builtin tap and nothing else — exactly what <code>boost mcp</code> leaves behind when the user
-accepts the boost-first rule and has not yet run <code>boost tap --defaults</code> — an agent calling
-both tools in one session is told <code>taps: 1 (1 items available)</code> and <i>healthy — no issues
-found</i> by one, and <i>nothing is tapped yet, so there is no catalog to search</i> by the other.
-<br><br>
-The requirement is already written down in the code that breaks it: <code>_tool_doctor</code>'s own
-comment says <i>same command, same order, as mcp.no_results: an agent that calls both tools in one
-session must not see the recommendation flipped</i>, and
-<code>configured_tap_count</code>'s docstring claims <code>boost_doctor</code> asks through it. It
-does not.
-<br><br>
-<b>Fix.</b> Count with <code>builtin.configured_tap_count()</code> for the "is anything configured"
-question, keeping <code>list_taps()</code> where the literal clone list is meant, and test both tools
-against one builtin-only HOME.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/mcp-doctor-says-healthy-where-mcp-search-says-nothing-is-tapped.md">Write-up &middot; mcp-doctor-says-healthy-where-mcp-search-says-nothing-is-tapped.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Medium</b></span>
@@ -2142,27 +2110,103 @@ in the round-trip tests.</p>
       </article>
 
       <article class="cap rcard" id="mcp-session-dies-on-a-deeply-nested-json-line">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">MCP · Bug</span></div>
         <h3>A deeply nested JSON line kills the MCP session, because the parse guard names one exception</h3>
-        <p><b>Found while fixing <code>mcp-server-dies-on-a-valid-json-message-that-is-not-an-object</code>, and
-left for its own card because it is the parse layer rather than the shape layer.</b>
-<code>serve_stdio</code> wraps <code>json.loads</code> in <code>except json.JSONDecodeError</code>
-and answers <code>-32700</code>, which is right for malformed JSON. A sufficiently nested line
-raises <code>RecursionError</code> instead, which the guard does not name, so it escapes exactly as
-the shape crashes did: exit 70, a crash report, nothing on stdout, and the session over.
-<br><br>
-Measured: object nesting 100,000 deep parses fine; at 1,000,000 (a ~7 MB line) CPython raises
-<code>RecursionError: Stack overflow (used 16352 kB) while decoding a JSON object</code>.
-<br><br>
-<b>Fix.</b> Catch the recursion failure beside the decode failure — or bound the line length before
-parsing, which also caps the memory one client line can cost — answer <code>-32700</code>, and keep
-the loop alive. Pin it with a round-trip test that sends a deep line and then a well-formed request,
-asserting the second is answered.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/mcp-session-dies-on-a-deeply-nested-json-line.md">Write-up &middot; mcp-session-dies-on-a-deeply-nested-json-line.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">The parse layer catches JSONDecodeError, and a deep enough line raises RecursionError instead…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="codex-is-not-an-mcp-host">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Compat · Feature</span></div>
+        <h3>Codex is a skills and rules target but not yet an MCP host</h3>
+        <p><b>Found while adding Codex as an agent target.</b> <code>boost install</code> now reaches Codex —
+skills through the canonical store it already reads, rules into <code>~/.codex/AGENTS.md</code> — but
+<code>core/mcphost.py</code> still has three rows (Claude Code, Gemini CLI, Antigravity CLI), so
+<code>boost mcp register</code> cannot register boost with the one agent most likely to want to search
+the catalogue for itself.
+<b>The grammar is already verified</b> against Codex CLI 0.156.1, and it differs from all three
+existing rows, so it is a row rather than a reuse. Flags are accepted on <em>either</em> side of
+<code>NAME</code>, unlike Antigravity, which rejects a flag after the name &middot; <code>--</code> is
+needed only when the command token itself starts with a dash &middot; there is <b>no scope
+concept</b>, just one global <code>$CODEX_HOME/config.toml</code>, so <code>mcphost.has_scope()</code>
+must answer False and the success line drops "(scope: user)" as it already does for Antigravity
+&middot; <code>add</code> <b>upserts</b> (rc=0 on a duplicate name), like Antigravity and unlike
+Claude, which is what <code>--host auto</code> has to tolerate &middot; <code>remove MISSING</code> is
+idempotent (rc=0) while <code>get MISSING</code> fails (rc=1), so a presence probe must use
+<code>get</code>, not <code>remove</code>.
+<b>Fix direction.</b> Add the fourth row to <code>mcphost.HOSTS</code> and pin each of those five
+asymmetries in <code>tests/unit/test_mcphost.py</code>, alongside the existing three. Don't
+"simplify" the four shapes into one — that is exactly the note <code>CLAUDE.md</code> already carries
+for the first three.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">Codex takes skills and rules but `boost mcp register` cannot reach it — the grammar is verified, the host row is not written…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-registration-writes-outside-a-sandboxed-home">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <h3>boost mcp registration writes outside a sandboxed HOME</h3>
+        <p><b>Found when an agent working in a sandboxed <code>HOME</code> ran <code>boost mcp</code> instead of
+<code>boost mcp --stdio</code>.</b> The registration path shells out to <code>claude mcp add</code>,
+which resolves its config from <code>CLAUDE_CONFIG_DIR</code> in the ambient environment rather than
+from <code>HOME</code> — so boost was registered in the developer's real
+<code>~/.claude-personal/.claude.json</code> from inside a run whose <code>HOME</code> and
+<code>BOOST_HOME</code> both pointed at a temporary directory. It was reverted with
+<code>claude mcp remove boost -s user</code>, and the escape is the finding.
+<br><br>
+Every other boost surface resolves state through <code>core/paths.py</code>, which reads
+<code>HOME</code>/<code>BOOST_HOME</code> at call time — that is what makes the whole test suite
+sandboxable. <code>mcphost</code> hands the decision to another CLI, and that CLI has its own
+environment variable, so a test, a CI job or an agent that sets <code>HOME</code> and expects
+containment does not get it.
+<br><br>
+<b>Fix.</b> Decide deliberately and say so in <code>mcphost.py</code>, which already documents each
+host's argv rules: either pass the scope explicitly derived from boost's own
+<code>HOME</code> (Claude Code reads <code>CLAUDE_CONFIG_DIR</code>, so boost can set it for the
+child), or refuse to register when <code>HOME</code> is not the ambient one and say which file
+would have been written. Pin whichever with a test that sets both variables apart and asserts
+nothing outside the sandbox is touched.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">Every other boost surface honours HOME/BOOST_HOME; this one writes to whatever CLAUDE_CONFIG_DIR says…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="codex-hooks-timeout-units-are-unestablished">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Compat · Research</span></div>
+        <h3>Codex hooks are shaped like Claude's, and the two fields that differ are unverified</h3>
+        <p><b>Found while adding Codex as an agent target.</b> Codex CLI 0.156.1 reads a <code>[hooks]</code>
+table keyed by event name, whose value is the same <code>matcher</code> plus
+<code>hooks: [{type, …}]</code> block Claude Code and Gemini CLI use. That similarity is the trap
+<code>core/hookhost.py</code> was written for: the block shape being identical is what makes the real
+differences easy to ship wrong.
+<b>What is not established.</b> <em>Timeout units</em> — Claude's are seconds and Gemini's are
+milliseconds, so a 10 is either ten seconds or ten milliseconds and nothing observed so far says which
+Codex means. <em>Event names</em> — unknown event keys are <b>silently accepted</b>, so a wrong
+spelling writes a config that parses, never fires, and reports nothing; a
+<code>CLAUDE_TO_CODEX</code> map needs each of the ten Claude events resolved against the real CLI,
+including the ones that must map to <code>None</code>. And the <code>prompt</code> and
+<code>agent</code> hook types parse but are reported "not supported yet", so boost must refuse them
+and say why rather than writing them.
+<b>Fix direction.</b> Establish both against a real Codex release the way <code>hookhost.py</code>
+establishes Gemini's — its shipped docs, the event list in its bundled JS, and an observed run — then
+add the host and name the sources at the top of the file. Until then boost should keep writing no
+Codex hooks at all: a hook config that silently never fires is worse than none.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">Codex has a `[hooks]` table shaped like Claude's and Gemini's, and the two fields that differ are unverified…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -3247,6 +3291,64 @@ asserting the second is answered.</p>
           <span class="m">`serve --port 99999` reached socket.bind and exited 70 with a crash report</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="sandbox-fixture-does-not-sandbox-the-working-directory">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Test hygiene · Bug</span></div>
+        <h3>The sandbox fixture sandboxes every env var except the one project scope reads</h3>
+        <p>`tests/conftest.py`'s `sandbox` fixture is thorough about the environment — it
+redirects `HOME`, clears `BOOST_HOME`, `BOOST_AGENTS_STORE` and `CODEX_HOME`,
+and sets five `BOOST_NO_*` guards so no test reaches AI, the network, the seed
+or a confirm prompt by accident. It never touches the **working directory**,
+and that is the one input project scope resolves against: `scopes.resolve_base`
+walks up from `os.getcwd()`, so a test that installs with `scope="project"` and
+no explicit `base`, or drives `boost install --local` without
+`monkeypatch.chdir`, writes into the developer's own checkout.
+
+What lands there is not a stray temp file. A project install materializes the
+full agent fan-out at the repo root — `.boost/skill-lock.json`, `.claude/skills/`,
+`.cursor/`, `.windsurf/`, `.gemini/`, `.codex/` — plus, for a rule, the context
+files themselves: `AGENTS.md` and `CLAUDE.local.md`, both of which every agent
+working the repo then loads as instructions.
+
+It is also self-propagating, because the state outlives the run that wrote it.
+A killed run left a project-scope `brainstorming` at the root; the next full
+suite read it back and failed twelve tests across four files that assert an
+empty install state — the `test_cli_quality.py` case for a machine that never
+installed anything saw `brainstorming ok project`, and `boost list`, `boost
+info` and the pane-width tests all inherited a row nothing in them had
+installed. The failures name none
+of the tests responsible, and they clear only when someone thinks to look at
+`git status` — where `.boost/` is gitignored and does not appear.
+
+No committed test writes there in its shipped form: `tests/unit`,
+`tests/functional` and `tests/smoke.sh` each leave the checkout clean when run
+directly, watched by a teardown hook that names the offending nodeid. A full
+`make check` does not — it ends with `.boost/skill-lock.json` and five agent
+dotdirs at the repo root, all stamped inside the mutation stage. That stage
+runs those same tests against mutated `boost_cli/core`, so the blast radius of
+a mutant that weakens a scope guard is the developer's own working tree, and
+4,343 of them survive each run. Which is the whole argument for the guard: the
+suite is one edit — or one mutant — away from writing here, and when it does,
+the failures it causes name everything except their cause.
+
+Two halves, both cheap:
+
+- **Chdir the sandbox.** Point `cwd` at a directory under `tmp_path` in the
+  fixture, so a forgotten `chdir` resolves to the sandbox instead of the repo.
+  Needs an audit first — any test that reads a repo-relative path (the
+  generated-file `--check` gates, `test_spdx_headers.py`) must take the repo
+  root explicitly rather than inheriting it.
+- **Fail loudly if it happens anyway.** A session-scoped autouse check that
+  snapshots the known project-scope artifact names at the repo root and fails
+  the run — naming the test — when one appears. That is the half that would
+  have turned twelve misleading failures into one accurate one.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">`make check` leaves a project install in the repo root; a later run reads it back and fails twelve unrelated tests.</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -3762,6 +3864,35 @@ asserting the second is answered.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">`boost profile use` unlinked four agents and `boost list` kept naming all four</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="one-bad-agent-dir-silences-the-whole-doctor-report">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <h3>One unresolvable agent dir silences the whole `boost doctor` report</h3>
+        <p><b>Found by the review of <code>loop/codex-agent-target</code>.</b>
+<code>paths.expand</code> now raises a <code>BoostError</code> for a <code>${VAR}</code> with no fallback
+and nothing in the environment, rather than resolving it to an empty or literal path — the change that
+stopped a mistyped <code>agents.&lt;name&gt;.dir</code> silently installing into
+<code>./skills</code>. <code>agents.known_agents</code> calls it for every configured agent, so one bad
+row now aborts every command that asks who the agents are: <code>doctor</code>,
+<code>heal</code>, <code>clean</code>, <code>install</code>, <code>sync</code>.
+
+For most of those, refusing is the right answer. For <code>doctor</code> it is not: its whole job is to
+surface a misconfiguration, and it exits 1 having reported nothing else — no lock check, no store check,
+no duplicate-discovery check. The remedy is reachable (<code>boost config set</code> never calls
+<code>known_agents</code>, verified in a sandbox), so this is a bad report rather than a lockout.
+
+<b>Fix direction.</b> Catch <code>BoostError</code> around the agent lookups in <code>cmd_doctor</code>
+and render it as an issue row, then continue with an empty agent set. The catch has to cover the
+indirect callers too — <code>store.duplicate_discovery</code>, <code>store.sync_plan</code> and the
+per-agent coverage counts all reach <code>known_agents</code> — so the natural shape is one resolution
+step at the top of the command whose failure degrades the agent-dependent sections rather than the run.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">A single agent whose `dir` names an unset variable makes `boost doctor` exit 1 with one line instead of reporting it as an issue…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

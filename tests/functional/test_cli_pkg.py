@@ -100,9 +100,10 @@ class TestInstall:
         r = boost("install", "brainstorming")
         assert "copied to ~/.agents/skills/brainstorming" in r.out
         assert "linked → claude-code · windsurf · cursor · antigravity" in r.out
-        # gemini reads the canonical store directly: no symlink, but the report
-        # must still say the skill reached it
-        assert "available to Gemini CLI (reads the store directly)" in r.out
+        # gemini and codex read the canonical store directly: no symlink, but
+        # the report must still say the skill reached them
+        assert ("available to Gemini CLI · Codex (reads the store directly)"
+                in r.out)
         assert "lock updated (.skill-lock.json)" in r.out
         assert "Installed 1 new skill; quality score 95/100" in r.out
         # D13: framed success card with a next-step hint
@@ -111,11 +112,12 @@ class TestInstall:
         entry = _lock()["brainstorming"]
         assert entry["version"] == "1.4.0"
         assert entry["tap"] == "fixture-tap"
-        # the lock records real symlinks only — gemini needs none
+        # the lock records real symlinks only — gemini and codex need none
         assert entry["agents"] == ["claude-code", "windsurf", "cursor",
                                    "antigravity"]
         assert entry["pinned"] is False and entry["quarantined"] is False
         assert not (paths.home() / ".gemini" / "skills").exists()
+        assert not (paths.home() / ".codex" / "skills").exists()
 
     def test_multi_with_one_unknown_rc1_installs_known(self, boost, tapped):
         r = boost("install", "brainstorming", "nope", expect=1)
@@ -129,12 +131,15 @@ class TestInstall:
         r = boost("install", "--dry-run", "brainstorming")
         assert "would install brainstorming v1.4.0 from fixture-tap" in r.out
         assert "~/.boost/repos/fixture-tap/skills/brainstorming" in r.out
-        # The preview names the agents that actually take a link. Gemini reads
-        # the canonical store directly and is never symlinked, so promising one
-        # here made the dry run wrong about the one thing it exists to predict.
+        # The preview names the agents that actually take a link. Gemini and
+        # Codex read the canonical store directly and are never symlinked, so
+        # promising one here made the dry run wrong about the one thing it
+        # exists to predict.
         assert "link  → claude-code · windsurf · cursor" in r.out
         assert "· gemini" not in r.out
-        assert "available to Gemini CLI (reads the store directly)" in r.out
+        assert "· codex" not in r.out
+        assert ("available to Gemini CLI · Codex (reads the store directly)"
+                in r.out)
         assert "dry run — nothing was changed" in r.out
         assert not (paths.store_dir() / "brainstorming").exists()
         assert not paths.lockfile_path().exists()
@@ -155,8 +160,10 @@ class TestInstall:
         # "a · b", so a substring check would have passed on the bug.
         assert agents_on(preview, "link  →") == agents_on(real, "linked →")
         for text in (preview, real):
-            assert "available to Gemini CLI (reads the store directly)" in text
+            assert ("available to Gemini CLI · Codex (reads the store "
+                    "directly)") in text
         assert not (paths.home() / ".gemini" / "skills").exists()
+        assert not (paths.home() / ".codex" / "skills").exists()
 
     def test_dry_run_still_names_gemini_for_a_rule(self, boost, fixture_tap_src,
                                                    tmp_path):
@@ -174,7 +181,8 @@ class TestInstall:
         # its rule/workflow format is unverified, and it reaches GEMINI.md only
         # through the `gemini` agent entry, never its own materialize line).
         line = next(x for x in r.out.splitlines() if "materialize →" in x)
-        assert line.split("→", 1)[1].strip() == "claude-code · windsurf · cursor · gemini"
+        assert (line.split("→", 1)[1].strip()
+                == "claude-code · windsurf · cursor · gemini · codex")
 
     def test_dry_run_rule_predicts_the_real_install(self, boost, fixture_tap_src,
                                                      tmp_path):
@@ -190,6 +198,34 @@ class TestInstall:
             line = next(x for x in text.splitlines() if marker in x)
             return line.split("→", 1)[1].strip()
         assert field(preview, "materialize →") == field(real, "materialized")
+
+    def test_dry_run_workflow_predicts_the_real_install(self, boost,
+                                                        fixture_tap_src,
+                                                        tmp_path):
+        """The workflow twin of the rule test above, and not a duplicate of it.
+
+        The two kinds no longer reach the same agents: Codex's instructions
+        file is known and its slash-command format does not exist, so
+        `_install_workflow` skips it while `_install_rule` writes it. One
+        `mat_targets` list served both previews, so the workflow preview
+        promised a `~/.codex/commands/ship-it.md` no install has ever written.
+        """
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "wf-dry-tap")
+        _add_and_commit(tap_dir, "commands/ship-it.md",
+                        "---\nname: ship-it\nversion: 1.0.0\n---\n\nShip.\n",
+                        "add workflow")
+        boost("tap", tap_dir)
+        preview = boost("install", "ship-it", "--dry-run").out
+        real = boost("install", "ship-it").out
+
+        def field(text, marker):
+            line = next(x for x in text.splitlines() if marker in x)
+            return line.split("→", 1)[1].strip()
+        # Whole-field, not a substring: "a · b · c" contains "a · b", so a
+        # substring check passes on exactly the over-promise this catches.
+        assert field(preview, "materialize →") == field(real, "materialized")
+        assert "codex" not in field(preview, "materialize →")
+        assert not (paths.home() / ".codex" / "commands").exists()
 
     def test_installs_declared_requires_closure(self, boost, tapped):
         # jira-integration declares `requires: [commit-messages]` in the fixture;
@@ -1660,7 +1696,8 @@ class TestInstallEdges:
         assert ("not linked: ~/.claude/skills/brainstorming exists and is "
                 "not managed by boost") in r.out
         assert "linked → windsurf · cursor · antigravity" in r.out
-        assert "available to Gemini CLI (reads the store directly)" in r.out
+        assert ("available to Gemini CLI · Codex (reads the store directly)"
+                in r.out)
         assert _lock()["brainstorming"]["agents"] == ["windsurf", "cursor",
                                                       "antigravity"]
         assert blocker.is_dir() and not blocker.is_symlink()
@@ -1699,7 +1736,7 @@ class TestInstallEdges:
         cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
         cfg["agents"] = {a: {"enabled": False}
                          for a in ("claude-code", "windsurf", "cursor",
-                                   "gemini", "antigravity")}
+                                   "gemini", "antigravity", "codex")}
         paths.config_path().write_text(json.dumps(cfg), encoding="utf-8")
         r = boost("install", "brainstorming")
         assert "no agent links created (no enabled agents?)" in r.out

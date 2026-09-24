@@ -114,6 +114,44 @@ class TestTheOfferIsScopedToHostsBoostRegistered:
         assert "CLAUDE.md" in out and "GEMINI.md" in out
 
 
+class TestThePreviewIsBuiltFromTheRuleInstallSet:
+    """The printed paths come from `agents.materializing_agents()`.
+
+    `enabled_agents()` is the wrong set for a *rule*: `skills_only` exists so
+    an agent can take skills and not standing text, and the preview naming a
+    path the install then refuses is a promise boost does not keep.
+    AGENT_FOR_HOST maps only claude-code and gemini today and both materialize
+    rules, so this is only observable by flipping the flag.
+    """
+
+    @staticmethod
+    def _skills_only(agent):
+        from boost_cli.core import config
+        cfg = config.load()
+        cfg["agents"][agent]["skills_only"] = True
+        config.save(cfg)
+
+    def test_a_skills_only_agent_is_dropped_from_the_preview(
+            self, offering, monkeypatch, capsys):
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        self._skills_only("gemini")
+        configuration._offer_boost_first(["claude", "gemini"])
+        out = capsys.readouterr().out
+        assert "CLAUDE.md" in out          # still offered for the agent that takes it
+        assert "GEMINI.md" not in out
+
+    def test_a_wholly_skills_only_scope_makes_no_offer_at_all(
+            self, offering, monkeypatch, capsys):
+        # `targets` empty returns before anything is printed and before
+        # `store.install` runs — so nothing is "refused", the question is
+        # simply never asked.
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        self._skills_only("claude-code")
+        configuration._offer_boost_first(["claude"])
+        assert capsys.readouterr().out == ""
+        assert lockfile.get_rule(RULE) is None
+
+
 class TestConsentIsRealRatherThanProcedural:
     def test_the_whole_body_is_printed_before_the_question(
             self, offering, monkeypatch, capsys):
