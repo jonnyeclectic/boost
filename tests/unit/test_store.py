@@ -33,7 +33,7 @@ ISO = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
 # assert the linked list exactly, and that list follows enabled_agents() order.
 AGENT_DIRS = {"claude-code": ".claude", "windsurf": ".windsurf",
               "cursor": ".cursor", "gemini": ".gemini",
-              "antigravity": ".gemini/antigravity-cli"}
+              "antigravity": ".gemini/antigravity-cli", "codex": ".codex"}
 # Project scope derives a repo-local dotdir from the agent's own, which holds
 # only for an agent whose skills dir sits one level under it. Antigravity's
 # sits two, so it is excluded rather than given a dotless
@@ -41,8 +41,9 @@ AGENT_DIRS = {"claude-code": ".claude", "windsurf": ".windsurf",
 PROJECT_AGENT_DIRS = {k: v for k, v in AGENT_DIRS.items()
                       if k != "antigravity"}
 # The agents a *user-scope skill* is symlinked into. gemini is deliberately
-# absent: it reads ~/.agents/skills (the canonical store) natively, so
-# links_skills is False and link_agents never touches ~/.gemini/skills. It is
+# absent, and so is codex: both read ~/.agents/skills (the canonical store)
+# natively, so links_skills is False and link_agents never touches
+# ~/.gemini/skills or ~/.codex/skills. Gemini is
 # still a full agent everywhere else — rules, workflows and project-scope
 # copies all materialize into ~/.gemini, so those assertions DO include it.
 # antigravity IS here: it shares gemini's tree but reads neither the canonical
@@ -99,7 +100,7 @@ class TestInstall:
         assert res.name == "brainstorming"
         assert res.dest == dest
         assert res.linked == LINKED_AGENTS
-        assert res.native == ["gemini"]
+        assert res.native == ["gemini", "codex"]
         assert res.conflicts == []
         assert res.upgraded is False
         assert res.score == 95
@@ -462,7 +463,7 @@ class TestNativeStoreAgents:
     def test_result_reports_gemini_as_native_not_linked(self, tap, entry):
         res = store.install(entry)
         assert res.linked == LINKED_AGENTS
-        assert res.native == ["gemini"]
+        assert res.native == ["gemini", "codex"]
         assert "gemini" not in res.linked
 
     def test_the_lock_records_only_real_links(self, brainstorming):
@@ -476,7 +477,7 @@ class TestNativeStoreAgents:
         # otherwise would be untrue.
         res = store.install(entry, only_agents=["cursor"])
         assert res.linked == ["cursor"]
-        assert res.native == ["gemini"]
+        assert res.native == ["gemini", "codex"]
 
     def test_native_survives_a_reinstall(self, tap, entry):
         # Regression: reinstall replays the lock's recorded links as the scope,
@@ -484,7 +485,7 @@ class TestNativeStoreAgents:
         # scope silently emptied it on every reinstall.
         store.install(entry)
         res = store.install(entry, force=True)
-        assert res.native == ["gemini"]
+        assert res.native == ["gemini", "codex"]
 
     def test_sync_never_wants_a_gemini_link(self, brainstorming):
         plan = store.sync_plan()
@@ -503,7 +504,7 @@ class TestNativeStoreAgents:
         config.save(cfg)
         res = store.install(entry)
         assert "gemini" in res.linked
-        assert res.native == []
+        assert res.native == ["codex"]
         assert _link("gemini").is_symlink()
 
 
@@ -618,6 +619,36 @@ class TestDuplicateDiscovery:
         cfg["agents"]["gemini"]["enabled"] = False
         config.save(cfg)
         assert store.duplicate_discovery() == []
+
+    @staticmethod
+    def _codex() -> Path:
+        d = paths.home() / ".codex" / "skills"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_an_agent_that_dedupes_by_path_is_not_reported(self, brainstorming):
+        # Codex de-duplicates its five skill roots on the *resolved* path and
+        # says nothing, so an entry reachable twice is not a symptom the user
+        # ever sees. Gemini's identical link still is — this is one flag, not
+        # a blanket exemption for native-store agents.
+        (self._codex() / "brainstorming").symlink_to(
+            paths.store_dir() / "brainstorming")
+        (self._gemini() / "brainstorming").symlink_to(
+            paths.store_dir() / "brainstorming")
+        assert [(d.agent, d.name) for d in store.duplicate_discovery()] == [
+            ("gemini", "brainstorming")]
+
+    def test_flipping_dedupes_by_path_off_makes_codex_reported(self,
+                                                               brainstorming):
+        # The other direction: nothing about codex's dir is special, only the
+        # flag. Turn it off and the same link reports like any other.
+        (self._codex() / "brainstorming").symlink_to(
+            paths.store_dir() / "brainstorming")
+        cfg = config.load()
+        cfg["agents"]["codex"]["dedupes_by_path"] = False
+        config.save(cfg)
+        assert [(d.agent, d.name) for d in store.duplicate_discovery()] == [
+            ("codex", "brainstorming")]
 
 
 class TestResolvesIntoStore:
@@ -1197,6 +1228,37 @@ class TestSyncPlan:
         assert plan["stale_links"] == [str(link)]
         assert plan["orphaned_store"] == ["orphan"]
 
+    def test_a_native_store_agents_dir_is_never_swept(self, brainstorming):
+        # Boost only ever creates a symlink in an agent it links for, so a link
+        # into the store from a native-store agent's skills dir was put there
+        # by something else — and the sweep's only ownership test is
+        # `points_into_store`, which it passes. Sweeping `enabled_agents` made
+        # `boost sync` delete another tool's files with --prune-duplicates
+        # never typed. The identical link in a *linking* agent's dir is still
+        # swept, so this is the set, not the check, that changed.
+        orphan = paths.store_dir() / "orphan"
+        orphan.mkdir()
+        for agent_dir in (".gemini", ".codex"):
+            d = paths.home() / agent_dir / "skills"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "orphan").symlink_to(orphan)
+        plan = store.sync_plan()
+        assert plan["stale_links"] == []
+        assert plan["orphaned_store"] == ["orphan"]
+
+        theirs = paths.home() / ".cursor" / "skills" / "orphan"
+        theirs.symlink_to(orphan)
+        assert store.sync_plan()["stale_links"] == [str(theirs)]
+
+    def test_a_dangling_link_in_a_native_store_dir_is_left_alone(
+            self, brainstorming):
+        # The broken-link half of the same rule: `points_into_store` is a
+        # readlink, so a dangling link in ~/.codex/skills matched too.
+        d = paths.home() / ".codex" / "skills"
+        d.mkdir(parents=True)
+        (d / "ghost").symlink_to(paths.store_dir() / "ghost")
+        assert store.sync_plan() == self.EMPTY
+
     def test_valid_symlink_outside_store_not_stale(self, brainstorming):
         target = paths.home() / "elsewhere"
         target.mkdir()
@@ -1563,9 +1625,13 @@ class TestRuleInstall:
     def _gemini_md(self):
         return paths.home() / ".gemini" / "GEMINI.md"
 
+    def _codex_md(self):
+        return paths.home() / ".codex" / "AGENTS.md"
+
     def test_materializes_into_each_agent_native_format(self, tap):
         res = store.install(_rule_entry(tap))
-        assert set(res.linked) == {"claude-code", "windsurf", "cursor", "gemini"}
+        assert set(res.linked) == {"claude-code", "windsurf", "cursor",
+                                   "gemini", "codex"}
 
         # Claude Code has no rules folder -> managed block in CLAUDE.md.
         text = self._claude_md().read_text(encoding="utf-8")
@@ -1586,6 +1652,22 @@ class TestRuleInstall:
         assert "name: Team Conventions" not in gtext   # frontmatter stripped
         assert not (paths.home() / ".gemini" / "rules").exists()
 
+        # Codex: AGENTS.md, the same managed block again. Asserted off disk
+        # and not just off res.linked, because the lock records whatever
+        # rule_target returned — a wrong directory (its skills dir rather than
+        # the parent) would leave every name-level assertion green while the
+        # file sat somewhere Codex never opens. ~/.codex/rules/ is the
+        # execpolicy DSL, so it must stay absent.
+        cdx = self._codex_md()
+        assert cdx.is_file()
+        ctext = cdx.read_text(encoding="utf-8")
+        assert "boost:rule:team-conventions start" in ctext
+        assert "boost:rule:team-conventions end" in ctext
+        assert "Always write tests first." in ctext
+        assert "name: Team Conventions" not in ctext   # frontmatter stripped
+        assert not (paths.home() / ".codex" / "rules").exists()
+        assert not (paths.home() / ".codex" / "skills").exists()
+
         # Cursor: verbatim .mdc drop, frontmatter preserved (native metadata).
         cur = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
         assert cur.is_file()
@@ -1598,15 +1680,29 @@ class TestRuleInstall:
         assert rec["kind"] == "rule"
         assert rec["tap"] == tap.name
         assert {m["agent"] for m in rec["materializations"]} == {
-            "claude-code", "windsurf", "cursor", "gemini"}
-        # The mode is what uninstall dispatches on, so pin it per agent: the two
-        # context-file agents share MODE_CLAUDE, the rules-dir agents don't.
+            "claude-code", "windsurf", "cursor", "gemini", "codex"}
+        # The mode is what uninstall dispatches on, so pin it per agent: the
+        # three context-file agents share MODE_CLAUDE, the rules-dir agents
+        # don't. Codex's context file is AGENTS.md — its ~/.codex/rules/ is the
+        # execpolicy approval DSL, not an instructions dir.
         assert {m["agent"]: m["mode"] for m in rec["materializations"]} == {
-            "claude-code": "claude", "gemini": "claude",
+            "claude-code": "claude", "gemini": "claude", "codex": "claude",
             "windsurf": "file", "cursor": "file"}
         assert {m["agent"]: m["path"] for m in rec["materializations"]}["gemini"] \
             == str(gem)
+        assert {m["agent"]: m["path"] for m in rec["materializations"]}["codex"] \
+            == str(cdx)
         assert lockfile.get_skill("team-conventions") is None  # not a skill
+
+    def test_narrowing_to_a_skills_only_agent_is_refused(self, tap):
+        # The rule twin of the workflow guard: antigravity is enabled and
+        # skills_only, so `--agent antigravity` intersects materializing_agents
+        # to nothing. Same silent zero-materialization lock row, same refusal.
+        with pytest.raises(BoostError) as exc:
+            store.install(_rule_entry(tap), only_agents=["antigravity"])
+        assert "antigravity" in str(exc.value)
+        assert lockfile.get_rule("team-conventions") is None
+        assert not self._claude_md().exists()
 
     def test_uninstall_reverses_every_materialization(self, tap):
         store.install(_rule_entry(tap))
@@ -1617,15 +1713,18 @@ class TestRuleInstall:
         info = store.uninstall("team-conventions")
         assert info["kind"] == "rule"
         assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor",
-                                         "gemini"}
+                                         "gemini", "codex"}
         assert lockfile.get_rule("team-conventions") is None
         text = claude_md.read_text(encoding="utf-8")
         assert "boost:rule" not in text
         assert "# My own standing notes" in text
         assert not (paths.home() / ".cursor" / "rules" / "team-conventions.mdc").exists()
         assert not (paths.home() / ".windsurf" / "rules" / "team-conventions.md").exists()
-        # GEMINI.md held only our block, so it goes with it.
+        # GEMINI.md held only our block, so it goes with it. Same for
+        # AGENTS.md — the most invasive file this install touches is also the
+        # one the uninstall test said nothing about.
         assert not self._gemini_md().exists()
+        assert not self._codex_md().exists()
 
     def test_uninstall_strips_only_our_block_from_gemini_md(self, tap):
         """The GEMINI.md equivalent of the CLAUDE.md guarantee above.
@@ -1786,6 +1885,83 @@ class TestWorkflowInstall:
         assert {m["agent"]: m["path"] for m in rec["materializations"]}["gemini"] \
             == str(gem)
         assert lockfile.get_skill("ship-it") is None
+
+    def test_narrowing_to_an_agent_with_no_workflow_surface_is_refused(self, tap):
+        """An empty ``--agent`` intersection must raise, not install nothing.
+
+        Everything after the loop ran regardless, so this wrote a lock row with
+        zero materializations and exited 0. Nothing downstream could see it
+        either: ``sync_plan`` asks ``any(... for m in materializations)`` and
+        ``any([])`` is False, so doctor called the phantom fully materialized
+        and uninstall had nothing to remove. Codex makes it the likely typo —
+        it is enabled by default and *does* take rules.
+        """
+        entry = _workflow_entry(tap)
+        with pytest.raises(BoostError) as exc:
+            store.install(entry, only_agents=["codex"])
+        assert "codex" in str(exc.value)
+        assert lockfile.get_workflow("ship-it") is None
+        assert not (paths.home() / ".codex" / "commands").exists()
+
+    def test_the_refusal_says_which_of_the_two_reasons_it_was(self, tap):
+        """``--agent`` names a *known* agent, which is all `_check_agents` can
+        check; whether it takes this kind is per-kind. An enabled agent with no
+        surface and a disabled agent are different mistakes, so the hints differ.
+        """
+        entry = _workflow_entry(tap)
+        with pytest.raises(BoostError) as enabled_but_no_surface:
+            store.install(entry, only_agents=["codex"])
+        assert "cannot take a workflow" in str(enabled_but_no_surface.value.hint)
+
+        cfg = config.load()
+        cfg["agents"]["gemini"]["enabled"] = False
+        config.save(cfg)
+        with pytest.raises(BoostError) as disabled:
+            store.install(entry, only_agents=["gemini"])
+        assert "enabled true" in str(disabled.value.hint)
+
+    def test_a_narrowing_replayed_from_the_lock_does_not_blame_agent(self, tap):
+        """The refusal has to say where the narrowing came from.
+
+        `preserved_agent_scope` replays a recorded scope before the guard runs,
+        so by then a lock-replayed narrowing and a typed `--agent` are the same
+        list. Reporting the first as `--agent codex` told a user to stop passing
+        a flag they had never passed, and named no way out.
+        """
+        entry = _rule_entry(tap)
+        store.install(entry, only_agents=["codex"])
+        # codex keeps rules today, so take the surface away rather than the
+        # agent: `skills_only` leaves it enabled, which is the harder case —
+        # the hint must still be "no surface", not "not enabled".
+        cfg = config.load()
+        cfg["agents"]["codex"]["skills_only"] = True
+        config.save(cfg)
+
+        with pytest.raises(BoostError) as exc:
+            store.install(entry, force=True)          # no --agent anywhere
+        msg, hint = str(exc.value), str(exc.value.hint)
+        assert "its recorded agents (codex)" in msg
+        assert "--agent codex" not in msg
+        assert "codex cannot take a rule" in hint
+        assert "--force --agent" in hint              # and how to widen it
+
+    def test_an_explicit_narrowing_still_says_agent(self, tap):
+        # The other half: a typed flag must still be quoted back, and must not
+        # carry the widening hint — the user is already passing --agent.
+        entry = _workflow_entry(tap)
+        with pytest.raises(BoostError) as exc:
+            store.install(entry, only_agents=["codex"])
+        assert "--agent codex" in str(exc.value)
+        assert "recorded agents" not in str(exc.value)
+        assert "--force --agent" not in str(exc.value.hint)
+
+    def test_a_narrowing_that_keeps_one_agent_still_installs(self, tap):
+        # The guard fires on an *empty* intersection only: naming codex
+        # alongside an agent that can take a workflow is not an error.
+        res = store.install(_workflow_entry(tap),
+                            only_agents=["codex", "claude-code"])
+        assert res.linked == ["claude-code"]
+        assert (paths.home() / ".claude" / "commands" / "ship-it.md").is_file()
 
     def test_subagent_drops_into_agents_dir(self, tap):
         entry = _workflow_entry(tap, name="reviewer", rel="agents/reviewer.md",
@@ -2295,8 +2471,9 @@ class TestProjectSkills:
         assert rec["kind"] == "skill"
         assert rec["version"] == "1.4.0"
         assert rec["tap"] == "fixture-tap"
-        assert rec["agents"] == ["claude-code", "windsurf", "cursor", "gemini"]
-        assert len(rec["materializations"]) == 4
+        assert rec["agents"] == ["claude-code", "windsurf", "cursor",
+                                 "gemini", "codex"]
+        assert len(rec["materializations"]) == 5
         assert re.match(ISO, rec["installed_at"])
         assert re.match(ISO, rec["updated_at"])
         assert rec["sha256"] and rec["commit"]
@@ -2386,7 +2563,14 @@ class TestProjectSkills:
         config.save(cfg)
         with pytest.raises(BoostError) as err:
             store.install(entry, scope="project", base=str(tmp_path / "p"))
-        assert "no enabled agents" in err.value.message
+        assert "no enabled agent takes a project-scope skill" in err.value.message
+        # Nothing was narrowed, so the remedy is to enable an agent — not to
+        # widen a selection the user never made.
+        assert "enabled true" in err.value.hint
+        assert "--agent" not in err.value.message
+        # And with every agent off there is no live one to name, so the hint
+        # must not claim some enabled agent lacks a repo-local path.
+        assert "repo-local skills path" not in err.value.hint
 
     def test_an_agent_outside_project_scope_does_not_avert_the_error(
             self, entry, tmp_path):
@@ -2396,12 +2580,58 @@ class TestProjectSkills:
         # on the scoped target set, so this must still error rather than
         # silently write nothing.
         cfg = config.load()
-        for name in ("claude-code", "windsurf", "cursor", "gemini"):
+        for name in ("claude-code", "windsurf", "cursor", "gemini", "codex"):
             cfg["agents"][name]["enabled"] = False
         config.save(cfg)
         with pytest.raises(BoostError) as err:
             store.install(entry, scope="project", base=str(tmp_path / "p"))
-        assert "no enabled agents" in err.value.message
+        assert "no enabled agent takes a project-scope skill" in err.value.message
+        # antigravity *is* enabled, so "enable one" would name a setting that
+        # is already true. The hint has to say what is actually wrong with it
+        # and point at the scope that does work.
+        assert "no enabled agent has a repo-local skills path" in err.value.hint
+        assert "antigravity" in err.value.hint
+        assert "install at user scope" in err.value.hint
+
+    def test_a_typed_agent_narrowing_is_reported_as_the_flag_it_was(
+            self, entry, tmp_path):
+        # `--agent antigravity` is a real, enabled agent that project scope
+        # excludes. The refusal has to name the flag, because that is the thing
+        # the user can change.
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(tmp_path / "p"),
+                          only_agents=["antigravity"])
+        assert "--agent antigravity" in err.value.message
+        assert "--force --agent" in err.value.hint
+        # Widening is only half the answer: antigravity is enabled, so the
+        # hint has to say *why* it was dropped rather than leave the user
+        # toggling a setting that is already on.
+        assert "antigravity has no repo-local skills path" in err.value.hint
+
+    def test_a_replayed_agent_narrowing_is_not_reported_as_a_flag(
+            self, entry, tmp_path):
+        """The lock replays a recorded scope; the user typed nothing.
+
+        `preserved_agent_scope` turns the recorded list into `only_agents`
+        before the guard runs, so without the `explicit` capture the refusal
+        tells a user to stop passing `--agent cursor` when their command line
+        was a bare `boost install <name> --local`.
+        """
+        repo, _ = self._install(entry, tmp_path, only_agents=["cursor"])
+        cfg = config.load()
+        cfg["agents"]["cursor"]["enabled"] = False
+        config.save(cfg)
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(repo), force=True)
+        assert "its recorded agents (cursor)" in err.value.message
+        assert "--agent cursor" not in err.value.message
+        # Recorded, so widening is one way out and the hint keeps offering it.
+        assert "--force --agent" in err.value.hint
+        # But cursor is *disabled*, not project-less, and that is the thing the
+        # user changed a moment ago. `narrow_materializing` says both on this
+        # same input; saying only "widen" here sent them looking for a second
+        # agent to install into instead of turning the first one back on.
+        assert "enabled true" in err.value.hint
 
     # ── uninstall ────────────────────────────────────────────────────────
 
@@ -2411,8 +2641,8 @@ class TestProjectSkills:
         info = store.uninstall_project("brainstorming", base=str(repo))
         assert info["scope"] == "project"
         assert info["kind"] == "skill"
-        assert sorted(info["unlinked"]) == ["claude-code", "cursor", "gemini",
-                                            "windsurf"]
+        assert sorted(info["unlinked"]) == ["claude-code", "codex", "cursor",
+                                            "gemini", "windsurf"]
         assert info["base"] == str(repo)
         for dotdir in AGENT_DIRS.values():
             assert not (repo / dotdir / "skills" / "brainstorming").exists()
@@ -2530,12 +2760,73 @@ class TestProjectSkills:
         rec = projectlock.get_skill(repo, "brainstorming")
         paths_rec = sorted(m["path"] for m in rec["materializations"])
         assert paths_rec == [".claude/skills/brainstorming",
+                             ".codex/skills/brainstorming",
                              ".cursor/skills/brainstorming",
                              ".gemini/skills/brainstorming",
                              ".windsurf/skills/brainstorming"]
         # Nothing machine-specific: this file is committed and read elsewhere.
         for p in paths_rec:
             assert not p.startswith("/") and str(tmp_path) not in p
+
+    def test_a_relocated_codex_home_does_not_move_the_repo_dir(
+            self, entry, tmp_path, monkeypatch):
+        """`$CODEX_HOME` moves Codex's *user* dir; its repo dir is fixed.
+
+        The dotdir used to be derived from the configured skills dir, so a
+        relocated CODEX_HOME landed the project copy in a dotless
+        ``<repo>/moved/skills``, which is not where Codex looks — its repo-scope
+        root is the literal ``<project>/.codex/skills`` whatever the variable
+        says — and then wrote that machine-local name into the *committed*
+        project lock, checking one developer's environment in for everyone who
+        clones the repo. Both halves are asserted below.
+        """
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "moved"))
+        repo, res = self._install(entry, tmp_path)
+        assert "codex" in res.linked
+        assert (repo / ".codex" / "skills" / "brainstorming"
+                / "SKILL.md").is_file()
+        assert not (repo / "moved").exists()
+
+        from boost_cli.core import projectlock
+        rec = projectlock.get_skill(repo, "brainstorming")
+        by_agent = {m["agent"]: m["path"] for m in rec["materializations"]}
+        assert by_agent["codex"] == ".codex/skills/brainstorming"
+        # The pre-existing "nothing machine-specific" check passes on
+        # `moved/skills/...` — the repo-relative form hides the leak — so name
+        # the directory instead of testing for the tmp_path prefix.
+        assert "moved" not in by_agent["codex"]
+
+    def test_the_orphan_scan_looks_where_a_relocated_codex_installed(
+            self, entry, tmp_path, monkeypatch):
+        # The scan derives its roots the same way the install does, so the two
+        # have to agree: deriving here would walk `<repo>/moved/skills`, find
+        # nothing, and report a clean tree over an unreferenced copy.
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "moved"))
+        repo, _ = self._install(entry, tmp_path)
+        stray = repo / ".codex" / "skills" / "hand-written"
+        stray.mkdir(parents=True)
+        plan = store.project_sync_plan(base=str(repo))
+        assert str(stray) in plan["orphaned"]
+
+    def test_the_orphan_scan_skips_a_root_the_install_never_writes(
+            self, entry, tmp_path):
+        """The scan walks `project_agents()`, the set the install writes to.
+
+        Antigravity is enabled but has `project_scope: False` — its user skills
+        dir sits two levels under its dotdir, so there is no repo path to
+        derive. Walking `enabled_agents()` instead invented
+        ``<repo>/antigravity-cli/skills`` and called anything a developer
+        happened to keep there boost's unclaimed litter.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        theirs = repo / "antigravity-cli" / "skills" / "hand-written"
+        theirs.mkdir(parents=True)
+        plan = store.project_sync_plan(base=str(repo))
+        assert str(theirs) not in plan["orphaned"]
+        # Not vacuous: a root the install *does* write is still scanned.
+        mine = repo / ".claude" / "skills" / "stray"
+        mine.mkdir(parents=True)
+        assert str(mine) in store.project_sync_plan(base=str(repo))["orphaned"]
 
     def test_sync_reads_the_lock_from_a_different_clone_path(self, entry, tmp_path):
         """Simulates the teammate: same lock, different absolute directory."""
@@ -2568,7 +2859,8 @@ class TestProjectSkills:
         info = store.uninstall_project("brainstorming", base=str(repo))
         # cursor's dir was already gone — claiming to have removed it would be
         # a lie in the CLI's own summary line.
-        assert sorted(info["unlinked"]) == ["claude-code", "gemini", "windsurf"]
+        assert sorted(info["unlinked"]) == ["claude-code", "codex", "gemini",
+                                            "windsurf"]
         assert projectlock.get_skill(repo, "brainstorming") is None
 
     # ── conflicts and partial reinstalls ─────────────────────────────────
@@ -2601,9 +2893,9 @@ class TestProjectSkills:
         store.install(entry, scope="project", base=str(repo), force=True,
                       only_agents=["cursor"])
         rec = projectlock.get_skill(repo, "brainstorming")
-        assert sorted(rec["agents"]) == ["claude-code", "cursor", "gemini",
-                                         "windsurf"]
-        assert len(rec["materializations"]) == 4
+        assert sorted(rec["agents"]) == ["claude-code", "codex", "cursor",
+                                         "gemini", "windsurf"]
+        assert len(rec["materializations"]) == 5
         # And uninstall still reverses every one of them.
         store.uninstall_project("brainstorming", base=str(repo))
         for dotdir in AGENT_DIRS.values():
@@ -2684,7 +2976,79 @@ class TestProjectSkills:
         assert (repo / ".cursor" / "skills" / "brainstorming" / "SKILL.md").is_file()
         # and the lock still describes all four
         assert len(projectlock.get_skill(repo, "brainstorming")
-                   ["materializations"]) == 4
+                   ["materializations"]) == 5
+
+
+class TestARelocatableProjectDotdir:
+    """A configured ``project_dir`` decides the repo-local directory name.
+
+    `agents.project_dotdir` exists so an agent whose *user* dir can move at
+    runtime (Codex, via ``$CODEX_HOME``) does not drag its *repo* dir with it.
+    Only the skill path was pinned against a name that actually differs; the
+    rule and workflow paths pass ``dotdir=`` to callees that would derive the
+    same answer for every shipped agent, so deleting either argument broke no
+    test. Cursor is the lever: it takes a rule through `rules.MODE_FILE` and a
+    workflow through `workflows.workflow_target` — the two branches that read
+    ``dotdir`` — so giving it a ``project_dir`` of ``.mycursor`` makes both
+    call sites discriminating. Nothing here is Cursor-specific; it is the one
+    agent that exercises both file-dropping branches.
+    """
+
+    @pytest.fixture()
+    def relocated(self, sandbox):
+        # `sandbox` is not decoration: this fixture writes config, and
+        # without the dependency it is hermetic only for as long as
+        # every test in the class happens to list a sandboxed fixture
+        # ahead of it — reorder two parameters and it edits the real
+        # ~/.boost/config.json.
+        cfg = config.load()
+        cfg["agents"]["cursor"]["project_dir"] = ".mycursor"
+        config.save(cfg)
+
+    @pytest.fixture()
+    def repo(self, tmp_path):
+        d = tmp_path / "proj"
+        (d / ".git").mkdir(parents=True)
+        return d
+
+    def test_a_project_rule_lands_under_the_configured_dotdir(
+            self, tap, relocated, repo):
+        store.install(_rule_entry(tap), scope="project", base=str(repo),
+                      only_agents=["cursor"])
+        assert (repo / ".mycursor" / "rules" / "team-conventions.mdc").is_file()
+        assert not (repo / ".cursor").exists()
+
+    def test_a_project_workflow_lands_under_the_configured_dotdir(
+            self, tap, relocated, repo):
+        store.install(_workflow_entry(tap), scope="project", base=str(repo),
+                      only_agents=["cursor"])
+        assert (repo / ".mycursor" / "commands" / "ship-it.md").is_file()
+        assert not (repo / ".cursor").exists()
+
+    def test_the_lock_records_the_configured_dotdir(self, tap, relocated, repo):
+        """A project *rule* is recorded in the user lock (not the project one —
+
+        `projectlock` holds skills), by absolute path. `uninstall` and `sync`
+        both read that path back, so a dotdir that disagrees with disk leaves
+        a real file no record claims.
+        """
+        store.install(_rule_entry(tap), scope="project", base=str(repo),
+                      only_agents=["cursor"])
+        rec = lockfile.get_rule("team-conventions")
+        assert [m["path"] for m in rec["materializations"]] == [
+            str(repo / ".mycursor" / "rules" / "team-conventions.mdc")]
+
+    def test_user_scope_ignores_it(self, tap, relocated):
+        """``project_dir`` names a *repo* directory. The user answer is the
+
+        real parent of the real skills dir, which is what `rule_target`
+        derives when no base is given — so a configured value must not leak
+        into ``~/``.
+        """
+        store.install(_rule_entry(tap), only_agents=["cursor"])
+        assert (paths.home() / ".cursor" / "rules"
+                / "team-conventions.mdc").is_file()
+        assert not (paths.home() / ".mycursor").exists()
 
 
 class TestCopySkillBackupCleanup:
@@ -2831,7 +3195,7 @@ class TestReinstallKeepsAgentScope:
         store.install(entry)
         res = store.install(entry, force=True)
         assert res.linked == LINKED_AGENTS
-        assert res.native == ["gemini"]
+        assert res.native == ["gemini", "codex"]
 
     def test_install_from_path_keeps_the_scope_too(self, tap, entry, tmp_path):
         # `boost reinstall` on a local skill goes through install_from_path.
@@ -3127,7 +3491,7 @@ class TestNarrowedRuleAndWorkflowKeepTheirRecords:
         store.install(_rule_entry(tap), force=True, only_agents=["cursor"])
         rec = lockfile.get_rule("team-conventions")
         assert {m["agent"] for m in rec["materializations"]} == {
-            "claude-code", "windsurf", "cursor", "gemini"}
+            "claude-code", "windsurf", "cursor", "gemini", "codex"}
 
     def test_an_agent_rewritten_in_place_is_not_recorded_twice(self, tap):
         # The carry-forward has to exclude what this run wrote, or uninstall
@@ -3135,7 +3499,7 @@ class TestNarrowedRuleAndWorkflowKeepTheirRecords:
         store.install(_rule_entry(tap))
         store.install(_rule_entry(tap), force=True, only_agents=["cursor"])
         rows = lockfile.get_rule("team-conventions")["materializations"]
-        assert len(rows) == len({m["agent"] for m in rows}) == 4
+        assert len(rows) == len({m["agent"] for m in rows}) == 5
 
     def test_uninstall_then_removes_the_orphaned_claude_md_block(self, tap):
         store.install(_rule_entry(tap))
@@ -4035,6 +4399,12 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
     CURSOR: ClassVar[dict[str, tuple[str, str]]] = {
         "rule": ("rules", "team-conventions.mdc"),
         "workflow": ("commands", "ship-it.md")}
+    # Codex takes rules (AGENTS.md) and has no slash-command format at all, so
+    # the two kinds no longer fan out to the same agents. See
+    # agents.workflow_agents.
+    WRITTEN: ClassVar[dict[str, set[str]]] = {
+        "rule": {"claude-code", "windsurf", "gemini", "codex"},
+        "workflow": {"claude-code", "windsurf", "gemini"}}
 
     def _entry(self, tap, kind):
         entry = _rule_entry(tap) if kind == "rule" else _workflow_entry(tap)
@@ -4060,7 +4430,7 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
         finally:
             cursor.chmod(0o700)
         assert res.unwritable == [str(cursor)]
-        assert set(res.linked) == {"claude-code", "windsurf", "gemini"}
+        assert set(res.linked) == self.WRITTEN[kind]
         assert not (cursor / self.CURSOR[kind][1]).exists()
         rows = {m["agent"]: m for m in self._locked(kind, entry["name"])
                 ["materializations"]}
@@ -4093,7 +4463,7 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
         finally:
             cursor.chmod(0o700)
         assert res.unwritable == [str(cursor)]
-        assert set(res.linked) == {"claude-code", "windsurf", "gemini"}
+        assert set(res.linked) == self.WRITTEN[kind]
         rows = {m["agent"]: m for m in self._locked(kind, entry["name"])
                 ["materializations"]}
         assert rows["cursor"]["unwritable"] is True
@@ -4395,6 +4765,12 @@ class TestSomethingInTheWayOfARuleOrWorkflowDir:
     CURSOR: ClassVar[dict[str, tuple[str, str]]] = {
         "rule": ("rules", "team-conventions.mdc"),
         "workflow": ("commands", "ship-it.md")}
+    # Codex takes rules (AGENTS.md) and has no slash-command format at all, so
+    # the two kinds no longer fan out to the same agents. See
+    # agents.workflow_agents.
+    WRITTEN: ClassVar[dict[str, set[str]]] = {
+        "rule": {"claude-code", "windsurf", "gemini", "codex"},
+        "workflow": {"claude-code", "windsurf", "gemini"}}
 
     def _entry(self, tap, kind):
         entry = _rule_entry(tap) if kind == "rule" else _workflow_entry(tap)
@@ -4416,7 +4792,7 @@ class TestSomethingInTheWayOfARuleOrWorkflowDir:
         res = store.install(entry)
         assert res.blocked == [(str(target), str(cursor))]
         assert res.unwritable == []
-        assert set(res.linked) == {"claude-code", "windsurf", "gemini"}
+        assert set(res.linked) == self.WRITTEN[kind]
         assert store.link_refusal(*res.blocked[0]) == (
             "%s cannot be created: ~/.cursor is not a directory"
             % paths.tilde(target), "move ~/.cursor aside")

@@ -202,6 +202,40 @@ def test_dry_run_local_copy_list_matches_the_real_install(boost, tapped, repo):
     assert not any("antigravity" in line for line in copy_lines)
 
 
+def test_dry_run_local_copy_list_matches_the_real_install_under_a_moved_codex(
+        boost, tapped, repo, tmp_path, monkeypatch):
+    """`CODEX_HOME` moves Codex's user dir; the preview and the install must
+    both still name `<repo>/.codex/skills`, which is the only repo-scope root
+    Codex reads.
+
+    Preview and install derive their targets in two different modules
+    (`commands/pkg.py` and `core/store.py`), so "they agree" is a property that
+    has to be asserted, not assumed — and the derivation they shared was the
+    one this fixes.
+    """
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "moved-codex"))
+    preview = boost("install", "brainstorming", "--local", "--dry-run").out
+    copy_lines = sorted(x.split("→", 1)[1].strip()
+                        for x in preview.splitlines() if "copy  →" in x)
+    assert any(line.endswith(".codex/skills/brainstorming") for line in copy_lines)
+    assert not any("moved-codex" in line for line in copy_lines)
+
+    boost("install", "brainstorming", "--local")
+    assert (repo / ".codex" / "skills" / "brainstorming" / "SKILL.md").is_file()
+    assert not (repo / "moved-codex").exists()
+    # And the preview named every directory the install actually created —
+    # same set, not merely the same count.
+    # `paths.tilde` on both sides, not `str()`: the preview renders through it
+    # and it forces `/` separators "so boost's display text is stable across
+    # platforms", so a raw `str(Path)` compares `C:\\Users\\…` against
+    # `C:/Users/…` and the test failed on Windows for a difference the user
+    # never sees. Rendering both sides the same way keeps the assertion about
+    # the target set, which is what it is for.
+    made = sorted(paths.tilde(d) for d in _skill_dirs(repo, "brainstorming"))
+    assert made, "nothing materialized under the repo"
+    assert copy_lines == made
+
+
 def _mcp_skill_tap(fixture_tap_src, tmp_path, name="mcp-proj-skill",
                    decl="github", sidecar=None):
     """A tap holding one skill that declares an MCP server, own commit."""

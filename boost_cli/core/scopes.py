@@ -116,20 +116,23 @@ def check_scope(scope: str) -> str:
     return scope
 
 
-def agent_root(skills_dir, base=None) -> Path:
+def agent_root(skills_dir, base=None, dotdir=None) -> Path:
     """The agent's config root for a scope (``~/.claude`` or ``<base>/.claude``).
 
     The dotdir name is taken from the agent's *configured* skills dir rather than
     hardcoded, so an agent someone added by hand in ``config.json`` lands in the
-    project under the same name it uses at home.
+    project under the same name it uses at home. ``dotdir`` overrides that for
+    an agent whose user dir can move at runtime while its repo-scope path
+    cannot — pass :func:`agents.project_dotdir`, which knows which is which.
+    User scope never consults it: there the answer is the real parent.
     """
     skills_dir = Path(skills_dir)
     if base is None:
         return skills_dir.parent
-    return Path(base) / skills_dir.parent.name
+    return Path(base) / (dotdir or skills_dir.parent.name)
 
 
-def skill_target(skills_dir, name: str, base=None) -> Path:
+def skill_target(skills_dir, name: str, base=None, dotdir=None) -> Path:
     """Where skill ``name`` materializes for one agent under a scope.
 
     User scope (``base=None``) is the agent's own skills dir — that is where the
@@ -144,7 +147,7 @@ def skill_target(skills_dir, name: str, base=None) -> Path:
     if not _SAFE_NAME.fullmatch(name or "") or name in {".", ".."}:  # noqa: FURB143
         raise BoostError("invalid skill name %r" % name)
     skills_dir = Path(skills_dir)
-    return agent_root(skills_dir, base) / skills_dir.name / name
+    return agent_root(skills_dir, base, dotdir) / skills_dir.name / name
 
 
 def describe(scope: str, base=None) -> str:

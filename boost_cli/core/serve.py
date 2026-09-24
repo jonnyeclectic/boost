@@ -68,8 +68,13 @@ def registry_categories() -> dict:
     That taxonomy is decided from the names of the items a repo ships rather
     than from its README, and is pinned by
     ``tests/unit/test_registry_categories.py``. Reading it here rather than
-    re-deriving one means the served facets and `boost registries` cannot
-    disagree. Missing or malformed data reads as "no categories": a catalogue
+    re-deriving one means the served facets and `boost browse` cannot
+    disagree — that TUI reads the same file through
+    ``discovery._tap_categories`` -> ``config.registry_categories``. (This
+    named "boost registries", a command that has never existed; the comment
+    predates `browse`. Quoted rather than backticked so the dead-hint scan in
+    ``tests/unit/test_command_reference_fresh.py`` does not read this sentence
+    as a fresh one.) Missing or malformed data reads as "no categories": a catalogue
     page must not fail to render because a data file moved.
     """
     global _CATEGORIES

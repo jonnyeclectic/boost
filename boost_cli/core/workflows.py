@@ -80,7 +80,8 @@ def target_ext(agent: str | None, slot: str) -> str:
 
 def workflow_target(skills_dir: Path, slot: str, name: str,
                     base: Path | None = None,
-                    agent: str | None = None) -> Path:
+                    agent: str | None = None,
+                    dotdir: str | None = None) -> Path:
     """Where workflow ``name`` (in ``slot``) materializes for an agent.
 
     ``base`` selects the scope:
@@ -92,13 +93,18 @@ def workflow_target(skills_dir: Path, slot: str, name: str,
     ``agent`` selects the file *extension* via :func:`target_ext`. It is
     optional and trails ``base`` so the pre-Gemini call signature still works;
     omitting it always yields the Markdown name.
+
+    ``dotdir`` overrides the derived project directory name — see
+    :func:`rules.rule_target`, which takes it for the same reason and on the
+    same terms. It is passed in rather than looked up here so this module stays
+    a pure function of its arguments and needs no config read.
     """
     # Same guard as rule_target: `name` is tap-controlled and is about to become
     # a path component, so traversal has to be refused before the join.
     if not util.is_safe_component(name):
         raise BoostError("invalid workflow name %r" % name)
-    root = (Path(base) / Path(skills_dir).parent.name) if base is not None \
-        else Path(skills_dir).parent
+    root = (Path(base) / (dotdir or Path(skills_dir).parent.name)) \
+        if base is not None else Path(skills_dir).parent
     return root / slot / (name + target_ext(agent, slot))
 
 

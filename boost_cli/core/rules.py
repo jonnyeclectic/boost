@@ -34,7 +34,8 @@ DEFAULT_RULE_EXT = ".md"
 
 # Agents with no rules folder: a rule becomes a managed block in the agent's
 # *context file* — the standing-instructions Markdown it reads every turn.
-# Claude Code reads CLAUDE.md; Gemini CLI reads GEMINI.md.
+# Claude Code reads CLAUDE.md; Gemini CLI reads GEMINI.md; Codex reads
+# AGENTS.md.
 #
 # The value is ``(user_filename, project_filename)``. They differ for Claude
 # because it documents a personal, git-ignored ``CLAUDE.local.md`` for the
@@ -42,9 +43,27 @@ DEFAULT_RULE_EXT = ".md"
 # rewrite a file the whole team reviews. Gemini CLI documents no ``.local``
 # variant — its project context file is just ``<repo>/GEMINI.md`` — so both
 # entries are the same and the pair still expresses the choice explicitly.
+#
+# Codex is the same shape as Gemini for the same reason: verified against Codex
+# CLI 0.156.1, the global `$CODEX_HOME/AGENTS.md` block is emitted first, then a
+# `--- project-doc ---` separator, then the project `AGENTS.md` chain root-to-
+# nested. There is no documented `.local` variant — the one override it has,
+# `AGENTS.override.md`, *replaces* a directory's AGENTS.md rather than layering
+# on it, which is the wrong shape for a personal overlay — so both entries are
+# `AGENTS.md` and a project rule lands in the committed file, as it already
+# does for Gemini. That is more consequential here than there: `AGENTS.md` is a
+# cross-vendor convention, so a *project* rule installed for codex is also read
+# by Cursor, and it is a file the team reviews. Say so; do not invent an
+# unverified `.local` sibling to dodge it.
+#
+# The user-scope file is `$CODEX_HOME/AGENTS.md`, and the agent dir default is
+# `${CODEX_HOME:-~/.codex}/skills` so `rule_target`'s `.parent` lands there even
+# when Codex has been relocated — writing the default path would produce a file
+# that CLI never opens, reported as installed.
 CONTEXT_FILES = {
     "claude-code": ("CLAUDE.md", "CLAUDE.local.md"),
     "gemini": ("GEMINI.md", "GEMINI.md"),
+    "codex": ("AGENTS.md", "AGENTS.md"),
 }
 
 # ``MODE_CLAUDE``'s *value* is written into every rule's lock record, so it is
@@ -61,7 +80,8 @@ def markers(name: str) -> tuple[str, str]:
 
 
 def rule_target(agent: str, skills_dir: Path, name: str,
-                base: Path | None = None) -> tuple[str, Path]:
+                base: Path | None = None,
+                dotdir: str | None = None) -> tuple[str, Path]:
     """Where rule ``name`` materializes for ``agent``.
 
     Returns ``(mode, path)``: ``MODE_CLAUDE`` writes/merges the agent's context
@@ -76,6 +96,13 @@ def rule_target(agent: str, skills_dir: Path, name: str,
         since those agents read per-repo memory from the root,
         ``<base>/CLAUDE.local.md`` or ``<base>/GEMINI.md`` (see
         :data:`CONTEXT_FILES`).
+
+    ``dotdir`` overrides the derived repo-local directory name, for an agent
+    whose user dir is not a fixed path — `agents.project_dotdir` is what
+    computes it, and passing it here rather than calling it keeps this module a
+    pure function of its arguments, as its unit tests rely on. Deriving is
+    still right for every agent that does not declare one, and user scope never
+    consults it: the answer there is the real parent of the real skills dir.
     """
     # `name` comes from tap-controlled frontmatter and is about to be joined
     # onto a directory, so it has to be a single component — otherwise
@@ -83,7 +110,7 @@ def rule_target(agent: str, skills_dir: Path, name: str,
     # under project scope it escapes into the victim's own repo.
     if not util.is_safe_component(name):
         raise BoostError("invalid rule name %r" % name)
-    dotdir = Path(skills_dir).parent.name          # ".claude" / ".cursor" / …
+    dotdir = dotdir or Path(skills_dir).parent.name   # ".claude" / ".cursor" / …
     context = CONTEXT_FILES.get(agent)
     if context is not None:
         user_name, project_name = context

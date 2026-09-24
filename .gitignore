@@ -233,9 +233,16 @@ _bmad-output/
 #
 # The canonical store lives under $HOME, so nothing here is the store itself;
 # these are only this repo's project-scoped copies.
+#
+# `.codex/` is in the list because Codex reads `<project>/.codex/skills`, so a
+# `--local` install writes there like any other agent. It is also where the
+# Codex CLI keeps a per-project `config.toml`, which can hold an MCP server's
+# `Authorization` header — one more reason not to leave the directory
+# committable by an inattentive `git add -A`.
 .boost/
 .claude/skills/
 .claude/worktrees/
+.codex/
 .cursor/
 .gemini/
 .windsurf/
@@ -244,6 +251,13 @@ _bmad-output/
 # (rules.CONTEXT_FILES). CLAUDE.md is *source* and stays tracked; these two are
 # generated — GEMINI.md carries `boost:rule:*` markers, and CLAUDE.local.md is
 # the local-scope half that was never meant to be shared.
+#
+# `/AGENTS.md` is Codex's entry in that table and is deliberately NOT here.
+# Unlike GEMINI.md it is a file people write by hand — Codex, Cursor and others
+# all read it — so ignoring it would silently hide a real document rather than
+# a generated one. A project-scope rule installed here does append a
+# `boost:rule:*` block to it; review that before committing, the same as any
+# other edit to a tracked file.
 /GEMINI.md
 /CLAUDE.local.md
 

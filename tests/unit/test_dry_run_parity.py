@@ -3,7 +3,7 @@
 """Unit tests: a dry run says what the real run will do, and nothing more.
 
 A preview's one job is fidelity, and a confident wrong number is worse than no
-number — the user acts on it. Five measured divergences are pinned here:
+number — the user acts on it. Ten measured divergences are pinned here:
 
 * ``compact --dry-run`` counted freight by walking the working tree, but
   ``git sparse-checkout reapply`` only drops *tracked* paths outside the cone.
@@ -23,6 +23,25 @@ number — the user acts on it. Five measured divergences are pinned here:
 * ``onboard --dry-run`` cut every preview at 24 lines with no marker (the lock
   preview ends mid-object), and ``--dry-run --pr`` outside a git repository
   exited 0 with no plan and no precondition failure.
+* ``install <workflow> --agent codex --dry-run`` printed ``materialize → (no
+  enabled agents)`` about an agent that is enabled, and exited 0 where the run
+  raises — the preview reimplemented the narrowing instead of calling it.
+* ``install <skill> --local --agent antigravity --dry-run`` printed its "would
+  install … into <repo>" header with no ``copy →`` line under it and exited 0,
+  where the run raises.
+* ``install <skill> --agent cursor --dry-run`` dropped the "available to …
+  (reads the store directly)" line the run prints, because it filtered the
+  native-store agents by ``--agent`` — which `store.link_agents` documents as
+  a lie, since the store is written however narrow the scope.
+* ``install a b --agent codex --dry-run``, with ``b`` an item the narrowing
+  refuses, printed ``a``'s plan and then exited out of the whole command —
+  no plan for anything after ``b``, and not even the "dry run — nothing was
+  changed" line — while the run installs ``a``, warns about ``b`` and carries
+  on. The live loop had a per-entry handler and the preview loop had none.
+* ``install <skill> --force --dry-run`` after ``install <skill> --agent
+  cursor`` previewed a link into every linking agent, because it filtered
+  ``linking_agents()`` by the *typed* ``--agent`` once, outside the entry
+  loop, while the run replays the lock's recorded scope per entry.
 
 The CLI tests drive the preview and the live run over the same state and
 compare the two, because parity is the property; a test of the preview alone
@@ -885,3 +904,188 @@ class TestOnboardPreviewIsHonest:
         r = boost("onboard", "--repo", repo, "--dry-run", "--pr", expect=1)
 
         assert "`gh` CLI is required" in r.err
+
+
+WORKFLOW = ("---\nname: ship-it\ndescription: release helper\n"
+            "allowed-tools: Bash\n---\n\nRun the release.\n")
+
+
+@pytest.fixture()
+def kind_tap(sandbox, fixture_tap_src, tmp_path):
+    """The fixture tap plus one rule and one workflow, with their entries."""
+    from boost_cli.core import catalog
+    tap_dir = tmp_path / "kind-tap"
+    shutil.copytree(fixture_tap_src, tap_dir)
+    (tap_dir / "rules").mkdir()
+    (tap_dir / "rules" / "team.mdc").write_text(RULE, encoding="utf-8")
+    (tap_dir / "commands").mkdir()
+    (tap_dir / "commands" / "ship-it.md").write_text(WORKFLOW, encoding="utf-8")
+    _git(tap_dir, "add", "-A")
+    _git(tap_dir, "commit", "-qm", "add rule and workflow")
+    tap = registry.add(str(tap_dir))
+    catalog.rebuild_tap(tap)
+    return tap
+
+
+class TestAnEmptyTargetSetRefusesInBothModes:
+    """A preview that exits 0 where the run exits 1 is the worst kind.
+
+    Both cases below reach an agent set that is empty for the *kind* being
+    installed, and the preview reported them as a benign fact and stopped:
+    ``materialize → (no enabled agents)`` about an agent that is enabled, and —
+    for a project skill — the "would install … into <repo>" header with no
+    ``copy →`` line under it. The live run raises in both. They diverged
+    because the preview reimplemented the narrowing as a list comprehension
+    instead of calling the one the install calls; it now calls
+    `store.narrow_materializing` / `store.narrow_project_agents`, so the two
+    cannot drift apart again without a type error.
+
+    Asserted as *parity*, not as a fixed string: the preview and the run are
+    driven over the same state and their exit code and message compared.
+    """
+
+    def _both(self, boost, *argv):
+        live = boost(*argv, expect=None)
+        dry = boost(*argv, "--dry-run", expect=None)
+        return dry, live
+
+    def test_a_workflow_narrowed_to_an_agent_with_no_command_format(
+            self, boost, kind_tap):
+        """Codex is enabled and takes rules; it has no slash-command format,
+        so `workflow_agents` excludes it and the narrowing is empty."""
+        dry, live = self._both(boost, "install", "ship-it", "--agent", "codex")
+
+        assert live.rc == 1 and dry.rc == 1
+        assert "no agent left to install workflow ship-it into" in live.err
+        assert dry.err == live.err
+        # A guard, not the discriminator: the old `only_agents and not
+        # kept` already refused a *narrowed* empty set, so the live run
+        # wrote no row before this change either. `dry.rc == 1` is what
+        # fails against the old preview.
+        assert lockfile.get_workflow("ship-it") is None
+
+    def test_a_project_skill_narrowed_to_an_agent_with_no_project_path(
+            self, boost, kind_tap, tmp_path, monkeypatch):
+        """Antigravity is enabled but `project_scope: False` — its user layout
+        is two levels under ~/.gemini and it has no repo-local path."""
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+
+        dry, live = self._both(boost, "install", "brainstorming", "--local",
+                               "--agent", "antigravity")
+
+        assert live.rc == 1 and dry.rc == 1
+        assert "no agent left to install brainstorming into" in live.err
+        assert dry.err == live.err
+        assert not (repo / ".boost").exists()
+
+    def test_a_rule_with_every_materializing_agent_disabled(self, boost, kind_tap):
+        """The un-narrowed road to the same empty set: no `--agent` at all,
+        just a config in which nothing can take a rule. The guard used to be
+        `only_agents and not kept`, so this one wrote `materializations: []`
+        and exited 0 — invisible to `sync_plan`, which asks `any([])`."""
+        cfg = config.load()
+        for name in cfg["agents"]:
+            cfg["agents"][name]["enabled"] = False
+        config.save(cfg)
+
+        dry, live = self._both(boost, "install", "team-conventions")
+
+        assert live.rc == 1 and dry.rc == 1
+        assert "no enabled agent takes a rule" in live.err
+        assert dry.err == live.err
+        assert lockfile.get_rule("team-conventions") is None
+
+
+class TestNativeStoreAccessIsPreviewedLikeItIsReported:
+    """`--agent` scopes *links*, not store access — and the preview said
+    otherwise.
+
+    `store.link_agents` deliberately leaves `res.native` unfiltered, with a
+    comment saying a filter there would be a lie: the canonical store is
+    written by every install however narrow the scope, so the skill really is
+    visible to a native-store agent either way. The preview filtered it, and
+    dropped the "available to … (reads the store directly)" line that the run
+    then prints — under-reporting exactly the agents Codex just doubled.
+    """
+
+    def test_a_narrowed_install_previews_the_native_line_it_prints(
+            self, boost, tapped):
+        dry = boost("install", "brainstorming", "--agent", "cursor", "--dry-run")
+        live = boost("install", "brainstorming", "--agent", "cursor")
+
+        native = list(agents.native_store_agents())
+        assert native, "fixture config has no native-store agent to test with"
+        for a in native:
+            label = agents.display_name(a)
+            assert label in dry.out, "preview omits %s" % label
+            assert label in live.out
+
+
+class TestOneRefusedEntryDoesNotSilenceTheRestOfThePreview:
+    """The preview loop had no per-entry `BoostError` handler, and this branch
+    is what first gave it something to raise.
+
+    The live loop catches a refusal, warns, counts it and carries on whenever
+    the request names more than one item — so `install a b` installs `a`.
+    Routing the preview through the same narrowing made it raise out of the
+    whole command instead: no plan for anything after the refused name, and
+    not even the "dry run — nothing was changed" line that tells the user the
+    exit code was a preview's. The parity fix created the divergence, so the
+    fix has to carry its own regression test.
+    """
+
+    def test_a_refused_second_entry_leaves_the_first_ones_plan_printed(
+            self, boost, kind_tap):
+        dry = boost("install", "brainstorming", "ship-it", "--agent", "codex",
+                    "--dry-run", expect=None)
+        live = boost("install", "brainstorming", "ship-it", "--agent", "codex",
+                     expect=None)
+
+        assert dry.rc == 1 and live.rc == 1
+        # The entry that survives the narrowing is still planned — the plan
+        # line itself, not just the name, which a warning would also carry.
+        assert "would install brainstorming" in dry.out
+        # …the one that does not is a warning, not an abort. `out.warn`
+        # writes to stdout, which is also where the live run's
+        # per-entry warning lands, so the two are compared there.
+        msg = "no agent left to install workflow ship-it into"
+        assert msg in dry.out
+        assert msg in live.out
+        # …and the marker that makes the exit code readable is still printed.
+        assert "dry run — nothing was changed" in dry.out
+        assert lockfile.get_workflow("ship-it") is None
+
+
+class TestAReinstallPreviewsTheLinkScopeItWillReplay:
+    """`store.install` replays the lock's recorded agent scope through
+    `preserved_agent_scope` before linking; the preview filtered
+    `linking_agents()` by the *typed* `--agent` alone, once, outside the entry
+    loop. So after a narrowed install, `--force --dry-run` promised a link into
+    every agent and the run relinked the recorded one — the same defect the
+    rule and workflow branches had, left open on the commonest shape.
+    """
+
+    def test_a_forced_reinstall_previews_only_the_recorded_agents(
+            self, boost, tapped):
+        boost("install", "brainstorming", "--agent", "cursor")
+        others = [a for a in agents.linking_agents() if a != "cursor"]
+        assert others, "fixture config has only one linking agent"
+
+        dry = boost("install", "brainstorming", "--force", "--dry-run")
+        # Both halves, because parity is the property: a preview-only test
+        # would still pass the day `store.install` stopped replaying the
+        # recorded scope, and it is the run's behaviour that makes the
+        # preview's narrow answer the right one.
+        live = boost("install", "brainstorming", "--force")
+
+        link_line = [ln for ln in dry.out.splitlines() if "link  →" in ln]
+        assert link_line, dry.out
+        live_line = [ln for ln in live.out.splitlines() if "linked →" in ln]
+        assert live_line, live.out
+        assert "cursor" in link_line[0]
+        assert "cursor" in live_line[0]
+        for a in others:
+            assert a not in link_line[0], "preview widens the recorded scope"
+            assert a not in live_line[0], "run widens the recorded scope"

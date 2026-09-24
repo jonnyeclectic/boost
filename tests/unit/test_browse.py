@@ -1129,3 +1129,55 @@ def test_a_command_exactly_as_wide_as_the_pane_is_not_split_by_its_comma():
     assert cmd in lines, lines
     assert all(len(t) <= 30 for t in lines), lines
 
+
+
+class TestBrowseInstallTargetLines:
+    """The strings the detail pane shows for "what Enter writes".
+
+    `TestInstallTarget` above pins the *dispatch* against a literal dict, so it
+    stays green whatever the real lines say. These pin the lines themselves,
+    which is where the defect was: each has to name the agent set the install
+    narrows to, or the pane advertises a destination the install refuses.
+    """
+
+    @staticmethod
+    def _targets(sandbox):
+        from boost_cli.commands import discovery
+        return discovery._install_targets()
+
+    def test_the_workflow_line_names_only_workflow_agents(self, sandbox):
+        # Codex is enabled and takes rules, but has no user-installable
+        # slash-command format, so it must not appear here. The old line said
+        # "each agent's commands dir", which included it by construction.
+        from boost_cli.core import agents
+        line = self._targets(sandbox)["workflow"]
+        assert "Codex" not in line
+        assert agents.display_name("claude-code") in line
+        for name in agents.workflow_agents():
+            assert agents.display_name(name) in line
+
+    def test_the_workflow_line_survives_having_no_workflow_agents(self, sandbox):
+        from boost_cli.core import config
+        cfg = config.load()
+        for spec in cfg["agents"].values():
+            spec["workflows"] = False
+        config.save(cfg)
+        assert "no agents" in self._targets(sandbox)["workflow"]
+
+    def test_the_skill_line_names_only_linking_agents(self, sandbox):
+        # Gemini and Codex discover the canonical store themselves; boost
+        # deliberately does not link for them, so naming them would promise a
+        # symlink that is never made.
+        from boost_cli.core import agents
+        line = self._targets(sandbox)["skill"]
+        for name in agents.native_store_agents():
+            assert agents.display_name(name) not in line
+        assert agents.display_name("claude-code") in line
+
+    def test_the_rule_line_names_context_files_beside_the_skills_dir(self, sandbox):
+        # `d` is the agent's *skills* dir; the context file sits beside it. The
+        # pane used to advertise `~/.claude/skills/CLAUDE.md`, which nothing
+        # reads.
+        line = self._targets(sandbox)["rule"]
+        assert "~/.claude/CLAUDE.md" in line
+        assert "skills/CLAUDE.md" not in line

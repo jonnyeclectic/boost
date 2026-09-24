@@ -457,10 +457,13 @@ def cmd_install(argv: list[str]) -> int:
 
     if args.dry_run:
         from ..core import mcpdecl, mcphost
-        link_targets = [a for a in agents.linking_agents()
-                        if not only or a in only]
-        native_targets = [a for a in agents.native_store_agents()
-                          if not only or a in only]
+        # Deliberately NOT filtered by `only`, matching `store.link_agents`'s
+        # own reasoning: that list scopes which agents get a *link*, and a
+        # native-store agent's access follows from the store, which every
+        # install writes however narrow the scope. Filtering made the preview
+        # of `install x --agent cursor` drop the "available to … (reads the
+        # store directly)" line the run then prints.
+        native_targets = list(agents.native_store_agents())
         pbase = scopes.resolve_base(args.scope)
         if args.scope == scopes.SCOPE_PROJECT and pbase is None:
             raise BoostError(
@@ -471,65 +474,118 @@ def cmd_install(argv: list[str]) -> int:
         # project scope the *repo-local* dotdirs (agents_for_scope's project
         # branch), not the user config every other scope writes into.
         mbase = pbase if args.scope == scopes.SCOPE_PROJECT else None
-        mat_targets = [a for a in agents.materializing_agents(mbase)
-                       if not only or a in only]
+        # Per kind, not one list: a rule and a workflow no longer reach the same
+        # agents. Codex's instructions file is known and its slash-command
+        # format does not exist, so `_install_workflow` skips it — and a preview
+        # that promised it would be wrong about the one thing it exists to
+        # predict. See agents.workflow_agents.
+        mat_sets = {"rule": agents.materializing_agents(mbase),
+                    "workflow": agents.workflow_agents(mbase)}
         offer_mcp = not args.no_mcp and not os.environ.get("BOOST_NO_MCP_OFFER")
         mcp_hosts = [h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))] \
             or mcphost.hosts()
         for e in entries:
-            if args.scope == scopes.SCOPE_PROJECT and e.get("kind", "skill") == "skill":
-                seen = projectlock.get_skill(pbase, e["name"])
-                out.info("would %s %s v%s from %s into %s"
-                         % ("reinstall" if seen else "install", e["name"],
-                            e["version"], e["tap"], _tilde(pbase)))
-                # agents_for_scope(pbase), not enabled_agents(): project scope
-                # copies into each agent's *repo-local* dotdir, which excludes
-                # Antigravity CLI (its layout is two levels under ~/.gemini and
-                # has no known project-local path — see agents.project_agents).
-                for agent_name, sdir in agents.agents_for_scope(pbase).items():
-                    if only and agent_name not in only:
-                        continue
-                    out.info("  copy  → %s"
-                             % _tilde(scopes.skill_target(sdir, e["name"], base=pbase)))
+            # The live loop below catches a per-entry refusal, warns and
+            # carries on when the request names more than one item. The
+            # preview did not, and this is the commit that first gives it
+            # something to raise: `install a b --agent codex --dry-run`, with
+            # `b` a workflow codex cannot take, printed `a`'s plan and then
+            # exited 1 out of the whole command — no plan for anything after
+            # `b`, and not even the "dry run — nothing was changed" line —
+            # while the run installs `a`, warns about `b` and exits 1. A
+            # single name reaches this too, since `_expand_dependencies` can
+            # raise `multi` on a `requires:` closure.
+            try:
+                if args.scope == scopes.SCOPE_PROJECT and e.get("kind", "skill") == "skill":
+                    seen = projectlock.get_skill(pbase, e["name"])
+                    # agents_for_scope(pbase), not enabled_agents(): project scope
+                    # copies into each agent's *repo-local* dotdir, which excludes
+                    # Antigravity CLI (its layout is two levels under ~/.gemini and
+                    # has no known project-local path — see agents.project_agents).
+                    # Narrowed through the same core helper the install calls, for
+                    # the same reason the rule/workflow branch below does — and
+                    # before the header, because the run refuses before it says a
+                    # word and a preview that announces an install it is about to
+                    # refuse is worse than one that just refuses.
+                    chosen = store.narrow_project_agents(
+                        agents.agents_for_scope(pbase),
+                        store.preserved_agent_scope(only, seen), e["name"],
+                        explicit=only is not None)
+                    out.info("would %s %s v%s from %s into %s"
+                             % ("reinstall" if seen else "install", e["name"],
+                                e["version"], e["tap"], _tilde(pbase)))
+                    for agent_name, sdir in chosen.items():
+                        out.info("  copy  → %s"
+                                 % _tilde(scopes.skill_target(
+                                     sdir, e["name"], base=pbase,
+                                     dotdir=agents.project_dotdir(agent_name, sdir))))
+                    if offer_mcp:
+                        for row in mcpdecl.registrable(
+                                store.declared_mcp_servers(store.source_dir_for(e))):
+                            out.info("  mcp   → record %s in %s"
+                                     % (row["name"], mcpdecl.SIDECAR))
+                    continue
+                if e.get("kind") in ("rule", "workflow"):
+                    k = e["kind"]
+                    seen = (lockfile.get_rule if k == "rule"
+                            else lockfile.get_workflow)(e["name"])
+                    # Same verb the real run's summary uses ("Upgraded 1 rule");
+                    # the skill preview below already says "upgrade".
+                    verb = "upgrade" if seen else "install"
+                    where = "into this repo" if args.scope == "project" else "user config"
+                    # The real run's two steps, in its order: replay the lock's
+                    # recorded scope, then narrow — so the preview refuses in the
+                    # same words at the same point, ahead of the header. Filtering
+                    # a list by `only` was a lookalike that got both halves wrong:
+                    # `install <workflow> --agent codex --dry-run` printed "(no
+                    # enabled agents)" about an agent that is enabled and exited 0,
+                    # where the run raises; and a reinstall previewed every agent
+                    # while the run narrows to the ones the lock recorded.
+                    mat = store.narrow_materializing(
+                        mat_sets[k], store.preserved_agent_scope(only, seen),
+                        e["name"], k, explicit=only is not None)
+                    out.info("would %s %s %s v%s from %s (%s)" % (verb, k, e["name"],
+                                                                  e["version"], e["tap"],
+                                                                  where))
+                    out.info("  materialize → %s" % " · ".join(mat))
+                    continue
+                seen = lockfile.get_skill(e["name"])
+                verb = "upgrade" if seen else "install"
+                # The lock's recorded scope, replayed exactly as `store.install`
+                # replays it before calling `link_agents` — the same two steps
+                # the rule/workflow branch above takes, and left out here for
+                # the commonest install shape of all: after `install x --agent
+                # cursor`, `install x --force --dry-run` previewed a link into
+                # every linking agent while the run relinked cursor alone.
+                # `link_agents` filters rather than refusing on an empty set,
+                # so this narrows in place instead of calling a core helper.
+                scoped = store.preserved_agent_scope(only, seen)
+                link_targets = [a for a in agents.linking_agents()
+                                if not scoped or a in scoped]
+                out.info("would %s %s v%s from %s" % (verb, e["name"],
+                                                      e["version"], e["tap"]))
+                out.info("  copy  %s → %s" % (_tilde(store.source_dir_for(e)),
+                                              _tilde(store.skill_store_dir(e["name"]))))
+                out.info("  link  → %s" % (" · ".join(link_targets)
+                                            or "(no linking agents)"))
+                # Mirrors what the real install reports, so a Gemini-only install
+                # does not read as reaching no agent at all.
+                if native_targets:
+                    out.info("  available to %s (reads the store directly)"
+                             % " · ".join(agents.display_name(a)
+                                          for a in native_targets))
                 if offer_mcp:
                     for row in mcpdecl.registrable(
                             store.declared_mcp_servers(store.source_dir_for(e))):
-                        out.info("  mcp   → record %s in %s"
-                                 % (row["name"], mcpdecl.SIDECAR))
+                        out.info("  mcp   → offer to register %s with %s"
+                                 % (row["name"], " · ".join(mcphost.label(h)
+                                                            for h in mcp_hosts)))
+            except BoostError as err:
+                if not multi:
+                    raise
+                out.warn("%s: %s" % (e["name"], err.message))
+                failed += 1
                 continue
-            if e.get("kind") in ("rule", "workflow"):
-                k = e["kind"]
-                seen = (lockfile.get_rule if k == "rule"
-                        else lockfile.get_workflow)(e["name"])
-                # Same verb the real run's summary uses ("Upgraded 1 rule");
-                # the skill preview below already says "upgrade".
-                verb = "upgrade" if seen else "install"
-                where = "into this repo" if args.scope == "project" else "user config"
-                out.info("would %s %s %s v%s from %s (%s)" % (verb, k, e["name"],
-                                                              e["version"], e["tap"],
-                                                              where))
-                out.info("  materialize → %s" % (" · ".join(mat_targets)
-                                                 or "(no enabled agents)"))
-                continue
-            verb = "upgrade" if lockfile.get_skill(e["name"]) else "install"
-            out.info("would %s %s v%s from %s" % (verb, e["name"],
-                                                  e["version"], e["tap"]))
-            out.info("  copy  %s → %s" % (_tilde(store.source_dir_for(e)),
-                                          _tilde(store.skill_store_dir(e["name"]))))
-            out.info("  link  → %s" % (" · ".join(link_targets)
-                                        or "(no linking agents)"))
-            # Mirrors what the real install reports, so a Gemini-only install
-            # does not read as reaching no agent at all.
-            if native_targets:
-                out.info("  available to %s (reads the store directly)"
-                         % " · ".join(agents.display_name(a)
-                                      for a in native_targets))
-            if offer_mcp:
-                for row in mcpdecl.registrable(
-                        store.declared_mcp_servers(store.source_dir_for(e))):
-                    out.info("  mcp   → offer to register %s with %s"
-                             % (row["name"], " · ".join(mcphost.label(h)
-                                                        for h in mcp_hosts)))
         out.info("dry run — nothing was changed")
         return 1 if failed else 0
 

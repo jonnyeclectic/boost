@@ -303,3 +303,49 @@ class TestUndocumented:
         sp = sub.add_parser("status", aliases=["st"], help="show state")
         sp.add_argument("--json", action="store_true", help="machine-readable output")
         assert builder.undocumented(p) == []
+
+
+def test_every_command_a_core_hint_names_actually_exists():
+    """A hint that names a command boost does not have is a dead end.
+
+    ``narrow_materializing`` shipped pointing at ``boost agents``, which has
+    never existed: the user hits an error, runs what the error tells them to,
+    and gets a second error. Nothing else catches it — the string is only ever
+    built inside the failure path it describes. So read the source the hints
+    live in and check the first word of every ``boost <word>`` span against
+    :data:`cli.COMMANDS`, which is the list ``_dispatch`` resolves against.
+
+    The scan covers **the whole package**, not just ``core/``: `serve.py` was
+    still pointing at ``boost registries`` while a ``core/``-only scan passed,
+    and the command layer writes at least as many hints as the engine does.
+    """
+    import re
+
+    from boost_cli import cli
+
+    # Deliberate prose about a name that is *not* a command. Each entry names
+    # where and why, so an accidental dead hint cannot hide behind a bare word.
+    ALLOWED = {
+        # `boost help --help`: argparse's pseudo-command, explicitly described
+        # as never appearing in COMMANDS.
+        ("help", "cli.py"),
+    }
+
+    known = {name for name, _group, _module, _summary in cli.COMMANDS}
+    pkg = Path(cli.__file__).resolve().parent
+    referenced: dict[str, set[str]] = {}
+    for src in sorted(pkg.rglob("*.py")):
+        for word in set(re.findall(r"`boost ([a-z][a-z-]*)",
+                                   src.read_text(encoding="utf-8"))):
+            referenced.setdefault(word, set()).add(src.name)
+    assert referenced, "no `boost <cmd>` spans found — the scan is broken"
+    # Not vacuous, and not silently narrowed back to core/: a hint the *command*
+    # layer writes has to be in the set the scan actually read, or a future
+    # `rglob` over the wrong directory passes green.
+    assert "install" in referenced
+    scanned = {f for fs in referenced.values() for f in fs}
+    assert {"pkg.py", "discovery.py"} <= scanned, sorted(scanned)
+    missing = {w: sorted(f) for w, f in referenced.items()
+               if w not in known
+               and not all((w, f) in ALLOWED for f in referenced[w])}
+    assert missing == {}
