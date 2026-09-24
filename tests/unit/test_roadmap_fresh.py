@@ -506,6 +506,34 @@ class TestWriteUpLinksResolveOnTheirOwnPR:
         # {0} must be the checkout itself, or the remap points nowhere.
         assert re.search(r"''', github\.workspace\)", line), line
 
+    def test_the_unremapped_burst_is_rate_limited(self):
+        """The other side of the rule above. Because main is NOT remapped, a
+        push fetches every write-up link for real — one host, hundreds of
+        requests — and at lychee's default concurrency of 128 GitHub answered
+        `503 Service Unavailable` on a different handful each attempt (2, 1
+        and 4 disjoint URLs over three attempts of one run; all seven return
+        200 fetched singly). The cap is what keeps that check honest, so it is
+        pinned against the number of links it has to survive."""
+        wf = _LINKS_WF.read_text(encoding="utf-8")
+        m = re.search(r"--max-concurrency (\d+)\b", wf)
+        assert m, "links.yml lost the concurrency cap that keeps main green"
+        cap = int(m.group(1))
+        same_host = len(set(re.findall(
+            r"https://github\.com/jonnyeclectic/boost/blob/main/\S+?\.md",
+            _CODE_HTML.read_text(encoding="utf-8"))))
+        assert same_host > 100, "the board stopped linking its write-ups?"
+        assert cap <= 16, (
+            "%d concurrent requests against %d same-host links is the burst "
+            "that 503s" % (cap, same_host))
+
+    def test_a_503_is_still_a_failure(self):
+        """The cheap non-fix. Accepting 503 would turn every real GitHub
+        outage — and every link that starts erroring — into a green run."""
+        wf = _LINKS_WF.read_text(encoding="utf-8")
+        accept = re.search(r"--accept (\S+)", wf)
+        assert accept, "links.yml lost its --accept list"
+        assert "503" not in accept.group(1).split(",")
+
 
 class TestOffScreenCardsSkipLayout:
     """The board's Lighthouse cost is layout and paint of ~11,000 elements, and
