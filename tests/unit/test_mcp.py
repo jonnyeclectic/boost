@@ -1418,6 +1418,34 @@ class TestDoctorCountsWithoutBuildingTheList:
         assert "3 items available" in text
 
 
+class TestDoctorTapLine:
+    """The one line `boost_doctor` opens its verdict with.
+
+    Its leading number is what an agent reads as "how many registries can
+    answer me", so it is the CONFIGURED count — the same number
+    `mcp.no_results` and `mcp.coverage_line` key their setup sentence on. The
+    items count stays the whole catalog, boost's own tap included, so the two
+    numbers have to explain each other rather than contradict.
+    """
+
+    def test_the_ordinary_machine_reads_exactly_as_before(self):
+        assert mcp.tap_line(tapped=3, total=3, items=120) == \
+            "taps: 3 (120 items available)"
+
+    def test_none_of_them_the_users(self):
+        # `boost mcp` leaves this behind: boost's own tap, nothing else.
+        assert mcp.tap_line(tapped=0, total=1, items=1) == \
+            "taps: 0 + boost's own (1 items available)"
+
+    def test_the_builtin_sits_beside_real_taps(self):
+        assert mcp.tap_line(tapped=5, total=6, items=900) == \
+            "taps: 5 + boost's own (900 items available)"
+
+    def test_the_empty_machine_is_unchanged(self):
+        assert mcp.tap_line(tapped=0, total=0, items=0) == \
+            "taps: 0 (0 items available)"
+
+
 class TestDoctorToolOnACorruptConfig:
     """The MCP twin of CLI doctor's `config` issue: with config.json
     unreadable, "no registries tapped — run `boost tap --defaults`" would send

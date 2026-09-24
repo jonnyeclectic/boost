@@ -451,6 +451,27 @@ def coverage_line(installed: dict, *, tapped: int) -> str:
             "--defaults` to add the recommended registries." % body)
 
 
+def tap_line(*, tapped: int, total: int, items: int) -> str:
+    """``boost_doctor``'s tap census. ``tapped`` is the CONFIGURED count.
+
+    The leading number is what an agent reads as "how many registries can
+    answer me", so it is :func:`builtin.configured_tap_count` — the same
+    number :func:`no_results` and :func:`coverage_line` key their setup
+    sentence on. Counting ``registry.list_taps()`` here instead is what let
+    one session be told ``taps: 1 (1 items available)`` and *healthy* by this
+    tool and *nothing is tapped yet* by the other two, on the machine
+    ``boost mcp`` itself leaves behind: boost's own tap and nothing else.
+
+    ``items`` stays the whole catalog, boost's own tap included, because that
+    is what a search would read. So when ``total`` exceeds ``tapped`` the line
+    says where the extra tap came from — otherwise ``taps: 0`` above
+    ``1 items available`` is a contradiction the agent has to guess at. A
+    machine with no builtin is byte-identical to before.
+    """
+    extra = " + boost's own" if total > tapped else ""
+    return "taps: %d%s (%d items available)" % (tapped, extra, items)
+
+
 def overlap_note(installed_hits: int, total_hits: int) -> str:
     """How much of a search reply this machine already has. ``""`` for no hits.
 

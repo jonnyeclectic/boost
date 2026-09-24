@@ -1623,7 +1623,13 @@ def _tool_install(args: dict):
 def _tool_doctor(args: dict):
     plan = store.sync_plan()
     issues = sum(len(v) for v in plan.values())
+    # Two different questions, and answering the second with the first is what
+    # made this tool disagree with every other one. `taps` is the literal clone
+    # list — the rows config.json holds, boost's own among them. `tapped` is
+    # "has this user configured anything", which `_tool_search` and
+    # `_tool_list` already ask through `builtin.configured_tap_count`.
     taps = registry.list_taps()
+    tapped = builtin.configured_tap_count()
     everything = lockfile.all_installed()
     lines = ["installed skills: %d" % len(everything["skill"]),
              "installed rules: %d · workflows: %d"
@@ -1636,8 +1642,8 @@ def _tool_doctor(args: dict):
              # concatenated every tap's cache — 71,655 entries on a real
              # install — to produce this one integer; `kind_counts` does the
              # same reads without the accumulation.
-             "taps: %d (%d items available)"
-             % (len(taps), sum(catalog.kind_counts().values()))]
+             mcp.tap_line(tapped=tapped, total=len(taps),
+                          items=sum(catalog.kind_counts().values()))]
     for key, vals in plan.items():
         if vals:
             lines.append("%s: %s" % (key, ", ".join(str(v) for v in vals)))
@@ -1667,7 +1673,7 @@ def _tool_doctor(args: dict):
         lines.append("%s — boost is running on defaults, so the user's taps are "
                      "not listed; ask the user to repair the file or re-add "
                      "their taps (run `boost doctor` for details)" % cfg_err)
-    elif not taps:
+    elif not tapped:
         # Same command, same order, as mcp.no_results: an agent that calls
         # both tools in one session must not see the recommendation flipped
         # and read it as two different fixes. `boost tap --defaults` leads
@@ -1677,7 +1683,7 @@ def _tool_doctor(args: dict):
                      "the user to run `boost tap --defaults` to add the "
                      "recommended ones")
     if total == 0:
-        if taps:
+        if tapped:
             lines.append("healthy — no issues found")
     elif mat_issues or cfg_err:
         lines.append("%d issue(s) — run `boost doctor` for details" % total)

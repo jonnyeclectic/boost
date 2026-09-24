@@ -178,7 +178,14 @@ def tap_summary(tapped: list[tuple[str, int]]) -> str:
 
 
 def list_taps() -> list[Tap]:
-    """Configured taps from config.json.
+    """Every ``taps`` row in config.json — boost's OWN tap included.
+
+    The literal clone list, which is the right question for cloning, caching,
+    commits and provenance. It is the wrong one for "has this user set boost
+    up yet": ``boost/builtin`` is appended by :func:`builtin.ensure_tap` on a
+    machine the user has tapped nothing on, so this returns 1 there and every
+    setup message keyed on it goes silent. Ask
+    :func:`builtin.configured_tap_count` for that.
 
     Malformed config or entries read as no taps, never raise.
     """

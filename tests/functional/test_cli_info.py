@@ -151,6 +151,14 @@ class TestList:
         assert "no skills installed" in r.out
         assert "boost tap --defaults && boost search <topic>" in r.out
 
+    def test_empty_state_hint_counts_only_the_users_taps(self, boost, sandbox):
+        # The `boost tap --defaults` half of the hint is useful exactly while
+        # nothing is tapped — and boost's own tap does not change that.
+        from boost_cli.core import builtin
+        builtin.ensure_tap()
+        r = boost("list")
+        assert "boost tap --defaults && boost search <topic>" in r.out
+
     def _seed_rule(self, name="team-rules"):
         from boost_cli.core import lockfile
         lockfile.set_rule(name, {
