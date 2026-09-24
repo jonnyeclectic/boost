@@ -28,9 +28,33 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# A percentage claimed as coverage. "80% changed-line" and "80% mutation" are
-# different gates and deliberately do not match.
-STATED = re.compile(r"(?<![\d.])(\d{2,3})\s*%\s+coverage\b")
+# A percentage claimed as coverage. "80% changed-line", "80% mutation" and
+# "80% of the diff" are different gates and deliberately do not match, and
+# neither does a MEASUREMENT like "95.2% statement coverage" -- the lookbehind
+# drops a decimal and "statement" breaks the adjacency.
+#
+# `\**` allows the markdown emphasis that the tables put between the two
+# words: CLAUDE.md's gate row is `**90%** coverage`, and without this the one
+# line in the repo whose whole job is to state the gate went unchecked.
+STATED = re.compile(r"(?<![\d.])(\d{2,3})\s*%\**\s+coverage\b(?!\s+of the diff)")
+
+# The same claim spelled as the setting itself. `docs/openssf-badge.md` cites
+# `fail_under = 90` as its evidence for the OpenSSF `test_most` criterion, and
+# CLAUDE.md's gate row quotes it too -- both are statements of the rule, both
+# drift, and neither is matched by the prose pattern above.
+SETTING = re.compile(r"fail_under\s*=\s*(\d{2,3})")
+
+
+def _flatten(text: str) -> str:
+    """Join a sentence that a comment or table broke across lines.
+
+    The Makefile opened with ``unit + functional with >=80%\n# coverage`` --
+    a live drift, against a 90% gate, that the first version of this file could
+    not see because the two words were separated by a newline and a `#`. The
+    scanned files are prose, so a line break inside a claim is normal and the
+    pattern has to read across it.
+    """
+    return re.sub(r"\s*\n\s*(?:#+|//+|\*|>|\|)?[ \t]*", " ", text)
 
 # Every file that states the rule rather than recording a measurement.
 AUTHORITATIVE = (
@@ -59,13 +83,29 @@ def test_the_gate_is_a_number_we_can_read(fail_under):
 def test_a_stated_coverage_percentage_is_the_real_one(rel, fail_under):
     path = ROOT / rel
     assert path.exists(), f"{rel} is in the list but not in the tree"
-    text = path.read_text(encoding="utf-8")
+    text = _flatten(path.read_text(encoding="utf-8"))
     stated = {int(m.group(1)) for m in STATED.finditer(text)}
+    stated |= {int(m.group(1)) for m in SETTING.finditer(text)}
     wrong = sorted(p for p in stated if p != fail_under)
     assert not wrong, (
         f"{rel} states {wrong} as the coverage gate; pyproject.toml says "
         f"{fail_under}"
     )
+
+
+@pytest.mark.parametrize("rel", AUTHORITATIVE)
+def test_the_scan_is_not_vacuous(rel, fail_under):
+    """A pattern that matches nothing passes the test above for free.
+
+    Every file in the list is there because it states the gate, so every file
+    must yield at least one reading of it. This is what would have caught the
+    `**90%** coverage` and `>=80%\n# coverage` spellings slipping past the
+    pattern rather than being checked by it.
+    """
+    text = _flatten((ROOT / rel).read_text(encoding="utf-8"))
+    found = [int(m.group(1)) for m in STATED.finditer(text)]
+    found += [int(m.group(1)) for m in SETTING.finditer(text)]
+    assert found, f"{rel} is listed as stating the gate but states no percentage"
 
 
 def test_the_ci_summary_reads_the_gate_instead_of_restating_it():

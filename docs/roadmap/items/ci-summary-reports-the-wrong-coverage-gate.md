@@ -32,3 +32,18 @@ string fails here rather than in CI. Roadmap cards are out of scope by design: a
 <code>patch-coverage</code>'s comment called the project gate 80% (it now names no percentage at
 all, so it cannot drift again) and the LangChain card stated the floor a contributor must not lower
 as 80%.
+<br><br>
+<b>Review turned up two more.</b> The scan was widened after a read-only review, and the wider
+pattern found a third live drift: the <code>Makefile</code> opened by calling
+<code>make check</code> "unit + functional with &gt;=80% coverage", which the first pattern could not
+see because a newline and a <code>#</code> sat between the two words. The pattern now flattens a
+claim broken across lines, reads the markdown emphasis that CLAUDE.md's gate row puts between
+<code>90%</code> and <code>coverage</code>, and also reads <code>fail_under = 90</code> where a file
+cites the setting itself as its evidence. A second parametrised test asserts the scan is not
+vacuous -- every listed file must yield at least one reading -- because a pattern that matches
+nothing passes the first test for free, which is exactly how those two spellings slipped past.
+<code>CLAUDE.md</code> is now in mutmut's <code>also_copy</code>: the unit suite runs inside
+<code>mutants/</code>, so a test that asserts a root file exists fails baseline collection and takes
+the whole mutation gate down with it. And the summary's derivation ends in <code>|| GATE='?'</code>,
+because the step reports rather than gates and a failed command substitution under
+<code>set -e</code> would redden a green suite.

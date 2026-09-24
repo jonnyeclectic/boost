@@ -471,6 +471,28 @@ class TestLongCodeTokensCanBreak:
 _LINKS_WF = _ROOT / ".github" / "workflows" / "links.yml"
 
 
+def _lychee_args() -> str:
+    """The `args:` block lychee actually receives, without the comments.
+
+    The comments around it quote the very flags the tests below grep for --
+    `--max-concurrency` is named in prose three lines above the line that sets
+    it -- so scanning the whole file would let a reworded comment ("128 is the
+    default") fail a test while the workflow is correct, or pass one while it
+    is not.
+    """
+    lines = _LINKS_WF.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith("args:"):
+            indent = len(line) - len(line.lstrip())
+            block = []
+            for nxt in lines[i + 1:]:
+                if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= indent:
+                    break
+                block.append(nxt)
+            return "\n".join(block)
+    raise AssertionError("links.yml no longer passes an args: block to lychee")
+
+
 @pytest.mark.skipif(not (_SCRIPT.exists() and _LINKS_WF.exists()),
                     reason="repo-root files not reachable (e.g. mutation sandbox)")
 class TestWriteUpLinksResolveOnTheirOwnPR:
@@ -514,7 +536,7 @@ class TestWriteUpLinksResolveOnTheirOwnPR:
         and 4 disjoint URLs over three attempts of one run; all seven return
         200 fetched singly). The cap is what keeps that check honest, so it is
         pinned against the number of links it has to survive."""
-        wf = _LINKS_WF.read_text(encoding="utf-8")
+        wf = _lychee_args()
         m = re.search(r"--max-concurrency (\d+)\b", wf)
         assert m, "links.yml lost the concurrency cap that keeps main green"
         cap = int(m.group(1))
@@ -529,7 +551,7 @@ class TestWriteUpLinksResolveOnTheirOwnPR:
     def test_a_503_is_still_a_failure(self):
         """The cheap non-fix. Accepting 503 would turn every real GitHub
         outage — and every link that starts erroring — into a green run."""
-        wf = _LINKS_WF.read_text(encoding="utf-8")
+        wf = _lychee_args()
         accept = re.search(r"--accept (\S+)", wf)
         assert accept, "links.yml lost its --accept list"
         assert "503" not in accept.group(1).split(",")

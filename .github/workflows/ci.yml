@@ -426,7 +426,11 @@ jobs:
               # pyproject.toml said 90, so a run at 90.4% read as comfortably
               # clear when it was four tenths of a point from red. The summary
               # is where the number is read without opening the log.
-              GATE=$("$VENV_BIN/python" -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['tool']['coverage']['report']['fail_under'])")
+              # `|| GATE='?'` because this step reports, it does not gate:
+              # the job runs `shell: bash`, so a failed command substitution
+              # in an assignment exits under `set -e` and reddens a green
+              # suite. The matrix job owns the actual threshold.
+              GATE=$("$VENV_BIN/python" -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['tool']['coverage']['report']['fail_under'])") || GATE='?'
               echo "- **Coverage:** ${PCT}% (gate: ${GATE}%)"
             fi
             # 2>/dev/null because the file is absent in exactly the case this
