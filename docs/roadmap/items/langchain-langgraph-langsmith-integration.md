@@ -104,7 +104,7 @@ lands" was wrong twice over: the unpin cannot land yet, and it was never the rea
 the required gate — the discipline <code>[eval]</code> already follows. It must degrade cleanly
 without an API key, the way <code>embed.py</code> falls back Voyage → OpenAI → local
 <code>bge-small-en-v1.5</code>; a key is a quality upgrade, never the entry fee. And it carries its
-own tests without lowering the 80% coverage or 80% mutation floors.
+own tests without lowering the 90% coverage or 80% mutation floors.
 
 <b>Delivery order.</b> Each phase is independently shippable.
 

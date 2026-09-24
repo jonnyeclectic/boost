@@ -422,7 +422,12 @@ jobs:
             echo ""
             if [ -f coverage.json ]; then
               PCT=$("$VENV_BIN/python" -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered'],1))")
-              echo "- **Coverage:** ${PCT}% (gate: 80%)"
+              # The gate is READ, never restated: this line said 80% while
+              # pyproject.toml said 90, so a run at 90.4% read as comfortably
+              # clear when it was four tenths of a point from red. The summary
+              # is where the number is read without opening the log.
+              GATE=$("$VENV_BIN/python" -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['tool']['coverage']['report']['fail_under'])")
+              echo "- **Coverage:** ${PCT}% (gate: ${GATE}%)"
             fi
             # 2>/dev/null because the file is absent in exactly the case this
             # step exists for: the test step failed, so smoke never ran. `||
@@ -829,8 +834,10 @@ jobs:
           # [rag] extra so dense.py counts the same lines the matrix does
           .venv/bin/pip -q install sqlite-vec || true
       - name: suite -> Cobertura coverage.xml
-        # --cov-fail-under=0: the project 80% gate is the matrix job's to own;
-        # this job gates ONLY the patch. Same suite the matrix runs.
+        # --cov-fail-under=0: the project coverage gate (`fail_under` in
+        # pyproject.toml) is the matrix job's to own; this comment names no
+        # percentage so it cannot drift away from it.
+        # This job gates ONLY the patch. Same suite the matrix runs.
         run: .venv/bin/pytest tests/unit tests/functional --cov=boost_cli --cov-report=xml --cov-fail-under=0 -q
       - name: diff-cover (changed-line coverage vs main)
         # 80% of each PR's changed, coverable lines must be tested — pairs with
