@@ -143,7 +143,7 @@
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>78</b><span>Planned</span></div>
-      <div class="stat"><b>497</b><span>Loop finds</span></div>
+      <div class="stat"><b>498</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2023,17 +2023,9 @@ wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every ins
       </article>
 
       <article class="cap rcard" id="ci-summary-reports-the-wrong-coverage-gate">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI · Docs</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Docs</span></div>
         <h3>The CI job summary reports the coverage gate as 80% when it is 90%</h3>
-        <p><b>Found by the audit of the repo's own automation.</b> The <code>tests</code> job's summary step in
-<code>.github/workflows/ci.yml</code> prints the measured percentage beside a hard-coded
-<code>gate: 80%</code>, while the gate that actually applies is <code>fail_under = 90</code> in
-<code>pyproject.toml</code>. So a run at 90.4% reads as comfortably clear when it is four tenths of a
-point from red. The summary is the one place the number is read without opening the log.
-<br><br>
-<b>Fix.</b> Read the threshold from <code>pyproject.toml</code> rather than restating it, and pin the
-two together in <code>tests/unit/test_eval_corpus.py</code>'s style — the repo already fails the
-build when CI and the Makefile state a floor differently.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/ci-summary-reports-the-wrong-coverage-gate.md">Write-up &middot; ci-summary-reports-the-wrong-coverage-gate.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -3347,6 +3339,18 @@ Two halves, both cheap:
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">`make check` leaves a project install in the repo root; a later run reads it back and fails twelve unrelated tests.</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="links-job-503s-its-own-write-up-links">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Flake</span></div>
+        <h3>The links job fetches 467 URLs from one host at once and GitHub 503s a random handful</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/links-job-503s-its-own-write-up-links.md">Write-up &middot; links-job-503s-its-own-write-up-links.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">Three attempts of one run failed on three disjoint sets of URLs, every one of which returns 200 on its own.</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
