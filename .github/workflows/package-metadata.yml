@@ -41,6 +41,33 @@ jobs:
         run: python -m pip -q install -r requirements/release-tools.txt
       - name: Build sdist + wheel
         run: python -m build
+      - name: no dev-only file in the sdist
+        # tests/unit/test_sdist_contents.py checks the same rule against the
+        # tracked tree with setuptools' own matcher, on every run of the unit
+        # suite. This checks the built artifact, which is the thing that is
+        # actually uploaded — a member list, not a pattern list. Both exist
+        # because docs/.claude/settings.local.json shipped to PyPI for
+        # releases while MANIFEST.in said, at the top, that it would not.
+        run: |
+          set -euo pipefail
+          # Resolve the glob first and require exactly one match. `grep || true`
+          # is needed (no match is grep's exit 1, and that is the pass), but it
+          # also swallows a failing `tar` -- so a step reading a tarball that
+          # was never built, or two of them, would report a clean sdist.
+          shopt -s nullglob
+          sdists=(dist/*.tar.gz)
+          if [ ${#sdists[@]} -ne 1 ]; then
+            echo "expected exactly one sdist in dist/, found ${#sdists[@]}" >&2
+            exit 1
+          fi
+          members=$(tar tzf "${sdists[0]}")
+          leaked=$(printf '%s\n' "$members" \
+            | grep -E '(^|/)(\.claude/|node_modules/|package\.json$|package-lock\.json$)' || true)
+          if [ -n "$leaked" ]; then
+            echo "dev-only files in the sdist:" >&2
+            echo "$leaked" >&2
+            exit 1
+          fi
       - name: twine check (README renders on PyPI)
         run: twine check --strict dist/*
       - name: check-wheel-contents (no empty/stray wheel)
