@@ -4,7 +4,7 @@ board: code
 section: planned
 status: shipped
 owner: loop/ci-summary-coverage-gate
-pr: ""
+pr: "966"
 category: CI · Docs
 complexity: S
 impact: Low

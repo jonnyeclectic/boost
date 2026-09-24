@@ -4,7 +4,7 @@ board: code
 section: internals
 status: shipped
 owner: loop/ci-summary-coverage-gate
-pr: ""
+pr: "966"
 category: CI · Flake
 complexity: S
 impact: Medium
