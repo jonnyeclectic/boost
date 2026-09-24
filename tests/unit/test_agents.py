@@ -10,13 +10,14 @@ class TestKnownAgents:
     def test_default_dirs_derive_from_sandbox_home(self, sandbox):
         known = agents.known_agents()
         assert list(known) == ["claude-code", "windsurf", "cursor", "gemini",
-                               "antigravity"]
+                               "antigravity", "codex"]
         assert known["claude-code"]["dir"] == sandbox / ".claude" / "skills"
         assert known["windsurf"]["dir"] == sandbox / ".windsurf" / "skills"
         assert known["cursor"]["dir"] == sandbox / ".cursor" / "skills"
         assert known["gemini"]["dir"] == sandbox / ".gemini" / "skills"
         assert (known["antigravity"]["dir"]
                 == sandbox / ".gemini" / "antigravity-cli" / "skills")
+        assert known["codex"]["dir"] == sandbox / ".codex" / "skills"
         assert all(spec["enabled"] is True for spec in known.values())
 
     def test_enabled_flag_honored_from_config(self, sandbox):
@@ -44,6 +45,7 @@ class TestEnabledAgents:
             "cursor": sandbox / ".cursor" / "skills",
             "gemini": sandbox / ".gemini" / "skills",
             "antigravity": sandbox / ".gemini" / "antigravity-cli" / "skills",
+            "codex": sandbox / ".codex" / "skills",
         }
 
     def test_disabled_agent_filtered_out(self, sandbox):
@@ -55,6 +57,7 @@ class TestEnabledAgents:
             "windsurf": sandbox / ".windsurf" / "skills",
             "gemini": sandbox / ".gemini" / "skills",
             "antigravity": sandbox / ".gemini" / "antigravity-cli" / "skills",
+            "codex": sandbox / ".codex" / "skills",
         }
 
 
@@ -69,7 +72,7 @@ class TestLinkingAgents:
     surplus one makes Gemini log a conflict for every skill, every session.
     """
 
-    def test_gemini_is_excluded_by_default(self, sandbox):
+    def test_native_store_agents_are_excluded_by_default(self, sandbox):
         assert agents.linking_agents() == {
             "claude-code": sandbox / ".claude" / "skills",
             "windsurf": sandbox / ".windsurf" / "skills",
@@ -97,7 +100,7 @@ class TestLinkingAgents:
         # derivation would make a dotless `<repo>/antigravity-cli/` nothing
         # reads — and boost would report a coverage it does not have.
         assert list(agents.project_agents()) == ["claude-code", "windsurf",
-                                                 "cursor", "gemini"]
+                                                 "cursor", "gemini", "codex"]
         assert agents.agents_for_scope(None) == agents.enabled_agents()
         assert agents.agents_for_scope("/repo") == agents.project_agents()
 
@@ -112,7 +115,8 @@ class TestLinkingAgents:
 
     def test_native_store_agents_is_the_complement(self, sandbox):
         assert agents.native_store_agents() == {
-            "gemini": sandbox / ".gemini" / "skills"}
+            "gemini": sandbox / ".gemini" / "skills",
+            "codex": sandbox / ".codex" / "skills"}
 
     def test_the_two_sets_partition_enabled_agents(self, sandbox):
         linking, native = agents.linking_agents(), agents.native_store_agents()
@@ -120,11 +124,12 @@ class TestLinkingAgents:
         assert {**linking, **native} == agents.enabled_agents()
 
     def test_links_skills_defaults_true_for_an_agent_that_omits_it(self, sandbox):
-        # Every agent but gemini omits the key; none of them may be treated as
-        # native or their skills stop being linked anywhere.
+        # Only gemini and codex set the key; none of the others may be
+        # treated as native or their skills stop being linked anywhere.
         known = agents.known_agents()
         assert known["claude-code"]["links_skills"] is True
         assert known["gemini"]["links_skills"] is False
+        assert known["codex"]["links_skills"] is False
 
     def test_a_hand_added_agent_links_by_default(self, sandbox):
         cfg = config.load()
@@ -138,8 +143,10 @@ class TestLinkingAgents:
         # narrowed: flipping the flag restores the symlink.
         cfg = config.load()
         cfg["agents"]["gemini"]["links_skills"] = True
+        cfg["agents"]["codex"]["links_skills"] = True
         config.save(cfg)
         assert "gemini" in agents.linking_agents()
+        assert "codex" in agents.linking_agents()
         assert agents.native_store_agents() == {}
 
     def test_a_disabled_native_agent_is_in_neither_set(self, sandbox):
@@ -156,6 +163,7 @@ class TestDisplayName:
         assert agents.display_name("windsurf") == "Windsurf"
         assert agents.display_name("cursor") == "Cursor"
         assert agents.display_name("gemini") == "Gemini CLI"
+        assert agents.display_name("codex") == "Codex"
 
     def test_every_default_agent_has_a_display_name(self, sandbox):
         # a new agent added to config DEFAULTS without a DISPLAY entry would
@@ -165,3 +173,93 @@ class TestDisplayName:
 
     def test_unknown_passthrough(self):
         assert agents.display_name("aider") == "aider"
+
+
+class TestCodexTarget:
+    """Codex CLI (and the ChatGPT desktop app, the same binary) as a target.
+
+    Verified against Codex CLI 0.156.1 with `codex debug prompt-input`, which
+    renders the literal <skills_instructions> block including the skill-roots
+    table. Two observations drive the whole entry: `$HOME/.agents/skills` is one
+    of the roots, and two entries resolving to one path are listed once.
+    """
+
+    def test_codex_reads_the_store_and_is_never_linked(self, sandbox):
+        # The reason for `links_skills: false`: boost's canonical store is
+        # already a Codex skill root, so a symlink would be redundant work.
+        assert "codex" in agents.native_store_agents()
+        assert "codex" not in agents.linking_agents()
+
+    def test_codex_takes_rules_but_not_workflows(self, sandbox):
+        # AGENTS.md is verified; a slash-command format is not. `skills_only`
+        # cannot say that — it would drop the rules surface too.
+        assert "codex" in agents.materializing_agents()
+        assert "codex" not in agents.workflow_agents()
+        assert agents.known_agents()["codex"]["skills_only"] is False
+
+    def test_workflows_defaults_true_so_every_other_agent_keeps_them(self,
+                                                                     sandbox):
+        # The other half of the flag: omitting the key must not silently strip
+        # an agent of its commands dir.
+        known = agents.known_agents()
+        assert known["claude-code"]["workflows"] is True
+        assert known["gemini"]["workflows"] is True
+        assert known["codex"]["workflows"] is False
+        assert set(agents.workflow_agents()) == {
+            "claude-code", "windsurf", "cursor", "gemini"}
+
+    def test_workflows_flag_is_configurable_back_on(self, sandbox):
+        cfg = config.load()
+        cfg["agents"]["codex"]["workflows"] = True
+        config.save(cfg)
+        assert "codex" in agents.workflow_agents()
+
+    def test_a_skills_only_agent_is_out_of_workflows_too(self, sandbox):
+        # workflow_agents narrows materializing_agents rather than replacing
+        # it, so `skills_only` still wins for antigravity.
+        assert "antigravity" not in agents.workflow_agents()
+        assert "antigravity" not in agents.materializing_agents()
+
+    def test_workflow_agents_honors_project_scope(self, sandbox):
+        # It must narrow the *scoped* set, not the user-scope one: antigravity
+        # is out of project scope entirely, and codex stays in it.
+        assert set(agents.workflow_agents("/repo")) == {
+            "claude-code", "windsurf", "cursor", "gemini"}
+        assert "codex" in agents.project_agents()
+
+    def test_the_base_argument_actually_reaches_the_scoped_set(self, sandbox):
+        # Under shipped defaults the scoped and unscoped workflow sets are
+        # identical — the only `project_scope: False` agent is antigravity, and
+        # it is `skills_only` too, so materializing_agents has already dropped
+        # it. That makes "pass base through" untestable by comparison alone:
+        # replacing the argument with None changes nothing. So make an agent
+        # that differs on scope and nothing else.
+        cfg = config.load()
+        cfg["agents"]["gemini"]["project_scope"] = False
+        config.save(cfg)
+        assert "gemini" in agents.workflow_agents()
+        assert "gemini" not in agents.workflow_agents("/repo")
+        assert "gemini" in agents.materializing_agents()
+        assert "gemini" not in agents.materializing_agents("/repo")
+
+    def test_only_codex_dedupes_by_path(self, sandbox):
+        # Gemini logs a conflict for a skill it sees twice; Codex collapses the
+        # two entries on the resolved path and says nothing.
+        assert agents.dedupes_by_path() == {"codex"}
+        known = agents.known_agents()
+        assert known["codex"]["dedupes_by_path"] is True
+        assert known["gemini"]["dedupes_by_path"] is False
+
+    def test_dedupes_by_path_is_configurable_off(self, sandbox):
+        cfg = config.load()
+        cfg["agents"]["codex"]["dedupes_by_path"] = False
+        config.save(cfg)
+        assert agents.dedupes_by_path() == set()
+
+    def test_a_disabled_agent_does_not_dedupe(self, sandbox):
+        # The set feeds a warning suppression, so a disabled agent leaking into
+        # it would silence a warning for an agent that is not even a target.
+        cfg = config.load()
+        cfg["agents"]["codex"]["enabled"] = False
+        config.save(cfg)
+        assert agents.dedupes_by_path() == set()

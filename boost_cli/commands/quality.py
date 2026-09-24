@@ -1169,8 +1169,9 @@ def cmd_heal(argv):
     ap.add_argument("--dry-run", action="store_true",
                     help="show repairs without applying them")
     ap.add_argument("--prune-duplicates", action="store_true",
-                    help="remove symlinks in a native-store agent's skills dir "
-                         "that lead back into the canonical store")
+                    help="remove the duplicate-discovery symlinks `boost doctor` "
+                         "reports (an agent that collapses them silently is "
+                         "never reported, so never pruned)")
     args = ap.parse_args(argv)
     dry = args.dry_run
     actions: list[str] = []

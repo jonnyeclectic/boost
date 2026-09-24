@@ -437,20 +437,31 @@ work in tests and the dev loop:
 ~/.agents/skills/.skill-lock.json   v3 lock file
 ~/.claude/skills/  ~/.windsurf/skills/  ~/.cursor/skills/   symlinked out from the canonical store
 ~/.gemini/                       rules (GEMINI.md) + workflows only — see below
+$CODEX_HOME/ (~/.codex)          rules (AGENTS.md) only — reads the store, no links
 ```
 
-**Five agent targets, and only Gemini CLI skips symlinks.** Gemini CLI implements the
-Agent Skills standard and discovers `~/.agents/skills` — the canonical store —
-*directly*, so it is configured with `links_skills: false`. Linking into
-`~/.gemini/skills` too would put one skill in two of its discovery tiers, where
-the `.agents` alias out-ranks whatever we linked, costing the user a "Skill
-conflict detected" line per skill per session and buying nothing. Consequences
-for code you write:
+**Six agent targets, and two of them skip symlinks.** Gemini CLI and Codex both
+implement the Agent Skills standard and discover `~/.agents/skills` — the
+canonical store — *directly*, so each is configured with `links_skills: false`.
+Linking into `~/.gemini/skills` too would put one skill in two of Gemini's
+discovery tiers, where the `.agents` alias out-ranks whatever we linked, costing
+the user a "Skill conflict detected" line per skill per session and buying
+nothing. Consequences for code you write:
 
 - Iterate `agents.linking_agents()` for anything symlink-shaped (link, unlink,
-  stale-link sweeps, coverage counts). `agents.enabled_agents()` is still right
-  for rules and workflows, which materialize into `~/.gemini/` like any other
-  agent's dotdir. `agents.native_store_agents()` is the complement, for reporting.
+  stale-link sweeps, coverage counts) — `sync_plan`'s stale sweep walked
+  `enabled_agents()` instead, and since its only ownership test is
+  `points_into_store`, `boost sync` would delete another tool's links out of a
+  native-store agent's skills dir with `--prune-duplicates` never typed. **Rules
+  take `agents.materializing_agents()`** (not `enabled_agents()`, which would
+  re-add the Antigravity rule write `skills_only` exists to prevent), and
+  **workflows take `agents.workflow_agents()`**, narrower again.
+  `agents.native_store_agents()` is the complement, for reporting. An `--agent`
+  narrowing is applied per kind by `store._narrow_materializing`, which
+  **raises** on an empty intersection: without it `boost install <workflow>
+  --agent codex` wrote a lock row with zero materializations and exited 0, and
+  `sync_plan`'s `any(... for m in materializations)` reads `any([])` as False,
+  so nothing downstream could ever see the phantom.
 - **Boost not linking there does not mean nothing else does**, and the warning
   costs the user the same either way. `store.duplicate_discovery()` walks
   `native_store_agents()` for entries that resolve back into the canonical
@@ -489,9 +500,46 @@ for code you write:
   formats have not been verified against the real CLI, and this file does not
   record guesses (see `hookhost.py` for the standard: name the sources).
 
+- **Codex is the second native-store agent, and the ChatGPT desktop app is the
+  same program.** `/Applications/ChatGPT.app` has bundle id `com.openai.codex`,
+  ships its own `codex` binary and launches it with `CODEX_HOME` — so it is one
+  boost target, not two. Verified against Codex CLI 0.156.1 with `codex debug
+  prompt-input`, which renders the literal `<skills_instructions>` block and its
+  skill-roots table: the roots are `<project>/.codex/skills`,
+  `$CODEX_HOME/skills`, **`$HOME/.agents/skills`**, `$CODEX_HOME/skills/.system`
+  and `<project>/.agents/skills`. Three consequences:
+  - The canonical store is already a root, so `links_skills: false` — a symlink
+    would be redundant work, not extra coverage.
+  - Codex **de-duplicates by resolved path and says nothing**, where Gemini logs
+    a conflict. That is a different bug shape, so it gets its own flag:
+    `dedupes_by_path`, which `store.duplicate_discovery()` reads to skip an
+    agent where there is no symptom to report. Warning about an invisible
+    duplicate is noise; the topology test that finds it is still right for
+    Gemini.
+  - Its rules surface is `AGENTS.md` (`rules.CONTEXT_FILES`, both scopes), and
+    it has **no user-installable slash-command format** in 0.156.1 — no
+    `~/.codex/prompts`, no `~/.codex/commands`, no prompt subcommand. That is
+    finer than `skills_only` can express (which would drop rules too), so the
+    `workflows` flag exists and `agents.workflow_agents()` is the set that
+    honours it. `~/.codex/rules/*.rules` is the **execpolicy** command-approval
+    DSL, not an instructions dir — don't write there. Its MCP and hooks hosts
+    are not wired up: the MCP grammar is verified but unimplemented, and the
+    hook `timeout` units are unestablished, so this file records neither as
+    done.
+  - **Its dir is the one agent path that is not fixed**, hence the
+    `${CODEX_HOME:-~/.codex}/skills` default and `paths.expand`'s leading
+    `${VAR:-fallback}` syntax. Skills reach a relocated Codex either way — the
+    store root follows `$HOME` — but a rule written to `~/.codex/AGENTS.md`
+    when `CODEX_HOME` points elsewhere is a file that CLI never opens, reported
+    as installed. `AGENTS.override.md` *replaces* the chain rather than merging
+    into it, so unlike `claude-code` there is no `.local` file to use for
+    project scope: a project rule goes into the committed `<repo>/AGENTS.md`,
+    which Cursor also reads.
+
 - Per-agent *formats* differ and are pure functions in `core/`: `rules.CONTEXT_FILES`
   maps an agent with no rules dir to its context file (`claude-code` → CLAUDE.md /
-  CLAUDE.local.md, `gemini` → GEMINI.md for both scopes), and
+  CLAUDE.local.md, `gemini` → GEMINI.md and `codex` → AGENTS.md for both
+  scopes), and
   `workflows.TOML_COMMAND_AGENTS` marks agents whose slash commands are TOML.
   Gemini's `commands/` slot is `.toml` (`workflows.render_gemini_command`); its
   `agents/` slot stays verbatim Markdown. Getting that backwards produces a file

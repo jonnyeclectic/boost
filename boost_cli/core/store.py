@@ -1382,6 +1382,35 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
     return actions
 
 
+def _narrow_materializing(targets: dict, only_agents, name: str, kind: str) -> dict:
+    """Apply an ``--agent`` narrowing to a rule/workflow target set, or refuse.
+
+    An empty intersection is not an empty install: everything after the loop
+    still runs, so `boost install <workflow> --agent codex` wrote a lock row
+    with zero materializations, exited 0, and printed "(no enabled agents)"
+    about an agent that is enabled. Nothing downstream could see it either —
+    `sync_plan` asks ``any(... for m in materializations)`` and `any([])` is
+    False, so doctor called the phantom fully materialized and uninstall
+    removed nothing.
+
+    `--agent` names a *known* agent, which is the only thing `_check_agents`
+    can check; whether that agent takes this kind is per-kind and resolved
+    here. So the error says which of the two it is.
+    """
+    kept = {n: d for n, d in targets.items()
+            if not only_agents or n in only_agents}
+    if only_agents and not kept:
+        known = agents.known_agents()
+        no_surface = [n for n in only_agents
+                      if n in known and known[n]["enabled"]]
+        hint = ("%s cannot take a %s — see `boost agents`"
+                % (", ".join(sorted(no_surface)), kind) if no_surface
+                else "enable one with `boost config set agents.<name>.enabled true`")
+        raise BoostError("no agent left to install %s %s into: --agent %s"
+                         % (kind, name, ", ".join(only_agents)), hint=hint)
+    return kept
+
+
 def _install_rule(entry: dict, force: bool = False,
                   only_agents: list[str] | None = None,
                   scope: str = "user", base=None,
@@ -1431,9 +1460,9 @@ def _install_rule(entry: dict, force: bool = False,
     unwritable: list[str] = []
     blocked: list[tuple[str, str]] = []
     refused: list[dict] = []
-    for agent, skills_dir in agents.materializing_agents(resolved_base).items():
-        if only_agents and agent not in only_agents:
-            continue
+    targets = _narrow_materializing(agents.materializing_agents(resolved_base),
+                                    only_agents, name, "rule")
+    for agent, skills_dir in targets.items():
         mode, path = rules.rule_target(agent, skills_dir, name, base=resolved_base)
         # Project scope writes into the repo, so a committed agent dir could be
         # a symlink escaping it (see scopes.ensure_in_base). User scope writes
@@ -1766,9 +1795,13 @@ def _install_workflow(entry: dict, force: bool = False,
     unwritable: list[str] = []
     blocked: list[tuple[str, str]] = []
     refused: list[dict] = []
-    for agent, skills_dir in agents.materializing_agents(resolved_base).items():
-        if only_agents and agent not in only_agents:
-            continue
+    # workflow_agents, not materializing_agents: an agent can have a verified
+    # rules surface and no slash-command format at all (Codex), and installing
+    # into a directory it never reads would report a command that does not
+    # exist. See agents.workflow_agents.
+    targets = _narrow_materializing(agents.workflow_agents(resolved_base),
+                                    only_agents, name, "workflow")
+    for agent, skills_dir in targets.items():
         path = workflows.workflow_target(skills_dir, slot, name,
                                          base=resolved_base, agent=agent)
         # Project scope writes into the repo; a committed agent dir could be a
@@ -2099,6 +2132,10 @@ def duplicate_discovery() -> list[DuplicateDiscovery]:
     same skill offered twice. Gemini CLI answers that with a "Skill conflict
     detected" line per skill, every session — the symptom this detects.
 
+    Not every such agent pays that cost: one that de-duplicates by resolved
+    path collapses the two entries silently, so there is nothing to warn about
+    and it is skipped (:func:`agents.dedupes_by_path`).
+
     Boost does not create these: it stopped linking into a native-store agent,
     and `sync_plan` never asks for such a link. Another installer's copy is far
     likelier, and the warning costs the user the same either way — so the test
@@ -2113,7 +2150,13 @@ def duplicate_discovery() -> list[DuplicateDiscovery]:
     """
     found: list[DuplicateDiscovery] = []
     store_root = paths.store_dir()
+    collapses = agents.dedupes_by_path()
     for agent, adir in agents.native_store_agents().items():
+        # An agent that de-duplicates by resolved path shows the skill once and
+        # says nothing, so there is no symptom to report. See
+        # agents.dedupes_by_path.
+        if agent in collapses:
+            continue
         if not adir.is_dir():
             continue
         for entry in sorted(adir.iterdir()):
@@ -2326,7 +2369,14 @@ def sync_plan() -> dict[str, list]:
                     and child.name not in lock):
                 plan["orphaned_store" if vouches else "unrecorded_store"].append(
                     child.name)
-    for adir in agents.enabled_agents().values():
+    # linking_agents, not enabled_agents: boost only ever creates a symlink in
+    # an agent it links for, so a link in a native-store agent's skills dir was
+    # put there by something else — and the sweep's only ownership test is
+    # `points_into_store`, which such a link passes. `boost sync` would have
+    # deleted another tool's files without `--prune-duplicates` ever being
+    # typed. Same "topology, not ownership" line as duplicate_discovery, which
+    # reports those entries and removes nothing.
+    for adir in agents.linking_agents().values():
         if not adir.is_dir():
             continue
         for link in adir.iterdir():

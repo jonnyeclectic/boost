@@ -471,8 +471,16 @@ def cmd_install(argv: list[str]) -> int:
         # project scope the *repo-local* dotdirs (agents_for_scope's project
         # branch), not the user config every other scope writes into.
         mbase = pbase if args.scope == scopes.SCOPE_PROJECT else None
-        mat_targets = [a for a in agents.materializing_agents(mbase)
-                       if not only or a in only]
+        # Per kind, not one list: a rule and a workflow no longer reach the same
+        # agents. Codex's instructions file is known and its slash-command
+        # format does not exist, so `_install_workflow` skips it — and a preview
+        # that promised it would be wrong about the one thing it exists to
+        # predict. See agents.workflow_agents.
+        mat_targets = {
+            "rule": [a for a in agents.materializing_agents(mbase)
+                     if not only or a in only],
+            "workflow": [a for a in agents.workflow_agents(mbase)
+                         if not only or a in only]}
         offer_mcp = not args.no_mcp and not os.environ.get("BOOST_NO_MCP_OFFER")
         mcp_hosts = [h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))] \
             or mcphost.hosts()
@@ -508,7 +516,7 @@ def cmd_install(argv: list[str]) -> int:
                 out.info("would %s %s %s v%s from %s (%s)" % (verb, k, e["name"],
                                                               e["version"], e["tap"],
                                                               where))
-                out.info("  materialize → %s" % (" · ".join(mat_targets)
+                out.info("  materialize → %s" % (" · ".join(mat_targets[k])
                                                  or "(no enabled agents)"))
                 continue
             verb = "upgrade" if lockfile.get_skill(e["name"]) else "install"

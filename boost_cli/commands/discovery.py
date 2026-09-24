@@ -1511,9 +1511,14 @@ def _browse_tui(curses, entries, install=None):
     # mid-session, and browse.install_target stays pure by receiving them.
     link_names = ", ".join(agents.display_name(a)
                            for a in agents.linking_agents()) or "no agents"
+    # `d.parent`, because `d` is the agent's *skills* dir and a context file
+    # sits beside it — the pane advertised `~/.claude/skills/CLAUDE.md`, a path
+    # nothing reads. rules.rule_target is the authority; this mirrors it.
+    # materializing_agents for the same reason the rule install uses it: a
+    # skills-only agent never receives one.
     context_files = " · ".join(sorted(
-        _tilde(d / rules.CONTEXT_FILES[a][0])
-        for a, d in agents.enabled_agents().items()
+        _tilde(d.parent / rules.CONTEXT_FILES[a][0])
+        for a, d in agents.materializing_agents().items()
         if a in rules.CONTEXT_FILES))
     targets = {
         "skill": "%s · linked to %s" % (_tilde(paths.store_dir()), link_names),

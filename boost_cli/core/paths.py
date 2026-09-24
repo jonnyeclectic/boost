@@ -17,6 +17,7 @@ Layout:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -26,8 +27,24 @@ def home() -> Path:
     return Path(os.environ.get("HOME") or str(Path.home()))
 
 
+_LEADING_ENV = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
 def expand(p: str) -> Path:
-    """Expand a leading ~ against home() (which respects the HOME env var)."""
+    """Expand a leading ``${VAR}`` / ``${VAR:-fallback}``, then a leading ``~``.
+
+    The ``~`` half resolves against home() (which respects the HOME env var), so
+    sandboxed tests keep working. The environment half exists because one agent
+    dir is not a fixed path: Codex reads ``$CODEX_HOME`` and only defaults it to
+    ``~/.codex``, so a user who relocated it would otherwise get boost's
+    ``AGENTS.md`` written to a directory Codex never opens — and reported as a
+    success. Only a *leading* reference is expanded, and only this one syntax:
+    the point is to make one config default honest, not to turn every stored
+    path into a template. An unset or empty var falls back, as in the shell.
+    """
+    m = _LEADING_ENV.match(p)
+    if m:
+        p = (os.environ.get(m.group(1)) or m.group(2) or "") + p[m.end():]
     if p == "~":
         return home()
     if p.startswith("~/"):

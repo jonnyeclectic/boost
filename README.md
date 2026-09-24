@@ -12,11 +12,16 @@
 
 **Homebrew for AI coding skills.** boost finds, installs, and version-tracks skills
 from GitHub-hosted registries, and wires each one into Claude Code, Windsurf,
-Cursor, Gemini CLI and Antigravity CLI in a single pass.
+Cursor, Gemini CLI, Antigravity CLI and Codex in a single pass.
 
 Antigravity CLI (`agy`) is wired up the same way: skills link into
 `~/.gemini/antigravity-cli/skills`, and `boost mcp register` reaches it through
 `agy mcp add` alongside Claude Code.
+
+Codex — the `codex` CLI and the ChatGPT desktop app, which is the same binary —
+needs no symlink at all: `~/.agents/skills` is one of its own skill roots, so a
+skill boost copies into the canonical store is already there. Rules materialize
+into `~/.codex/AGENTS.md`.
 
 ```bash
 pipx install boost-skill-cli
@@ -28,7 +33,7 @@ boost install test-driven-development  # → every agent, version-pinned, one lo
 (No `pipx` yet? macOS ships neither it nor a new enough Python — run the
 [prerequisites check](#prerequisites) first.)
 
-No more copying `SKILL.md` into five agent folders and forgetting which one is
+No more copying `SKILL.md` into six agent folders and forgetting which one is
 stale. The default install is pure stdlib, with no build step and no
 dependencies.
 
@@ -297,19 +302,23 @@ the remote.
 boost indexes three item kinds from the same registries, and they install to
 different places. A skill is copied into the canonical store and symlinked out.
 A rule is materialised into each agent's context file (`~/.claude/CLAUDE.md`,
-`~/.gemini/GEMINI.md`), so it has no directory to look in. A workflow is
-rendered per agent.
+`~/.gemini/GEMINI.md`, `$CODEX_HOME/AGENTS.md`), so it has no directory to look
+in — installing one edits a file you read every session, which makes it the most
+invasive of the three. A workflow is rendered per agent that has a slash-command
+format; Codex has none, so it takes rules and skills and no workflows.
 
 ```bash
 boost list --kind rule                # just the rules, and where they landed
 boost list --kind workflow            # and which slot each one fills
 ```
 
-Gemini CLI is the one agent that needs no symlink. It implements the
-[Agent Skills](https://agentskills.io) standard and discovers `~/.agents/skills`
-directly, so linking into `~/.gemini/skills` as well would put the same skill in
-two of its discovery tiers. Rules and workflows still materialize under
-`~/.gemini/`.
+Gemini CLI and Codex are the two agents that need no symlink. Both discover
+`~/.agents/skills` directly — Gemini CLI through the
+[Agent Skills](https://agentskills.io) standard, Codex as one of its five skill
+roots — so linking into their own skills dirs as well would put the same skill
+in two of their discovery tiers. Gemini CLI says so out loud, one "Skill
+conflict detected" line per skill per session; Codex collapses the pair
+silently. Rules still materialize under `~/.gemini/` and `$CODEX_HOME/`.
 
 ## User scope vs project scope
 

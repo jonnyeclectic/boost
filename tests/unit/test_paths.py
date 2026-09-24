@@ -86,6 +86,36 @@ class TestExpand:
         # only ~ and ~/ forms are special; ~user is left as-is
         assert paths.expand("~other") == Path("~other")
 
+    def test_a_leading_env_var_wins_over_the_fallback(self, sandbox,
+                                                      monkeypatch, tmp_path):
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "elsewhere"))
+        assert paths.expand("${CODEX_HOME:-~/.codex}/skills") == (
+            tmp_path / "elsewhere" / "skills")
+
+    def test_an_unset_var_falls_back_and_the_fallback_still_expands(
+            self, sandbox, monkeypatch):
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        assert paths.expand("${CODEX_HOME:-~/.codex}/skills") == (
+            sandbox / ".codex" / "skills")
+
+    def test_an_empty_var_falls_back_like_the_shell(self, sandbox, monkeypatch):
+        # `${VAR:-x}`, not `${VAR-x}`: an exported-but-empty CODEX_HOME would
+        # otherwise resolve the agent dir to a bare "skills" relative path.
+        monkeypatch.setenv("CODEX_HOME", "")
+        assert paths.expand("${CODEX_HOME:-~/.codex}/skills") == (
+            sandbox / ".codex" / "skills")
+
+    def test_a_var_with_no_fallback_expands_to_nothing_when_unset(
+            self, sandbox, monkeypatch):
+        monkeypatch.delenv("BOOST_TEST_NOPE", raising=False)
+        assert paths.expand("${BOOST_TEST_NOPE}/x") == Path("/x")
+
+    def test_only_a_leading_reference_is_expanded(self, sandbox, monkeypatch):
+        # Deliberately not a general template: an interior `${...}` is a
+        # literal, so nothing else boost stores a path in changes meaning.
+        monkeypatch.setenv("CODEX_HOME", "/elsewhere")
+        assert paths.expand("~/a/${CODEX_HOME}") == sandbox / "a" / "${CODEX_HOME}"
+
 
 class TestTilde:
     def test_exact_home_is_tilde(self, sandbox):

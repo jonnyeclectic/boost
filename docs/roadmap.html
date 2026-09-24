@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>492</b><span>Loop finds</span></div>
+      <div class="stat"><b>77</b><span>Planned</span></div>
+      <div class="stat"><b>494</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2163,6 +2163,64 @@ asserting the second is answered.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">The parse layer catches JSONDecodeError, and a deep enough line raises RecursionError instead…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="codex-is-not-an-mcp-host">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Compat · Feature</span></div>
+        <h3>Codex is a skills and rules target but not yet an MCP host</h3>
+        <p><b>Found while adding Codex as an agent target.</b> <code>boost install</code> now reaches Codex —
+skills through the canonical store it already reads, rules into <code>~/.codex/AGENTS.md</code> — but
+<code>core/mcphost.py</code> still has three rows (Claude Code, Gemini CLI, Antigravity CLI), so
+<code>boost mcp register</code> cannot register boost with the one agent most likely to want to search
+the catalogue for itself.
+<b>The grammar is already verified</b> against Codex CLI 0.156.1, and it differs from all three
+existing rows, so it is a row rather than a reuse. Flags are accepted on <em>either</em> side of
+<code>NAME</code>, unlike Antigravity, which rejects a flag after the name &middot; <code>--</code> is
+needed only when the command token itself starts with a dash &middot; there is <b>no scope
+concept</b>, just one global <code>$CODEX_HOME/config.toml</code>, so <code>mcphost.has_scope()</code>
+must answer False and the success line drops "(scope: user)" as it already does for Antigravity
+&middot; <code>add</code> <b>upserts</b> (rc=0 on a duplicate name), like Antigravity and unlike
+Claude, which is what <code>--host auto</code> has to tolerate &middot; <code>remove MISSING</code> is
+idempotent (rc=0) while <code>get MISSING</code> fails (rc=1), so a presence probe must use
+<code>get</code>, not <code>remove</code>.
+<b>Fix direction.</b> Add the fourth row to <code>mcphost.HOSTS</code> and pin each of those five
+asymmetries in <code>tests/unit/test_mcphost.py</code>, alongside the existing three. Don't
+"simplify" the four shapes into one — that is exactly the note <code>CLAUDE.md</code> already carries
+for the first three.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">Codex takes skills and rules but `boost mcp register` cannot reach it — the grammar is verified, the host row is not written…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="codex-hooks-timeout-units-are-unestablished">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Compat · Research</span></div>
+        <h3>Codex hooks are shaped like Claude's, and the two fields that differ are unverified</h3>
+        <p><b>Found while adding Codex as an agent target.</b> Codex CLI 0.156.1 reads a <code>[hooks]</code>
+table keyed by event name, whose value is the same <code>matcher</code> plus
+<code>hooks: [{type, …}]</code> block Claude Code and Gemini CLI use. That similarity is the trap
+<code>core/hookhost.py</code> was written for: the block shape being identical is what makes the real
+differences easy to ship wrong.
+<b>What is not established.</b> <em>Timeout units</em> — Claude's are seconds and Gemini's are
+milliseconds, so a 10 is either ten seconds or ten milliseconds and nothing observed so far says which
+Codex means. <em>Event names</em> — unknown event keys are <b>silently accepted</b>, so a wrong
+spelling writes a config that parses, never fires, and reports nothing; a
+<code>CLAUDE_TO_CODEX</code> map needs each of the ten Claude events resolved against the real CLI,
+including the ones that must map to <code>None</code>. And the <code>prompt</code> and
+<code>agent</code> hook types parse but are reported "not supported yet", so boost must refuse them
+and say why rather than writing them.
+<b>Fix direction.</b> Establish both against a real Codex release the way <code>hookhost.py</code>
+establishes Gemini's — its shipped docs, the event list in its bundled JS, and an observed run — then
+add the host and name the sources at the top of the file. Until then boost should keep writing no
+Codex hooks at all: a hook config that silently never fires is worse than none.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">Codex has a `[hooks]` table shaped like Claude's and Gemini's, and the two fields that differ are unverified…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

@@ -261,11 +261,12 @@
      rest of that row empty, which is what `.three` did to Gemini CLI at every
      width above the 620px collapse. */
   .flow-row.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .flow-row.six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   /* Below ~900px four tracks squeeze each card to 165px and the Gemini
      caption to three lines (128px / four lines by 621px), so step to 2x2 —
      still a divisor of 4, so still no orphan. The max-width:620px rule
      further down takes it to a single column and wins there on source order. */
-  @media (max-width: 900px) { .flow-row.four { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 900px) { .flow-row.four, .flow-row.six { grid-template-columns: 1fr 1fr; } }
   .node {
     background: var(--surface-1);
     box-shadow: inset 0 1px 0 0 rgba(255,255,255,.06), inset 0 -1px 0 0 rgba(0,0,0,.3);
@@ -500,7 +501,7 @@
   @media (max-width: 620px) {
     section { padding: 84px 0 10px; }
     .cards, .caps, .mini { grid-template-columns: 1fr; }
-    .flow-row.two, .flow-row.three, .flow-row.four { grid-template-columns: 1fr; }
+    .flow-row.two, .flow-row.three, .flow-row.four, .flow-row.six { grid-template-columns: 1fr; }
     .stats { gap: 10px; }
     .stat { padding: 18px 10px; }
   }
@@ -565,7 +566,7 @@
     <p class="lede">
       Boost is a command-line package manager that <b>searches, installs, and
       manages AI skills</b> from GitHub-hosted registries — then wires
-      them into <b>Claude Code, Windsurf, Cursor, Gemini CLI and Antigravity CLI</b> at once. One command
+      them into <b>Claude Code, Windsurf, Cursor, Gemini CLI, Antigravity CLI and Codex</b> at once. One command
       replaces the copy-paste-and-pray dance of setting up AI agent skills by hand.
     </p>
     <p class="lede prereq-note">
@@ -697,7 +698,7 @@ facilitate structured divergent thinking:
           <svg width="14" height="26" viewBox="0 0 14 26" fill="none" aria-hidden="true"><path d="M7 0v22m0 0l-5.5-6M7 22l5.5-6" stroke="currentColor" stroke-width="2"/></svg>
           <span>symlinks</span>
         </div>
-        <div class="flow-row four reveal">
+        <div class="flow-row six reveal">
           <div class="node agent">
             <span class="tag">Agent</span>
             <h3>Claude Code</h3>
@@ -715,7 +716,17 @@ facilitate structured divergent thinking:
           </div>
           <div class="node agent">
             <span class="tag">Agent</span>
+            <h3>Antigravity CLI</h3>
+            <p><code>~/.gemini/antigravity-cli/skills/</code></p>
+          </div>
+          <div class="node agent">
+            <span class="tag">Agent</span>
             <h3>Gemini CLI</h3>
+            <p><code>~/.agents/skills/</code> — read directly, no symlink</p>
+          </div>
+          <div class="node agent">
+            <span class="tag">Agent</span>
+            <h3>Codex</h3>
             <p><code>~/.agents/skills/</code> — read directly, no symlink</p>
           </div>
         </div>
@@ -742,7 +753,7 @@ facilitate structured divergent thinking:
 <span class="tp">$</span> <span class="tv">boost</span> <span class="tc">install</span> jira-integration
   <span class="tok">✓</span> copied to ~/.agents/skills/jira-integration
   <span class="tok">✓</span> linked → claude-code · windsurf · cursor
-  <span class="tok">✓</span> available to Gemini CLI (reads the store directly)
+  <span class="tok">✓</span> available to Gemini CLI · Codex (reads the store directly)
   <span class="tok">✓</span> lock updated (.skill-lock.json)
   <span class="tbox">╭─ </span><b>installed</b><span class="tbox"> ────────────────────────────────────────╮</span>
   <span class="tbox">│</span> Installed 1 new skill; quality score 92/100        <span class="tbox">│</span>
@@ -831,7 +842,7 @@ facilitate structured divergent thinking:
         <div class="cap reveal" style="--ic-bg: rgba(96,165,250,.12); --ic-fg: #93c5fd;">
           <div class="ic">⇄</div>
           <h3>Multi-agent &amp; integration</h3>
-          <p>Install once, land in <b>Claude Code, Windsurf, Cursor and Antigravity CLI</b>.</p>
+          <p>Install once, land in <b>Claude Code, Windsurf, Cursor, Antigravity CLI and Codex</b>.</p>
           <ul class="bullets">
             <li>Run as a native <b>MCP server</b>, so the agent can search for itself.</li>
             <li>Register a <code style="color:var(--cyan)">boost://</code> handler for

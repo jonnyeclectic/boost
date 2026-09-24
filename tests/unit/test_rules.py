@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import rules
+from boost_cli.core import agents, rules
 from boost_cli.errors import BoostError
 
 
@@ -36,6 +36,7 @@ class TestContextFiles:
         assert rules.CONTEXT_FILES == {
             "claude-code": ("CLAUDE.md", "CLAUDE.local.md"),
             "gemini": ("GEMINI.md", "GEMINI.md"),
+            "codex": ("AGENTS.md", "AGENTS.md"),
         }
 
     def test_claude_user_and_project_filenames_differ(self):
@@ -49,6 +50,47 @@ class TestContextFiles:
         # Gemini CLI documents no ".local" variant: <repo>/GEMINI.md is the
         # per-project context file, so the pair is deliberately identical.
         assert rules.CONTEXT_FILES["gemini"] == ("GEMINI.md", "GEMINI.md")
+
+    def test_codex_merges_into_agents_md_in_both_scopes(self):
+        # Verified against Codex CLI 0.156.1: the global $CODEX_HOME/AGENTS.md
+        # is emitted first, then a "--- project-doc ---" separator, then the
+        # project AGENTS.md chain. Its only override, AGENTS.override.md,
+        # *replaces* a directory's AGENTS.md rather than layering on it, so it
+        # is not a ".local" equivalent and the pair is deliberately identical.
+        assert rules.CONTEXT_FILES["codex"] == ("AGENTS.md", "AGENTS.md")
+
+    def test_codex_user_rule_lands_beside_the_codex_home(self):
+        mode, path = rules.rule_target("codex", Path("/h/.codex/skills"), "r")
+        assert mode == rules.MODE_CLAUDE
+        assert path == Path("/h/.codex/AGENTS.md")
+
+    def test_codex_project_rule_lands_at_the_repo_root(self):
+        # <repo>/AGENTS.md, not <repo>/.codex/AGENTS.md — Codex reads the
+        # project doc from the project root, like Gemini's GEMINI.md.
+        mode, path = rules.rule_target("codex", Path("/h/.codex/skills"), "r",
+                                       base=Path("/repo"))
+        assert mode == rules.MODE_CLAUDE
+        assert path == Path("/repo/AGENTS.md")
+
+    def test_codex_never_takes_the_rules_dir_path(self):
+        # A `rules/` sibling exists under ~/.codex, but it is the execpolicy
+        # command-approval DSL (prefix_rule(...)), not an instructions dir.
+        # Dropping Markdown there would be a file Codex never loads.
+        _m, path = rules.rule_target("codex", Path("/h/.codex/skills"), "r")
+        assert "rules" not in path.parts
+
+    def test_a_relocated_codex_home_moves_the_rule_with_it(self, sandbox,
+                                                           monkeypatch,
+                                                           tmp_path):
+        # End to end through the agent registry, because that is where being
+        # wrong is invisible: `rule_target` takes whatever dir it is handed,
+        # and a hardcoded `~/.codex/skills` would put AGENTS.md in a directory
+        # this Codex never opens — and report it installed.
+        moved = tmp_path / "codex-elsewhere"
+        monkeypatch.setenv("CODEX_HOME", str(moved))
+        _m, path = rules.rule_target(
+            "codex", agents.known_agents()["codex"]["dir"], "r")
+        assert path == moved / "AGENTS.md"
 
     def test_rules_dir_agents_are_absent(self):
         # membership here is what routes an agent away from its rules/ dir

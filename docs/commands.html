@@ -951,7 +951,7 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show repairs without applying them</span></div>
-          <div class="arg"><code>--prune-duplicates</code><span>remove symlinks in a native-store agent&#x27;s skills dir that lead back into the canonical store</span></div>
+          <div class="arg"><code>--prune-duplicates</code><span>remove the duplicate-discovery symlinks `boost doctor` reports (an agent that collapses them silently is never reported, so never pruned)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-conflict" data-search="conflict detect contradictory rules between skills detect contradictory rules between skills (exits 1 when any conflict is found) --json">
