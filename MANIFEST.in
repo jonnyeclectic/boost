@@ -9,11 +9,20 @@ prune mutants
 prune dist
 prune .idea
 prune .claude
+# `prune` and `exclude` are ROOT-ANCHORED, so a second copy of a dev-only
+# file deeper in the tree ships anyway: docs/.claude/settings.local.json and
+# tests/visual/package.json both reached PyPI under the paragraph above.
+# `global-exclude` is unanchored, which is what makes these recursive — one
+# line per directory depth, because MANIFEST.in globs never cross a
+# separator (`**` is not recursive here; setuptools' glob_to_re rewrites
+# every `*` to `[^/]*`). The patterns are the rule; the tar member list is
+# the fact, and tests/unit/test_sdist_contents.py checks the fact.
+global-exclude .claude/* .claude/*/* .claude/*/*/*
 prune .github
 exclude .coverage
 # The npm lint/test toolchain (stylelint, eslint, puppeteer-core, axe-core). CI
 # only; nothing in the shipped runtime touches node.
-exclude package.json package-lock.json
+global-exclude package.json package-lock.json
 global-exclude __pycache__ *.pyc *.pyo .DS_Store
 # The package README is repo documentation, not wheel payload — the wheel's
 # long_description is the root README.
