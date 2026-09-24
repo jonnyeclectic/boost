@@ -38,6 +38,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Collection
 from contextlib import suppress
 from pathlib import Path
 
@@ -341,6 +342,43 @@ def unchanged(manifest: dict, commits: dict[str, str]) -> dict[str, dict]:
             continue
         if str(row.get("commit")) == commit:
             out[tap] = row
+    return out
+
+
+def unreported(manifest: dict, reported: Collection[str],
+               known: Collection[str]) -> dict[str, dict]:
+    """Published rows for registries a run said nothing about at all.
+
+    A shard run reports on a registry in exactly two ways: a fresh shard
+    (rebuilt) or a line in an ``unchanged-*.txt`` (verified as already
+    published at the commit it is at now). A build job that *fails* uploads
+    neither, so its whole chunk of registries is simply absent from the
+    evidence the publish job assembles the next manifest from — and a manifest
+    rebuilt from that evidence alone dropped them, while ``gh release upload
+    --clobber`` left their assets on the release untouched. Measured on the
+    release generated 2026-09-20: 453 manifest rows against 461 ``.shard.json``
+    assets, so eight registries and 245.5 MB orphaned, among them the 199 MB
+    shard that is the run's 2 h 07 m critical path.
+
+    Silence is therefore not the same answer as "gone". This is the third of
+    the four states a publish must tell apart — rebuilt, unchanged, unreported,
+    gone — and the only one where last week's row is still the best row
+    available: its asset is byte for byte where the row says it is, and a
+    consumer re-checks the sha256 on download and the commit on import, so a
+    row that has since gone stale is refused rather than believed.
+
+    ``known`` is what makes the fourth state distinguishable: a registry that
+    has left the catalogue is dropped, so the index cannot grow forever on rows
+    nobody can use. An empty ``known`` therefore carries nothing — with no idea
+    what still counts as a registry, silence cannot be told from removal.
+    """
+    out: dict[str, dict] = {}
+    for tap, row in rows(manifest).items():
+        if tap in reported:
+            continue
+        if tap not in known:
+            continue
+        out[tap] = row
     return out
 
 

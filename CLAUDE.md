@@ -587,9 +587,16 @@ each agent's skills dir, and updating the lock file.
   never deletes), so re-exporting would re-upload ~300 MB of identical vectors
   a week. Three refusals keep it honest — an empty local commit is a failed
   clone, not a match; a manifest in another embedding space reuses nothing;
-  and a row is carried only when the job's commit and the manifest's agree. A
-  registry that is neither fresh nor unchanged drops out of the manifest rather
-  than accumulating forever. Its asset stays; its row returns when it does.
+  and a row is carried only when the job's commit and the manifest's agree.
+  **Silence is a fourth answer, not a synonym for "gone".** A `fail-fast:
+  false` job that dies uploads neither shards nor an `unchanged` file, so the
+  publish job hears nothing about its ~10 registries — and rebuilding the
+  manifest from what arrived deleted their rows while `--clobber` kept their
+  assets, measured on the 2026-09-20 release as 8 orphans and 245.5 MB, one of
+  them the 199 MB shard that costs 2 h 07 m. `shards.unreported` carries a row
+  nobody reported on and drops one that has left the catalogue (`--known`,
+  defaulting to the bundled catalogue); both counts are printed, because a
+  manifest that shrinks quietly is the bug.
 
 - **A published shard is only importable while three things match, and every
   mismatch is silent if waved through.** `core/shards.py` fetches
