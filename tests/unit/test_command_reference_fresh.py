@@ -308,7 +308,7 @@ class TestUndocumented:
 def test_every_command_a_core_hint_names_actually_exists():
     """A hint that names a command boost does not have is a dead end.
 
-    ``_narrow_materializing`` shipped pointing at ``boost agents``, which has
+    ``narrow_materializing`` shipped pointing at ``boost agents``, which has
     never existed: the user hits an error, runs what the error tells them to,
     and gets a second error. Nothing else catches it — the string is only ever
     built inside the failure path it describes. So read the source the hints

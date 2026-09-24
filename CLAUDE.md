@@ -462,7 +462,7 @@ nothing. Consequences for code you write:
   re-add the Antigravity rule write `skills_only` exists to prevent), and
   **workflows take `agents.workflow_agents()`**, narrower again.
   `agents.native_store_agents()` is the complement, for reporting. An `--agent`
-  narrowing is applied per kind by `store._narrow_materializing`, which
+  narrowing is applied per kind by `store.narrow_materializing`, which
   **raises** on an empty intersection: without it `boost install <workflow>
   --agent codex` wrote a lock row with zero `materializations` and exited 0, and
   `sync_plan`'s `any(... for m in materializations)` reads `any([])` as False,
@@ -474,7 +474,11 @@ nothing. Consequences for code you write:
   captured as `only_agents is not None` *before* the replay. And a hint must
   name a command that exists — this one shipped pointing at `boost agents`,
   which never has; `test_command_reference_fresh.py` now checks every
-  `` `boost <word>` `` span in `core/` against `cli.COMMANDS`.
+  `` `boost <word>` `` span in the whole package against `cli.COMMANDS` — the
+  command layer interpolates hints too, and scanning only `core/` missed them.
+  The narrowing itself refuses an **empty** target set, not only an empty
+  *intersection*: a config where every rule- or workflow-capable agent is off
+  reached the same phantom lock row by the other road.
 - **Boost not linking there does not mean nothing else does**, and the warning
   costs the user the same either way. `store.duplicate_discovery()` walks
   `native_store_agents()` for entries that resolve back into the canonical

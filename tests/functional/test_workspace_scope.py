@@ -225,7 +225,13 @@ def test_dry_run_local_copy_list_matches_the_real_install_under_a_moved_codex(
     assert not (repo / "moved-codex").exists()
     # And the preview named every directory the install actually created —
     # same set, not merely the same count.
-    made = sorted(str(d) for d in _skill_dirs(repo, "brainstorming"))
+    # `paths.tilde` on both sides, not `str()`: the preview renders through it
+    # and it forces `/` separators "so boost's display text is stable across
+    # platforms", so a raw `str(Path)` compares `C:\\Users\\…` against
+    # `C:/Users/…` and the test failed on Windows for a difference the user
+    # never sees. Rendering both sides the same way keeps the assertion about
+    # the target set, which is what it is for.
+    made = sorted(paths.tilde(d) for d in _skill_dirs(repo, "brainstorming"))
     assert made, "nothing materialized under the repo"
     assert copy_lines == made
 

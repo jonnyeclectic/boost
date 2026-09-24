@@ -1196,8 +1196,9 @@ def _install_project_skill(entry: dict, force: bool = False,
     targets = [(agent, scopes.skill_target(
                     skills_dir, name, base=resolved_base,
                     dotdir=agents.project_dotdir(agent, skills_dir)))
-               for agent, skills_dir in agents.agents_for_scope(resolved_base).items()
-               if not only_agents or agent in only_agents]
+               for agent, skills_dir in narrow_project_agents(
+                   agents.agents_for_scope(resolved_base), only_agents, name,
+                   explicit=explicit_agents).items()]
 
     # Refuse to write through a symlink that leaves the repo. An agent dir like
     # ``.claude/skills`` is committed, so a hostile clone can ship it as a
@@ -1223,7 +1224,10 @@ def _install_project_skill(entry: dict, force: bool = False,
 
     materializations: list[dict] = []
     linked: list[str] = []
-    first: Path | None = None
+    # `narrow_project_agents` above refuses an empty set, so there is always a
+    # first target — the result fields below (`sha256`, `dest`, the score, the
+    # MCP scan) all read one real directory and used to be reachable with None.
+    first: Path = targets[0][1]
     for agent, dest in targets:
         _copy_skill(src, dest)
         # Relative, because this record is committed and read on machines where
@@ -1231,27 +1235,6 @@ def _install_project_skill(entry: dict, force: bool = False,
         materializations.append(
             {"agent": agent, "path": scopes.relative_to_base(resolved_base, dest)})
         linked.append(agent)
-        if first is None:
-            first = dest
-
-    if first is None:
-        # Same provenance problem `_narrow_materializing` has, at the third
-        # replay site. `preserved_agent_scope` above has already turned a
-        # *recorded* scope into `only_agents`, so the old "no enabled agents"
-        # was wrong twice over: an agent narrowed away is usually enabled, and
-        # attributing the narrowing to nothing at all left the user with no way
-        # to tell a flag they typed from one the lock replayed for them.
-        if only_agents:
-            listed = ", ".join(sorted(only_agents))
-            why = ("--agent " + listed) if explicit_agents \
-                else "its recorded agents (%s)" % listed
-            hint = ("widen with `boost install %s --local --force --agent <name>`"
-                    % name)
-        else:
-            why = "no enabled agent takes a project-scope skill"
-            hint = "enable one with `boost config set agents.<name>.enabled true`"
-        raise BoostError("no agent left to install %s into: %s" % (name, why),
-                        hint=hint)
 
     # A filtered reinstall (`--force --agent cursor`) refreshes only the agents
     # it names. Carrying the untouched ones forward keeps the lock describing
@@ -1409,7 +1392,71 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
     return actions
 
 
-def _narrow_materializing(targets: dict, only_agents, name: str, kind: str,
+def narrow_project_agents(scoped: dict, only_agents, name: str,
+                          *, explicit: bool) -> dict:
+    """Apply an ``--agent`` narrowing to a project-scope skill's agent set.
+
+    The skill-shaped twin of :func:`narrow_materializing`, extracted so the
+    live install and `install --dry-run` refuse in the same words at the same
+    point. They did not: the preview printed its "would install … into <repo>"
+    header with zero ``copy →`` lines and exited 0 where the run raised, which
+    is the one thing a preview must not do.
+
+    ``scoped`` is `agents.agents_for_scope(base)` — agent name to its
+    repo-local skills dir. Returns the kept subset, in the caller's order.
+    """
+    kept = {a: d for a, d in scoped.items() if not only_agents or a in only_agents}
+    if not kept:
+        # Same provenance problem `narrow_materializing` has, at the third
+        # replay site. `preserved_agent_scope` has already turned a *recorded*
+        # scope into `only_agents` by the time this runs, so the old "no
+        # enabled agents" was wrong twice over: an agent narrowed away is
+        # usually enabled, and attributing the narrowing to nothing at all left
+        # the user with no way to tell a flag they typed from one the lock
+        # replayed for them.
+        known = agents.known_agents()
+        if only_agents:
+            listed = ", ".join(sorted(only_agents))
+            why = ("--agent " + listed) if explicit \
+                else "its recorded agents (%s)" % listed
+            # The same `no_surface` split `narrow_materializing` makes, for the
+            # same reason: at project scope the usual cause is `project_scope:
+            # False` — an agent that is enabled and whose user-scope layout has
+            # no repo-local equivalent — and telling that user to enable it
+            # names a setting that is already true and would change nothing.
+            no_surface = [n for n in only_agents
+                          if n in known and known[n]["enabled"]]
+            widen = ("widen with `boost install %s --local --force "
+                     "--agent <name>`" % name)
+            # No `no_surface` means every named agent is *disabled*, and then
+            # widening is the wrong first move: `narrow_materializing` says
+            # "enable one …, or widen …" on that same input, and the twins
+            # disagreeing on one shape is how a user learns to distrust both.
+            # The widen clause stays either way — a recorded scope is a thing
+            # the user may never have typed.
+            hint = ("%s has no repo-local skills path, so %s"
+                    % (", ".join(sorted(no_surface)), widen)) if no_surface \
+                else ("enable one with `boost config set "
+                      "agents.<name>.enabled true`, or %s" % widen)
+        else:
+            why = "no enabled agent takes a project-scope skill"
+            # Un-narrowed, so every candidate was dropped by the scope itself.
+            # If some are enabled, enabling is not the remedy either. "at user
+            # scope" rather than "without `--local`" because `--local` is an
+            # alias for `--scope project`, and naming one spelling tells half
+            # the users to drop a flag they did not pass.
+            live = [n for n, spec in known.items() if spec["enabled"]]
+            hint = ("no enabled agent has a repo-local skills path (%s) — "
+                    "install at user scope instead" % ", ".join(sorted(live))
+                    if live
+                    else "enable one with "
+                         "`boost config set agents.<name>.enabled true`")
+        raise BoostError("no agent left to install %s into: %s" % (name, why),
+                        hint=hint)
+    return kept
+
+
+def narrow_materializing(targets: dict, only_agents, name: str, kind: str,
                           *, explicit: bool) -> dict:
     """Apply an ``--agent`` narrowing to a rule/workflow target set, or refuse.
 
@@ -1437,10 +1484,24 @@ def _narrow_materializing(targets: dict, only_agents, name: str, kind: str,
     ``--agent codex`` at a user who had typed no such flag. It still refuses —
     returning ``{}`` is what wrote the phantom row this guard exists to stop —
     but it says where the narrowing came from and how to widen it.
+
+    The refusal is ``not kept``, not ``only_agents and not kept``: an empty
+    target set is a phantom row whichever way it got empty. Guarding only the
+    narrowing left the *config* route open — every rule-capable agent disabled,
+    or every candidate ``skills_only``, or (for a workflow) every candidate
+    ``workflows: false`` — where ``only_agents`` is None, the loop body never
+    runs, and `set_rule`/`set_workflow` still write ``materializations: []``
+    and exit 0. `_install_project_skill` has guarded its un-narrowed case since
+    it was written; these two had not.
     """
     kept = {n: d for n, d in targets.items()
             if not only_agents or n in only_agents}
-    if only_agents and not kept:
+    if not kept:
+        if not only_agents:
+            raise BoostError(
+                "no agent left to install %s %s into: no enabled agent takes a %s"
+                % (kind, name, kind),
+                hint="enable one with `boost config set agents.<name>.enabled true`")
         known = agents.known_agents()
         no_surface = [n for n in only_agents
                       if n in known and known[n]["enabled"]]
@@ -1507,7 +1568,7 @@ def _install_rule(entry: dict, force: bool = False,
     unwritable: list[str] = []
     blocked: list[tuple[str, str]] = []
     refused: list[dict] = []
-    targets = _narrow_materializing(agents.materializing_agents(resolved_base),
+    targets = narrow_materializing(agents.materializing_agents(resolved_base),
                                     only_agents, name, "rule",
                                     explicit=explicit_agents)
     for agent, skills_dir in targets.items():
@@ -1850,7 +1911,7 @@ def _install_workflow(entry: dict, force: bool = False,
     # rules surface and no slash-command format at all (Codex), and installing
     # into a directory it never reads would report a command that does not
     # exist. See agents.workflow_agents.
-    targets = _narrow_materializing(agents.workflow_agents(resolved_base),
+    targets = narrow_materializing(agents.workflow_agents(resolved_base),
                                     only_agents, name, "workflow",
                                     explicit=explicit_agents)
     for agent, skills_dir in targets.items():

@@ -143,7 +143,7 @@
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>77</b><span>Planned</span></div>
-      <div class="stat"><b>494</b><span>Loop finds</span></div>
+      <div class="stat"><b>496</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -3305,6 +3305,64 @@ Codex hooks at all: a hook config that silently never fires is worse than none.<
           <span class="m">`serve --port 99999` reached socket.bind and exited 70 with a crash report</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="sandbox-fixture-does-not-sandbox-the-working-directory">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Test hygiene · Bug</span></div>
+        <h3>The sandbox fixture sandboxes every env var except the one project scope reads</h3>
+        <p>`tests/conftest.py`'s `sandbox` fixture is thorough about the environment — it
+redirects `HOME`, clears `BOOST_HOME`, `BOOST_AGENTS_STORE` and `CODEX_HOME`,
+and sets five `BOOST_NO_*` guards so no test reaches AI, the network, the seed
+or a confirm prompt by accident. It never touches the **working directory**,
+and that is the one input project scope resolves against: `scopes.resolve_base`
+walks up from `os.getcwd()`, so a test that installs with `scope="project"` and
+no explicit `base`, or drives `boost install --local` without
+`monkeypatch.chdir`, writes into the developer's own checkout.
+
+What lands there is not a stray temp file. A project install materializes the
+full agent fan-out at the repo root — `.boost/skill-lock.json`, `.claude/skills/`,
+`.cursor/`, `.windsurf/`, `.gemini/`, `.codex/` — plus, for a rule, the context
+files themselves: `AGENTS.md` and `CLAUDE.local.md`, both of which every agent
+working the repo then loads as instructions.
+
+It is also self-propagating, because the state outlives the run that wrote it.
+A killed run left a project-scope `brainstorming` at the root; the next full
+suite read it back and failed twelve tests across four files that assert an
+empty install state — the `test_cli_quality.py` case for a machine that never
+installed anything saw `brainstorming ok project`, and `boost list`, `boost
+info` and the pane-width tests all inherited a row nothing in them had
+installed. The failures name none
+of the tests responsible, and they clear only when someone thinks to look at
+`git status` — where `.boost/` is gitignored and does not appear.
+
+No committed test writes there in its shipped form: `tests/unit`,
+`tests/functional` and `tests/smoke.sh` each leave the checkout clean when run
+directly, watched by a teardown hook that names the offending nodeid. A full
+`make check` does not — it ends with `.boost/skill-lock.json` and five agent
+dotdirs at the repo root, all stamped inside the mutation stage. That stage
+runs those same tests against mutated `boost_cli/core`, so the blast radius of
+a mutant that weakens a scope guard is the developer's own working tree, and
+4,343 of them survive each run. Which is the whole argument for the guard: the
+suite is one edit — or one mutant — away from writing here, and when it does,
+the failures it causes name everything except their cause.
+
+Two halves, both cheap:
+
+- **Chdir the sandbox.** Point `cwd` at a directory under `tmp_path` in the
+  fixture, so a forgotten `chdir` resolves to the sandbox instead of the repo.
+  Needs an audit first — any test that reads a repo-relative path (the
+  generated-file `--check` gates, `test_spdx_headers.py`) must take the repo
+  root explicitly rather than inheriting it.
+- **Fail loudly if it happens anyway.** A session-scoped autouse check that
+  snapshots the known project-scope artifact names at the repo root and fails
+  the run — naming the test — when one appears. That is the half that would
+  have turned twelve misleading failures into one accurate one.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">`make check` leaves a project install in the repo root; a later run reads it back and fails twelve unrelated tests.</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -3820,6 +3878,35 @@ Codex hooks at all: a hook config that silently never fires is worse than none.<
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">`boost profile use` unlinked four agents and `boost list` kept naming all four</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="one-bad-agent-dir-silences-the-whole-doctor-report">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <h3>One unresolvable agent dir silences the whole `boost doctor` report</h3>
+        <p><b>Found by the review of <code>loop/codex-agent-target</code>.</b>
+<code>paths.expand</code> now raises a <code>BoostError</code> for a <code>${VAR}</code> with no fallback
+and nothing in the environment, rather than resolving it to an empty or literal path — the change that
+stopped a mistyped <code>agents.&lt;name&gt;.dir</code> silently installing into
+<code>./skills</code>. <code>agents.known_agents</code> calls it for every configured agent, so one bad
+row now aborts every command that asks who the agents are: <code>doctor</code>,
+<code>heal</code>, <code>clean</code>, <code>install</code>, <code>sync</code>.
+
+For most of those, refusing is the right answer. For <code>doctor</code> it is not: its whole job is to
+surface a misconfiguration, and it exits 1 having reported nothing else — no lock check, no store check,
+no duplicate-discovery check. The remedy is reachable (<code>boost config set</code> never calls
+<code>known_agents</code>, verified in a sandbox), so this is a bad report rather than a lockout.
+
+<b>Fix direction.</b> Catch <code>BoostError</code> around the agent lookups in <code>cmd_doctor</code>
+and render it as an issue row, then continue with an empty agent set. The catch has to cover the
+indirect callers too — <code>store.duplicate_discovery</code>, <code>store.sync_plan</code> and the
+per-agent coverage counts all reach <code>known_agents</code> — so the natural shape is one resolution
+step at the top of the command whose failure degrades the agent-dependent sections rather than the run.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">A single agent whose `dir` names an unset variable makes `boost doctor` exit 1 with one line instead of reporting it as an issue…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

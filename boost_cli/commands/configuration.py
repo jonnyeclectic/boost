@@ -2053,7 +2053,7 @@ def _offer_boost_first(hosts: list[str]) -> None:
     # Note what it does and does not cover. `only_agents` below is
     # `scoped_agents`, not this filtered list, so a skills-only agent added to
     # AGENT_FOR_HOST would be dropped from the preview and still passed to the
-    # install, where `_narrow_materializing` drops it again — silently, since
+    # install, where `narrow_materializing` drops it again — silently, since
     # the intersection is non-empty as long as one real agent remains. If it
     # were the *only* scoped agent, `targets` is empty and the early return
     # below means the offer is never made and `store.install` never runs. So

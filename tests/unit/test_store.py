@@ -2568,6 +2568,9 @@ class TestProjectSkills:
         # widen a selection the user never made.
         assert "enabled true" in err.value.hint
         assert "--agent" not in err.value.message
+        # And with every agent off there is no live one to name, so the hint
+        # must not claim some enabled agent lacks a repo-local path.
+        assert "repo-local skills path" not in err.value.hint
 
     def test_an_agent_outside_project_scope_does_not_avert_the_error(
             self, entry, tmp_path):
@@ -2583,6 +2586,12 @@ class TestProjectSkills:
         with pytest.raises(BoostError) as err:
             store.install(entry, scope="project", base=str(tmp_path / "p"))
         assert "no enabled agent takes a project-scope skill" in err.value.message
+        # antigravity *is* enabled, so "enable one" would name a setting that
+        # is already true. The hint has to say what is actually wrong with it
+        # and point at the scope that does work.
+        assert "no enabled agent has a repo-local skills path" in err.value.hint
+        assert "antigravity" in err.value.hint
+        assert "install at user scope" in err.value.hint
 
     def test_a_typed_agent_narrowing_is_reported_as_the_flag_it_was(
             self, entry, tmp_path):
@@ -2594,6 +2603,10 @@ class TestProjectSkills:
                           only_agents=["antigravity"])
         assert "--agent antigravity" in err.value.message
         assert "--force --agent" in err.value.hint
+        # Widening is only half the answer: antigravity is enabled, so the
+        # hint has to say *why* it was dropped rather than leave the user
+        # toggling a setting that is already on.
+        assert "antigravity has no repo-local skills path" in err.value.hint
 
     def test_a_replayed_agent_narrowing_is_not_reported_as_a_flag(
             self, entry, tmp_path):
@@ -2612,8 +2625,13 @@ class TestProjectSkills:
             store.install(entry, scope="project", base=str(repo), force=True)
         assert "its recorded agents (cursor)" in err.value.message
         assert "--agent cursor" not in err.value.message
-        # Recorded, so the way out is to widen it — not to enable something.
+        # Recorded, so widening is one way out and the hint keeps offering it.
         assert "--force --agent" in err.value.hint
+        # But cursor is *disabled*, not project-less, and that is the thing the
+        # user changed a moment ago. `narrow_materializing` says both on this
+        # same input; saying only "widen" here sent them looking for a second
+        # agent to install into instead of turning the first one back on.
+        assert "enabled true" in err.value.hint
 
     # ── uninstall ────────────────────────────────────────────────────────
 
@@ -2959,6 +2977,78 @@ class TestProjectSkills:
         # and the lock still describes all four
         assert len(projectlock.get_skill(repo, "brainstorming")
                    ["materializations"]) == 5
+
+
+class TestARelocatableProjectDotdir:
+    """A configured ``project_dir`` decides the repo-local directory name.
+
+    `agents.project_dotdir` exists so an agent whose *user* dir can move at
+    runtime (Codex, via ``$CODEX_HOME``) does not drag its *repo* dir with it.
+    Only the skill path was pinned against a name that actually differs; the
+    rule and workflow paths pass ``dotdir=`` to callees that would derive the
+    same answer for every shipped agent, so deleting either argument broke no
+    test. Cursor is the lever: it takes a rule through `rules.MODE_FILE` and a
+    workflow through `workflows.workflow_target` — the two branches that read
+    ``dotdir`` — so giving it a ``project_dir`` of ``.mycursor`` makes both
+    call sites discriminating. Nothing here is Cursor-specific; it is the one
+    agent that exercises both file-dropping branches.
+    """
+
+    @pytest.fixture()
+    def relocated(self, sandbox):
+        # `sandbox` is not decoration: this fixture writes config, and
+        # without the dependency it is hermetic only for as long as
+        # every test in the class happens to list a sandboxed fixture
+        # ahead of it — reorder two parameters and it edits the real
+        # ~/.boost/config.json.
+        cfg = config.load()
+        cfg["agents"]["cursor"]["project_dir"] = ".mycursor"
+        config.save(cfg)
+
+    @pytest.fixture()
+    def repo(self, tmp_path):
+        d = tmp_path / "proj"
+        (d / ".git").mkdir(parents=True)
+        return d
+
+    def test_a_project_rule_lands_under_the_configured_dotdir(
+            self, tap, relocated, repo):
+        store.install(_rule_entry(tap), scope="project", base=str(repo),
+                      only_agents=["cursor"])
+        assert (repo / ".mycursor" / "rules" / "team-conventions.mdc").is_file()
+        assert not (repo / ".cursor").exists()
+
+    def test_a_project_workflow_lands_under_the_configured_dotdir(
+            self, tap, relocated, repo):
+        store.install(_workflow_entry(tap), scope="project", base=str(repo),
+                      only_agents=["cursor"])
+        assert (repo / ".mycursor" / "commands" / "ship-it.md").is_file()
+        assert not (repo / ".cursor").exists()
+
+    def test_the_lock_records_the_configured_dotdir(self, tap, relocated, repo):
+        """A project *rule* is recorded in the user lock (not the project one —
+
+        `projectlock` holds skills), by absolute path. `uninstall` and `sync`
+        both read that path back, so a dotdir that disagrees with disk leaves
+        a real file no record claims.
+        """
+        store.install(_rule_entry(tap), scope="project", base=str(repo),
+                      only_agents=["cursor"])
+        rec = lockfile.get_rule("team-conventions")
+        assert [m["path"] for m in rec["materializations"]] == [
+            str(repo / ".mycursor" / "rules" / "team-conventions.mdc")]
+
+    def test_user_scope_ignores_it(self, tap, relocated):
+        """``project_dir`` names a *repo* directory. The user answer is the
+
+        real parent of the real skills dir, which is what `rule_target`
+        derives when no base is given — so a configured value must not leak
+        into ``~/``.
+        """
+        store.install(_rule_entry(tap), only_agents=["cursor"])
+        assert (paths.home() / ".cursor" / "rules"
+                / "team-conventions.mdc").is_file()
+        assert not (paths.home() / ".mycursor").exists()
 
 
 class TestCopySkillBackupCleanup:
