@@ -42,8 +42,42 @@ def known_agents() -> dict[str, dict]:
             # does. True marks one that collapses them instead — see
             # :func:`dedupes_by_path`.
             "dedupes_by_path": bool(spec.get("dedupes_by_path", False)),
+            # Defaults "": derive the repo-local dotdir from the user dir, as
+            # every agent with a fixed path can. A non-empty value declares it
+            # — see :func:`project_dotdir`.
+            "project_dir": str(spec.get("project_dir", "")),
         }
     return out
+
+
+def project_dotdir(agent: str, skills_dir) -> str:
+    """The repo-local directory name `agent` uses under a project base.
+
+    Normally derived: ``~/.claude/skills`` -> ``.claude``, so an agent someone
+    added by hand in ``config.json`` lands in the project under the name it
+    uses at home. That derivation assumes the user dir is a fixed path, and
+    Codex's is not — its default is ``${CODEX_HOME:-~/.codex}/skills``. Under a
+    relocated ``CODEX_HOME=/opt/codexhome`` the derivation yields ``codexhome``,
+    so `boost install --local` would write ``<repo>/codexhome/skills/<name>``
+    and report success. Codex's project skill root is the literal
+    ``<project>/.codex/skills`` whatever ``CODEX_HOME`` says, so that copy is
+    somewhere it never reads; and the *project* lock is a committed file, so
+    the row records a repo-relative path that one machine's environment
+    invented. The spec therefore declares the name, and this returns the
+    declared one whenever there is one.
+
+    A declared value is a path segment boost joins under the project base, and
+    ``config.json`` is user-editable, so it is checked rather than trusted: one
+    component, no separator, no ``.``/``..``. A value that fails goes back to
+    the derived name instead of escaping the repo — `scopes.ensure_in_base`
+    would catch an escape at install time, but as a crash at the end of a
+    command rather than a name that makes sense, and the sweeps that walk
+    project roots never reach that check at all.
+    """
+    declared = (known_agents().get(agent) or {}).get("project_dir") or ""
+    if declared in ("", ".", "..") or "/" in declared or "\\" in declared:
+        return Path(skills_dir).parent.name
+    return declared
 
 
 def enabled_agents() -> dict[str, Path]:

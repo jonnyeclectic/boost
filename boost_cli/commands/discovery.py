@@ -1472,6 +1472,43 @@ def _browse_theme(curses):
     return t
 
 
+def _install_targets() -> dict[str, str]:
+    """What Enter will write, by item kind, for the browse detail pane.
+
+    Stated before the key is pressed, because a rule edits a file the user
+    reads every session — the highest-stakes of the three.
+
+    Each line has to name the set the *install* uses, or the pane promises a
+    destination the install then refuses:
+
+    * skills — `agents.linking_agents()`. A native-store agent reads
+      `~/.agents/skills` itself and is deliberately not linked to.
+    * rules — `agents.materializing_agents()`, the set `store._install_rule`
+      narrows to, and ``d.parent`` because ``d`` is the agent's *skills* dir
+      and a context file sits beside it. The pane used to advertise
+      ``~/.claude/skills/CLAUDE.md``, a path nothing reads.
+    * workflows — `agents.workflow_agents()`, narrower again. Codex is enabled
+      and takes rules but has no user-installable slash-command format at all,
+      so "each agent's commands dir" named a destination that cannot exist.
+
+    A module-level function rather than a block inside the curses loop so it
+    can be asserted on without a terminal.
+    """
+    link_names = ", ".join(agents.display_name(a)
+                           for a in agents.linking_agents()) or "no agents"
+    context_files = " · ".join(sorted(
+        _tilde(d.parent / rules.CONTEXT_FILES[a][0])
+        for a, d in agents.materializing_agents().items()
+        if a in rules.CONTEXT_FILES))
+    wf_names = ", ".join(agents.display_name(a)
+                         for a in agents.workflow_agents()) or "no agents"
+    return {
+        "skill": "%s · linked to %s" % (_tilde(paths.store_dir()), link_names),
+        "rule": context_files or "each agent's rules directory",
+        "workflow": "commands dir of %s (TOML for gemini)" % wf_names,
+    }
+
+
 def _browse_tui(curses, entries, install=None):
     """Run the curses UI. Returns the list of entries picked for install
     (one or more, via multi-select), or None if the user quit without picking.
@@ -1505,26 +1542,9 @@ def _browse_tui(curses, entries, install=None):
     workers: list = []
     queue: list = []
     queue_lock = threading.Lock()
-    # What Enter will touch, by kind — stated in the detail pane before it is
-    # pressed (a rule edits a file the user reads every session, which is the
-    # highest-stakes of the three). Built once: the paths cannot change
+    # What Enter will touch, by kind. Built once: the paths cannot change
     # mid-session, and browse.install_target stays pure by receiving them.
-    link_names = ", ".join(agents.display_name(a)
-                           for a in agents.linking_agents()) or "no agents"
-    # `d.parent`, because `d` is the agent's *skills* dir and a context file
-    # sits beside it — the pane advertised `~/.claude/skills/CLAUDE.md`, a path
-    # nothing reads. rules.rule_target is the authority; this mirrors it.
-    # materializing_agents for the same reason the rule install uses it: a
-    # skills-only agent never receives one.
-    context_files = " · ".join(sorted(
-        _tilde(d.parent / rules.CONTEXT_FILES[a][0])
-        for a, d in agents.materializing_agents().items()
-        if a in rules.CONTEXT_FILES))
-    targets = {
-        "skill": "%s · linked to %s" % (_tilde(paths.store_dir()), link_names),
-        "rule": context_files or "each agent's rules directory",
-        "workflow": "each agent's commands dir (TOML for gemini)",
-    }
+    targets = _install_targets()
 
     def start_install(entry):
         """Queue an install. Installs run one at a time, in a single worker.

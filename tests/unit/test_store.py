@@ -1920,6 +1920,41 @@ class TestWorkflowInstall:
             store.install(entry, only_agents=["gemini"])
         assert "enabled true" in str(disabled.value.hint)
 
+    def test_a_narrowing_replayed_from_the_lock_does_not_blame_agent(self, tap):
+        """The refusal has to say where the narrowing came from.
+
+        `preserved_agent_scope` replays a recorded scope before the guard runs,
+        so by then a lock-replayed narrowing and a typed `--agent` are the same
+        list. Reporting the first as `--agent codex` told a user to stop passing
+        a flag they had never passed, and named no way out.
+        """
+        entry = _rule_entry(tap)
+        store.install(entry, only_agents=["codex"])
+        # codex keeps rules today, so take the surface away rather than the
+        # agent: `skills_only` leaves it enabled, which is the harder case —
+        # the hint must still be "no surface", not "not enabled".
+        cfg = config.load()
+        cfg["agents"]["codex"]["skills_only"] = True
+        config.save(cfg)
+
+        with pytest.raises(BoostError) as exc:
+            store.install(entry, force=True)          # no --agent anywhere
+        msg, hint = str(exc.value), str(exc.value.hint)
+        assert "its recorded agents (codex)" in msg
+        assert "--agent codex" not in msg
+        assert "codex cannot take a rule" in hint
+        assert "--force --agent" in hint              # and how to widen it
+
+    def test_an_explicit_narrowing_still_says_agent(self, tap):
+        # The other half: a typed flag must still be quoted back, and must not
+        # carry the widening hint — the user is already passing --agent.
+        entry = _workflow_entry(tap)
+        with pytest.raises(BoostError) as exc:
+            store.install(entry, only_agents=["codex"])
+        assert "--agent codex" in str(exc.value)
+        assert "recorded agents" not in str(exc.value)
+        assert "--force --agent" not in str(exc.value.hint)
+
     def test_a_narrowing_that_keeps_one_agent_still_installs(self, tap):
         # The guard fires on an *empty* intersection only: naming codex
         # alongside an agent that can take a workflow is not an error.
@@ -2528,7 +2563,11 @@ class TestProjectSkills:
         config.save(cfg)
         with pytest.raises(BoostError) as err:
             store.install(entry, scope="project", base=str(tmp_path / "p"))
-        assert "no enabled agents" in err.value.message
+        assert "no enabled agent takes a project-scope skill" in err.value.message
+        # Nothing was narrowed, so the remedy is to enable an agent — not to
+        # widen a selection the user never made.
+        assert "enabled true" in err.value.hint
+        assert "--agent" not in err.value.message
 
     def test_an_agent_outside_project_scope_does_not_avert_the_error(
             self, entry, tmp_path):
@@ -2543,7 +2582,38 @@ class TestProjectSkills:
         config.save(cfg)
         with pytest.raises(BoostError) as err:
             store.install(entry, scope="project", base=str(tmp_path / "p"))
-        assert "no enabled agents" in err.value.message
+        assert "no enabled agent takes a project-scope skill" in err.value.message
+
+    def test_a_typed_agent_narrowing_is_reported_as_the_flag_it_was(
+            self, entry, tmp_path):
+        # `--agent antigravity` is a real, enabled agent that project scope
+        # excludes. The refusal has to name the flag, because that is the thing
+        # the user can change.
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(tmp_path / "p"),
+                          only_agents=["antigravity"])
+        assert "--agent antigravity" in err.value.message
+        assert "--force --agent" in err.value.hint
+
+    def test_a_replayed_agent_narrowing_is_not_reported_as_a_flag(
+            self, entry, tmp_path):
+        """The lock replays a recorded scope; the user typed nothing.
+
+        `preserved_agent_scope` turns the recorded list into `only_agents`
+        before the guard runs, so without the `explicit` capture the refusal
+        tells a user to stop passing `--agent cursor` when their command line
+        was a bare `boost install <name> --local`.
+        """
+        repo, _ = self._install(entry, tmp_path, only_agents=["cursor"])
+        cfg = config.load()
+        cfg["agents"]["cursor"]["enabled"] = False
+        config.save(cfg)
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(repo), force=True)
+        assert "its recorded agents (cursor)" in err.value.message
+        assert "--agent cursor" not in err.value.message
+        # Recorded, so the way out is to widen it — not to enable something.
+        assert "--force --agent" in err.value.hint
 
     # ── uninstall ────────────────────────────────────────────────────────
 
@@ -2679,6 +2749,66 @@ class TestProjectSkills:
         # Nothing machine-specific: this file is committed and read elsewhere.
         for p in paths_rec:
             assert not p.startswith("/") and str(tmp_path) not in p
+
+    def test_a_relocated_codex_home_does_not_move_the_repo_dir(
+            self, entry, tmp_path, monkeypatch):
+        """`$CODEX_HOME` moves Codex's *user* dir; its repo dir is fixed.
+
+        The dotdir used to be derived from the configured skills dir, so a
+        relocated CODEX_HOME landed the project copy in a dotless
+        ``<repo>/moved/skills``, which is not where Codex looks — its repo-scope
+        root is the literal ``<project>/.codex/skills`` whatever the variable
+        says — and then wrote that machine-local name into the *committed*
+        project lock, checking one developer's environment in for everyone who
+        clones the repo. Both halves are asserted below.
+        """
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "moved"))
+        repo, res = self._install(entry, tmp_path)
+        assert "codex" in res.linked
+        assert (repo / ".codex" / "skills" / "brainstorming"
+                / "SKILL.md").is_file()
+        assert not (repo / "moved").exists()
+
+        from boost_cli.core import projectlock
+        rec = projectlock.get_skill(repo, "brainstorming")
+        by_agent = {m["agent"]: m["path"] for m in rec["materializations"]}
+        assert by_agent["codex"] == ".codex/skills/brainstorming"
+        # The pre-existing "nothing machine-specific" check passes on
+        # `moved/skills/...` — the repo-relative form hides the leak — so name
+        # the directory instead of testing for the tmp_path prefix.
+        assert "moved" not in by_agent["codex"]
+
+    def test_the_orphan_scan_looks_where_a_relocated_codex_installed(
+            self, entry, tmp_path, monkeypatch):
+        # The scan derives its roots the same way the install does, so the two
+        # have to agree: deriving here would walk `<repo>/moved/skills`, find
+        # nothing, and report a clean tree over an unreferenced copy.
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "moved"))
+        repo, _ = self._install(entry, tmp_path)
+        stray = repo / ".codex" / "skills" / "hand-written"
+        stray.mkdir(parents=True)
+        plan = store.project_sync_plan(base=str(repo))
+        assert str(stray) in plan["orphaned"]
+
+    def test_the_orphan_scan_skips_a_root_the_install_never_writes(
+            self, entry, tmp_path):
+        """The scan walks `project_agents()`, the set the install writes to.
+
+        Antigravity is enabled but has `project_scope: False` — its user skills
+        dir sits two levels under its dotdir, so there is no repo path to
+        derive. Walking `enabled_agents()` instead invented
+        ``<repo>/antigravity-cli/skills`` and called anything a developer
+        happened to keep there boost's unclaimed litter.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        theirs = repo / "antigravity-cli" / "skills" / "hand-written"
+        theirs.mkdir(parents=True)
+        plan = store.project_sync_plan(base=str(repo))
+        assert str(theirs) not in plan["orphaned"]
+        # Not vacuous: a root the install *does* write is still scanned.
+        mine = repo / ".claude" / "skills" / "stray"
+        mine.mkdir(parents=True)
+        assert str(mine) in store.project_sync_plan(base=str(repo))["orphaned"]
 
     def test_sync_reads_the_lock_from_a_different_clone_path(self, entry, tmp_path):
         """Simulates the teammate: same lock, different absolute directory."""

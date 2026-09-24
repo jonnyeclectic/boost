@@ -127,6 +127,30 @@ class TestRuleTarget:
         assert mode == rules.MODE_FILE
         assert path == Path("/h/.cursor/rules/r.mdc")
 
+    def test_a_declared_dotdir_overrides_the_derived_project_root(self):
+        # An agent whose user dir can move (Codex's `${CODEX_HOME:-~/.codex}`)
+        # must not move its *project* root with it. `store` passes
+        # `agents.project_dotdir`; this module takes the answer rather than
+        # calling it, so it stays a pure function of its arguments and its
+        # tests need no sandbox.
+        _m, path = rules.rule_target("cursor", Path("/opt/moved/skills"), "r",
+                                     base=Path("/repo"), dotdir=".cursor")
+        assert path == Path("/repo/.cursor/rules/r.mdc")
+
+    def test_no_declared_dotdir_still_derives_the_project_root(self):
+        # The override is the exception; every fixed-path agent must keep
+        # landing under the name it uses at home.
+        _m, path = rules.rule_target("cursor", Path("/h/.cursor/skills"), "r",
+                                     base=Path("/repo"))
+        assert path == Path("/repo/.cursor/rules/r.mdc")
+
+    def test_a_declared_dotdir_is_ignored_in_user_scope(self):
+        # User scope writes beside the *real* skills dir; the repo-local name
+        # has no say there, and honouring it would invent a directory.
+        _m, path = rules.rule_target("cursor", Path("/opt/moved/skills"), "r",
+                                     dotdir=".cursor")
+        assert path == Path("/opt/moved/rules/r.mdc")
+
     def test_windsurf_uses_md(self):
         mode, path = rules.rule_target("windsurf", Path("/h/.windsurf/skills"), "r")
         assert mode == rules.MODE_FILE

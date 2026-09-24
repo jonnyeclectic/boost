@@ -64,9 +64,13 @@ class TestLoadDefaults:
         # path instead of warning. Its dir is the one that is not a literal:
         # Codex reads $CODEX_HOME and only defaults it to ~/.codex, and a rule
         # written to the default when it has moved is a file Codex never opens.
+        # `project_dir` is declared rather than derived for the same reason:
+        # every other agent's repo dotdir falls out of its user dir, and
+        # Codex's user dir moves.
         assert cfg["agents"]["codex"] == {
             "dir": "${CODEX_HOME:-~/.codex}/skills", "enabled": True,
-            "links_skills": False, "workflows": False, "dedupes_by_path": True}
+            "links_skills": False, "workflows": False,
+            "dedupes_by_path": True, "project_dir": ".codex"}
 
     def test_the_codex_dir_follows_codex_home(self, sandbox, monkeypatch,
                                               tmp_path):

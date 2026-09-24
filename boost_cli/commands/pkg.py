@@ -498,7 +498,9 @@ def cmd_install(argv: list[str]) -> int:
                     if only and agent_name not in only:
                         continue
                     out.info("  copy  → %s"
-                             % _tilde(scopes.skill_target(sdir, e["name"], base=pbase)))
+                             % _tilde(scopes.skill_target(
+                                 sdir, e["name"], base=pbase,
+                                 dotdir=agents.project_dotdir(agent_name, sdir))))
                 if offer_mcp:
                     for row in mcpdecl.registrable(
                             store.declared_mcp_servers(store.source_dir_for(e))):

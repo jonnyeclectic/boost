@@ -80,7 +80,8 @@ def markers(name: str) -> tuple[str, str]:
 
 
 def rule_target(agent: str, skills_dir: Path, name: str,
-                base: Path | None = None) -> tuple[str, Path]:
+                base: Path | None = None,
+                dotdir: str | None = None) -> tuple[str, Path]:
     """Where rule ``name`` materializes for ``agent``.
 
     Returns ``(mode, path)``: ``MODE_CLAUDE`` writes/merges the agent's context
@@ -95,6 +96,13 @@ def rule_target(agent: str, skills_dir: Path, name: str,
         since those agents read per-repo memory from the root,
         ``<base>/CLAUDE.local.md`` or ``<base>/GEMINI.md`` (see
         :data:`CONTEXT_FILES`).
+
+    ``dotdir`` overrides the derived repo-local directory name, for an agent
+    whose user dir is not a fixed path — `agents.project_dotdir` is what
+    computes it, and passing it here rather than calling it keeps this module a
+    pure function of its arguments, as its unit tests rely on. Deriving is
+    still right for every agent that does not declare one, and user scope never
+    consults it: the answer there is the real parent of the real skills dir.
     """
     # `name` comes from tap-controlled frontmatter and is about to be joined
     # onto a directory, so it has to be a single component — otherwise
@@ -102,7 +110,7 @@ def rule_target(agent: str, skills_dir: Path, name: str,
     # under project scope it escapes into the victim's own repo.
     if not util.is_safe_component(name):
         raise BoostError("invalid rule name %r" % name)
-    dotdir = Path(skills_dir).parent.name          # ".claude" / ".cursor" / …
+    dotdir = dotdir or Path(skills_dir).parent.name   # ".claude" / ".cursor" / …
     context = CONTEXT_FILES.get(agent)
     if context is not None:
         user_name, project_name = context

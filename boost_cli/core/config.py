@@ -81,6 +81,21 @@ DEFAULTS = {
         # reach a relocated Codex regardless, but a rule written to the default
         # path would be a file that CLI never opens, reported as installed.
         #
+        # `project_dir` is what makes that safe for *project* scope, and it is
+        # the one place a movable dir would otherwise leak. scopes.agent_root
+        # derives a repo-local dotdir from `basename(dirname(dir))`, which is
+        # `.codex` only while CODEX_HOME is unset. Relocate it and two things
+        # go wrong, both measured: the project copy lands in a dotless
+        # `<repo>/<basename>/skills`, which is not the repo-scope root Codex
+        # reads — that is the literal `<project>/.codex/skills` whatever
+        # CODEX_HOME says — so the install reports success over a skill the CLI
+        # never sees; and the *committed* project lock records that
+        # repo-relative name, so one developer's environment variable is
+        # checked in for everyone who clones. The name is known, so it is
+        # declared rather than derived. Antigravity answers the same derivation
+        # hazard by leaving project scope off; here the path is known, so it is
+        # named.
+        #
         # `workflows: False` — Codex 0.156.1 has no user-installable slash
         # command format: there is no `~/.codex/prompts` or `~/.codex/commands`,
         # no prompt/command subcommand, and its own plugin importer *rewrites* a
@@ -89,7 +104,7 @@ DEFAULTS = {
         # silently never loads. Rules are kept because AGENTS.md is verified.
         "codex": {"dir": "${CODEX_HOME:-~/.codex}/skills", "enabled": True,
                   "links_skills": False, "workflows": False,
-                  "dedupes_by_path": True},
+                  "dedupes_by_path": True, "project_dir": ".codex"},
     },
     "taps": [],  # [{"name": "owner/repo", "url": "...", "curated": bool}]
     "ai": {

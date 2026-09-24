@@ -505,7 +505,14 @@ def cmd_doctor(argv):
         lock_ok = False
 
     skills = lockfile.installed()
-    enabled = agents.enabled_agents()
+    # linking_agents, not enabled_agents, for the same reason `sync_plan` uses
+    # it: the lock's `agents` field is measured by `store.linked_agents`, which
+    # only walks linking agents — so a native-store name in there is a *stale*
+    # row, written before that agent's `links_skills` flipped (gemini's did;
+    # codex arrived after). Looking it up in the enabled set finds a real
+    # directory holding no symlink and reports "not linked — run `boost sync`",
+    # which sync then declines to act on. Doctor and sync have to agree.
+    enabled = agents.linking_agents()
     skill_issues = 0
     quarantined_skills = 0
     for name, entry in sorted(skills.items()):

@@ -3,6 +3,10 @@
 """Unit tests: boost_cli/core/agents.py — agent targets and symlink dirs."""
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from boost_cli.core import agents, config
 
 
@@ -241,6 +245,57 @@ class TestCodexTarget:
         assert "gemini" not in agents.workflow_agents("/repo")
         assert "gemini" in agents.materializing_agents()
         assert "gemini" not in agents.materializing_agents("/repo")
+
+    def test_the_codex_project_dotdir_is_declared_not_derived(self, sandbox,
+                                                              monkeypatch,
+                                                              tmp_path):
+        # `scopes.agent_root` derives the repo dotdir from the user dir, which
+        # is right for every agent whose user dir is fixed. Codex's is not: a
+        # relocated CODEX_HOME would put the project copy in a dotless
+        # `<repo>/moved/skills`, which is not Codex's repo-scope root, and put
+        # that machine-local name into the *committed* project lock.
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "moved"))
+        sdir = agents.known_agents()["codex"]["dir"]
+        assert sdir == tmp_path / "moved" / "skills"
+        assert agents.project_dotdir("codex", sdir) == ".codex"
+
+    def test_every_other_agent_still_derives_its_project_dotdir(self, sandbox):
+        # The declaration is the exception, not the rule — an agent someone
+        # adds by hand in config.json has no `project_dir` and must still land
+        # under the name it uses at home.
+        known = agents.known_agents()
+        assert agents.project_dotdir("claude-code", known["claude-code"]["dir"]) \
+            == ".claude"
+        assert agents.project_dotdir("cursor", known["cursor"]["dir"]) == ".cursor"
+        assert known["claude-code"]["project_dir"] == ""
+
+    @pytest.mark.parametrize("bad", ["../../etc", "a/b", "/abs", ".", "..",
+                                     "back\\slash"])
+    def test_an_unsafe_declared_project_dir_falls_back_to_the_derived_name(
+            self, sandbox, bad):
+        # `config.json` is user-editable and the value is joined under the
+        # project base, so a separator or a `..` would put the install outside
+        # the repo. `scopes.ensure_in_base` catches an escape at install time,
+        # but as a crash at the end of a command — and the sweeps that walk
+        # project roots never reach it at all.
+        cfg = config.load()
+        cfg["agents"]["codex"]["project_dir"] = bad
+        config.save(cfg)
+        assert agents.project_dotdir(
+            "codex", Path("/home/u/.codex/skills")) == ".codex"
+
+    def test_a_safe_declared_project_dir_is_still_honoured(self, sandbox):
+        # The validation must not swallow the feature it guards.
+        cfg = config.load()
+        cfg["agents"]["codex"]["project_dir"] = ".mycodex"
+        config.save(cfg)
+        assert agents.project_dotdir(
+            "codex", Path("/opt/moved/skills")) == ".mycodex"
+
+    def test_an_unknown_agent_falls_back_to_the_derived_name(self, sandbox):
+        # Callers pass the name and the dir they already have; a name that is
+        # not in the config must not raise, it must derive.
+        assert agents.project_dotdir("zed", Path("/home/u/.zed/prompts")) == ".zed"
 
     def test_only_codex_dedupes_by_path(self, sandbox):
         # Gemini logs a conflict for a skill it sees twice; Codex collapses the

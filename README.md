@@ -315,7 +315,7 @@ boost list --kind workflow            # and which slot each one fills
 Gemini CLI and Codex are the two agents that need no symlink. Both discover
 `~/.agents/skills` directly — Gemini CLI through the
 [Agent Skills](https://agentskills.io) standard, Codex as one of its five skill
-roots — so linking into their own skills dirs as well would put the same skill
+roots — so linking into their own skills directories as well would put the same
 in two of their discovery tiers. Gemini CLI says so out loud, one "Skill
 conflict detected" line per skill per session; Codex collapses the pair
 silently. Rules still materialize under `~/.gemini/` and `$CODEX_HOME/`.

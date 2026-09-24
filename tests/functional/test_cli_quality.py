@@ -483,6 +483,29 @@ class TestDoctor:
         jira_link = paths.home() / ".claude" / "skills" / "jira-integration"
         assert not jira_link.exists()               # sync must not have relinked it
 
+    def test_a_stale_native_store_row_is_not_reported_as_unlinked(
+            self, boost, installed):
+        """A lock written before an agent became native-store must not go red.
+
+        The lock's `agents` is measured by `store.linked_agents`, which walks
+        linking agents only — so `codex` can appear there only on a lock
+        written when it still linked. Doctor looked the name up in the
+        *enabled* set, found `~/.codex/skills`, saw no symlink, and reported
+        "not linked for codex — run `boost sync`". Sync reads the linking set
+        and answers "everything in sync", so the two contradicted each other
+        and no command could clear it.
+        """
+        from boost_cli.core import lockfile
+        lock = lockfile.read()
+        _name, entry = next(iter(lock["skills"].items()))
+        entry["agents"] = [*entry.get("agents", []), "codex"]
+        lockfile.write(lock)
+
+        r = boost("doctor")
+        assert "not linked for codex" not in r.out
+        assert "● healthy" in r.out
+        assert "everything in sync" in boost("sync").out
+
     def test_a_foreign_broken_link_is_reported_but_not_an_issue(
             self, boost, installed):
         # `heal` deliberately will not fix this, so counting it would leave

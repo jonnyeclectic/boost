@@ -452,16 +452,29 @@ nothing. Consequences for code you write:
   stale-link sweeps, coverage counts) — `sync_plan`'s stale sweep walked
   `enabled_agents()` instead, and since its only ownership test is
   `points_into_store`, `boost sync` would delete another tool's links out of a
-  native-store agent's skills dir with `--prune-duplicates` never typed. **Rules
+  native-store agent's skills dir with `--prune-duplicates` never typed.
+  **`doctor`'s per-skill link check takes it too**: the lock's `agents` field is
+  measured by `store.linked_agents`, so a native-store name in there is a stale
+  row from before that agent's `links_skills` flipped, and looking it up in the
+  *enabled* set made doctor report ``not linked for <agent> — run `boost sync```
+  at a user whose `sync` answers "everything in sync". **Rules
   take `agents.materializing_agents()`** (not `enabled_agents()`, which would
   re-add the Antigravity rule write `skills_only` exists to prevent), and
   **workflows take `agents.workflow_agents()`**, narrower again.
   `agents.native_store_agents()` is the complement, for reporting. An `--agent`
   narrowing is applied per kind by `store._narrow_materializing`, which
   **raises** on an empty intersection: without it `boost install <workflow>
-  --agent codex` wrote a lock row with zero materializations and exited 0, and
+  --agent codex` wrote a lock row with zero `materializations` and exited 0, and
   `sync_plan`'s `any(... for m in materializations)` reads `any([])` as False,
-  so nothing downstream could ever see the phantom.
+  so nothing downstream could ever see the phantom. The refusal has to say
+  *where* the narrowing came from: `preserved_agent_scope` replays a recorded
+  scope before the guard runs, so by then a lock-replayed set and a typed
+  `--agent` are the same list, and reporting the first as `--agent codex` told
+  a user to stop passing a flag they never passed. Hence the `explicit` flag,
+  captured as `only_agents is not None` *before* the replay. And a hint must
+  name a command that exists — this one shipped pointing at `boost agents`,
+  which never has; `test_command_reference_fresh.py` now checks every
+  `` `boost <word>` `` span in `core/` against `cli.COMMANDS`.
 - **Boost not linking there does not mean nothing else does**, and the warning
   costs the user the same either way. `store.duplicate_discovery()` walks
   `native_store_agents()` for entries that resolve back into the canonical
@@ -521,20 +534,55 @@ nothing. Consequences for code you write:
     `~/.codex/prompts`, no `~/.codex/commands`, no prompt subcommand. That is
     finer than `skills_only` can express (which would drop rules too), so the
     `workflows` flag exists and `agents.workflow_agents()` is the set that
-    honours it. `~/.codex/rules/*.rules` is the **execpolicy** command-approval
+    honours it. `~/.codex/rules/*.rules` is the `execpolicy` command-approval
     DSL, not an instructions dir — don't write there. Its MCP and hooks hosts
     are not wired up: the MCP grammar is verified but unimplemented, and the
     hook `timeout` units are unestablished, so this file records neither as
     done.
   - **Its dir is the one agent path that is not fixed**, hence the
     `${CODEX_HOME:-~/.codex}/skills` default and `paths.expand`'s leading
-    `${VAR:-fallback}` syntax. Skills reach a relocated Codex either way — the
+    `${VAR:-fallback}` syntax. Only a *leading* reference expands and nesting
+    is not supported. `${VAR}` with no fallback and nothing in the environment
+    **raises**, because both of the answers that do not raise were measured and
+    both are worse: the shell's empty string turns `${NOPE}/skills` into
+    `/skills`, refused with `PermissionError` on a normal box and created for
+    real in a root container; and leaving the reference literal makes it
+    *relative*, which produced `./${NOPE}/skills/brainstorming` under the
+    working directory plus a lock row and an "Installed 1 new skill" line, so a
+    second working directory got a second copy and nothing said why. An
+    explicit `${NOPE:-}` still asks for the shell behaviour and still gets it,
+    and `boost config set` keeps working with a broken value in the file, so
+    the raise is not a lockout. Skills reach a relocated Codex either way — the
     store root follows `$HOME` — but a rule written to `~/.codex/AGENTS.md`
     when `CODEX_HOME` points elsewhere is a file that CLI never opens, reported
     as installed. `AGENTS.override.md` *replaces* the chain rather than merging
     into it, so unlike `claude-code` there is no `.local` file to use for
     project scope: a project rule goes into the committed `<repo>/AGENTS.md`,
     which Cursor also reads.
+  - **A movable user dir must not move the *project* dir.**
+    `scopes.agent_root` derives a repo dotdir from the configured skills dir —
+    `~/.cursor/skills` -> `<repo>/.cursor` — which is right for every agent
+    whose path is fixed. Codex's is not: with `CODEX_HOME` relocated, the
+    derivation put the project copy in a `<repo>/<whatever>/skills` with no
+    leading dot. Codex's repo-scope root is the literal `<project>/.codex/skills`
+    whatever `CODEX_HOME` says, so that copy sits where the CLI never looks and
+    the install still reports success; and `projectlock` records the path
+    **relative to the repo**, so the *committed* lock carries one developer's
+    environment variable to everyone who clones. So the spec *declares*
+    `project_dir: ".codex"` and `agents.project_dotdir` prefers a declared name
+    over the derived one — validating it as a single safe component first,
+    since `config.json` is user-editable and the value is joined under the
+    project base. Everything that builds a project path takes the override:
+    `scopes.agent_root`/`skill_target`, `rules.rule_target` and
+    `workflows.workflow_target` all accept `dotdir=`, and the callers in
+    `core/store.py` (install, sync plan) and `commands/pkg.py` (the
+    `--dry-run` preview) all pass `agents.project_dotdir(...)`. They have to
+    agree: the orphan scan in `store.project_sync_plan` deriving while the
+    install declares would report a clean tree over an unreferenced copy, and
+    the preview would name a path the install does not write. Those two
+    modules take the argument rather than calling `agents` themselves so they
+    stay pure functions of their arguments — their unit tests pass literal
+    paths and read no config.
 
 - Per-agent *formats* differ and are pure functions in `core/`: `rules.CONTEXT_FILES`
   maps an agent with no rules dir to its context file (`claude-code` → CLAUDE.md /
