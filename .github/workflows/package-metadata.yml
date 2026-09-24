@@ -41,6 +41,21 @@ jobs:
         run: python -m pip -q install -r requirements/release-tools.txt
       - name: Build sdist + wheel
         run: python -m build
+      - name: no dev-only file in the sdist
+        # tests/unit/test_sdist_contents.py checks the same rule against the
+        # tracked tree with setuptools' own matcher, on every run of the unit
+        # suite. This checks the built artifact, which is the thing that is
+        # actually uploaded — a member list, not a pattern list. Both exist
+        # because docs/.claude/settings.local.json shipped to PyPI for
+        # releases while MANIFEST.in said, at the top, that it would not.
+        run: |
+          leaked=$(tar tzf dist/*.tar.gz \
+            | grep -E '(^|/)(\.claude/|node_modules/|package\.json$|package-lock\.json$)' || true)
+          if [ -n "$leaked" ]; then
+            echo "dev-only files in the sdist:" >&2
+            echo "$leaked" >&2
+            exit 1
+          fi
       - name: twine check (README renders on PyPI)
         run: twine check --strict dist/*
       - name: check-wheel-contents (no empty/stray wheel)
