@@ -907,7 +907,16 @@ jobs:
         # importorskip themselves, exactly as on the main matrix.
         run: |
           python -m venv .venv
-          .venv/bin/pip -q install pytest pytest-cov coverage hypothesis
+          # setuptools is a TEST dependency here, not a build one: `pip install
+          # -e .` resolves the backend in an isolated build env, so nothing it
+          # does puts setuptools in .venv, and a modern `venv` seeds pip alone.
+          # tests/unit/test_sdist_contents.py runs setuptools' own MANIFEST
+          # matcher (`setuptools._distutils.filelist`) rather than building an
+          # sdist over the network, so without this the leg is red on 17
+          # ModuleNotFoundErrors and a real no-GIL regression would not change
+          # its colour. tests/unit/test_canary_deps.py keeps this list in step
+          # with what the suite imports unguarded.
+          .venv/bin/pip -q install pytest pytest-cov coverage hypothesis setuptools
           .venv/bin/pip -q install -e .
           .venv/bin/pytest tests/unit tests/functional -q
 
