@@ -10,8 +10,8 @@ like "boost's MCP server is broken" rather than "the flag order is wrong".
 
 So these assertions pin the two grammars token-for-token, and specifically pin
 the three places they diverge: where the server name sits relative to the
-``-e`` flags, whether a ``--`` separator appears, and whether the unregister
-side needs an explicit scope. A change that "looks equivalent" to one of them
+``-e`` flags, which side of the command the ``--`` separator goes, and
+whether the unregister side needs an explicit scope. A change that "looks equivalent" to one of them
 is a regression.
 
 Which CLI versions those argvs were last checked against, and how to repeat the
@@ -105,8 +105,9 @@ class TestRegisterArgvGemini:
         # Claude's placement is rejected outright by yargs ("Not enough
         # non-option arguments: got 1, need at least 2"), and omitting it
         # lets `mcp add`'s own ten flags eat a matching arg out of the
-        # server's tail — measured on 0.61.0, `-e K=v` in a tail vanishes
-        # into gemini's variadic `--env`.
+        # server's tail — measured on 0.61.0, `-e K=v` in a tail is claimed
+        # by gemini's own `--env` (`nargs: 1`) and relocated into the entry's
+        # `env` map, and the bare `-e NAME` form vanishes outright.
         argv = mcphost.register_argv(mcphost.GEMINI, SHIM)
         assert argv[argv.index("--") - 1] == SHIM
 
@@ -140,10 +141,12 @@ class TestRegisterArgvGemini:
 class TestRegisterArgvAgy:
     """`agy mcp add [flags] <name> <commandOrUrl> [args...]`.
 
-    Both of agy's own rules bite here, and each one fails quietly if broken:
-    a flag placed after the name is rejected outright, and without `--` before
-    the command, `--stdio` is eaten as an agy flag — boost would be registered
-    with a command it never receives its own argument for.
+    One of agy's own rules bites here: a flag placed after the name is
+    rejected outright. The `--` is agy's documented separator and boost emits
+    it, but measured on 1.1.22 it is inert — agy never claims an argument that
+    *follows* the command, and rejects a dash-leading command with or without
+    it. The argv below is still the one to pin; only the reason it carries a
+    separator is weaker than this docstring once claimed.
 
     There is also no scope: agy keeps one global file at
     `~/.gemini/config/mcp_config.json` (inherited from Gemini CLI — there is no

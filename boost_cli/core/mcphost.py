@@ -307,10 +307,13 @@ def add_argv(host: str, name: str, command: str, tail: list[str], *,
         # -s/--scope, -t/--transport/--type, -e/--env, -H/--header, --timeout,
         # --trust, --description, --include-tools, --exclude-tools. A skill
         # declaring the canonical GitHub server — `docker run -i --rm -e
-        # GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/…` — had its `-e` pair eaten by
-        # gemini's own variadic `--env` and the container launched without the
-        # token, exit 0, no warning. `-t http` is worse: the entry is rewritten
-        # as {"url": "npx", "type": "http"}. Measured on Gemini CLI 0.61.0.
+        # GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/…` — had its `-e` pair claimed
+        # by gemini's own `--env` (`nargs: 1`, so it takes the name as its one
+        # value) and the container launched without the token, exit 0, no
+        # warning. The `-e KEY=value` spelling is not dropped but *relocated*:
+        # it lands in gemini's own `env` map, out of the args docker reads, so
+        # the container is just as tokenless. `-t http` is worse: the entry is
+        # rewritten as {"url": "npx", "type": "http"}. Measured on 0.61.0.
         #
         # Unconditional, including for an empty tail: `add x npx --` is
         # accepted and stores `args: []`.

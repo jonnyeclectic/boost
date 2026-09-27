@@ -612,16 +612,20 @@ nothing. Consequences for code you write:
   Claude. Claude and
   Gemini disagree on name position, the `--` separator, and whether unregister
   needs an explicit scope — all three verified against the real CLIs and pinned
-  by `tests/unit/test_mcphost.py`. **Every host needs the separator, and Gemini
-  is the one that takes it *after* the command.** boost emitted none for Gemini
-  at all, on the theory that its trailing variadic would pass a `--` through as
-  a literal argument; against the real CLI 0.61.0 it does not, and
+  by `tests/unit/test_mcphost.py`. **boost emits the separator for all three,
+  and Gemini is the one that takes it *after* the command.** boost emitted none
+  for Gemini at all, on the theory that its trailing variadic would pass a `--`
+  through as a literal argument; against the real CLI 0.61.0 it does not, and
   `unknown-options-as-args` rescues only options gemini does *not* know —
-  `gemini mcp add` knows ten. So the canonical GitHub spec's
-  `-e GITHUB_PERSONAL_ACCESS_TOKEN=…` was eaten as gemini's own `-e` and
-  dropped from the stored entry, exit 0, and a `-t http` in a spec's args
-  rewrote the entry as `{"url": "npx", "type": "http"}`. Emit it
-  unconditionally: `add x npx --` is accepted and stores `args: []`. Don't "simplify" them into one shape —
+  `gemini mcp add` knows ten. So the canonical GitHub spec's bare
+  `-e GITHUB_PERSONAL_ACCESS_TOKEN` was claimed by gemini's own `--env`
+  (`nargs: 1`, taking the name as its one value) and vanished, exit 0. The
+  `-e KEY=value` spelling is *relocated* rather than dropped — into gemini's
+  own `env` map, out of the args docker reads — so the container is equally
+  tokenless; say relocated, not dropped, when reading a real entry. A `-t http`
+  in a spec's args rewrites the entry as `{"url": "npx", "type": "http"}`. Emit
+  the separator unconditionally: `add x npx --` is accepted and stores
+  `args: []`. Don't "simplify" them into one shape —
   **one function, three branches**, which is what `mcphost.add_argv` is. It is
   the only copy of the `mcp add` grammar, and it is the only copy because
   `mcpdecl.register_argv` (the install path, registering a server a *skill*

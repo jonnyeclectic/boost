@@ -2817,18 +2817,22 @@ class TestMcpAwareSkills:
         # each written in that CLI's own grammar: claude takes
         # `add <name> … -- <command>`, gemini `add [options] <name> <command>
         # -- <args>` — same separator, opposite side of the command.
-        self._fake_which(monkeypatch, "claude", "gemini")
+        self._fake_which(monkeypatch, "claude", "gemini", "agy")
         calls = self._capture_run(monkeypatch)
         d = _mcp_skill_dir(
             tmp_path, decl="github",
             sidecar={"mcpServers": {"github": {"command": "npx",
                                                "args": ["-y", "srv"]}}})
         r = boost("import", d)
+        # agy is in the list because the argv it is *executed* with is the one
+        # that was wrong: before the shared builder it inherited Claude's
+        # shape, and the unit layer is the only other place it is pinned.
         assert calls == [
             ["claude", "mcp", "add", "github", "--scope", "user",
              "--", "npx", "-y", "srv"],
             ["gemini", "mcp", "add", "--scope", "user",
-             "github", "npx", "--", "-y", "srv"]]
+             "github", "npx", "--", "-y", "srv"],
+            ["agy", "mcp", "add", "github", "--", "npx", "-y", "srv"]]
         assert "registered MCP server github with Claude Code" in r.out
         assert "registered MCP server github with Gemini CLI" in r.out
 
@@ -2859,6 +2863,11 @@ class TestMcpAwareSkills:
         # non-TTY stdin makes confirm() return its default, which is False here
         assert "skipped — run these yourself when you're ready:" in r.out
         assert "claude mcp add github --scope user -- npx" in r.out
+        # agy is not on PATH, so it is not in `targets` and must not be
+        # printed: the decline path prints what a yes would have *run*, and a
+        # yes would not have run agy. Without this, `targets` and `hosts()`
+        # are indistinguishable in every test that covers the loop.
+        assert "agy mcp add" not in r.out
         assert "mcp-skill" in _lock()
 
     def test_declining_prints_a_line_for_every_host_the_yes_would_have_hit(
@@ -2891,7 +2900,12 @@ class TestMcpAwareSkills:
         assert "`claude` CLI not found" in r.out
         assert "claude mcp add github --scope user -- npx" in r.out
         assert "`gemini` CLI not found" in r.out
-        assert "gemini mcp add --scope user github npx" in r.out
+        # The whole line, not a prefix: this spec has an empty tail, which is
+        # the one case with no other coverage, and a prefix assertion passed
+        # just as happily before gemini got its separator at all.
+        assert "gemini mcp add --scope user github npx --" in r.out
+        assert "`agy` CLI not found" in r.out
+        assert "agy mcp add github -- npx" in r.out
         assert "mcp-skill" in _lock()          # still installed
 
     def test_failed_registration_is_not_fatal(self, boost, sandbox, tmp_path,

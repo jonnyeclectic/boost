@@ -1782,10 +1782,11 @@ class TestMcp:
     # grammars disagree on almost every detail: Claude wants
     # `add <name> [options] -- <command>` (its `-e` is variadic, so a name
     # placed after it is swallowed as another env var); Gemini wants
-    # `add [options] <name> <commandOrUrl> [args...]` with no `--` (which its
-    # trailing variadic would capture and hand to boost as a literal argument);
-    # agy wants flags before the name, a `--` before the command, and has no
-    # scope flag at all (one global file).
+    # `add [options] <name> <commandOrUrl> -- [args...]` — same separator, the
+    # other side of the command, and not optional, because its own ten flags
+    # claim a matching arg out of an unguarded tail; agy wants flags before
+    # the name, carries the same `--` before the command, and has no scope
+    # flag at all (one global file).
     # Every test below captures the argv the fake CLI receives — an argv that
     # is merely plausible fails silently, on someone else's machine.
 
@@ -1833,8 +1834,10 @@ class TestMcp:
 
     def _agy_add(self):
         # agy wants `add [flags] <name> [args...]`: flags must precede the
-        # name, and `--` must precede a command whose own args start with `-`,
-        # or `--stdio` is eaten as an agy flag. No scope flag — one global file.
+        # name. The `--` is agy's documented separator; measured on 1.1.22 it
+        # is inert here — agy claims nothing after the command — but it is
+        # emitted because agy's own help says to. No scope flag — one global
+        # file.
         return ["agy", "mcp", "add",
                 "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
                 "-e", "no_proxy=*",

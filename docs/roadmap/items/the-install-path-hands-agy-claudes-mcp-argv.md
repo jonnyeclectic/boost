@@ -46,11 +46,15 @@ Gemini's, the host the old copy had "mirrored" correctly. boost emitted no <code
 gemini at all, on the belief that its trailing variadic would pass the separator through as a
 literal argument. Measured against the real Gemini CLI 0.61.0: it does not.
 <code>unknown-options-as-args</code> rescues only options gemini does <i>not</i> know, and
-<code>gemini mcp add</code> knows ten of them, so the canonical GitHub server spec
-(<code>-e GITHUB_PERSONAL_ACCESS_TOKEN=…</code>) had its <code>-e</code> eaten as gemini's own and
-the variable silently dropped from the stored entry — <b>exit 0, "server added"</b>, and a server
-that cannot authenticate. A <code>-t http</code> in a spec's args is worse: the entry is rewritten
-as <code>{"url": "npx", "type": "http"}</code>. The separator goes <i>after</i> the command for
+<code>gemini mcp add</code> knows ten of them, so the canonical GitHub server spec — which ships
+the bare <code>docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/…</code> — had its
+<code>-e</code> claimed by gemini's own <code>--env</code> (<code>nargs: 1</code>, taking the
+variable's name as its one value) and dropped from the stored entry &mdash; <b>exit 0, "server
+added"</b>, and a container launched with no token. The <code>-e KEY=value</code> spelling is not
+dropped but <i>relocated</i>, into gemini's own <code>env</code> map and out of the args docker
+reads, which is the same outcome by a different route and the one to expect when reading a real
+entry. A <code>-t http</code> in a spec's args is worse: the entry is rewritten as
+<code>{"url": "npx", "type": "http"}</code>. The separator goes <i>after</i> the command for
 gemini — the one host where it does — and it is emitted unconditionally, because
 <code>add x npx --</code> is accepted and stores <code>args: []</code>.
 <br><br>
