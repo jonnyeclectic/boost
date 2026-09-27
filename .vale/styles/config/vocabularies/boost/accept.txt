@@ -54,9 +54,11 @@ else's
 env
 eval
 evals
+fallthrough
 freemium
 frontmatter
 fuzzer
+gemini
 GEO
 GIF
 gitignored
@@ -177,8 +179,8 @@ typosquatted
 unkilled
 unlinking
 unpatched
-unregister
 unreferenced
+unregister
 unremediated
 unstaged
 untap
@@ -188,6 +190,7 @@ upserts
 uv
 Vaadin
 Valgrind
+variadic
 vendored
 vendoring
 venv
@@ -200,6 +203,7 @@ WooCommerce
 wordmark
 worktree
 worktrees
+yargs
 Zapier
 zizmor
 zsh
