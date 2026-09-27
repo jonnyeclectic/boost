@@ -609,11 +609,11 @@ nothing. Consequences for code you write:
   Gemini disagree on name position, the `--` separator, and whether unregister
   needs an explicit scope — all three verified against the real CLIs and pinned
   by `tests/unit/test_mcphost.py`. Don't "simplify" them into one shape. The two
-  `remove` argvs now *coincide* — both carry `--scope user` — and that is a
-  deliberate convergence, not a leftover: Gemini needs the flag or it no-ops
-  against a user-scope entry, and Claude, which needs none, is given one so the
-  argv cannot reach `<cwd>/.mcp.json`, the one scope outside every `$HOME` and
-  therefore the one `mcphost.escapes_home` cannot vouch for.
+  `remove` calls now agree — both carry `--scope user` — and they agree on
+  purpose, rather than by neglect: Gemini needs the flag or its removal is a
+  no-op against a user-scope entry, and Claude, which needs none, is handed one
+  so the argv cannot reach `<cwd>/.mcp.json`, the one scope outside every
+  `$HOME` and so the one `mcphost.escapes_home` cannot judge.
 - **`core/hookhost.py` is the same idea for hooks, and two hosts have them.**
   `boost hooks` writes Claude Code's `~/.claude/settings.json` (the default,
   unchanged) or, behind `--host gemini`, the `~/.gemini/settings.json` that
