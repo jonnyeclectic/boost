@@ -14,3 +14,10 @@ pytest
 pytest-cov
 coverage
 hypothesis
+# tests/unit/test_sdist_contents.py runs setuptools' own MANIFEST.in matcher
+# (`setuptools._distutils.filelist.FileList`) rather than reimplementing it.
+# `python -m venv` stopped seeding setuptools in 3.12 and the `tests` job does
+# no editable install, so it has to be declared here: locally `make venv` also
+# installs release-tools.txt, which pins it, and the test passed on every
+# developer machine while every leg of the CI matrix raised ModuleNotFoundError.
+setuptools
