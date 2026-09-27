@@ -34,9 +34,22 @@ skew tolerance was the other option and is not available — <code>backing_off(n
 False</code> is pinned deliberately, because honouring a future-dated record holds the model back for
 however far ahead the clock is.
 <br><br>
-Four tests, two of which fail against the old module: the record carries its own clock, a marker
+Five tests, three of which fail against the old module: the record carries its own clock, a marker
 whose mtime runs an hour ahead still holds back, a legacy marker with no <code>at</code> still dates
-from its file, and an <code>at</code> that is not a number falls back to the mtime — parametrised
+from its file, one whose mtime runs ahead still holds back, and an <code>at</code> that is not a
+number falls back to the mtime — parametrised
 over <code>"yesterday"</code>, <code>None</code>, <code>True</code> and <code>nan</code>, because in
 Python a bool <i>is</i> an int and every comparison against <code>nan</code> is False, which would
 read the half-open window as expired and re-fetch on every search.
+<br><br>
+<b>The first fix was half of one, and the same Windows leg said so.</b> Recording <code>at</code>
+repairs every marker written from then on and nothing already on disk — which is the only case the
+mtime fallback exists for, so the bug simply moved into it.
+<code>test_a_legacy_marker_falls_back_to_its_mtime</code> then failed on
+<code>tests (windows-latest, 3.12)</code> alone, with <code>assert False is True</code> out of
+<code>backing_off()</code>: the fallback was still handing one clock's number to the other's
+comparison. The fallback is now <b>clamped to now</b> — a proxy for "when this was written" that
+reads later than now means now — while a recorded <code>at</code> is never clamped, because that one
+does come from <code>time.time()</code> and a future value there really is a clock set back. Writing
+the fix from the failure rather than from the prediction is the difference: the prediction was that
+recording the field closed the hole, and it closed three quarters of it.

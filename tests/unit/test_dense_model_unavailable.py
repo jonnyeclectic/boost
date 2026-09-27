@@ -297,10 +297,31 @@ class TestBackOffRules:
         _record_on_disk()
         assert "at" not in json.loads(
             _marker().read_text(encoding="utf-8"))
+        # Back-date by a second first, so the fallback is unambiguously in the
+        # past and the clamp below it is a no-op. A just-written mtime is not:
+        # on Windows it reads microseconds *ahead* of `time.time()`, which is
+        # the case the next test covers.
+        _age_marker(1)
         assert localembed.last_failure()["at"] == _marker().stat().st_mtime
         assert localembed.backing_off() is True
         _age_marker(localembed.RETRY_AFTER + 5)
         assert localembed.backing_off() is False
+
+    def test_a_legacy_marker_whose_mtime_runs_ahead_still_holds_back(self):
+        """The same two-clock failure, in the one place recording `at` cannot
+        reach: a marker already on disk from before the field existed. Its
+        date is the filesystem's clock, `backing_off` judges it against
+        `time.time()`, and an age below zero is discarded as a clock set back
+        — so the 133 MB fetch is paid on every search. Found by the Windows
+        3.12 leg of CI, which failed the test above while every other leg
+        passed; forced here on any platform by moving the mtime an hour
+        ahead."""
+        _record_on_disk()
+        ahead = time.time() + 3600
+        os.utime(_marker(), (ahead, ahead))
+        localembed.reset()
+        assert localembed.last_failure()["at"] <= time.time()
+        assert localembed.backing_off() is True
 
     @pytest.mark.parametrize("at", ["yesterday", None, True, float("nan")])
     def test_an_at_that_is_not_a_number_falls_back_to_the_mtime(self, at):

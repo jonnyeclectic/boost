@@ -240,6 +240,13 @@ def last_failure() -> dict | None:
     dated in the future, the back-off is discarded as a clock set back, and
     every search pays the 133 MB fetch the record exists to stop. Measured by
     moving an mtime 16 ms ahead: ``backing_off()`` flips True -> False.
+
+    Recording ``at`` fixes that for every marker written from here on, and
+    fixes nothing for the ones already on disk — which is the whole reason
+    the fallback exists. So the fallback is **clamped to now**. Windows CI
+    proved the gap rather than argument did: with ``at`` recorded and the
+    fallback left alone, ``test_a_legacy_marker_falls_back_to_its_mtime``
+    failed on the 3.12 leg and passed everywhere else.
     """
     if _failure is not None:
         return dict(_failure)
@@ -258,7 +265,12 @@ def last_failure() -> dict | None:
         rec = {}
     at = rec.get("at")
     if not isinstance(at, (int, float)) or isinstance(at, bool) or at != at:
-        at = mtime
+        # The mtime is a *proxy* for when the record was written, read off a
+        # different clock from the one that judges it, so it is clamped to
+        # now: a proxy that reads later than now means now. A recorded `at`
+        # is never clamped — it comes from `time.time()`, so a future value
+        # there really is a clock set back and `backing_off` discards it.
+        at = min(mtime, time.time())
     return {"stage": str(rec.get("stage") or "fetch"),
             "error": str(rec.get("error") or ""), "at": float(at)}
 
