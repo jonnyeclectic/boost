@@ -273,7 +273,10 @@ class TestBackOffRules:
         rec = json.loads(localembed.failure_path().read_text(encoding="utf-8"))
         assert isinstance(rec.get("at"), (int, float))
         localembed.reset()
-        assert localembed.last_failure()["at"] == pytest.approx(rec["at"])
+        # json round-trips a float exactly, so this is an equality, not an
+        # approximation — `pytest.approx` defaults to rel=1e-6, which on
+        # epoch seconds is a tolerance of about half an hour.
+        assert localembed.last_failure()["at"] == rec["at"]
 
     def test_a_marker_whose_mtime_runs_ahead_still_holds_back(self):
         """The Windows-3.12 failure, forced: on that platform `time.time()`
@@ -294,8 +297,7 @@ class TestBackOffRules:
         _record_on_disk()
         assert "at" not in json.loads(
             _marker().read_text(encoding="utf-8"))
-        assert localembed.last_failure()["at"] == pytest.approx(
-            _marker().stat().st_mtime)
+        assert localembed.last_failure()["at"] == _marker().stat().st_mtime
         assert localembed.backing_off() is True
         _age_marker(localembed.RETRY_AFTER + 5)
         assert localembed.backing_off() is False
@@ -311,7 +313,7 @@ class TestBackOffRules:
         p.write_text(json.dumps({"stage": "fetch", "error": "x", "at": at}),
                      encoding="utf-8")
         rec = localembed.last_failure()
-        assert rec["at"] == pytest.approx(p.stat().st_mtime)
+        assert rec["at"] == p.stat().st_mtime
         assert localembed.backing_off() is True
 
     def test_forget_drops_both_copies(self):
