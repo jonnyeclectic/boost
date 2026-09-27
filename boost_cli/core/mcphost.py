@@ -43,12 +43,19 @@ load-bearing:
   ``add`` also sets ``populate--`` and a middleware that appends ``argv["--"]``
   to the server args, both already present in the v0.46.0 source this file
   first cited. The argv was right; only the reason for it was wrong.
-* **Unregister scope.** ``claude mcp remove`` finds the server in whichever
-  scope holds it, without being told. ``gemini mcp remove`` defaults to
-  ``--scope project`` and returns after logging "not found in project
-  settings" — exit status 0, user-scope entry untouched — so the scope flag is
-  mandatory on the way out, not just in. This is the one difference here with a
-  silent-failure mode, which is why it is pinned twice.
+* **Unregister scope.** ``gemini mcp remove`` defaults to ``--scope project``
+  and returns after logging "not found in project settings" — exit status 0,
+  user-scope entry untouched — so the scope flag is mandatory on the way out,
+  not just in. This is the one difference here with a silent-failure mode,
+  which is why it is pinned twice. ``claude mcp remove`` is the opposite and
+  needs no flag: "if not specified, removes from whichever scope it exists
+  in". boost passes ``--scope`` anyway, and that is a deliberate narrowing
+  rather than belt-and-braces — see the next paragraph. Its ``local`` and
+  ``user`` scopes both live in the configuration home, but ``project`` scope
+  is ``<cwd>/.mcp.json``, which no ``HOME`` contains, so a scope-less remove
+  can reach a committed file the guard below has not vouched for. boost only
+  ever *registers* at user scope, so removing at user scope is the symmetric
+  answer as well as the containable one.
 
 **Where each host writes, and why boost refuses rather than redirects.**
 A host CLI resolves its own configuration from the ambient environment, not
@@ -212,6 +219,28 @@ def user_config_path(host: str, env: Mapping[str, str], home: str) -> str:
     return os.path.join(config_home(host, env, home), *USER_CONFIG_REL[host])
 
 
+def escapes_home(host: str, env: Mapping[str, str], home,
+                 *, force: bool = False) -> str | None:
+    """The file ``host`` would write, when it is **outside** ``home``.
+
+    ``None`` means the write is contained (or ``force`` was asked for) and the
+    caller may shell out. This is the one function in this module that touches
+    the filesystem — :func:`scopes.contains` resolves both sides, which is what
+    makes it right on macOS, where a ``$HOME`` under ``/var/folders`` resolves
+    to ``/private/var/...`` and comparing one resolved path against one nominal
+    path never matches. It lives here rather than in the command layer anyway,
+    because a guard the mutation gate cannot see is a guard that can rot: the
+    gate runs ``tests/unit`` over ``boost_cli/core``, so a mutant flipping
+    ``force`` or dropping the containment test has to be killed by a test
+    rather than by a reviewer. Three call sites share it.
+    """
+    from . import scopes
+    cfg = user_config_path(host, env, str(home))
+    if force or scopes.contains(home, cfg):
+        return None
+    return cfg
+
+
 def _env_flags(env: dict[str, str] | None) -> list[str]:
     """``-e KEY=VALUE`` pairs, sorted so the argv is deterministic."""
     if not env:
@@ -261,7 +290,12 @@ def unregister_argv(host: str, *, scope: str = "user",
 
     Gemini gets an explicit ``--scope`` because its ``remove`` defaults to
     ``project`` and would otherwise no-op against a user-scope registration.
-    Claude's ``remove`` takes no scope flag.
+    Claude gets one for the opposite reason: without it, 2.1.283 "removes from
+    whichever scope it exists in", and one of those scopes is
+    ``<cwd>/.mcp.json`` — a committed file outside every ``HOME``, which
+    :func:`escapes_home` therefore cannot vouch for. Passing the scope makes
+    the argv match the file that was checked, and matches the register side,
+    which only ever writes user scope. agy has no scopes at all.
     """
     exe = cli(host)
     if host == GEMINI:
@@ -274,7 +308,7 @@ def unregister_argv(host: str, *, scope: str = "user",
         # the argv, and `agy mcp disable boost` is the documented off-switch
         # that keeps the entry.
         return [exe, "mcp", "remove", name]
-    return [exe, "mcp", "remove", name]
+    return [exe, "mcp", "remove", "--scope", scope, name]
 
 
 def argv(host: str, action: str, launcher: str = "", *,

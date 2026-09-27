@@ -87,3 +87,17 @@ def test_the_variable_does_not_hold_back_the_other_hosts(
     cap = capsys.readouterr()
     assert clis == [mcpdecl.register_argv("gh", SPEC, host="gemini")]
     assert "outside this $HOME" not in cap.out + cap.err
+
+
+def test_a_scope_this_guard_cannot_model_is_refused_loudly(sandbox):
+    """The guard models the *user-scope* file and nothing else.
+
+    A project registration writes ``<cwd>/.mcp.json``, which no ``$HOME``
+    contains, so judging it against the user-scope path would vouch for a
+    file nothing was going to write. ``_offer_mcp`` returns early for a
+    project install, and this raise is what keeps that an invariant rather
+    than a coincidence — the failure it prevents is silent.
+    """
+    from boost_cli.commands import pkg
+    with pytest.raises(ValueError, match="user-scope only"):
+        pkg._register_mcp_server("srv", {"command": "x"}, scope="project")

@@ -2068,7 +2068,7 @@ class TestMcp:
         assert journal.events(action="mcp")[0]["hosts"] == ""
 
         r = boost("mcp", "unregister")
-        assert "claude mcp remove boost" in r.out
+        assert "claude mcp remove --scope user boost" in r.out
         assert "gemini mcp remove --scope user boost" in r.out
         assert "agy mcp remove boost" in r.out
         assert journal.events(action="mcp")[0]["subject"] == "unregister"
@@ -2135,8 +2135,12 @@ class TestMcp:
         r = boost("mcp", "unregister")
         # `gemini mcp remove` defaults to --scope project and would report
         # "not found" while leaving the user-scope entry in place, so the
-        # scope flag is mandatory on the way out; claude's takes none.
-        assert calls == [["claude", "mcp", "remove", "boost"],
+        # scope flag is mandatory on the way out. Claude's needs none — it
+        # removes from whichever scope holds the entry — and gets one anyway,
+        # so the argv is held to the user-scope file the sandbox guard
+        # checked rather than reaching `<cwd>/.mcp.json`.
+        assert calls == [["claude", "mcp", "remove", "--scope", "user",
+                          "boost"],
                          ["gemini", "mcp", "remove", "--scope", "user",
                           "boost"]]
         assert ("unregistered boost as an MCP server for Claude Code "
@@ -2246,7 +2250,8 @@ class TestMcp:
         r = boost("mcp", "unregister", "--dry-run")
         assert calls == []
         assert ("Claude Code (installed): %s"
-                % " ".join(["claude", "mcp", "remove", "boost"])) in r.out
+                % " ".join(["claude", "mcp", "remove", "--scope", "user",
+                            "boost"])) in r.out
         assert "dry run — nothing was unregistered, nothing tapped" in r.out
 
     # ── the sandbox guard ────────────────────────────────────────────────
@@ -2394,6 +2399,45 @@ class TestMcp:
         r = boost("mcp", "register", "--host", "gemini", "--dry-run")
         assert ("writes %s" % (sandbox / ".gemini" / "settings.json")) in r.out
         assert "refused without --force" not in r.out
+
+    def test_dry_run_with_force_does_not_threaten_a_refusal(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        # A dry run's job is to predict the run it describes. With --force
+        # typed, that run writes the file, so the note would be a prediction
+        # of the opposite.
+        elsewhere = self._outside_home(monkeypatch, tmp_path)
+        self._writing_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "--host", "claude", "--dry-run",
+                  "--force")
+        assert ("writes %s" % (elsewhere / ".claude.json")) in r.out
+        assert "refused without --force" not in r.out
+
+    def test_force_removes_from_the_scope_the_guard_checked(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        # Two things at once, because they are one property: --force works on
+        # the way out as well as in, and what it lets through is a removal
+        # from *user* scope. A scope-less `claude mcp remove` deletes from
+        # whichever scope holds the entry, including `<cwd>/.mcp.json` — a
+        # file no $HOME contains, so the guard could not have vouched for it.
+        self._outside_home(monkeypatch, tmp_path)
+        calls = self._writing_clis(monkeypatch, "claude")
+        r = boost("mcp", "unregister", "--force")
+        assert calls == [["claude", "mcp", "remove", "--scope", "user",
+                          "boost"]]
+        assert "unregistered boost as an MCP server for Claude Code" in r.out
+
+    def test_a_refused_host_and_a_failed_host_are_both_reported(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        # The two buckets are separate and the exit code is their union: a
+        # run reporting only one of them would exit 0 on the other.
+        elsewhere = self._outside_home(monkeypatch, tmp_path)
+        seen = self._clis_with_results(monkeypatch, {
+            "claude": (0, ""), "gemini": (1, "boom\n")})
+        r = boost("mcp", "register", "--no-seed", expect=1)
+        assert seen == ["gemini"]          # claude never ran
+        blob = r.out + r.err
+        assert str(elsewhere / ".claude.json") in blob
+        assert "boom" in blob
 
 
 

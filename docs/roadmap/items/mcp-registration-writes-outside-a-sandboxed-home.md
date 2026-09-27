@@ -54,11 +54,38 @@ fails <b>fourteen pre-existing <code>TestMcp</code> tests</b> while CI, which ex
 stays green. The <code>sandbox</code> fixture now clears it, beside the <code>CODEX_HOME</code>
 delenv that is there for exactly this reason.
 <br><br>
-Twenty-two tests, and the ablations are what they are worth. Neutering the two guards fails four —
-three on <code>boost mcp</code>, one on <code>boost install</code>'s MCP prompt, which is the
-second shell-out and would have read as covered by the first. The rest pin the parts easy to get
-wrong: that a config home <i>inside</i> <code>HOME</code> is not refused, that one refused host
-does not end the sweep of the others, that <code>--force</code> gets through, that
-<code>--dry-run</code> names the file either way, and that the absolute-path fixtures are built
-with <code>os.path</code> rather than a literal <code>/</code>, since
-<code>ntpath.isabs("/foo")</code> flipped to <code>False</code> in 3.13 and CI runs both.
+<b>Review found the guard was guarding the wrong file on the way out.</b>
+<code>claude mcp remove boost</code> takes no scope flag and does not need one — it removes the
+entry from <i>whichever</i> scope holds it, and project scope is <code>&lt;cwd&gt;/.mcp.json</code>,
+a file no <code>$HOME</code> contains. So a check that the user-scope file is inside
+<code>HOME</code> vouched for one file while the argv could reach another, and
+<code>boost mcp unregister</code> from a repo could delete a committed project registration the
+guard never looked at. Claude's <code>unregister_argv</code> now passes <code>--scope user</code>
+explicitly: the flag it does not need is how the argv is held to the file the guard checked.
+<br><br>
+The comparison itself moved into <code>core/mcphost.escapes_home</code>. It had been three lines in
+the command layer, which the required gate cannot mutate — <code>mutation_gate.py</code> targets
+<code>boost_cli/core</code> — so a mutant flipping <code>not force</code> or inverting the
+containment test would have been killed by nothing. It is the only function in that module that
+touches the filesystem, because <code>scopes.contains</code> resolves <b>both</b> sides: on macOS a
+tempdir <code>$HOME</code> under <code>/var/folders</code> resolves to <code>/private/var/…</code>,
+and a symlink <i>inside</i> <code>$HOME</code> that leads out is an escape a string prefix test
+would wave through. Both are pinned. So is the raise for a scope the guard cannot model: the
+install path threads <code>scope</code> from the install and now refuses anything but
+<code>user</code>, rather than measuring the user-scope path for a project write.
+<br><br>
+<b>Thirty-six tests, and the ablations are what they are worth.</b> Making
+<code>escapes_home</code> always answer "contained" — leaving its refusal for an unknown host
+intact, so the count is the containment test alone — fails <b>eight</b>: three unit, five
+functional, across <code>boost mcp</code> in both directions and <code>boost install</code>'s MCP
+prompt, which is the second shell-out and would have read as covered by the first. Dropping
+<code>--scope user</code> from Claude's removal fails <b>six</b>, two of them on the argv itself
+and four on what the command layer prints and runs. Dropping the fixture's
+<code>delenv</code> fails <b>fourteen pre-existing tests</b> on a machine that exports the variable.
+The rest pin the parts easy to get wrong: that a config home <i>inside</i> <code>HOME</code> is not
+refused, that one refused host does not end the sweep of the others, that a refused host and a
+failed host are both reported and the exit code is their union, that <code>--force</code> gets
+through in both directions, that <code>--dry-run</code> predicts the run it describes with and
+without it, and that the absolute-path fixtures are built with <code>os.path</code> rather than a
+literal <code>/</code>, since <code>ntpath.isabs("/foo")</code> flipped to <code>False</code> in
+3.13 and CI runs both.

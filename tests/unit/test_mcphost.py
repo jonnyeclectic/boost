@@ -191,9 +191,19 @@ class TestRegisterArgvOptions:
 
 
 class TestUnregisterArgv:
-    def test_claude_takes_no_scope(self):
+    def test_claude_is_narrowed_to_the_scope_the_guard_checked(self):
+        # `claude mcp remove` needs no scope — 2.1.283 "removes from whichever
+        # scope it exists in" — and that is exactly why boost passes one. One
+        # of those scopes is `<cwd>/.mcp.json`, a committed file no $HOME
+        # contains, so a scope-less remove reaches past `escapes_home`, which
+        # vouches for the user-scope file alone. Register only ever writes
+        # user scope; remove now matches it.
         assert mcphost.unregister_argv(mcphost.CLAUDE) == [
-            "claude", "mcp", "remove", "boost"]
+            "claude", "mcp", "remove", "--scope", "user", "boost"]
+
+    def test_claude_scope_is_threaded_through(self):
+        argv = mcphost.unregister_argv(mcphost.CLAUDE, scope="local")
+        assert argv[argv.index("--scope") + 1] == "local"
 
     def test_gemini_needs_an_explicit_scope(self):
         # `gemini mcp remove` defaults to --scope project: without this it
@@ -443,3 +453,89 @@ class TestConfigHome:
         home = self._abs("home", "sandbox")
         for host in mcphost.hosts():
             assert mcphost.user_config_path(host, {}, home).startswith(home)
+
+
+class TestEscapesHome:
+    """The containment half of the guard, where the mutation gate can see it.
+
+    :func:`mcphost.user_config_path` decides *which* file is at stake and is
+    pure; this decides whether boost may let a child CLI write it. It lives in
+    ``core`` for one reason: the required gate mutates ``boost_cli/core`` and
+    runs ``tests/unit``, so a mutant that drops ``force`` or inverts the
+    containment test is killed here rather than reviewed for.
+    """
+
+    def _elsewhere(self, tmp_path):
+        out = tmp_path / "real-config"
+        out.mkdir()
+        return out
+
+    def test_a_config_home_inside_home_is_contained(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        env = {"CLAUDE_CONFIG_DIR": str(home / ".claude-personal")}
+        assert mcphost.escapes_home(mcphost.CLAUDE, env, home) is None
+
+    def test_an_unset_variable_is_contained(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        assert mcphost.escapes_home(mcphost.CLAUDE, {}, home) is None
+
+    def test_an_escape_returns_the_file_that_would_be_written(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        elsewhere = self._elsewhere(tmp_path)
+        env = {"CLAUDE_CONFIG_DIR": str(elsewhere)}
+        assert mcphost.escapes_home(mcphost.CLAUDE, env, home) == \
+            str(elsewhere / ".claude.json")
+
+    def test_force_waves_the_escape_through(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        env = {"CLAUDE_CONFIG_DIR": str(self._elsewhere(tmp_path))}
+        assert mcphost.escapes_home(
+            mcphost.CLAUDE, env, home, force=True) is None
+
+    def test_force_does_not_invent_an_escape(self, tmp_path):
+        # `force` may only ever turn a refusal into a pass, never the reverse.
+        home = tmp_path / "home"
+        home.mkdir()
+        assert mcphost.escapes_home(
+            mcphost.CLAUDE, {}, home, force=True) is None
+
+    def test_a_link_inside_home_that_leads_out_is_an_escape(self, tmp_path):
+        # Why this is `scopes.contains` and not a string prefix test: the
+        # path is under $HOME and the write is not.
+        home = tmp_path / "home"
+        home.mkdir()
+        elsewhere = self._elsewhere(tmp_path)
+        link = home / "cfg"
+        link.symlink_to(elsewhere, target_is_directory=True)
+        env = {"CLAUDE_CONFIG_DIR": str(link)}
+        assert mcphost.escapes_home(mcphost.CLAUDE, env, home) is not None
+
+    def test_a_home_that_only_resolves_into_itself_still_matches(
+            self, tmp_path):
+        # macOS puts a tempdir $HOME under /var/folders, which resolves to
+        # /private/var/... — resolving one side only would refuse every write.
+        home = tmp_path / "home"
+        home.mkdir()
+        alias = tmp_path / "home-alias"
+        alias.symlink_to(home, target_is_directory=True)
+        env = {"CLAUDE_CONFIG_DIR": str(home / ".claude-personal")}
+        assert mcphost.escapes_home(mcphost.CLAUDE, env, alias) is None
+
+    def test_the_hosts_without_a_variable_are_never_an_escape(self, tmp_path):
+        # Anchored at $HOME by construction: a Claude-only variable must not
+        # hold back a write that was always landing in the sandbox.
+        home = tmp_path / "home"
+        home.mkdir()
+        env = {"CLAUDE_CONFIG_DIR": str(self._elsewhere(tmp_path))}
+        for host in (mcphost.GEMINI, mcphost.AGY):
+            assert mcphost.escapes_home(host, env, home) is None
+
+    def test_an_unknown_host_raises_rather_than_passing(self, tmp_path):
+        # Fail loudly: a new host silently answering "contained" is the one
+        # wrong answer this function must never give.
+        with pytest.raises(KeyError):
+            mcphost.escapes_home("copilot", {}, tmp_path)

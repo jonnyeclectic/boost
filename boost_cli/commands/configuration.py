@@ -39,7 +39,6 @@ from ..core import (
     rag,
     registry,
     rules,
-    scopes,
     selfupdate,
     serve,
     store,
@@ -1979,9 +1978,8 @@ def _run_mcp_host(host: str, action: str, cmd, *,
     # setting CLAUDE_CONFIG_DIR for the child: redirecting would re-point a
     # user who set it deliberately, and report success for a file their CLI
     # never reads. `--force` is the way through.
-    boost_home = paths.home()
-    cfg = mcphost.user_config_path(host, os.environ, str(boost_home))
-    if not force and not scopes.contains(boost_home, cfg):
+    cfg = mcphost.escapes_home(host, os.environ, paths.home(), force=force)
+    if cfg:
         return "refused", cfg
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -2188,8 +2186,10 @@ def cmd_mcp(argv) -> int:
             # Which file that argv lands in is the one thing a dry run could
             # not tell you, and it is the thing the sandbox guard turns on.
             cfg = mcphost.user_config_path(host, os.environ, str(paths.home()))
-            note = "" if scopes.contains(paths.home(), cfg) \
-                else "  — outside this $HOME, refused without --force"
+            escape = mcphost.escapes_home(host, os.environ, paths.home(),
+                                          force=args.force)
+            note = "  — outside this $HOME, refused without --force" \
+                if escape else ""
             out.dim("  writes %s%s" % (cfg, note))
         out.dim("  dry run — nothing was %sed, nothing tapped" % verb)
         return 0
