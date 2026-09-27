@@ -301,12 +301,13 @@ def unregister_argv(host: str, *, scope: str = "user",
     if host == GEMINI:
         return [exe, "mcp", "remove", "--scope", scope, name]
     if host == AGY:
-        # No scope flag: one global file. NOTE — `add`, `enable` and `disable`
-        # are the subcommands verified from agy's own help; `remove` mirrors
-        # Claude's and is the only shape that matches this command's meaning.
-        # If a release turns out not to have it, the failure is loud and names
-        # the argv, and `agy mcp disable boost` is the documented off-switch
-        # that keeps the entry.
+        # No scope flag: one global file. `agy mcp remove --help` on 1.1.22
+        # gives `agy mcp remove <name> [flags]` with only `-h`/`--help` — so
+        # the name is positional and there is no scope to pass, which is this
+        # argv. (This note used to say `remove` was inferred from Claude's
+        # shape because only `add`, `enable` and `disable` had been read off
+        # agy's help. It has now been read: the guess was right, and it is no
+        # longer a guess.)
         return [exe, "mcp", "remove", name]
     return [exe, "mcp", "remove", "--scope", scope, name]
 

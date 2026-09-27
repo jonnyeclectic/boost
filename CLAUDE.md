@@ -513,9 +513,11 @@ nothing. Consequences for code you write:
   would cost a "Skill conflict detected" line per session — the exact failure
   `links_skills: false` exists to prevent. Its rules arrive through the
   `gemini` agent, which already writes the `~/.gemini/GEMINI.md` Antigravity
-  reads; its workflow and MCP surfaces are **not** wired up, because their
-  formats have not been verified against the real CLI, and this file does not
-  record guesses (see `hookhost.py` for the standard: name the sources).
+  reads; its **workflow** surface is not wired up, because that format has not
+  been verified against the real CLI, and this file does not record guesses
+  (see `hookhost.py` for the standard: name the sources). Its MCP surface is:
+  `core/mcphost.py` carries agy as the third host, and every argv there was
+  read off `agy mcp <subcommand> --help` rather than inferred.
 
 - **Codex is the second native-store agent, and the ChatGPT desktop app is the
   same program.** `/Applications/ChatGPT.app` has bundle id `com.openai.codex`,

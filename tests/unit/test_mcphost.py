@@ -363,10 +363,11 @@ class TestClassifyResult:
 class TestConfigHome:
     """Which file each host would write, and how ``HOME`` decides.
 
-    The guard these back is in the command layer, because comparing two paths
-    means resolving them; the *decision* of which path is at stake is here, so
-    every branch is reachable without an agent CLI on PATH. The failure they
-    describe is real and was observed: `boost mcp register` under a sandboxed
+    These decide *which* file is at stake; :class:`TestEscapesHome` below
+    covers the guard that compares it against boost's own ``HOME``. Both live
+    in ``core`` — the guard moved out of the command layer so the mutation
+    gate can see it — and every branch here is reachable without an agent CLI
+    on PATH. The failure they describe is real and was observed: `boost mcp register` under a sandboxed
     ``HOME`` wrote into a live ``~/.claude-personal/.claude.json``, because the
     child CLI reads ``CLAUDE_CONFIG_DIR`` from the ambient environment and has
     never heard of boost's ``HOME``.
