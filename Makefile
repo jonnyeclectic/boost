@@ -1,5 +1,5 @@
 # boost — test & quality gates
-# `make check` is the full production gate: unit + functional with >=80%
+# `make check` is the full production gate: unit + functional with >=90%
 # coverage, the shell-level smoke suite, >=80% mutation strength, and the
 # Tier 1 retrieval-quality gate (golden-set recall@k).
 

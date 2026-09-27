@@ -55,11 +55,22 @@ jobs:
       # pins the pattern to build_roadmap.ITEMS_URL.
       - name: lychee (URLs + local paths)
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        # `--max-concurrency` is the one argument here that is not about
+        # correctness. The boards carry 467 same-repo `blob/main` write-up
+        # links, and on a push they are fetched for real (the remap below is
+        # deliberately pull-request-only, so that main is where the PUBLISHED
+        # link is proved to work). At lychee's default of 128 that is 467
+        # requests to one host in a burst, and GitHub answers some of them
+        # `503 Service Unavailable`: three consecutive attempts on 000265e6
+        # failed on 2, 1 and 4 URLs, three DISJOINT sets, and all seven return
+        # 200 when fetched one at a time. 503 is deliberately not in
+        # `--accept` — accepting it would hide a real outage — so the burst is
+        # what has to go.
         with:
           args: >-
             --cache --max-cache-age 1d --no-progress
             --accept 200,206,403,429
-            --max-retries 3
+            --max-retries 3 --max-concurrency 8 --retry-wait-time 5
             ${{ github.event_name == 'pull_request' && format('--remap ''^https://github\.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/ file://{0}/docs/roadmap/items/''', github.workspace) || '' }}
             README.md docs/*.html
           fail: true

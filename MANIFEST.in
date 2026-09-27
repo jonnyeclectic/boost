@@ -8,12 +8,33 @@ recursive-include boost_langchain *.py py.typed
 prune mutants
 prune dist
 prune .idea
+# `prune` and `exclude` are ROOT-ANCHORED, so a second copy of a dev-only
+# file deeper in the tree ships anyway: docs/.claude/settings.local.json and
+# tests/visual/package.json both reached PyPI under the paragraph above.
+#
+# A MANIFEST.in glob never crosses a separator — `**` is not recursive here,
+# setuptools' `glob_to_re` rewrites every `*` to `[^/]*` — so no single line
+# can be depth-agnostic on both sides of the directory name. `prune <dir>` is
+# already recursive *below* the directory it names, so the ladder goes on the
+# PREFIX and every layout inside is covered whatever its depth: a plugin's
+# `.claude/plugins/<pack>/commands/<x>.md` is four levels down, and a suffix
+# ladder (`global-exclude .claude/* .claude/*/* .claude/*/*/*`) let it through.
+# Four rungs, for a `.claude/` up to three directories deep; the two that
+# exist are at depth 0 and 1. The patterns are the rule and the tar member
+# list is the fact — tests/unit/test_sdist_contents.py checks both.
 prune .claude
+prune */.claude
+prune */*/.claude
+prune */*/*/.claude
 prune .github
 exclude .coverage
 # The npm lint/test toolchain (stylelint, eslint, puppeteer-core, axe-core). CI
-# only; nothing in the shipped runtime touches node.
-exclude package.json package-lock.json
+# only; nothing in the shipped runtime touches node. `global-exclude` matches
+# the whole relative path with `re.search`, so one line here covers every depth
+# — and, having no left anchor, it would also drop a file named
+# `<anything>package.json`. Nothing tracked is; the positive tests in
+# tests/unit/test_sdist_contents.py are what would catch it if one appeared.
+global-exclude package.json package-lock.json
 global-exclude __pycache__ *.pyc *.pyo .DS_Store
 # The package README is repo documentation, not wheel payload — the wheel's
 # long_description is the root README.
