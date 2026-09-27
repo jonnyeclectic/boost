@@ -153,6 +153,48 @@ class TestRegisterArgvAgy:
             "agy", "mcp", "add", "boost", "--", SHIM, "mcp", "--stdio"]
 
 
+class TestAddArgv:
+    """`add_argv` is the one copy of the `mcp add` grammar.
+
+    It exists because there were two: `register_argv` here and
+    `mcpdecl.register_argv` on the install path, which "mirrored" this one for
+    Claude and Gemini and had no agy branch at all — so agy, the single host
+    whose CLI rejects Claude's shape, was handed exactly that. The parity is
+    asserted across modules in `test_mcpdecl.py`; what is pinned here is the
+    generalisation (an arbitrary command, not just boost's own) and the
+    refusal.
+    """
+
+    def test_an_arbitrary_command_and_tail(self):
+        assert mcphost.add_argv(mcphost.CLAUDE, "gh", "npx", ["-y", "pkg"],
+                                env={"A": "1"}) == [
+            "claude", "mcp", "add", "gh", "--scope", "user", "-e", "A=1",
+            "--", "npx", "-y", "pkg"]
+
+    def test_env_defaults_to_none_rather_than_boosts_own(self):
+        # `register_argv` substitutes LAUNCH_ENV; the generic builder must not,
+        # or every declared server would inherit boost's fork-safety vars.
+        assert "-e" not in mcphost.add_argv(
+            mcphost.CLAUDE, "gh", "npx", [])
+
+    def test_an_empty_tail_ends_at_the_command(self):
+        assert mcphost.add_argv(mcphost.GEMINI, "gh", "npx", [])[-1] == "npx"
+
+    def test_a_host_in_the_table_with_no_grammar_raises(self, monkeypatch):
+        # The regression this function exists to prevent: a new HOSTS row used
+        # to inherit Claude's argv silently. A fourth host must be given a
+        # branch, and until it is, boost says so instead of shipping the wrong
+        # command line. ValueError, not KeyError — the host *is* known.
+        monkeypatch.setitem(mcphost.HOSTS, "codex",
+                            {"cli": "codex", "label": "Codex CLI"})
+        with pytest.raises(ValueError, match="grammar"):
+            mcphost.add_argv("codex", "gh", "npx", [])
+
+    def test_an_unknown_host_still_raises_keyerror(self):
+        with pytest.raises(KeyError):
+            mcphost.add_argv("nope", "gh", "npx", [])
+
+
 class TestRegisterArgvOptions:
     def test_scope_is_threaded_through_every_scoped_host(self):
         # agy is excluded by has_scope: it keeps one global file, so there is

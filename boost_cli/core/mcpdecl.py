@@ -156,30 +156,26 @@ def register_argv(name: str, spec: dict, *, scope: str = "user",
                   host: str = mcphost.CLAUDE) -> list[str]:
     """The ``<host> mcp add`` argv that registers one declared server.
 
-    Mirrors :mod:`boost_cli.core.mcphost`'s per-host grammar exactly, because
-    the two build the same command for different servers and a divergence would
-    only show up on someone else's machine. For Claude the server **name**
-    precedes every ``-e`` flag (its ``-e`` is variadic, so a name after it is
-    swallowed as another env var) and a bare ``--`` separates boost's flags from
-    the server's own command; for Gemini the flags precede the name and there is
-    no ``--``, which would be passed through as a literal argument.
+    The per-host grammar itself is :func:`mcphost.add_argv`, and this function
+    only turns a *declared spec* into that call's arguments. It used to build
+    the argv itself, "mirroring" mcphost — which held for Claude and Gemini and
+    not for agy, the one host whose grammar rejects Claude's shape and the one
+    this function had no branch for. Sharing the builder is what makes the
+    mirror a fact rather than a comment.
+
+    A non-dict ``env`` and a non-list ``args`` are *ignored* rather than
+    rejected, because a malformed sidecar should still register the server it
+    names; ``command`` is the one required key and a spec without it never
+    reaches here (see :func:`registrable`).
 
     ``host`` defaults to Claude Code so existing callers are unchanged.
     """
-    exe = mcphost.cli(host)
     env = spec.get("env")
-    flags: list[str] = []
-    if isinstance(env, dict):
-        for key in sorted(env):
-            flags += ["-e", "%s=%s" % (key, env[key])]
-    command = str(spec["command"])
     args = spec.get("args")
     tail = [str(a) for a in args] if isinstance(args, list) else []
-    if host == mcphost.GEMINI:
-        return [exe, "mcp", "add", "--scope", scope, *flags,
-                name, command, *tail]
-    return [exe, "mcp", "add", name, "--scope", scope, *flags,
-            "--", command, *tail]
+    return mcphost.add_argv(host, name, str(spec["command"]), tail,
+                            scope=scope,
+                            env=env if isinstance(env, dict) else None)
 
 
 def merge_into(existing: dict | None, rows, skill: str) -> tuple[dict, list[str]]:

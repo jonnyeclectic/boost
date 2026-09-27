@@ -251,6 +251,52 @@ def _env_flags(env: dict[str, str] | None) -> list[str]:
     return out
 
 
+def add_argv(host: str, name: str, command: str, tail: list[str], *,
+             scope: str = "user",
+             env: dict[str, str] | None = None) -> list[str]:
+    """``<host> mcp add`` for *any* server — the one copy of that grammar.
+
+    ``command`` plus ``tail`` is the server's own command line. There is one
+    copy because there are two callers: :func:`register_argv` registers boost
+    itself, and :func:`boost_cli.core.mcpdecl.register_argv` registers a server
+    a skill declares. Those built the argv separately, and the second grew a
+    Gemini branch and a Claude fallthrough while agy — the one host whose
+    grammar rejects Claude's shape — fell through to Claude's, so every
+    ``boost install`` of an MCP-declaring skill on a machine with agy on PATH
+    failed. A shared builder makes that divergence unrepresentable rather than
+    merely fixed.
+
+    Raises KeyError for an unknown host, and ValueError for a known host with
+    no grammar here — see the tail of this function for why that matters.
+    """
+    exe = cli(host)
+    flags = _env_flags(env)
+    if host == AGY:
+        # [flags] <name> <commandOrUrl> [args...], and both of its rules bite
+        # here. Flags must come BEFORE the name — a flag after it is rejected —
+        # and `--` must precede a command whose own args start with `-`, or
+        # such an arg is eaten as an agy flag rather than passed to the server.
+        # There is no scope: agy keeps one global file
+        # (~/.gemini/config/mcp_config.json, inherited from Gemini CLI — there
+        # is no ~/.antigravity), so passing `--scope` would be an error rather
+        # than a no-op.
+        return [exe, "mcp", "add", *flags, name, "--", command, *tail]
+    if host == GEMINI:
+        # [options] <name> <commandOrUrl> [args...]. No `--`: yargs
+        # `unknown-options-as-args` already carries a leading-dash arg into
+        # [args...], so a separator would be redundant rather than harmful.
+        return [exe, "mcp", "add", "--scope", scope, *flags,
+                name, command, *tail]
+    if host == CLAUDE:
+        # <name> [options] -- <command>: the name MUST precede the variadic -e.
+        return [exe, "mcp", "add", name, "--scope", scope, *flags,
+                "--", command, *tail]
+    # A row in HOSTS with no branch above. Claude's shape used to be the
+    # fallthrough, which is how agy came to be handed an argv its CLI rejects;
+    # a host is added to the table and to this function or not at all.
+    raise ValueError("no `mcp add` grammar for host %r" % host)
+
+
 def register_argv(host: str, launcher: str, *, scope: str = "user",
                   name: str = SERVER_NAME,
                   env: dict[str, str] | None = None) -> list[str]:
@@ -260,28 +306,8 @@ def register_argv(host: str, launcher: str, *, scope: str = "user",
     boost (:func:`paths.launcher`). ``env`` defaults to :data:`LAUNCH_ENV`;
     pass ``{}`` for none. Raises KeyError for an unknown host.
     """
-    exe = cli(host)
-    flags = _env_flags(LAUNCH_ENV if env is None else env)
-    if host == AGY:
-        # [flags] <name> <commandOrUrl> [args...], and both of its rules bite
-        # here. Flags must come BEFORE the name — a flag after it is rejected —
-        # and `--` must precede a command whose own args start with `-`, or
-        # `--stdio` is eaten as an agy flag rather than passed to boost. There
-        # is no scope: agy keeps one global file
-        # (~/.gemini/config/mcp_config.json, inherited from Gemini CLI — there
-        # is no ~/.antigravity), so passing `--scope` would be an error rather
-        # than a no-op.
-        return [exe, "mcp", "add", *flags, name,
-                "--", launcher, "mcp", "--stdio"]
-    if host == GEMINI:
-        # [options] <name> <commandOrUrl> [args...]. No `--`: yargs
-        # `unknown-options-as-args` already carries `--stdio` into [args...],
-        # so a separator would be redundant rather than harmful.
-        return ([exe, "mcp", "add", "--scope", scope, *flags,
-                 name, launcher, "mcp", "--stdio"])
-    # <name> [options] -- <command>: the name MUST precede the variadic -e.
-    return ([exe, "mcp", "add", name, "--scope", scope, *flags,
-             "--", launcher, "mcp", "--stdio"])
+    return add_argv(host, name, launcher, ["mcp", "--stdio"], scope=scope,
+                    env=LAUNCH_ENV if env is None else env)
 
 
 def unregister_argv(host: str, *, scope: str = "user",

@@ -610,8 +610,16 @@ nothing. Consequences for code you write:
   Claude. Claude and
   Gemini disagree on name position, the `--` separator, and whether unregister
   needs an explicit scope — all three verified against the real CLIs and pinned
-  by `tests/unit/test_mcphost.py`. Don't "simplify" them into one shape. The two
-  `remove` calls now agree — both carry `--scope user` — and they agree on
+  by `tests/unit/test_mcphost.py`. Don't "simplify" them into one shape —
+  **one function, three branches**, which is what `mcphost.add_argv` is. It is
+  the only copy of the `mcp add` grammar, and it is the only copy because
+  `mcpdecl.register_argv` (the install path, registering a server a *skill*
+  declares) used to be a second one: it had a Gemini branch and a Claude
+  fallthrough, so agy — the one host whose CLI rejects Claude's shape — got it
+  on every install. A host with no branch now raises rather than inheriting
+  Claude's, and `test_mcpdecl.py` asserts the two callers agree, parametrised
+  over `hosts()`. Add a host in `add_argv`, not around it. The two `remove`
+  calls, meanwhile, now agree — both carry `--scope user` — and they agree on
   purpose, rather than by neglect: Gemini needs the flag or its removal is a
   no-op against a user-scope entry, and Claude, which needs none, is handed one
   so the argv cannot reach `<cwd>/.mcp.json`, the one scope outside every
