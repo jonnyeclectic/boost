@@ -52,6 +52,17 @@ failed attempt per hour on a machine that can never reach the host, and
 ``boost reindex --dense`` retries at once (:func:`forget_failure`). A failed
 *fetch* stops holding anything back once the files are on disk — copied in by
 hand, or fetched by another process — because loading them needs no network.
+
+The record carries the time it was written, and that is not a detail of the
+file format: the age is measured against ``time.time()``, so dating it by the
+file's mtime instead compares two different clocks. On Windows under Python
+3.12 the system clock is the coarse ``GetSystemTimeAsFileTime`` (~15.6 ms)
+while NTFS stamps the write from a precise one, so a marker written moments
+ago read as *future*-dated, the back-off was discarded as a clock set back,
+and the fetch was paid on every search after all. The mtime remains the
+fallback for a marker written before ``at`` existed, or one whose ``at``
+cannot be read as a number — see :func:`_mtime_as_at` for the grace that
+fallback needs and, just as much, for the limit on it.
 """
 from __future__ import annotations
 
@@ -59,6 +70,7 @@ import contextlib
 import hashlib
 import importlib.util
 import json
+import math
 import shutil
 import time
 from pathlib import Path
@@ -90,6 +102,11 @@ MAX_TOKENS = 512
 # Seconds a recorded failure holds back the next fetch. See the module
 # docstring for why it is neither zero nor forever.
 RETRY_AFTER = 3600
+# How far a filesystem mtime may read ahead of `time.time()` and still be taken
+# as "now" — clock *granularity*, not tolerance for a clock that is wrong. See
+# `_mtime_as_at`; a second is three orders of magnitude over the ~15.6 ms the
+# case it exists for needs, and still far under anything a real skew produces.
+MTIME_GRACE = 1.0
 
 _session = None
 _tokenizer = None
@@ -215,6 +232,31 @@ def failure_path() -> Path:
     return model_dir() / "unavailable.json"
 
 
+def _mtime_as_at(mtime: float) -> float:
+    """A file's mtime read as the time the record in it was written.
+
+    It is a *proxy*, off a different clock from the one :func:`backing_off`
+    judges it against, so a reading that runs ahead of now by no more than
+    :data:`MTIME_GRACE` means now — that gap is clock granularity, and on
+    Windows under Python 3.12 it is the entire bug.
+
+    A reading further ahead than that is not granularity, it is a wrong clock:
+    a home directory restored with ``rsync -t`` from a box running fast, an
+    exFAT or SMB mount stamping in the wrong timezone. That is left exactly as
+    it reads, so :func:`backing_off` discards it and the next load tries. The
+    cost is one fetch attempt, and that attempt is the cure — it rewrites the
+    marker through :func:`_note_failure`, with an ``at`` from ``time.time()``,
+    after which the filesystem's clock never decides this again. Clamping
+    unconditionally is what the first draft did, and it holds the model back
+    for as long as the skew lasts: ``at`` is recomputed as ``now`` on every
+    read, so the age never reaches :data:`RETRY_AFTER`, no attempt is ever
+    made, and nothing can migrate the record. Only ``boost reindex --dense``
+    would clear it.
+    """
+    now = time.time()
+    return now if 0 <= mtime - now <= MTIME_GRACE else mtime
+
+
 def last_failure() -> dict | None:
     """The last failed fetch or load of the model, or None when there is none.
 
@@ -222,12 +264,33 @@ def last_failure() -> dict | None:
     stands until a load succeeds or :func:`forget_failure` runs — it is what
     last happened, whatever its age. Cheap enough for every search: a read of
     a file that is absent on a healthy machine.
+
+    ``at`` is read out of the record and falls back to the file's mtime three
+    ways: a marker written before the field existed, one this function could
+    not parse at all, and one whose ``at`` is not a finite number. The last
+    is not pedantry — ``inf`` survives the ``nan`` check and makes every age
+    ``-inf``, which reads as expired and re-fetches on every search, and a
+    400-digit JSON integer is a valid ``int`` that ``float()`` refuses, in a
+    function whose contract is to return ``None`` rather than raise.
+
+    The mtime is a different clock from the one :func:`backing_off` judges it
+    against: on Windows under Python 3.12 the system clock ticks every
+    ~15.6 ms while NTFS stamps the write from a precise one, so a marker
+    written moments ago reads as dated in the future, the back-off is
+    discarded as a clock set back, and every search pays the 133 MB fetch the
+    record exists to stop. Measured by moving an mtime 16 ms ahead:
+    ``backing_off()`` flips True -> False. Recording ``at`` fixes that for
+    every marker written from here on and nothing already on disk — which is
+    what the fallback is for — so :func:`_mtime_as_at` grants it a grace.
+    Windows CI proved that gap rather than argument did: with ``at`` recorded
+    and the fallback untouched, ``test_a_legacy_marker_falls_back_to_its_mtime``
+    failed on the 3.12 leg and passed everywhere else.
     """
     if _failure is not None:
         return dict(_failure)
     p = failure_path()
     try:
-        at = p.stat().st_mtime
+        mtime = p.stat().st_mtime
     except OSError:
         return None
     try:
@@ -238,6 +301,16 @@ def last_failure() -> dict | None:
         rec = {}
     if not isinstance(rec, dict):
         rec = {}
+    raw = rec.get("at")
+    try:
+        at = (float(raw) if isinstance(raw, (int, float))
+              and not isinstance(raw, bool) else None)
+    except OverflowError:
+        # A JSON integer wider than a float. `math.isfinite` would raise the
+        # same way, so the conversion has to be tried before it is asked.
+        at = None
+    if at is None or not math.isfinite(at):
+        at = _mtime_as_at(mtime)
     return {"stage": str(rec.get("stage") or "fetch"),
             "error": str(rec.get("error") or ""), "at": at}
 
@@ -246,8 +319,12 @@ def backing_off(now: float | None = None) -> bool:
     """True while a recorded failure should stop the next load from trying.
 
     A record dated in the future (a clock set back) does not count: honouring
-    it would hold the model back for however far ahead the clock was. Nor does
-    a failed fetch whose files have since arrived — see the module docstring.
+    it would hold the model back for however far ahead the clock was. That
+    rule is absolute for a recorded ``at``, which comes from ``time.time()``
+    and so can only be ahead by being wrong; a date inferred from the file's
+    mtime gets :data:`MTIME_GRACE` of slack first, because there the two
+    clocks are genuinely different. Nor does a failed fetch whose files have
+    since arrived — see the module docstring.
     """
     rec = last_failure()
     if rec is None:
@@ -261,13 +338,17 @@ def backing_off(now: float | None = None) -> bool:
 def _note_failure(stage: str, error: str) -> None:
     """Record a failed fetch or load, here and for the next process."""
     global _failure
-    _failure = {"stage": stage, "error": error, "at": time.time()}
+    at = time.time()
+    _failure = {"stage": stage, "error": error, "at": at}
     # Best effort: a cache dir that cannot be written still gets the
     # in-process record, which is what a long-lived MCP server needs.
+    # `at` is written down rather than left to the file's mtime, so the next
+    # process compares its own `time.time()` against this one — see
+    # `last_failure`.
     with contextlib.suppress(OSError):
         p = failure_path()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"stage": stage, "error": error}),
+        p.write_text(json.dumps({"stage": stage, "error": error, "at": at}),
                      encoding="utf-8")
 
 

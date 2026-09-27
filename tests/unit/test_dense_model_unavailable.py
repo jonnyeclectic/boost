@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import time
 
 import pytest
 
@@ -114,9 +115,18 @@ def _record_on_disk(stage="fetch", error="URLError: timed out"):
 
 
 def _age_marker(seconds: float) -> None:
-    """Back-date the on-disk marker, and drop any in-process copy."""
+    """Back-date the on-disk marker, and drop any in-process copy.
+
+    Both clocks move: the record's own `at` is what the module reads, and the
+    mtime is the fallback for a marker written before it carried one. Ageing
+    only one would leave the other saying the failure just happened.
+    """
     p = _marker()
     assert p.exists(), "no failure was recorded for the next process"
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    if "at" in rec:
+        rec["at"] = rec["at"] - seconds
+        p.write_text(json.dumps(rec), encoding="utf-8")
     then = p.stat().st_mtime - seconds
     os.utime(p, (then, then))
     localembed._failure = None
@@ -256,6 +266,110 @@ class TestBackOffRules:
         # literal path the other tests write is the one the module reads.
         assert localembed.failure_path() == _marker()
         assert localembed.MODEL_REV in str(_marker())
+
+    def test_the_record_carries_its_own_clock(self):
+        """`at` is written down, not left to be inferred from the mtime."""
+        localembed._note_failure("fetch", "x")
+        rec = json.loads(localembed.failure_path().read_text(encoding="utf-8"))
+        assert isinstance(rec.get("at"), (int, float))
+        localembed.reset()
+        # json round-trips a float exactly, so this is an equality, not an
+        # approximation — `pytest.approx` defaults to rel=1e-6, which on
+        # epoch seconds is a tolerance of about half an hour.
+        assert localembed.last_failure()["at"] == rec["at"]
+
+    def test_a_marker_whose_mtime_runs_ahead_still_holds_back(self):
+        """The Windows-3.12 failure, forced: on that platform `time.time()`
+        ticks every ~15.6 ms while NTFS stamps the write from a precise clock,
+        so a marker written moments ago is dated in the future, `backing_off`
+        reads it as a clock set back, and the 133 MB fetch is paid again on
+        every search. `at` comes out of the record, so the mtime cannot say
+        otherwise."""
+        localembed._note_failure("fetch", "x")
+        p = localembed.failure_path()
+        ahead = time.time() + 3600
+        os.utime(p, (ahead, ahead))
+        localembed.reset()
+        assert localembed.backing_off() is True
+
+    def test_a_legacy_marker_falls_back_to_its_mtime(self):
+        """A record written before `at` existed still dates from its file."""
+        _record_on_disk()
+        assert "at" not in json.loads(
+            _marker().read_text(encoding="utf-8"))
+        # Back-date by a second first, so the fallback is unambiguously in the
+        # past and the clamp below it is a no-op. A just-written mtime is not:
+        # on Windows it reads microseconds *ahead* of `time.time()`, which is
+        # the case the next test covers.
+        _age_marker(1)
+        assert localembed.last_failure()["at"] == _marker().stat().st_mtime
+        assert localembed.backing_off() is True
+        _age_marker(localembed.RETRY_AFTER + 5)
+        assert localembed.backing_off() is False
+
+    def test_a_legacy_marker_a_tick_ahead_still_holds_back(self):
+        """The same two-clock failure, in the one place recording `at` cannot
+        reach: a marker already on disk from before the field existed. Its
+        date is the filesystem's clock, `backing_off` judges it against
+        `time.time()`, and an age below zero is discarded as a clock set back
+        — so the 133 MB fetch is paid on every search. Found by the Windows
+        3.12 leg of CI, which failed the test above it while every other leg
+        passed; forced here on any platform by putting the mtime half of
+        `MTIME_GRACE` ahead, which stands in for that platform's ~15.6 ms."""
+        _record_on_disk()
+        ahead = time.time() + localembed.MTIME_GRACE / 2
+        os.utime(_marker(), (ahead, ahead))
+        localembed.reset()
+        assert localembed.last_failure()["at"] <= time.time()
+        assert localembed.backing_off() is True
+
+    def test_a_legacy_marker_dated_far_ahead_expires_and_then_migrates(self):
+        """Past the grace it is a wrong clock, not a coarse one, and the cure
+        is to let one attempt through. Clamping unconditionally — the first
+        draft — recomputes `at` as `now` on every read, so the age never
+        reaches `RETRY_AFTER`, no attempt is ever made, and the record can
+        never be replaced: a home dir restored with `rsync -t` from a fast box
+        would sit on BM25 until the wall clock caught up. Here the stale date
+        is honoured, the next failure rewrites the marker with an `at` from
+        `time.time()`, and the filesystem's clock stops deciding."""
+        _record_on_disk()
+        ahead = time.time() + 3600
+        os.utime(_marker(), (ahead, ahead))
+        localembed.reset()
+        stale = localembed.last_failure()
+        assert stale is not None and stale["at"] == pytest.approx(ahead)
+        assert localembed.backing_off() is False
+        localembed._note_failure("fetch", "the attempt that got through")
+        localembed.reset()
+        assert localembed.last_failure()["at"] <= time.time()
+        assert localembed.backing_off() is True
+
+    @pytest.mark.parametrize("at", ["yesterday", None, True, float("nan"),
+                                    float("inf"), float("-inf"), 10 ** 400])
+    def test_an_at_that_is_not_a_finite_number_falls_back_to_the_mtime(
+            self, at):
+        """A hand-edited or corrupt `at` must not decide the window. `True` is
+        in the list because in Python a bool *is* an int; `nan` because every
+        comparison against it is False, which would read the half-open window
+        as expired and re-fetch on every search; `inf` because it survives the
+        `nan` check and makes every age `-inf`, which does the same thing by
+        the neighbouring value; and a 400-digit integer because JSON parses it
+        as a perfectly valid `int` that `float()` then refuses — in a function
+        that promises to return `None` rather than raise, on the search
+        path."""
+        p = localembed.failure_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"stage": "fetch", "error": "x", "at": at}),
+                     encoding="utf-8")
+        # Back-date the file before reading it. A just-written mtime reads
+        # microseconds *ahead* of `time.time()` on Windows, where the fallback
+        # is then graced to now and the equality below is not an equality —
+        # the same two-clock trap this whole class is about.
+        then = p.stat().st_mtime - 1
+        os.utime(p, (then, then))
+        rec = localembed.last_failure()
+        assert rec["at"] == p.stat().st_mtime
+        assert localembed.backing_off() is True
 
     def test_forget_drops_both_copies(self):
         localembed._note_failure("fetch", "x")
@@ -468,6 +582,26 @@ class TestSurfaces:
         assert "last tried" in msg
         assert "`boost reindex --dense`" in msg
         assert "huggingface.co" in msg
+
+    def test_doctor_drops_an_undateable_stamp_instead_of_crashing(
+            self, local_ready):
+        """`datetime.fromtimestamp` raises three different ways on a number
+        no calendar has a date for, and doctor's job on this line is to
+        report a failure rather than become one. 1e30 is finite, so it is
+        past every guard in `last_failure` by design — a timestamp is not
+        wrong for being large, it is only undateable — and the surface that
+        formats it is the one that has to cope."""
+        from boost_cli.commands import quality
+        p = localembed.failure_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"stage": "fetch", "error": "URLError: x",
+                                 "at": 1e30}), encoding="utf-8")
+        rep = report.Report(as_json=True)
+        quality._report_search_engine(rep)
+        msg = rep.payload()["checks"][0]["message"]
+        assert "the local model could not be downloaded" in msg
+        assert "URLError: x" in msg
+        assert "last tried" not in msg
 
     def test_doctor_names_a_load_failure_as_one(self, local_ready):
         from boost_cli.commands import quality

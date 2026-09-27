@@ -895,10 +895,15 @@ def _report_search_engine(rep) -> None:
             from ..core import embed
             fail = st.get("model_failure") or {}
             detail += ", but %s" % embed.local_failure_text(fail)
+            # A hand-edited marker can hold a number no calendar has a date
+            # for (`inf`, 1e30), and `fromtimestamp` raises three different
+            # ways on those. Doctor's job here is to report a failure, so it
+            # drops the "when" rather than becoming one.
             if isinstance(fail.get("at"), (int, float)):
-                detail += ", last tried %s" % util.rel_time(
-                    datetime.fromtimestamp(fail["at"], UTC)
-                    .strftime("%Y-%m-%dT%H:%M:%SZ"))
+                with suppress(ValueError, OverflowError, OSError):
+                    detail += ", last tried %s" % util.rel_time(
+                        datetime.fromtimestamp(fail["at"], UTC)
+                        .strftime("%Y-%m-%dT%H:%M:%SZ"))
         rep.issue("search-engine",
                   "semantic search silently off — %d-chunk vector store %s; "
                   "searches are using BM25 — %s" % (st["chunks"], detail, fix),
