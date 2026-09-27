@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import time
 
 import pytest
 
@@ -114,9 +115,18 @@ def _record_on_disk(stage="fetch", error="URLError: timed out"):
 
 
 def _age_marker(seconds: float) -> None:
-    """Back-date the on-disk marker, and drop any in-process copy."""
+    """Back-date the on-disk marker, and drop any in-process copy.
+
+    Both clocks move: the record's own `at` is what the module reads, and the
+    mtime is the fallback for a marker written before it carried one. Ageing
+    only one would leave the other saying the failure just happened.
+    """
     p = _marker()
     assert p.exists(), "no failure was recorded for the next process"
+    rec = json.loads(p.read_text(encoding="utf-8"))
+    if "at" in rec:
+        rec["at"] = rec["at"] - seconds
+        p.write_text(json.dumps(rec), encoding="utf-8")
     then = p.stat().st_mtime - seconds
     os.utime(p, (then, then))
     localembed._failure = None
@@ -256,6 +266,53 @@ class TestBackOffRules:
         # literal path the other tests write is the one the module reads.
         assert localembed.failure_path() == _marker()
         assert localembed.MODEL_REV in str(_marker())
+
+    def test_the_record_carries_its_own_clock(self):
+        """`at` is written down, not left to be inferred from the mtime."""
+        localembed._note_failure("fetch", "x")
+        rec = json.loads(localembed.failure_path().read_text(encoding="utf-8"))
+        assert isinstance(rec.get("at"), (int, float))
+        localembed.reset()
+        assert localembed.last_failure()["at"] == pytest.approx(rec["at"])
+
+    def test_a_marker_whose_mtime_runs_ahead_still_holds_back(self):
+        """The Windows-3.12 failure, forced: on that platform `time.time()`
+        ticks every ~15.6 ms while NTFS stamps the write from a precise clock,
+        so a marker written moments ago is dated in the future, `backing_off`
+        reads it as a clock set back, and the 133 MB fetch is paid again on
+        every search. `at` comes out of the record, so the mtime cannot say
+        otherwise."""
+        localembed._note_failure("fetch", "x")
+        p = localembed.failure_path()
+        ahead = time.time() + 3600
+        os.utime(p, (ahead, ahead))
+        localembed.reset()
+        assert localembed.backing_off() is True
+
+    def test_a_legacy_marker_falls_back_to_its_mtime(self):
+        """A record written before `at` existed still dates from its file."""
+        _record_on_disk()
+        assert "at" not in json.loads(
+            _marker().read_text(encoding="utf-8"))
+        assert localembed.last_failure()["at"] == pytest.approx(
+            _marker().stat().st_mtime)
+        assert localembed.backing_off() is True
+        _age_marker(localembed.RETRY_AFTER + 5)
+        assert localembed.backing_off() is False
+
+    @pytest.mark.parametrize("at", ["yesterday", None, True, float("nan")])
+    def test_an_at_that_is_not_a_number_falls_back_to_the_mtime(self, at):
+        """A hand-edited or corrupt `at` must not decide the window. `True` is
+        in the list because in Python a bool *is* an int, and `nan` because
+        every comparison against it is False — which would make the half-open
+        window read as expired and re-fetch on every search."""
+        p = localembed.failure_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"stage": "fetch", "error": "x", "at": at}),
+                     encoding="utf-8")
+        rec = localembed.last_failure()
+        assert rec["at"] == pytest.approx(p.stat().st_mtime)
+        assert localembed.backing_off() is True
 
     def test_forget_drops_both_copies(self):
         localembed._note_failure("fetch", "x")

@@ -52,6 +52,15 @@ failed attempt per hour on a machine that can never reach the host, and
 ``boost reindex --dense`` retries at once (:func:`forget_failure`). A failed
 *fetch* stops holding anything back once the files are on disk — copied in by
 hand, or fetched by another process — because loading them needs no network.
+
+The record carries the time it was written, and that is not a detail of the
+file format: the age is measured against ``time.time()``, so dating it by the
+file's mtime instead compares two different clocks. On Windows under Python
+3.12 the system clock is the coarse ``GetSystemTimeAsFileTime`` (~15.6 ms)
+while NTFS stamps the write from a precise one, so a marker written moments
+ago read as *future*-dated, the back-off was discarded as a clock set back,
+and the fetch was paid on every search after all. The mtime remains the
+fallback for a marker written before ``at`` existed.
 """
 from __future__ import annotations
 
@@ -222,12 +231,21 @@ def last_failure() -> dict | None:
     stands until a load succeeds or :func:`forget_failure` runs — it is what
     last happened, whatever its age. Cheap enough for every search: a read of
     a file that is absent on a healthy machine.
+
+    ``at`` is read out of the record, and falls back to the file's mtime only
+    for a marker written before it carried one. The two are different clocks
+    and :func:`backing_off` subtracts one from ``time.time()``: on Windows
+    under Python 3.12 the system clock ticks every ~15.6 ms while NTFS stamps
+    the write from a precise one, so a marker written moments ago reads as
+    dated in the future, the back-off is discarded as a clock set back, and
+    every search pays the 133 MB fetch the record exists to stop. Measured by
+    moving an mtime 16 ms ahead: ``backing_off()`` flips True -> False.
     """
     if _failure is not None:
         return dict(_failure)
     p = failure_path()
     try:
-        at = p.stat().st_mtime
+        mtime = p.stat().st_mtime
     except OSError:
         return None
     try:
@@ -238,8 +256,11 @@ def last_failure() -> dict | None:
         rec = {}
     if not isinstance(rec, dict):
         rec = {}
+    at = rec.get("at")
+    if not isinstance(at, (int, float)) or isinstance(at, bool) or at != at:
+        at = mtime
     return {"stage": str(rec.get("stage") or "fetch"),
-            "error": str(rec.get("error") or ""), "at": at}
+            "error": str(rec.get("error") or ""), "at": float(at)}
 
 
 def backing_off(now: float | None = None) -> bool:
@@ -261,13 +282,17 @@ def backing_off(now: float | None = None) -> bool:
 def _note_failure(stage: str, error: str) -> None:
     """Record a failed fetch or load, here and for the next process."""
     global _failure
-    _failure = {"stage": stage, "error": error, "at": time.time()}
+    at = time.time()
+    _failure = {"stage": stage, "error": error, "at": at}
     # Best effort: a cache dir that cannot be written still gets the
     # in-process record, which is what a long-lived MCP server needs.
+    # `at` is written down rather than left to the file's mtime, so the next
+    # process compares its own `time.time()` against this one — see
+    # `last_failure`.
     with contextlib.suppress(OSError):
         p = failure_path()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"stage": stage, "error": error}),
+        p.write_text(json.dumps({"stage": stage, "error": error, "at": at}),
                      encoding="utf-8")
 
 
