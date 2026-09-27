@@ -1820,10 +1820,16 @@ class TestMcp:
                 "--", self._shim(), "mcp", "--stdio"]
 
     def _gemini_add(self):
+        # gemini takes `[options] <name> <commandOrUrl> [args...]` and parses
+        # the trailing variadic with yargs, which keeps claiming flags it
+        # knows: without the `--` after the command, `-e K=v` in a server's
+        # own args is eaten as gemini's own `-e` and vanishes from the stored
+        # entry. Gemini is the one host whose separator goes after the
+        # command, not before it.
         return ["gemini", "mcp", "add", "--scope", "user",
                 "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
                 "-e", "no_proxy=*",
-                "boost", self._shim(), "mcp", "--stdio"]
+                "boost", self._shim(), "--", "mcp", "--stdio"]
 
     def _agy_add(self):
         # agy wants `add [flags] <name> [args...]`: flags must precede the
@@ -2187,19 +2193,21 @@ class TestMcp:
         assert cmd.index("boost") < cmd.index("-e")
         assert cmd[cmd.index("--") + 1] == self._shim()
 
-    def test_gemini_puts_flags_before_the_name_and_omits_the_separator(
+    def test_gemini_puts_flags_before_the_name_and_the_separator_after(
             self, boost, sandbox, monkeypatch):
-        # Regression: gemini's `add` takes yargs positionals
+        # gemini's `add` takes yargs positionals
         # (`[options] <name> <commandOrUrl> [args...]`), so flags may precede
-        # the name — but a `--` would be captured by the trailing variadic and
-        # passed through to boost as a literal argument.
+        # the name. The `--` goes *after* the command — measured against
+        # Gemini CLI 0.61.0, `unknown-options-as-args` rescues only options
+        # gemini does not know, and `mcp add` knows ten of them, so a server
+        # arg spelled like one is swallowed without a word.
         calls = self._fake_clis(monkeypatch, "gemini")
         boost("mcp", "register")
         cmd = calls[0]
         assert cmd[:3] == ["gemini", "mcp", "add"]
         assert cmd.index("-e") < cmd.index("boost")
-        assert "--" not in cmd
         assert cmd[cmd.index("boost") + 1] == self._shim()
+        assert cmd[cmd.index(self._shim()) + 1] == "--"
 
     def test_register_failure(self, boost, sandbox, monkeypatch):
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",

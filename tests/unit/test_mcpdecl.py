@@ -282,7 +282,7 @@ class TestRegisterArgvPerHost:
         assert mcpdecl.register_argv("gh", SPEC,
                                      host=mcphost.GEMINI) == [
             "gemini", "mcp", "add", "--scope", "user", "-e", "K=v",
-            "gh", "npx", "-y", "gh-mcp"]
+            "gh", "npx", "--", "-y", "gh-mcp"]
 
     def test_agy(self):
         assert mcpdecl.register_argv("gh", SPEC, host=mcphost.AGY) == [

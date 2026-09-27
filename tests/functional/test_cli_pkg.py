@@ -2815,7 +2815,8 @@ class TestMcpAwareSkills:
                                                         tmp_path, monkeypatch):
         # a declared server belongs on every agent CLI that is actually here,
         # each written in that CLI's own grammar: claude takes
-        # `add <name> … -- <command>`, gemini `add [options] <name> <command>`.
+        # `add <name> … -- <command>`, gemini `add [options] <name> <command>
+        # -- <args>` — same separator, opposite side of the command.
         self._fake_which(monkeypatch, "claude", "gemini")
         calls = self._capture_run(monkeypatch)
         d = _mcp_skill_dir(
@@ -2827,7 +2828,7 @@ class TestMcpAwareSkills:
             ["claude", "mcp", "add", "github", "--scope", "user",
              "--", "npx", "-y", "srv"],
             ["gemini", "mcp", "add", "--scope", "user",
-             "github", "npx", "-y", "srv"]]
+             "github", "npx", "--", "-y", "srv"]]
         assert "registered MCP server github with Claude Code" in r.out
         assert "registered MCP server github with Gemini CLI" in r.out
 
@@ -2843,7 +2844,7 @@ class TestMcpAwareSkills:
                                                "args": ["-y", "srv"]}}})
         r = boost("import", d)
         assert calls == [["gemini", "mcp", "add", "--scope", "user",
-                          "github", "npx", "-y", "srv"]]
+                          "github", "npx", "--", "-y", "srv"]]
         assert "registered MCP server github with Gemini CLI" in r.out
         assert "Claude Code" not in r.out
 
@@ -2859,6 +2860,24 @@ class TestMcpAwareSkills:
         assert "skipped — run these yourself when you're ready:" in r.out
         assert "claude mcp add github --scope user -- npx" in r.out
         assert "mcp-skill" in _lock()
+
+    def test_declining_prints_a_line_for_every_host_the_yes_would_have_hit(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # The prompt names every installed host and a yes registers with all
+        # of them, so a no that printed only the first handed back an
+        # incomplete answer — and `hosts()` puts agy last, so the host whose
+        # grammar differs most was the one never shown.
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        self._fake_which(monkeypatch, "claude", "gemini", "agy")
+        d = _mcp_skill_dir(
+            tmp_path, decl="github",
+            sidecar={"mcpServers": {"github": {"command": "npx",
+                                               "args": ["-y", "srv"]}}})
+        r = boost("import", d)
+        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "claude mcp add github --scope user -- npx -y srv" in r.out
+        assert "gemini mcp add --scope user github npx -- -y srv" in r.out
+        assert "agy mcp add github -- npx -y srv" in r.out
 
     def test_missing_agent_clis_print_the_commands(self, boost, sandbox,
                                                    tmp_path, monkeypatch):

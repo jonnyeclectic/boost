@@ -97,15 +97,23 @@ class TestRegisterArgvGemini:
             "gemini", "mcp", "add", "--scope", "user",
             "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
             "-e", "no_proxy=*",
-            "boost", SHIM, "mcp", "--stdio",
+            "boost", SHIM, "--", "mcp", "--stdio",
         ]
 
-    def test_no_separator(self):
-        # `gemini mcp add` sets yargs `unknown-options-as-args`, so `--stdio`
-        # reaches [args...] on its own and a separator buys nothing. (Gemini
-        # does handle a `--` correctly — `populate--` strips it and appends the
-        # rest — so this pins the argv boost sends, not a hazard it dodges.)
-        assert "--" not in mcphost.register_argv(mcphost.GEMINI, SHIM)
+    def test_the_separator_follows_the_command(self):
+        # Gemini is the one host that takes `--` *after* <commandOrUrl>.
+        # Claude's placement is rejected outright by yargs ("Not enough
+        # non-option arguments: got 1, need at least 2"), and omitting it
+        # lets `mcp add`'s own ten flags eat a matching arg out of the
+        # server's tail — measured on 0.61.0, `-e K=v` in a tail vanishes
+        # into gemini's variadic `--env`.
+        argv = mcphost.register_argv(mcphost.GEMINI, SHIM)
+        assert argv[argv.index("--") - 1] == SHIM
+
+    def test_the_separator_is_emitted_even_with_an_empty_tail(self):
+        # `gemini mcp add x npx --` is accepted and stores `args: []`, so the
+        # builder needs no branch for it. A branch is what would rot.
+        assert mcphost.add_argv(mcphost.GEMINI, "x", "npx", [])[-1] == "--"
 
     def test_name_follows_the_flags_and_precedes_the_command(self):
         argv = mcphost.register_argv(mcphost.GEMINI, SHIM)
@@ -113,7 +121,20 @@ class TestRegisterArgvGemini:
 
     def test_stdio_trails_the_launcher_as_a_server_arg(self):
         argv = mcphost.register_argv(mcphost.GEMINI, SHIM)
-        assert argv[-3:] == [SHIM, "mcp", "--stdio"]
+        assert argv[-4:] == [SHIM, "--", "mcp", "--stdio"]
+
+    def test_a_dash_arg_in_the_tail_survives_the_hosts_own_flags(self):
+        # The regression that made the separator mandatory: the canonical
+        # GitHub server's `-e GITHUB_PERSONAL_ACCESS_TOKEN` used to be eaten
+        # by gemini's own `--env`, launching the container with no token,
+        # exit 0, no warning.
+        argv = mcphost.add_argv(
+            mcphost.GEMINI, "github", "docker",
+            ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+             "ghcr.io/github/github-mcp-server"])
+        assert argv[argv.index("--") + 1:] == [
+            "run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+            "ghcr.io/github/github-mcp-server"]
 
 
 class TestRegisterArgvAgy:
@@ -178,7 +199,9 @@ class TestAddArgv:
             mcphost.CLAUDE, "gh", "npx", [])
 
     def test_an_empty_tail_ends_at_the_command(self):
-        assert mcphost.add_argv(mcphost.GEMINI, "gh", "npx", [])[-1] == "npx"
+        # Claude's separator precedes the command, so an empty tail ends
+        # there. (Gemini's trails it — see TestRegisterArgvGemini.)
+        assert mcphost.add_argv(mcphost.CLAUDE, "gh", "npx", [])[-1] == "npx"
 
     def test_a_host_in_the_table_with_no_grammar_raises(self, monkeypatch):
         # The regression this function exists to prevent: a new HOSTS row used

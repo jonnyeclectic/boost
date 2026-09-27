@@ -599,9 +599,11 @@ nothing. Consequences for code you write:
   `agents/` slot stays verbatim Markdown. Getting that backwards produces a file
   the agent silently never loads.
 - `core/mcphost.py` holds the per-host `mcp add`/`remove` grammar.
-  **Antigravity CLI (`agy`) is the third host**, and its two argv rules both bite: flags must
-  come *before* `<name>` (a flag after it is rejected) and `--` must precede a
-  command whose args start with `-`, or `--stdio` is eaten as an agy flag. It
+  **Antigravity CLI (`agy`) is the third host**, and one argv rule of its own
+  bites: flags must come *before* `<name>` (a flag after it is rejected). The
+  `--` boost also emits is agy's documented separator and, measured on 1.1.22,
+  inert — agy never consumes an argument that *follows* the command, and
+  rejects a dash-leading command with or without it. It
   has **no scope** — one global file at `~/.gemini/config/mcp_config.json`,
   inherited from Gemini CLI, so there is no `~/.antigravity` — which is why
   `has_scope()` exists and the success line drops "(scope: user)" for it. Its
@@ -610,7 +612,16 @@ nothing. Consequences for code you write:
   Claude. Claude and
   Gemini disagree on name position, the `--` separator, and whether unregister
   needs an explicit scope — all three verified against the real CLIs and pinned
-  by `tests/unit/test_mcphost.py`. Don't "simplify" them into one shape —
+  by `tests/unit/test_mcphost.py`. **Every host needs the separator, and Gemini
+  is the one that takes it *after* the command.** boost emitted none for Gemini
+  at all, on the theory that its trailing variadic would pass a `--` through as
+  a literal argument; against the real CLI 0.61.0 it does not, and
+  `unknown-options-as-args` rescues only options gemini does *not* know —
+  `gemini mcp add` knows ten. So the canonical GitHub spec's
+  `-e GITHUB_PERSONAL_ACCESS_TOKEN=…` was eaten as gemini's own `-e` and
+  dropped from the stored entry, exit 0, and a `-t http` in a spec's args
+  rewrote the entry as `{"url": "npx", "type": "http"}`. Emit it
+  unconditionally: `add x npx --` is accepted and stores `args: []`. Don't "simplify" them into one shape —
   **one function, three branches**, which is what `mcphost.add_argv` is. It is
   the only copy of the `mcp add` grammar, and it is the only copy because
   `mcpdecl.register_argv` (the install path, registering a server a *skill*

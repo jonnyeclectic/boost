@@ -2274,9 +2274,31 @@ the function, which is <i>why</i> a host with no branch inherited it silently. I
 <code>if host == CLAUDE</code>, and the bottom of the function raises. A host can be in
 <code>HOSTS</code> and have no grammar for exactly as long as it takes a test to run.
 <br><br>
-Eleven tests. The three literal per-host argvs on the install path (none existed: nothing tested
-<code>mcpdecl.register_argv</code> with a <code>host=</code> at all); agy's two rules each pinned
-separately, so a regression names which one broke; a cross-module parity test <b>parametrised over
+<b>Then a verifying subagent found a worse bug in the code that was now shared</b> — and it was
+Gemini's, the host the old copy had "mirrored" correctly. boost emitted no <code>--</code> for
+gemini at all, on the belief that its trailing variadic would pass the separator through as a
+literal argument. Measured against the real Gemini CLI 0.61.0: it does not.
+<code>unknown-options-as-args</code> rescues only options gemini does <i>not</i> know, and
+<code>gemini mcp add</code> knows ten of them, so the canonical GitHub server spec
+(<code>-e GITHUB_PERSONAL_ACCESS_TOKEN=…</code>) had its <code>-e</code> eaten as gemini's own and
+the variable silently dropped from the stored entry — <b>exit 0, "server added"</b>, and a server
+that cannot authenticate. A <code>-t http</code> in a spec's args is worse: the entry is rewritten
+as <code>{"url": "npx", "type": "http"}</code>. The separator goes <i>after</i> the command for
+gemini — the one host where it does — and it is emitted unconditionally, because
+<code>add x npx --</code> is accepted and stores <code>args: []</code>.
+<br><br>
+The same pass killed the comment justifying agy's <code>--</code>: measured on 1.1.22, agy never
+consumes an argument that follows the command, and rejects a dash-leading command with or without
+it. The <code>--</code> stays (it is agy's documented separator) but is now described as inert
+rather than load-bearing. And <code>boost install</code>'s <i>decline</i> path printed one command
+line for <code>targets[0]</code> after a prompt that named every host — so a user who said no got
+Claude's line and nothing for the two hosts a yes would also have registered with, agy among them.
+<br><br>
+Fifteen new tests and two rewritten ones that had pinned the old, wrong shape. The three literal
+per-host argvs on the install path (none existed: nothing tested <code>mcpdecl.register_argv</code>
+with a <code>host=</code> at all); agy's two rules each pinned separately, so a regression names
+which one broke; gemini's separator pinned three ways, including a spec whose args start with a dash
+— the case that was silently losing data; a cross-module parity test <b>parametrised over
 <code>mcphost.hosts()</code></b>, which is the docstring's promise turned into an assertion and which
 covers a fourth host the moment the table gains one; and a monkeypatched <code>codex</code> row
 asserting <code>ValueError</code> — the regression this shape exists to prevent, failing in CI
@@ -2285,7 +2307,7 @@ instead of on a user's machine.</p>
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
-          <span class="m">Two functions built the same `mcp add` command line, and only one of them had heard of agy…</span>
+          <span class="m">Two functions built the same `mcp add` command line, one had never heard of agy, and both got Gemini wrong…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
