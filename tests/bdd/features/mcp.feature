@@ -70,9 +70,12 @@ Feature: boost mcp
     And the output should contain "claude mcp register failed — no auth"
     And the output should contain "run it yourself"
 
+  # Claude's `mcp remove` needs no scope flag and is handed one anyway, so the
+  # argv cannot reach `<cwd>/.mcp.json` — the one scope outside every $HOME, and
+  # so the one the containment guard cannot judge. See core/mcphost.py.
   Scenario: unregistering with no agent CLI prints both manual commands
     Given no agent CLI is on PATH
     When I run "boost mcp unregister"
     Then the exit code should be 0
-    And the output should contain "claude mcp remove boost"
+    And the output should contain "claude mcp remove --scope user boost"
     And the output should contain "gemini mcp remove --scope user boost"

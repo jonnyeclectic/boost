@@ -18,10 +18,17 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+#: Cleared before every scenario, the same set tests/conftest.py's sandbox
+#: fixture clears. The two agent-CLI variables are the ones that fail *only on
+#: a developer's machine*: the codex agent dir is ``${CODEX_HOME:-~/.codex}``
+#: and Claude Code's config home is ``${CLAUDE_CONFIG_DIR:-~/.claude}``, so
+#: either one exported in the shell points boost outside the scenario's $HOME
+#: — where `boost mcp`'s containment guard refuses to write — while a CI runner
+#: exports neither and the same scenario passes.
 _SANDBOX_ENV = ("BOOST_HOME", "BOOST_AGENTS_STORE", "BOOST_DEBUG",
                 "BOOST_LOG_LEVEL", "BOOST_NO_LOG", "VOYAGE_API_KEY",
                 "OPENAI_API_KEY", "BOOST_NO_EMBED", "BOOST_NO_SEED",
-                "BOOST_NO_RULE")
+                "BOOST_NO_RULE", "CODEX_HOME", "CLAUDE_CONFIG_DIR")
 
 
 def before_all(context):
