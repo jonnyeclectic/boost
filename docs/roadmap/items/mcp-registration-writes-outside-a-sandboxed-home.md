@@ -2,13 +2,14 @@
 id: mcp-registration-writes-outside-a-sandboxed-home
 board: code
 section: planned
-status: planned
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: Medium
 wow: 3
 note: Every other boost surface honours HOME/BOOST_HOME; this one writes to whatever CLAUDE_CONFIG_DIR says…
 order: 344
+owner: loop/mcp-sandbox-home
 title: boost mcp registration writes outside a sandboxed HOME
 ---
 <b>Found when an agent working in a sandboxed <code>HOME</code> ran <code>boost mcp</code> instead of
@@ -25,9 +26,38 @@ sandboxable. <code>mcphost</code> hands the decision to another CLI, and that CL
 environment variable, so a test, a CI job or an agent that sets <code>HOME</code> and expects
 containment does not get it.
 <br><br>
-<b>Fix.</b> Decide deliberately and say so in <code>mcphost.py</code>, which already documents each
-host's argv rules: either pass the scope explicitly derived from boost's own
-<code>HOME</code> (Claude Code reads <code>CLAUDE_CONFIG_DIR</code>, so boost can set it for the
-child), or refuse to register when <code>HOME</code> is not the ambient one and say which file
-would have been written. Pin whichever with a test that sets both variables apart and asserts
-nothing outside the sandbox is touched.
+<b>Fixed by refusing, not by redirecting.</b> boost <i>could</i> set <code>CLAUDE_CONFIG_DIR</code>
+for the child and point the write back inside its own <code>HOME</code> — and that is the worse half
+of the choice: it overrides a variable the user set on purpose, and then reports success for a file
+their CLI never reads. So <code>mcphost</code> gains the table it was missing
+(<code>CONFIG_HOME_ENV</code>, <code>USER_CONFIG_REL</code>) and both shell-out sites check the
+answer against boost's own <code>HOME</code> before <code>subprocess.run</code> inherits the
+environment. The refusal names the file that would have been written and prints the argv, so the
+remedy is one paste; <code>--force</code> is the way through on <code>boost mcp</code>, and
+<code>boost install</code>'s MCP prompt has no flag surface, so it only reports.
+<br><br>
+<b>Only Claude Code can escape, and that was established rather than assumed.</b> Claude Code
+2.1.283 resolves its configuration home from <code>CLAUDE_CONFIG_DIR</code> and falls back to
+<code>HOME</code> — including for a <i>relative</i> value, which it rejects outright
+(<i>"the configuration home (CLAUDE_CONFIG_DIR) is not an absolute path"</i>), so
+<code>config_home()</code> falls back on anything not <code>isabs</code>. Gemini CLI 0.57.0's
+<code>GEMINI_DIR</code> is a JavaScript constant, not an environment variable, and Antigravity
+(<code>agy</code>) exposes none at all; both are anchored at <code>HOME</code> and are pinned to
+stay that way, so a Claude-only variable can never hold back a write that was always landing in the
+sandbox.
+<br><br>
+<b>The test fixture had the same hole, and it was not hypothetical.</b> Every existing
+<code>mcp</code> test is judged against whatever <code>CLAUDE_CONFIG_DIR</code> the developer has
+exported — so on the machine this was found on, removing the fixture's new <code>delenv</code>
+fails <b>fourteen pre-existing <code>TestMcp</code> tests</b> while CI, which exports nothing,
+stays green. The <code>sandbox</code> fixture now clears it, beside the <code>CODEX_HOME</code>
+delenv that is there for exactly this reason.
+<br><br>
+Twenty-two tests, and the ablations are what they are worth. Neutering the two guards fails four —
+three on <code>boost mcp</code>, one on <code>boost install</code>'s MCP prompt, which is the
+second shell-out and would have read as covered by the first. The rest pin the parts easy to get
+wrong: that a config home <i>inside</i> <code>HOME</code> is not refused, that one refused host
+does not end the sweep of the others, that <code>--force</code> gets through, that
+<code>--dry-run</code> names the file either way, and that the absolute-path fixtures are built
+with <code>os.path</code> rather than a literal <code>/</code>, since
+<code>ntpath.isabs("/foo")</code> flipped to <code>False</code> in 3.13 and CI runs both.

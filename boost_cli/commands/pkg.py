@@ -203,11 +203,23 @@ def _register_mcp_server(name: str, spec: dict, host: str = "claude",
     """
     import subprocess
 
-    from ..core import mcpdecl, mcphost
+    from ..core import mcpdecl, mcphost, scopes
     argv = mcpdecl.register_argv(name, spec, host=host, scope=scope)
     if not shutil.which(mcphost.cli(host)):
         out.warn("`%s` CLI not found — run this yourself:" % mcphost.cli(host))
         out.info("  " + " ".join(argv))
+        return
+    # The same sandbox guard `boost mcp` applies, for the same reason: the
+    # child resolves its config home from the ambient environment, so an
+    # install run under HOME=<tempdir> would write a skill's MCP server into
+    # the real one. There is no --force here — this is an install prompt, not
+    # a flag surface — so the argv is printed and the user decides.
+    boost_home = paths.home()
+    cfg = mcphost.user_config_path(host, os.environ, str(boost_home))
+    if not scopes.contains(boost_home, cfg):
+        out.warn("not registering %s with %s: %s is outside this $HOME (%s)"
+                 % (name, mcphost.label(host), cfg, boost_home), wrap=True)
+        out.info("  run it yourself: " + " ".join(argv))
         return
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)

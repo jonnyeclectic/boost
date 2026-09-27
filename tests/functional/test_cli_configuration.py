@@ -2249,6 +2249,153 @@ class TestMcp:
                 % " ".join(["claude", "mcp", "remove", "boost"])) in r.out
         assert "dry run — nothing was unregistered, nothing tapped" in r.out
 
+    # ── the sandbox guard ────────────────────────────────────────────────
+    # An agent CLI resolves its own configuration from the ambient
+    # environment, not from the HOME boost is running under. Claude Code is
+    # the only one of the three that can be moved that way (CLAUDE_CONFIG_DIR;
+    # Gemini's GEMINI_DIR is a JS constant and agy has none), and it is how a
+    # run with HOME and BOOST_HOME both pointed at a tempdir registered boost
+    # in a developer's live ~/.claude-personal/.claude.json.
+
+    def _outside_home(self, monkeypatch, tmp_path):
+        """Point CLAUDE_CONFIG_DIR at a directory beside the sandbox HOME."""
+        elsewhere = tmp_path / "real-config"
+        elsewhere.mkdir()
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(elsewhere))
+        return elsewhere
+
+    def _writing_clis(self, monkeypatch, *present):
+        """Fake CLIs that really write the config file they would write.
+
+        The assertion this enables is the one the guard is *for*: not "the
+        subprocess was not called" but "no file appeared outside the
+        sandbox". It also proves the ordering — a guard placed after
+        ``subprocess.run`` rather than before it would leave this file
+        behind. Written in Python rather than as a script on PATH so the
+        Windows legs run it too.
+        """
+        from boost_cli.core import mcphost
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.shutil.which",
+            lambda c: "/usr/local/bin/" + c if c in present else None)
+        calls = []
+
+        def fake_run(cmd, **kw):
+            target = pathlib.Path(mcphost.user_config_path(
+                cmd[0], os.environ, os.environ["HOME"]))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('{"mcpServers": {"boost": {}}}',
+                              encoding="utf-8")
+            calls.append(list(cmd))
+            return _proc(cmd, 0, out="Added stdio MCP server boost\n")
+
+        monkeypatch.setattr("boost_cli.commands.configuration.subprocess.run",
+                            fake_run)
+        return calls
+
+    def test_the_sandbox_fixture_clears_claude_config_dir(self, sandbox):
+        # The guard that makes every other mcp test in this file meaningful
+        # on a developer's machine. Without the delenv in conftest, a shell
+        # exporting CLAUDE_CONFIG_DIR (Claude Code's own alternate-profile
+        # switch — this repo is developed under one) refuses every
+        # registration locally and nothing refuses in CI.
+        assert "CLAUDE_CONFIG_DIR" not in os.environ
+
+    def test_register_refuses_to_write_outside_this_home(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        elsewhere = self._outside_home(monkeypatch, tmp_path)
+        calls = self._writing_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "--no-seed", expect=1)
+        assert calls == []
+        assert not (elsewhere / ".claude.json").exists()
+        blob = r.out + r.err
+        assert "refusing to register" in blob
+        assert str(elsewhere / ".claude.json") in blob
+        # The refusal has to be actionable: name the way through and the argv.
+        assert "--force" in blob
+        assert " ".join(self._claude_add()) in blob
+
+    def test_unregister_is_guarded_too(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        # The worse direction, and the one a "register-only" guard misses:
+        # `claude mcp remove boost` from a sandbox deletes the user's real
+        # registration rather than adding a stray one.
+        elsewhere = self._outside_home(monkeypatch, tmp_path)
+        real = elsewhere / ".claude.json"
+        real.write_text('{"mcpServers": {"boost": {}}}', encoding="utf-8")
+        calls = self._writing_clis(monkeypatch, "claude")
+        r = boost("mcp", "unregister", expect=1)
+        assert calls == []
+        assert json.loads(real.read_text(encoding="utf-8"))["mcpServers"]
+        assert "refusing to unregister" in r.out + r.err
+
+    def test_force_is_the_way_through(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        # A config home deliberately kept outside $HOME is legal, so the
+        # refusal is a guard rather than a wall — and `--force` is what makes
+        # the two cases distinguishable instead of one silent write.
+        elsewhere = self._outside_home(monkeypatch, tmp_path)
+        calls = self._writing_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "--no-seed", "--force")
+        assert calls == [self._claude_add()]
+        assert (elsewhere / ".claude.json").exists()
+        assert "registered boost as an MCP server for Claude Code" in r.out
+
+    def test_a_config_home_inside_this_home_is_not_refused(
+            self, boost, sandbox, monkeypatch):
+        # The no-op case, and the reason this change is safe to ship: on an
+        # ordinary machine CLAUDE_CONFIG_DIR sits under $HOME, so the guard
+        # never fires. Only a sandboxed HOME separates the two.
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR",
+                           str(sandbox / ".claude-personal"))
+        calls = self._writing_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "--no-seed")
+        assert calls == [self._claude_add()]
+        assert (sandbox / ".claude-personal" / ".claude.json").exists()
+        assert "registered boost as an MCP server for Claude Code" in r.out
+
+    def test_one_refused_host_does_not_end_the_sweep(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        # Same rule as an already-registered host or a failed one: the next
+        # host is a different config file, and Gemini's is still under this
+        # HOME. A partial sweep is a success with a warning.
+        self._outside_home(monkeypatch, tmp_path)
+        calls = self._writing_clis(monkeypatch, "claude", "gemini")
+        r = boost("mcp", "register", "--no-seed")
+        assert calls == [self._gemini_add()]
+        assert "refusing to register" in r.out + r.err
+        assert "registered boost as an MCP server for Gemini CLI" in r.out
+
+    def test_the_other_hosts_never_read_claude_config_dir(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        # Gemini and agy are anchored at $HOME, so the variable that moves
+        # Claude must not move them — guarding them on it would refuse a
+        # registration that was always going to land in the sandbox.
+        self._outside_home(monkeypatch, tmp_path)
+        calls = self._writing_clis(monkeypatch, "gemini", "agy")
+        r = boost("mcp", "register", "--no-seed")
+        assert calls == [self._gemini_add(), self._agy_add()]
+        assert "refusing" not in r.out + r.err
+
+    def test_dry_run_names_the_file_and_the_escape(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        # Which file the argv lands in is the one thing a dry run could not
+        # tell you before, and it is exactly what the guard turns on.
+        elsewhere = self._outside_home(monkeypatch, tmp_path)
+        calls = self._writing_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "--host", "claude", "--dry-run")
+        assert calls == []
+        assert ("writes %s  — outside this $HOME, refused without --force"
+                % (elsewhere / ".claude.json")) in r.out
+
+    def test_dry_run_names_a_file_inside_home_without_warning(
+            self, boost, sandbox, monkeypatch):
+        self._writing_clis(monkeypatch, "gemini")
+        r = boost("mcp", "register", "--host", "gemini", "--dry-run")
+        assert ("writes %s" % (sandbox / ".gemini" / "settings.json")) in r.out
+        assert "refused without --force" not in r.out
+
+
 
 # ---------------------------------------------------------------- self-update
 

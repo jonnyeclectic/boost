@@ -126,6 +126,12 @@ def sandbox(tmp_path, monkeypatch):
     # fail agent/store assertions for reasons nothing in the test says. Tests
     # that mean to exercise the relocation set it themselves.
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    # Same shape, and it is the bug `boost mcp`'s sandbox guard exists for: an
+    # agent CLI resolves its config home from the ambient environment, so a
+    # developer with CLAUDE_CONFIG_DIR exported would have every mcp test
+    # judged against their real config dir — refused locally, fine in CI.
+    # Tests that mean to exercise the escape set it themselves.
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("BOOST_NO_AI", "1")       # deterministic: no AI calls
     # `boost mcp` seeds the default registries on an empty machine. That is
     # seven network clones, which no test may perform as a side effect of

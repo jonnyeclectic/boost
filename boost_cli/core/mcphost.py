@@ -50,6 +50,18 @@ load-bearing:
   mandatory on the way out, not just in. This is the one difference here with a
   silent-failure mode, which is why it is pinned twice.
 
+**Where each host writes, and why boost refuses rather than redirects.**
+A host CLI resolves its own configuration from the ambient environment, not
+from the ``HOME`` boost is running under, so shelling out to ``claude mcp add``
+from a run sandboxed with ``HOME=<tempdir>`` registered boost in the
+developer's live ``~/.claude-personal/.claude.json``. :data:`CONFIG_HOME_ENV`
+and :data:`USER_CONFIG_REL` name the file each host would touch, and the
+command layer refuses when boost's own ``HOME`` does not contain it. Refusing
+is the deliberate half: boost *could* set ``CLAUDE_CONFIG_DIR`` for the child
+and redirect the write, but that re-points a user who set it on purpose and
+reports success for a file their CLI never reads. ``--force`` is the way
+through, and the refusal names the path and prints the argv.
+
 Verified against the real CLIs — Claude Code 2.1.251 and Gemini CLI 0.57.0 — on
 2026-08-28, by running every argv below against a throwaway ``HOME`` *and*
 working directory (Gemini writes ``project`` scope to ``./.gemini``, so ``HOME``
@@ -63,6 +75,9 @@ machine — and prose that is merely plausible fails the same way, one reader at
 a time, which is what the ``--`` bullet above cost.
 """
 from __future__ import annotations
+
+import os.path
+from collections.abc import Mapping
 
 # The MCP server name boost registers itself under. Deliberately free of
 # underscores: Gemini CLI assigns every MCP tool the fully-qualified name
@@ -119,6 +134,82 @@ def has_scope(host: str) -> bool:
     entry after something that cannot exist.
     """
     return host != AGY
+
+
+#: The environment variable a host resolves its configuration home from.
+#: **Claude Code is the only one**, which is what makes the guard below small.
+#: Verified on 2026-09-27 against the installed CLIs: Claude Code 2.1.283's own
+#: strings describe ``CLAUDE_CONFIG_DIR`` as naming "the configuration home …
+#: the HOME it defaults from"; Gemini CLI 0.57.0's ``GEMINI_DIR`` is a JS
+#: constant ``".gemini"`` and not an environment variable at all (only
+#: ``GEMINI_PROJECT_DIR`` exists, and it moves the *project* dir); and
+#: Antigravity CLI exposes no config-dir variable, inheriting Gemini's tree.
+#: A host absent from this table therefore keeps its files under ``$HOME``.
+CONFIG_HOME_ENV: dict[str, str] = {
+    CLAUDE: "CLAUDE_CONFIG_DIR",
+}
+
+#: Where each host keeps the user-scope registration ``mcp add`` writes,
+#: relative to its configuration home. Claude's ``mcpServers`` live at the top
+#: level of ``.claude.json``; Gemini's in ``.gemini/settings.json`` (the same
+#: file :mod:`boost_cli.core.hookhost` writes hooks into); agy's in the global
+#: ``.gemini/config/mcp_config.json`` it inherited, which is why it has no
+#: scope. Components rather than a string so the join is native on Windows.
+USER_CONFIG_REL: dict[str, tuple[str, ...]] = {
+    CLAUDE: (".claude.json",),
+    GEMINI: (".gemini", "settings.json"),
+    AGY: (".gemini", "config", "mcp_config.json"),
+}
+
+
+def config_home_env(host: str) -> str | None:
+    """The env var ``host`` reads its configuration home from, or ``None``.
+
+    ``None`` is the common answer and means "this host is anchored at
+    ``$HOME``". Raises KeyError for an unknown host, like the rest of this
+    table.
+    """
+    if host not in HOSTS:
+        raise KeyError(host)
+    return CONFIG_HOME_ENV.get(host)
+
+
+def config_home(host: str, env: Mapping[str, str], home: str) -> str:
+    """Where ``host`` will look for its configuration, given ``env``.
+
+    ``home`` is boost's own idea of the home directory (:func:`paths.home`),
+    and is the answer unless the host has a configuration-home variable set to
+    an **absolute** path. A relative value falls back to ``home`` because the
+    CLI itself refuses it rather than resolving it: Claude Code 2.1.283 carries
+    the literal message ``the configuration home (CLAUDE_CONFIG_DIR) is not an
+    absolute path``. Treating it as a home would make boost report an escape
+    for a config that writes nothing anywhere; falling back lets the CLI run
+    and say so in its own words.
+    """
+    var = config_home_env(host)
+    value = (env.get(var) or "").strip() if var else ""
+    # `os.path.isabs`, not `Path(value).is_absolute()`. The two disagree only
+    # on Windows, for a drive-less `/foo`: `ntpath.isabs` says True on 3.12 and
+    # False on 3.13+, `PureWindowsPath` says False on both (the trap
+    # `registry.py` documents for a tap spec), and the host CLI is a Node
+    # program whose `path.win32.isAbsolute("/foo")` says True. Nothing models
+    # all three, and nothing is written outside boost's $HOME either way —
+    # this branch only decides whether boost or the CLI reports the refusal —
+    # so switching would add a third answer and buy nothing.
+    return value if value and os.path.isabs(value) else home  # noqa: FURB146
+
+
+def user_config_path(host: str, env: Mapping[str, str], home: str) -> str:
+    """The file ``host``'s user-scope ``mcp add``/``remove`` would write.
+
+    Pure: the caller resolves and compares it (``scopes.contains``) against
+    the home boost itself is running under. That comparison is the whole
+    guard — an agent CLI resolves its own configuration from the ambient
+    environment, not from the ``HOME`` boost was sandboxed with, so
+    ``boost mcp register`` under ``HOME=<tempdir>`` really did write into a
+    developer's live ``~/.claude-personal/.claude.json``.
+    """
+    return os.path.join(config_home(host, env, home), *USER_CONFIG_REL[host])
 
 
 def _env_flags(env: dict[str, str] | None) -> list[str]:

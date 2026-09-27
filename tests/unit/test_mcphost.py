@@ -22,6 +22,9 @@ did exactly that once: this file and the module both cited a version, and the
 """
 from __future__ import annotations
 
+import os
+import os.path
+
 import pytest
 
 from boost_cli.core import mcphost
@@ -345,3 +348,98 @@ class TestClassifyResult:
         status, _ = mcphost.classify_result(
             "register", 1, "already configured", "")
         assert status == "already"
+
+
+class TestConfigHome:
+    """Which file each host would write, and how ``HOME`` decides.
+
+    The guard these back is in the command layer, because comparing two paths
+    means resolving them; the *decision* of which path is at stake is here, so
+    every branch is reachable without an agent CLI on PATH. The failure they
+    describe is real and was observed: `boost mcp register` under a sandboxed
+    ``HOME`` wrote into a live ``~/.claude-personal/.claude.json``, because the
+    child CLI reads ``CLAUDE_CONFIG_DIR`` from the ambient environment and has
+    never heard of boost's ``HOME``.
+
+    Absolute-path fixtures are built with ``os.path.join``/``abspath`` rather
+    than written as ``/x``: ``ntpath.isabs("/x")`` is True on CPython 3.12 and
+    False on 3.13+, and CI runs both.
+    """
+
+    def _abs(self, *parts):
+        return os.path.abspath(os.path.join(os.sep, *parts))
+
+    def test_only_claude_has_a_config_home_variable(self):
+        # Gemini's GEMINI_DIR is a JS constant, not an env var, and agy
+        # exposes none at all — so both are anchored at $HOME and the escape
+        # is Claude-only. Pinned as a set so a new host has to decide.
+        assert mcphost.config_home_env(mcphost.CLAUDE) == "CLAUDE_CONFIG_DIR"
+        assert mcphost.config_home_env(mcphost.GEMINI) is None
+        assert mcphost.config_home_env(mcphost.AGY) is None
+
+    def test_an_unknown_host_raises_like_the_rest_of_the_table(self):
+        with pytest.raises(KeyError):
+            mcphost.config_home_env("emacs")
+        with pytest.raises(KeyError):
+            mcphost.user_config_path("emacs", {}, self._abs("home"))
+
+    def test_an_unset_variable_leaves_the_host_under_home(self):
+        home = self._abs("home", "sandbox")
+        assert mcphost.config_home(mcphost.CLAUDE, {}, home) == home
+
+    def test_an_empty_variable_leaves_the_host_under_home(self):
+        # Exported-but-empty is the shell's way of saying nothing, and the
+        # CLI treats it that way too. Whitespace counts as empty.
+        home = self._abs("home", "sandbox")
+        for value in ("", "   "):
+            assert mcphost.config_home(
+                mcphost.CLAUDE, {"CLAUDE_CONFIG_DIR": value}, home) == home
+
+    def test_a_relative_variable_falls_back_to_home(self):
+        # Claude Code 2.1.283 refuses it in its own words — "the configuration
+        # home (CLAUDE_CONFIG_DIR) is not an absolute path" — so nothing is
+        # written anywhere and reporting an escape would be a false refusal.
+        home = self._abs("home", "sandbox")
+        assert mcphost.config_home(
+            mcphost.CLAUDE, {"CLAUDE_CONFIG_DIR": "rel/cfg"}, home) == home
+
+    def test_an_absolute_variable_wins_over_home(self):
+        home = self._abs("home", "sandbox")
+        elsewhere = self._abs("home", "real", ".claude-personal")
+        assert mcphost.config_home(
+            mcphost.CLAUDE, {"CLAUDE_CONFIG_DIR": elsewhere},
+            home) == elsewhere
+
+    def test_the_variable_is_ignored_for_hosts_that_do_not_read_it(self):
+        # The exact machine shape that hid the bug: CLAUDE_CONFIG_DIR set,
+        # and two hosts for which it means nothing.
+        home = self._abs("home", "sandbox")
+        env = {"CLAUDE_CONFIG_DIR": self._abs("home", "real", ".cfg")}
+        for host in (mcphost.GEMINI, mcphost.AGY):
+            assert mcphost.config_home(host, env, home) == home
+
+    def test_each_host_names_its_own_user_scope_file(self):
+        home = self._abs("home", "sandbox")
+        assert mcphost.user_config_path(mcphost.CLAUDE, {}, home) == \
+            os.path.join(home, ".claude.json")
+        assert mcphost.user_config_path(mcphost.GEMINI, {}, home) == \
+            os.path.join(home, ".gemini", "settings.json")
+        assert mcphost.user_config_path(mcphost.AGY, {}, home) == \
+            os.path.join(home, ".gemini", "config", "mcp_config.json")
+
+    def test_the_escaping_path_is_the_one_that_was_actually_written(self):
+        # The reported incident, as a path: HOME sandboxed, CLAUDE_CONFIG_DIR
+        # left pointing at the developer's real config dir.
+        real = self._abs("Users", "dev", ".claude-personal")
+        cfg = mcphost.user_config_path(
+            mcphost.CLAUDE, {"CLAUDE_CONFIG_DIR": real},
+            self._abs("tmp", "sandbox-home"))
+        assert cfg == os.path.join(real, ".claude.json")
+
+    def test_every_known_host_has_a_user_scope_file(self):
+        # A new host with no row would raise KeyError from inside the guard,
+        # on the path where the guard is the only thing standing between a
+        # sandboxed run and someone's real config.
+        home = self._abs("home", "sandbox")
+        for host in mcphost.hosts():
+            assert mcphost.user_config_path(host, {}, home).startswith(home)
