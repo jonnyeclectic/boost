@@ -513,9 +513,11 @@ nothing. Consequences for code you write:
   would cost a "Skill conflict detected" line per session — the exact failure
   `links_skills: false` exists to prevent. Its rules arrive through the
   `gemini` agent, which already writes the `~/.gemini/GEMINI.md` Antigravity
-  reads; its workflow and MCP surfaces are **not** wired up, because their
-  formats have not been verified against the real CLI, and this file does not
-  record guesses (see `hookhost.py` for the standard: name the sources).
+  reads; its **workflow** surface is not wired up, because that format has not
+  been verified against the real CLI, and this file does not record guesses
+  (see `hookhost.py` for the standard: name the sources). Its MCP surface is:
+  `core/mcphost.py` carries agy as the third host, and every argv there was
+  read off `agy mcp <subcommand> --help` rather than inferred.
 
 - **Codex is the second native-store agent, and the ChatGPT desktop app is the
   same program.** `/Applications/ChatGPT.app` has bundle id `com.openai.codex`,
@@ -608,7 +610,12 @@ nothing. Consequences for code you write:
   Claude. Claude and
   Gemini disagree on name position, the `--` separator, and whether unregister
   needs an explicit scope — all three verified against the real CLIs and pinned
-  by `tests/unit/test_mcphost.py`. Don't "simplify" them into one shape.
+  by `tests/unit/test_mcphost.py`. Don't "simplify" them into one shape. The two
+  `remove` calls now agree — both carry `--scope user` — and they agree on
+  purpose, rather than by neglect: Gemini needs the flag or its removal is a
+  no-op against a user-scope entry, and Claude, which needs none, is handed one
+  so the argv cannot reach `<cwd>/.mcp.json`, the one scope outside every
+  `$HOME` and so the one `mcphost.escapes_home` cannot judge.
 - **`core/hookhost.py` is the same idea for hooks, and two hosts have them.**
   `boost hooks` writes Claude Code's `~/.claude/settings.json` (the default,
   unchanged) or, behind `--host gemini`, the `~/.gemini/settings.json` that

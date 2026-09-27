@@ -195,19 +195,45 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
 
 def _register_mcp_server(name: str, spec: dict, host: str = "claude",
                          scope: str = "user") -> None:
-    """Run one `<host> mcp add` for a skill-declared server. Never raises.
+    """Run one `<host> mcp add` for a skill-declared server.
+
+    Never raises on a *runtime* failure — a missing CLI, a refused config
+    file, a timeout or a non-zero exit is reported and swallowed, because an
+    install must not die on the optional step that follows it. A scope this
+    function cannot model is a different thing: a programming error, and it
+    raises.
 
     ``scope`` is threaded from the install rather than defaulted, because
     ``register_argv``'s own default is ``"user"`` and silently taking it is how
     a ``--scope project`` install ended up registering machine-wide.
+
+    Only user scope reaches here — :func:`_offer_mcp` returns early for a
+    project install — and the guard below is why that stays an invariant
+    rather than a coincidence: it models the *user-scope* file, so a project
+    registration (``<cwd>/.mcp.json``) would be judged against a path nothing
+    was going to write. Fail loudly instead of guarding the wrong file.
     """
     import subprocess
 
     from ..core import mcpdecl, mcphost
+    if scope != "user":
+        raise ValueError("MCP registration is user-scope only, got %r" % scope)
     argv = mcpdecl.register_argv(name, spec, host=host, scope=scope)
     if not shutil.which(mcphost.cli(host)):
         out.warn("`%s` CLI not found — run this yourself:" % mcphost.cli(host))
         out.info("  " + " ".join(argv))
+        return
+    # The same sandbox guard `boost mcp` applies, for the same reason: the
+    # child resolves its config home from the ambient environment, so an
+    # install run under HOME=<tempdir> would write a skill's MCP server into
+    # the real one. There is no --force here — this is an install prompt, not
+    # a flag surface — so the argv is printed and the user decides.
+    boost_home = paths.home()
+    cfg = mcphost.escapes_home(host, os.environ, boost_home)
+    if cfg:
+        out.warn("not registering %s with %s: %s is outside this $HOME (%s)"
+                 % (name, mcphost.label(host), cfg, boost_home), wrap=True)
+        out.info("  run it yourself: " + " ".join(argv))
         return
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)

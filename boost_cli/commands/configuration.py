@@ -1942,7 +1942,8 @@ def _mcp_tool(tool: str, args: dict):
     return REGISTRY.call(tool, args)
 
 
-def _run_mcp_host(host: str, action: str, cmd) -> tuple[str, str]:
+def _run_mcp_host(host: str, action: str, cmd, *,
+                  force: bool = False) -> tuple[str, str]:
     """Run one host's register/unregister argv.
 
     Returns ``(status, detail)`` where status is:
@@ -1954,6 +1955,8 @@ def _run_mcp_host(host: str, action: str, cmd) -> tuple[str, str]:
       likewise success with a different wording;
     * ``"missing"``        — the CLI is not installed. Not an error: most
       machines have one agent CLI, not all of them;
+    * ``"refused"``        — it is installed, but the file it would write sits
+      outside the ``HOME`` boost is running under; ``detail`` is that path;
     * ``"failed"``         — it is installed and something else went wrong.
 
     It **returns** rather than raises so one host cannot end the sweep. That
@@ -1966,6 +1969,18 @@ def _run_mcp_host(host: str, action: str, cmd) -> tuple[str, str]:
     exe = mcphost.cli(host)
     if not shutil.which(exe):
         return "missing", ""
+    # The sandbox guard, and it has to run HERE — before `subprocess.run`,
+    # which inherits the ambient environment. An agent CLI resolves its own
+    # config home from that environment (Claude Code reads CLAUDE_CONFIG_DIR),
+    # not from the HOME boost was started with, so `boost mcp register` under
+    # HOME=<tempdir> really did register boost in a developer's live
+    # ~/.claude-personal/.claude.json. Refuse and name the file rather than
+    # setting CLAUDE_CONFIG_DIR for the child: redirecting would re-point a
+    # user who set it deliberately, and report success for a file their CLI
+    # never reads. `--force` is the way through.
+    cfg = mcphost.escapes_home(host, os.environ, paths.home(), force=force)
+    if cfg:
+        return "refused", cfg
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -2127,6 +2142,10 @@ def cmd_mcp(argv) -> int:
     p.add_argument("--dry-run", action="store_true",
                    help="print the resolved command and install status per "
                         "host; register or tap nothing")
+    p.add_argument("--force", action="store_true",
+                   help="(un)register even when the host would write outside "
+                        "this $HOME — for a config home deliberately kept "
+                        "elsewhere")
     # Mutually exclusive: `--seed --no-seed` used to resolve silently to the
     # network-touching side, which is the wrong way for an ambiguous pair of
     # explicitly typed flags to break.
@@ -2164,6 +2183,14 @@ def cmd_mcp(argv) -> int:
                 out.role("(installed)" if installed else "(not installed)",
                          "muted"),
                 " ".join(cmd)))
+            # Which file that argv lands in is the one thing a dry run could
+            # not tell you, and it is the thing the sandbox guard turns on.
+            cfg = mcphost.user_config_path(host, os.environ, str(paths.home()))
+            escape = mcphost.escapes_home(host, os.environ, paths.home(),
+                                          force=args.force)
+            note = "  — outside this $HOME, refused without --force" \
+                if escape else ""
+            out.dim("  writes %s%s" % (cfg, note))
         out.dim("  dry run — nothing was %sed, nothing tapped" % verb)
         return 0
 
@@ -2183,10 +2210,16 @@ def cmd_mcp(argv) -> int:
     explicit = args.host not in (None, "", "auto")
     named = mcphost.is_named(args.host)
     done, already, not_registered, missing, failed = [], [], [], [], {}
+    refused: dict[str, str] = {}
     for host in targets:
         cmd = mcphost.argv(host, args.action, shim)
-        status, detail = _run_mcp_host(host, args.action, cmd)
-        if status == "ran":
+        status, detail = _run_mcp_host(host, args.action, cmd,
+                                       force=args.force)
+        if status == "refused":
+            # Collected like a failure, for the same reason: the next host is
+            # a different config file and may well be inside this HOME.
+            refused[host] = detail
+        elif status == "ran":
             done.append(host)
         elif status == "already":
             already.append(host)
@@ -2214,6 +2247,12 @@ def cmd_mcp(argv) -> int:
                % mcphost.label(host))
     for host in not_registered:
         out.ok("%s: not registered — nothing to do" % mcphost.label(host))
+    for host, cfg in refused.items():
+        out.warn("%s: refusing to %s — %s is outside this $HOME (%s)"
+                 % (mcphost.label(host), verb, cfg, paths.home()), wrap=True)
+        out.info(out.role("run it yourself, or pass --force: %s"
+                          % " ".join(mcphost.argv(host, args.action, shim)),
+                          "muted"))
     for host, detail in failed.items():
         out.warn("%s: %s mcp %s failed — %s"
                  % (mcphost.label(host), mcphost.cli(host), args.action,
@@ -2223,9 +2262,10 @@ def cmd_mcp(argv) -> int:
                           "muted"))
     settled = done + already + not_registered
     if not settled:
-        if failed:
-            # Every installed CLI failed. That is a real error — but only after
-            # each one has been tried and named.
+        if failed or refused:
+            # Every installed CLI failed, or every one of them would have
+            # written outside this HOME. Either is a real error — but only
+            # after each host has been tried and named.
             journal.log("mcp", args.action, hosts="")
             return 1
         # Nothing ran. Under `auto` nothing has been printed yet, so say which
