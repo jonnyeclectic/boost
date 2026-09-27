@@ -9,7 +9,13 @@ from __future__ import annotations
 
 import json
 
-from boost_cli.core import frontmatter, mcpdecl
+import pytest
+
+from boost_cli.core import frontmatter, mcpdecl, mcphost
+
+# One declared server with every optional field populated, so a per-host
+# assertion below exercises flag position and the command tail at once.
+SPEC = {"command": "npx", "args": ["-y", "gh-mcp"], "env": {"K": "v"}}
 
 
 class TestConstants:
@@ -255,6 +261,60 @@ class TestRegisterArgv:
     def test_scope_defaults_to_user(self):
         argv = mcpdecl.register_argv("gh", {"command": "npx"})
         assert argv[argv.index("--scope") + 1] == "user"
+
+
+class TestRegisterArgvPerHost:
+    """The install path builds an argv for *every* installed host CLI.
+
+    ``pkg`` registers a declared server with each host on PATH, so a host with
+    no branch is not a theoretical gap: it ships an argv that CLI rejects, on
+    every install, forever. agy was that host — it fell through to Claude's
+    shape, which puts the name before the flags and `--scope` in front of a CLI
+    that has no scopes. These pin the literal argv for each of the three.
+    """
+
+    def test_claude(self):
+        assert mcpdecl.register_argv("gh", SPEC) == [
+            "claude", "mcp", "add", "gh", "--scope", "user", "-e", "K=v",
+            "--", "npx", "-y", "gh-mcp"]
+
+    def test_gemini(self):
+        assert mcpdecl.register_argv("gh", SPEC,
+                                     host=mcphost.GEMINI) == [
+            "gemini", "mcp", "add", "--scope", "user", "-e", "K=v",
+            "gh", "npx", "--", "-y", "gh-mcp"]
+
+    def test_agy(self):
+        assert mcpdecl.register_argv("gh", SPEC, host=mcphost.AGY) == [
+            "agy", "mcp", "add", "-e", "K=v", "gh",
+            "--", "npx", "-y", "gh-mcp"]
+
+    def test_agy_passes_no_scope(self):
+        # agy keeps one global file and errors on `--scope`. Claude's shape,
+        # which this used to fall through to, passes one.
+        argv = mcpdecl.register_argv("gh", SPEC, host=mcphost.AGY)
+        assert "--scope" not in argv and "user" not in argv
+
+    def test_agy_puts_every_flag_before_the_name(self):
+        argv = mcpdecl.register_argv("gh", SPEC, host=mcphost.AGY)
+        assert argv.index("-e") < argv.index("gh")
+
+    @pytest.mark.parametrize("host", mcphost.hosts())
+    def test_matches_mcphost_for_the_same_server(self, host):
+        # The docstring's promise, as an assertion: for the one server both
+        # modules can describe — boost itself — the two produce the same argv.
+        # A new host added to `mcphost.add_argv` and not to its table, or a
+        # grammar changed in one caller's head, fails here rather than on a
+        # user's machine. `hosts()` drives the parametrization so a fourth host
+        # is covered the moment it is added.
+        spec = {"command": "/opt/boost", "args": ["mcp", "--stdio"],
+                "env": mcphost.LAUNCH_ENV}
+        assert (mcpdecl.register_argv(mcphost.SERVER_NAME, spec, host=host)
+                == mcphost.register_argv(host, "/opt/boost"))
+
+    def test_an_unknown_host_raises_rather_than_guessing(self):
+        with pytest.raises(KeyError):
+            mcpdecl.register_argv("gh", SPEC, host="nope")
 
 
 class TestCommandLine:

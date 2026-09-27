@@ -599,9 +599,11 @@ nothing. Consequences for code you write:
   `agents/` slot stays verbatim Markdown. Getting that backwards produces a file
   the agent silently never loads.
 - `core/mcphost.py` holds the per-host `mcp add`/`remove` grammar.
-  **Antigravity CLI (`agy`) is the third host**, and its two argv rules both bite: flags must
-  come *before* `<name>` (a flag after it is rejected) and `--` must precede a
-  command whose args start with `-`, or `--stdio` is eaten as an agy flag. It
+  **Antigravity CLI (`agy`) is the third host**, and one argv rule of its own
+  bites: flags must come *before* `<name>` (a flag after it is rejected). The
+  `--` boost also emits is agy's documented separator and, measured on 1.1.22,
+  inert — agy never consumes an argument that *follows* the command, and
+  rejects a dash-leading command with or without it. It
   has **no scope** — one global file at `~/.gemini/config/mcp_config.json`,
   inherited from Gemini CLI, so there is no `~/.antigravity` — which is why
   `has_scope()` exists and the success line drops "(scope: user)" for it. Its
@@ -610,8 +612,29 @@ nothing. Consequences for code you write:
   Claude. Claude and
   Gemini disagree on name position, the `--` separator, and whether unregister
   needs an explicit scope — all three verified against the real CLIs and pinned
-  by `tests/unit/test_mcphost.py`. Don't "simplify" them into one shape. The two
-  `remove` calls now agree — both carry `--scope user` — and they agree on
+  by `tests/unit/test_mcphost.py`. **boost emits the separator for all three,
+  and Gemini is the one that takes it *after* the command.** boost emitted none
+  for Gemini at all, on the theory that its trailing variadic would pass a `--`
+  through as a literal argument; against the real CLI 0.61.0 it does not, and
+  `unknown-options-as-args` rescues only options gemini does *not* know —
+  `gemini mcp add` knows ten. So the canonical GitHub spec's bare
+  `-e GITHUB_PERSONAL_ACCESS_TOKEN` was claimed by gemini's own `--env`
+  (`nargs: 1`, taking the name as its one value) and vanished, exit 0. The
+  `-e KEY=value` spelling is *relocated* rather than dropped — into gemini's
+  own `env` map, out of the args docker reads — so the container is equally
+  tokenless; say relocated, not dropped, when reading a real entry. A `-t http`
+  in a spec's args rewrites the entry as `{"url": "npx", "type": "http"}`. Emit
+  the separator unconditionally: `add x npx --` is accepted and stores
+  `args: []`. Don't "simplify" them into one shape —
+  **one function, three branches**, which is what `mcphost.add_argv` is. It is
+  the only copy of the `mcp add` grammar, and it is the only copy because
+  `mcpdecl.register_argv` (the install path, registering a server a *skill*
+  declares) used to be a second one: it had a Gemini branch and a Claude
+  fallthrough, so agy — the one host whose CLI rejects Claude's shape — got it
+  on every install. A host with no branch now raises rather than inheriting
+  Claude's, and `test_mcpdecl.py` asserts the two callers agree, parametrised
+  over `hosts()`. Add a host in `add_argv`, not around it. The two `remove`
+  calls, meanwhile, now agree — both carry `--scope user` — and they agree on
   purpose, rather than by neglect: Gemini needs the flag or its removal is a
   no-op against a user-scope entry, and Claude, which needs none, is handed one
   so the argv cannot reach `<cwd>/.mcp.json`, the one scope outside every

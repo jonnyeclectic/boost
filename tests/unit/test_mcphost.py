@@ -10,8 +10,8 @@ like "boost's MCP server is broken" rather than "the flag order is wrong".
 
 So these assertions pin the two grammars token-for-token, and specifically pin
 the three places they diverge: where the server name sits relative to the
-``-e`` flags, whether a ``--`` separator appears, and whether the unregister
-side needs an explicit scope. A change that "looks equivalent" to one of them
+``-e`` flags, which side of the command the ``--`` separator goes, and
+whether the unregister side needs an explicit scope. A change that "looks equivalent" to one of them
 is a regression.
 
 Which CLI versions those argvs were last checked against, and how to repeat the
@@ -97,15 +97,24 @@ class TestRegisterArgvGemini:
             "gemini", "mcp", "add", "--scope", "user",
             "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
             "-e", "no_proxy=*",
-            "boost", SHIM, "mcp", "--stdio",
+            "boost", SHIM, "--", "mcp", "--stdio",
         ]
 
-    def test_no_separator(self):
-        # `gemini mcp add` sets yargs `unknown-options-as-args`, so `--stdio`
-        # reaches [args...] on its own and a separator buys nothing. (Gemini
-        # does handle a `--` correctly — `populate--` strips it and appends the
-        # rest — so this pins the argv boost sends, not a hazard it dodges.)
-        assert "--" not in mcphost.register_argv(mcphost.GEMINI, SHIM)
+    def test_the_separator_follows_the_command(self):
+        # Gemini is the one host that takes `--` *after* <commandOrUrl>.
+        # Claude's placement is rejected outright by yargs ("Not enough
+        # non-option arguments: got 1, need at least 2"), and omitting it
+        # lets `mcp add`'s own ten flags eat a matching arg out of the
+        # server's tail — measured on 0.61.0, `-e K=v` in a tail is claimed
+        # by gemini's own `--env` (`nargs: 1`) and relocated into the entry's
+        # `env` map, and the bare `-e NAME` form vanishes outright.
+        argv = mcphost.register_argv(mcphost.GEMINI, SHIM)
+        assert argv[argv.index("--") - 1] == SHIM
+
+    def test_the_separator_is_emitted_even_with_an_empty_tail(self):
+        # `gemini mcp add x npx --` is accepted and stores `args: []`, so the
+        # builder needs no branch for it. A branch is what would rot.
+        assert mcphost.add_argv(mcphost.GEMINI, "x", "npx", [])[-1] == "--"
 
     def test_name_follows_the_flags_and_precedes_the_command(self):
         argv = mcphost.register_argv(mcphost.GEMINI, SHIM)
@@ -113,16 +122,31 @@ class TestRegisterArgvGemini:
 
     def test_stdio_trails_the_launcher_as_a_server_arg(self):
         argv = mcphost.register_argv(mcphost.GEMINI, SHIM)
-        assert argv[-3:] == [SHIM, "mcp", "--stdio"]
+        assert argv[-4:] == [SHIM, "--", "mcp", "--stdio"]
+
+    def test_a_dash_arg_in_the_tail_survives_the_hosts_own_flags(self):
+        # The regression that made the separator mandatory: the canonical
+        # GitHub server's `-e GITHUB_PERSONAL_ACCESS_TOKEN` used to be eaten
+        # by gemini's own `--env`, launching the container with no token,
+        # exit 0, no warning.
+        argv = mcphost.add_argv(
+            mcphost.GEMINI, "github", "docker",
+            ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+             "ghcr.io/github/github-mcp-server"])
+        assert argv[argv.index("--") + 1:] == [
+            "run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN",
+            "ghcr.io/github/github-mcp-server"]
 
 
 class TestRegisterArgvAgy:
     """`agy mcp add [flags] <name> <commandOrUrl> [args...]`.
 
-    Both of agy's own rules bite here, and each one fails quietly if broken:
-    a flag placed after the name is rejected outright, and without `--` before
-    the command, `--stdio` is eaten as an agy flag — boost would be registered
-    with a command it never receives its own argument for.
+    One of agy's own rules bites here: a flag placed after the name is
+    rejected outright. The `--` is agy's documented separator and boost emits
+    it, but measured on 1.1.22 it is inert — agy never claims an argument that
+    *follows* the command, and rejects a dash-leading command with or without
+    it. The argv below is still the one to pin; only the reason it carries a
+    separator is weaker than this docstring once claimed.
 
     There is also no scope: agy keeps one global file at
     `~/.gemini/config/mcp_config.json` (inherited from Gemini CLI — there is no
@@ -151,6 +175,50 @@ class TestRegisterArgvAgy:
     def test_the_whole_argv(self):
         assert mcphost.register_argv(mcphost.AGY, SHIM, env={}) == [
             "agy", "mcp", "add", "boost", "--", SHIM, "mcp", "--stdio"]
+
+
+class TestAddArgv:
+    """`add_argv` is the one copy of the `mcp add` grammar.
+
+    It exists because there were two: `register_argv` here and
+    `mcpdecl.register_argv` on the install path, which "mirrored" this one for
+    Claude and Gemini and had no agy branch at all — so agy, the single host
+    whose CLI rejects Claude's shape, was handed exactly that. The parity is
+    asserted across modules in `test_mcpdecl.py`; what is pinned here is the
+    generalisation (an arbitrary command, not just boost's own) and the
+    refusal.
+    """
+
+    def test_an_arbitrary_command_and_tail(self):
+        assert mcphost.add_argv(mcphost.CLAUDE, "gh", "npx", ["-y", "pkg"],
+                                env={"A": "1"}) == [
+            "claude", "mcp", "add", "gh", "--scope", "user", "-e", "A=1",
+            "--", "npx", "-y", "pkg"]
+
+    def test_env_defaults_to_none_rather_than_boosts_own(self):
+        # `register_argv` substitutes LAUNCH_ENV; the generic builder must not,
+        # or every declared server would inherit boost's fork-safety vars.
+        assert "-e" not in mcphost.add_argv(
+            mcphost.CLAUDE, "gh", "npx", [])
+
+    def test_an_empty_tail_ends_at_the_command(self):
+        # Claude's separator precedes the command, so an empty tail ends
+        # there. (Gemini's trails it — see TestRegisterArgvGemini.)
+        assert mcphost.add_argv(mcphost.CLAUDE, "gh", "npx", [])[-1] == "npx"
+
+    def test_a_host_in_the_table_with_no_grammar_raises(self, monkeypatch):
+        # The regression this function exists to prevent: a new HOSTS row used
+        # to inherit Claude's argv silently. A fourth host must be given a
+        # branch, and until it is, boost says so instead of shipping the wrong
+        # command line. ValueError, not KeyError — the host *is* known.
+        monkeypatch.setitem(mcphost.HOSTS, "codex",
+                            {"cli": "codex", "label": "Codex CLI"})
+        with pytest.raises(ValueError, match="grammar"):
+            mcphost.add_argv("codex", "gh", "npx", [])
+
+    def test_an_unknown_host_still_raises_keyerror(self):
+        with pytest.raises(KeyError):
+            mcphost.add_argv("nope", "gh", "npx", [])
 
 
 class TestRegisterArgvOptions:

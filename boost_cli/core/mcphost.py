@@ -16,9 +16,9 @@ rather than a variant of it: Gemini is being deprecated in its favour. Its
 scope** (one global file at ``~/.gemini/config/mcp_config.json`` — it inherited
 Gemini's directory, so there is no ``~/.antigravity``), its off-switch is
 ``enable``/``disable`` rather than removal, and it has no per-server ``get``.
-Its two argv rules come from its own help and both bite: **flags must precede
-the name**, and **``--`` must precede a command whose args start with ``-``**,
-or ``--stdio`` is eaten as an agy flag.
+One argv rule of its own bites: **flags must precede the name**. The ``--``
+boost also emits is agy's documented separator and, measured on 1.1.22, inert
+— see :func:`add_argv`.
 
 That upsert-vs-error asymmetry is also why `boost mcp register --host auto`
 used to abort: Claude rejects the duplicate, and the sweep gave up before
@@ -34,15 +34,24 @@ load-bearing:
   as another env var ("Invalid environment variable format: boost"), so the
   name must lead. Gemini's is yargs with ``nargs: 1``, which takes exactly one
   value, so flags may precede the name safely.
-* **The ``--`` separator.** Claude needs one to stop flag parsing before the
-  server's own command. Gemini does not: its ``add`` sets yargs
-  ``unknown-options-as-args``, so a bare ``--stdio`` already lands in
-  ``[args...]`` as a literal. boost therefore omits it because it is
-  *redundant* — not, as this note claimed until 2026-08-28, because Gemini
-  would capture it and hand it to boost. It would not, and never would have:
-  ``add`` also sets ``populate--`` and a middleware that appends ``argv["--"]``
-  to the server args, both already present in the v0.46.0 source this file
-  first cited. The argv was right; only the reason for it was wrong.
+* **The ``--`` separator, and where it goes.** Both need one; only Claude
+  takes it *before* the command. Gemini takes it after —
+  ``add <name> <command> -- <args...>`` — and rejects Claude's placement
+  outright ("Not enough non-option arguments: got 1, need at least 2"),
+  because yargs has then seen one non-option argument where it needs two.
+  This note said for a long time that Gemini needed no separator at all,
+  reasoning from ``unknown-options-as-args``; that setting rescues only
+  options Gemini does **not** know, and ``mcp add`` knows ten of them
+  (``-d``, ``-s``, ``-t``, ``-e``, ``-H``, ``--timeout``, ``--trust``,
+  ``--description``, ``--include-tools``, ``--exclude-tools``). The claim held
+  for as long as the only tail boost ever passed was its own ``mcp --stdio``,
+  which Gemini does not know. It stopped holding the moment
+  :func:`add_argv` began building arbitrary *skill-declared* command lines:
+  the canonical GitHub server's ``-e GITHUB_PERSONAL_ACCESS_TOKEN`` was eaten
+  by Gemini's own ``--env``, and the container launched with no token, exit 0.
+  Measured on 0.61.0. (``populate--`` and the middleware that appends
+  ``argv["--"]`` to the server args are both real and are what make the
+  trailing separator work, including with an empty tail.)
 * **Unregister scope.** ``gemini mcp remove`` defaults to ``--scope project``
   and returns after logging "not found in project settings" — exit status 0,
   user-scope entry untouched — so the scope flag is mandatory on the way out,
@@ -251,6 +260,75 @@ def _env_flags(env: dict[str, str] | None) -> list[str]:
     return out
 
 
+def add_argv(host: str, name: str, command: str, tail: list[str], *,
+             scope: str = "user",
+             env: dict[str, str] | None = None) -> list[str]:
+    """``<host> mcp add`` for *any* server — the one copy of that grammar.
+
+    ``command`` plus ``tail`` is the server's own command line. There is one
+    copy because there are two callers: :func:`register_argv` registers boost
+    itself, and :func:`boost_cli.core.mcpdecl.register_argv` registers a server
+    a skill declares. Those built the argv separately, and the second grew a
+    Gemini branch and a Claude fallthrough while agy — the one host whose
+    grammar rejects Claude's shape — fell through to Claude's, so every
+    ``boost install`` of an MCP-declaring skill on a machine with agy on PATH
+    failed. A shared builder makes that divergence unrepresentable rather than
+    merely fixed.
+
+    Raises KeyError for an unknown host, and ValueError for a known host with
+    no grammar here — see the tail of this function for why that matters.
+    """
+    exe = cli(host)
+    flags = _env_flags(env)
+    if host == AGY:
+        # [flags] <name> <commandOrUrl> [args...]. Flags must come BEFORE the
+        # name — a flag after it is rejected — and there is no scope: agy keeps
+        # one global file (~/.gemini/config/mcp_config.json, inherited from
+        # Gemini CLI — there is no ~/.antigravity), so `--scope` would be an
+        # error rather than a no-op.
+        #
+        # The `--` is agy's documented separator ("Use -- before the command to
+        # pass a command or args that begin with '-'") and, measured on 1.1.22,
+        # it is inert: agy never consumes an argument that *follows* the
+        # command, not even one of its own flags (`add I npx -t http` stores
+        # ["-t", "http"]), and a command that itself begins with a dash is
+        # rejected with or without it ("invalid command \"-weird\": flags must
+        # come before the server name"). So it is emitted because agy's help
+        # says to and it costs nothing — not because a case here needs it.
+        return [exe, "mcp", "add", *flags, name, "--", command, *tail]
+    if host == GEMINI:
+        # [options] <name> <commandOrUrl> [args...], and the separator goes
+        # AFTER the command — the one host where it does. Before it, Claude's
+        # way, yargs counts one non-option argument and fails ("Not enough
+        # non-option arguments: got 1, need at least 2").
+        #
+        # It is not optional. `unknown-options-as-args` rescues only options
+        # gemini does *not* know, and `gemini mcp add` knows ten: -d/--debug,
+        # -s/--scope, -t/--transport/--type, -e/--env, -H/--header, --timeout,
+        # --trust, --description, --include-tools, --exclude-tools. A skill
+        # declaring the canonical GitHub server — `docker run -i --rm -e
+        # GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/…` — had its `-e` pair claimed
+        # by gemini's own `--env` (`nargs: 1`, so it takes the name as its one
+        # value) and the container launched without the token, exit 0, no
+        # warning. The `-e KEY=value` spelling is not dropped but *relocated*:
+        # it lands in gemini's own `env` map, out of the args docker reads, so
+        # the container is just as tokenless. `-t http` is worse: the entry is
+        # rewritten as {"url": "npx", "type": "http"}. Measured on 0.61.0.
+        #
+        # Unconditional, including for an empty tail: `add x npx --` is
+        # accepted and stores `args: []`.
+        return [exe, "mcp", "add", "--scope", scope, *flags,
+                name, command, "--", *tail]
+    if host == CLAUDE:
+        # <name> [options] -- <command>: the name MUST precede the variadic -e.
+        return [exe, "mcp", "add", name, "--scope", scope, *flags,
+                "--", command, *tail]
+    # A row in HOSTS with no branch above. Claude's shape used to be the
+    # fallthrough, which is how agy came to be handed an argv its CLI rejects;
+    # a host is added to the table and to this function or not at all.
+    raise ValueError("no `mcp add` grammar for host %r" % host)
+
+
 def register_argv(host: str, launcher: str, *, scope: str = "user",
                   name: str = SERVER_NAME,
                   env: dict[str, str] | None = None) -> list[str]:
@@ -260,28 +338,8 @@ def register_argv(host: str, launcher: str, *, scope: str = "user",
     boost (:func:`paths.launcher`). ``env`` defaults to :data:`LAUNCH_ENV`;
     pass ``{}`` for none. Raises KeyError for an unknown host.
     """
-    exe = cli(host)
-    flags = _env_flags(LAUNCH_ENV if env is None else env)
-    if host == AGY:
-        # [flags] <name> <commandOrUrl> [args...], and both of its rules bite
-        # here. Flags must come BEFORE the name — a flag after it is rejected —
-        # and `--` must precede a command whose own args start with `-`, or
-        # `--stdio` is eaten as an agy flag rather than passed to boost. There
-        # is no scope: agy keeps one global file
-        # (~/.gemini/config/mcp_config.json, inherited from Gemini CLI — there
-        # is no ~/.antigravity), so passing `--scope` would be an error rather
-        # than a no-op.
-        return [exe, "mcp", "add", *flags, name,
-                "--", launcher, "mcp", "--stdio"]
-    if host == GEMINI:
-        # [options] <name> <commandOrUrl> [args...]. No `--`: yargs
-        # `unknown-options-as-args` already carries `--stdio` into [args...],
-        # so a separator would be redundant rather than harmful.
-        return ([exe, "mcp", "add", "--scope", scope, *flags,
-                 name, launcher, "mcp", "--stdio"])
-    # <name> [options] -- <command>: the name MUST precede the variadic -e.
-    return ([exe, "mcp", "add", name, "--scope", scope, *flags,
-             "--", launcher, "mcp", "--stdio"])
+    return add_argv(host, name, launcher, ["mcp", "--stdio"], scope=scope,
+                    env=LAUNCH_ENV if env is None else env)
 
 
 def unregister_argv(host: str, *, scope: str = "user",

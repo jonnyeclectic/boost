@@ -183,9 +183,15 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
             % (_plural(len(wirable), "server"), where), default=False):
         out.dim("  skipped — run these yourself when you're ready:")
         for row in wirable:
-            argv = mcpdecl.register_argv(row["name"], row["spec"],
-                                         host=targets[0], scope=res.scope)
-            out.info("    " + " ".join(argv))
+            # One line per host, not `targets[0]` — the prompt named every
+            # host and a yes would have registered with every one, so a no
+            # that prints only the first hands back an incomplete answer.
+            # `hosts()` order puts agy last, so the host whose grammar differs
+            # most was the one never shown.
+            for host in targets:
+                argv = mcpdecl.register_argv(row["name"], row["spec"],
+                                             host=host, scope=res.scope)
+                out.info("    " + " ".join(argv))
         return
     for row in wirable:
         for host in targets:
