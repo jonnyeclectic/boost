@@ -10,6 +10,7 @@ wow: 3
 note: Every other boost surface honours HOME/BOOST_HOME; this one writes to whatever CLAUDE_CONFIG_DIR says…
 order: 344
 owner: loop/mcp-sandbox-home
+pr: "977"
 title: boost mcp registration writes outside a sandboxed HOME
 ---
 <b>Found when an agent working in a sandboxed <code>HOME</code> ran <code>boost mcp</code> instead of
