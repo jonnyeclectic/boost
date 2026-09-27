@@ -23,8 +23,8 @@ and capped. A 100,000-character query comes back whole.
 <code>QUERY_ECHO_CHARS</code> (120), collapsing whitespace first so a query of 100,000 newlines
 cannot beat the cut, and cutting on a word boundary when there is one. Both echoing branches take
 it: the plain miss, and the unsearchable-term branch, which also lists at most
-<code>ECHO_TERMS</code> (8) terms and counts the rest — a query of 500 punctuation marks used to
-name all 500. 120 is not arbitrary: the longest of the 141 graded queries across
+<code>ECHO_TERMS</code> (8) terms and counts the rest — a query of 500 distinct CJK characters,
+none of which the tokenizer can index, used to name all 500 back (2,498 characters of term list). 120 is not arbitrary: the longest of the 141 graded queries across
 <code>tests/eval/golden.jsonl</code> and <code>golden-natural.jsonl</code> is 87 characters, so the
 cap never fires on a real question and the functional suite's reply assertions stay byte-identical.
-Nine tests pin it, and all five fail against the unbounded version.
+Fourteen tests pin it; thirteen fail against the version on <code>main</code> — the fourteenth pins that a real-length query still comes back byte for byte, which is the behaviour the fix preserves — and the three added after review cover what the first draft left unmeasured — the exact-<code>ECHO_TERMS</code> boundary, the unprintable characters <code>repr</code> would have expanded four-for-one, and the word ending exactly on the budget.

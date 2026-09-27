@@ -861,7 +861,9 @@ class TestTheMissReplyDoesNotCostWhatTheQueryCost:
     """The miss is the reply an agent hits repeatedly while it rephrases, and
     it echoed the query back whole. That made the one *recurring* reply on this
     surface the only unbounded one — a 1:1 amplifier beside a body capped at
-    READ_LIMIT and a description capped at chat.DESC_CHARS.
+    READ_LIMIT and a line capped at MAX_LINE_CHARS. (`chat.DESC_CHARS` is the
+    same shape of cut and is where the word-boundary handling comes from, but
+    it bounds the AI prompt in `core/chat.py`, not anything on this surface.)
     """
 
     def test_a_real_query_is_echoed_unchanged(self):
@@ -916,6 +918,38 @@ class TestTheMissReplyDoesNotCostWhatTheQueryCost:
 
     def test_echo_leaves_text_inside_the_budget_alone(self):
         assert mcp.echo("alpha bravo", limit=12) == "alpha bravo"
+
+    def test_a_word_ending_exactly_on_the_budget_survives(self):
+        # The cut looks one character PAST the budget, so a space sitting on
+        # the boundary is seen. Cutting at the budget hides it, and "cde" —
+        # which fits exactly — would be thrown away for an ellipsis.
+        assert mcp.echo("ab cde fgh", limit=6) == "ab cde …"
+
+    def test_exactly_the_listed_number_is_listed_not_counted(self):
+        # The boundary `len(dropped) > ECHO_TERMS` decides. At exactly the
+        # limit there is no remainder, and a reply ending "and 0 more" would
+        # be both noise and false.
+        terms = ["!%d" % i for i in range(mcp.ECHO_TERMS)]
+        reply = mcp.no_results("q", tapped=4, dropped=terms)
+        assert "and 0 more" not in reply
+        assert reply.count("'") == 2 * mcp.ECHO_TERMS, reply
+
+    def test_one_over_the_listed_number_counts_the_remainder(self):
+        terms = ["!%d" % i for i in range(mcp.ECHO_TERMS + 1)]
+        reply = mcp.no_results("q", tapped=4, dropped=terms)
+        assert "and 1 more" in reply
+
+    def test_an_unprintable_query_cannot_grow_the_reply(self):
+        # Collapsing whitespace is not enough to make the budget a budget:
+        # repr renders a NUL as the four characters \x00, so 120 of them
+        # inside the cut are a 480-character reply. `str.isprintable` is the
+        # predicate repr escapes on, so it is the one that has to be applied.
+        reply = mcp.no_results("\x00" * 100000, tapped=4)
+        assert "\\x00" not in reply
+        assert len(reply) < 200, len(reply)
+
+    def test_an_unprintable_inside_real_text_is_dropped_not_escaped(self):
+        assert mcp.echo("ab\x00cd") == "abcd"
 
 
 def _descriptions(ai_available: bool = True):

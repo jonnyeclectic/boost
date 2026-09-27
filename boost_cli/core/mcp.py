@@ -504,8 +504,11 @@ def overlap_note(installed_hits: int, total_hits: int) -> str:
 # The miss reply is the one an agent hits repeatedly while it rephrases, and
 # `"no skills match %r" % query` made its cost proportional to the query — a
 # 1:1 amplifier on the surface where every other rendering is measured and
-# capped (:data:`READ_LIMIT` for a body, ``chat.DESC_CHARS`` for a
-# description). A 100,000-character query came back whole, once per attempt.
+# capped: :data:`READ_LIMIT` for a body it sends, :data:`MAX_LINE_CHARS` for a
+# line it accepts. (``chat.DESC_CHARS`` is the same *shape* of cut and is where
+# this one's word-boundary handling comes from, but it bounds the AI prompt in
+# `core/chat.py` — nothing on this surface, which renders no descriptions.)
+# A 100,000-character query came back whole, once per attempt.
 #
 # 120 is measured against the queries this repo grades itself on: 141 rows
 # across `tests/eval/golden.jsonl` and `golden-natural.jsonl`, longest 87
@@ -524,18 +527,30 @@ ECHO_TERMS = 8
 def echo(text: str, *, limit: int = QUERY_ECHO_CHARS) -> str:
     """The caller's own text, bounded, ready for ``%r``.
 
-    Whitespace is collapsed first so that a multi-line query costs its
-    characters once rather than again as ``\n`` escapes — ``repr`` expands
-    what it cannot print, so the bound has to be applied to text that will not
-    grow. The cut lands on a word boundary when there is one inside the budget
-    and hard otherwise, the way ``chat._describe`` cuts a description, and the
-    ellipsis is the notice: unlike :func:`read_reply` there is no second half
-    to fetch, and nothing here is payload the agent will act on.
+    ``repr`` expands what it cannot print, so a bound applied to the raw text
+    does not bound the reply: whitespace is collapsed (a newline would come
+    back as the two characters ``\n``) and every remaining unprintable
+    character is dropped, because ``str.isprintable`` is the very predicate
+    ``repr`` escapes on and one NUL renders as four characters. What is left
+    can still grow, but only by the constant ``repr`` charges for quoting —
+    each backslash and each embedded quote doubles — so the reply is bounded
+    by the budget rather than by the caller.
+
+    The cut lands on a word boundary when there is one inside the budget and
+    hard otherwise, the way ``chat._describe`` cuts a description; it looks one
+    character past the budget so that a query whose word ends exactly on it
+    keeps that word instead of losing it to the ellipsis. The ellipsis is the
+    notice: unlike :func:`read_reply` there is no second half to fetch, and
+    nothing here is payload the agent will act on.
     """
-    one = " ".join(text.split())
+    one = "".join(c for c in " ".join(text.split()) if c.isprintable())
     if len(one) <= limit:
         return one
-    return (one[:limit].rsplit(" ", 1)[0] or one[:limit]) + " …"
+    # `head` is one over budget so a space sitting *on* the boundary is seen.
+    # No `or` fallback: whitespace is collapsed and stripped above, so `head`
+    # never begins with a space and the kept half is never empty.
+    head = one[:limit + 1]
+    return (head.rsplit(" ", 1)[0] if " " in head else head[:limit]) + " …"
 
 
 def no_results(query: str, *, tapped: int,
