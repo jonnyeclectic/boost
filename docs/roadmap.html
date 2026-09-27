@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>78</b><span>Planned</span></div>
-      <div class="stat"><b>497</b><span>Loop finds</span></div>
+      <div class="stat"><b>79</b><span>Planned</span></div>
+      <div class="stat"><b>499</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2023,17 +2023,9 @@ wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every ins
       </article>
 
       <article class="cap rcard" id="ci-summary-reports-the-wrong-coverage-gate">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI · Docs</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Docs</span></div>
         <h3>The CI job summary reports the coverage gate as 80% when it is 90%</h3>
-        <p><b>Found by the audit of the repo's own automation.</b> The <code>tests</code> job's summary step in
-<code>.github/workflows/ci.yml</code> prints the measured percentage beside a hard-coded
-<code>gate: 80%</code>, while the gate that actually applies is <code>fail_under = 90</code> in
-<code>pyproject.toml</code>. So a run at 90.4% reads as comfortably clear when it is four tenths of a
-point from red. The summary is the one place the number is read without opening the log.
-<br><br>
-<b>Fix.</b> Read the threshold from <code>pyproject.toml</code> rather than restating it, and pin the
-two together in <code>tests/unit/test_eval_corpus.py</code>'s style — the repo already fails the
-build when CI and the Makefile state a floor differently.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/ci-summary-reports-the-wrong-coverage-gate.md">Write-up &middot; ci-summary-reports-the-wrong-coverage-gate.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -2067,21 +2059,9 @@ build when CI and the Makefile state a floor differently.</p>
       </article>
 
       <article class="cap rcard" id="manifest-in-prunes-only-the-root-copy">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Packaging · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Packaging · Bug</span></div>
         <h3>MANIFEST.in prunes only the root copy, so dev-local files ship in the sdist</h3>
-        <p><b>Found by the audit of packaging, and confirmed against the artifact on PyPI.</b>
-<code>MANIFEST.in</code> opens by saying everything below it is dev-only and should never ship, then
-writes <code>prune .claude</code> and <code>exclude package.json package-lock.json</code>. Both
-patterns are root-relative, so they match <code>./.claude/</code> and <code>./package.json</code>
-and miss <code>docs/.claude/settings.local.json</code> and <code>tests/visual/package.json</code>,
-which setuptools-scm's file finder adds because they are tracked. Both ship in every release.
-<br><br>
-Today's contents are harmless, which is the reason to fix it now rather than after someone adds a
-machine-specific path or a tool allowlist to a checked-in agent-permission file.
-<br><br>
-<b>Fix.</b> Use recursive patterns (<code>global-exclude</code> / <code>prune</code> per path), and
-add a test that builds an sdist and fails on any <code>.claude</code> or <code>node_modules</code>
-member, so the rule is enforced rather than stated.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/manifest-in-prunes-only-the-root-copy.md">Write-up &middot; manifest-in-prunes-only-the-root-copy.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -2091,16 +2071,9 @@ member, so the rule is enforced rather than stated.</p>
       </article>
 
       <article class="cap rcard" id="mcp-miss-reply-echoes-the-whole-query">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">MCP · UX</span></div>
         <h3>A search that finds nothing echoes the whole query back into the agent's context</h3>
-        <p><b>Found by the audit of the MCP surface.</b> <code>mcp.no_results</code> returns
-<code>"no skills match %r" % query</code>, unbounded, and the miss reply is the one an agent hits
-repeatedly while it rephrases. Every miss therefore costs context in proportion to the query rather
-than a fixed line — a 1:1 amplifier on a surface where the result rendering elsewhere is measured
-and capped. A 100,000-character query comes back whole.
-<br><br>
-<b>Fix.</b> Truncate the echoed query the way the result rows are already truncated, and pin the cap
-in the round-trip tests.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/mcp-miss-reply-echoes-the-whole-query.md">Write-up &middot; mcp-miss-reply-echoes-the-whole-query.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -2207,6 +2180,72 @@ Codex hooks at all: a hook config that silently never fires is worse than none.<
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">Codex has a `[hooks]` table shaped like Claude's and Gemini's, and the two fields that differ are unverified…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="install-cannot-tell-a-skill-needs-another-one">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Install · Research</span></div>
+        <h3>Research: how <code>boost install</code> could tell that a skill needs something else installed first</h3>
+        <p><b>Requested, and scoped by a census of the real catalog.</b> Some items cannot run alone — a skill
+that calls a workflow the user never installed, or one of a set that only works together.
+<code>boost install</code> has no concept of a prerequisite: nothing in <code>core/store.py</code>
+or <code>core/catalog.py</code> reads one, so the install reports success and the failure surfaces
+later, inside an agent session, as a slash command that does not exist.
+<br><br>
+The data is already on disk, which is what makes this measurable before any code is written.
+<code>catalog.scan_dir</code> keeps the <b>full parsed frontmatter</b> in <code>entry["meta"]</code>
+(<code>WORKFLOW_META_KEYS</code> only classifies a file as a workflow; it filters nothing), so one
+pass over <code>~/.boost/cache/*.json</code> answers it. Over <b>467 taps / 62,791 entries</b> on a
+real machine: <b>2,860 entries carry a dependency-ish key</b>, under <b>12 spellings</b> —
+<code>requires</code> (2,062) &middot; <code>dependencies</code> (510) &middot;
+<code>required</code> (129) &middot; <code>prerequisites</code> (57) &middot;
+<code>requires_tools</code> &middot; <code>depends-on</code> &middot; <code>depends_on</code>
+&middot; <code>tools_required</code> &middot; <code>requirements</code> &middot;
+<code>dependency</code> &middot; <code>requires-extras</code> &middot; <code>uses</code>. But
+<b>only 595 of them have a non-empty value</b>: the other 2,265 are an empty <code>requires:</code>
+left behind by a template, so the presence of the key says nothing and a reader that treats it as a
+declaration is wrong four times in five. And <b>only 35 of the 467 taps</b> use any of them — this
+is a convention in a corner of the ecosystem, not a standard.
+<br><br>
+Those 595 entries declare <b>1,430 values</b>, and they are not one kind of thing.
+<b>437 name a catalogued item</b> (<code>prerequisites: [form-cro]</code>) — the only class boost
+could act on. <b>486 are bare tokens matching nothing</b> in a 62,791-entry catalog.
+<b>230 are namespaced</b> (<code>imbue:proof-of-work</code>, a pack-relative name in a syntax boost
+does not parse). <b>183 are package specs</b> (<code>torch&gt;=2.0.0</code>) — a pip requirement,
+not a skill. <b>94 are prose.</b>
+<br><br>
+And the actionable class is the ambiguous one: of the 437 that name a catalogued item, <b>245 name
+one that exists in more than one tap</b>. boost already refuses an unqualified name in exactly that
+situation
+(<code>tests/functional/test_cli_pkg.py::TestBundleEdges::test_unqualified_name_in_two_taps_is_refused</code>),
+so a resolver cannot install "the one with that name" — it would have to choose, and choosing
+silently is the failure that refusal exists to prevent.
+<br><br>
+<b>What the research has to answer</b>, in the order that decides whether this ships at all.
+<b>1.</b> Is a declaration a declaration? An empty value is not, and 2,265 of 2,860 are empty.
+<b>2.</b> What is the value — catalogued item, binary on <code>PATH</code>, Python package, MCP
+server? boost can install exactly one of those four, so classification comes before resolution, and
+has to be honest about what it cannot classify. <b>3.</b> How is an ambiguous name resolved?
+Same-tap-first is the obvious rule and needs measuring against those 245. <b>4.</b> Report, offer,
+or install? Installing a <i>rule</i> edits a file the user reads every session, so an auto-install
+that walks a dependency graph is more invasive than the thing they asked for; naming what is
+missing is cheap and always correct, installing it is neither. <b>5.</b> Cycles and fan-out —
+<code>athola/claude-night-market</code>'s <code>architecture-paradigms</code> lists five siblings,
+each of which may list it back. <b>6.</b> The prose half: a frontmatter census cannot see "requires
+the <code>brainstorming</code> skill" in a body, which is where most of the ecosystem says it, and
+whether that is worth reading at all is its own measurement against the false-positive rate.
+<br><br>
+<b>Deliverable.</b> A measurement note, a decision on question 4, and — if the answer is "report" —
+an unmet-prerequisite line on <code>boost install</code> and <code>boost doctor</code> naming the
+item and the tap it would come from, wired to whichever spellings survive question 1. The floor for
+shipping anything is that it must be wrong less often than silence is: at 2,265 empty declarations
+and 486 unresolvable tokens, a naive reader warns on noise far more often than it catches the real
+case.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">595 catalogued items declare a prerequisite and boost reads none of them — but only 437 of 1,430 declared values name something boost could install…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -3347,6 +3386,18 @@ Two halves, both cheap:
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">`make check` leaves a project install in the repo root; a later run reads it back and fails twelve unrelated tests.</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="links-job-503s-its-own-write-up-links">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Flake</span></div>
+        <h3>The links job fetches 467 URLs from one host at once and GitHub 503s a random handful</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/links-job-503s-its-own-write-up-links.md">Write-up &middot; links-job-503s-its-own-write-up-links.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">Three attempts of one run failed on three disjoint sets of URLs, every one of which returns 200 on its own.</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
