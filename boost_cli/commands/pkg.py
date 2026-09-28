@@ -25,6 +25,7 @@ from ..core import (
     catalog,
     complete,
     config,
+    deps,
     frontmatter,
     gitutil,
     installscan,
@@ -32,6 +33,7 @@ from ..core import (
     journal,
     lockfile,
     paths,
+    prereq,
     projectlock,
     rag,
     registry,
@@ -381,11 +383,55 @@ def _rel_list(meta: dict, key: str) -> list[str]:
 
 
 def _skill_relations(name: str, key: str) -> list[str]:
-    """`requires:`/`conflicts:` for a skill by name, from its catalog entry."""
+    """`requires:`/`conflicts:` for a skill by name, from its catalog entry.
+
+    ``requires:`` goes through :func:`deps.requirement_names`, the same
+    filter ``boost deps`` applies, so the two cannot disagree about what a
+    requirement *is*. Without it this path still fed prose and package
+    coordinates to the resolver: `requires: ["gh (GitHub CLI)", "python3"]`
+    printed "required skill 'gh (GitHub CLI)' is in no tap — skipped" while
+    `boost deps` on the same skill, post-filter, listed nothing. A qualified
+    `tap:name` survives the filter verbatim, because this feeds
+    ``catalog.find``.
+    """
     matches = catalog.find(name)
     if not matches:
         return []
-    return _rel_list(matches[0].get("meta") or {}, key)
+    meta = matches[0].get("meta") or {}
+    if key == "requires":
+        return deps.requirement_names(meta)
+    return _rel_list(meta, key)
+
+
+def _report_prerequisites(entries: list[dict], *, pbase=None,
+                          would: bool = False) -> None:
+    """Name the catalogued items an install's own frontmatter says it needs.
+
+    Advisory and after the fact: the ``requires:`` closure is installed for
+    you (above), and everything the wider spellings declare — ``skills:``,
+    ``dependencies:``, ``prerequisites:``, … — is reported here instead. See
+    :mod:`boost_cli.core.prereq` for why reporting rather than installing is
+    the answer, and for the census the key set comes from.
+
+    ``pbase`` is the project base for a ``--local`` install, so a sibling
+    installed into *this repo* counts as present. Without it every
+    project-scope user got a prerequisite line naming something already
+    beside it.
+    """
+    try:
+        rows = prereq.for_entries(entries, pbase=pbase)
+    except BoostError:
+        # A missing or unreadable catalog must not fail an install that has
+        # already happened; the prerequisite line is advice, not a step.
+        return
+    for row in rows:
+        out.warn("%s declares %s boost cannot see installed: %s"
+                 % (row.name, _plural(len(row.unmet), "prerequisite"),
+                    ", ".join("%s (%s)" % (m.name, m.tap) for m in row.unmet)),
+                 wrap=True)
+    if rows:
+        out.info(("would meet them with: %s" if would else "meet them with: %s")
+                 % prereq.install_hint(rows), wrap=True)
 
 
 def _expand_dependencies(entries: list[dict]) -> tuple[list[dict], resolve.Resolution]:
@@ -450,11 +496,17 @@ def cmd_install(argv: list[str]) -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="show what would happen without changing anything")
     ap.add_argument("--no-deps", action="store_true",
-                    help="install only the named skills, not their `requires:`")
+                    help="install only the named skills, not their `requires:` "
+                         "(the wider spellings are reported, never installed)")
     ap.add_argument("--no-mcp", action="store_true",
                     help="don't offer to register MCP servers a skill declares")
     args = ap.parse_args(argv)
     args.scope = args.scope or scopes.SCOPE_USER
+    # Resolved before the dry-run branch, because both sides need it and only
+    # one of them used to bind it: the preview returns early, so a `pbase`
+    # assigned inside `if args.dry_run:` is unbound by the time the run path
+    # reports prerequisites. `None` for every scope but `--local`.
+    pbase = scopes.resolve_base(args.scope)
     only = _check_agents(args.agent)
     multi = len(args.names) > 1
     entries, failed = [], 0
@@ -479,8 +531,30 @@ def cmd_install(argv: list[str]) -> int:
                      % (_plural(len(dep_res.added), "dependency"),
                         ", ".join(dep_res.added)))
         for name in dep_res.unresolved:
-            out.warn("required skill %r is in no tap — skipped "
-                     "(install it manually or `boost tap` its source)" % name)
+            # "in no tap" is only true when the catalog has no row for it.
+            # `_expand_dependencies` also lands here when `resolve_one`
+            # refuses a name *several* taps carry, and calling that absent
+            # contradicted the prerequisite line printed a few lines below,
+            # which names a tap and gives a command that works. 77% of the
+            # ambiguous values in the census resolve this way, so the
+            # contradiction was the common case, not the corner.
+            cands = catalog.distinct_candidates(catalog.find(name))
+            if not cands:
+                out.warn("required skill %r is in no tap — skipped "
+                         "(install it manually or `boost tap` its source)"
+                         % name)
+                continue
+            taps = sorted({str(e.get("tap") or "") for e in cands})
+            # Only offer `tap:name` when that would actually disambiguate:
+            # one tap vendoring the same name twice is ambiguous too, and
+            # there `tap:name` is as unresolvable as the bare name.
+            fix = ("name one of %s" % ", ".join("%s:%s" % (t, name)
+                                                for t in taps)
+                   if len(taps) == len(cands)
+                   else "`boost search %s` and install the one you want"
+                        % name)
+            out.warn("required skill %r matches %d catalog entries — "
+                     "skipped (%s)" % (name, len(cands), fix), wrap=True)
         for skill, clash in dep_res.conflicts:
             out.warn("%s declares a conflict with %s (also present)" % (skill, clash))
         # Pulling in dependencies can turn a single-name request into a multi-item
@@ -497,7 +571,6 @@ def cmd_install(argv: list[str]) -> int:
         # of `install x --agent cursor` drop the "available to … (reads the
         # store directly)" line the run then prints.
         native_targets = list(agents.native_store_agents())
-        pbase = scopes.resolve_base(args.scope)
         if args.scope == scopes.SCOPE_PROJECT and pbase is None:
             raise BoostError(
                 "there is no project here to install into",
@@ -619,6 +692,7 @@ def cmd_install(argv: list[str]) -> int:
                 out.warn("%s: %s" % (e["name"], err.message))
                 failed += 1
                 continue
+        _report_prerequisites(entries, pbase=pbase, would=True)
         out.info("dry run — nothing was changed")
         return 1 if failed else 0
 
@@ -637,6 +711,9 @@ def cmd_install(argv: list[str]) -> int:
         _report_result(res, no_mcp=args.no_mcp)
         results.append(res)
     if results:
+        _report_prerequisites([e for e in entries
+                               if e["name"] in {r.name for r in results}],
+                              pbase=pbase)
         kinds = {r.kind for r in results}
         noun = next(iter(kinds)) if len(kinds) == 1 else "item"
         new = sum(1 for r in results if not r.upgraded)

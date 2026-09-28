@@ -1,70 +1,91 @@
 ---
 id: install-cannot-tell-a-skill-needs-another-one
 board: code
-section: planned
-status: planned
+section: shipped
+status: shipped
 category: Install · Research
 complexity: M
 impact: Med
 wow: 3
-note: 595 catalogued items declare a prerequisite and boost reads none of them — but only 437 of 1,430 declared values name something boost could install…
+note: The premise was wrong — boost has always followed <code>requires:</code>. It is the narrowest spelling in the ecosystem (101 values); <code>skills:</code> and <code>dependencies:</code> carry 2,388 more and were invisible.
 order: 348
-owner:
-pr:
+owner: loop/install-prerequisites
+pr: 987
 title: "Research: how <code>boost install</code> could tell that a skill needs something else installed first"
 ---
-<b>Requested, and scoped by a census of the real catalog.</b> Some items cannot run alone — a skill
-that calls a workflow the user never installed, or one of a set that only works together.
-<code>boost install</code> has no concept of a prerequisite: nothing in <code>core/store.py</code>
-or <code>core/catalog.py</code> reads one, so the install reports success and the failure surfaces
-later, inside an agent session, as a slash command that does not exist.
+<b>Shipped as a measurement note plus a report-only warning. The card's premise was wrong, and
+the correction is the finding.</b> <code>boost install</code> has read prerequisites since the
+dependency resolver landed: <code>pkg._expand_dependencies</code> walks
+<code>deps.requirement_names(entry["meta"])</code> transitively and installs the closure unless
+<code>--no-deps</code>. What it reads is <code>requires:</code> — and a census of the real catalog
+says that is the <i>narrowest</i> spelling anyone uses.
 <br><br>
-The data is already on disk, which is what makes this measurable before any code is written.
-<code>catalog.scan_dir</code> keeps the <b>full parsed frontmatter</b> in <code>entry["meta"]</code>
-(<code>WORKFLOW_META_KEYS</code> only classifies a file as a workflow; it filters nothing), so one
-pass over <code>~/.boost/cache/*.json</code> answers it. Over <b>467 taps / 62,791 entries</b> on a
-real machine: <b>2,860 entries carry a dependency-ish key</b>, under <b>12 spellings</b> —
-<code>requires</code> (2,062) &middot; <code>dependencies</code> (510) &middot;
-<code>required</code> (129) &middot; <code>prerequisites</code> (57) &middot;
-<code>requires_tools</code> &middot; <code>depends-on</code> &middot; <code>depends_on</code>
-&middot; <code>tools_required</code> &middot; <code>requirements</code> &middot;
-<code>dependency</code> &middot; <code>requires-extras</code> &middot; <code>uses</code>. But
-<b>only 595 of them have a non-empty value</b>: the other 2,265 are an empty <code>requires:</code>
-left behind by a template, so the presence of the key says nothing and a reader that treats it as a
-declaration is wrong four times in five. And <b>only 35 of the 467 taps</b> use any of them — this
-is a convention in a corner of the ecosystem, not a standard.
+<b>The census.</b> 461 tapped registries, 62,310 entries, every value read out of
+<code>entry["meta"]</code> in <code>~/.boost/cache/*.json</code> (<code>catalog.scan_dir</code>
+keeps the full parsed frontmatter, so this needed no re-tap). <b>14 dependency-ish spellings are
+present; 1,099 entries across 52 taps carry a non-empty value.</b> By key:
+<code>skills</code> 1,323 values / 18 taps &middot; <code>dependencies</code> 1,065 / 17 &middot;
+<code>requires</code> <b>101 / 6</b> &middot; <code>prerequisites</code> 57 &middot;
+<code>uses</code> &middot; <code>depends-on</code> &middot; <code>depends_on</code>.
+So a user installing <code>athola/claude-night-market</code>'s
+<code>architecture-paradigms</code> got no hint that it names five siblings it cannot run
+without — it spells them <code>dependencies:</code>.
 <br><br>
-Those 595 entries declare <b>1,430 values</b>, and they are not one kind of thing.
-<b>437 name a catalogued item</b> (<code>prerequisites: [form-cro]</code>) — the only class boost
-could act on. <b>486 are bare tokens matching nothing</b> in a 62,791-entry catalog.
-<b>230 are namespaced</b> (<code>imbue:proof-of-work</code>, a pack-relative name in a syntax boost
-does not parse). <b>183 are package specs</b> (<code>torch&gt;=2.0.0</code>) — a pip requirement,
-not a skill. <b>94 are prose.</b>
+<b>Q1 — is a declaration a declaration?</b> Not by key name. Two lookalikes had to be excluded
+<i>by name</i>: <code>required:</code> is an argument-schema field (130 entries, booleans and
+parameter lists — reading it would invent 130 prerequisites), and <code>tools_required:</code>
+names Claude tool permissions (<code>Bash</code>, <code>Read</code>), not installables. Both are
+in <code>deps.NON_PREREQUISITE_KEYS</code> with the count that justifies them.
 <br><br>
-And the actionable class is the ambiguous one: of the 437 that name a catalogued item, <b>245 name
-one that exists in more than one tap</b>. boost already refuses an unqualified name in exactly that
-situation
-(<code>tests/functional/test_cli_pkg.py::TestBundleEdges::test_unqualified_name_in_two_taps_is_refused</code>),
-so a resolver cannot install "the one with that name" — it would have to choose, and choosing
-silently is the failure that refusal exists to prevent.
+<b>Q2 — what is the value?</b> Classification is <b>per value, not per key</b>:
+<code>dependencies:</code> is pip packages in <code>Galaxy-Dawn/claude-scholar</code> and sibling
+skills in <code>athola/claude-night-market</code>. Of 2,658 values,
+<b>1,944 (73%) resolve to a catalogued item</b>; 413 are bare tokens matching nothing
+(<code>chromadb</code>, <code>litgpt</code>), 193 are package specs
+(<code>torch&gt;=2.0.0</code>, <code>dspy[mcp]</code>), 62 are prose
+(<code>GitHub CLI (gh) installed and authenticated</code>), 42 are file paths. Per-key
+resolvability: <code>skills</code> 98% &middot; <code>depends-on</code>/<code>depends_on</code>
+100% &middot; <code>uses</code> 81% &middot; <code>prerequisites</code> 65% &middot;
+<code>dependencies</code> 45% &middot; <code>requires</code> 30%.
 <br><br>
-<b>What the research has to answer</b>, in the order that decides whether this ships at all.
-<b>1.</b> Is a declaration a declaration? An empty value is not, and 2,265 of 2,860 are empty.
-<b>2.</b> What is the value — catalogued item, binary on <code>PATH</code>, Python package, MCP
-server? boost can install exactly one of those four, so classification comes before resolution, and
-has to be honest about what it cannot classify. <b>3.</b> How is an ambiguous name resolved?
-Same-tap-first is the obvious rule and needs measuring against those 245. <b>4.</b> Report, offer,
-or install? Installing a <i>rule</i> edits a file the user reads every session, so an auto-install
-that walks a dependency graph is more invasive than the thing they asked for; naming what is
-missing is cheap and always correct, installing it is neither. <b>5.</b> Cycles and fan-out —
-<code>athola/claude-night-market</code>'s <code>architecture-paradigms</code> lists five siblings,
-each of which may list it back. <b>6.</b> The prose half: a frontmatter census cannot see "requires
-the <code>brainstorming</code> skill" in a body, which is where most of the ecosystem says it, and
-whether that is worth reading at all is its own measurement against the false-positive rate.
+<b>Q3 — ambiguity.</b> 422 values name something carried by more than one tap, and
+<b>preferring the declaring tap disambiguates 326 of them (77%)</b>. The remainder are dropped
+rather than guessed; a name in exactly one other tap is reported qualified
+(<code>tap:name</code>), because boost refuses an unqualified name carried by two.
 <br><br>
-<b>Deliverable.</b> A measurement note, a decision on question 4, and — if the answer is "report" —
-an unmet-prerequisite line on <code>boost install</code> and <code>boost doctor</code> naming the
-item and the tap it would come from, wired to whichever spellings survive question 1. The floor for
-shipping anything is that it must be wrong less often than silence is: at 2,265 empty declarations
-and 486 unresolvable tokens, a naive reader warns on noise far more often than it catches the real
-case.
+<b>Q4 — report, offer, or install? <i>Report.</i></b> Three measurements decide it. Fan-out
+reaches <b>19</b> direct prerequisites (<code>nWave-ai/nWave</code>'s
+<code>nw-functional-software-crafter</code>) and the transitive closure reaches <b>35</b> items
+over a 553-node / 1,411-edge graph nine levels deep, so "install what it needs" quietly becomes a
+35-item install. The graph has <b>two cycles</b> (<code>pr-review</code> ⇄
+<code>review-chamber</code>, <code>code-refinement</code> ⇄
+<code>safety-critical-patterns</code>). And <code>sparesparrow/cursor-rules</code> lists
+<b>rules</b> under <code>dependencies:</code> — installing a rule edits a file the user reads
+every session, which is the most invasive thing boost can do, off the least reliable input it
+has. So the widened keys are surfaced as a line; the <code>requires:</code> auto-install closure
+is unchanged.
+<br><br>
+<b>Shipped.</b> <code>core/deps.py</code> gains the classifier
+(<code>classify_token</code> → item / package / prose / file) and the pure rules
+(<code>declared_prerequisites</code>, <code>unmet_prerequisites</code>);
+<code>core/prereq.py</code> composes them against the catalog and the lock file.
+<code>boost install</code> — and <code>--dry-run</code> — name what an item declares that is not
+installed, with the one <code>boost install …</code> that meets it; <code>boost doctor</code>
+reports the same across everything installed as an INFO check, <b>not</b> an issue, because no
+boost command clears it on the user's behalf. Siblings installed in one command satisfy each
+other. The read goes through a new <code>catalog.cached_entries()</code> that never writes:
+<code>load_tap</code> rescans and saves a missing cache, so an advisory check hung off
+<code>doctor</code> rebuilt the very cache doctor was about to report missing, turning
+<code>heal</code>'s "rebuilt catalog cache" into "nothing to heal".
+<br><br>
+<b>A bug fell out of Q2.</b> <code>deps.requirement_names</code> returned every
+<code>requires:</code> value verbatim, so <code>boost deps</code> rendered
+<code>torch&gt;=2.0.0 ✗ not installed</code> and <code>boost install</code> reported prose "in no
+tap". It now filters through the classifier.
+<br><br>
+<b>The floor held: wrong less often than silence.</b> Unresolvable tokens are dropped
+<i>silently</i> — those 413 bare tokens would otherwise be 413 false "in no tap" lines.
+<b>733 rows in 32 taps</b> have at least one resolvable prerequisite, which is the true size of
+the thing that was invisible. <b>Follow-up:</b> a <code>shutil.which()</code> classifier could
+turn some of the 413 into an honest "needs the <code>gh</code> binary" line, and the prose half
+(Q6 — "requires the brainstorming skill" in a body) stays unmeasured.

@@ -37,6 +37,7 @@ from ..core import (
     lockfile,
     logs,
     paths,
+    prereq,
     provenance,
     registry,
     report,
@@ -728,6 +729,37 @@ def cmd_doctor(argv):
         rep.note("foreign-hooks", "%d hook%s in ~/.claude/settings.json not managed by boost "
                  "(%s) — left alone; `boost hooks` only touches its own"
                  % (len(others), _s(len(others)), ", ".join(events)), wrap=True)
+
+    try:
+        prereq_rows = prereq.for_installed()
+    except BoostError:
+        # doctor's contract is to *report* problems, not to raise on one. A
+        # BoostError out of the catalog or the lock would otherwise abort the
+        # health report part-way through, and this check is the least
+        # important thing in it.
+        prereq_rows = []
+    if prereq_rows:
+        # Declared in the items' own frontmatter and resolvable to real
+        # catalogued items that are not installed. `rep.note`, not `bad`: it
+        # is somebody else's frontmatter, and boost will not install it for
+        # them (see `core/prereq`), so counting it would leave doctor
+        # permanently red on something no boost command clears on its own.
+        #
+        # One line, truncated, like `orphans` above — not one per item. The
+        # census found 1,323 `skills:` values across 18 taps, so a note per
+        # declaring item buries the rest of the report and repeats a single
+        # `name` down the whole `--json` `checks` array. The hint stays
+        # whole: it is a command, and a truncated command does not run.
+        missing = sorted({m.spec for row in prereq_rows for m in row.unmet})
+        rep.note("unmet-prerequisite",
+                 "%d installed item%s declare%s %d prerequisite%s not "
+                 "installed (%s%s) — `%s`"
+                 % (len(prereq_rows), _s(len(prereq_rows)),
+                    "" if len(prereq_rows) > 1 else "s",
+                    len(missing), _s(len(missing)),
+                    ", ".join(missing[:5]),
+                    ", …" if len(missing) > 5 else "",
+                    prereq.install_hint(prereq_rows)), wrap=True)
 
     for dup in store.duplicate_discovery():
         # An agent that reads the canonical store natively, holding its own
