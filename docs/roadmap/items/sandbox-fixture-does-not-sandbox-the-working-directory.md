@@ -2,13 +2,13 @@
 id: sandbox-fixture-does-not-sandbox-the-working-directory
 board: code
 section: internals
-status: planned
+status: inflight
 category: Test hygiene · Bug
 complexity: M
 impact: Medium
 wow: 2
 order: 347
-owner: ""
+owner: loop/sandbox-cwd
 pr: ""
 title: The sandbox fixture sandboxes every env var except the one project scope reads
 note: `make check` leaves a project install in the repo root; a later run reads it back and fails twelve unrelated tests.
