@@ -197,16 +197,21 @@ resolves — it is simply not the one your vectors are in. The fix is to put the
 key back, and the generic "rebuild" answer would re-embed every vector you
 already paid for.
 
-Two separate things can stand between a store and its own provider, and doctor
-names whichever applies:
+For a store **built with a key**, two separate things can stand between it and
+its own provider, and doctor names whichever applies:
 
-* the key is gone, so `export` brings it back;
-* a key boost prefers is in force. The order is Voyage, then OpenAI, then the
+- the key is gone, so `export` brings it back;
+- a key boost prefers is in force. The order is Voyage, then OpenAI, then the
   local model, so an OpenAI-built store goes dark the moment a Voyage key
   appears on the machine — `unset VOYAGE_API_KEY` is what hands it back.
 
 Both can be true at once, and then doctor names both steps. Running only the
 export would leave the resolver exactly where it was.
+
+A store built by the **local** model is displaced the same way — exporting a
+key on a machine whose vectors are local ones takes semantic search off — but
+doctor does not yet name the `unset` for it, and offers the rebuild instead.
+Tracked as a follow-up; `unset` is the free fix in the meantime.
 
 If you would rather move to the live provider than restore the old one,
 `boost reindex --dense --force` is the command, and doctor names the space it

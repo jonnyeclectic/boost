@@ -50,7 +50,9 @@ from . import nethttp
 # second copy of that string is precisely how a surface ends up naming the
 # wrong one at the only moment the name matters.
 #
-# **Insertion order is preference order**, and it is the only statement of it:
+# **Insertion order is preference order**, and it is the only *executable*
+# statement of it (`dense._FIX["no-key"]` and this module's own docstring
+# restate it in prose, where nothing can act on the wrong copy):
 # `provider` and `outranking` both walk this dict rather than testing the two
 # keys in a hardcoded sequence. Stating it twice is what let `fix_hint`
 # prescribe `export OPENAI_API_KEY=...` to an OpenAI-built store on a machine

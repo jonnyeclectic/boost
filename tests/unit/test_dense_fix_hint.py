@@ -298,6 +298,23 @@ class TestProviderChangedIsWhereALostKeyActuallyLands:
         from boost_cli.core import embed
         for env in embed.KEY_ENV.values():
             monkeypatch.delenv(env, raising=False)
+        # `BOOST_NO_EMBED` too, matching `test_embed_outranking.py`'s fixture.
+        # Only one test here calls `embed.provider()` for real, and an ambient
+        # kill switch made that one fail while the rest of the file passed —
+        # a class whose keys are controlled and whose resolver is not.
+        monkeypatch.delenv("BOOST_NO_EMBED", raising=False)
+
+    def test_an_exported_but_empty_key_counts_as_gone(self, monkeypatch):
+        # `gone = not os.environ.get(env)`, not `env not in os.environ`. An
+        # exported-empty key is the shape `embed.provider` already refuses to
+        # select on (`test_an_empty_key_does_not_select_a_provider`), so a
+        # presence test would call the key present, find nothing outranking
+        # it, return None, and hand this store the table's full re-embed —
+        # the one answer this whole branch exists to keep away from a store
+        # somebody paid for.
+        monkeypatch.setenv("VOYAGE_API_KEY", "")
+        hint = dense.fix_hint("provider-changed", self._status())
+        assert "`export VOYAGE_API_KEY=...`" in hint
 
     def test_the_remedy_is_the_key_not_the_rebuild(self):
         hint = dense.fix_hint("provider-changed", self._status())
