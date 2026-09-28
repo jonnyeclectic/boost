@@ -337,7 +337,17 @@ jobs:
 
   tests:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # One cap for nine cells was one cap for three very different machines.
+    # Medians over 40 ci runs (every attempt): ubuntu 3.9-5.7 min, macOS
+    # 7.4-8.1, Windows 18.4-20.6. Against the slowest run that still passed
+    # (24.6 min, windows 3.14) a flat 30 left Linux 22 minutes of headroom and
+    # Windows 5.4 — and on 2026-09-28 a release train's windows-3.14 job was
+    # cancelled at 30.4 min with pytest's last line a partial `99%` row. It was
+    # neither hung nor failing; it ran out of wall clock about a minute from
+    # green, and the whole train waited on a re-run. Widening all nine would
+    # have bought that at the price of the bound: a genuinely wedged Linux job
+    # is the case a timeout exists for, and it still dies in 30.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 30 }}
     permissions:
       contents: write  # coverage badge push (main only)
     defaults:
