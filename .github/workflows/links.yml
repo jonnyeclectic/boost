@@ -45,33 +45,45 @@ jobs:
           path: .lycheecache
           key: lychee-${{ github.sha }}
           restore-keys: lychee-
-      # On a pull request, a settled card's write-up link is checked against
-      # this checkout, not GitHub. build_roadmap.py links it to
+      # A settled card's write-up link is checked against this checkout, not
+      # GitHub. build_roadmap.py links it to
       # blob/main/docs/roadmap/items/<id>.md, so a PR filing a NEW card as
       # shipped always 404'd (#845): the file is not on main until the PR
-      # merges. The remap sends that one prefix to the PR's own tree, where a
-      # mistyped id still fails as "File not found"; pushes to main and the
-      # weekly run keep fetching the real URL. tests/unit/test_roadmap_fresh.py
-      # pins the pattern to build_roadmap.ITEMS_URL.
+      # merges. The remap sends that one prefix to the tree being checked,
+      # where a mistyped id still fails as "File not found".
+      # tests/unit/test_roadmap_fresh.py pins the pattern to
+      # build_roadmap.ITEMS_URL.
+      #
+      # It applies to every event. It used to be pull-request-only, so that a
+      # push to main "proved the published link works" — but it proved nothing
+      # the file check does not. The URL is derived mechanically from a path in
+      # the very commit being checked, and `--accept` already takes 403, so a
+      # live fetch cannot tell an inaccessible repo from a reachable one: 404
+      # is the only verdict it discriminates, and `file://` gives that one
+      # identically. What it did do was fire 474 requests at one host. Run
+      # 36393345706 lost 8 of them to `503 Service Unavailable` at
+      # `--max-concurrency 8`, the cap added the last time this reddened main;
+      # and since every roadmap item regenerates docs/roadmap.html, every merge
+      # from the roadmap loop rolled that dice again. A write-up URL that does
+      # NOT match the prefix — a card pointing into the wrong directory, say —
+      # is still fetched for real, and so are the other 9 github.com links in
+      # the docs.
       - name: lychee (URLs + local paths)
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         # `--max-concurrency` is the one argument here that is not about
-        # correctness. The boards carry 467 same-repo `blob/main` write-up
-        # links, and on a push they are fetched for real (the remap below is
-        # deliberately pull-request-only, so that main is where the PUBLISHED
-        # link is proved to work). At lychee's default of 128 that is 467
-        # requests to one host in a burst, and GitHub answers some of them
-        # `503 Service Unavailable`: three consecutive attempts on 000265e6
-        # failed on 2, 1 and 4 URLs, three DISJOINT sets, and all seven return
-        # 200 when fetched one at a time. 503 is deliberately not in
-        # `--accept` — accepting it would hide a real outage — so the burst is
-        # what has to go.
+        # correctness: it is a burst cap for the links that are still fetched.
+        # lychee's default of 128 is what first turned the boards' same-host
+        # write-up links into `503 Service Unavailable` (2, 1 and 4 URLs over
+        # three attempts of one run on 000265e6, three DISJOINT sets, all seven
+        # 200 when fetched singly). 8 was not enough on its own — see the remap
+        # note above — but it stays, because the cap costs nothing and the next
+        # host the docs lean on will not have a remap.
         with:
           args: >-
             --cache --max-cache-age 1d --no-progress
             --accept 200,206,403,429
             --max-retries 3 --max-concurrency 8 --retry-wait-time 5
-            ${{ github.event_name == 'pull_request' && format('--remap ''^https://github\.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/ file://{0}/docs/roadmap/items/''', github.workspace) || '' }}
+            ${{ format('--remap ''^https://github\.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/ file://{0}/docs/roadmap/items/''', github.workspace) }}
             README.md docs/*.html
           fail: true
       - name: anchors (in-page + cross-page fragments)
