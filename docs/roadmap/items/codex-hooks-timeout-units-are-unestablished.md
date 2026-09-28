@@ -10,7 +10,7 @@ wow: 2
 note: Codex has hooks shaped like Claude's, and the two fields that differ were unverified — now measured, and the file is `hooks.json`…
 order: 345
 owner: loop/codex-hooks
-pr:
+pr: 981
 title: Codex hooks are shaped like Claude's, and the two fields that differ are unverified
 ---
 <b>Found while adding Codex as an agent target.</b> Codex CLI 0.156.1 reads a <code>[hooks]</code>
