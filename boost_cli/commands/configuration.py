@@ -2237,8 +2237,10 @@ def cmd_mcp(argv) -> int:
                 out.info(" ".join(cmd))
 
     for host in done:
-        # agy has no scopes — one global file — so claiming "(scope: user)"
-        # would describe a distinction its CLI does not have.
+        # agy and Codex have no scopes — one global file each — so claiming
+        # "(scope: user)" for either would describe a distinction their CLIs
+        # do not have, and send anyone looking for a project-scoped entry
+        # after something that cannot exist.
         scope_note = " (scope: user)" if mcphost.has_scope(host) else ""
         out.ok("%sed boost as an MCP server for %s%s"
                % (verb, mcphost.label(host), scope_note))

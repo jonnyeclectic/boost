@@ -2863,21 +2863,23 @@ class TestMcpAwareSkills:
         # non-TTY stdin makes confirm() return its default, which is False here
         assert "skipped — run these yourself when you're ready:" in r.out
         assert "claude mcp add github --scope user -- npx" in r.out
-        # agy is not on PATH, so it is not in `targets` and must not be
-        # printed: the decline path prints what a yes would have *run*, and a
-        # yes would not have run agy. Without this, `targets` and `hosts()`
-        # are indistinguishable in every test that covers the loop.
+        # agy and codex are not on PATH, so neither is in `targets` and
+        # neither must be printed: the decline path prints what a yes would
+        # have *run*, and a yes would not have run either. Without this,
+        # `targets` and `hosts()` are indistinguishable in every test that
+        # covers the loop.
         assert "agy mcp add" not in r.out
+        assert "codex mcp add" not in r.out
         assert "mcp-skill" in _lock()
 
     def test_declining_prints_a_line_for_every_host_the_yes_would_have_hit(
             self, boost, sandbox, tmp_path, monkeypatch):
         # The prompt names every installed host and a yes registers with all
         # of them, so a no that printed only the first handed back an
-        # incomplete answer — and `hosts()` puts agy last, so the host whose
-        # grammar differs most was the one never shown.
+        # incomplete answer — and `hosts()` puts the newest host last, so the
+        # host whose grammar differs most was the one never shown.
         monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
-        self._fake_which(monkeypatch, "claude", "gemini", "agy")
+        self._fake_which(monkeypatch, "claude", "gemini", "agy", "codex")
         d = _mcp_skill_dir(
             tmp_path, decl="github",
             sidecar={"mcpServers": {"github": {"command": "npx",
@@ -2887,6 +2889,7 @@ class TestMcpAwareSkills:
         assert "claude mcp add github --scope user -- npx -y srv" in r.out
         assert "gemini mcp add --scope user github npx -- -y srv" in r.out
         assert "agy mcp add github -- npx -y srv" in r.out
+        assert "codex mcp add github -- npx -y srv" in r.out
 
     def test_missing_agent_clis_print_the_commands(self, boost, sandbox,
                                                    tmp_path, monkeypatch):
@@ -2906,6 +2909,8 @@ class TestMcpAwareSkills:
         assert "gemini mcp add --scope user github npx --" in r.out
         assert "`agy` CLI not found" in r.out
         assert "agy mcp add github -- npx" in r.out
+        assert "`codex` CLI not found" in r.out
+        assert "codex mcp add github -- npx" in r.out
         assert "mcp-skill" in _lock()          # still installed
 
     def test_failed_registration_is_not_fatal(self, boost, sandbox, tmp_path,

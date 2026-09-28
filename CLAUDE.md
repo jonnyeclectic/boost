@@ -541,10 +541,10 @@ nothing. Consequences for code you write:
     finer than `skills_only` can express (which would drop rules too), so the
     `workflows` flag exists and `agents.workflow_agents()` is the set that
     honours it. `~/.codex/rules/*.rules` is the `execpolicy` command-approval
-    DSL, not an instructions dir — don't write there. Its MCP and hooks hosts
-    are not wired up: the MCP grammar is verified but unimplemented, and the
-    hook `timeout` units are unestablished, so this file records neither as
-    done.
+    DSL, not an instructions dir — don't write there. Its **MCP host is wired
+    up** (`core/mcphost.py`, fourth row — see below); its **hooks** host is
+    not, because the hook `timeout` units are unestablished, so this file does
+    not record it as done.
   - **Its dir is the one agent path that is not fixed**, hence the
     `${CODEX_HOME:-~/.codex}/skills` default and `paths.expand`'s leading
     `${VAR:-fallback}` syntax. Only a *leading* reference expands and nesting
@@ -599,7 +599,8 @@ nothing. Consequences for code you write:
   `agents/` slot stays verbatim Markdown. Getting that backwards produces a file
   the agent silently never loads.
 - `core/mcphost.py` holds the per-host `mcp add`/`remove` grammar.
-  **Antigravity CLI (`agy`) is the third host**, and one argv rule of its own
+  **Antigravity CLI (`agy`) is the third host and Codex CLI is the fourth**,
+  and one argv rule of agy's own
   bites: flags must come *before* `<name>` (a flag after it is rejected). The
   `--` boost also emits is agy's documented separator and, measured on 1.1.22,
   inert — agy never consumes an argument that *follows* the command, and
@@ -609,7 +610,34 @@ nothing. Consequences for code you write:
   `has_scope()` exists and the success line drops "(scope: user)" for it. Its
   `add` **upserts** where Claude's errors on a duplicate name; that asymmetry
   is what made `--host auto` abort on a machine already registered with
-  Claude. Claude and
+  Claude.
+
+  **Codex agrees with none of the other three outright, and the difference
+  with teeth is the flag spelling**: `--env` is long-form only — `codex mcp
+  add x -e A=1 -- cmd` exits 2 with "unexpected argument `-e` found", and its
+  own tip ("to pass `-e` as a value, use `-- -e`") is about the command, not
+  the option. So the env flag is a per-host spelling (`mcphost.ENV_FLAG`, an
+  override table whose absent rows mean `-e`) rather than one constant. It
+  takes flags on *either* side of the name (agy rejects one after it), puts
+  `--` on Claude's side, and there it is load-bearing rather than decorative:
+  with it a dash-leading command is stored verbatim, where agy rejects the
+  same input. Like agy it has **no scope** (one global
+  `$CODEX_HOME/config.toml`) and its `add` upserts. Two things about *where*
+  it writes are its own, and both are in `config_home`: the default home is
+  **`$HOME/.codex`, a subdirectory** where the other three are rooted at
+  `$HOME` itself (`CONFIG_HOME_DEFAULT_REL`), and a **relative `CODEX_HOME`
+  is honoured against the current directory** (`RELATIVE_CONFIG_HOME_CWD`) —
+  the exact opposite of Claude Code, which refuses a relative
+  `CLAUDE_CONFIG_DIR` outright. That last one is why they cannot share a
+  branch: Claude's "relative → fall back to `$HOME`" would have reported a
+  write contained when it lands wherever the user happened to be standing.
+  One more asymmetry is on the removal side: `codex mcp remove <missing>`
+  prints `No MCP server named 'boost' found.` and exits **0**, which contains
+  "found" but never "not found", so `_NOT_REGISTERED` carries a second marker
+  or `classify_result` reports a removal that never happened. All measured
+  against codex-cli 0.156.1 on 2026-09-27.
+
+  Claude and
   Gemini disagree on name position, the `--` separator, and whether unregister
   needs an explicit scope — all three verified against the real CLIs and pinned
   by `tests/unit/test_mcphost.py`. **boost emits the separator for all three,
@@ -626,7 +654,7 @@ nothing. Consequences for code you write:
   in a spec's args rewrites the entry as `{"url": "npx", "type": "http"}`. Emit
   the separator unconditionally: `add x npx --` is accepted and stores
   `args: []`. Don't "simplify" them into one shape —
-  **one function, three branches**, which is what `mcphost.add_argv` is. It is
+  **one function, four branches**, which is what `mcphost.add_argv` is. It is
   the only copy of the `mcp add` grammar, and it is the only copy because
   `mcpdecl.register_argv` (the install path, registering a server a *skill*
   declares) used to be a second one: it had a Gemini branch and a Claude

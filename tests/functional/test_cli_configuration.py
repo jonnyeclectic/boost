@@ -1786,7 +1786,9 @@ class TestMcp:
     # other side of the command, and not optional, because its own ten flags
     # claim a matching arg out of an unguarded tail; agy wants flags before
     # the name, carries the same `--` before the command, and has no scope
-    # flag at all (one global file).
+    # flag at all (one global file); codex agrees with agy on the scope and
+    # the separator's side and with nobody on the flag — `--env`, no short
+    # form (`-e` is "unexpected argument '-e' found", exit 2).
     # Every test below captures the argv the fake CLI receives — an argv that
     # is merely plausible fails silently, on someone else's machine.
 
@@ -1841,6 +1843,16 @@ class TestMcp:
         return ["agy", "mcp", "add",
                 "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
                 "-e", "no_proxy=*",
+                "boost", "--", self._shim(), "mcp", "--stdio"]
+
+    def _codex_add(self):
+        # codex takes `[OPTIONS] <NAME> -- <COMMAND>...`. The separator sits
+        # on Claude's side, there is no scope (one global
+        # $CODEX_HOME/config.toml), and the env flag has no short form at
+        # all — `-e` exits 2 with "unexpected argument '-e' found".
+        return ["codex", "mcp", "add",
+                "--env", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
+                "--env", "no_proxy=*",
                 "boost", "--", self._shim(), "mcp", "--stdio"]
 
     def test_register_seeds_the_catalog_on_an_empty_machine(
@@ -2053,6 +2065,27 @@ class TestMcp:
         assert "Claude Code" not in r.out
         assert journal.events(action="mcp")[0]["hosts"] == "gemini"
 
+    def test_register_with_only_codex_cli_claims_no_scope(self, boost,
+                                                          sandbox,
+                                                          monkeypatch):
+        # The second scopeless host, and the one whose argv shares no flag
+        # spelling with the other three. "(scope: user)" must not appear:
+        # codex keeps one global file and saying otherwise sends a reader
+        # after a project-scoped entry that cannot exist.
+        calls = self._fake_clis(monkeypatch, "codex")
+        r = boost("mcp", "register")
+        assert calls == [self._codex_add()]
+        assert "registered boost as an MCP server for Codex CLI" in r.out
+        assert "Codex CLI (scope: user)" not in r.out
+        assert journal.events(action="mcp")[0]["hosts"] == "codex"
+
+    def test_unregister_with_only_codex_cli_passes_no_scope(self, boost,
+                                                            sandbox,
+                                                            monkeypatch):
+        calls = self._fake_clis(monkeypatch, "codex")
+        boost("mcp", "unregister")
+        assert calls == [["codex", "mcp", "remove", "boost"]]
+
     def test_register_with_both_clis_registers_both(self, boost, sandbox,
                                                     monkeypatch):
         calls = self._fake_clis(monkeypatch, "claude", "gemini")
@@ -2070,10 +2103,12 @@ class TestMcp:
         calls = self._fake_clis(monkeypatch)          # no agent CLI on PATH
         r = boost("mcp", "register")
         assert calls == []                            # nothing was run
-        assert "no agent CLI found (looked for: claude, gemini, agy)" in r.out
+        assert ("no agent CLI found (looked for: claude, gemini, agy, codex)"
+                in r.out)
         assert " ".join(self._claude_add()) in r.out
         assert " ".join(self._gemini_add()) in r.out
         assert " ".join(self._agy_add()) in r.out
+        assert " ".join(self._codex_add()) in r.out
         assert journal.events(action="mcp")[0]["hosts"] == ""
 
         r = boost("mcp", "unregister")
@@ -2119,6 +2154,8 @@ class TestMcp:
         assert " ".join(self._gemini_add()) in r.out
         assert "`agy` CLI not found — run this yourself:" in r.out
         assert " ".join(self._agy_add()) in r.out
+        assert "`codex` CLI not found — run this yourself:" in r.out
+        assert " ".join(self._codex_add()) in r.out
 
     def test_host_all_with_nothing_installed_still_succeeds(
             self, boost, sandbox, monkeypatch):
@@ -2131,12 +2168,13 @@ class TestMcp:
         assert "`claude` CLI not found — run this yourself:" in r.out
         assert "`gemini` CLI not found — run this yourself:" in r.out
         assert "`agy` CLI not found — run this yourself:" in r.out
+        assert "`codex` CLI not found — run this yourself:" in r.out
 
     def test_unknown_host_rc1(self, boost, sandbox, monkeypatch):
         self._fake_clis(monkeypatch, "claude", "gemini")
         r = boost("mcp", "register", "--host", "bogus", expect=1)
         assert "unknown MCP host 'bogus'" in r.err
-        assert "known hosts: claude, gemini, agy" in r.err
+        assert "known hosts: claude, gemini, agy, codex" in r.err
 
     def test_unregister_uses_each_hosts_grammar(self, boost, sandbox,
                                                 monkeypatch):
@@ -2267,11 +2305,13 @@ class TestMcp:
 
     # ── the sandbox guard ────────────────────────────────────────────────
     # An agent CLI resolves its own configuration from the ambient
-    # environment, not from the HOME boost is running under. Claude Code is
-    # the only one of the three that can be moved that way (CLAUDE_CONFIG_DIR;
-    # Gemini's GEMINI_DIR is a JS constant and agy has none), and it is how a
-    # run with HOME and BOOST_HOME both pointed at a tempdir registered boost
-    # in a developer's live ~/.claude-personal/.claude.json.
+    # environment, not from the HOME boost is running under. Two of the four
+    # can be moved that way — Claude Code (CLAUDE_CONFIG_DIR) and Codex
+    # (CODEX_HOME); Gemini's GEMINI_DIR is a JS constant and agy has none —
+    # and it is how a run with HOME and BOOST_HOME both pointed at a tempdir
+    # registered boost in a developer's live ~/.claude-personal/.claude.json.
+    # The two resolve a *relative* value differently, which is why Codex has
+    # its own legs below rather than riding on Claude's.
 
     def _outside_home(self, monkeypatch, tmp_path):
         """Point CLAUDE_CONFIG_DIR at a directory beside the sandbox HOME."""
@@ -2384,14 +2424,45 @@ class TestMcp:
 
     def test_the_other_hosts_never_read_claude_config_dir(
             self, boost, sandbox, monkeypatch, tmp_path):
-        # Gemini and agy are anchored at $HOME, so the variable that moves
-        # Claude must not move them — guarding them on it would refuse a
-        # registration that was always going to land in the sandbox.
+        # Gemini and agy are anchored at $HOME and Codex reads a different
+        # variable, so the one that moves Claude must not move any of them —
+        # guarding them on it would refuse a registration that was always
+        # going to land in the sandbox.
         self._outside_home(monkeypatch, tmp_path)
-        calls = self._writing_clis(monkeypatch, "gemini", "agy")
+        calls = self._writing_clis(monkeypatch, "gemini", "agy", "codex")
         r = boost("mcp", "register", "--no-seed")
-        assert calls == [self._gemini_add(), self._agy_add()]
+        assert calls == [self._gemini_add(), self._agy_add(),
+                         self._codex_add()]
         assert "refusing" not in r.out + r.err
+
+    def test_codex_home_outside_this_home_is_refused(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        # Codex's own half of the guard. The file is a config.toml at the
+        # root of CODEX_HOME rather than a dotfile under $HOME, so a guard
+        # that only knew Claude's shape would vouch for a path Codex never
+        # writes and let this one through.
+        elsewhere = tmp_path / "real-codex"
+        elsewhere.mkdir()
+        monkeypatch.setenv("CODEX_HOME", str(elsewhere))
+        calls = self._writing_clis(monkeypatch, "codex")
+        r = boost("mcp", "register", "--no-seed", expect=1)
+        assert calls == []
+        assert not (elsewhere / "config.toml").exists()
+        blob = r.out + r.err
+        assert "refusing to register" in blob
+        assert str(elsewhere / "config.toml") in blob
+        assert " ".join(self._codex_add()) in blob
+
+    def test_codexs_default_subdirectory_is_not_refused(
+            self, boost, sandbox, monkeypatch):
+        # The ordinary machine: CODEX_HOME unset means $HOME/.codex, which is
+        # inside the sandbox. Anchoring Codex at $HOME itself — as the other
+        # three are — would have named the wrong file in both directions.
+        calls = self._writing_clis(monkeypatch, "codex")
+        r = boost("mcp", "register", "--no-seed")
+        assert calls == [self._codex_add()]
+        assert (sandbox / ".codex" / "config.toml").exists()
+        assert "registered boost as an MCP server for Codex CLI" in r.out
 
     def test_dry_run_names_the_file_and_the_escape(
             self, boost, sandbox, monkeypatch, tmp_path):
