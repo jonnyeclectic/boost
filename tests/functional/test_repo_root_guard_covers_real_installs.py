@@ -78,6 +78,21 @@ def test_a_project_skill_install_is_caught_in_every_agent_dotdir(boost, tapped,
         assert any(dotdir in p for p in parts), (dotdir, hits)
 
 
+def test_a_project_mcp_registration_is_caught(watch):
+    # `<repo>/.mcp.json` is the one project-scope artifact that is committable
+    # and the one no table the probe list is derived from names — `store.
+    # register_project_mcp` joins it straight onto the base. Driving the real
+    # writer rather than the fixture tap, because no fixture skill declares an
+    # MCP server and adding one to a tap the whole functional suite shares
+    # would change what every other test installs.
+    from boost_cli.core import store
+    rows = [{"name": "probe", "spec": {"command": "true"}}]
+    assert store.register_project_mcp(watch.repo, rows, "brainstorming") \
+        == ["probe"]
+    hits = watch()
+    assert any(h.endswith(".mcp.json") for h in hits), hits
+
+
 def test_an_untouched_repo_reports_nothing(boost, tapped, watch):
     # The other half of every guard: it has to be silent when nothing happened,
     # or it teaches people to ignore it. `tapped` has already run a user-scope

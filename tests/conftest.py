@@ -24,6 +24,11 @@ if str(ROOT) not in sys.path:
 # :func:`watched_roots`.
 _START_DIR = Path.cwd()
 
+# The real home directory, captured now: `checkout_root` stops there the way
+# `scopes.project_root` does, and by the time the guard first runs the `sandbox`
+# fixture has already pointed `$HOME` at a tempdir.
+_REAL_HOME = Path(os.environ.get("HOME") or Path.home())
+
 # A name joined into probe paths that are never read, only stat-ed. It has to
 # satisfy `util.is_safe_component` and the skill-name rule, so it cannot be a
 # marker like "<probe>".
@@ -36,7 +41,7 @@ _PROBE_NAME = "boost-repo-guard-probe"
 _VCS_MARKERS = (".git", ".hg", ".svn")
 
 
-def checkout_root(start):
+def checkout_root(start, home=None):
     """The working tree ``start`` sits in — the same answer `scopes` computes.
 
     `scopes.resolve_base` walks *up* from the cwd for a VCS marker, so this has
@@ -47,11 +52,24 @@ def checkout_root(start):
     where a stray project install is most likely, and the one where deriving
     the checkout from `__file__` silently stops naming the checkout.
 
+    **The walk stops at ``$HOME``**, exactly where `scopes.project_root` stops
+    and for the same reason: dotfile setups make ``~/.git`` common, and no
+    scope-resolved writer can put a project install at ``$HOME`` — that is what
+    that stop guarantees. Without it, running `pytest` from a directory under a
+    dotfiles repo makes the guard fingerprint the live ``~/.claude``,
+    ``~/.codex`` and ``~/.boost`` trees, so a `boost install` in another
+    terminal, or Claude Code rewriting its own ``settings.json``, fails
+    whichever test happened to be running — an accusation against an innocent
+    test, in exchange for watching a tree nothing under test can write to.
+
     Falls back to ``start`` when there is no marker above it, which is what a
     `pytest` run from an unpacked sdist looks like.
     """
     start = Path(start)
+    home = Path(home) if home is not None else _REAL_HOME
     for d in (start, *start.parents):
+        if d == home:
+            break
         if any((d / m).exists() for m in _VCS_MARKERS):
             return d
     return start
@@ -64,11 +82,10 @@ def watched_roots(*candidates) -> list[Path]:
     `scopes.resolve_base` walks *up* for a VCS marker, so under the mutation
     gate — which runs the suite from `mutants/` inside the checkout — a project
     install lands at the **repo** root. A cwd-relative writer such as
-    `claude_settings.settings_path("project")` lands in `mutants/` itself. Both
-    are real: a `mutants/.codex/hooks.json` measured in this tree was left by a
-    mutant execution of the Codex hook host, read back by the next clean-test
-    run, and failed it with a traceback pointing at the assertion rather than
-    at the file.
+    `claude_settings.settings_path("project")` — whose ``project_dir`` defaults
+    to ``Path.cwd()`` (`boost_cli/core/claude_settings.py`) — lands in
+    `mutants/` itself. Both are therefore reachable from one run, and watching
+    only the one `__file__` names would miss whichever the escape used.
 
     Deduplicated in the order given, so the caller decides which is reported
     first and a `mutants/`-shaped run costs one extra root rather than two
@@ -152,12 +169,18 @@ def project_scope_probes(root, specs=None) -> list[Path]:
         projectlock,
         rules,
         scopes,
+        store,
         workflows,
     )
     root = Path(root)
     if specs is None:
         specs = agent_specs()
-    probes: list[Path] = [projectlock.lock_path(root)]
+    # The lock file, and the directory holding it: a test that writes the lock
+    # and removes the file in its own cleanup leaves `<root>/.boost/` behind,
+    # gitignored, with before == after == absent. The directory also covers
+    # `projectlock`'s corrupt-file quarantine sibling.
+    probes: list[Path] = [projectlock.lock_path(root),
+                          projectlock.lock_path(root).parent]
 
     for name, spec in specs.items():
         if not spec.get("project_scope", True):
@@ -181,6 +204,16 @@ def project_scope_probes(root, specs=None) -> list[Path]:
     probes.extend(
         claude_settings.settings_path("project", project_dir=root, host=host)
         for host in hookhost.hosts())
+    # `<root>/.mcp.json`, named rather than derived, and the standing exception
+    # to "a new target is covered by adding it to a table": `store.
+    # project_mcp_sidecar` is joined straight onto the base by
+    # `register_project_mcp`/`unregister_project_mcp`, so no table mentions it.
+    # A stray project install is still *detected* without it — both writers sit
+    # beside a `projectlock` write, which is probed — but this is the artifact
+    # that is committable and shows up in `git status`, so leaving it out of
+    # the report means the developer cleans up everything the guard names and
+    # still commits one file.
+    probes.append(store.project_mcp_sidecar(root))
 
     seen, unique = set(), []
     for p in probes:
@@ -213,6 +246,43 @@ def _dir_entries(d):
     return out
 
 
+_CONTEXT_FILES: dict[str, object] = {}
+
+
+def context_file_facts() -> tuple[frozenset[str], str]:
+    """``(filenames, marker prefix)`` for the agents' shared context files.
+
+    Both derived from `rules`, never spelled out, so a new context-file agent
+    is covered the moment its row lands in `rules.CONTEXT_FILES` — and cached,
+    because this is on the teardown path of every test.
+    """
+    if not _CONTEXT_FILES:
+        from boost_cli.core import rules
+        _CONTEXT_FILES["names"] = frozenset(
+            n for pair in rules.CONTEXT_FILES.values() for n in pair)
+        _CONTEXT_FILES["marker"] = rules.BLOCK_START.split("%s")[0]
+    return _CONTEXT_FILES["names"], _CONTEXT_FILES["marker"]
+
+
+def managed_blocks(path, marker) -> str:
+    """The ``marker`` lines of ``path``, in order — boost's footprint in it.
+
+    A context file (``CLAUDE.local.md``, ``GEMINI.md``, ``AGENTS.md``) is the
+    one probe that is *prose a human edits*, and hashing the whole file makes
+    every concurrent edit to it a test failure: `make check` runs for tens of
+    minutes, so appending a line to `AGENTS.md` meanwhile fails one arbitrary
+    test with "wrote project-scope state into a real working tree" and passes
+    on the re-run, which is a flake in a required gate.
+
+    `rules` brackets every block it writes in ``<!-- boost:rule:<name> ... -->``
+    comments and strips exactly those on uninstall, so the marker lines are a
+    complete record of what an install or uninstall did to the file, and
+    nothing else in it can move them.
+    """
+    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    return "\n".join(ln for ln in text.splitlines() if marker in ln)
+
+
 def fingerprint_paths(paths) -> dict[str, str]:
     """``{path: fingerprint}`` for the ones that exist — absent means absent.
 
@@ -222,7 +292,9 @@ def fingerprint_paths(paths) -> dict[str, str]:
 
     A probed **file** is fingerprinted by content — rather than mtime, because
     an idempotent rewrite is not a change and a guard that fires on one gets
-    switched off.
+    switched off. The exception is an agent **context file**, which is prose a
+    human also edits: those are fingerprinted by their boost markers alone, see
+    :func:`managed_blocks`.
 
     A probed **directory** is fingerprinted by its immediate entries, each as
     ``name|kind`` plus, for a regular file, its size and ``mtime_ns``, and for
@@ -251,8 +323,12 @@ def fingerprint_paths(paths) -> dict[str, str]:
             if p.is_dir():
                 out[str(p)] = "d:" + ",".join(sorted(_dir_entries(p)))
             elif p.exists():
-                out[str(p)] = "f:" + hashlib.sha256(
-                    p.read_bytes()).hexdigest()[:16]
+                names, marker = context_file_facts()
+                if p.name in names:
+                    out[str(p)] = "m:" + managed_blocks(p, marker)
+                else:
+                    out[str(p)] = "f:" + hashlib.sha256(
+                        p.read_bytes()).hexdigest()[:16]
             elif p.is_symlink():
                 # Present, but neither `is_dir` nor `exists` says so: both
                 # follow the link. A broken symlink planted at a probe path
@@ -461,8 +537,13 @@ def sandbox(tmp_path, monkeypatch):
     # `TMPDIR` inside a checkout inverts the whole fix — every project-scope
     # test would resolve to that checkout and the guard would fail all of them
     # with the wrong story. Cheaper to say so here than to debug there.
-    assert not any((d / ".git").exists() for d in (cwd, *cwd.parents)), (
-        "pytest's tmp_path is inside a git working tree (%s) — set TMPDIR or"
+    # Every marker `scopes.PROJECT_MARKERS` accepts, not just `.git`: a
+    # `TMPDIR` inside a Mercurial or Subversion working copy resolves exactly
+    # the same way, and checking one of the three would let the inversion this
+    # assertion exists to announce pass silently.
+    assert not any((d / m).exists()
+                   for d in (cwd, *cwd.parents) for m in _VCS_MARKERS), (
+        "pytest's tmp_path is inside a working tree (%s) — set TMPDIR or"
         " --basetemp somewhere else, or every project-scope test writes into"
         " it" % cwd)
     monkeypatch.delenv("BOOST_HOME", raising=False)

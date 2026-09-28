@@ -17,6 +17,7 @@ would need the failure it exists to raise.
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -84,13 +85,34 @@ class TestWhatIsWatched:
     def test_the_rule_context_files_are_watched(self, guard):
         # A rule install does not create a file — it *edits* one that already
         # exists and that every agent working this repo loads as instructions.
-        # So these are watched by content, which is what the fingerprint below
-        # makes possible.
+        # So these are watched by their boost markers, which is what the
+        # fingerprint below makes possible.
         root = Path("/repo")
         probes = set(guard.project_scope_probes(root))
         from boost_cli.core import rules
         for _global_name, project_name in rules.CONTEXT_FILES.values():
             assert root / project_name in probes, project_name
+
+    def test_the_lock_directory_is_watched_as_well_as_the_lock(self, guard):
+        # A test that writes the lock and removes the *file* in its own
+        # cleanup leaves `<root>/.boost/` behind — gitignored, and invisible to
+        # a probe that only names the file, because before == after == absent.
+        root = Path("/repo")
+        probes = set(guard.project_scope_probes(root))
+        from boost_cli.core import projectlock
+        lock = projectlock.lock_path(root)
+        assert lock in probes and lock.parent in probes
+
+    def test_the_project_mcp_sidecar_is_watched(self, guard):
+        # `store.register_project_mcp` joins `.mcp.json` straight onto the
+        # base, so no table the probe list is derived from mentions it. It is
+        # also the only project-scope artifact that is committable, so leaving
+        # it out of the report means the developer cleans up everything the
+        # guard names and still commits one file.
+        root = Path("/repo")
+        from boost_cli.core import store
+        assert store.project_mcp_sidecar(root) in set(
+            guard.project_scope_probes(root))
 
     def test_probes_are_deduplicated(self, guard):
         # claude-code's `.claude` arrives from the agent table and again from
@@ -114,7 +136,9 @@ class TestFingerprint:
         assert fp == {}
 
     def test_a_file_is_fingerprinted_by_content(self, guard, tmp_path):
-        f = tmp_path / "AGENTS.md"
+        # A probed file that is not a context file — those take the
+        # marker-only branch, see `TestAContextFileIsWatchedByItsMarkers`.
+        f = tmp_path / "settings.json"
         f.write_text("before", encoding="utf-8")
         before = guard.fingerprint_paths([f])
         f.write_text("after", encoding="utf-8")
@@ -126,7 +150,9 @@ class TestFingerprint:
                                                                   tmp_path):
         # mtime would call this a change. It is not one, and a guard that
         # cried wolf on an idempotent write would be turned off within a week.
-        f = tmp_path / "CLAUDE.local.md"
+        # `settings.json` deliberately: a context file goes down the
+        # marker-only branch instead, and would pass this vacuously.
+        f = tmp_path / "settings.json"
         f.write_text("same", encoding="utf-8")
         before = guard.fingerprint_paths([f])
         f.write_text("same", encoding="utf-8")
@@ -240,6 +266,87 @@ class TestFingerprint:
                                          guard.fingerprint_paths([d])) == []
 
 
+    def test_a_same_size_overwrite_inside_a_watched_directory_is_a_change(
+            self, guard, tmp_path):
+        # The `mtime_ns` half of a directory entry, which the replacement test
+        # above cannot reach: there the new body is longer, so `st_size` alone
+        # discriminates and the timestamp could be dropped with the suite
+        # green. `os.utime` rather than a bare rewrite, because two writes
+        # inside one clock tick on a coarse filesystem carry the same stamp.
+        d = tmp_path / "commands"
+        d.mkdir()
+        f = d / "review.md"
+        f.write_text("mine", encoding="utf-8")
+        os.utime(f, ns=(1_000_000_000, 1_000_000_000))
+        before = guard.fingerprint_paths([d])
+        f.write_text("hers", encoding="utf-8")          # same byte count
+        os.utime(f, ns=(2_000_000_000, 2_000_000_000))
+        assert guard.repo_root_intruders(
+            before, guard.fingerprint_paths([d])) == [str(d)]
+
+
+class TestAContextFileIsWatchedByItsMarkers:
+    """`CLAUDE.local.md`, `GEMINI.md` and `AGENTS.md` are prose humans edit.
+
+    Hashing them whole makes any concurrent edit a test failure: `make check`
+    runs for tens of minutes, so a line appended to `AGENTS.md` meanwhile fails
+    one arbitrary test with the project-install message and passes on the
+    re-run — a flake in a required gate, blaming an innocent test.
+    """
+
+    def test_prose_appended_by_a_human_is_not_a_change(self, guard, tmp_path):
+        f = tmp_path / "AGENTS.md"
+        f.write_text("# notes\n", encoding="utf-8")
+        before = guard.fingerprint_paths([f])
+        f.write_text("# notes\nsomething a teammate typed\n", encoding="utf-8")
+        assert guard.repo_root_intruders(
+            before, guard.fingerprint_paths([f])) == []
+
+    def test_a_rule_block_appearing_is_a_change(self, guard, tmp_path):
+        from boost_cli.core import rules
+        start, end = rules.markers("some-rule")
+        f = tmp_path / "AGENTS.md"
+        f.write_text("# notes\n", encoding="utf-8")
+        before = guard.fingerprint_paths([f])
+        f.write_text("# notes\n%s\nbody\n%s\n" % (start, end),
+                     encoding="utf-8")
+        assert guard.repo_root_intruders(
+            before, guard.fingerprint_paths([f])) == [str(f)]
+
+    def test_a_rule_block_disappearing_is_a_change_too(self, guard, tmp_path):
+        # Uninstall is the worse direction: a test that strips a rule the
+        # developer installed leaves no trace a content hash would out-live.
+        from boost_cli.core import rules
+        start, end = rules.markers("some-rule")
+        f = tmp_path / "GEMINI.md"
+        f.write_text("%s\nbody\n%s\n" % (start, end), encoding="utf-8")
+        before = guard.fingerprint_paths([f])
+        f.write_text("", encoding="utf-8")
+        assert guard.repo_root_intruders(
+            before, guard.fingerprint_paths([f])) == [str(f)]
+
+    def test_the_filenames_and_the_marker_come_from_rules(self, guard):
+        from boost_cli.core import rules
+        names, marker = guard.context_file_facts()
+        assert names == {n for pair in rules.CONTEXT_FILES.values()
+                         for n in pair}
+        assert marker and rules.BLOCK_START.startswith(marker)
+        assert "%s" not in marker
+
+    def test_a_file_that_is_not_a_context_file_is_still_hashed(self, guard,
+                                                               tmp_path):
+        # The carve-out is by filename, so it must not swallow the other
+        # probed file: `settings.json` carries no boost markers at all, and a
+        # marker fingerprint of it would be "" before and after every hook
+        # write.
+        f = tmp_path / "settings.json"
+        f.write_text('{"hooks": {}}', encoding="utf-8")
+        before = guard.fingerprint_paths([f])
+        f.write_text('{"hooks": {"SessionStart": []}}', encoding="utf-8")
+        assert guard.repo_root_intruders(
+            before, guard.fingerprint_paths([f])) == [str(f)]
+
+
 class TestIntruders:
     def test_nothing_changed_reports_nothing(self, guard):
         snap = {"/repo/.boost/skill-lock.json": "f:abc"}
@@ -318,6 +425,53 @@ class TestTheRootsAreDerivedFromTheFilesystem:
         assert guard.checkout_root(d) == d
 
 
+    def test_guard_roots_watches_the_checkout_above_a_mutants_copy(
+            self, guard, monkeypatch, tmp_path):
+        # The composition, not its pieces. `test_a_watched_root_is_a_real_
+        # working_tree` above passes in an ordinary run even with both
+        # `checkout_root` calls deleted from `guard_roots`, because `ROOT` is
+        # then the checkout already — so the regression it guards against
+        # could land green in CI and on every machine but the mutation gate.
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        mutants = repo / "mutants"
+        (mutants / "tests").mkdir(parents=True)
+        monkeypatch.setattr(guard, "ROOT", mutants)
+        monkeypatch.setattr(guard, "_START_DIR", mutants)
+        monkeypatch.setattr(guard, "_REAL_HOME", tmp_path / "home")
+        assert guard.guard_roots() == [repo, mutants]
+
+    def test_the_walk_stops_at_home(self, guard, tmp_path):
+        # A dotfiles `$HOME`. `scopes.project_root` returns None here, so no
+        # project install can land at `$HOME`, and watching it would put the
+        # live `~/.claude`, `~/.codex` and `~/.boost` trees under a guard that
+        # fails whichever test is running when another terminal touches them.
+        home = tmp_path / "home"
+        (home / ".git").mkdir(parents=True)
+        start = home / "Code" / "loose"
+        start.mkdir(parents=True)
+        assert guard.checkout_root(start, home=home) == start
+
+    def test_a_checkout_below_home_still_wins(self, guard, tmp_path):
+        # The stop must not cost the ordinary case: every real checkout on a
+        # developer machine is under `$HOME`.
+        home = tmp_path / "home"
+        (home / ".git").mkdir(parents=True)
+        repo = home / "Code" / "boost"
+        (repo / ".git").mkdir(parents=True)
+        deep = repo / "tests" / "unit"
+        deep.mkdir(parents=True)
+        assert guard.checkout_root(deep, home=home) == repo
+
+    def test_the_home_stop_is_captured_at_import(self, guard, monkeypatch,
+                                                 tmp_path):
+        # Read once, at import — which happens at collection, before any
+        # fixture. A per-call read would see `sandbox`'s tempdir `$HOME`
+        # instead, which is no stop at all.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert tmp_path == load_conftest()._REAL_HOME
+
+
 class TestTheGuardReadsNoConfig:
     """`project_scope_probes` used to call `agents.project_dotdir`, which calls
     `known_agents()`, which calls `paths.expand` on every agent's dir. That
@@ -357,9 +511,8 @@ class TestWatchedRoots:
     `.boost/skill-lock.json` lands at the repo root (project_root walks up and
     finds the checkout's `.git`), while a cwd-relative writer such as
     `claude_settings.settings_path("project")` lands in `mutants/` itself. A
-    guard watching only one of them misses half the damage — measured: a
-    `mutants/.codex/hooks.json` left by a mutant execution was read back by the
-    next clean-test run and failed it.
+    guard watching only one of them misses half the damage, and which one it
+    lands in depends on the writer rather than on anything the test chose.
     """
 
     def test_the_checkout_and_the_start_directory_are_both_watched(self, guard,

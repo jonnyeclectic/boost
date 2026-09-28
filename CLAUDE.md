@@ -53,15 +53,30 @@ VCS marker, never from `__file__`**: mutmut copies `tests/` into `mutants/` and
 runs the suite from there, so under the mutation gate — the one run the guard
 exists for — `Path(__file__).parent.parent` *is* `mutants/`, it coincides with
 the start directory, and a derivation from either watches only `mutants/` while
-`scopes.resolve_base` puts the escaped install at the real repo root. And a
+`scopes.resolve_base` puts the escaped install at the real repo root. That walk
+**stops at `$HOME`**, where `scopes.project_root` stops: a dotfiles `~/.git` is
+common, no scope-resolved writer can put a project install at `$HOME`, and
+without the stop the guard fingerprints the live `~/.claude`, `~/.codex` and
+`~/.boost` trees — so a `boost install` in another terminal fails whichever
+test happened to be running. And a
 watched **directory** is fingerprinted by its immediate entries with each
 file's size and `mtime_ns`, not by name alone, or replacing a slash command the
-developer wrote by hand leaves the listing identical. The probe list is derived
+developer wrote by hand leaves the listing identical; a watched **file** by
+content, except an agent **context file** (`CLAUDE.local.md`, `GEMINI.md`,
+`AGENTS.md`), which is prose a human also edits and is fingerprinted by its
+`<!-- boost:rule:… -->` marker lines alone — a whole-file hash turns a teammate
+appending a line during a tens-of-minutes `make check` into a flake in a
+required gate. The probe list is derived
 from the live agent table over `config.DEFAULTS["agents"]`, plus
 `rules.CONTEXT_FILES` and `hookhost.hosts()`, so a new write target is covered
 by adding it to those tables, not to the guard — and it reads that config
 defensively, because an autouse fixture that can raise is a setup error on
-every test in the suite rather than one failure.
+every test in the suite rather than one failure. The standing exception is
+`store.project_mcp_sidecar` (`<repo>/.mcp.json`), which no table names because
+`register_project_mcp` joins it straight onto the base; it is probed by name,
+and it is the one project-scope artifact that is committable, so a report that
+omitted it would have the developer clean up everything the guard named and
+commit one file anyway.
 
 ## The one gate that matters
 
