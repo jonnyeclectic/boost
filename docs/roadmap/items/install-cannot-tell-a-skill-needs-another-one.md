@@ -2,14 +2,14 @@
 id: install-cannot-tell-a-skill-needs-another-one
 board: code
 section: planned
-status: planned
+status: inflight
 category: Install · Research
 complexity: M
 impact: Med
 wow: 3
 note: 595 catalogued items declare a prerequisite and boost reads none of them — but only 437 of 1,430 declared values name something boost could install…
 order: 348
-owner:
+owner: loop/install-prerequisites
 pr:
 title: "Research: how <code>boost install</code> could tell that a skill needs something else installed first"
 ---
