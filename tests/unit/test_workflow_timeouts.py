@@ -69,13 +69,20 @@ CI = WORKFLOWS / "ci.yml"
 # runner label or a version string — is never mistaken for a cap.
 TERNARY = re.compile(r"&&\s*(\d+)\s*\|\|\s*(\d+)\s*$")
 
-QUOTED = re.compile(r"'[^']*'")
+# A whole expression that is one context lookup and nothing else — the only
+# shape whose cap legitimately lives outside this repo's YAML.
+CONTEXT_REF = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_-]+)*")
 
 # The comparison forms a cap's condition is allowed to take, each paired with
 # the predicate that evaluates it over one matrix value. Keeping this an
 # explicit table is the point: an unlisted shape raises rather than being
 # approximated, because a condition this file guesses at is a condition it is
 # not really checking.
+# GitHub's `==`, `startsWith` and `contains` fold case; these predicates do
+# not. Every divergence therefore reads a cell as *not* matching when GitHub
+# would match it, which can only turn a real cap into a reported miss — a
+# false failure, never a false pass. Tighten it if a runner label ever varies
+# in case; do not loosen it.
 COMPARISONS = (
     (re.compile(r"^(\S+)\s*==\s*'([^']*)'$"), lambda value, lit: value == lit),
     (re.compile(r"^(\S+)\s*!=\s*'([^']*)'$"), lambda value, lit: value != lit),
@@ -112,9 +119,12 @@ def job_timeouts(body: str, where: str = "") -> list[int]:
     """Every integer minute count a job's `timeout-minutes` can take.
 
     A literal gives one; the `${{ <cond> && X || Y }}` form gives both
-    branches, because both are caps that really apply to some matrix cell. An
-    expression carrying no digits outside quotes (a `${{ inputs.x }}`
-    passthrough, say) gives none — there is no number here to bound.
+    branches, because both are caps that really apply to some matrix cell. A
+    bare context reference (`${{ inputs.cap }}`) gives none — the number lives
+    outside the file and there is nothing here to bound. That carve-out is
+    deliberately narrow: `${{ cond && vars.WIN_CAP || vars.CAP }}` carries no
+    digits either, but it is a decision this file *can* see the shape of, and
+    letting it through unchecked is the same hole by another route.
 
     Anything else raises. Returning an empty list for an unparsed shape is how
     the trailing-comment bug hid a 330-minute cap from its own gate for
@@ -131,7 +141,7 @@ def job_timeouts(body: str, where: str = "") -> list[int]:
         branches = TERNARY.search(inner)
         if branches:
             return [int(n) for n in branches.groups()]
-        if not re.search(r"\d", QUOTED.sub("", inner)):
+        if CONTEXT_REF.fullmatch(inner):
             return []
     raise AssertionError(
         "%s: timeout-minutes %r is neither an integer nor "
@@ -141,6 +151,9 @@ def job_timeouts(body: str, where: str = "") -> list[int]:
 
 def matrix_os_values(body: str) -> list[str]:
     """The runner labels a job's `os:` matrix axis actually produces."""
+    assert not re.search(r"^ +include:\s*$", body, re.M), (
+        "this job's matrix has an `include:`, which adds cells this function "
+        "does not read — teach it the block before trusting the result")
     found = re.search(r"^ +os: \[([^\]]*)\]", body, re.M)
     assert found, "no `os:` matrix list in this job"
     return [v.strip().strip("'\"") for v in found.group(1).split(",") if v.strip()]
@@ -210,8 +223,15 @@ def test_every_job_declares_a_timeout(path):
     for name, body in found:
         if REUSABLE.search(body):
             continue
-        assert "timeout-minutes:" in body, (
-            "%s / %s has no timeout-minutes" % (path.name, name))
+        # `"timeout-minutes:" in body` was the old test, and it accepted a
+        # *step*-level cap as though it capped the job: eight spaces of indent
+        # satisfy the substring while `timeout_value`'s four-space anchor —
+        # and so the bound in the next test — never see it. Both guards now
+        # ask the same question, so a job cannot be declared capped by one and
+        # skipped by the other.
+        assert timeout_value(body) is not None, (
+            "%s / %s has no job-level timeout-minutes (a step-level one does "
+            "not cap the job)" % (path.name, name))
 
 
 @pytest.mark.parametrize("path", workflow_files(), ids=lambda p: p.name)
@@ -276,19 +296,28 @@ def test_the_parser_reads_branches_not_digits(value, expected):
     assert job_timeouts("    timeout-minutes: %s\n" % value) == expected
 
 
-def test_the_parser_refuses_a_shape_it_cannot_read():
+@pytest.mark.parametrize("value", [
+    "${{ fromJSON(inputs.caps)[3] }}",
+    # Digit-free, so a "no numbers here" carve-out waves it through — but it
+    # is a two-branch decision this file can see, and the branch it does not
+    # take is exactly where an unbounded cap would hide.
+    "${{ startsWith(matrix.os, 'windows') && vars.WIN_CAP || vars.CAP }}",
+])
+def test_the_parser_refuses_a_shape_it_cannot_read(value):
     """Silence is the dangerous answer here, so there must not be one."""
     with pytest.raises(AssertionError, match="teach job_timeouts"):
-        job_timeouts("    timeout-minutes: ${{ fromJSON(inputs.caps)[3] }}\n")
+        job_timeouts("    timeout-minutes: %s\n" % value)
 
 
 def test_windows_gets_the_wider_cap_and_the_others_do_not():
     """Measured, not guessed — see the comment above the line in ci.yml.
 
-    Over 40 `ci` runs the Windows cells' medians were 18.8-20.5 min against
-    3.9-8.2 for Linux and macOS, and the slowest Windows run that still passed
+    Over 40 `ci` runs the Windows cells' medians were 19.3-20.7 min against
+    4.0-8.8 for Linux and macOS, and the slowest Windows run that still passed
     took 24.6. A flat 30 gave Windows 5.4 minutes of headroom, and on
-    2026-09-28 a release train's windows-3.14 job was killed by it at 30.4.
+    2026-09-28 windows-3.14 ran out of it twice in one morning — a release
+    train's job at 30.4 min and main's own at 30.3, both still printing test
+    results when they were killed.
 
     The assertion is on the *cap each real matrix cell gets*, not on how the
     condition is spelled: an equivalent rewrite (`!= 'windows-latest' && 30 ||
@@ -306,8 +335,11 @@ def test_windows_gets_the_wider_cap_and_the_others_do_not():
     assert min(windows.values()) > max(others.values()), (
         "the wider cap must land on Windows, not against it: %r" % caps)
     assert min(windows.values()) >= 40, (
-        "45 is 1.8x the measured Windows worst case (24.6 min); anything much "
-        "tighter puts the cap back inside the observed spread: %r" % caps)
+        "45 is 1.8x the slowest Windows run that ever *passed* (24.6 min) and "
+        "~1.5x the two that were killed at ~30.4; the assertion floors at 40 "
+        "rather than pinning 45 so the value stays tunable, but under 40 the "
+        "cap is back inside 1.6x of a run that already passed: %r" % caps)
     assert max(others.values()) == 30, (
-        "the non-Windows cells measured 3.9-8.2 min, worst pass 10.3; 30 is "
-        "already 3x the slowest of them and does not need widening: %r" % caps)
+        "the non-Windows cells measured 4.0-8.8 min with a worst pass of "
+        "10.3; 30 is 2.9x the slowest of them and does not need widening: %r"
+        % caps)

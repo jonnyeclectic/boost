@@ -55,7 +55,8 @@ longer than 13 minutes.)
 <br><br>
 <b>Fixed by giving Windows its own cap</b>, not by widening all nine:
 <code>timeout-minutes: ${{ startsWith(matrix.os, 'windows') &amp;&amp; 45 || 30 }}</code>.
-45 is 1.8x the measured Windows worst case, and the six Linux/macOS cells keep the
+45 is 1.8x the slowest Windows run that ever <i>passed</i> (24.6 min) and about
+1.5x the two that were killed, and the six Linux/macOS cells keep the
 tight cap that is the point of having one — a genuinely hung Linux job still dies
 in 30 minutes rather than 45. It is <code>startsWith</code> rather than
 <code>== 'windows-latest'</code> because the condition and the <code>os:</code>
@@ -64,11 +65,23 @@ as <code>windows-2025</code> and the equality matches nothing, handing all nine
 cells 30 again without failing anything.
 <br><br>
 <b>The gate that should have caught the value did not read it.</b>
-<code>test_workflow_timeouts</code> floors every job's <code>timeout-minutes</code>
-at 90 via <code>^ timeout-minutes: (\d+)\s*$</code> — an anchor that skips any line
-it cannot match, so the repo's single cap over the bound
+<code>test_workflow_timeouts</code> caps every job's <code>timeout-minutes</code>
+at 90 via <code>^&nbsp;&nbsp;&nbsp;&nbsp;timeout-minutes: (\d+)\s*$</code> — four
+spaces of indent and a line that ends at the digits, so it skips any line it
+cannot match, and the repo's single cap over the bound
 (<code>shards.yml</code>/<code>build</code>, 330, with a trailing comment) was the
 one the bound never saw. It now parses the branch operands of the expression form
 structurally, refuses aloud any shape it was not taught, and evaluates the
 condition against the job's real <code>os:</code> list, so a cap that has stopped
 applying to any cell fails the test instead of passing it.
+<br><br>
+Two sibling holes closed with it. The companion
+<code>test_every_job_declares_a_timeout</code> asked only whether the string
+<code>timeout-minutes:</code> appeared anywhere in the job — which a
+<i>step</i>-level cap satisfies at eight spaces of indent, so a job with no
+job-level cap at all passed both guards. Both now ask the same question. And the
+carve-out for an expression with no digits in it (<code>${{ inputs.cap }}</code>,
+whose number genuinely lives elsewhere) was wide enough to swallow
+<code>${{ cond &amp;&amp; vars.WIN_CAP || vars.CAP }}</code> — digit-free, but a
+two-branch decision this file can see the shape of. It is now narrowed to a bare
+context reference, and anything else raises.
