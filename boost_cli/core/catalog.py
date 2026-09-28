@@ -469,6 +469,30 @@ def all_entries() -> list[dict]:
     return out
 
 
+def cached_entries() -> list[dict]:
+    """:func:`all_entries`, but never writing — whatever the caches hold.
+
+    :func:`load_tap` *rescans* a missing or stale cache and writes it, which is
+    the right default for a command whose answer depends on the catalogue. It
+    is the wrong default for a read-only check bolted onto another command:
+    ``boost doctor`` reports a missing cache as an issue and ``boost heal``
+    rebuilds it, so a doctor that quietly rebuilt it first turned heal's
+    "rebuilt catalog cache" into "nothing to heal" — doctor curing the thing it
+    had just diagnosed.
+
+    A tap with no cache contributes nothing rather than being scanned. Callers
+    of this get a possibly-incomplete corpus by construction, so it suits a
+    check that only ever *adds* an advisory line and must stay silent when it
+    cannot see enough to be sure.
+    """
+    out: list[dict] = []
+    for tap in registry.list_taps():
+        cached = _cached_tap(tap)
+        if cached is not None:
+            out.extend(cached[0])
+    return out
+
+
 def kind_counts() -> dict[str, int]:
     """Per-kind entry counts across every configured tap.
 
@@ -518,12 +542,19 @@ def tap_matches(tap_name: str, qualifier: str) -> bool:
     return bool(tap_name) and qualifier in (tap_name, tap_name.split("/")[-1])
 
 
-def find(name: str, tap: str | None = None) -> list[dict]:
-    """Exact-name lookup. Supports 'owner/repo:skill' qualified form."""
+def find(name: str, tap: str | None = None,
+         entries: list[dict] | None = None) -> list[dict]:
+    """Exact-name lookup. Supports 'owner/repo:skill' qualified form.
+
+    ``entries`` searches a corpus the caller already has instead of reading
+    every tap again: a caller resolving many names in a row (one per installed
+    item) would otherwise pay a full :func:`all_entries` per name.
+    """
     qualifier, bare = split_name(name)
     if qualifier is not None:
         tap, name = qualifier, bare
-    matches = [e for e in all_entries() if e["name"] == name]
+    pool = all_entries() if entries is None else entries
+    matches = [e for e in pool if e["name"] == name]
     if tap:
         # Same tiering as registry.get: a qualified owner/repo beats a bare
         # repo tail, so `angular/skills:x` never picks up `microsoft/skills:x`.
@@ -686,6 +717,35 @@ def _fuzzy_suggestions(query: str, entries: list[dict], limit: int = 3) -> list[
     """
     names = sorted({e["name"] for e in entries})
     return difflib.get_close_matches(query, names, n=limit)
+
+
+def distinct_candidates(matches: list[dict]) -> list[dict]:
+    """The candidates :func:`resolve_one` would still have to choose between.
+
+    The same two collapses ``resolve_one`` makes, without raising or picking:
+    inside one tap, rows that render identically are a vendored copy
+    (:func:`_identity`); across taps, rows that agree on a non-empty content
+    digest are a mirror (:func:`_same_thing`). What is left is genuine
+    ambiguity, and more than one of it means an unqualified ``boost install
+    <name>`` exits 1.
+
+    A caller that only wants to know whether a name is *installable by name*
+    needs exactly that count. Asking ``resolve_one`` instead would mean
+    catching an exception per name, and counting ``find()`` rows instead
+    over-reports every mirrored skill in the catalogue.
+    """
+    if len(matches) <= 1:
+        return matches.copy()
+    # `.get`, like `_identity`: this is an advisory read behind `install`
+    # and `doctor`, and a synthesised entry missing `tap` must not raise
+    # KeyError out of a hint.
+    taps = list(dict.fromkeys(e.get("tap") for e in matches))
+    if len(taps) == 1:
+        if len({_identity(e) for e in matches}) == 1:
+            return [_canonical(matches)]
+        return matches.copy()
+    best = _same_thing(matches)
+    return [best] if best is not None else matches.copy()
 
 
 def resolve_one(name: str, path: str | None = None) -> dict:

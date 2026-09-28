@@ -3078,3 +3078,265 @@ class TestLocalInstallGates:
         skills = json.loads(boost("list", "--json").out)["skills"]
         assert skills["pinned-local"]["pinned"] is True
 
+
+
+# ── prerequisites declared under the wider spellings ─────────────────────
+
+class TestUnmetPrerequisites:
+    """`boost install` reports the catalogued items a skill's own frontmatter
+    says it needs, under every spelling the corpus actually uses — not just
+    `requires:`, which the 461-registry census found is the narrowest one.
+    """
+
+    def _tap(self, tmp_path):
+        root = tmp_path / "prereq-tap"
+        for name, extra in (
+            ("needy", "skills: [helper-one, helper-two]\n"
+                      "dependencies: [torch>=2.0.0, chromadb, helper-one]\n"
+                      "prerequisites: ['GitHub CLI (gh) installed and authenticated']\n"
+                      "required: true\n"
+                      "tools_required: [Bash, Read]\n"),
+            ("helper-one", ""),
+            ("helper-two", ""),
+        ):
+            d = root / "skills" / name
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text(
+                "---\nname: %s\ndescription: %s fixture\nversion: 1.0.0\n%s---\n\n"
+                "# %s\n\nBody.\n" % (name, name, extra, name), encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(root), "-c", "user.email=t@e",
+                        "-c", "user.name=t", "commit", "-qm", "init"],
+                       check=True, capture_output=True)
+        return root
+
+    def test_install_names_the_unmet_siblings_and_nothing_else(
+            self, boost, sandbox, tmp_path):
+        boost("tap", self._tap(tmp_path))
+        r = boost("install", "needy")
+        text = r.out + r.err
+        assert "needy declares 2 prerequisites boost cannot see installed" in text
+        assert "helper-one" in text and "helper-two" in text
+        # The three classes that must never become a reported prerequisite:
+        # a package coordinate, a bare package name in no tap, and prose.
+        assert "torch" not in text
+        assert "chromadb" not in text
+        assert "GitHub CLI" not in text
+        # …nor the two lookalike keys.
+        assert "Bash" not in text
+        assert "meet them with: boost install helper-one helper-two" in text
+
+    def test_installing_them_together_reports_nothing(
+            self, boost, sandbox, tmp_path):
+        boost("tap", self._tap(tmp_path))
+        r = boost("install", "needy", "helper-one", "helper-two")
+        assert "cannot see installed" not in (r.out + r.err)
+
+    def test_the_line_clears_once_the_siblings_are_installed(
+            self, boost, sandbox, tmp_path):
+        boost("tap", self._tap(tmp_path))
+        boost("install", "helper-one")
+        boost("install", "helper-two")
+        r = boost("install", "needy")
+        assert "cannot see installed" not in (r.out + r.err)
+
+    def test_dry_run_previews_it_in_the_conditional(
+            self, boost, sandbox, tmp_path):
+        boost("tap", self._tap(tmp_path))
+        r = boost("install", "needy", "--dry-run")
+        assert "would meet them with: boost install helper-one helper-two" in r.out
+
+    def test_doctor_names_it_without_going_red(self, boost, sandbox, tmp_path):
+        boost("tap", self._tap(tmp_path))
+        boost("install", "needy")
+        # exit 0: boost will not install someone else's declaration for them,
+        # so counting it would leave doctor permanently red.
+        r = boost("doctor")
+        # One aggregate line, not one per declaring item — see the note in
+        # `quality._doctor`; the hint stays whole because it is a command.
+        out = " ".join(r.out.split())          # un-wrap: `note` folds to the pane
+        assert "1 installed item declares 2 prerequisites not installed" in out
+        assert "(helper-one, helper-two)" in out
+        assert "boost install helper-one helper-two" in out
+
+    def test_doctor_aggregates_rather_than_one_note_per_item(
+            self, boost, sandbox, tmp_path):
+        # Two declaring items must still be one check, or a real machine's
+        # dozens bury the rest of the report and repeat one `name` through
+        # the whole `--json` `checks` array.
+        root = tmp_path / "two-declarers"
+        for name, extra in (("needy-a", "skills: [leafy]\n"),
+                            ("needy-b", "dependencies: [leafy]\n"),
+                            ("leafy", "")):
+            d = root / "skills" / name
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text(
+                "---\nname: %s\ndescription: %s fixture\n%s---\n\nBody.\n"
+                % (name, name, extra), encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(root), "-c", "user.email=t@e",
+                        "-c", "user.name=t", "commit", "-qm", "init"],
+                       check=True, capture_output=True)
+        boost("tap", str(root))
+        boost("install", "needy-a", "needy-b")
+        report = json.loads(boost("doctor", "--json").out)
+        rows = [c for c in report["checks"]
+                if c["name"] == "unmet-prerequisite"]
+        assert len(rows) == 1
+        assert "2 installed items declare" in rows[0]["message"]
+        # De-duplicated: both declare the same sibling, so it is named once.
+        assert rows[0]["message"].count("leafy") == 2   # the list, then the hint
+
+    def test_an_ambiguous_requires_is_not_called_absent(
+            self, boost, sandbox, tmp_path):
+        # `_expand_dependencies` funnels "unknown" and "carried by two taps"
+        # into the same `unresolved` list, and calling the second "in no tap"
+        # contradicted the prerequisite line printed a few lines below, which
+        # names a tap and gives a command that works.
+        def tap(dirname, names):
+            root = tmp_path / dirname
+            for name, extra in names:
+                d = root / "skills" / name
+                d.mkdir(parents=True)
+                (d / "SKILL.md").write_text(
+                    "---\nname: %s\ndescription: %s in %s\n%s---\n\nB.\n"
+                    % (name, name, dirname, extra), encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "-A"], check=True,
+                           capture_output=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.email=t@e",
+                            "-c", "user.name=t", "commit", "-qm", "i"],
+                           check=True, capture_output=True)
+            return str(root)
+
+        boost("tap", tap("amb-a", [("rooted", "requires: [shared]\n"),
+                                   ("shared", "")]))
+        boost("tap", tap("amb-b", [("shared", "")]))
+        r = boost("install", "rooted")
+        out = " ".join((r.out + r.err).split())
+        assert "is in no tap" not in out
+        assert "'shared' matches 2 catalog entries" in out
+        assert "amb-a:shared" in out and "amb-b:shared" in out
+
+    def test_a_truly_absent_requires_still_says_so(
+            self, boost, sandbox, tmp_path):
+        # The other side of the branch above: a name the catalog has no row
+        # for keeps the original message and its `boost tap` advice.
+        root = tmp_path / "gone"
+        d = root / "skills" / "rooted"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            "---\nname: rooted\ndescription: d\nrequires: [nowhere]\n"
+            "---\n\nB.\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(root), "-c", "user.email=t@e",
+                        "-c", "user.name=t", "commit", "-qm", "i"],
+                       check=True, capture_output=True)
+        boost("tap", str(root))
+        out = " ".join(boost("install", "rooted").out.split())
+        assert "'nowhere' is in no tap" in out
+        assert "boost tap" in out
+
+    def test_a_broken_prerequisite_report_does_not_fail_the_install(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # The install has already happened by the time this line is printed;
+        # a catalog that went unreadable in between must not turn a completed
+        # install into a non-zero exit.
+        from boost_cli.commands import pkg
+        from boost_cli.errors import BoostError
+
+        def boom(*a, **k):
+            raise BoostError("catalog is unreadable")
+
+        boost("tap", self._tap(tmp_path))
+        monkeypatch.setattr(pkg.prereq, "for_entries", boom)
+        r = boost("install", "needy")
+        assert "copied to" in r.out
+        assert "catalog is unreadable" not in r.out + r.err
+
+    def test_doctor_json_carries_the_row(self, boost, sandbox, tmp_path):
+        boost("tap", self._tap(tmp_path))
+        boost("install", "needy")
+        report = json.loads(boost("doctor", "--json").out)
+        codes = [c["name"] for c in report["checks"]]
+        assert "unmet-prerequisite" in codes
+
+    def test_a_local_install_sees_its_own_project_lock(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # `--local` records nothing in the user lock, so without the project
+        # lock read `boost install needy --local` called a sibling installed
+        # in the same repo missing.
+        boost("tap", self._tap(tmp_path))
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        boost("install", "helper-one", "--local")
+        boost("install", "helper-two", "--local")
+        r = boost("install", "needy", "--local", "--no-deps")
+        assert "cannot see installed" not in (r.out + r.err)
+
+    def test_a_local_install_still_names_what_is_missing(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        boost("tap", self._tap(tmp_path))
+        repo = tmp_path / "proj2"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        r = boost("install", "needy", "--local", "--no-deps")
+        assert "needy declares 2 prerequisites boost cannot see installed" in (
+            r.out + r.err)
+
+    def test_no_deps_still_reports_the_wider_spellings(
+            self, boost, sandbox, tmp_path):
+        # The flag turns off *installing* the `requires:` closure; the report
+        # is advisory either way, and the wider keys never auto-installed.
+        boost("tap", self._tap(tmp_path))
+        r = boost("install", "needy", "--no-deps")
+        assert "cannot see installed" in (r.out + r.err)
+
+
+class TestRequiresFilteredOnTheInstallPath:
+    """`requires:` values that are not item names must not reach the resolver."""
+
+    def _tap(self, tmp_path):
+        root = tmp_path / "req-tap"
+        for name, extra in (
+            ("rooty", "requires:\n  - 'gh (GitHub CLI)'\n  - torch>=2.0.0\n"
+                      "  - 01-base.rules.md\n  - leafy\n"),
+            ("leafy", ""),
+        ):
+            d = root / "skills" / name
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text(
+                "---\nname: %s\ndescription: %s fixture\nversion: 1.0.0\n%s---\n\n"
+                "# %s\n\nBody.\n" % (name, name, extra, name), encoding="utf-8")
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(root), "-c", "user.email=t@e",
+                        "-c", "user.name=t", "commit", "-qm", "init"],
+                       check=True, capture_output=True)
+        return root
+
+    def test_prose_and_packages_are_not_dangling_requirements(
+            self, boost, sandbox, tmp_path):
+        boost("tap", self._tap(tmp_path))
+        r = boost("install", "rooty")
+        text = r.out + r.err
+        assert "is in no tap" not in text
+        assert "GitHub CLI" not in text and "torch" not in text
+        # …while the one real name still installs first.
+        assert "leafy" in text
+
+    def test_boost_deps_agrees_with_the_installer(
+            self, boost, sandbox, tmp_path):
+        boost("tap", self._tap(tmp_path))
+        boost("install", "rooty")
+        text = boost("deps", "rooty").out
+        assert "leafy" in text
+        assert "GitHub CLI" not in text and "torch" not in text

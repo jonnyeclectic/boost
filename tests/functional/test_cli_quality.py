@@ -224,6 +224,46 @@ class TestDoctor:
         assert "no catalog cache" in doc and "not writable" not in doc
         assert "rebuilt catalog cache" in boost("heal").out
 
+    def test_the_prerequisite_check_never_rebuilds_the_cache(self, boost,
+                                                             tapped):
+        # doctor reads `catalog.cached_entries`, not `all_entries`: a doctor
+        # that rebuilt the cache first would cure the very thing it is there
+        # to diagnose, and the test above would pass for the wrong reason.
+        shutil.rmtree(paths.cache_dir())
+        boost("doctor", expect=1)
+        # A *tap* catalog, specifically: doctor is free to write one of its
+        # own derived artifacts here (`paths.INTERNAL_CACHE_FILES`), and a
+        # bare "no *.json at all" assertion would fail on that unrelated day.
+        rebuilt = [f.name for f in paths.cache_dir().glob("*.json")
+                   if f.name not in paths.INTERNAL_CACHE_FILES
+                   ] if paths.cache_dir().exists() else []
+        assert rebuilt == []
+
+    def test_a_broken_prerequisite_check_does_not_abort_the_report(
+            self, boost, tapped, monkeypatch):
+        # Its contract is to *report* problems. A BoostError out of the
+        # catalog or the lock must not truncate the health report at the
+        # least important check in it.
+        from boost_cli.commands import quality
+        from boost_cli.errors import BoostError
+
+        def boom():
+            raise BoostError("catalog is unreadable")
+
+        def names():
+            return [c["name"] for c in
+                    json.loads(boost("doctor", "--json").out)["checks"]]
+
+        # Clean first: `monkeypatch.undo()` would also unwind the sandbox
+        # fixture's HOME and point doctor at the real ~/.boost.
+        clean = names()
+        monkeypatch.setattr(quality.prereq, "for_installed", boom)
+        # Identical report, minus the one check that raised — so every check
+        # downstream of it still ran, and the raised message never surfaced.
+        assert names() == [n for n in clean if n != "unmet-prerequisite"]
+        r = boost("doctor")
+        assert "catalog is unreadable" not in r.out + r.err
+
     @pytest.mark.skipif(sys.platform == "win32",
                         reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,

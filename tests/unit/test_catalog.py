@@ -668,6 +668,53 @@ class TestAllEntriesAndFind:
         assert counts["mcp-server"] == 1
         assert sum(counts.values()) == len(catalog.all_entries())
 
+    def test_cached_entries_reads_the_same_corpus_in_the_same_order(self,
+                                                                    sandbox):
+        _fake_taps(
+            ("zeta", [_entry("z1", "zeta"), _entry("z2", "zeta")]),
+            ("alpha", [_entry("a1", "alpha")]),
+        )
+        assert catalog.cached_entries() == catalog.all_entries()
+
+    def test_cached_entries_never_writes_a_cache(self, sandbox):
+        # `boost doctor`'s prerequisite check runs on a machine doctor is
+        # about to call "no catalog cache", and `boost heal` is what rebuilds
+        # it. A read that rebuilt first turned heal's "rebuilt catalog cache"
+        # into "nothing to heal" — doctor curing its own diagnosis.
+        _fake_taps(("t", [_entry("a", "t")]))
+        cache = registry.Tap(name="t", url="").cache_file
+        cache.unlink()
+        assert catalog.cached_entries() == []
+        assert not cache.exists()
+
+    def test_cached_entries_skips_the_uncached_tap_and_keeps_the_rest(self,
+                                                                      sandbox):
+        _fake_taps(("t1", [_entry("a", "t1")]), ("t2", [_entry("b", "t2")]))
+        registry.Tap(name="t1", url="").cache_file.unlink()
+        assert [e["name"] for e in catalog.cached_entries()] == ["b"]
+
+    def test_find_searches_the_corpus_it_is_handed(self, sandbox):
+        # A caller resolving one name per installed item would otherwise pay a
+        # full corpus read per name.
+        _fake_taps(("t", [_entry("ondisk", "t")]))
+        pool = [_entry("given", "other")]
+        assert [e["name"] for e in catalog.find("given", None, pool)] == [
+            "given"]
+        assert catalog.find("ondisk", None, pool) == []
+
+    def test_a_handed_corpus_still_honours_the_tap_tiering(self, sandbox):
+        pool = [_entry("dup", "owner/alpha"), _entry("dup", "beta")]
+        assert [e["tap"] for e in catalog.find("dup", "alpha", pool)] == [
+            "owner/alpha"]
+        assert [e["tap"] for e in catalog.find("owner/alpha:dup", None,
+                                               pool)] == ["owner/alpha"]
+
+    def test_an_empty_handed_corpus_is_not_a_missing_one(self, sandbox):
+        # `[]` must mean "search nothing", not "fall back to every tap" — the
+        # caller that passes it has already decided what is visible.
+        _fake_taps(("t", [_entry("aaa", "t")]))
+        assert catalog.find("aaa", None, []) == []
+
     def test_find_exact_name(self, sandbox):
         _fake_taps(("t", [_entry("aaa", "t"), _entry("aab", "t")]))
         matches = catalog.find("aaa")
@@ -718,6 +765,56 @@ class TestAllEntriesAndFind:
         _fake_taps(("owner/skills", [_entry("dup", "owner/skills")]),
                    ("skills", [_entry("dup", "skills")]))
         assert [e["tap"] for e in catalog.find("dup", tap="skills")] == ["skills"]
+
+
+class TestDistinctCandidates:
+    """The count `prereq.name_index` needs: what `resolve_one` would still ask about."""
+
+    def test_nothing_and_one_pass_straight_through(self):
+        assert catalog.distinct_candidates([]) == []
+        one = [_entry("a", "t1")]
+        assert catalog.distinct_candidates(one) == one
+
+    def test_a_vendored_copy_inside_one_tap_collapses(self):
+        # Same rendered metadata, two paths: `resolve_one` installs the
+        # shallowest rather than asking, so this name IS installable by name.
+        rows = [_entry("a", "t1", rel_dir="plugins/pack/skills/a"),
+                _entry("a", "t1", rel_dir="skills/a")]
+        got = catalog.distinct_candidates(rows)
+        assert [e["rel_dir"] for e in got] == ["skills/a"]
+
+    def test_two_different_skills_in_one_tap_stay_two(self):
+        # The case a set-of-taps index cannot see: one registry, one name,
+        # two genuinely different items, so `boost install a` exits 1.
+        rows = [_entry("a", "t1", desc="one", rel_dir="skills/a"),
+                _entry("a", "t1", desc="two", rel_dir="other/a")]
+        assert len(catalog.distinct_candidates(rows)) == 2
+
+    def test_a_mirror_across_taps_collapses_to_one(self):
+        rows = [dict(_entry("a", "t1"), content="deadbeef"),
+                dict(_entry("a", "t2"), content="deadbeef")]
+        assert len(catalog.distinct_candidates(rows)) == 1
+
+    def test_different_content_across_taps_stays_ambiguous(self):
+        rows = [dict(_entry("a", "t1"), content="dead"),
+                dict(_entry("a", "t2"), content="beef")]
+        assert len(catalog.distinct_candidates(rows)) == 2
+
+    def test_a_missing_digest_is_never_a_match(self):
+        # `_same_thing` treats an absent digest as unknown, and two unknowns
+        # are not equal — so the pair stays ambiguous rather than collapsing.
+        rows = [_entry("a", "t1"), _entry("a", "t2")]
+        assert len(catalog.distinct_candidates(rows)) == 2
+
+    def test_a_row_with_no_tap_does_not_raise(self):
+        # Advisory path: a synthesised entry must cost a hint, not a crash.
+        rows = [{"name": "a"}, {"name": "a", "tap": "t1"}]
+        assert len(catalog.distinct_candidates(rows)) == 2
+
+    def test_it_does_not_mutate_what_it_is_handed(self):
+        rows = [_entry("a", "t1"), _entry("a", "t1")]
+        catalog.distinct_candidates(rows)
+        assert len(rows) == 2
 
 
 class TestResolveOne:
