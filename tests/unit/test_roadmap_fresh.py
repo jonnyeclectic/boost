@@ -498,9 +498,9 @@ def _lychee_args() -> str:
 class TestWriteUpLinksResolveOnTheirOwnPR:
     """A settled card links to its item file on `main`, so a PR that files a
     NEW card as shipped used to 404 in the `links` job until it merged (#845).
-    links.yml remaps that prefix to the PR's checkout; these pin the remap to
-    the URL the builder actually emits, so renaming ITEMS_URL cannot quietly
-    bring the 404 back."""
+    links.yml remaps that prefix to the checkout being tested; these pin the
+    remap to the URL the builder actually emits, so renaming ITEMS_URL cannot
+    quietly bring the 404 back."""
 
     @staticmethod
     def _remap():
@@ -519,34 +519,35 @@ class TestWriteUpLinksResolveOnTheirOwnPR:
         assert re.sub(pattern, local, url) == "/docs/roadmap/items/some-new-card.md"
         assert (_ROOT / local.strip("/")).resolve() == _ITEMS.resolve()
 
-    def test_only_pull_requests_are_remapped(self):
-        # Main and the weekly run must keep fetching the real GitHub URL —
-        # that is the check that the published link works.
+    def test_the_remap_applies_to_every_event(self):
+        """It was `github.event_name == 'pull_request' &&` until a push to
+        main was measured: 474 write-up links fetched from one host, of which
+        run 36393345706 lost 8 to `503 Service Unavailable` -- at
+        `--max-concurrency 8`, the cap added the last time this reddened main.
+        The guard bought no signal to pay for that. `--accept` already takes
+        403, so a live fetch cannot tell an inaccessible repo from a reachable
+        one; 404 is the only verdict it discriminates, and the file check
+        gives that one identically."""
         wf, _pattern, _local = self._remap()
         line = next(ln for ln in wf.splitlines() if "--remap" in ln)
-        assert "github.event_name == 'pull_request' &&" in line
+        assert "github.event_name" not in line, line
         # {0} must be the checkout itself, or the remap points nowhere.
         assert re.search(r"''', github\.workspace\)", line), line
 
-    def test_the_unremapped_burst_is_rate_limited(self):
-        """The other side of the rule above. Because main is NOT remapped, a
-        push fetches every write-up link for real — one host, hundreds of
-        requests — and at lychee's default concurrency of 128 GitHub answered
-        `503 Service Unavailable` on a different handful each attempt (2, 1
-        and 4 disjoint URLs over three attempts of one run; all seven return
-        200 fetched singly). The cap is what keeps that check honest, so it is
-        pinned against the number of links it has to survive."""
-        wf = _lychee_args()
-        m = re.search(r"--max-concurrency (\d+)\b", wf)
-        assert m, "links.yml lost the concurrency cap that keeps main green"
-        cap = int(m.group(1))
-        same_host = len(set(re.findall(
-            r"https://github\.com/jonnyeclectic/boost/blob/main/\S+?\.md",
-            _CODE_HTML.read_text(encoding="utf-8"))))
-        assert same_host > 100, "the board stopped linking its write-ups?"
-        assert cap <= 16, (
-            "%d concurrent requests against %d same-host links is the burst "
-            "that 503s" % (cap, same_host))
+    def test_every_write_up_link_on_the_boards_is_remapped(self):
+        """What actually replaced the burst. A cap only makes a burst slower;
+        these links are safe because none of them is fetched at all, and that
+        holds only while the pattern covers every one the boards emit. So this
+        is the test that fails if a board starts linking its write-ups by some
+        other path."""
+        _wf, pattern, _local = self._remap()
+        links: set[str] = set()
+        for html in (_CODE_HTML, _DESIGN_HTML):
+            links |= set(re.findall(
+                r"https://github\.com/jonnyeclectic/boost/blob/main/\S+?\.md",
+                html.read_text(encoding="utf-8")))
+        assert len(links) > 100, "the boards stopped linking their write-ups?"
+        assert sorted(u for u in links if not re.match(pattern, u)) == []
 
     def test_a_503_is_still_a_failure(self):
         """The cheap non-fix. Accepting 503 would turn every real GitHub
