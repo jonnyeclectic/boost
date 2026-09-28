@@ -21,7 +21,8 @@ Antigravity CLI (`agy`) is wired up the same way: skills link into
 Codex — the `codex` CLI and the ChatGPT desktop app, which is the same binary —
 needs no symlink at all: `~/.agents/skills` is one of its own skill roots, so a
 skill boost copies into the canonical store is already there. Rules materialize
-into `~/.codex/AGENTS.md`.
+into `~/.codex/AGENTS.md`, and `boost mcp register` reaches it through
+`codex mcp add`.
 
 ```bash
 pipx install boost-skill-cli
@@ -470,6 +471,7 @@ purely local operation, for CI images and air-gapped machines.
 | Claude Code | `claude` | `claude mcp add` → its user-scope MCP config |
 | Gemini CLI | `gemini` | `gemini mcp add -s user` → `~/.gemini/settings.json` |
 | Antigravity CLI | `agy` | `agy mcp add` → `~/.gemini/config/mcp_config.json` |
+| Codex CLI | `codex` | `codex mcp add` → `${CODEX_HOME:-~/.codex}/config.toml` |
 
 Seven tools are exposed: `boost_search`, `boost_list`, `boost_info`,
 `boost_read`, `boost_install`, `boost_doctor` and
@@ -477,15 +479,15 @@ Seven tools are exposed: `boost_search`, `boost_list`, `boost_info`,
 actual text — without it, installing was the only way to read a skill.
 
 The server also returns MCP `instructions`, telling the agent when boost is
-relevant. The two hosts place those differently, and it matters. Claude Code
-loads them into the system prompt. Gemini CLI appends them to its memory tier
-alongside `GEMINI.md`, and only in a trusted folder, so outside one they are
-dropped silently. Each tool's own description therefore repeats its trigger,
-because a tool description is the only part always in context at the moment the
-agent chooses a tool.
+relevant. Claude Code and Gemini CLI place those differently, and it matters.
+Claude Code loads them into the system prompt. Gemini CLI appends them to its
+memory tier alongside `GEMINI.md`, and only in a trusted folder, so outside one
+they are dropped silently. Each tool's own description therefore repeats its
+trigger, because a tool description is the only part always in context at the
+moment the agent chooses a tool.
 
-Verify with `claude mcp list` or `gemini mcp list`; boost should show as
-Connected.
+Verify with `claude mcp list`, `gemini mcp list` or `codex mcp list`; boost
+should show as Connected.
 
 ## Agent hooks and BMAD
 

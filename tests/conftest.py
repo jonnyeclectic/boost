@@ -123,8 +123,10 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.delenv("BOOST_NO_LOG", raising=False)
     # The codex agent dir is `${CODEX_HOME:-~/.codex}/skills`, so a developer
     # (or runner) with CODEX_HOME exported would move it out of the sandbox and
-    # fail agent/store assertions for reasons nothing in the test says. Tests
-    # that mean to exercise the relocation set it themselves.
+    # fail agent/store assertions for reasons nothing in the test says. It is
+    # also codex's *MCP* config home, so it is the CLAUDE_CONFIG_DIR case below
+    # as well, in one variable. Tests that mean to exercise either relocation
+    # set it themselves.
     monkeypatch.delenv("CODEX_HOME", raising=False)
     # Same shape, and it is the bug `boost mcp`'s sandbox guard exists for: an
     # agent CLI resolves its config home from the ambient environment, so a

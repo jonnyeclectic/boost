@@ -186,8 +186,9 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
             # One line per host, not `targets[0]` — the prompt named every
             # host and a yes would have registered with every one, so a no
             # that prints only the first hands back an incomplete answer.
-            # `hosts()` order puts agy last, so the host whose grammar differs
-            # most was the one never shown.
+            # `hosts()` order puts the newest host last — agy when this was
+            # written, Codex now — so the host whose grammar differs most
+            # from Claude's was the one never shown.
             for host in targets:
                 argv = mcpdecl.register_argv(row["name"], row["spec"],
                                              host=host, scope=res.scope)

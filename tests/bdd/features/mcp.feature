@@ -1,7 +1,7 @@
 Feature: boost mcp
   Register boost as an MCP server with every agent CLI that speaks MCP —
-  Claude Code, Gemini CLI and Antigravity CLI. Never shells out to a real CLI
-  in these scenarios: shutil.which/subprocess.run are mocked.
+  Claude Code, Gemini CLI, Antigravity CLI and Codex CLI. Never shells out to
+  a real CLI in these scenarios: shutil.which/subprocess.run are mocked.
 
   Background:
     Given a fresh boost environment
@@ -10,10 +10,11 @@ Feature: boost mcp
     Given no agent CLI is on PATH
     When I run "boost mcp register"
     Then the exit code should be 0
-    And the output should contain "no agent CLI found (looked for: claude, gemini, agy)"
+    And the output should contain "no agent CLI found (looked for: claude, gemini, agy, codex)"
     And the output should contain "claude mcp add boost --scope user"
     And the output should contain "gemini mcp add --scope user"
     And the output should contain "agy mcp add"
+    And the output should contain "codex mcp add --env"
 
   Scenario: registering with only the claude CLI present succeeds
     Given the "claude" CLI is on PATH and succeeds
@@ -61,7 +62,14 @@ Feature: boost mcp
     When I run "boost mcp register --host bogus"
     Then the exit code should be 1
     And the output should contain "unknown MCP host 'bogus'"
-    And the output should contain "known hosts: claude, gemini, agy"
+    And the output should contain "known hosts: claude, gemini, agy, codex"
+
+  Scenario: registering with only the codex CLI present says nothing about scope
+    Given the "codex" CLI is on PATH and succeeds
+    When I run "boost mcp register"
+    Then the exit code should be 0
+    And the output should contain "registered boost as an MCP server for Codex CLI"
+    And the output should not contain "Codex CLI (scope: user)"
 
   Scenario: a claude mcp add failure surfaces the error
     Given the "claude" CLI is on PATH but fails with "no auth"

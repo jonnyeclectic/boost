@@ -161,7 +161,8 @@ def register_argv(name: str, spec: dict, *, scope: str = "user",
     the argv itself, "mirroring" mcphost — which held for Claude and Gemini and
     not for agy, the one host whose grammar rejects Claude's shape and the one
     this function had no branch for. Sharing the builder is what makes the
-    mirror a fact rather than a comment.
+    mirror a fact rather than a comment, and it is what let Codex — whose env
+    flag has no short form at all — arrive as one table row rather than two.
 
     A non-dict ``env`` and a non-list ``args`` are *ignored* rather than
     rejected, because a malformed sidecar should still register the server it

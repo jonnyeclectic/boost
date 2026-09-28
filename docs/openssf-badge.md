@@ -120,7 +120,7 @@ Package: [`boost-skill-cli`](https://pypi.org/project/boost-skill-cli/)
 
 | Criterion | Cat. | Answer | Evidence |
 |---|---|---|---|
-| `test` | MUST | **Met** | Four tiers: `tests/unit`, `tests/functional` (drive the real CLI in-process), `tests/smoke.sh` (183 end-to-end checks through the `./boost` shim) and a Gherkin BDD suite (11 features, 56 scenarios). |
+| `test` | MUST | **Met** | Four tiers: `tests/unit`, `tests/functional` (drive the real CLI in-process), `tests/smoke.sh` (183 end-to-end checks through the `./boost` shim) and a Gherkin BDD suite (11 features, 57 scenarios). |
 | `test_invocation` | SHOULD | **Met** | `make test` — or `nox`, which reproduces the exact CI gate in isolated venvs across every supported interpreter. |
 | `test_most` | SUGGESTED | **Met** | A **90% coverage** gate over statements and branches (`fail_under = 90`), an **80% changed-line** gate on pull requests, and an **80% mutation** gate over `boost_cli/core` — the last of which means coverage cannot be satisfied by tests that merely execute the code without asserting on it. |
 | `test_continuous_integration` | SUGGESTED | **Met** | GitHub Actions runs the full gate on every push and every pull request. |
