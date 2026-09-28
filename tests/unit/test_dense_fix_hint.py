@@ -166,6 +166,15 @@ class TestNoKeyReadsTheStore:
         hint = dense.fix_hint("no-key", self._status())
         assert "VOYAGE_API_KEY" in hint
 
+    def test_the_whole_sentence_is_pinned(self):
+        # `no-key` and `provider-changed` share this branch's predicate and
+        # differ only in their tail, so pinning the halves separately lets
+        # either reason quietly serve the other's advice.
+        assert dense.fix_hint("no-key", self._status()) == (
+            "set the key it was built with: `export VOYAGE_API_KEY=...` — "
+            "reinstalling the extra swaps in the local model and forces all "
+            "750,416 vectors to be re-embedded")
+
     def test_a_voyage_built_store_is_not_told_to_reinstall(self):
         # The whole point: this is the advice that costs the re-embed.
         hint = dense.fix_hint("no-key", self._status())
@@ -202,12 +211,13 @@ class TestNoKeyReadsTheStore:
         # Every pre-existing caller passes one argument; none may regress.
         assert dense.fix_hint("no-key") == _table("no-key")
 
-    @pytest.mark.parametrize("reason", [r for r in ALL_REASONS if r != "no-key"])
+    @pytest.mark.parametrize("reason", [r for r in ALL_REASONS
+                                        if r not in ("no-key", "provider-changed")])
     def test_other_reasons_ignore_the_status_dict(self, reason):
-        # Only "no-key" reads the built store. ("no-store" reads the live
-        # provider, which this dict leaves out — see TestKeyedMachineWithNoStore.)
-        # If a status dict started steering the rest, the "these never chain"
-        # property would be back in play.
+        # Only the two reasons a lost key can land on read the built store.
+        # ("no-store" reads the live provider, which this dict leaves out —
+        # see TestKeyedMachineWithNoStore.) If a status dict started steering
+        # the rest, the "these never chain" property would be back in play.
         assert dense.fix_hint(reason, self._status(reason=reason)) == _table(reason)
 
     def test_the_env_var_names_come_from_embed_not_a_local_copy(self):
@@ -231,6 +241,156 @@ class TestNoKeyReadsTheStore:
 
     def test_the_state_aware_hint_still_names_a_command(self):
         assert "`" in dense.fix_hint("no-key", self._status())
+
+
+class TestProviderChangedIsWhereALostKeyActuallyLands:
+    """The state `no-key`'s guard was written for, reached by the real ladder.
+
+    `embed.provider` falls through a missing key to the local model the
+    ``[rag]`` extra ships, so a complete install that loses its key never
+    reports `no-key` at all — it reports `provider-changed`, whose table row
+    is the full re-embed the guard exists to prevent. Measured on a
+    voyage-4 / 750,416-vector store with the key unexported: `boost doctor`
+    prescribed `boost reindex --dense --force`.
+    """
+
+    def _status(self, **over):
+        st = {"reason": "provider-changed", "provider": "local",
+              "built_provider": "voyage", "built_model": "voyage-4",
+              "built_dim": 1024, "chunks": 750416, "store_exists": True,
+              "degraded": True}
+        st.update(over)
+        return st
+
+    @pytest.fixture(autouse=True)
+    def _no_keys(self, monkeypatch):
+        from boost_cli.core import embed
+        for env in embed.KEY_ENV.values():
+            monkeypatch.delenv(env, raising=False)
+
+    def test_the_remedy_is_the_key_not_the_rebuild(self):
+        hint = dense.fix_hint("provider-changed", self._status())
+        assert "`export VOYAGE_API_KEY=...`" in hint
+        assert hint.index("export") < hint.index("--force")
+
+    def test_it_does_not_lead_with_the_bill(self):
+        # The table's answer throws away every vector the user paid for.
+        assert dense.fix_hint("provider-changed",
+                              self._status()) != _table("provider-changed")
+
+    def test_the_rebuild_is_still_offered_as_the_alternative(self):
+        # A user who no longer wants the paid space needs the command too.
+        hint = dense.fix_hint("provider-changed", self._status())
+        assert "`boost reindex --dense --force`" in hint
+
+    def test_it_names_what_the_rebuild_costs(self):
+        assert "750,416 vectors" in dense.fix_hint("provider-changed",
+                                                   self._status())
+
+    def test_it_names_the_space_the_rebuild_would_land_in(self):
+        # Not "the local model": whatever `provider()` picked is what a
+        # rebuild embeds into, and on a keyed machine that is not local.
+        assert "local's space" in dense.fix_hint("provider-changed",
+                                                 self._status())
+
+    def test_it_does_not_tell_a_user_who_has_the_extra_to_reinstall_it(self):
+        # `no-key`'s tail. This user's local model is installed and working —
+        # it is what displaced their store — so reinstalling names nothing.
+        assert "reinstall" not in dense.fix_hint("provider-changed",
+                                                 self._status())
+
+    def test_a_key_that_is_merely_outranked_is_unset_not_exported(self,
+                                                                  monkeypatch):
+        # `provider()` prefers Voyage over OpenAI, so an OpenAI-built store
+        # goes dark the moment a Voyage key appears. Telling that user to
+        # export the key they already have is a no-op remedy.
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        monkeypatch.setenv("OPENAI_API_KEY", "o")
+        hint = dense.fix_hint("provider-changed",
+                              self._status(built_provider="openai",
+                                           provider="voyage"))
+        assert hint == (
+            "`unset VOYAGE_API_KEY` puts the store's own key back in front "
+            "— or `boost reindex --dense --force` re-embeds all 750,416 "
+            "vectors in voyage's space")
+        assert "export" not in hint
+
+    def test_a_key_in_force_with_nothing_above_it_keeps_the_table(self,
+                                                                  monkeypatch):
+        # The key is set and is the live provider: whatever else is wrong
+        # with this store, a key is not it, so the hint must not invent one.
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        st = self._status(provider="voyage")
+        assert dense.fix_hint("provider-changed", st) == \
+            _table("provider-changed")
+
+    def test_a_locally_built_store_keeps_the_table(self):
+        # No key would revive it — the rebuild really is the answer.
+        st = self._status(built_provider="local", provider="voyage")
+        assert dense.fix_hint("provider-changed", st) == \
+            _table("provider-changed")
+
+    def test_a_store_that_names_no_provider_keeps_the_table(self):
+        st = self._status(built_provider=None)
+        assert dense.fix_hint("provider-changed", st) == \
+            _table("provider-changed")
+
+    def test_an_empty_store_keeps_the_table(self):
+        # Nothing on disk for a key to revive: the rebuild is the real step.
+        st = self._status(chunks=0)
+        assert dense.fix_hint("provider-changed", st) == \
+            _table("provider-changed")
+
+    def test_a_store_that_never_recorded_a_total_is_still_revived(self):
+        # `None` is a legacy store, not an empty one — reading it as zero
+        # sends exactly this user to the re-embed-everything answer.
+        hint = dense.fix_hint("provider-changed", self._status(chunks=None))
+        assert "`export VOYAGE_API_KEY=...`" in hint
+        assert "all vectors" in hint
+
+    def test_a_status_with_no_live_provider_still_words_the_tail(self):
+        # `provider-changed` cannot be reached with `provider` None, but the
+        # hint is also called with hand-built dicts; "None's space" is worse
+        # than saying nothing precise.
+        hint = dense.fix_hint("provider-changed", self._status(provider=None))
+        assert "None" not in hint
+        assert "the live provider's space" in hint
+
+    def test_a_one_vector_store_is_still_worth_reviving(self):
+        # The guard is "any vectors at all", not "more than one": a store
+        # with a single chunk is still a store a key brings back.
+        hint = dense.fix_hint("provider-changed", self._status(chunks=1))
+        assert "`export VOYAGE_API_KEY=...`" in hint
+        assert "all 1 vectors" in hint
+
+    def test_the_whole_sentence_is_pinned(self):
+        # Both halves in one assertion: the remedy, the em-dash join and the
+        # alternative. Each `in` check above passes against a string with
+        # anything else bolted onto either end.
+        assert dense.fix_hint("provider-changed", self._status()) == (
+            "set the key it was built with: `export VOYAGE_API_KEY=...` — "
+            "or `boost reindex --dense --force` re-embeds all 750,416 "
+            "vectors in local's space")
+
+    def test_no_status_argument_keeps_the_table(self):
+        assert dense.fix_hint("provider-changed") == _table("provider-changed")
+
+    @pytest.mark.parametrize("cols", [40, 50, 60, 80])
+    def test_every_command_stays_one_runnable_span(self, cols):
+        # `out.info` adds two columns of indent, as `boost search` budgets it.
+        from boost_cli.core import output as out
+        hint = dense.fix_hint("provider-changed", self._status())
+        lines = out.wrap("semantic search is off — %s" % hint, cols - 2)
+        assert any("`export VOYAGE_API_KEY=...`" in ln for ln in lines), lines
+        assert any("`boost reindex --dense --force`" in ln
+                   for ln in lines), lines
+
+    def test_the_env_var_name_comes_from_embed_not_a_local_copy(self):
+        from boost_cli.core import embed
+        for provider, env in embed.KEY_ENV.items():
+            hint = dense.fix_hint("provider-changed",
+                                  self._status(built_provider=provider))
+            assert env in hint
 
 
 class TestFallback:

@@ -352,7 +352,7 @@ def test_doctor_names_the_live_provider_on_a_provider_change(boost, sandbox,
     _write_store(provider="voyage", model="voyage-4", dim=1024)
     res = boost("doctor", expect=None)
     assert res.rc == 1
-    assert "live key is openai" in res.out
+    assert "live provider is openai" in res.out
 
 
 def test_doctor_says_an_empty_store_holds_no_vectors(boost, sandbox, keyed):

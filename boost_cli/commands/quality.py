@@ -915,9 +915,12 @@ def _report_search_engine(rep) -> None:
         built = st["built_model"] or st["built_provider"] or "an older build"
         detail = "built with %s" % built
         if st["reason"] == "model-changed":
-            detail += ", live key is %s" % st["model"]
+            detail += ", live model is %s" % st["model"]
         elif st["reason"] == "provider-changed":
-            detail += ", live key is %s" % st["provider"]
+            # "live key is local" named a key that does not exist: the local
+            # model is what `provider()` falls through to when every key is
+            # gone, which is the commonest way a store reaches this reason.
+            detail += ", live provider is %s" % st["provider"]
         elif st["reason"] == "empty":
             detail += " but holds no vectors"
         elif st["reason"] == "model-unavailable":

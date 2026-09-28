@@ -1101,7 +1101,7 @@ space before trusting a number in it.</p>
       </article>
 
       <article class="cap rcard" id="dense-no-key-guard-is-unreachable">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Retrieval eval</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Quality · Retrieval eval</span></div>
         <h3>fix_hint's no-key guard has been unreachable since the day it was written; a missing API key now prescribes the full re-embed the guard exists to prevent</h3>
         <p><b>Measured.</b> On a complete <code>[rag]</code> extra with a voyage-4-built vector store and no API key exported, <code>dense.status()</code> returns <code>reason='provider-changed'</code> (not <code>no-key</code>), so all three status-passing surfaces print <code>rebuild it: \</code>boost reindex --dense --force\`<code> and </code>boost doctor<code> exits 1 — measured verbatim, including doctor's "live key is local; searches are using BM25" line — while the guard written to prevent exactly that (</code>21f28223<code>, #444) fires only under </code>BOOST_NO_EMBED=1` or a partial install, both confirmed by direct probe.
 

@@ -2,14 +2,14 @@
 id: dense-no-key-guard-is-unreachable
 board: code
 section: planned
-status: planned
+status: inflight
 category: Quality · Retrieval eval
 complexity: L
 impact: High
 wow: 4
 note: dense.status() checks prov is None before it looks at the store (dense.py:618-621), b…
 order: 204
-owner:
+owner: loop/dense-no-key-guard
 pr:
 title: fix_hint's no-key guard has been unreachable since the day it was written; a missing API key now prescribes the full re-embed the guard exists to prevent
 ---
