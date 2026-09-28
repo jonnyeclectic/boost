@@ -12,6 +12,7 @@ ASan
 Attio
 Autofix
 autofix
+autouse
 Backfilling
 backfilling
 backport
@@ -25,6 +26,8 @@ bestpractices
 bmad
 bookended
 Camunda
+chdir
+chdirs
 CI's
 CLIs
 Codecov
@@ -36,6 +39,7 @@ CPython
 CRM
 cron
 crontab
+cwd
 cyclomatic
 dedupe
 deduped
@@ -103,6 +107,7 @@ mtime
 mtimes
 mutmut
 mypy
+nodeid
 nonces
 npm
 onboards

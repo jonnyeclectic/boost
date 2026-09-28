@@ -34,6 +34,50 @@ The functional/unit `sandbox` fixture (`tests/conftest.py`) also sets
 block on a confirm prompt or a real AI call — override explicitly in a test
 that means to exercise the AI or confirmation path.
 
+**`sandbox` also chdirs into `tmp_path/"cwd"`**, because the working directory
+is the one input *project* scope resolves against: `scopes.resolve_base` walks
+up from `os.getcwd()` looking for a `.git`, so a test installing with
+`scope="project"` and no explicit `base=` used to write `.boost/skill-lock.json`
+plus a full five-agent fan-out into the developer's own checkout — all of it
+gitignored, so `git status` never said a word, and the next full run read the
+leftover lock back and failed a dozen tests that assert an empty install state.
+The sandbox cwd is a *sibling* of the fake `$HOME`, never `$HOME` itself
+(`scopes.project_root` refuses to call `$HOME` a project, which would make
+`resolve_base` return `None` and change what every project-scope test means),
+and it carries no `.git`: **a test that needs a real project root plants its own
+marker and chdirs into it.** The backstop is the autouse `_repo_root_guard`
+fixture, which snapshot-diffs the project-scope paths under the checkout *and*
+under the directory pytest started in, and fails the offending test by nodeid.
+Two details there are load-bearing. **The checkout is found by walking up for a
+VCS marker, never from `__file__`**: mutmut copies `tests/` into `mutants/` and
+runs the suite from there, so under the mutation gate — the one run the guard
+exists for — `Path(__file__).parent.parent` *is* `mutants/`, it coincides with
+the start directory, and a derivation from either watches only `mutants/` while
+`scopes.resolve_base` puts the escaped install at the real repo root. That walk
+**stops at `$HOME`**, where `scopes.project_root` stops: a dotfiles `~/.git` is
+common, no scope-resolved writer can put a project install at `$HOME`, and
+without the stop the guard fingerprints the live `~/.claude`, `~/.codex` and
+`~/.boost` trees — so a `boost install` in another terminal fails whichever
+test happened to be running. And a
+watched **directory** is fingerprinted by its immediate entries with each
+file's size and `mtime_ns`, not by name alone, or replacing a slash command the
+developer wrote by hand leaves the listing identical; a watched **file** by
+content, except an agent **context file** (`CLAUDE.local.md`, `GEMINI.md`,
+`AGENTS.md`), which is prose a human also edits and is fingerprinted by its
+`<!-- boost:rule:… -->` marker lines alone — a whole-file hash turns a teammate
+appending a line during a tens-of-minutes `make check` into a flake in a
+required gate. The probe list is derived
+from the live agent table over `config.DEFAULTS["agents"]`, plus
+`rules.CONTEXT_FILES` and `hookhost.hosts()`, so a new write target is covered
+by adding it to those tables, not to the guard — and it reads that config
+defensively, because an autouse fixture that can raise is a setup error on
+every test in the suite rather than one failure. The standing exception is
+`store.project_mcp_sidecar` (`<repo>/.mcp.json`), which no table names because
+`register_project_mcp` joins it straight onto the base; it is probed by name,
+and it is the one project-scope artifact that is committable, so a report that
+omitted it would have the developer clean up everything the guard named and
+commit one file anyway.
+
 ## The one gate that matters
 
 Before calling any change done, run the full gate:
