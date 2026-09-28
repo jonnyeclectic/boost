@@ -3435,13 +3435,13 @@ Two halves, both cheap:
 
       <article class="cap rcard" id="the-windows-test-cap-is-five-minutes-from-the-measurement">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Flake</span></div>
-        <h3>The tests job caps every OS at 30 minutes, and Windows spends 25 of them</h3>
+        <h3>One 30-minute cap for nine matrix cells, and only Windows is anywhere near it</h3>
         <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/the-windows-test-cap-is-five-minutes-from-the-measurement.md">Write-up &middot; the-windows-test-cap-is-five-minutes-from-the-measurement.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">The release train's windows-3.14 job was cancelled at 99% of the suite, one minute from green, with the whole train behind it.</span>
+          <span class="m">A release train's windows-3.14 job was killed at 30.4 min while pytest was still printing results — 5.4 minutes of headroom against the worst run that ever passed.</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
