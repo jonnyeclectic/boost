@@ -49,6 +49,15 @@ from . import nethttp
 # exact variable that would revive a store built with a given provider — and a
 # second copy of that string is precisely how a surface ends up naming the
 # wrong one at the only moment the name matters.
+#
+# **Insertion order is preference order**, and it is the only *executable*
+# statement of it (`dense._FIX["no-key"]` and this module's own docstring
+# restate it in prose, where nothing can act on the wrong copy):
+# `provider` and `outranking` both walk this dict rather than testing the two
+# keys in a hardcoded sequence. Stating it twice is what let `fix_hint`
+# prescribe `export OPENAI_API_KEY=...` to an OpenAI-built store on a machine
+# holding a Voyage key — a remedy that leaves `provider()` exactly where it
+# was. `tests/unit/test_embed_outranking.py` pins the order itself.
 KEY_ENV = {"voyage": "VOYAGE_API_KEY", "openai": "OPENAI_API_KEY"}
 
 VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
@@ -194,13 +203,35 @@ def provider() -> str | None:
     """
     if not enabled():
         return None
-    if os.environ.get(KEY_ENV["voyage"]):
-        return "voyage"
-    if os.environ.get(KEY_ENV["openai"]):
-        return "openai"
+    for name, env in KEY_ENV.items():
+        if os.environ.get(env):
+            return name
     if local_available():
         return "local"
     return None
+
+
+def outranking(name: str) -> tuple[str, ...]:
+    """The set keys :func:`provider` would pick ahead of ``name``, in order.
+
+    Empty when ``name`` is already first among the keys in force — including
+    when it is the only one. Every key for a name outside :data:`KEY_ENV`,
+    since local comes last and any key displaces it.
+
+    It exists so a caller can ask what stands between a store and its own
+    provider without re-deriving the preference order. ``provider`` alone
+    cannot answer that: it names the winner, not what would have to go for
+    somebody else to win, and an OpenAI-built store whose own key is *also*
+    missing needs both facts — the export and the unset — where the winner's
+    name implies only one of them.
+    """
+    ahead = []
+    for other, env in KEY_ENV.items():
+        if other == name:
+            break
+        if os.environ.get(env):
+            ahead.append(env)
+    return tuple(ahead)
 
 
 def available() -> bool:

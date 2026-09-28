@@ -1,18 +1,20 @@
 ---
 id: dense-no-key-guard-is-unreachable
 board: code
-section: planned
-status: planned
+section: shipped
+status: shipped
 category: Quality · Retrieval eval
 complexity: L
 impact: High
 wow: 4
-note: dense.status() checks prov is None before it looks at the store (dense.py:618-621), b…
+note: A complete [rag] extra falls through a missing key to the local model, so the ladder reaches provider-changed and prescribes the full re-embed the guard exists to prevent. Two things can displace a store, and the fix answers both.
 order: 204
-owner:
-pr:
+owner: loop/dense-no-key-guard
+pr: 989
 title: fix_hint's no-key guard has been unreachable since the day it was written; a missing API key now prescribes the full re-embed the guard exists to prevent
 ---
+<b>Shipped in #989.</b> <code>fix_hint</code> now fires on <code>provider-changed</code> as well as <code>no-key</code>, with a different tail for each, and <code>embed.KEY_ENV</code> became the single statement of the provider preference order that <code>provider()</code> and the new <code>embed.outranking()</code> both walk. Adversarial verification of the first cut caught a second defect in the fix itself: two independent things can stand between a store and its own provider — its key being gone, and a key the resolver prefers being in force — and ordering them instead of combining them prescribed <code>export OPENAI_API_KEY=...</code> to an OpenAI-built store on a Voyage-keyed machine, which moves <code>provider()</code> not at all. All eight key combinations are now pinned whole.
+
 <b>Measured.</b> On a complete <code>[rag]</code> extra with a voyage-4-built vector store and no API key exported, <code>dense.status()</code> returns <code>reason='provider-changed'</code> (not <code>no-key</code>), so all three status-passing surfaces print <code>rebuild it: \</code>boost reindex --dense --force\`<code> and </code>boost doctor<code> exits 1 — measured verbatim, including doctor's "live key is local; searches are using BM25" line — while the guard written to prevent exactly that (</code>21f28223<code>, #444) fires only under </code>BOOST_NO_EMBED=1` or a partial install, both confirmed by direct probe.
 
 <b>Reproduce it.</b>
@@ -54,6 +56,6 @@ THE REAL MACHINE IS NOT CURRENTLY IN THE BUG STATE. <code>~/.boost/cache/rag_vec
 
 THE MISDIAGNOSIS WAS REFUTABLE FROM THE SAME FILE. The <code>_FIX</code> comment — "This reason means 'no key AND no local backend', which in practice is a partial install or BOOST_NO_EMBED" — was already in <code>dense.py</code> from 86163e03 (07-31) when #444 (08-03) added a guard whose docstring asserts the opposite: "an unfinished install with no store and a complete install whose key merely went missing both land here." Two claims about <code>no-key</code>, 30 lines apart, that contradict each other.
 
-<b>Why it is worth doing.</b> A user who opens a new shell without exporting their key is told by doctor, search and the MCP server to re-embed their whole store. On the real machine in this repo that is 645,592 chunks / 1.20 GB, which CLAUDE.md prices at ~1.2 s per chunk on CPU — hours of compute, or a real API bill — to fix a problem whose actual remedy is one <code>export</code>. The repo already decided this was unacceptable and wrote six tests plus a paragraph of docstring to prevent it; the guard has simply never been able to fire.
+<b>Why it is worth doing.</b> A user who opens a new shell without exporting their key is told by doctor, search and the MCP server to re-embed their whole store. On the real machine in this repo that is 645,592 chunks / 1.20 GB, which the roadmap prices at ~1.2 s per chunk on CPU (<code>keyless-semantic-search-for-everyone.md:298</code> — not CLAUDE.md, per correction 1 above) — hours of compute, or a real API bill — to fix a problem whose actual remedy is one <code>export</code>. The repo already decided this was unacceptable and wrote six tests plus a paragraph of docstring to prevent it; the guard has simply never been able to fire.
 
-<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em>
+<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. The measurement was the first contribution; the fix followed in #989, and was itself sent back once by the same adversarial pass.</em>

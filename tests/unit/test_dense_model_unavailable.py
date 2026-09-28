@@ -514,7 +514,9 @@ class TestStatusNamesTheState:
         st = dense.status()
         assert st["reason"] == "model-unavailable"
         hint = dense.fix_hint(st["reason"], st)
-        assert "`boost reindex --dense`" in hint
+        # Pinned whole: `in` passes against a string with anything bolted
+        # onto either end, and this one bypasses the table entirely.
+        assert hint == "retry loading the local model: `boost reindex --dense`"
         assert "huggingface.co" not in hint and "download" not in hint
 
     def test_the_shard_surfaces_get_the_same_answer(self, monkeypatch):

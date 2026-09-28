@@ -185,13 +185,37 @@ deliberately no vectors, for the same reason.
 | no backend | `pip install "boost-skill-cli[rag]"` (`pipx inject boost-skill-cli "boost-skill-cli[rag]"` under pipx) |
 | no store | `boost reindex --dense` |
 | store is empty | `boost reindex --dense --force` |
-| version, model, provider or dimension changed | `boost reindex --dense --force` |
+| version, model or dimension changed | `boost reindex --dense --force` |
+| provider changed, and a store built with a key | put that key back in force. The rebuild is offered as the alternative, and it re-embeds everything |
 | no key, and a store built with one | set the key it was built with. Reinstalling the extra swaps in the local model and forces a full re-embed |
 
-That last row is the one worth reading twice. If your store was built against
-Voyage or OpenAI and the key later goes missing, the fix is to put the key back.
-The generic "reinstall the extra" answer would install the local model, change
-the provider, and re-embed every vector you already paid for.
+Those last two rows are the ones worth reading twice, and the first of them is
+the one you are likely to meet. If your store was built against Voyage or
+OpenAI and the key later goes missing, doctor reports **provider changed**, not
+**no key**: the `[rag]` extra ships a local model, so a provider still
+resolves — it is simply not the one your vectors are in. The fix is to put the
+key back, and the generic "rebuild" answer would re-embed every vector you
+already paid for.
+
+For a store **built with a key**, two separate things can stand between it and
+its own provider, and doctor names whichever applies:
+
+- the key is gone, so `export` brings it back;
+- a key boost prefers is in force. The order is Voyage, then OpenAI, then the
+  local model, so an OpenAI-built store goes dark the moment a Voyage key
+  appears on the machine — `unset VOYAGE_API_KEY` is what hands it back.
+
+Both can be true at once, and then doctor names both steps. Running only the
+export would leave the resolver exactly where it was.
+
+A store built by the **local** model is displaced the same way — exporting a
+key on a machine whose vectors are local ones takes semantic search off — but
+doctor does not yet name the `unset` for it, and offers the rebuild instead.
+Tracked as a follow-up; `unset` is the free fix in the meantime.
+
+If you would rather move to the live provider than restore the old one,
+`boost reindex --dense --force` is the command, and doctor names the space it
+would land the vectors in.
 
 ## Search is slow
 

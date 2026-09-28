@@ -568,6 +568,10 @@ _FIX = {
     # instead: with it in force, this build goes through the paid API.
     "no-store": "build it: `boost reindex --dense`",
     "version-changed": "rebuild it: `boost reindex --dense --force`",
+    # Only right when the live space is the one the user wants. A store built
+    # through a paid provider that has merely lost its key lands here too, and
+    # for that user this row is the bill `no-key`'s guard exists to prevent —
+    # so `fix_hint` answers it from the status dict before reaching this table.
     "provider-changed": "rebuild it: `boost reindex --dense --force`",
     "model-changed": "rebuild it: `boost reindex --dense --force`",
     "dim-changed": "rebuild it: `boost reindex --dense --force`",
@@ -611,6 +615,55 @@ def free_shard_path(prov: str | None) -> str | None:
             % (" ".join(keys), "s" if len(keys) > 1 else "", prov))
 
 
+def _restore_built_space(built: str, env: str) -> str | None:
+    """How to put a store's own provider back in force, or None if nothing can.
+
+    ``built`` is the provider the vectors were embedded with and ``env`` its
+    key variable. Like :func:`free_shard_path` above, a pure function of the
+    environment: both facts it needs are read from ``os.environ`` through
+    :data:`embed.KEY_ENV`, so its answer cannot disagree with what
+    :func:`embed.provider` will do next.
+
+    **Two independent things can be wrong, and an earlier draft ordered them
+    instead of combining them.** The key can be gone, and a key the resolver
+    prefers can be in force; either alone, or both at once:
+
+    * the key is gone — ``export`` brings it back;
+    * something outranks it — ``unset`` what is in front hands the store back
+      its own provider;
+    * both — an OpenAI-built store with no OpenAI key on a machine holding a
+      Voyage one. Answering only the first is what the ordered version did,
+      and ``export OPENAI_API_KEY=...`` moves ``provider()`` not at all: the
+      user runs it, lands on the same reason, and is then told to unset the
+      other key. A remedy that has to be followed twice to do anything is the
+      no-op this branch exists to replace, arrived at one step at a time.
+
+    None when the key is in force and nothing outranks it: whatever else is
+    wrong with that store, a key is not it.
+    """
+    gone = not os.environ.get(env)
+    # Not `live != built`: inequality says another provider won, not that it
+    # would *keep* winning once this one's key came back. A voyage-built store
+    # displaced by an OpenAI key needs the export alone, because voyage
+    # outranks openai — `unset OPENAI_API_KEY` there is a step that buys
+    # nothing. `outranking` reads the one preference order there is.
+    drop = embed.outranking(built)
+    # `unset A B` rather than one command per key: it is a single shell verb
+    # taking a list, and the surfaces that print this have one line. No
+    # `if drop else ""` guard — every branch that reads this one has already
+    # tested `drop`, so the guard was a value nothing could observe, which is
+    # a mutant no test can kill rather than a safety net.
+    unset = "`unset %s`" % " ".join(drop)
+    if gone and drop:
+        return ("set the key it was built with: `export %s=...`, then %s "
+                "puts it back in front" % (env, unset))
+    if gone:
+        return "set the key it was built with: `export %s=...`" % env
+    if drop:
+        return "%s puts the store's own key back in front" % unset
+    return None
+
+
 def fix_hint(reason: str, status: dict | None = None) -> str:
     """The single next action for a `status()` reason, or a safe default.
 
@@ -622,11 +675,26 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
     status into ``provider-changed`` — a full re-embed of every vector they
     already paid for. Seen in the wild at 750,416 chunks.
 
-    The reason ladder cannot distinguish these two states on its own, because
-    ``no-key`` is checked before the store is even looked at: an unfinished
-    install with no store and a complete install whose key merely went missing
-    both land here. ``built_provider`` is what separates them, and it lives in
-    the status dict.
+    ``no-key`` means no key *and* no local backend, which in practice is a
+    partial install. A complete install whose key merely went missing does
+    **not** land there — ``provider()`` falls through to the local model that
+    the ``[rag]`` extra ships, so the ladder reaches ``provider-changed``
+    instead, whose table row is that same full re-embed. The guard was written
+    for a reason it could not be reached through: measured on a voyage-4 store
+    with the key unexported, `boost doctor` prescribed
+    `boost reindex --dense --force`. So both reasons consult the status, and
+    ``built_provider`` is what separates a store worth reviving from an
+    unfinished install with nothing to revive.
+
+    The two remedies differ in their tail, because the cost differs. Under
+    ``no-key`` the local model is missing, so the alternative is installing it
+    — which is what re-embeds everything. Under ``provider-changed`` a
+    provider resolved, so *some* backend is already in force and "reinstall
+    the extra" names a remedy for a state this is not. (Not "the user already
+    has the local model": the provider that displaced this store may well be
+    another key, and that machine need never have installed it.) The
+    alternative there is the explicit rebuild, named with the space it would
+    land in.
 
     ``no-store`` needs the status too. With a key in force and the local model
     installed, the table's "build it" is the paid build, while `boost
@@ -644,8 +712,12 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
         free = free_shard_path(status.get("provider"))
         if free:
             return free
-    if reason == "no-key" and status:
-        env = embed.KEY_ENV.get(status.get("built_provider") or "")
+    if reason in ("no-key", "provider-changed") and status:
+        # `or ""` rather than a `get` default: a status that carries the key
+        # explicitly set to None must reach the same lookup as one that omits
+        # it, and `KEY_ENV` is missed either way.
+        built = status.get("built_provider") or ""
+        env = embed.KEY_ENV.get(built)
         # `chunks` guards the unfinished-install case: without vectors on disk
         # there is nothing a key would revive, and "build it" is the real next
         # step. A store built by the local model has no env var and correctly
@@ -656,10 +728,21 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
         # vectors to revive; reading unknown as zero would send exactly the
         # user this branch exists to protect to the re-embed-everything answer.
         if env and (count is None or count > 0):
-            n = f"{int(count):,} vectors" if count else "vectors"
-            return ("set the key it was built with: `export %s=...` — "
-                    "reinstalling the extra swaps in the local model and "
-                    "forces all %s to be re-embedded" % (env, n))
+            n = (f"{int(count):,} vector{'' if count == 1 else 's'}"
+                 if count else "vectors")
+            if reason == "no-key":
+                return ("set the key it was built with: `export %s=...` — "
+                        "reinstalling the extra swaps in the local model and "
+                        "forces all %s to be re-embedded" % (env, n))
+            live = status.get("provider")
+            restore = _restore_built_space(built, env)
+            if restore:
+                # Names the live space rather than "the local model": the
+                # provider that displaced this store is whatever `provider()`
+                # picked, and a rebuild lands the vectors in *its* space.
+                return ("%s — or `boost reindex --dense --force` re-embeds "
+                        "all %s in %s's space"
+                        % (restore, n, live or "the live provider"))
     if (reason == "model-unavailable" and status
             and (status.get("model_failure") or {}).get("stage") == "load"):
         # The files are on disk and the load itself failed: promising a
