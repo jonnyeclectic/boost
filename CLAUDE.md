@@ -34,6 +34,24 @@ The functional/unit `sandbox` fixture (`tests/conftest.py`) also sets
 block on a confirm prompt or a real AI call — override explicitly in a test
 that means to exercise the AI or confirmation path.
 
+**`sandbox` also chdirs into `tmp_path/"cwd"`**, because the working directory
+is the one input *project* scope resolves against: `scopes.resolve_base` walks
+up from `os.getcwd()` looking for a `.git`, so a test installing with
+`scope="project"` and no explicit `base=` used to write `.boost/skill-lock.json`
+plus a full five-agent fan-out into the developer's own checkout — all of it
+gitignored, so `git status` never said a word, and the next full run read the
+leftover lock back and failed a dozen tests that assert an empty install state.
+The sandbox cwd is a *sibling* of the fake `$HOME`, never `$HOME` itself
+(`scopes.project_root` refuses to call `$HOME` a project, which would make
+`resolve_base` return `None` and change what every project-scope test means),
+and it carries no `.git`: **a test that needs a real project root plants its own
+marker and chdirs into it.** The backstop is the autouse `_repo_root_guard`
+fixture, which snapshot-diffs the project-scope paths under the checkout *and*
+under the directory pytest started in (`mutants/`, during the mutation gate) and
+fails the offending test by nodeid. Its probe list is derived from
+`config.DEFAULTS["agents"]`, `rules.CONTEXT_FILES` and `hookhost.hosts()`, so a
+new write target is covered by adding it to those tables, not to the guard.
+
 ## The one gate that matters
 
 Before calling any change done, run the full gate:
