@@ -152,16 +152,92 @@ class TestFingerprint:
         assert guard.repo_root_intruders(before,
                                          guard.fingerprint_paths([d])) == []
 
-    def test_an_unreadable_path_does_not_crash_the_guard(self, guard, tmp_path):
+    def test_a_file_replaced_inside_a_watched_directory_is_a_change(self,
+                                                                     guard,
+                                                                     tmp_path):
+        # The destructive case, and the one a name-only listing missed:
+        # `boost install <workflow> --local` writes
+        # `<root>/.claude/commands/<name>.md`, and the probe is the directory.
+        # Overwriting a slash command the developer wrote by hand left the
+        # listing byte-identical.
+        d = tmp_path / "commands"
+        d.mkdir()
+        (d / "review.md").write_text("mine", encoding="utf-8")
+        before = guard.fingerprint_paths([d])
+        (d / "review.md").write_text("theirs, and longer", encoding="utf-8")
+        assert guard.repo_root_intruders(before,
+                                         guard.fingerprint_paths([d])) == [str(d)]
+
+    def test_a_symlink_repointed_inside_a_watched_directory_is_a_change(
+            self, guard, tmp_path):
+        # The same hole one level over: a project-scope skill install links
+        # `<root>/.claude/skills/<name>` into the canonical store, so a
+        # reinstall re-points a link whose *name* never changes.
+        d = tmp_path / "skills"
+        d.mkdir()
+        (tmp_path / "store-a").mkdir()
+        (tmp_path / "store-b").mkdir()
+        (d / "brainstorming").symlink_to(tmp_path / "store-a")
+        before = guard.fingerprint_paths([d])
+        (d / "brainstorming").unlink()
+        (d / "brainstorming").symlink_to(tmp_path / "store-b")
+        assert guard.repo_root_intruders(before,
+                                         guard.fingerprint_paths([d])) == [str(d)]
+
+    def test_a_broken_symlink_inside_a_watched_directory_still_lists(
+            self, guard, tmp_path):
+        # `os.readlink` rather than `resolve()`: the entry has to answer even
+        # when its target does not exist, or a dangling link left behind by a
+        # half-finished install would read as no entry at all.
+        d = tmp_path / "skills"
+        d.mkdir()
+        before = guard.fingerprint_paths([d])
+        (d / "brainstorming").symlink_to(tmp_path / "nowhere")
+        after = guard.fingerprint_paths([d])
+        assert guard.repo_root_intruders(before, after) == [str(d)]
+        assert "brainstorming|l|" in after[str(d)]
+
+    def test_a_broken_symlink_at_a_probe_path_is_present(self, guard,
+                                                          tmp_path):
+        # `is_dir()` and `exists()` both follow the link, so a dangling one
+        # read as absent — the same value the guard compares against.
+        p = tmp_path / "skills"
+        before = guard.fingerprint_paths([p])
+        p.symlink_to(tmp_path / "nowhere")
+        assert guard.repo_root_intruders(before,
+                                         guard.fingerprint_paths([p])) == [str(p)]
+
+    def test_an_unreadable_path_does_not_crash_the_guard(self, guard,
+                                                          tmp_path,
+                                                          monkeypatch):
         # The guard runs in teardown for every test in the suite. A guard that
         # can raise turns one unrelated permissions oddity into 3,000 errors.
+        #
+        # The error is forced rather than provoked with chmod: as root — the
+        # ordinary CI container — `chmod 0o000` does not stop `scandir`, so
+        # that version returned a fingerprint without ever reaching the
+        # `except OSError` branch it exists to cover, and passed.
         d = tmp_path / "locked"
         d.mkdir()
-        d.chmod(0o000)
-        try:
-            assert guard.fingerprint_paths([d]) != {}
-        finally:
-            d.chmod(0o755)
+
+        def boom(_):
+            raise PermissionError(13, "nope")
+        monkeypatch.setattr(guard, "_dir_entries", boom)
+        assert guard.fingerprint_paths([d]) == {str(d): "e:13"}
+
+    def test_an_unreadable_path_reads_the_same_way_twice(self, guard,
+                                                          tmp_path,
+                                                          monkeypatch):
+        # ...and the reason has to be stable, or an unreadable probe would
+        # show up as a change on every single test.
+        d = tmp_path / "locked"
+        d.mkdir()
+
+        def boom(_):
+            raise PermissionError(13, "nope")
+        monkeypatch.setattr(guard, "_dir_entries", boom)
+        assert guard.repo_root_intruders(guard.fingerprint_paths([d]),
+                                         guard.fingerprint_paths([d])) == []
 
 
 class TestIntruders:
@@ -186,6 +262,93 @@ class TestIntruders:
         got = guard.repo_root_intruders(
             {}, {"/repo/z": "f:1", "/repo/a": "f:2", "/repo/m": "f:3"})
         assert got == ["/repo/a", "/repo/m", "/repo/z"]
+
+
+class TestTheRootsAreDerivedFromTheFilesystem:
+    """The bug `TestWatchedRoots` below cannot catch.
+
+    Those tests feed synthetic roots, so they pin the *function*. Under the
+    mutation gate mutmut copies `tests/` into `mutants/` and runs pytest from
+    there, so `Path(__file__).parent.parent` — the checkout everywhere else —
+    becomes `<checkout>/mutants`. `_START_DIR` is the same directory, the two
+    collapse to one root, and the project install that `scopes.resolve_base`
+    puts at the real repo root goes unwatched. That is the exact run the guard
+    was written for, and every assertion about `watched_roots` stayed green
+    through it.
+    """
+
+    def test_a_watched_root_is_a_real_working_tree(self, guard):
+        roots = guard.guard_roots()
+        assert any(
+            any((r / m).exists() for m in (".git", ".hg", ".svn"))
+            for r in roots), roots
+
+    def test_the_checkout_is_watched_even_when_run_from_a_copy(self, guard,
+                                                               tmp_path):
+        # `mutants/` shape, spelled out: a subdirectory of a working tree,
+        # holding its own copy of the suite.
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        mutants = repo / "mutants"
+        (mutants / "tests").mkdir(parents=True)
+        assert guard.checkout_root(mutants) == repo
+        assert guard.watched_roots(guard.checkout_root(mutants), mutants) \
+            == [repo, mutants]
+
+    def test_a_git_worktree_marker_is_a_file_not_a_directory(self, guard,
+                                                              tmp_path):
+        # This suite runs in a `git worktree`, where `.git` is a file pointing
+        # at the real gitdir. An `is_dir()` check would find no marker here and
+        # walk past the checkout entirely.
+        repo = tmp_path / "wt"
+        repo.mkdir()
+        (repo / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+        deep = repo / "a" / "b"
+        deep.mkdir(parents=True)
+        assert guard.checkout_root(deep) == repo
+
+    def test_no_marker_anywhere_falls_back_to_the_start_directory(self, guard,
+                                                                   tmp_path):
+        # An unpacked sdist. Watching *something* beats watching nothing.
+        d = tmp_path / "loose"
+        d.mkdir()
+        if any((a / m).exists()
+               for a in (d, *d.parents) for m in (".git", ".hg", ".svn")):
+            pytest.skip("tmp_path is inside a working tree on this machine")
+        assert guard.checkout_root(d) == d
+
+
+class TestTheGuardReadsNoConfig:
+    """`project_scope_probes` used to call `agents.project_dotdir`, which calls
+    `known_agents()`, which calls `paths.expand` on every agent's dir. That
+    raises `BoostError` for an unresolvable `${VAR}` — a config state boost
+    deliberately tolerates. In an autouse fixture that is not one failure, it
+    is a setup error on every test in the suite, on that developer's machine
+    only, with the traceback pointing at the guard."""
+
+    def test_probes_survive_a_config_that_cannot_be_loaded(self, guard,
+                                                            monkeypatch):
+        from boost_cli.core import config
+        monkeypatch.setattr(config, "load",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                RuntimeError("boom")))
+        probes = guard.project_scope_probes(Path("/repo"))
+        assert projectlock.lock_path(Path("/repo")) in probes
+
+    def test_the_inlined_dotdir_matches_the_real_one(self, guard, sandbox):
+        # The copy is only safe while it agrees with the original.
+        from boost_cli.core import config
+        for name, spec in config.DEFAULTS["agents"].items():
+            skills_dir = Path(str(spec["dir"]))
+            assert guard._probe_dotdir(spec) == \
+                agents.project_dotdir(name, skills_dir), name
+
+    def test_an_agent_added_by_hand_is_watched(self, guard):
+        # `store.install` iterates the *live* table, so an agent a developer
+        # added in config.json is one boost writes to under project scope.
+        specs = {"cline": {"dir": "~/.cline/skills", "enabled": True}}
+        probes = set(guard.project_scope_probes(Path("/repo"), specs=specs))
+        assert Path("/repo/.cline/skills") in probes
 
 
 class TestWatchedRoots:

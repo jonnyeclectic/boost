@@ -47,10 +47,21 @@ The sandbox cwd is a *sibling* of the fake `$HOME`, never `$HOME` itself
 and it carries no `.git`: **a test that needs a real project root plants its own
 marker and chdirs into it.** The backstop is the autouse `_repo_root_guard`
 fixture, which snapshot-diffs the project-scope paths under the checkout *and*
-under the directory pytest started in (`mutants/`, during the mutation gate) and
-fails the offending test by nodeid. Its probe list is derived from
-`config.DEFAULTS["agents"]`, `rules.CONTEXT_FILES` and `hookhost.hosts()`, so a
-new write target is covered by adding it to those tables, not to the guard.
+under the directory pytest started in, and fails the offending test by nodeid.
+Two details there are load-bearing. **The checkout is found by walking up for a
+VCS marker, never from `__file__`**: mutmut copies `tests/` into `mutants/` and
+runs the suite from there, so under the mutation gate — the one run the guard
+exists for — `Path(__file__).parent.parent` *is* `mutants/`, it coincides with
+the start directory, and a derivation from either watches only `mutants/` while
+`scopes.resolve_base` puts the escaped install at the real repo root. And a
+watched **directory** is fingerprinted by its immediate entries with each
+file's size and `mtime_ns`, not by name alone, or replacing a slash command the
+developer wrote by hand leaves the listing identical. The probe list is derived
+from the live agent table over `config.DEFAULTS["agents"]`, plus
+`rules.CONTEXT_FILES` and `hookhost.hosts()`, so a new write target is covered
+by adding it to those tables, not to the guard — and it reads that config
+defensively, because an autouse fixture that can raise is a setup error on
+every test in the suite rather than one failure.
 
 ## The one gate that matters
 

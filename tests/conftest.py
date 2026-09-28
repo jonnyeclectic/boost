@@ -29,27 +29,105 @@ _START_DIR = Path.cwd()
 # marker like "<probe>".
 _PROBE_NAME = "boost-repo-guard-probe"
 
+# What `scopes.PROJECT_MARKERS` looks for, duplicated rather than imported so
+# the guard keeps working if a mutant deletes that constant. `.git` is a *file*
+# in a worktree and a directory in a plain clone, so this is `exists`, not
+# `is_dir`.
+_VCS_MARKERS = (".git", ".hg", ".svn")
 
-def watched_roots(root, start) -> list[Path]:
+
+def checkout_root(start):
+    """The working tree ``start`` sits in — the same answer `scopes` computes.
+
+    `scopes.resolve_base` walks *up* from the cwd for a VCS marker, so this has
+    to as well or the guard watches a directory nothing writes to. It matters
+    because `ROOT` cannot be trusted for this: mutmut copies `tests/` into
+    `mutants/` and runs the suite from there, so under the mutation gate
+    ``Path(__file__).parent.parent`` is ``<checkout>/mutants`` — the one run
+    where a stray project install is most likely, and the one where deriving
+    the checkout from `__file__` silently stops naming the checkout.
+
+    Falls back to ``start`` when there is no marker above it, which is what a
+    `pytest` run from an unpacked sdist looks like.
+    """
+    start = Path(start)
+    for d in (start, *start.parents):
+        if any((d / m).exists() for m in _VCS_MARKERS):
+            return d
+    return start
+
+
+def watched_roots(*candidates) -> list[Path]:
     """The working trees a stray project-scope write could land in.
 
-    Two of them, because the two writers disagree about what "the project" is.
-    `scopes.resolve_base` walks *up* for a `.git` marker, so under the mutation
+    More than one, because the writers disagree about what "the project" is.
+    `scopes.resolve_base` walks *up* for a VCS marker, so under the mutation
     gate — which runs the suite from `mutants/` inside the checkout — a project
-    install lands at the repo root. A cwd-relative writer such as
-    `claude_settings.settings_path("project")` lands in `mutants/` itself.
-    Measured: a `mutants/.codex/hooks.json` left behind by one mutant execution
-    was read back by the next clean-test run and failed it, and the traceback
-    pointed at the assertion rather than at the file.
+    install lands at the **repo** root. A cwd-relative writer such as
+    `claude_settings.settings_path("project")` lands in `mutants/` itself. Both
+    are real: a `mutants/.codex/hooks.json` measured in this tree was left by a
+    mutant execution of the Codex hook host, read back by the next clean-test
+    run, and failed it with a traceback pointing at the assertion rather than
+    at the file.
 
-    Deduplicated, and ordered checkout-first so the more surprising of the two
-    is reported second.
+    Deduplicated in the order given, so the caller decides which is reported
+    first and a `mutants/`-shaped run costs one extra root rather than two
+    copies of the same one.
     """
-    root, start = Path(root), Path(start)
-    return [root] if start == root else [root, start]
+    seen, out = set(), []
+    for c in candidates:
+        p = Path(c)
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
 
 
-def project_scope_probes(root) -> list[Path]:
+def agent_specs() -> dict:
+    """The agent table the guard probes: ``DEFAULTS`` plus whatever is live.
+
+    ``DEFAULTS`` is the floor, so the guard means the same thing on every
+    machine and an agent someone disabled locally is still one the suite can
+    write to. The developer's own ``config.json`` is merged **over** it,
+    because `store.install` iterates the live table: an agent added by hand is
+    one boost writes to under project scope and would otherwise be the one
+    place the guard is blind.
+
+    Best-effort and never raises. `config.load` reads a user-editable file and
+    `paths.expand` raises `BoostError` for an unresolvable ``${VAR}`` — a state
+    CLAUDE.md says boost deliberately tolerates. Letting either propagate out
+    of an autouse fixture would turn one developer's config into a setup error
+    on every test in the suite. Raw rows are used rather than
+    `agents.known_agents`, so nothing is expanded and no environment is read.
+    """
+    from boost_cli.core import config
+    specs = dict(config.DEFAULTS["agents"])
+    try:
+        live = config.load().get("agents")
+        if isinstance(live, dict):
+            specs.update({n: s for n, s in live.items()
+                          if isinstance(s, dict) and s.get("dir")})
+    except Exception:
+        # Bare, and deliberately: this runs in an autouse fixture, so any
+        # exception here is a setup error on every test in the suite.
+        pass
+    return specs
+
+
+def _probe_dotdir(spec) -> str:
+    """`agents.project_dotdir`, off a raw spec row and without reading config.
+
+    Pinned against the real one by `test_repo_root_guard.py`. Inlined because
+    the real one calls `known_agents()`, which calls `paths.expand` on every
+    agent's dir — see :func:`agent_specs` for why that cannot happen here.
+    """
+    declared = spec.get("project_dir") or ""
+    if declared in ("", ".", "..") or "/" in declared or "\\" in declared:
+        return Path(str(spec["dir"])).parent.name
+    return declared
+
+
+def project_scope_probes(root, specs=None) -> list[Path]:
     """Paths under ``root`` that a project-scope write materializes.
 
     Every entry is produced by *calling the writer's own path function* with
@@ -57,15 +135,19 @@ def project_scope_probes(root) -> list[Path]:
     would be wrong the first time an agent, a hook host or a workflow slot is
     added — and wrong silently, since what it guards is an absence.
 
-    The agent set comes from :data:`config.DEFAULTS` rather than from the
-    developer's ``config.json``: the guard has to mean the same thing on every
-    machine, and an agent someone disabled locally is still one the suite can
-    write to.
+    The agent set is :func:`agent_specs` — ``DEFAULTS`` merged under the live
+    config — and ``specs`` overrides it so a test can pin the derivation
+    against a table that does not vary by machine.
+
+    What this covers is project *scope*, not every cwd-relative write. A few
+    commands join straight onto ``Path.cwd()`` (`boost distill` writes
+    ``<cwd>/<name>.SKILL.md`, `boost bmad` takes the cwd as its project base),
+    and those land outside every probe here. The `sandbox` fixture's chdir is
+    what contains them; this is the backstop for the scope-resolved writers,
+    which are the ones that reach a checkout the cwd is not even inside.
     """
     from boost_cli.core import (
-        agents,
         claude_settings,
-        config,
         hookhost,
         projectlock,
         rules,
@@ -73,13 +155,15 @@ def project_scope_probes(root) -> list[Path]:
         workflows,
     )
     root = Path(root)
+    if specs is None:
+        specs = agent_specs()
     probes: list[Path] = [projectlock.lock_path(root)]
 
-    for name, spec in config.DEFAULTS["agents"].items():
+    for name, spec in specs.items():
         if not spec.get("project_scope", True):
             continue          # antigravity: no repo-local path to watch
         skills_dir = Path(str(spec["dir"]))
-        dotdir = agents.project_dotdir(name, skills_dir)
+        dotdir = _probe_dotdir(spec)
         probes.append(scopes.agent_root(skills_dir, root, dotdir)
                       / skills_dir.name)
         mode, target = rules.rule_target(name, skills_dir, _PROBE_NAME,
@@ -106,6 +190,29 @@ def project_scope_probes(root) -> list[Path]:
     return unique
 
 
+def _dir_entries(d):
+    """``name|kind[|target|size|mtime_ns]`` for each immediate entry of ``d``.
+
+    A symlink carries its *target*, not just its name, for the same reason a
+    file carries its size: `store.install` under project scope links
+    ``<root>/.claude/skills/<name>`` into the canonical store, so a reinstall
+    that re-points an existing link changes nothing a name-only listing can
+    see. It is read with `os.readlink` rather than `resolve()` — one syscall,
+    no walk, and a broken link answers instead of vanishing.
+    """
+    out = []
+    with os.scandir(d) as it:
+        for e in it:
+            if e.is_symlink():
+                out.append("%s|l|%s" % (e.name, os.readlink(e.path)))
+            elif e.is_dir():
+                out.append("%s|d" % e.name)
+            else:
+                st = e.stat()
+                out.append("%s|f|%d|%d" % (e.name, st.st_size, st.st_mtime_ns))
+    return out
+
+
 def fingerprint_paths(paths) -> dict[str, str]:
     """``{path: fingerprint}`` for the ones that exist — absent means absent.
 
@@ -113,11 +220,25 @@ def fingerprint_paths(paths) -> dict[str, str]:
     compare equal to a present-but-empty directory: a test that removed the
     last entry from a real ``.claude/skills`` has to read as a change.
 
-    Files are fingerprinted by content and directories by their *immediate*
-    entries. Content rather than mtime because an idempotent rewrite is not a
-    change, and a guard that fires on one gets switched off. Immediate entries
-    rather than a walk because ``.claude/`` in a real checkout holds
-    ``worktrees/``, and this runs twice for every test in the suite.
+    A probed **file** is fingerprinted by content — rather than mtime, because
+    an idempotent rewrite is not a change and a guard that fires on one gets
+    switched off.
+
+    A probed **directory** is fingerprinted by its immediate entries, each as
+    ``name|kind`` plus, for a regular file, its size and ``mtime_ns``, and for
+    a symlink, its target. Not by name alone: `boost install <workflow>
+    --local` writes
+    ``<root>/.claude/commands/<name>.md``, and the probe is the ``commands``
+    directory, so a *replacement* of a slash command the developer wrote by
+    hand left the listing identical and the guard silent — the destructive
+    case, which is the worse one. Size and mtime rather than content because
+    this runs twice per test: it costs one `scandir` and no reads.
+
+    Immediate entries rather than a walk, for the same reason — and because
+    ``.claude/`` in a real checkout holds ``worktrees/``. The residual gap is a
+    write *below* an entry that already exists (a ``--force`` reinstall over
+    ``.claude/skills/<name>/``); catching that means hashing subtrees on every
+    teardown, which is the cost this design exists to avoid.
 
     Never raises. It runs in teardown for every test, so one unreadable
     directory must not turn into three thousand errors.
@@ -128,16 +249,48 @@ def fingerprint_paths(paths) -> dict[str, str]:
         p = Path(p)
         try:
             if p.is_dir():
-                out[str(p)] = "d:" + ",".join(sorted(os.listdir(p)))
+                out[str(p)] = "d:" + ",".join(sorted(_dir_entries(p)))
             elif p.exists():
                 out[str(p)] = "f:" + hashlib.sha256(
                     p.read_bytes()).hexdigest()[:16]
+            elif p.is_symlink():
+                # Present, but neither `is_dir` nor `exists` says so: both
+                # follow the link. A broken symlink planted at a probe path
+                # would otherwise read as absent, which is the state the guard
+                # compares against.
+                out[str(p)] = "l:" + os.readlink(p)
         except OSError as exc:
             # Unreadable is still *present*, and the reason is stable across
             # the two calls, so it cancels out of the diff rather than
             # masquerading as a change.
             out[str(p)] = "e:%s" % exc.errno
     return out
+
+
+_GUARD_PROBES: list[Path] = []
+
+
+def guard_roots() -> list[Path]:
+    """Every working tree the guard watches, checkout-first.
+
+    Four candidates collapse to one or two in practice. `ROOT` is where this
+    file sits; `checkout_root` of it is the tree that `scopes.resolve_base`
+    would pick from there. Both again for `_START_DIR`, which is `ROOT` in an
+    ordinary run and ``<checkout>/mutants`` under the mutation gate — where
+    `ROOT` is *also* ``mutants``, because mutmut copies `tests/` in, so
+    deriving the checkout from `__file__` alone watches neither the tree the
+    install lands in nor, by coincidence, anything else that matters.
+    """
+    return watched_roots(checkout_root(ROOT), ROOT,
+                         checkout_root(_START_DIR), _START_DIR)
+
+
+def _guard_probes() -> list[Path]:
+    """:func:`project_scope_probes` over :func:`guard_roots`, computed once."""
+    if not _GUARD_PROBES:
+        _GUARD_PROBES.extend(p for root in guard_roots()
+                             for p in project_scope_probes(root))
+    return _GUARD_PROBES
 
 
 def repo_root_intruders(before: dict, after: dict) -> list[str]:
@@ -222,10 +375,14 @@ def _repo_root_guard(request):
     attributed to another's test and kill a mutant that should have survived.
     That is accepted deliberately: the alternative is a silently poisoned
     checkout, one mutant out of ~26,500 is noise against an 80% floor, and it
-    can only happen when something genuinely escaped.
+    can only happen when something genuinely escaped. The same caveat applies
+    to `pytest-xdist`, for the same reason and with the same answer.
+
+    The probe list is cached per process: it is a pure function of the roots,
+    computing it reads the developer's `config.json`, and this fixture runs
+    thousands of times.
     """
-    probes = [p for root in watched_roots(ROOT, _START_DIR)
-              for p in project_scope_probes(root)]
+    probes = _guard_probes()
     before = fingerprint_paths(probes)
     yield
     hits = repo_root_intruders(before, fingerprint_paths(probes))
@@ -299,6 +456,15 @@ def sandbox(tmp_path, monkeypatch):
     cwd = tmp_path / "cwd"
     cwd.mkdir()
     monkeypatch.chdir(cwd)
+    # ...and the "carries no `.git`" half is an assumption about where pytest
+    # puts tmp_path, not something this fixture controls. `--basetemp` or a
+    # `TMPDIR` inside a checkout inverts the whole fix — every project-scope
+    # test would resolve to that checkout and the guard would fail all of them
+    # with the wrong story. Cheaper to say so here than to debug there.
+    assert not any((d / ".git").exists() for d in (cwd, *cwd.parents)), (
+        "pytest's tmp_path is inside a git working tree (%s) — set TMPDIR or"
+        " --basetemp somewhere else, or every project-scope test writes into"
+        " it" % cwd)
     monkeypatch.delenv("BOOST_HOME", raising=False)
     monkeypatch.delenv("BOOST_AGENTS_STORE", raising=False)
     monkeypatch.delenv("BOOST_DEBUG", raising=False)

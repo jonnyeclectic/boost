@@ -31,10 +31,17 @@ def load_conftest():
 
 
 @pytest.fixture()
-def watch(tmp_path, monkeypatch):
+def watch(sandbox, tmp_path, monkeypatch):
     """A repo-shaped directory, cd'd into, with the guard watching it.
 
     Returns a callable that answers "what did the guard see change here?".
+
+    Depends on `sandbox` explicitly rather than relying on the test signature
+    listing `boost` first. Both fixtures chdir through the *same* `monkeypatch`
+    instance, so the one created later wins; without this dependency the order
+    would come from argument order, and reordering a signature would make
+    `test_an_untouched_repo_reports_nothing` pass vacuously while the other
+    three failed. It also keeps `project_scope_probes` off the real `$HOME`.
     """
     guard = load_conftest()
     repo = tmp_path / "victim"
@@ -63,8 +70,12 @@ def test_a_project_skill_install_is_caught_in_every_agent_dotdir(boost, tapped,
                                                                  watch):
     boost("install", "brainstorming", "--local")
     hits = watch()
+    # `Path(h).parts` rather than a "/<dotdir>/" substring: the guard reports
+    # `str(Path)`, which is backslash-separated on Windows, so the substring
+    # form matched nothing there and failed only on the Windows runners.
+    parts = [Path(h).parts for h in hits]
     for dotdir in (".claude", ".cursor", ".windsurf", ".gemini", ".codex"):
-        assert any("/%s/" % dotdir in h for h in hits), (dotdir, hits)
+        assert any(dotdir in p for p in parts), (dotdir, hits)
 
 
 def test_an_untouched_repo_reports_nothing(boost, tapped, watch):
