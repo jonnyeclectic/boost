@@ -337,7 +337,24 @@ jobs:
 
   tests:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # One cap for nine cells was one cap for three very different machines.
+    # Over 40 ci runs (every attempt, 2026-09-28) the per-cell medians were
+    # ubuntu 4.0-5.8 min, macOS 7.4-8.8, Windows 19.3-20.7; measured against
+    # the slowest run of each OS that still passed (7.9 / 10.3 / 24.6), a flat
+    # 30 left Linux 22.1 minutes of headroom, macOS 19.7 and Windows 5.4.
+    # windows-3.14 ran out of it twice in one morning — run 36399947619 job
+    # 108855169521 at 30.4 min, and run 36408455593 job 108882688603 at 30.3 —
+    # and both logs say the job was still working rather than wedged: pytest
+    # printed 11 more results in the 7 s, and 33 more in the 39 s, between its
+    # last `99%` row and the cancel. The second was main's own run, so it also
+    # held back the release `publish.yml` fires on a *successful* ci. Widening
+    # all nine would have bought that at the price of the bound: a genuinely
+    # wedged Linux job is the case a timeout exists for, and still dies in 30.
+    # `startsWith` rather than `== 'windows-latest'` because the condition and
+    # the `os:` list below are otherwise related only by spelling: pin that
+    # list to a dated label such as windows-2025 and the equality matches
+    # nothing, handing all nine cells 30 again without failing anything.
+    timeout-minutes: ${{ startsWith(matrix.os, 'windows') && 45 || 30 }}
     permissions:
       contents: write  # coverage badge push (main only)
     defaults:
