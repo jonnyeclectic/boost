@@ -10,7 +10,7 @@ wow: 3
 note: Codex takes skills and rules but `boost mcp register` cannot reach it — the grammar is verified, the host row is not written…
 order: 344
 owner: loop/codex-mcp-host
-pr: PRNUM
+pr: 980
 title: Codex is a skills and rules target but not yet an MCP host
 ---
 <b>Found while adding Codex as an agent target.</b> <code>boost install</code> now reaches Codex —
