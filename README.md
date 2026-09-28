@@ -491,13 +491,15 @@ should show as Connected.
 
 ## Agent hooks and BMAD
 
-`boost hooks` manages hooks in `settings.json` for Claude Code and Gemini CLI,
+`boost hooks` manages hooks for Claude Code, Gemini CLI and Codex CLI —
+`settings.json` for the first two, `$CODEX_HOME/hooks.json` for Codex —
 translating between their event vocabularies and timeout units. `boost bmad on`
 uses them to put the BMAD Method's personas in charge of every task, in one
 command with no Node and no network.
 
 ```bash
 boost hooks add SessionStart -c 'echo hello' -n greet --scope project
+boost hooks add SessionStart --host codex -c 'echo hello' -n greet
 boost bmad on
 ```
 

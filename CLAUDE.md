@@ -542,9 +542,9 @@ nothing. Consequences for code you write:
     `workflows` flag exists and `agents.workflow_agents()` is the set that
     honours it. `~/.codex/rules/*.rules` is the `execpolicy` command-approval
     DSL, not an instructions dir — don't write there. Its **MCP host is wired
-    up** (`core/mcphost.py`, fourth row — see below); its **hooks** host is
-    not, because the hook `timeout` units are unestablished, so this file does
-    not record it as done.
+    up** (`core/mcphost.py`, fourth row — see below) and so is its **hooks**
+    host (`core/hookhost.py`, third row — the `timeout` units this file used
+    to record as unestablished are **seconds**, measured; see below).
   - **Its dir is the one agent path that is not fixed**, hence the
     `${CODEX_HOME:-~/.codex}/skills` default and `paths.expand`'s leading
     `${VAR:-fallback}` syntax. Only a *leading* reference expands and nesting
@@ -667,14 +667,14 @@ nothing. Consequences for code you write:
   no-op against a user-scope entry, and Claude, which needs none, is handed one
   so the argv cannot reach `<cwd>/.mcp.json`, the one scope outside every
   `$HOME` and so the one `mcphost.escapes_home` cannot judge.
-- **`core/hookhost.py` is the same idea for hooks, and two hosts have them.**
+- **`core/hookhost.py` is the same idea for hooks, and three hosts have them.**
   `boost hooks` writes Claude Code's `~/.claude/settings.json` (the default,
-  unchanged) or, behind `--host gemini`, the `~/.gemini/settings.json` that
-  Gemini CLI reads;
+  unchanged), or behind `--host` the `~/.gemini/settings.json` that Gemini CLI
+  reads or the `$CODEX_HOME/hooks.json` that Codex CLI reads;
   `core/claude_settings.py` takes `host=` throughout and asks the table for the
   differences. The `hooks` key and the `{matcher, hooks: [{type, command,
-  timeout}]}` block shape are *identical* between them, which is exactly what
-  makes the three real differences easy to ship wrong:
+  timeout}]}` block shape are *identical* across all three, which is exactly
+  what makes the real differences easy to ship wrong. Gemini's three:
   - **`timeout` units.** Claude's is **seconds**; Gemini's is **milliseconds**
     (`DEFAULT_HOOK_TIMEOUT = 6e4`, fed straight to `setTimeout`). Callers pass
     seconds and `hookhost.hook_entry` converts, so boost's `--timeout 10` is ten
@@ -700,6 +700,73 @@ nothing. Consequences for code you write:
   `EVENT_MAPPING` in the bundled JS, and an observed `migrate` run — and those
   sources are named at the top of `hookhost.py` so the next person can re-check
   them against a newer release.
+
+  **Codex's four are different differences, and two of them are not about the
+  block at all.** Measured against Codex CLI 0.156.1 on 2026-09-27, from four
+  sources named at the top of `hookhost.py` (`codex app-server
+  generate-json-schema`; `strings` over the binary the ChatGPT app ships;
+  observed `codex app-server` `hooks/list` runs; the 23 embedded draft-07
+  schemas its `schema_loader.rs` reads):
+  - **The filename is `hooks.json`**, not `settings.json` — the only host
+    where it is not, hence `hookhost.settings_file`. A `hooks` key in a
+    `settings.json` is a file Codex never opens, and nothing says so.
+  - **The user root moves.** `$CODEX_HOME` relocates it and a *relative* value
+    is honoured against the current directory — the measured grammar lives
+    once, in `mcphost.config_home`. The **project** root does not move: it is
+    the literal `<project>/.codex` whatever `CODEX_HOME` says. Because the
+    variable is ambient, `claude_settings.escaping_path` refuses a user-scope
+    write that lands outside this `$HOME` unless `--force` comes with it —
+    the same hole `test_mcp_install_sandbox_home.py` closes for `mcp add`,
+    where a sandboxed `HOME` does not move `CODEX_HOME` and a test run wrote
+    into the developer's live `~/.codex`. The sweeps in `commands/bmad.py`
+    **skip** such a host with a warning rather than inheriting the refusal:
+    an aborted `bmad on` would leave Claude without its hooks either. So
+    `boost bmad` carries its own `--force`, and needs to: `bmad doctor` reads
+    the relocated file and reports the hook that will actually run, and
+    without the flag no `bmad` command could act on what `doctor` had just
+    reported. `_autopilot_on` resolves its host list **before** writing the
+    personas, because that resolution is the only step that can refuse and
+    refusing after `write_personas` left files on disk that
+    `_set_scope_state` never recorded.
+  - **`timeout` is in seconds**, agreeing with Claude and not Gemini. (Also
+    measured: `timeoutSec` is the *wire* spelling only — as a config key it is
+    ignored and the hook silently falls back to Codex's 600-second default.)
+  - **Event names are matched exactly, and an unknown one is dropped in
+    silence.** Twelve PascalCase events; `NotARealEvent` and `sessionstart`
+    each produced no hook, no warning and no error. So Codex is
+    `strict_events` in the table and `translate` returns `None` rather than
+    taking Gemini's warn-but-add fallthrough — the "looks installed and never
+    fires" failure this module exists to prevent. `CLAUDE_TO_CODEX` maps all
+    ten Claude events explicitly; only `Notification` has no counterpart
+    (Codex *has* both sub-agent events, which is why the refusal's "has no
+    sub-agents" clause is now a per-host `no_counterpart_note` rather than one
+    hardcoded sentence).
+
+  Two more Codex facts shape the writer rather than the block. A hook's trust
+  key is positional — `<sourcePath>:<event>:<group_index>:<handler_index>` —
+  so a re-add that drops a group and appends a new one re-keys every group
+  after it and voids the user's trust grant on each (measured: an untouched
+  neighbour moved `:0:0` -> `:1:0`). `add_hook` therefore **replaces in
+  place**, for every host: shuffling a file boost does not own was never a
+  feature, only never load-bearing. And a new hook does not run until the user
+  trusts it at startup, with project scope also needing `trust_level =
+  "trusted"` — `commands/hooks.py` says so after a Codex add, because "added"
+  alone is true and useless.
+
+  **Hook stdin and stdout are schema-validated, and both schemas were read
+  rather than assumed.** Every event has an embedded pair,
+  `<event>.command.{input,output}`, each `"additionalProperties": false`. The
+  output side carries `hookSpecificOutput` -> `<Event>HookSpecificOutputWire`
+  with `additionalContext` and a required `hookEventName` pinned to that
+  event's PascalCase `const`, so `hookhost.context_output`'s Gemini-shaped
+  JSON is what Codex wants too — Claude's plain-text `SessionStart` shortcut
+  is the one thing that does not carry over. The input side uses Claude's
+  snake_case keys (`prompt`, `session_id`, `cwd`, `hook_event_name`) plus
+  Codex's own `model`/`permission_mode`/`turn_id`, so `bmad._read_hook_stdin`
+  needs no per-host branch. Both were worth measuring rather than inferring:
+  `_host_command` ends every non-Claude hook in `2>/dev/null || true`, so a
+  key spelled wrong on either side is a router that prints nothing, on every
+  prompt, with no error anywhere.
 
 `core/catalog.scan_dir` walks a tap's clone and classifies each file into one
 of the three item kinds (see Non-obvious rules above); `core/store.py` owns

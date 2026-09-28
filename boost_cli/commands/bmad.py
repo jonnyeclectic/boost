@@ -113,6 +113,10 @@ def cmd_bmad(argv) -> int:
                    help="enable the startup toggle right after install")
     p.add_argument("--plain", action="store_true",
                    help="route: print the banner as text, not as hook JSON")
+    p.add_argument("--force", action="store_true",
+                   help="reach hosts whose settings file lies outside this "
+                        "$HOME (a relocated $CODEX_HOME), which on/off/"
+                        "startup/uninstall/disable otherwise skip")
     p.add_argument("--host", metavar="H", default=None,
                    choices=(*hookhost.hosts(), "auto"),
                    help="on/startup: hosts to hook (%s; default auto: "
@@ -121,9 +125,9 @@ def cmd_bmad(argv) -> int:
     args = p.parse_args(argv)
 
     if args.action == "on":
-        return _autopilot_on(args.scope, args.host)
+        return _autopilot_on(args.scope, args.host, args.force)
     if args.action == "off":
-        return _autopilot_off(args.scope)
+        return _autopilot_off(args.scope, args.force)
     if args.action == "route":
         return _route(args.value, args.plain, args.scope, _one_host(args.host))
     if args.action == "personas":
@@ -133,13 +137,14 @@ def cmd_bmad(argv) -> int:
     if args.action == "init":
         return _init(args.modules, args.startup)
     if args.action == "startup":
-        return _startup(args.value or "status", args.scope, args.host)
+        return _startup(args.value or "status", args.scope, args.host,
+                        args.force)
     if args.action == "orient":
         return _orient(args.scope, _one_host(args.host))
     if args.action == "uninstall":
-        return _uninstall(args.scope, args.yes)
+        return _uninstall(args.scope, args.yes, args.force)
     if args.action == "disable":
-        return _disable(args.scope)
+        return _disable(args.scope, args.force)
     if args.action == "enable":
         return _enable(args.scope)
     return _doctor()  # doctor | status
@@ -187,7 +192,7 @@ def _one_host(host) -> str:
     return hookhost.CLAUDE if host in (None, "auto") else host
 
 
-def _hook_hosts(scope: str, requested=None) -> list[str]:
+def _hook_hosts(scope: str, requested=None, force: bool = False) -> list[str]:
     """Hosts to write hooks into: Claude always, others on evidence of use.
 
     Claude is unconditional. It is boost's primary host and the behaviour every
@@ -205,18 +210,53 @@ def _hook_hosts(scope: str, requested=None) -> list[str]:
 
     ``requested`` (`--host`) overrides the rule: naming one host writes that
     host only, so Claude-only no longer means hand-editing Gemini's settings
-    after every `on`.
+    after every `on`. It does **not** override the escape guard — naming a
+    host whose file lies outside this `$HOME` raises here, before the caller
+    has written anything, rather than from `add_hook` half a command later.
+    `--force` is what gets past it, on either path.
+
+    Resolved once per command and passed around, not recomputed per hook:
+    `on` installs two hooks, and a host list that decided itself twice said
+    "skipping Codex CLI" twice for one decision.
     """
     if requested not in (None, "auto"):
-        return [requested]
+        cs.refuse_escape(scope, str(requested), force=force)
+        return [str(requested)]
     chosen = [hookhost.CLAUDE]
     for host in hookhost.hosts():
         if host == hookhost.CLAUDE:
             continue
         dotdir = cs.settings_path(scope, host=host).parent
-        if shutil.which(hookhost.cli(host)) or dotdir.is_dir():
-            chosen.append(host)
+        if not (shutil.which(hookhost.cli(host)) or dotdir.is_dir()):
+            continue
+        # After the evidence check: warning about a host that was never a
+        # candidate is noise, and it is the only thing this warning is for.
+        if _skip_escaping(scope, host, force):
+            continue
+        chosen.append(host)
     return chosen
+
+
+def _skip_escaping(scope: str, host: str, force: bool = False) -> bool:
+    """True — and says so — when `host`'s file lies outside this `$HOME`.
+
+    `bmad on`/`off` sweep every host they find, so one host boost must not
+    write is a reason to leave that host alone, not to abort the sweep: an
+    unguarded `add_hook` raises and Claude's hook never gets installed either.
+
+    The deliberate case is `--force`, on `bmad` itself and not only on `boost
+    hooks`. Without it here, `bmad doctor` could report a hook in a relocated
+    `$CODEX_HOME` — it reads what will actually run — that `bmad off` then
+    refused to remove, with nothing in the command able to reconcile the two.
+    """
+    if force:
+        return False
+    target = cs.escaping_path(scope, host)
+    if target is None:
+        return False
+    out.warn("skipping %s — %s is outside this $HOME"
+             % (hookhost.label(host), target), wrap=True)
+    return True
 
 
 #: (Claude event, hook name, matcher). The matcher is Claude's own
@@ -243,11 +283,16 @@ def _host_command(host: str, command: str) -> str:
 
 
 def _add_hook_everywhere(scope: str, spec: tuple, command: str,
-                         requested=None) -> list[str]:
-    """Install one hook on every chosen host. Returns the hosts written."""
+                         hosts: list[str], force: bool = False) -> list[str]:
+    """Install one hook on each of `hosts`. Returns the ones written.
+
+    Takes the list rather than resolving it, because resolving it is where
+    the escape guard and its warning live and a caller installing two hooks
+    must make that decision once.
+    """
     event, name, matcher = spec
     written = []
-    for host in _hook_hosts(scope, requested):
+    for host in hosts:
         target = hookhost.translate(host, event)
         if target is None:
             # Refused out loud rather than dropped: a hook the user asked for
@@ -257,12 +302,13 @@ def _add_hook_everywhere(scope: str, spec: tuple, command: str,
             continue
         cs.add_hook(scope, target, name, _host_command(host, command),
                     matcher=matcher if host == hookhost.CLAUDE else None,
-                    host=host)
+                    host=host, force=force)
         written.append(host)
     return written
 
 
-def _remove_hook_everywhere(scope: str, *specs: tuple) -> int:
+def _remove_hook_everywhere(scope: str, *specs: tuple,
+                            force: bool = False) -> int:
     """Remove hooks from every host, installed or not. Returns how many were.
 
     Unlike install this does not filter on `shutil.which`: someone who removed
@@ -273,21 +319,30 @@ def _remove_hook_everywhere(scope: str, *specs: tuple) -> int:
     """
     removed = 0
     for host in hookhost.hosts():
+        if _skip_escaping(scope, host, force):
+            continue
         for event, name, _matcher in specs:
             target = hookhost.translate(host, event)
             if target is not None:
-                removed += cs.remove_hook(scope, target, name, host=host)
+                removed += cs.remove_hook(scope, target, name, host=host,
+                                          force=force)
     return removed
 
 
-def _autopilot_on(scope, requested_host=None) -> int:
+def _autopilot_on(scope, requested_host=None, force: bool = False) -> int:
     """The one command. Personas + orientation + router, in one idempotent pass.
 
     Global by default: the point of the autopilot is that a task arriving in
     *any* repo already knows which persona owns it, and per-project setup would
     make that a per-repo chore.
+
+    The host list is resolved **first**, before anything is written. It is the
+    only step that can refuse — a `--host` whose settings file lies outside
+    this `$HOME` — and refusing after `write_personas` left persona files on
+    disk that `_set_scope_state` never got to record.
     """
     scope = scope or "global"
+    chosen = _hook_hosts(scope, requested_host, force)
     agents = _agents_dir(scope)
     # Asked before writing: whether this run *creates* the directory decides
     # what running sessions can see (see the restart line below).
@@ -302,10 +357,10 @@ def _autopilot_on(scope, requested_host=None) -> int:
     launcher = shlex.quote(str(paths.launcher()))
     hosts = _add_hook_everywhere(
         scope, _ORIENT_HOOK, "%s bmad orient --scope %s" % (launcher, scope),
-        requested_host)
+        chosen, force)
     _add_hook_everywhere(scope, _ROUTE_HOOK,
                          "%s bmad route --scope %s" % (launcher, scope),
-                         requested_host)
+                         chosen, force)
     _set_scope_state(scope, autopilot=True, startup=True, personas=present,
                      enabled_at=util.now_iso())
     journal.log("bmad-autopilot", "on", scope=scope, personas=present)
@@ -335,9 +390,10 @@ def _autopilot_on(scope, requested_host=None) -> int:
     return 0
 
 
-def _autopilot_off(scope) -> int:
+def _autopilot_off(scope, force: bool = False) -> int:
     scope = scope or "global"
-    hooks_removed = _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK)
+    hooks_removed = _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK,
+                                            force=force)
     removed = core.remove_personas(_agents_dir(scope))
     _set_scope_state(scope, autopilot=False, startup=False, personas=0)
     journal.log("bmad-autopilot", "off", scope=scope, personas=len(removed))
@@ -349,6 +405,15 @@ def _autopilot_off(scope) -> int:
 
 def _read_hook_stdin() -> dict:
     """Claude Code's UserPromptSubmit payload, or {} for anything unreadable.
+
+    One reader for every host, because the payload keys are the same on all
+    three. Measured for Codex, not assumed: its
+    ``user-prompt-submit.command.input`` schema requires ``prompt``,
+    ``session_id``, ``cwd`` and ``hook_event_name`` under exactly Claude's
+    snake_case spellings (plus ``model``/``permission_mode``/``turn_id`` of
+    its own). A different spelling would have reached ``_route`` as an empty
+    prompt, classified TRIVIAL, and printed nothing — silently, because
+    ``_host_command`` ends the hook in ``2>/dev/null || true``.
 
     Accepts plain text too, so `echo "add tests for the scanner" | boost bmad
     route` works for a human debugging the routing table. (Give it a real
@@ -632,12 +697,14 @@ def _drop_retired_skills(before: dict, installed: list[str],
 
 # ----------------------------------------------------------------------- toggle
 
-def _startup(value, scope, requested_host=None) -> int:
+def _startup(value, scope, requested_host=None, force: bool = False) -> int:
     scope = scope or "project"
     if value == "on":
         cmd = "%s bmad orient --scope %s" % (
             shlex.quote(str(paths.launcher())), scope)
-        started = _add_hook_everywhere(scope, _ORIENT_HOOK, cmd, requested_host)
+        started = _add_hook_everywhere(
+            scope, _ORIENT_HOOK, cmd,
+            _hook_hosts(scope, requested_host, force), force)
         _set_scope_state(scope, startup=True)
         journal.log("bmad-startup", "on", scope=scope)
         out.ok("BMAD startup ON (%s) — new sessions get orientation" % scope)
@@ -645,7 +712,7 @@ def _startup(value, scope, requested_host=None) -> int:
             out.dim("  hook → %s" % cs.settings_path(scope, host=host))
         return 0
     if value == "off":
-        _remove_hook_everywhere(scope, _ORIENT_HOOK)
+        _remove_hook_everywhere(scope, _ORIENT_HOOK, force=force)
         _set_scope_state(scope, startup=False)
         journal.log("bmad-startup", "off", scope=scope)
         out.ok("BMAD startup OFF (%s) — skills stay installed" % scope)
@@ -692,14 +759,14 @@ def _status(scope) -> int:
 
 # ------------------------------------------------------------------- teardown
 
-def _uninstall(scope, yes) -> int:
+def _uninstall(scope, yes, force: bool = False) -> int:
     scope = scope or "project"
     if not (yes or out.confirm(
             "Remove BMAD (%s)? deletes bmad-* skills%s" % (
                 scope, " + _bmad/, _bmad-output/" if scope == "project" else ""))):
         out.info("aborted")
         return 1
-    _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK)
+    _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK, force=force)
     removed = _rm_skills(_skills_dir(scope))
     removed += len(core.remove_personas(_agents_dir(scope)))
     if scope == "project":
@@ -714,10 +781,10 @@ def _uninstall(scope, yes) -> int:
     return 0
 
 
-def _disable(scope) -> int:
+def _disable(scope, force: bool = False) -> int:
     """Quarantine: turn startup off and move skills aside (recoverable)."""
     scope = scope or "project"
-    _remove_hook_everywhere(scope, _ORIENT_HOOK)
+    _remove_hook_everywhere(scope, _ORIENT_HOOK, force=force)
     qdir = _quarantine_dir(scope)
     qdir.mkdir(parents=True, exist_ok=True)
     moved = 0
