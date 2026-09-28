@@ -185,11 +185,20 @@ class TestHelpScreen:
         # UTF-8 both ways: help prints box and arrow glyphs, and on Windows a
         # cp1252 decode of them kills subprocess's reader thread, which leaves
         # stdout None rather than raising.
+        pkg_root = Path(boost_cli.__file__).resolve().parents[1]
         env = dict(os.environ, PYTHONIOENCODING="utf-8",
-                   PYTHONPATH=str(Path(boost_cli.__file__).resolve().parents[1]))
+                   PYTHONPATH=str(pkg_root))
+        # `cwd` explicitly, because this child imports `boost_cli` for real.
+        # Under the mutation gate that import is mutmut's trampoline, which
+        # reads `[mutmut]` out of the `setup.cfg` in the *current directory*
+        # only — no upward search, no env override — so the child has to start
+        # in the tree the package lives in (`mutants/`, there) or it dies with
+        # "Could not figure out where the code to mutate is". It used to
+        # inherit that by accident from pytest's own cwd; `sandbox` now chdirs
+        # into a tempdir, so it has to be said.
         proc = subprocess.run([sys.executable, "-c", code], env=env,
                               capture_output=True, encoding="utf-8",
-                              check=True)
+                              check=True, cwd=pkg_root)
         assert "new here?" in proc.stdout
         assert proc.stdout.splitlines()[-1] == "lean"
 

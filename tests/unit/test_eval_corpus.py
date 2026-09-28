@@ -1243,12 +1243,22 @@ class TestTheCardScenarioRepairsItself:
         env = dict(os.environ, PYTHON=sys.executable)
         env.pop("FORCE", None)
         wrapper = ["bash", str(root / "scripts" / "ensure_eval_corpus.sh")]
-        first = subprocess.run(wrapper, capture_output=True, text=True, env=env)
+        # `cwd` explicitly, because this is the one subprocess in the suite
+        # that imports `boost_cli` for real. Under the mutation gate that
+        # import is mutmut's trampoline, which loads `[mutmut]` out of the
+        # `setup.cfg` in the *current directory* — so the child has to start
+        # in the tree the package lives in (`mutants/`, there) or it dies with
+        # "Could not figure out where the code to mutate is". It used to
+        # inherit that by accident from pytest's own cwd; `sandbox` now chdirs
+        # into `tmp_path`, so it has to be said.
+        first = subprocess.run(wrapper, capture_output=True, text=True,
+                               env=env, cwd=_ROOT)
         assert first.returncode == 0, first.stdout + first.stderr
         assert (paths.boost_home() / ".eval-corpus-ready").is_file()
         for child in paths.repos_dir().iterdir():
             util.rmtree(child)
-        again = subprocess.run(wrapper, capture_output=True, text=True, env=env)
+        again = subprocess.run(wrapper, capture_output=True, text=True,
+                               env=env, cwd=_ROOT)
         assert again.returncode == 0, again.stdout + again.stderr
         assert "re-tapping" in again.stderr
         assert "stale" not in again.stdout
