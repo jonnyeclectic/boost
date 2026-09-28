@@ -1,23 +1,28 @@
 # Copyright the boost contributors.
 # SPDX-License-Identifier: Apache-2.0
-"""boost hooks — scope- and host-aware management of agent hooks in settings.json.
+"""boost hooks — scope- and host-aware management of agent hooks.
 
     boost hooks add SessionStart --command 'boost bmad orient' --name bmad \
         --scope global --matcher 'startup|resume|clear'
     boost hooks add PreToolUse --host gemini -c 'boost check' -n guard
+    boost hooks add SessionStart --host codex -c 'boost bmad orient' -n bmad
     boost hooks list
     boost hooks remove --name bmad
 
-Two hosts have hooks: Claude Code (`~/.claude/settings.json`, the default and
-unchanged) and Gemini CLI (`~/.gemini/settings.json`). What differs between
-them is a pure table in core/hookhost.py; this layer only picks a host, spells
-the event the way that host spells it, and reports what it did.
+Three hosts have hooks: Claude Code (`~/.claude/settings.json`, the default and
+unchanged), Gemini CLI (`~/.gemini/settings.json`) and Codex CLI
+(`$CODEX_HOME/hooks.json` — a different filename, and a root the environment
+can move). What differs between them is a pure table in core/hookhost.py; this
+layer only picks a host, spells the event the way that host spells it, and
+reports what it did.
 
-Event names mostly differ, so `--host gemini` accepts either vocabulary and
-says which translation it applied. Two Claude events — SubagentStop and
-SubagentStart — have no Gemini counterpart at all, and are refused rather than
-silently dropped: a hook that looks installed and never fires is the failure
-mode worth being loud about.
+Event names differ, so `--host` accepts either vocabulary and says which
+translation it applied. An event with no counterpart on the named host is
+refused rather than silently dropped — SubagentStop/SubagentStart on Gemini,
+Notification on Codex — and so is an *unrecognised* name on Codex, which
+matches keys exactly and ignores what it does not know without a word. A hook
+that looks installed and never fires is the failure mode worth being loud
+about.
 
 Only hooks boost created (tagged `# boost:<name>`) are ever touched; user hooks
 are left untouched. See core/claude_settings.py.
@@ -36,7 +41,8 @@ from ..errors import BoostError
 def cmd_hooks(argv) -> int:
     p = cliparse.parser(
         prog="boost hooks",
-        description="Manage agent hooks (scope- and host-aware) in settings.json")
+        description="Manage agent hooks (scope- and host-aware) in an agent's "
+                    "settings")
     p.add_argument("action", choices=("add", "remove", "list"),
                    help="add | remove | list")
     p.add_argument("event", nargs="?",
@@ -44,7 +50,7 @@ def cmd_hooks(argv) -> int:
                         "(required for add; filters remove/list)")
     p.add_argument("--host", metavar="H", default=None,
                    choices=(*hookhost.hosts(), "auto"),
-                   help="agent CLI whose settings.json to manage: %s "
+                   help="agent CLI whose hook settings to manage: %s "
                         "(default: claude for add/remove, all of them for list)"
                         % ", ".join(hookhost.hosts()))
     p.add_argument("-c", "--command", help="command the hook runs (add)")
@@ -57,6 +63,8 @@ def cmd_hooks(argv) -> int:
                    help="hook timeout in seconds (default: 10)")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output (list)")
+    p.add_argument("--force", action="store_true",
+                   help="write even when $CODEX_HOME points outside this $HOME")
     args = p.parse_args(argv)
 
     if args.action == "list":
@@ -132,13 +140,30 @@ def _where(host: str, scope: str) -> str:
 
 
 def _native_event(host: str, event: str) -> str:
-    """`event` as `host` spells it, saying so, or refusing if it cannot."""
+    """`event` as `host` spells it, saying so, or refusing if it cannot.
+
+    The two refusals are different problems and read differently. A *known*
+    Claude event with no counterpart is a gap in the host (`hookhost` says
+    which, per host — the note used to be a hardcoded "has no sub-agents",
+    which is Gemini's gap and not Codex's). An *unrecognised* name reaching
+    here at all means a `strict_events` host, where boost refuses because the
+    host would accept the write and never fire the hook.
+    """
     native = hookhost.translate(host, event)
     if native is None:
+        known = ", ".join(hookhost.events(host))
+        if event in hookhost.unmappable(host):
+            raise BoostError(
+                "'%s' has no %s counterpart" % (event, hookhost.label(host)),
+                hint="%s; its events are: %s"
+                     % (hookhost.no_counterpart_note(host), known))
         raise BoostError(
-            "'%s' has no %s counterpart" % (event, hookhost.label(host)),
-            hint="%s has no sub-agents; its events are: %s"
-                 % (hookhost.label(host), ", ".join(hookhost.events(host))))
+            "'%s' is not a known %s hook event"
+            % (event, hookhost.event_label(host)),
+            hint="%s matches an event name exactly and ignores one it does "
+                 "not know — with no warning and no error — so boost refuses "
+                 "rather than writing a hook that never fires. Its events "
+                 "are: %s" % (hookhost.label(host), known))
     if native != event:
         out.info("Claude's '%s' is %s's '%s' — using that"
                  % (event, hookhost.event_label(host), native))
@@ -163,14 +188,36 @@ def _add(args) -> int:
                  % (event, hookhost.event_label(host)))
     snapshot = cs.add_hook(scope, event, args.name, args.command,
                            matcher=args.matcher, timeout=args.timeout,
-                           host=host)
+                           host=host, force=args.force)
     journal.log("hook-add", args.name, scope=scope, event=event, host=host)
     out.ok("added %s hook '%s' (%s) → %s"
            % (event, args.name, _where(host, scope), args.command))
     out.dim("  settings: %s" % cs.settings_path(scope, host=host))
     if snapshot is not None:
         out.dim("  backup:   %s" % snapshot)
+    for line in _after_add(host, scope):
+        out.info(line, wrap=True)
     return 0
+
+
+def _after_add(host: str, scope: str) -> list[str]:
+    """What the user still has to do before this hook can run, if anything.
+
+    Empty for Claude and Gemini, which load a hook as soon as it is written.
+    Codex gates one behind a trust grant: an untrusted hook does not run, and
+    a project-scope one is not even listed until the repo itself is trusted —
+    `hooks/list` returns an empty list with no warning at all. Saying "added"
+    and nothing else would be true and useless.
+    """
+    if host != hookhost.CODEX:
+        return []
+    lines = ["Codex reviews new hooks at startup — it will ask you to trust "
+             "this one before it runs."]
+    if scope == "project":
+        lines.append("A project hook is also ignored until the repo is "
+                     "trusted (`trust_level = \"trusted\"` in "
+                     "$CODEX_HOME/config.toml).")
+    return lines
 
 
 def _remove(args) -> int:
@@ -180,7 +227,8 @@ def _remove(args) -> int:
     scope = args.scope or "project"
     host = _write_host(args.host)
     event = _native_event(host, args.event) if args.event else None
-    removed = cs.remove_hook_by_name(scope, args.name, event, host=host)
+    removed = cs.remove_hook_by_name(scope, args.name, event, host=host,
+                                     force=args.force)
     journal.log("hook-remove", args.name, scope=scope, host=host)
     if removed:
         out.ok("removed %d hook(s) named '%s' (%s)"

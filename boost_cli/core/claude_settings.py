@@ -7,12 +7,34 @@ Claude Code reads hooks from a JSON `settings.json` at two scopes:
   project -> <project>/.claude/settings.json
 
 Gemini CLI reads the same shape from `~/.gemini/settings.json` and
-`<project>/.gemini/settings.json`. Every function here takes `host=` (default
+`<project>/.gemini/settings.json`, and Codex CLI from `$CODEX_HOME/hooks.json`
+and `<project>/.codex/hooks.json`. Every function here takes `host=` (default
 `"claude"`, so nothing that predates the second host changed) and gets the
-per-host facts — the dotdir, the event vocabulary, the timeout units — from
-`core/hookhost.py`, which is a pure table. The units are the trap worth naming
-twice: Claude's `timeout` is seconds and Gemini's is milliseconds, so callers
-pass **seconds** and `hookhost.hook_entry` converts.
+per-host facts — the dotdir, the *filename*, the event vocabulary, the timeout
+units — from `core/hookhost.py`, which is a pure table. The units are the trap
+worth naming twice: Claude's `timeout` is seconds and Gemini's is milliseconds,
+so callers pass **seconds** and `hookhost.hook_entry` converts. Codex agrees
+with Claude on seconds and disagrees on the filename.
+
+Two things are Codex's alone and both are silent when wrong:
+
+* **The user-scope root moves.** `$CODEX_HOME` relocates it, resolved through
+  `mcphost.config_home` so the measured grammar (including that a *relative*
+  value is honoured against the cwd) has exactly one copy. The **project** root
+  does not move — it is the literal `<project>/.codex` whatever the variable
+  says, the asymmetry `agents.project_dotdir` exists for. Because that root
+  comes from the ambient environment rather than from boost's `HOME`,
+  :func:`escaping_path` is the same guard `mcphost.escapes_home` is for
+  `mcp add`: a run under a sandboxed `HOME` must not write the developer's
+  real `~/.codex/hooks.json`. `force=` is the escape hatch for a genuinely
+  relocated Codex.
+* **Position is identity.** A Codex hook's trust key is
+  `<sourcePath>:<snake_case_event>:<group_index>:<handler_index>`, so
+  :func:`add_hook` replaces a same-named block *in place* rather than removing
+  it and appending — the latter re-keys every later group and voids the user's
+  trust grant on each (measured: an untouched neighbour moved `:0:0` ->
+  `:1:0`). It is the right behaviour for the other hosts too; it was just
+  never load-bearing before.
 
 boost only ever touches hooks it created. Each managed hook's command carries a
 trailing shell comment marker `# boost:<name>` so we can find and remove exactly
@@ -32,11 +54,12 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import sys
 from pathlib import Path
 
 from ..errors import BoostError
-from . import hookhost, jsonstate, output, paths, util
+from . import hookhost, jsonstate, mcphost, output, paths, scopes, util
 
 SCOPES = ("global", "project")
 MARKER = "# boost:"
@@ -50,15 +73,76 @@ KNOWN_EVENTS = hookhost.CLAUDE_EVENTS
 
 def settings_path(scope: str, project_dir: Path | None = None,
                   host: str = hookhost.CLAUDE) -> Path:
-    """Absolute path to the settings.json for a scope, on a host."""
+    """Absolute path to the hooks settings file for a scope, on a host.
+
+    The filename is the host's (`settings.json`, or Codex's `hooks.json`), and
+    for a host with a `movable_user_root` the **global** root comes from
+    `mcphost.config_home` rather than `$HOME/<dotdir>`. Project scope is always
+    `<base>/<dotdir>/<file>`: Codex reads `<project>/.codex` whatever
+    `CODEX_HOME` says, so moving it here would put the file where the CLI never
+    looks and still report success.
+
+    This is a pure path computation, deliberately: `bmad._hook_hosts` probes
+    `settings_path(...).parent.is_dir()` to decide whether a host is in use and
+    `hooks add` prints the path, so a refusal belongs at the write (see
+    :func:`escaping_path`), not here.
+    """
     dotdir = hookhost.settings_dir(host)
+    fname = hookhost.settings_file(host)
     if scope == "global":
-        return paths.home() / dotdir / "settings.json"
+        if hookhost.movable_user_root(host):
+            return Path(mcphost.config_home(
+                host, os.environ, str(paths.home()))) / fname
+        return paths.home() / dotdir / fname
     if scope == "project":
         base = Path(project_dir) if project_dir else Path.cwd()
-        return base / dotdir / "settings.json"
+        return base / dotdir / fname
     raise BoostError("unknown scope %r" % scope,
                      hint="use 'global' or 'project'")
+
+
+def escaping_path(scope: str, host: str,
+                  project_dir: Path | None = None) -> Path | None:
+    """The file this write would touch, when it is **outside** boost's `$HOME`.
+
+    `None` means contained, and is the answer for every host whose root is
+    fixed at `$HOME` and for every project-scope write — `<project>/.codex` is
+    the one scope no `$HOME` contains, so judging it here would vouch for a
+    file nothing was going to write, the same reason `pkg._register_mcp_server`
+    refuses a project scope outright rather than guessing.
+
+    `scopes.contains` resolves both sides, which is what makes it right on
+    macOS: a `$HOME` under `/var/folders` resolves to `/private/var/...`, and
+    comparing one resolved path against one nominal path never matches.
+    """
+    if scope != "global" or not hookhost.movable_user_root(host):
+        return None
+    target = settings_path(scope, project_dir, host)
+    home = paths.home()
+    return None if scopes.contains(home, target) else target
+
+
+def refuse_escape(scope: str, host: str, project_dir: Path | None = None,
+                  force: bool = False) -> None:
+    """Raise unless this write lands inside boost's `$HOME`, or `force`.
+
+    Public because a caller that writes other things first has to refuse
+    *before* them: `bmad on` installs personas and then hooks, so a refusal
+    raised from `add_hook` left persona files on disk that no state record
+    claimed. Rebuilding the message at that call site would be a second copy
+    of the one sentence that has to name the right environment variable.
+    """
+    if force:
+        return
+    target = escaping_path(scope, host, project_dir)
+    if target is None:
+        return
+    var = mcphost.config_home_env(host)
+    raise BoostError(
+        "%s would write %s, outside this $HOME (%s)"
+        % (hookhost.label(host), target, paths.home()),
+        hint="%s points there — unset it, or pass --force to write anyway"
+             % var)
 
 
 def _history_dir() -> Path:
@@ -157,35 +241,49 @@ def _hook_name(command: str) -> str | None:
 def add_hook(scope: str, event: str, name: str, command: str,
              matcher: str | None = None, timeout: int = 10,
              project_dir: Path | None = None,
-             host: str = hookhost.CLAUDE) -> Path | None:
+             host: str = hookhost.CLAUDE, force: bool = False) -> Path | None:
     """Idempotently install a boost-managed hook (replaces same-named entry).
 
     ``timeout`` is in **seconds** whatever the host; ``hookhost.hook_entry``
-    converts it to the units that host's settings.json is read in. ``event``
+    converts it to the units that host's settings file is read in. ``event``
     must already be spelled the way ``host`` spells it — translating is the
-    command layer's job, because a Claude event with no Gemini counterpart has
+    command layer's job, because an event with no counterpart on ``host`` has
     to be refused out loud rather than silently dropped here.
 
+    The replacement is **in place**: the new block goes where the old one was,
+    and only a genuinely new hook is appended. Codex keys a hook's trust grant
+    by its index (``…:<group_index>:<handler_index>``), so remove-then-append
+    re-keyed every group after ours and made the user re-trust hooks they had
+    already trusted and boost had not touched.
+
+    ``force`` waves through a write outside boost's ``$HOME`` — see
+    :func:`escaping_path`.
+
     Returns `save`'s snapshot path (or None) so the caller can tell the user
-    where the pre-edit settings.json went.
+    where the pre-edit settings went.
     """
+    refuse_escape(scope, host, project_dir, force)
     data = load(scope, project_dir, host)
     event_list = data.setdefault("hooks", {}).setdefault(event, [])
-    # Drop any prior entry we own with this name so re-adding is idempotent.
-    _strip(event_list, name)
     block: dict = {}
     if matcher:
         block["matcher"] = matcher
     block["hooks"] = [hookhost.hook_entry(host, _tag(command, name), timeout,
                                           name=name)]
-    event_list.append(block)
+    _strip(event_list, name, insert=block)
     return save(scope, data, project_dir, host)
 
 
 def remove_hook(scope: str, event: str, name: str,
                 project_dir: Path | None = None,
-                host: str = hookhost.CLAUDE) -> int:
-    """Remove boost-managed hooks matching name; return how many were removed."""
+                host: str = hookhost.CLAUDE, force: bool = False) -> int:
+    """Remove boost-managed hooks matching name; return how many were removed.
+
+    The escape guard runs before the read: ``bmad off`` must not reach the file
+    ``bmad on`` was stopped from reaching, and a no-op read-modify-write still
+    rewrites it.
+    """
+    refuse_escape(scope, host, project_dir, force)
     data = load(scope, project_dir, host)
     hooks = data.get("hooks")
     if not isinstance(hooks, dict) or event not in hooks:
@@ -203,7 +301,8 @@ def remove_hook(scope: str, event: str, name: str,
 
 def remove_hook_by_name(scope: str, name: str, event: str | None = None,
                         project_dir: Path | None = None,
-                        host: str = hookhost.CLAUDE) -> int:
+                        host: str = hookhost.CLAUDE,
+                        force: bool = False) -> int:
     """Remove boost-managed hooks named ``name``; return how many were removed.
 
     With ``event`` given, scoped to just that event, like :func:`remove_hook`.
@@ -212,19 +311,42 @@ def remove_hook_by_name(scope: str, name: str, event: str | None = None,
     (with a warning) an event name outside that table, and such a hook would
     otherwise be unremovable by name alone — only by naming its event
     positionally too.
+
+    ``force`` as in :func:`remove_hook`, and the guard runs **here** as well,
+    before the read that decides ``events``: with no ``event`` the loop below
+    may run zero times, so delegating the refusal to ``remove_hook`` would let
+    an escaping path be read and reported as "no such hook" rather than
+    refused.
     """
+    refuse_escape(scope, host, project_dir, force)
     if event is not None:
         events: tuple[str, ...] = (event,)
     else:
         present = load(scope, project_dir, host).get("hooks")
         events = tuple(present) if isinstance(present, dict) else ()
-    return sum(remove_hook(scope, ev, name, project_dir, host) for ev in events)
+    return sum(remove_hook(scope, ev, name, project_dir, host, force=True)
+               for ev in events)
 
 
-def _strip(event_list: list, name: str) -> int:
-    """Drop inner hook entries owned by `name`; prune emptied blocks. In place."""
+def _strip(event_list: list, name: str, insert: dict | None = None) -> int:
+    """Drop inner hook entries owned by `name`; prune emptied blocks. In place.
+
+    With ``insert``, that block takes the place of the *first* one we owned an
+    entry in — the vacated slot when the block empties, immediately after it
+    when another writer's entries keep it alive — and is appended when we owned
+    nothing. The slot is counted against the survivors as they are collected
+    rather than read off the input, because a block dropped ahead of ours
+    shifts every later index.
+
+    Position is a Codex hook's identity (``…:<group_index>:<handler_index>``),
+    so a re-add that removed our block and appended a new one re-keyed every
+    group after it and voided the user's trust grant on each. Right for the
+    other hosts too — shuffling a file boost does not own was never a feature,
+    only never load-bearing.
+    """
     removed = 0
-    survivors = []
+    survivors: list = []
+    at: int | None = None
     for block in event_list:
         inner = block.get("hooks") if isinstance(block, dict) else None
         if not isinstance(inner, list):
@@ -232,11 +354,16 @@ def _strip(event_list: list, name: str) -> int:
             continue
         kept = [h for h in inner
                 if _hook_name(str(h.get("command", ""))) != name]
-        removed += len(inner) - len(kept)
+        if len(kept) != len(inner):
+            removed += len(inner) - len(kept)
+            if at is None:
+                at = len(survivors) + (1 if kept else 0)
         if kept:
             block["hooks"] = kept
             survivors.append(block)
         # else: whole block owned by us and now empty -> drop it
+    if insert is not None:
+        survivors.insert(len(survivors) if at is None else at, insert)
     event_list[:] = survivors
     return removed
 

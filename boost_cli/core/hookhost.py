@@ -3,13 +3,13 @@
 """Which agent CLIs can boost install *hooks* into, and how they differ.
 
 ``boost hooks`` used to speak Claude Code and nothing else. Gemini CLI grew a
-hook system too, and — like the MCP grammars in :mod:`boost_cli.core.mcphost` —
-the two agree on the *concept* while disagreeing on details that are silent
-when you get them wrong. A hook written to the wrong schema is worse than no
-hook: it looks installed and never fires. So this is the table of those
-differences, kept pure and I/O-free (like :mod:`mcphost`) so every branch is
-unit testable and reachable by the mutation gate; the command layer does the
-file work through :mod:`boost_cli.core.claude_settings`.
+hook system, then Codex CLI grew one, and — like the MCP grammars in
+:mod:`boost_cli.core.mcphost` — they agree on the *concept* while disagreeing
+on details that are silent when you get them wrong. A hook written to the wrong
+schema is worse than no hook: it looks installed and never fires. So this is
+the table of those differences, kept pure and I/O-free (like :mod:`mcphost`) so
+every branch is unit testable and reachable by the mutation gate; the command
+layer does the file work through :mod:`boost_cli.core.claude_settings`.
 
 Everything below was established against **Gemini CLI 0.57.0**, three ways that
 agree — the bundle at ``@google/gemini-cli/bundle`` ships its own docs, and the
@@ -49,6 +49,60 @@ Claude tool names inside a matcher (``Bash`` → ``run_shell_command``) because 
 is porting an existing config; ``boost hooks add`` is not porting anything, so a
 matcher is passed through host-native — a Gemini tool matcher is a regex over
 Gemini's tool names, and a lifecycle matcher is an exact string.
+
+Codex CLI is the third host, established against **0.156.1** (2026-09-27), four
+sources that agree — none of them a guess, by the same standard the Gemini
+section above is held to:
+
+* ``codex app-server generate-json-schema`` — the generated protocol schema
+  (643 definitions, 23 of them hook types: ``HookEventName``,
+  ``ConfiguredHookHandler``, ``HookTrustStatus``, ``HookSource``,
+  ``ManagedHooksRequirements``).
+* ``strings -a -n 5 /Applications/ChatGPT.app/Contents/Resources/codex`` — the
+  ``hooks/src/**`` module names, the verbatim skip warnings and
+  ``tui/src/startup_hooks_review.rs``'s trust prompt.
+* Observed ``codex app-server`` runs over stdio JSON-RPC (``initialize`` ->
+  ``initialized`` -> ``hooks/list``) against throwaway ``CODEX_HOME``s, which
+  is what measured every "silently drops" claim below.
+* The **23 draft-07 JSON Schemas the binary embeds** for hook stdout, titled
+  ``<event>.command.{input,output}`` and loaded by
+  ``hooks/src/engine/schema_loader.rs``.
+
+Codex agrees with Claude on the two things Gemini disagrees about and disagrees
+about two of its own:
+
+* **The filename.** ``$CODEX_HOME/hooks.json``, not ``settings.json`` — hence
+  :data:`HOSTS`'s ``file`` key. A ``hooks`` key written into a Codex
+  ``settings.json`` is a file the CLI never opens. (A ``[hooks]`` table in
+  ``config.toml`` is an equivalent representation; Codex loads both when both
+  exist and warns "prefer a single representation for this layer", so boost
+  writes exactly one of them.)
+* **The user-scope root moves.** ``$CODEX_HOME`` relocates it, resolved by
+  :func:`boost_cli.core.mcphost.config_home` — the same grammar the MCP host
+  already measured, including that a *relative* value is honoured against the
+  cwd. The **project** root is the literal ``<project>/.codex`` whatever
+  ``CODEX_HOME`` says. Hence ``movable_user_root``.
+* **Timeout is seconds**, like Claude and unlike Gemini. ``timeoutSec`` is the
+  wire spelling only: as a config key it is ignored and the hook silently falls
+  back to Codex's 600-second default.
+* **Event names are Claude's, PascalCase, matched exactly** — plus
+  ``PermissionRequest``, ``PostCompact`` and ``Interrupt``, minus
+  ``Notification``. There is **no warn-but-add path here**: an unknown name
+  (``NotARealEvent``) and a wrong-case one (``sessionstart``) each produce no
+  hook, no warning and no error, measured in both JSON and TOML. That is the
+  "looks installed and never fires" failure this module exists to prevent, so
+  ``strict_events`` makes :func:`translate` refuse instead of falling through.
+
+Two Codex facts shape the *writer* rather than this table, and are stated here
+because the next person will look for them here first. A hook's identity is
+``<sourcePath>:<snake_case_event>:<group_index>:<handler_index>`` — **position
+is identity** — so a re-add must replace its block in place; removing and
+appending re-keys every later hook and voids the user's trust grant on each
+(measured: an untouched neighbour moved ``:0:0`` -> ``:1:0``). And an untrusted
+hook does not run, but it is not silent: Codex prompts at startup ("Hooks need
+review", "Trust all and continue"), and a project-scope hook additionally needs
+the repo marked ``trust_level = "trusted"`` or ``hooks/list`` returns an empty
+list with no warning at all.
 """
 from __future__ import annotations
 
@@ -58,6 +112,7 @@ from ..errors import BoostError
 
 CLAUDE = "claude"
 GEMINI = "gemini"
+CODEX = "codex"
 
 # Claude Code's hook events. Permissive by design — an unrecognised name is
 # warned about and added anyway, so a new upstream event is usable the day it
@@ -99,23 +154,75 @@ CLAUDE_TO_GEMINI: dict[str, str | None] = {
     "Notification": "Notification",
 }
 
+# Codex CLI's hook events — the `HookEventName` enum in the generated protocol
+# schema, verbatim. Nine are spelled exactly as Claude spells them; the three
+# that are not (`PermissionRequest`, `PostCompact`, `Interrupt`) have no Claude
+# counterpart and are reachable only by their own name.
+#
+# `ManagedHooksRequirements` lists all twelve but marks only ten `required`
+# (`Interrupt` and `SessionEnd` carry `default: []`). That asymmetry describes
+# what a *managed* config must enumerate, not which events fire, so it is not
+# a reason to shorten this list.
+CODEX_EVENTS = (
+    "PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact",
+    "PostCompact", "SessionStart", "SessionEnd", "UserPromptSubmit",
+    "SubagentStart", "SubagentStop", "Stop", "Interrupt",
+)
+
+#: Claude event -> Codex event, or ``None`` where there is no counterpart.
+#:
+#: Explicit like :data:`CLAUDE_TO_GEMINI`, and for the same reason: a Claude
+#: event that fell through unnoticed is what this table prevents. Nine are the
+#: identity — Codex borrowed Claude's vocabulary, including the sub-agent
+#: lifecycle Gemini has no concept of — and ``Notification`` is the one Claude
+#: event Codex does not have.
+CLAUDE_TO_CODEX: dict[str, str | None] = {
+    "SessionStart": "SessionStart",
+    "SessionEnd": "SessionEnd",
+    "UserPromptSubmit": "UserPromptSubmit",
+    "PreToolUse": "PreToolUse",
+    "PostToolUse": "PostToolUse",
+    "Stop": "Stop",
+    "SubagentStop": "SubagentStop",
+    "SubagentStart": "SubagentStart",
+    "PreCompact": "PreCompact",
+    "Notification": None,
+}
+
 # name -> host facts. Order is the order hosts are reported in.
 #
 # ``events_label`` is the *event namespace* name, not the product name: it is
 # interpolated into "not a known %s hook event", where "Claude Code hook event"
 # would read as a product rather than a vocabulary.
 #
-# ``history_prefix`` keeps the two hosts' settings snapshots apart in
+# ``history_prefix`` keeps the hosts' settings snapshots apart in
 # ``~/.boost/state/claude-settings-history/``, which names files
 # ``<prefix><scope>-<stamp>.json``. Claude's prefix is empty so its existing
 # filenames stay byte-identical.
+#
+# ``file`` is the settings filename, because Codex's is ``hooks.json`` where
+# the other two are ``settings.json``; ``movable_user_root`` says the
+# user-scope root is an environment variable away from ``$HOME/<dir>``;
+# ``strict_events`` says an unrecognised event name must be refused rather
+# than passed through; ``claude_map`` is the host's own Claude-event
+# translation table (``None`` for Claude, which needs none); and
+# ``no_counterpart_note`` is the one clause explaining *why* some Claude event
+# cannot exist here. That last one is a per-host fact and not a shared one:
+# "%s has no sub-agents" was hardcoded into the refusal in ``commands/hooks.py``
+# and is false for Codex, which has both sub-agent events and no
+# ``Notification``.
 HOSTS: dict[str, dict] = {
     CLAUDE: {
         "cli": "claude",
         "label": "Claude Code",
         "events_label": "Claude",
         "dir": ".claude",
+        "file": "settings.json",
         "events": CLAUDE_EVENTS,
+        "claude_map": None,
+        "no_counterpart_note": "",
+        "strict_events": False,
+        "movable_user_root": False,
         "timeout_scale": 1,
         "timeout_unit": "seconds",
         "history_prefix": "",
@@ -126,11 +233,32 @@ HOSTS: dict[str, dict] = {
         "label": "Gemini CLI",
         "events_label": "Gemini",
         "dir": ".gemini",
+        "file": "settings.json",
         "events": GEMINI_EVENTS,
+        "claude_map": CLAUDE_TO_GEMINI,
+        "no_counterpart_note": "Gemini CLI has no sub-agents",
+        "strict_events": False,
+        "movable_user_root": False,
         "timeout_scale": 1000,
         "timeout_unit": "milliseconds",
         "history_prefix": "gemini-",
         "names_hooks": True,
+    },
+    CODEX: {
+        "cli": "codex",
+        "label": "Codex CLI",
+        "events_label": "Codex",
+        "dir": ".codex",
+        "file": "hooks.json",
+        "events": CODEX_EVENTS,
+        "claude_map": CLAUDE_TO_CODEX,
+        "no_counterpart_note": "Codex CLI has no notification event",
+        "strict_events": True,
+        "movable_user_root": True,
+        "timeout_scale": 1,
+        "timeout_unit": "seconds",
+        "history_prefix": "codex-",
+        "names_hooks": False,
     },
 }
 
@@ -168,6 +296,52 @@ def event_label(host: str) -> str:
 def settings_dir(host: str) -> str:
     """The dotdir holding ``host``'s settings.json (``.claude`` / ``.gemini``)."""
     return str(_spec(host)["dir"])
+
+
+def settings_file(host: str) -> str:
+    """The filename inside :func:`settings_dir` that ``host`` reads hooks from.
+
+    ``settings.json`` for Claude Code and Gemini CLI; Codex reads
+    ``hooks.json`` and never opens a ``settings.json``.
+    """
+    return str(_spec(host)["file"])
+
+
+def movable_user_root(host: str) -> bool:
+    """Whether ``host``'s *user*-scope root is relocatable by the environment.
+
+    True only for Codex, whose ``$CODEX_HOME`` moves it. Project scope is never
+    movable — Codex's repo root is the literal ``<project>/.codex`` — so a
+    caller must apply this to the global scope alone.
+    """
+    return bool(_spec(host)["movable_user_root"])
+
+
+def no_counterpart_note(host: str) -> str:
+    """Why some Claude event cannot exist on ``host``, in one clause.
+
+    Empty for Claude, which is the vocabulary the others are mapped from. The
+    two answers differ in kind, which is why this is a table entry rather than
+    one sentence at the call site: Gemini's gap is the sub-agent lifecycle and
+    Codex's is ``Notification``.
+    """
+    return str(_spec(host)["no_counterpart_note"])
+
+
+def unmappable(host: str) -> tuple[str, ...]:
+    """The Claude events with no counterpart on ``host``, in Claude's order."""
+    mapping = _spec(host)["claude_map"] or {}
+    return tuple(e for e in CLAUDE_EVENTS if e in mapping and mapping[e] is None)
+
+
+def strict_events(host: str) -> bool:
+    """Whether ``host`` silently ignores an event name it does not know.
+
+    True for Codex, where an unknown or wrong-case key produces no hook, no
+    warning and no error, so boost must refuse rather than write one. False for
+    the two hosts whose warn-but-add path is safe.
+    """
+    return bool(_spec(host)["strict_events"])
 
 
 def history_prefix(host: str) -> str:
@@ -212,19 +386,26 @@ def timeout(host: str, seconds: int) -> int:
 
 
 def translate(host: str, event: str) -> str | None:
-    """``event`` spelled the way ``host`` spells it.
+    """``event`` spelled the way ``host`` spells it, or ``None`` if it cannot be.
 
-    Returns ``None`` only for an event that is known to have **no** counterpart
-    on ``host`` — the caller must say so rather than dropping the hook. An
-    event already native to ``host``, and any name neither host recognises,
-    passes through unchanged so the warn-but-add path keeps working.
+    An event already native to ``host`` passes through unchanged, and a Claude
+    event with a counterpart is mapped by the host's own ``claude_map``.
+
+    ``None`` means the caller must refuse the hook and say why, and it arrives
+    two ways. A Claude event **known** to have no counterpart maps to ``None``
+    explicitly (Gemini has no sub-agents; Codex has no ``Notification``). And
+    on a ``strict_events`` host an *unrecognised* name is ``None`` too, because
+    Codex drops such a key with no warning and no error — the warn-but-add
+    fallthrough that is right for Gemini would write a hook that never fires.
     """
-    _spec(host)
-    if host == CLAUDE or event in GEMINI_EVENTS:
+    spec = _spec(host)
+    if host == CLAUDE or event in spec["events"]:
         return event
-    if event in CLAUDE_TO_GEMINI:
-        return CLAUDE_TO_GEMINI[event]
-    return event
+    mapping = spec["claude_map"]
+    if mapping is not None and event in mapping:
+        target: str | None = mapping[event]
+        return target
+    return None if spec["strict_events"] else event
 
 
 def hook_entry(host: str, command: str, seconds: int,

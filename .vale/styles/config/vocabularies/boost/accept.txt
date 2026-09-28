@@ -70,6 +70,7 @@ GTM
 gzip
 gzipped
 hardcode
+hardcoded
 Helm
 hotspots
 Huashu
@@ -148,9 +149,11 @@ setuptools
 SHAs
 Shopify
 Sigstore
+snake_case
 Snyk
 SonarCloud
 stderr
+stdin
 Stdlib
 stdlib
 stdout

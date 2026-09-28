@@ -18,8 +18,12 @@ from boost_cli.errors import BoostError
 
 
 class TestTable:
-    def test_hosts_are_claude_then_gemini(self):
-        assert hh.hosts() == ["claude", "gemini"]
+    def test_hosts_lead_with_claude_then_gemini(self):
+        # Order is report order and the first is the default for a write, so
+        # a third host appends rather than reordering. Codex's own facts are
+        # pinned in test_hookhost_codex.py.
+        assert hh.hosts()[:2] == ["claude", "gemini"]
+        assert hh.hosts() == ["claude", "gemini", "codex"]
 
     def test_cli_names(self):
         assert hh.cli(hh.CLAUDE) == "claude"
