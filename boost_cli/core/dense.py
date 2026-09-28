@@ -615,28 +615,52 @@ def free_shard_path(prov: str | None) -> str | None:
             % (" ".join(keys), "s" if len(keys) > 1 else "", prov))
 
 
-def _restore_built_space(built: str, env: str, live: str | None) -> str | None:
+def _restore_built_space(built: str, env: str) -> str | None:
     """How to put a store's own provider back in force, or None if nothing can.
 
-    ``built`` is the provider the vectors were embedded with, ``env`` its key
-    variable and ``live`` what :func:`embed.provider` resolves to now. Two
-    shapes reach here and they take opposite commands, which is why the
-    environment is read rather than inferred from ``live`` alone:
+    ``built`` is the provider the vectors were embedded with and ``env`` its
+    key variable. Like :func:`free_shard_path` above, a pure function of the
+    environment: both facts it needs are read from ``os.environ`` through
+    :data:`embed.KEY_ENV`, so its answer cannot disagree with what
+    :func:`embed.provider` will do next.
+
+    **Two independent things can be wrong, and an earlier draft ordered them
+    instead of combining them.** The key can be gone, and a key the resolver
+    prefers can be in force; either alone, or both at once:
 
     * the key is gone — ``export`` brings it back;
-    * the key is set and another one outranks it (``provider`` prefers Voyage
-      over OpenAI) — ``unset`` the one in front is what hands the store back
-      its own provider. Telling that user to export a key they already have
-      is a no-op remedy, the same failure as the table's.
+    * something outranks it — ``unset`` what is in front hands the store back
+      its own provider;
+    * both — an OpenAI-built store with no OpenAI key on a machine holding a
+      Voyage one. Answering only the first is what the ordered version did,
+      and ``export OPENAI_API_KEY=...`` moves ``provider()`` not at all: the
+      user runs it, lands on the same reason, and is then told to unset the
+      other key. A remedy that has to be followed twice to do anything is the
+      no-op this branch exists to replace, arrived at one step at a time.
 
     None when the key is in force and nothing outranks it: whatever else is
     wrong with that store, a key is not it.
     """
-    if not os.environ.get(env):
+    gone = not os.environ.get(env)
+    # Not `live != built`: inequality says another provider won, not that it
+    # would *keep* winning once this one's key came back. A voyage-built store
+    # displaced by an OpenAI key needs the export alone, because voyage
+    # outranks openai — `unset OPENAI_API_KEY` there is a step that buys
+    # nothing. `outranking` reads the one preference order there is.
+    drop = embed.outranking(built)
+    # `unset A B` rather than one command per key: it is a single shell verb
+    # taking a list, and the surfaces that print this have one line. No
+    # `if drop else ""` guard — every branch that reads this one has already
+    # tested `drop`, so the guard was a value nothing could observe, which is
+    # a mutant no test can kill rather than a safety net.
+    unset = "`unset %s`" % " ".join(drop)
+    if gone and drop:
+        return ("set the key it was built with: `export %s=...`, then %s "
+                "puts it back in front" % (env, unset))
+    if gone:
         return "set the key it was built with: `export %s=...`" % env
-    if live in embed.KEY_ENV and live != built:
-        return "`unset %s` puts the store's own key back in front" % (
-            embed.KEY_ENV[live],)
+    if drop:
+        return "%s puts the store's own key back in front" % unset
     return None
 
 
@@ -664,9 +688,13 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
 
     The two remedies differ in their tail, because the cost differs. Under
     ``no-key`` the local model is missing, so the alternative is installing it
-    — which is what re-embeds everything. Under ``provider-changed`` the user
-    already has it, so the alternative is the explicit rebuild, and saying
-    "reinstalling the extra" to someone who has it names nothing they can do.
+    — which is what re-embeds everything. Under ``provider-changed`` a
+    provider resolved, so *some* backend is already in force and "reinstall
+    the extra" names a remedy for a state this is not. (Not "the user already
+    has the local model": the provider that displaced this store may well be
+    another key, and that machine need never have installed it.) The
+    alternative there is the explicit rebuild, named with the space it would
+    land in.
 
     ``no-store`` needs the status too. With a key in force and the local model
     installed, the table's "build it" is the paid build, while `boost
@@ -700,13 +728,14 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
         # vectors to revive; reading unknown as zero would send exactly the
         # user this branch exists to protect to the re-embed-everything answer.
         if env and (count is None or count > 0):
-            n = f"{int(count):,} vectors" if count else "vectors"
+            n = (f"{int(count):,} vector{'' if count == 1 else 's'}"
+                 if count else "vectors")
             if reason == "no-key":
                 return ("set the key it was built with: `export %s=...` — "
                         "reinstalling the extra swaps in the local model and "
                         "forces all %s to be re-embedded" % (env, n))
             live = status.get("provider")
-            restore = _restore_built_space(built, env, live)
+            restore = _restore_built_space(built, env)
             if restore:
                 # Names the live space rather than "the local model": the
                 # provider that displaced this store is whatever `provider()`

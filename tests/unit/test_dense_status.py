@@ -353,6 +353,36 @@ def test_doctor_names_the_live_provider_on_a_provider_change(boost, sandbox,
     res = boost("doctor", expect=None)
     assert res.rc == 1
     assert "live provider is openai" in res.out
+    # "live key is" named a key on the reason a *lost* key reaches, where
+    # there may be no key at all. Pinned as an absence too, because the
+    # wording it replaced still reads correctly to a reviewer.
+    assert "live key is" not in res.out
+
+
+def test_doctor_names_the_live_model_on_a_model_change(boost, sandbox, keyed):
+    """The sibling line, which said "live key is" for the same reason."""
+    _write_store(provider="voyage", model="voyage-3", dim=1024)
+    res = boost("doctor", expect=None)
+    assert res.rc == 1
+    assert "live model is voyage-4" in res.out
+    assert "live key is" not in res.out
+
+
+def test_doctor_names_both_steps_when_a_preferred_key_displaced_the_store(
+        boost, sandbox, monkeypatch):
+    """The end-to-end shape of the two-condition remedy.
+
+    An OpenAI-built store on a machine holding only a Voyage key. Doctor is
+    where a user meets this, and the export alone moves nothing.
+    """
+    monkeypatch.setenv("VOYAGE_API_KEY", "v-test")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _write_store(provider="openai", model="text-embedding-3-small", dim=1536,
+                 chunks=5)
+    res = boost("doctor", expect=None)
+    assert res.rc == 1
+    assert "export OPENAI_API_KEY=..." in res.out
+    assert "unset VOYAGE_API_KEY" in res.out
 
 
 def test_doctor_says_an_empty_store_holds_no_vectors(boost, sandbox, keyed):

@@ -243,6 +243,37 @@ class TestNoKeyReadsTheStore:
         assert "`" in dense.fix_hint("no-key", self._status())
 
 
+# built, VOYAGE_API_KEY, OPENAI_API_KEY, the provider `embed.provider`
+# then resolves to, and the whole sentence. Every combination, because
+# the defect this class was rewritten for lived in the two rows where
+# exactly one key is set: the class had a fixture deleting both and one
+# test setting both, so the only inputs `_restore_built_space` got wrong
+# were the only inputs it was never handed.
+_REBUILD = ("or `boost reindex --dense --force` re-embeds all 750,416 "
+            "vectors in %s's space")
+GRID = [
+    ("voyage", False, False, "local",
+     "set the key it was built with: `export VOYAGE_API_KEY=...` — "
+     + _REBUILD % "local"),
+    ("voyage", False, True, "openai",
+     "set the key it was built with: `export VOYAGE_API_KEY=...` — "
+     + _REBUILD % "openai"),
+    ("voyage", True, False, "voyage", None),
+    ("voyage", True, True, "voyage", None),
+    ("openai", False, False, "local",
+     "set the key it was built with: `export OPENAI_API_KEY=...` — "
+     + _REBUILD % "local"),
+    ("openai", False, True, "openai", None),
+    ("openai", True, False, "voyage",
+     "set the key it was built with: `export OPENAI_API_KEY=...`, then "
+     "`unset VOYAGE_API_KEY` puts it back in front — "
+     + _REBUILD % "voyage"),
+    ("openai", True, True, "voyage",
+     "`unset VOYAGE_API_KEY` puts the store's own key back in front — "
+     + _REBUILD % "voyage"),
+]
+
+
 class TestProviderChangedIsWhereALostKeyActuallyLands:
     """The state `no-key`'s guard was written for, reached by the real ladder.
 
@@ -361,7 +392,10 @@ class TestProviderChangedIsWhereALostKeyActuallyLands:
         # with a single chunk is still a store a key brings back.
         hint = dense.fix_hint("provider-changed", self._status(chunks=1))
         assert "`export VOYAGE_API_KEY=...`" in hint
-        assert "all 1 vectors" in hint
+        # Singular. The count is formatted, so the noun has to agree with it
+        # or the one state where the hint is cheapest to act on is the one
+        # that reads like a bug.
+        assert "all 1 vector in" in hint
 
     def test_the_whole_sentence_is_pinned(self):
         # Both halves in one assertion: the remedy, the em-dash join and the
@@ -384,6 +418,98 @@ class TestProviderChangedIsWhereALostKeyActuallyLands:
         assert any("`export VOYAGE_API_KEY=...`" in ln for ln in lines), lines
         assert any("`boost reindex --dense --force`" in ln
                    for ln in lines), lines
+
+    @pytest.mark.parametrize("cols", [40, 50, 60, 80])
+    def test_the_two_command_remedy_also_stays_runnable(self, cols,
+                                                        monkeypatch):
+        # The longest sentence this function produces, and the only one
+        # carrying three spans. Sequenced with "then" rather than packed into
+        # one span for exactly this reason — `export X=... && unset Y` is 48
+        # columns and would overflow every pane tested here whole.
+        from boost_cli.core import output as out
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        hint = dense.fix_hint("provider-changed",
+                              self._status(built_provider="openai",
+                                           provider="voyage"))
+        lines = out.wrap("semantic search is off — %s" % hint, cols - 2)
+        for span in ("`export OPENAI_API_KEY=...`", "`unset VOYAGE_API_KEY`",
+                     "`boost reindex --dense --force`"):
+            assert any(span in ln for ln in lines), (span, lines)
+
+    @pytest.mark.parametrize("built,voyage,openai,live,expected", GRID)
+    def test_every_key_combination(self, monkeypatch, built, voyage, openai,
+                                   live, expected):
+        for env, on in (("VOYAGE_API_KEY", voyage),
+                        ("OPENAI_API_KEY", openai)):
+            if on:
+                monkeypatch.setenv(env, "k")
+        st = self._status(built_provider=built, provider=live)
+        assert dense.fix_hint("provider-changed", st) == (
+            expected if expected else _table("provider-changed"))
+
+    def test_the_grid_agrees_with_the_resolver_it_describes(self,
+                                                            monkeypatch):
+        # `live` above is asserted output, so it has to be what
+        # `embed.provider()` really returns under that row's keys — otherwise
+        # the grid pins a sentence describing a machine that cannot exist.
+        # The keyless rows say "local", which is the fallback this whole
+        # branch is about, so they are checked against `local_available`
+        # rather than assumed.
+        from boost_cli.core import embed
+        for built, voyage, openai, live, _ in GRID:
+            with monkeypatch.context() as m:
+                for env, on in (("VOYAGE_API_KEY", voyage),
+                                ("OPENAI_API_KEY", openai)):
+                    m.delenv(env, raising=False)
+                    if on:
+                        m.setenv(env, "k")
+                if not (voyage or openai):
+                    m.setattr(embed, "local_available", lambda: True)
+                assert embed.provider() == live, (built, voyage, openai)
+
+    def test_a_missing_key_outranked_by_another_needs_both_steps(self,
+                                                                 monkeypatch):
+        # The regression, stated on its own. An OpenAI-built store on a
+        # machine holding only a Voyage key: the export alone moves
+        # `provider()` not at all, so a hint that stops there sends the user
+        # round the same reason a second time to be told the other half.
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        hint = dense.fix_hint("provider-changed",
+                              self._status(built_provider="openai",
+                                           provider="voyage"))
+        assert "`export OPENAI_API_KEY=...`" in hint
+        assert "`unset VOYAGE_API_KEY`" in hint
+        assert hint.index("export") < hint.index("unset")
+
+    def test_a_lower_ranked_key_in_force_is_not_unset(self, monkeypatch):
+        # The mirror, and why `live != built` is not the test. A voyage-built
+        # store displaced by an OpenAI key needs the export alone: voyage
+        # outranks openai, so the OpenAI key stops mattering the moment the
+        # Voyage one is back. Telling the user to unset it is a step that
+        # buys nothing.
+        monkeypatch.setenv("OPENAI_API_KEY", "o")
+        hint = dense.fix_hint("provider-changed",
+                              self._status(provider="openai"))
+        assert "unset" not in hint
+
+    def test_several_keys_in_front_are_named_in_one_unset(self, monkeypatch):
+        # `KEY_ENV` holds two providers today, so the *last* of them can only
+        # ever be outranked by one key and the separator in `" ".join(drop)`
+        # is never reached. It is reached the moment a third provider is
+        # added, and a `unset A` `unset B` pair — or an unseparated
+        # `unset A_KEYB_KEY` — is a line the user cannot run. Pinned against a
+        # three-provider `KEY_ENV` rather than waiting for the real one to
+        # grow, because the wrong join reads correctly until then.
+        from boost_cli.core import embed
+        monkeypatch.setattr(embed, "KEY_ENV",
+                            {"a": "A_KEY", "b": "B_KEY", "c": "C_KEY"})
+        monkeypatch.setenv("A_KEY", "x")
+        monkeypatch.setenv("B_KEY", "x")
+        monkeypatch.delenv("C_KEY", raising=False)
+        hint = dense.fix_hint("provider-changed",
+                              self._status(built_provider="c", provider="a"))
+        assert "`export C_KEY=...`" in hint
+        assert "`unset A_KEY B_KEY`" in hint
 
     def test_the_env_var_name_comes_from_embed_not_a_local_copy(self):
         from boost_cli.core import embed
