@@ -9,7 +9,7 @@ impact: Medium
 wow: 2
 order: 347
 owner: loop/sandbox-cwd
-pr: ""
+pr: "982"
 title: The sandbox fixture sandboxes every env var except the one project scope reads
 note: `make check` leaves a project install in the repo root; a later run reads it back and fails twelve unrelated tests.
 ---
