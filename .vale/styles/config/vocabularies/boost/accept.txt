@@ -39,6 +39,7 @@ CPython
 CRM
 cron
 crontab
+cwd
 cyclomatic
 dedupe
 deduped
