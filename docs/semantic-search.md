@@ -146,6 +146,12 @@ A key buys a larger embedding model. Nothing else changes.
 Set one and boost prefers it automatically, re-embedding on your next
 `boost reindex --dense`. Voyage wins if both are set.
 
+If you came in through `boost quickstart`, your vectors are the keyless local
+ones, and exporting a key is what takes them out of service — boost prefers
+the key, and nothing it has on disk is in that key's space. `boost doctor`
+names the `unset` that puts them back, so this is recoverable for free rather
+than at the price of a re-embed.
+
 Be deliberate about this, because switching providers is not free. Vectors are
 only meaningful inside the embedding space that produced them, so changing
 provider or model invalidates every vector you have and forces a full re-embed.
@@ -187,6 +193,7 @@ deliberately no vectors, for the same reason.
 | store is empty | `boost reindex --dense --force` |
 | version, model or dimension changed | `boost reindex --dense --force` |
 | provider changed, and a store built with a key | put that key back in force. The rebuild is offered as the alternative, and it re-embeds everything |
+| provider changed, and a store built by the local model | `unset` the keys in front of it. Free, and instant |
 | no key, and a store built with one | set the key it was built with. Reinstalling the extra swaps in the local model and forces a full re-embed |
 
 Those last two rows are the ones worth reading twice, and the first of them is
@@ -208,10 +215,17 @@ its own provider, and doctor names whichever applies:
 Both can be true at once, and then doctor names both steps. Running only the
 export would leave the resolver exactly where it was.
 
-A store built by the **local** model is displaced the same way — exporting a
-key on a machine whose vectors are local ones takes semantic search off — but
-doctor does not yet name the `unset` for it, and offers the rebuild instead.
-Tracked as a follow-up; `unset` is the free fix in the meantime.
+A store built by the **local** model is displaced the same way, and it is the
+case most people can reach: `boost quickstart` imports keyless vectors, so
+exporting a key for anything at all takes semantic search off. Doctor answers
+that one with the `unset` too — every key in front of local, since dropping
+`VOYAGE_API_KEY` alone falls through to `OPENAI_API_KEY`, which is no nearer
+the local space. There is no `export` half, because a local store has no key
+of its own.
+
+The one time doctor withholds that advice is when the local model is not
+installed. Dropping your only key there would leave no provider at all, so
+the rebuild really is the way out, and that is what it says.
 
 If you would rather move to the live provider than restore the old one,
 `boost reindex --dense --force` is the command, and doctor names the space it

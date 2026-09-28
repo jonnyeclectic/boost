@@ -385,6 +385,33 @@ def test_doctor_names_both_steps_when_a_preferred_key_displaced_the_store(
     assert "unset VOYAGE_API_KEY" in res.out
 
 
+def test_doctor_hands_a_local_store_the_unset_not_the_bill(
+        boost, sandbox, monkeypatch):
+    """The end-to-end shape of the direction that costs money.
+
+    A `boost quickstart` machine: keyless 384-d shards imported, then a
+    Voyage key exported for something unrelated. `embed.provider` prefers the
+    key, dense goes quiet, and the table's row would re-embed every vector
+    through the very API whose key caused it. `local_installed` is forced on
+    because CI has no `[rag]` extra and the assertion must not flip with the
+    interpreter it runs under.
+    """
+    monkeypatch.setattr(embed, "local_available", lambda: True)
+    monkeypatch.setattr(embed, "local_installed", lambda: True)
+    monkeypatch.setenv("VOYAGE_API_KEY", "v-test")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _write_store(provider="local", model="BAAI/bge-small-en-v1.5", dim=384,
+                 chunks=7)
+    res = boost("doctor", expect=None)
+    assert res.rc == 1
+    assert "unset VOYAGE_API_KEY" in res.out
+    # The two wordings that would be wrong here, pinned as absences: this
+    # store has no key of its own to export, and leading with the rebuild is
+    # the bill the whole branch exists to avoid.
+    assert "export VOYAGE_API_KEY" not in res.out
+    assert "own key" not in res.out
+
+
 def test_doctor_says_an_empty_store_holds_no_vectors(boost, sandbox, keyed):
     _write_store(chunks=0)
     res = boost("doctor", expect=None)
