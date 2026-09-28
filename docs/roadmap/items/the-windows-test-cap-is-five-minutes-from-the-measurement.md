@@ -46,9 +46,10 @@ happened: 1 timeout in 37 windows-3.14 attempts.
 45 is 1.8x the measured Windows worst case, and the six Linux/macOS cells keep the
 tight cap that is the point of having one — a genuinely hung Linux job still dies
 in 30 minutes rather than 45. It is <code>startsWith</code> rather than
-<code>== 'windows-latest'</code> because GitHub is migrating that label to
-<code>windows-2025</code>, and an equality test that silently stops matching hands
-every cell 30 again without failing anything.
+<code>== 'windows-latest'</code> because the condition and the <code>os:</code>
+list are otherwise related only by spelling: pin that list to a dated label such
+as <code>windows-2025</code> and the equality matches nothing, handing all nine
+cells 30 again without failing anything.
 <br><br>
 <b>The gate that should have caught the value did not read it.</b>
 <code>test_workflow_timeouts</code> floors every job's <code>timeout-minutes</code>

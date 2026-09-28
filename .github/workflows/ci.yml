@@ -349,9 +349,10 @@ jobs:
     # left, with a release train queued behind the re-run. Widening all nine
     # would have bought that at the price of the bound: a genuinely wedged
     # Linux job is the case a timeout exists for, and it still dies in 30.
-    # `startsWith` rather than `== 'windows-latest'` so the cap survives the
-    # runner label moving to windows-2025 — an `==` that stops matching gives
-    # every cell 30 again and says nothing.
+    # `startsWith` rather than `== 'windows-latest'` because the condition and
+    # the `os:` list below are otherwise related only by spelling: pin that
+    # list to a dated label such as windows-2025 and the equality matches
+    # nothing, handing all nine cells 30 again without failing anything.
     timeout-minutes: ${{ startsWith(matrix.os, 'windows') && 45 || 30 }}
     permissions:
       contents: write  # coverage badge push (main only)
