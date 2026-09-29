@@ -10,7 +10,7 @@ wow: 1
 note: fixed — c() takes the stream it is painting for, and err, heading and a table's header cells pass theirs, so each line is coloured by where it lands
 order: 331
 owner: loop/err-colour-stream
-pr:
+pr: 996
 title: "out.err() judges colour by stdout while writing to stderr"
 ---
 <b>Every <code>Error:</code> line asks stdout whether to colour a line it writes to stderr.</b>
