@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,11 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "eval_retrieval.py"
 
-pytestmark = pytest.mark.skipif(
+#: Guards only the classes that IMPORT the script. `TestTheMigrationIsFinished`
+#: reads the query sets as data and must not inherit it: a module-level mark
+#: made the migration ratchet vanish in any tree holding `tests/` without
+#: `scripts/`, so a new name-graded row would land green.
+_needs_script = pytest.mark.skipif(
     not _SCRIPT.exists(), reason="repo-root script not reachable")
 
 
@@ -67,6 +72,7 @@ C = _entry("code-reviewer", "owner/c", "code-reviewer/SKILL.md")
 OTHER = _entry("something-else", "owner/a", "something-else/SKILL.md")
 
 
+@_needs_script
 class TestNameGradingIsUnchanged:
     """The default must stay identical, or published numbers stop comparing."""
 
@@ -83,6 +89,7 @@ class TestNameGradingIsUnchanged:
         assert m.grade_key(row, OTHER, HASHES) not in m.relevant_keys(row)
 
 
+@_needs_script
 class TestExemplarGradingSeparatesHomonyms:
     def test_the_named_body_counts(self):
         m = _load()
@@ -118,6 +125,7 @@ class TestExemplarGradingSeparatesHomonyms:
         assert m.grade_key(row, B, HASHES) != m.grade_key(row, OTHER, HASHES)
 
 
+@_needs_script
 class TestExemplarsFailLoudly:
     """A silent fallback to name-grading would hide a typo as a passing gate."""
 
@@ -135,6 +143,7 @@ class TestExemplarsFailLoudly:
                            "exemplar": "no-separator"}, HASHES)
 
 
+@_needs_script
 class TestIdentityIsTheBodyNotTheName:
     """One de-duplication convention, whether or not the row pins an exemplar."""
 
@@ -181,6 +190,7 @@ class TestIdentityIsTheBodyNotTheName:
         assert m.grade_key(row, one, HASHES) != m.grade_key(row, two, HASHES)
 
 
+@_needs_script
 class TestTheWorksheetShowsWhatIsLeftToDecide:
     """Pinning the remaining rows is a judgment, so hand over a menu, not a task.
 
@@ -227,6 +237,7 @@ class TestTheWorksheetShowsWhatIsLeftToDecide:
         assert [r["query"] for r in rows if not r.get("exemplar")] == []
 
 
+@_needs_script
 class TestDedupeKeepsTheBestRank:
     def test_repeats_collapse_to_first_occurrence(self):
         m = _load()
@@ -242,37 +253,71 @@ class TestDedupeKeepsTheBestRank:
         assert len(keys) == 2
 
 
-class TestTheMigrationIsFinished:
-    """Every natural-language row now pins its exemplars, and must keep doing so.
+_EVAL = _ROOT / "tests" / "eval"
+#: Both shipped query sets. `golden-natural.jsonl` migrated in two steps —
+#: 28 of 50 rows in #412, the last 22 in #434 — and `golden.jsonl`, the one
+#: the REQUIRED gate scores, finished here. Naming both means a new set added
+#: name-graded is a failure rather than an omission.
+_SETS = ("golden.jsonl", "golden-natural.jsonl")
 
-    The mechanism shipped in #412 with 28 of 50 rows migrated — the ones whose
-    exemplar was a lookup rather than a judgment. The remaining 22 were left
-    open deliberately, because choosing which of 13 `code-reviewer`s a question
-    refers to is a statement about intent. They are decided now, under a rule
-    stated in the file's own header, and this is the ratchet that stops a new
-    row arriving name-graded and quietly re-opening the hole.
+
+def _taps_in(path: Path) -> set[str]:
+    """The `owner/repo` of every pinned row in a taps file."""
+    out = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if parts and not parts[0].startswith("#"):
+            out.add(parts[0])
+    return out
+
+
+@pytest.mark.parametrize("which", _SETS)
+class TestTheMigrationIsFinished:
+    """Every row of every shipped set pins its exemplars, and must keep doing so.
+
+    The mechanism shipped in #412 with 28 of 50 natural-language rows migrated
+    — the ones whose exemplar was a lookup rather than a judgment. The
+    remaining 22 were left open deliberately, because choosing which of 13
+    `code-reviewer`s a question refers to is a statement about intent; #434
+    made those 22 calls and closed that set.
+
+    `golden.jsonl` was the larger hole and the one that mattered most: it is
+    the set the REQUIRED gate scores, and all 91 of its rows were name-graded,
+    so every published floor was an upper bound. Its 20 ambiguous rows are
+    decided now under the rule in the file's own header, and this is the
+    ratchet that stops a new row arriving name-graded and quietly re-opening
+    the hole.
+
+    `prepare_row` raises on a spec that resolves to nothing, but only for a key
+    that is THERE — a row with no `exemplar` at all falls back to name grading
+    without a word, which is exactly how the defect would return one row at a
+    time. That silence is what this class covers.
     """
 
-    _GOLDEN = _ROOT / "tests" / "eval" / "golden-natural.jsonl"
+    def _path(self, which):
+        return _EVAL / which
 
-    def _rows(self):
+    def _rows(self, which):
         return [json.loads(ln) for ln in
-                self._GOLDEN.read_text(encoding="utf-8").splitlines()
+                self._path(which).read_text(encoding="utf-8").splitlines()
                 if ln.strip() and not ln.lstrip().startswith("#")]
 
-    @pytest.mark.skipif(not _GOLDEN.exists(), reason="query set not reachable")
-    def test_every_row_pins_an_exemplar(self):
-        missing = [r["query"] for r in self._rows() if not r.get("exemplar")]
-        assert missing == [], (
-            "%d natural-language rows are still graded by name — run "
-            "`eval_retrieval.py --golden tests/eval/golden-natural.jsonl "
-            "--worksheet` for the candidates: %s" % (len(missing), missing[:3]))
+    @pytest.fixture(autouse=True)
+    def _skip_if_absent(self, which):
+        if not self._path(which).exists():
+            pytest.skip("query set not reachable")
 
-    @pytest.mark.skipif(not _GOLDEN.exists(), reason="query set not reachable")
-    def test_every_exemplar_is_well_formed(self):
+    def test_every_row_pins_an_exemplar(self, which):
+        missing = [r["query"] for r in self._rows(which) if not r.get("exemplar")]
+        assert missing == [], (
+            "%d rows of %s are still graded by name — run "
+            "`eval_retrieval.py --golden tests/eval/%s --worksheet` for the "
+            "candidates: %s" % (len(missing), which, which, missing[:3]))
+
+    def test_every_exemplar_is_well_formed(self, which):
         # Resolvability needs a materialised corpus and is enforced at run time
         # by prepare_row; the shape can be checked anywhere, so it is.
-        for row in self._rows():
+        for row in self._rows(which):
             spec = row["exemplar"]
             specs = [spec] if isinstance(spec, str) else spec
             assert specs, row["query"]
@@ -281,8 +326,34 @@ class TestTheMigrationIsFinished:
                 tap, path = one.split("::", 1)
                 assert "/" in tap and path, (row["query"], one)
 
-    @pytest.mark.skipif(not _GOLDEN.exists(), reason="query set not reachable")
-    def test_no_exemplar_is_a_localised_copy(self):
+    def test_every_exemplar_names_a_tapped_repo(self, which):
+        """The corpus coupling, checked before anything is cloned.
+
+        A pin is `tap::skill_md`, so a row can only be scored over a corpus
+        holding that tap. `prepare_row` says so at run time, but only after
+        `eval_corpus.py` has cloned twenty repositories — and in
+        `eval-corpus-refresh.yml` the failure lands in the re-baseline step,
+        which is not `continue-on-error`, so the monthly pull request never
+        opens. Reading the two files catches a pin naming an untapped repo in
+        milliseconds instead, at the point someone wrote it.
+
+        Raw-file parsing on both sides on purpose, the way
+        `test_corpus_prose.py` does it: a bug in the code that reads taps.txt
+        must not be able to agree with itself.
+        """
+        taps = _taps_in(_EVAL / "taps.txt")
+        assert taps, "taps.txt parsed to nothing"
+        stray = sorted({
+            one.split("::", 1)[0]
+            for row in self._rows(which)
+            for one in ([row["exemplar"]] if isinstance(row["exemplar"], str)
+                        else row["exemplar"])
+        } - taps)
+        assert stray == [], (
+            "%s pins exemplars in repos tests/eval/taps.txt does not tap, so "
+            "the required gate cannot resolve them: %s" % (which, stray))
+
+    def test_no_exemplar_is_a_localised_copy(self, which):
         """The stated rule, enforced rather than trusted.
 
         The queries are English. `affaan-m/ECC` ships `code-reviewer` and
@@ -290,17 +361,26 @@ class TestTheMigrationIsFinished:
         who asked in English is not served by the Turkish one. Byte-identical
         mirrors still count automatically — they are one content class — so
         this excludes only genuine translations.
+
+        Matched by SHAPE, not by a locale list. A hardcoded seven was both
+        asymmetric — two locales were checked at any path depth and five only
+        at the root of the spec — and blind to the eighth language upstream
+        adds next. Any `docs/<tag>/` segment whose tag looks like a BCP-47
+        code (`tr`, `ja-JP`, `pt-BR`) is refused wherever it appears; a real
+        English path segment such as `docs/api/` does not match, because the
+        pattern requires the two-letter-then-optional-region shape.
         """
-        for row in self._rows():
+        locale = re.compile(r"(?:^|/)docs/[a-z]{2}(?:-[A-Za-z]{2,4})?/")
+        for row in self._rows(which):
             spec = row["exemplar"]
             for one in ([spec] if isinstance(spec, str) else spec):
-                assert "/docs/es/" not in one and "::docs/es/" not in one, one
-                assert "/docs/ja-JP/" not in one and "::docs/ja-JP/" not in one, one
-                assert "::docs/zh-CN/" not in one and "::docs/zh-TW/" not in one, one
-                assert "::docs/ko-KR/" not in one and "::docs/pt-BR/" not in one, one
-                assert "::docs/tr/" not in one, one
+                path = one.split("::", 1)[1] if "::" in one else one
+                assert not locale.search(path), (
+                    "%s pins a localised copy; the queries are English: %s"
+                    % (which, one))
 
 
+@_needs_script
 class TestASupersededBaselineIsDropped:
     """A baseline key is `name@digest`, so an edited query set orphans the old one.
 
