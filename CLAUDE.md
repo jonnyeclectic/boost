@@ -104,8 +104,8 @@ time and never ranks it first scores recall@10 1.000 with hit@1 0.000, and
 passed. The golden set grades real catalog items **by the body they name**, so it
 needs a corpus: `scripts/ensure_eval_corpus.sh` first taps the pinned repo list in
 `tests/eval/taps.txt` (`boost tap --defaults` is NOT enough, it omits every
-rule/workflow repo). The list is **twenty** repos and **none of them is
-droppable**: the first six are the set the name-graded floors were first
+rule/workflow repo). The list is **twenty** repos and **not one of them
+can be dropped**: the first six are the set the name-graded floors were first
 measured on, and the `# --- scale` divider below them no longer separates
 "targets" from "filler" — `golden.jsonl` pins exemplars into two repos below
 it and `golden-natural.jsonl` into five, so no proper subset of the file can

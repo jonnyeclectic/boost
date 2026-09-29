@@ -131,7 +131,7 @@ LessUp/awesome-cursorrules-zh           ce39351450c4720a11c7edeadaef26d60c5c02e7
 
 # --- scale: outside the six the floors were first measured on. NOT a
 #     "no golden targets" line -- golden.jsonl pins two repos below it and
-#     golden-natural.jsonl pins five, so this file has no droppable tail ---
+#     golden-natural.jsonl pins five, so this file has no tail that can be dropped ---
 aliarghyani/vue-cursor-rules            92609798e192312ce16edb78aa5424a8caaa415b    14    14
 affaan-m/ECC                            ca185ef5f7667078a1e70a763bd3a9c71c48acf0  1621  1588
 BagelHole/DevOps-Security-Agent-Skills  0365f57a079b1332f95cf26e31dd2d5332a8399f   163   163
