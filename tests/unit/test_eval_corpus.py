@@ -584,15 +584,24 @@ class TestTheCorpusSizeBlock:
         assert "next:" not in block
 
     def test_the_rows_above_the_scale_divider_are_totalled_on_their_own(self):
-        # Those rows hold every golden target; CLAUDE.md and the Makefile quote
-        # their total beside the scores measured over them alone.
+        """CLAUDE.md and the Makefile quote that total beside the scores
+        measured over those rows alone.
+
+        The label is `sixrepo:`, not `targets:`, and the wording is load
+        bearing rather than cosmetic: both shipped query sets pin exemplars
+        BELOW the divider, so the rows above it are a historical baseline and
+        not a subset that can still score anything. Calling them "targets"
+        read as a trimming recipe that now exits non-zero.
+        """
         m = _load()
         text = self._text([("a/one", 30), ("b/two", 10), ("c/three", 60)],
                           divider_after=1)
         counts = {"a/one": 30, "b/two": 10, "c/three": 60}
         block = self._block(m.relock_text(text, counts))
         assert "100 entries in 3 repos" in block
-        assert "40 entries in the 2 repos above the scale divider" in block
+        assert "sixrepo: 40 entries in the 2 repos above the scale" in block
+        assert "not a subset that scores" in block
+        assert "targets:" not in block
 
     def test_without_a_divider_there_is_no_target_line(self):
         m = _load()
@@ -1138,12 +1147,13 @@ class TestTheFloorBand:
 class TestTheNaturalSetIsMeasured:
     """card: exemplar-graded-golden-set-runs-in-no-gate.
 
-    golden-natural.jsonl is the one set graded by exemplar on every row, and
-    no Makefile target or workflow passed `--golden` — so the only way its
-    numbers were ever produced was a person typing the command.
+    golden-natural.jsonl was the first set graded by exemplar on every row
+    (#412 + #434; golden.jsonl caught up in #994), and no Makefile target or
+    workflow passed `--golden` — so the only way its numbers were ever
+    produced was a person typing the command.
 
     It runs ADVISORY (continue-on-error in CI, outside `make check`), and the
-    reason is a count of queries. The keyword gate's recall floor sits five
+    reason is a count of queries. The keyword gate's recall floor sits six
     queries of 91 under its measurement; a natural-set hit@1 floor ~10% under
     its row is one query under it (7 of 50 against 8, at the pins the floors
     were set on) — one query of slack. The refresh's

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,11 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "eval_retrieval.py"
 
-pytestmark = pytest.mark.skipif(
+#: Guards only the classes that IMPORT the script. `TestTheMigrationIsFinished`
+#: reads the query sets as data and must not inherit it: a module-level mark
+#: made the migration ratchet vanish in any tree holding `tests/` without
+#: `scripts/`, so a new name-graded row would land green.
+_needs_script = pytest.mark.skipif(
     not _SCRIPT.exists(), reason="repo-root script not reachable")
 
 
@@ -67,6 +72,7 @@ C = _entry("code-reviewer", "owner/c", "code-reviewer/SKILL.md")
 OTHER = _entry("something-else", "owner/a", "something-else/SKILL.md")
 
 
+@_needs_script
 class TestNameGradingIsUnchanged:
     """The default must stay identical, or published numbers stop comparing."""
 
@@ -83,6 +89,7 @@ class TestNameGradingIsUnchanged:
         assert m.grade_key(row, OTHER, HASHES) not in m.relevant_keys(row)
 
 
+@_needs_script
 class TestExemplarGradingSeparatesHomonyms:
     def test_the_named_body_counts(self):
         m = _load()
@@ -118,6 +125,7 @@ class TestExemplarGradingSeparatesHomonyms:
         assert m.grade_key(row, B, HASHES) != m.grade_key(row, OTHER, HASHES)
 
 
+@_needs_script
 class TestExemplarsFailLoudly:
     """A silent fallback to name-grading would hide a typo as a passing gate."""
 
@@ -135,6 +143,7 @@ class TestExemplarsFailLoudly:
                            "exemplar": "no-separator"}, HASHES)
 
 
+@_needs_script
 class TestIdentityIsTheBodyNotTheName:
     """One de-duplication convention, whether or not the row pins an exemplar."""
 
@@ -181,6 +190,7 @@ class TestIdentityIsTheBodyNotTheName:
         assert m.grade_key(row, one, HASHES) != m.grade_key(row, two, HASHES)
 
 
+@_needs_script
 class TestTheWorksheetShowsWhatIsLeftToDecide:
     """Pinning the remaining rows is a judgment, so hand over a menu, not a task.
 
@@ -227,6 +237,7 @@ class TestTheWorksheetShowsWhatIsLeftToDecide:
         assert [r["query"] for r in rows if not r.get("exemplar")] == []
 
 
+@_needs_script
 class TestDedupeKeepsTheBestRank:
     def test_repeats_collapse_to_first_occurrence(self):
         m = _load()
@@ -243,9 +254,10 @@ class TestDedupeKeepsTheBestRank:
 
 
 _EVAL = _ROOT / "tests" / "eval"
-#: Both shipped query sets. `golden-natural.jsonl` finished migrating in #412;
-#: `golden.jsonl` — the one the REQUIRED gate scores — finished here. Naming
-#: both means a new set added name-graded is a failure rather than an omission.
+#: Both shipped query sets. `golden-natural.jsonl` migrated in two steps —
+#: 28 of 50 rows in #412, the last 22 in #434 — and `golden.jsonl`, the one
+#: the REQUIRED gate scores, finished here. Naming both means a new set added
+#: name-graded is a failure rather than an omission.
 _SETS = ("golden.jsonl", "golden-natural.jsonl")
 
 
@@ -266,7 +278,8 @@ class TestTheMigrationIsFinished:
     The mechanism shipped in #412 with 28 of 50 natural-language rows migrated
     — the ones whose exemplar was a lookup rather than a judgment. The
     remaining 22 were left open deliberately, because choosing which of 13
-    `code-reviewer`s a question refers to is a statement about intent.
+    `code-reviewer`s a question refers to is a statement about intent; #434
+    made those 22 calls and closed that set.
 
     `golden.jsonl` was the larger hole and the one that mattered most: it is
     the set the REQUIRED gate scores, and all 91 of its rows were name-graded,
@@ -348,17 +361,26 @@ class TestTheMigrationIsFinished:
         who asked in English is not served by the Turkish one. Byte-identical
         mirrors still count automatically — they are one content class — so
         this excludes only genuine translations.
+
+        Matched by SHAPE, not by a locale list. A hardcoded seven was both
+        asymmetric — two locales were checked at any path depth and five only
+        at the root of the spec — and blind to the eighth language upstream
+        adds next. Any `docs/<tag>/` segment whose tag looks like a BCP-47
+        code (`tr`, `ja-JP`, `pt-BR`) is refused wherever it appears; a real
+        English path segment such as `docs/api/` does not match, because the
+        pattern requires the two-letter-then-optional-region shape.
         """
+        locale = re.compile(r"(?:^|/)docs/[a-z]{2}(?:-[A-Za-z]{2,4})?/")
         for row in self._rows(which):
             spec = row["exemplar"]
             for one in ([spec] if isinstance(spec, str) else spec):
-                assert "/docs/es/" not in one and "::docs/es/" not in one, one
-                assert "/docs/ja-JP/" not in one and "::docs/ja-JP/" not in one, one
-                assert "::docs/zh-CN/" not in one and "::docs/zh-TW/" not in one, one
-                assert "::docs/ko-KR/" not in one and "::docs/pt-BR/" not in one, one
-                assert "::docs/tr/" not in one, one
+                path = one.split("::", 1)[1] if "::" in one else one
+                assert not locale.search(path), (
+                    "%s pins a localised copy; the queries are English: %s"
+                    % (which, one))
 
 
+@_needs_script
 class TestASupersededBaselineIsDropped:
     """A baseline key is `name@digest`, so an edited query set orphans the old one.
 

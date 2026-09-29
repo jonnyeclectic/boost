@@ -326,7 +326,8 @@
         regression &mdash; it is what users already had, now visible.</p>
 
       <h3>2 &middot; The score was also about the shape of the question</h3>
-      <p>The keyword golden set grades catalog items <b>by name</b>, so its queries carry the
+      <p>The keyword golden set was graded <b>by name</b> when these runs were made &mdash; both
+        shipped sets now pin an exemplar body on every row &mdash; and its queries carry the
         vocabulary of the thing they are looking for. That is BM25's home ground. The 50 queries in
         <code>golden-natural.jsonl</code> describe a <em>problem</em> instead &mdash; each written
         from its target's own description, with the target's distinctive name tokens deliberately
@@ -341,7 +342,8 @@
         query sets, <code>k=10</code>. <b>Voyage is absent: it needs an API key, and these runs were
         keyless</b>, which is the configuration most users are in.</p>
 
-      <p><b>Keyword golden set</b> &mdash; 91 queries that grade items by name:</p>
+      <p><b>Keyword golden set</b> &mdash; 91 queries, graded by name at the pins these runs
+        used; every row pins an exemplar body today:</p>
       <table class="contract">
         <thead><tr><th>engine</th><th>recall@10</th><th>hit@1</th><th>MRR</th><th>nDCG@10</th></tr></thead>
         <tbody>
@@ -397,8 +399,10 @@
     <div class="wrap">
       <span class="eyebrow">Sequence · the required gate</span>
       <h2 class="sec-title">How Tier 1 runs on every PR</h2>
-      <p class="lead" style="margin-top:20px">The golden set grades items <em>by name</em>, so the
-        repos that hold them must be present. CI taps a pinned corpus first, builds the BM25 index,
+      <p class="lead" style="margin-top:20px">Every golden row pins the <em>body</em> it was
+        written about, as <code>tap::skill_md</code>, so the repos that hold them must be present
+        &mdash; a pin the corpus cannot resolve halts the gate and names the missing spec,
+        rather than quietly scoring a smaller set. CI taps a pinned corpus first, builds the BM25 index,
         scores the golden set, and floors recall — all offline after the tap, all deterministic.</p>
 
       <div class="diagram">

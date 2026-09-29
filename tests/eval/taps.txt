@@ -16,7 +16,8 @@
 #
 # --- corpus size: written from the rows below by eval_corpus.py ---
 # total:   10,731 entries in 20 repos
-# targets: 921 entries in the 6 repos above the scale divider
+# sixrepo: 921 entries in the 6 repos above the scale
+#          divider -- a historical baseline, not a subset that scores
 # largest: sickn33/antigravity-awesome-skills, 6,634 entries (61.8%)
 # next:    affaan-m/ECC, 1,621 entries (15.1%)
 # content: 5,938 distinct items; sickn33/antigravity-awesome-skills holds 35.7%
@@ -42,11 +43,15 @@
 # the Makefile, docs/eval.html) are checked against these rows and
 # baseline.json by tests/unit/test_corpus_prose.py.
 #
-# The golden set (golden.jsonl) grades real catalog items by NAME, so the gate
-# needs the repos that actually contain those items tapped before it can score.
-# The first six repos are the minimal set covering all 77 golden targets across
-# the skill / rule / workflow kinds. The rest exist to make the corpus a
-# realistic size, which is the whole point: when #372 grew the list from six
+# The golden set (golden.jsonl) grades real catalog items by the BODY each row
+# pins, so the gate needs the repos that actually contain those bodies tapped
+# before it can score. The first six repos are the minimal set the name-graded
+# floors were measured on, and that is now a historical fact rather than a
+# trimming recipe: both shipped sets pin exemplars into repos BELOW the scale
+# divider as well (golden.jsonl into two, golden-natural.jsonl into five), so
+# no proper subset of this file can score either set. See "the divider is not
+# a target list" below. The rest exist to make the corpus a realistic size,
+# which is the whole point: when #372 grew the list from six
 # repos to twenty, BM25 went from recall@10 1.000 / hit@1 0.791 to 0.863 /
 # 0.473. A user with twenty taps gets the second number, so flooring against
 # the first was measuring the corpus rather than the retrieval.
@@ -80,13 +85,21 @@
 #   minus LessUp (targets)    9,682  0.676 / 0.374 / 0.483 / 0.523
 #   floors                           0.780 / 0.400 / 0.520 / 0.580
 #
-# Losing a *scale* repo makes the gate EASIER: every metric rises and the check
-# goes green having measured a third of the intended corpus. Losing a repo that
-# holds golden targets fails all four floors, indistinguishably from "this pull
-# request broke retrieval". So skipping whichever repos are missing today is
-# unsafe in both directions — the counts are what make the first case detectable
-# before anything is scored, and an unreachable repo now exits 75 (EX_TEMPFAIL)
-# so a third party's outage does not read as a regression here.
+# That table is HISTORICAL -- it was measured when every row was graded by name
+# and any subset of this file could still be scored. Today a missing repo that
+# holds a pin is a SystemExit out of prepare_row before a single query runs, so
+# the "minus sickn33" and "minus that and ECC" rows are no longer reproducible
+# with the shipped golden.jsonl. What the table still shows is the direction,
+# and it is the reason the counts exist: losing a *scale* repo that holds no
+# pin makes the gate EASIER -- every metric rises and the check goes green
+# having measured a third of the intended corpus. Losing a repo that holds
+# golden targets used to fail all four floors, indistinguishably from "this
+# pull request broke retrieval"; it now fails loudly by name instead, which is
+# the one improvement pinning bought here. So skipping whichever repos are
+# missing today is unsafe in both directions — the counts are what make the
+# first case detectable before anything is scored, and an unreachable repo
+# now exits 75 (EX_TEMPFAIL) so a third party's outage does not read as a
+# regression here.
 #
 # The same table is why the concentration is not fixed by trimming: dropping
 # the big repo raises every number. Diluting it means adding breadth. The
@@ -116,7 +129,9 @@ Aaronontheweb/dotnet-cursor-rules       9be2d201482bdafca8c687359f0ef0a71895d7af
 ChrisWiles/claude-code-showcase         a95518f0cb67e86230119da40429169bc4c35a6f    14    14
 LessUp/awesome-cursorrules-zh           ce39351450c4720a11c7edeadaef26d60c5c02e7   470   470
 
-# --- scale: not golden targets, present so the corpus is a realistic size ---
+# --- scale: outside the six the floors were first measured on. NOT a
+#     "no golden targets" line -- golden.jsonl pins two repos below it and
+#     golden-natural.jsonl pins five, so this file has no droppable tail ---
 aliarghyani/vue-cursor-rules            92609798e192312ce16edb78aa5424a8caaa415b    14    14
 affaan-m/ECC                            ca185ef5f7667078a1e70a763bd3a9c71c48acf0  1621  1588
 BagelHole/DevOps-Security-Agent-Skills  0365f57a079b1332f95cf26e31dd2d5332a8399f   163   163

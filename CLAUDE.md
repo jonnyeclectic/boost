@@ -103,10 +103,13 @@ hole rather than a simplification: a ranker that finds the right answer every
 time and never ranks it first scores recall@10 1.000 with hit@1 0.000, and
 passed. The golden set grades real catalog items **by the body they name**, so it
 needs a corpus: `scripts/ensure_eval_corpus.sh` first taps the pinned repo list in
-`tests/eval/taps.txt` (the minimal set covering all golden targets — `boost tap
---defaults` is NOT enough, it omits every rule/workflow repo). The list is
-**twenty** repos: the first six cover every golden target, the rest exist so the
-corpus is a realistic size. That matters more than it sounds — over the six
+`tests/eval/taps.txt` (`boost tap --defaults` is NOT enough, it omits every
+rule/workflow repo). The list is **twenty** repos and **none of them is
+droppable**: the first six are the set the name-graded floors were first
+measured on, and the `# --- scale` divider below them no longer separates
+"targets" from "filler" — `golden.jsonl` pins exemplars into two repos below
+it and `golden-natural.jsonl` into five, so no proper subset of the file can
+score either set. The rest exist so the corpus is a realistic size. That matters more than it sounds — over the six
 alone (921 entries at the current pins) BM25 scored 0.989 / 0.769 / 0.848 /
 0.880, and over the twenty (10,731) it scores **0.846 / 0.484 / 0.607 / 0.659**
 (what `tests/eval/baseline.json` records), so three of the four old floors fail
@@ -124,9 +127,13 @@ one query of recall@10. That is where the old "recall is 1.000" folklore came
 from; the six-repo corpus measured 0.978 at the pins of the time once mirrors
 collapse and homonyms do not. Relevance is decided by the content class of the
 bodies a row pins in its `exemplar`, or by name for a row that pins none. The
-two conventions coexist so a set can migrate a row at a time; **`golden.jsonl`
-has finished migrating** — all 91 rows are pinned — while
-`golden-natural.jsonl` is half pinned, so the name path is live and stays.
+two conventions coexist so a set can migrate a row at a time, and **both
+shipped sets have now finished** — `golden.jsonl` 91/91 here, and
+`golden-natural.jsonl` 50/50 back in #434. So no shipped set exercises the
+name path any more: it is kept for a set added outside this repo, and unit
+tests (`TestNameGradingIsUnchanged`) are the only thing covering it. Don't
+delete it on the strength of the coverage report, and don't claim a shipped
+set still uses it.
 
 The floors are fixed absolute values, and the uniform "~10%" margin this file
 claimed from 170d52c0 (2026-07-31) onward was never one of them. They sit under

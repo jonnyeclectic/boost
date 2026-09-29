@@ -11,7 +11,7 @@ note: CLAUDE.md presents exemplar pinning as a live migration — "relevance is 
 order: 214
 owner: loop/gated-golden-exemplars
 pr: "994"
-title: The exemplar mechanism was applied to the ungated set only: golden.jsonl is 0/91 pinned, and 10 of its 43 hit@1 credits are on names the metric cannot adjudicate
+title: The exemplar mechanism was applied to the ungated set only: golden.jsonl is 0/91 pinned, and 10 of its 44 hit@1 credits are on names the metric cannot adjudicate
 ---
 <b>Measured.</b> On the 10,731-entry corpus that committed <code>taps.txt</code> materializes today, <code>tests/eval/golden.jsonl</code> — the only set the required <code>eval</code> gate floors — is 0/91 exemplar-pinned while the ungated <code>golden-natural.jsonl</code> is 50/50; 10 of its 44 hit@1 credits (22.7%) are awarded on a name that resolves to more than one distinct body, and the hit@1 floor's entire headroom is 7.60 queries, smaller than the 10 credits the metric cannot adjudicate.
 
@@ -19,7 +19,7 @@ title: The exemplar mechanism was applied to the ungated set only: golden.jsonl 
 
 <code>cd &lt;repo&gt;</code><br>
 <code>export BOOST_HOME=$TMPDIR/eval-home</code><br>
-<code># 0. confirm which corpus you are on (expect 10152)</code><br>
+<code># 0. confirm which corpus you are on (expect 10731)</code><br>
 <code>.venv/bin/python -c "import sys;sys.path.insert(0,'.');from boost_cli.core import catalog;print(len(catalog.all_entries()))"; echo EXIT=$?</code><br>
 <code># 1. exemplar counts per set</code><br>
 <code>python3 -c "</code><br>
@@ -52,7 +52,7 @@ Nothing else in the finding is wrong. 0/91 vs 50/50, the 27 undecided rows / 62 
 
 5. NOT A DEFECT IN THE HARNESS: <code>exemplar_worksheet</code> (scripts/eval_retrieval.py:219) and exemplar grading work correctly and fail loudly on a bad pin.
 
-<b>Why it is worth doing.</b> golden.jsonl is the set the required <code>eval</code> gate floors, so it is the only one that can block a merge. 23.3% of its hit@1 credits are awarded on a name that maps to several genuinely different skills, and the floor's whole margin (6.60 queries) is narrower than the un-adjudicated credit count (10). That does not mean retrieval is worse than reported — the realistic shift is 1-2 queries — it means the published margin cannot be read as precision about the intended skill, so anyone tuning blend weights or pool depth against this gate inherits an unquantified slack.
+<b>Why it is worth doing.</b> golden.jsonl is the set the required <code>eval</code> gate floors, so it is the only one that can block a merge. 22.7% of its hit@1 credits are awarded on a name that maps to several genuinely different skills, and the floor's whole margin (7.60 queries) is narrower than the un-adjudicated credit count (10). That does not mean retrieval is worse than reported — the realistic shift is 1-2 queries — it means the published margin cannot be read as precision about the intended skill, so anyone tuning blend weights or pool depth against this gate inherits an unquantified slack.
 
 <em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em>
 
