@@ -10,7 +10,7 @@ wow: 2
 note: assert 1 &gt; 1 on macOS/3.14 against a thread pool that was working correctly
 order: 357
 owner: loop/flaky-concurrency-probe
-pr:
+pr: 1001
 title: "The <code>add_many</code> concurrency probe measured a race, not the pool"
 ---
 <code>test_it_actually_runs_concurrently</code> counted the peak number of fake clones in flight and
