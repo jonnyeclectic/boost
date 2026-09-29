@@ -57,6 +57,13 @@ def project_root(start=None) -> Path | None:
     ``boost install --local`` run from ``src/deep/nested`` must write into the
     repo's ``.claude/skills``, not create a stray one three levels down.
 
+    **This is the marker walk, not the answer to "where is the project".** That
+    is :func:`resolve_base`, which adds the unmarked-directory fallback, and it
+    is what every caller should use — a command that asks this one directly
+    disagrees with ``install --local`` about whether an unmarked directory is a
+    project, which is how ``verify``/``list``/``doctor``/``uninstall`` came to
+    deny skills that ``install`` had just written and ``sync`` could still see.
+
     ``$HOME`` is never a project, even when it is itself a repo (dotfile setups
     do this). A "project" install into ``$HOME`` would write to exactly the
     directories user scope owns — ``~/.claude/skills`` and friends — so the two
@@ -106,6 +113,39 @@ def resolve_base(scope: str, base=None, start=None) -> Path | None:
         if here.resolve() == Path(paths.home()).resolve():
             return None
     return here
+
+
+def owned_by(entries: dict, base) -> dict:
+    """The entries of ``entries`` this project owns — ``{}`` when ``base`` is None.
+
+    Rules and workflows installed with ``--local`` materialize into the repo but
+    are recorded in the *user* lock, tagged ``scope``/``base``, because a project
+    lock holds skills and nothing else. So "what has this repo got?" is a filter
+    over the user lock, not a different file, and a caller that skips the filter
+    reports another checkout's rules as this one's.
+
+    Both sides are resolved before comparing. ``base`` reaches the lock as a
+    string written by whichever call installed it, and on macOS a ``$HOME``
+    under ``/var/folders`` resolves to ``/private/var/...`` — comparing one
+    resolved path against one nominal one never matches, the same trap
+    :func:`store.resolves_into_store` documents.
+    """
+    if base is None:
+        return {}
+    with suppress(OSError):
+        base = Path(base).resolve()
+
+    def here(entry) -> bool:
+        if entry.get("scope") != SCOPE_PROJECT:
+            return False
+        eb = entry.get("base")
+        if not eb:
+            return False
+        with suppress(OSError):
+            return Path(eb).resolve() == base
+        return False
+
+    return {n: e for n, e in entries.items() if here(e)}
 
 
 def check_scope(scope: str) -> str:

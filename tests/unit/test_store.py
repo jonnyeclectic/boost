@@ -2654,6 +2654,48 @@ class TestProjectSkills:
         assert "not installed in this project" in err.value.message
         assert "--local" in err.value.hint
 
+    def test_bare_uninstall_finds_an_unmarked_project(self, entry):
+        """`install --local` writes where `resolve_base` says; so must reads.
+
+        In a directory with no VCS marker `resolve_base` falls back to the cwd
+        and `project_root` answers None, so bare `uninstall` used to refuse the
+        very skill install had just written there. The `sandbox` fixture stands
+        in exactly such a directory, so this drives the real resolver.
+        """
+        from boost_cli.core import projectlock, scopes
+        here = Path.cwd().resolve()
+        assert scopes.project_root(here) is None, (
+            "a VCS marker at or above tmp_path would make this assert nothing")
+        store.install(entry, scope="project", base=str(here))
+        assert projectlock.get_skill(here, "brainstorming") is not None
+        info = store.uninstall("brainstorming")
+        assert info["scope"] == "project"
+        assert projectlock.get_skill(here, "brainstorming") is None
+
+    def test_bare_uninstall_still_refuses_an_unrecorded_name(self, tap):
+        """The project fallback only ever acts on what the project lock holds.
+
+        Widening the resolver must not widen *what* is removable: an unmarked
+        cwd with no lock entry for the name is still "not installed".
+        """
+        with pytest.raises(BoostError) as err:
+            store.uninstall("brainstorming")
+        assert "not installed" in err.value.message
+
+    def test_already_installed_hint_names_a_command_that_exists(self, entry,
+                                                                tmp_path):
+        """`reinstall --local` exits 2 and bare `reinstall` cannot see a repo.
+
+        The hint is the only route the error offers, so it has to be the one
+        the README documents and the CLI accepts.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(repo))
+        assert "already installed in this project" in err.value.message
+        assert err.value.hint == "`boost install brainstorming --local --force` to force"
+        assert "reinstall" not in (err.value.hint or "")
+
     def test_uninstall_refuses_a_path_outside_the_project(self, entry, tmp_path):
         """The lock is committed, so its paths are input — never trusted."""
         from boost_cli.core import projectlock

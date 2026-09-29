@@ -16,7 +16,7 @@ import subprocess
 
 import pytest
 
-from boost_cli.core import lockfile, paths, projectlock, store
+from boost_cli.core import lockfile, paths, projectlock, scopes, store
 
 
 @pytest.fixture()
@@ -26,6 +26,25 @@ def repo(tmp_path, monkeypatch):
     (d / ".git").mkdir(parents=True)
     monkeypatch.chdir(d)
     return d
+
+
+@pytest.fixture()
+def plain_dir(tmp_path, monkeypatch):
+    """A project directory with no VCS marker at or above it, cd'd into.
+
+    Every seam in `audit-project-scope-seams` only reproduces here, because
+    `install --local` resolves its base with `scopes.resolve_base` (which falls
+    back to the cwd) while the query commands asked `scopes.project_root`
+    (which stops at the filesystem root and answers None). The precondition is
+    asserted rather than assumed: a checkout above `tmp_path` on some other
+    machine would make every test below pass for the wrong reason.
+    """
+    d = tmp_path / "plain"
+    d.mkdir()
+    monkeypatch.chdir(d)
+    assert scopes.project_root(d) is None, (
+        "a VCS marker at or above %s — these tests would assert nothing" % d)
+    return d.resolve()
 
 
 def _skill_dirs(repo, name):
@@ -437,3 +456,187 @@ def test_a_user_install_writes_no_sidecar_into_the_repo(boost, tapped, repo):
     _declare_mcp(tapped, "brainstorming")
     boost("install", "brainstorming")
     assert not (repo / mcpdecl.SIDECAR).exists()
+
+
+# ── an unmarked directory is a project to every command, or to none ──────
+#
+# `install --local` writes there and says so. Before this, `verify`, `list`,
+# `doctor` and bare `uninstall` all answered "not installed" for what it had
+# just written, while `sync` could still see it and offered to re-materialize
+# it. The split was `scopes.project_root` (readers) against
+# `scopes.resolve_base` (writers); the fix is that everyone asks the latter.
+
+def test_unmarked_dir_install_then_every_command_agrees(boost, tapped,
+                                                        plain_dir):
+    boost("install", "brainstorming", "--local")
+    assert (plain_dir / ".boost" / "skill-lock.json").is_file()
+    assert (plain_dir / ".claude" / "skills" / "brainstorming"
+            / "SKILL.md").is_file()
+
+    named = boost("verify", "brainstorming")
+    assert "brainstorming" in named.out
+
+    listed = boost("list", "--local")
+    assert "brainstorming" in listed.out
+
+    doc = boost("doctor")
+    assert "brainstorming" in doc.out or "project skill" in doc.out
+
+    boost("uninstall", "brainstorming")
+    assert projectlock.get_skill(plain_dir, "brainstorming") is None
+    assert not (plain_dir / ".claude" / "skills" / "brainstorming").exists()
+
+
+def test_unmarked_dir_info_is_not_the_not_installed_card(boost, tapped,
+                                                         plain_dir):
+    boost("install", "brainstorming", "--local")
+    res = boost("info", "brainstorming")
+    assert "installed in this project" in res.out
+    assert "version" in res.out
+
+
+def test_unmarked_dir_verify_json_tags_the_project_scope(boost, tapped,
+                                                         plain_dir):
+    boost("install", "brainstorming", "--local")
+    data = json.loads(boost("verify", "--json").out)
+    assert {r["scope"] for r in data["skills"]} == {"project"}
+
+
+def test_home_is_still_never_a_project(boost, tapped, monkeypatch):
+    """Widening the read side must not widen it to `$HOME`.
+
+    A "project" install into `$HOME` writes into exactly the directories user
+    scope owns, so `resolve_base` returns None there — the one case the
+    walk-up's `$HOME` stop exists for, and the reason this fix could not just
+    delete `project_root`'s guard.
+    """
+    monkeypatch.chdir(paths.home())
+    assert scopes.resolve_base(scopes.SCOPE_PROJECT) is None
+    res = boost("list", "--local")
+    assert "project skills" not in res.out
+
+
+# ── verify: a named project skill does not drag in user scope ────────────
+
+def test_verify_named_project_skill_ignores_user_scope(boost, tapped, repo):
+    """`[]` means "no user-scope items", not "all of them".
+
+    `cmd_verify` drops names the user lock cannot resolve, so a project-only
+    name leaves the filter empty — and a truthiness test read that as "grade
+    everything", failing the run on an item the user never named.
+    """
+    boost("install", "commit-messages")                 # user scope
+    boost("install", "brainstorming", "--local")        # project scope
+    store_md = paths.store_dir() / "commit-messages" / "SKILL.md"
+    store_md.write_text("TAMPERED\n", encoding="utf-8")
+
+    # Unnamed still grades both, and still fails on the tampered one.
+    every = boost("verify", expect=1)
+    assert "commit-messages" in every.out
+
+    res = boost("verify", "brainstorming")
+    assert "brainstorming" in res.out
+    assert "commit-messages" not in res.out
+    assert "no skills installed" not in res.out
+
+
+def test_verify_named_project_skill_json_holds_only_that_name(boost, tapped,
+                                                              repo):
+    boost("install", "commit-messages")
+    boost("install", "brainstorming", "--local")
+    data = json.loads(boost("verify", "brainstorming", "--json").out)
+    assert [r["name"] for r in data["skills"]] == ["brainstorming"]
+    assert data["failed"] == 0
+
+
+# ── list --local: project scope holds all three kinds ────────────────────
+
+def test_list_local_shows_a_project_rule(boost, tapped, repo):
+    """The card's premise was that project scope is skills-only. It is not.
+
+    A rule installed with `--local` materializes into the repo but is recorded
+    in the USER lock with scope+base, because a project lock has no rules
+    section. `--local` used to clear that dict, so the one command that should
+    have shown the rule was the one that denied it.
+    """
+    lockfile.set_rule("house-style", {
+        "kind": "rule", "version": "1.0.0", "tap": "acme/rules",
+        "scope": "project", "base": str(repo),
+        "materializations": [{"agent": "claude-code", "mode": "claude"}]})
+    res = boost("list", "--local", "--kind", "rule")
+    assert "house-style" in res.out
+    assert "no rules installed" not in res.out
+
+
+def test_list_local_hides_another_repos_rule(boost, tapped, repo, tmp_path):
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    lockfile.set_rule("theirs", {
+        "kind": "rule", "version": "1.0.0", "tap": "acme/rules",
+        "scope": "project", "base": str(other),
+        "materializations": [{"agent": "claude-code", "mode": "claude"}]})
+    res = boost("list", "--local", "--kind", "rule")
+    assert "theirs" not in res.out
+
+
+def test_list_local_hides_a_user_scope_rule(boost, tapped, repo):
+    lockfile.set_rule("mine", {
+        "kind": "rule", "version": "1.0.0", "tap": "acme/rules",
+        "materializations": [{"agent": "claude-code", "mode": "claude"}]})
+    res = boost("list", "--local", "--kind", "rule")
+    assert "mine" not in res.out
+    # ...and plain `list` still shows it.
+    assert "mine" in boost("list", "--kind", "rule").out
+
+
+def test_list_local_json_keeps_the_four_key_shape(boost, tapped, repo):
+    lockfile.set_workflow("ship-it", {
+        "kind": "workflow", "version": "1.0.0", "tap": "acme/wf",
+        "slot": "commands", "scope": "project", "base": str(repo),
+        "materializations": [{"agent": "claude-code", "slot": "commands"}]})
+    data = json.loads(boost("list", "--local", "--json").out)
+    assert set(data) == {"skills", "rules", "workflows", "project"}
+    assert "ship-it" in data["workflows"]
+    assert data["skills"] == {}
+
+
+# ── info on a project-scoped skill ───────────────────────────────────────
+
+def test_info_project_skill_shows_its_identity_rows(boost, tapped, repo):
+    boost("install", "brainstorming", "--local")
+    res = boost("info", "brainstorming")
+    assert "installed in this project" in res.out
+    for row in ("version", "commit", "sha256", "installed", "agents", "scope"):
+        assert row in res.out, "missing the %s row" % row
+
+
+def test_info_project_skill_omits_the_user_only_rows(boost, tapped, repo):
+    """Omit rather than blank: a project entry has no such keys.
+
+    Printing `pinned no` would assert a field `store._install_project_skill`
+    never writes, and there is no canonical store in a repo to point `store`
+    at.
+    """
+    boost("install", "brainstorming", "--local")
+    res = boost("info", "brainstorming")
+    assert "pinned" not in res.out
+    assert "quarantined" not in res.out
+    assert "store" not in res.out
+
+
+def test_info_user_scope_card_is_unchanged_by_the_project_read(boost, tapped,
+                                                               repo):
+    boost("install", "brainstorming")
+    res = boost("info", "brainstorming")
+    assert "pinned" in res.out and "quarantined" in res.out
+    assert "store" in res.out
+    assert "scope" not in res.out, "user scope needs no scope row to disambiguate"
+
+
+def test_info_names_both_copies_when_both_scopes_hold_it(boost, tapped, repo):
+    boost("install", "brainstorming")
+    boost("install", "brainstorming", "--local")
+    res = boost("info", "brainstorming")
+    assert "also in this project" in res.out
+    # User scope still wins the identity rows.
+    assert "pinned" in res.out

@@ -351,3 +351,54 @@ def test_ensure_in_base_allows_a_real_nested_dir(tmp_path):
     (repo / ".claude" / "skills").mkdir(parents=True)
     dest = repo / ".claude" / "skills" / "ok"
     assert scopes.ensure_in_base(repo, dest) == Path(dest)
+
+
+# ── owned_by: which lock rows this repo owns ─────────────────────────────
+
+def test_owned_by_keeps_only_this_repo(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    entries = {
+        "mine": {"scope": "project", "base": str(a)},
+        "theirs": {"scope": "project", "base": str(b)},
+        "user": {"scope": "user"},
+    }
+    assert set(scopes.owned_by(entries, a)) == {"mine"}
+
+
+def test_owned_by_is_empty_without_a_base(tmp_path):
+    entries = {"mine": {"scope": "project", "base": str(tmp_path)}}
+    assert scopes.owned_by(entries, None) == {}
+
+
+def test_owned_by_drops_a_project_row_with_no_base(tmp_path):
+    # A row that says "project" but names no directory cannot be claimed by
+    # one; treating it as this repo's would show a stranger's rule as local.
+    entries = {"nobase": {"scope": "project"},
+               "blank": {"scope": "project", "base": ""}}
+    assert scopes.owned_by(entries, tmp_path) == {}
+
+
+def test_owned_by_rejects_a_user_row_whose_base_matches(tmp_path):
+    # Both halves of the predicate are load-bearing: scope alone would let a
+    # user-scope row whose base happens to name the repo through.
+    entries = {"u": {"scope": "user", "base": str(tmp_path)}}
+    assert scopes.owned_by(entries, tmp_path) == {}
+
+
+def test_owned_by_resolves_both_sides(tmp_path):
+    # The macOS trap: $TMPDIR resolves through /private, so comparing one
+    # resolved path against one nominal one never matches.
+    real = tmp_path / "repo"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    entries = {"x": {"scope": "project", "base": str(link)}}
+    assert set(scopes.owned_by(entries, real)) == {"x"}
+
+
+def test_owned_by_returns_everything_when_every_row_is_this_repo(tmp_path):
+    entries = {"a": {"scope": "project", "base": str(tmp_path)},
+               "b": {"scope": "project", "base": str(tmp_path)}}
+    assert set(scopes.owned_by(entries, tmp_path)) == {"a", "b"}

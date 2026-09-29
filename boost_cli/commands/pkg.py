@@ -742,6 +742,26 @@ def cmd_install(argv: list[str]) -> int:
 
 # ── uninstall ────────────────────────────────────────────────────────────
 
+def _project_fallback_base(names: list[str]) -> Path | None:
+    """The repo a bare ``uninstall`` would act in, when it would act there.
+
+    Bare uninstall prefers user scope and only falls back to the repo for a name
+    the project lock records. That fallback resolves its base the way
+    ``install --local`` writes one, so an unmarked directory counts too — and in
+    an extracted copy of a repo that carries a committed ``.boost/`` but no
+    ``.git``, someone typing ``boost uninstall x`` meaning their user config
+    would be deleting files in the cwd. The prompt says so rather than letting
+    the success line be the first mention of where.
+    """
+    base = scopes.resolve_base(scopes.SCOPE_PROJECT)
+    if base is None:
+        return None
+    if any(lockfile.find_any(n) is None and projectlock.get_skill(base, n)
+           for n in names):
+        return base
+    return None
+
+
 def cmd_uninstall(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost uninstall",
@@ -760,9 +780,13 @@ def cmd_uninstall(argv: list[str]) -> int:
     # silent no-op exiting 1. A pipeline that cannot see the prompt keeps the
     # behaviour it has today; the prompt is a speed bump for humans only.
     if sys.stdin.isatty() and not args.yes:
-        prompt = ("uninstall %s?" % args.names[0] if len(args.names) == 1 else
-                  "uninstall %d skills: %s?" % (len(args.names),
-                                                ", ".join(args.names)))
+        what = (args.names[0] if len(args.names) == 1 else
+                "%d skills: %s" % (len(args.names), ", ".join(args.names)))
+        where = (scopes.resolve_base(scopes.SCOPE_PROJECT)
+                 if args.scope == scopes.SCOPE_PROJECT
+                 else _project_fallback_base(args.names))
+        prompt = ("uninstall %s from %s?" % (what, _tilde(where)) if where
+                  else "uninstall %s?" % what)
         if not out.confirm(prompt):
             out.info("cancelled")
             return 1

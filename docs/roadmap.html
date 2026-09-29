@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>74</b><span>Planned</span></div>
-      <div class="stat"><b>505</b><span>Loop finds</span></div>
+      <div class="stat"><b>506</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -5416,53 +5416,50 @@ exactly why plausible similarity was not accepted as evidence.</p>
       </article>
 
       <article class="cap rcard" id="audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
-        <h3>Project scope seams: <code>uninstall</code>/<code>verify</code>/<code>list</code>/<code>info</code>/<code>reinstall</code> disagree with what <code>install --local</code> wrote</h3>
-        <p>The project-scope-across-every-command item shipped, and the 2026-08 CLI audit found its seams: the
-writers and readers resolve "the project" differently. <code>install --local</code> uses
-<code>scopes.resolve_base</code>, which falls back to the cwd
-(<code>scopes.py:83-104</code>), while <code>uninstall</code>'s project fallback
-(<code>store.py:1249</code>) and <code>verify</code>/<code>doctor</code>/<code>list</code> all go
-through <code>scopes.project_root</code>, which requires a VCS marker (<code>scopes.py:45</code>).
-So from a plain directory, <code>install anthropics/skills:pdf --local</code> writes
-<code>.boost/skill-lock.json</code> and <code>.claude/skills/pdf</code> and reports success &mdash;
-then <code>verify pdf</code> answers <em>&ldquo;Error: not installed: pdf&rdquo;</em>, plain
-<code>uninstall</code> answers <em>&ldquo;brainstorming is not installed&rdquo;</em>, and
-<code>doctor</code>/<code>list</code> show no project row. After <code>mkdir .git</code> the same
-commands find everything. All six findings reproduced.
-
-Four more seams, each confirmed in source. The already-installed error hints
-<em>&ldquo;<code>boost reinstall brainstorming --local</code> to force&rdquo;</em> &mdash; a flag
-<code>reinstall</code> does not have; following the hint exits 2 with
-<em>&ldquo;unrecognized arguments: --local&rdquo;</em> (<code>store.py:615-617</code>).
-<code>verify &lt;project-only name&gt;</code> ignores the filter and grades every user-scope item
-&mdash; <code>cmd_verify</code> already passes <code>[]</code> for project-only names
-(<code>safety.py:355-356</code>) but <code>_iter_installed_all</code> treats <code>[]</code> as
-&ldquo;everything&rdquo; (<code>_common.py:66</code>, <code>if names:</code>), so the run can
-<em>fail</em> on a rule the user never named. <code>list --local --kind rule</code> prints
-<em>&ldquo;&#9675; no rules installed&rdquo;</em> although project scope holds skills only. And
-<code>info</code> on a project-scoped skill shows the not-installed card &mdash; no version,
-installed date, commit or agents rows &mdash; though the project lock records them all and
-<code>--json</code> returns them under <code>project</code>.
-
-The verified fix, one follow-up card: make <code>_iter_installed_all</code> treat <code>[]</code>
-as nothing (<code>_common.py:66</code>) &middot; change the hint to
-<code>boost install NAME --local --force</code> (matching README ~328) or add
-<code>--local</code> to <code>reinstall</code> &middot; unify the uninstall fallback on
-<code>resolve_base</code> or hint <code>--local</code> (<code>store.py:1249</code>) &middot; have
-<code>install --local</code> warn outside a VCS root, or teach <code>project_root</code> to accept
-<code>.boost/skill-lock.json</code> as a marker &middot; refuse
-<code>list --local --kind rule|workflow</code> the way the existing <code>--tag</code> guard does
-(<code>info.py:274-281</code>) &middot; render the plock identity rows in <code>cmd_info</code>.
-Docs: README ~304&ndash;328 (uninstall/reinstall routes), a follow-up note on
-<code>docs/roadmap/items/project-scope-across-every-command.md</code>, and regenerate
-docs/commands.html if <code>reinstall</code> gains <code>--local</code>. Found by the 2026-08 CLI
-audit (cluster <code>project-scope-readers</code>); repro in the audit log.</p>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
+        <h3>Project scope seams: <code>uninstall</code>/<code>verify</code>/<code>list</code>/<code>info</code> disagreed with what <code>install --local</code> wrote</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis.md">Write-up &middot; audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">install --local writes a lock that uninstall, verify, doctor and list then cannot find</span>
+          <span class="m">install --local wrote a lock that uninstall, verify, doctor and list then could not find</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="rule-and-workflow-rows-carry-a-scope-nothing-but-list-local-reads">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3>A rule or workflow installed <code>--local</code> reads as a user one everywhere but <code>list --local</code></h3>
+        <p>Rules and workflows installed with <code>--local</code> materialize into the repo but are recorded
+in the <em>user</em> lock, tagged <code>scope: project</code> and <code>base: &lt;repo&gt;</code>,
+because a project lock holds skills and nothing else
+(<code>store._check_scope_conflict</code>). <code>boost list --local</code> now filters them with
+<code>scopes.owned_by</code>, and it is the only reader that does.
+
+<code>lockfile.installed_rules()</code> and <code>installed_workflows()</code> have a dozen other
+consumers &mdash; <code>store</code>, <code>complete</code>, <code>taps</code>,
+<code>team</code>, <code>safety</code>, <code>quality</code>, <code>pkg</code> &mdash; and none of
+them ask whose repo a row belongs to. So <code>boost doctor</code> and <code>boost verify</code>
+count another checkout's rule as this machine's, <code>drift</code> and <code>health</code> grade
+it, tab-completion offers it, and plain <code>boost list</code> prints it under
+&ldquo;installed rules&rdquo; with nothing saying it belongs to a directory the user may not be
+standing in. The failure is quiet in both directions: a row for a repo that has since been
+deleted never goes away, and a row for the repo you <em>are</em> in looks identical to one for a
+repo you are not.
+
+Worth settling the design before the sweep, because the honest answer differs per command. A
+<code>scope</code> column on plain <code>list</code>'s rule and workflow tables is cheap and makes
+the ambiguity visible (<code>boost info</code> already prints <code>scope project</code>).
+Whether <code>verify</code> and <code>doctor</code> should <em>grade</em> a rule belonging to
+another repo is a separate question &mdash; they cannot read its materializations from here, so
+counting it is arguably the bug and skipping it with a note the honest fix. Split out of
+<code>audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis</code>, where the
+evidence was gathered.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">a project-scoped rule reads as a user one in doctor, verify, drift, health and update</span>
         </div>
       </article>
 

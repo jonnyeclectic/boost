@@ -135,8 +135,13 @@ def project_skills():
     ``(None, {})`` when not inside a project — the single place the rest of the
     CLI asks "does this working directory have committed skills?", so a command
     can fold them into whatever it already does for user-scope skills.
+
+    It resolves the base the way ``install --local`` does, so ``doctor`` and
+    ``verify`` see the skills install wrote even in a directory with no VCS
+    marker. Reading with ``project_root`` instead is what made them report a
+    clean machine while the lock and the agent dirs both sat in the cwd.
     """
-    base = scopes.project_root()
+    base = scopes.resolve_base(scopes.SCOPE_PROJECT)
     if base is None:
         return None, {}
     return base, projectlock.installed(base)

@@ -8,9 +8,20 @@ behaviour has its own coverage in tests/functional/test_integrity_enforce.py.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from boost_cli.core import catalog, config, integrity, lockfile, paths, registry, store
+from boost_cli.core import (
+    catalog,
+    config,
+    integrity,
+    lockfile,
+    paths,
+    registry,
+    scopes,
+    store,
+)
 from boost_cli.errors import BoostError
 
 
@@ -286,6 +297,32 @@ class TestProjectScope:
     def test_project_skills_none_outside_a_repo(self, sandbox, monkeypatch):
         # Patch the resolver rather than chdir'ing — a unit test that chdirs
         # breaks mutmut's instrumentation (it resolves boost_cli off the cwd).
-        monkeypatch.setattr(integrity.scopes, "project_root", lambda *a, **k: None)
+        # `resolve_base`, not `project_root`: patching by name is silent when
+        # the code under test moves to the other function, and this test went
+        # on passing against the real resolver until the name was updated.
+        monkeypatch.setattr(integrity.scopes, "resolve_base", lambda *a, **k: None)
         base, skills = integrity.project_skills()
         assert base is None and skills == {}
+
+    def test_project_skills_reads_an_unmarked_directory(
+            self, sandbox, fixture_tap_src):
+        # The seam this fixes: `install --local` resolves its base with
+        # `resolve_base`, which falls back to the cwd when no VCS marker is
+        # above it. Reading with `project_root` answered None for the very
+        # directory install had just written, so `doctor` and `verify` called
+        # a machine clean while the lock and the agent dirs sat in the cwd.
+        #
+        # No monkeypatch and no chdir: the `sandbox` fixture already stands in
+        # an unmarked directory, so this drives the real resolver — patching
+        # `scopes.resolve_base` would patch it for the code under test too,
+        # since `integrity.scopes` is that same module object.
+        t = registry.add(str(fixture_tap_src))
+        catalog.rebuild_tap(t)
+        here = Path.cwd().resolve()
+        assert scopes.project_root(here) is None, (
+            "a VCS marker at or above tmp_path would make this assert nothing")
+        store.install(catalog.resolve_one("brainstorming"),
+                      scope="project", base=str(here))
+        base, skills = integrity.project_skills()
+        assert base == here
+        assert set(skills) == {"brainstorming"}
