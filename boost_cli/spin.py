@@ -44,7 +44,8 @@ class Spinner:
         for frame in itertools.cycle(_FRAMES):
             if self._stop.is_set():
                 break
-            self.stream.write("\r" + out.aurora(frame, "cyan") + " " + self.label)
+            self.stream.write("\r" + out.aurora(frame, "cyan", self.stream)
+                              + " " + self.label)
             self.stream.flush()
             self._stop.wait(_INTERVAL)
 
@@ -74,7 +75,7 @@ def progress(current: int, total: int, label: str = "", stream=None) -> None:
     s = stream if stream is not None else sys.stderr
     if not (out.color_level(s) > 0 and hasattr(s, "isatty") and s.isatty()):
         return
-    line = "%s %d/%d %s" % (out.aurora(bar(current, total), "cyan"),
+    line = "%s %d/%d %s" % (out.aurora(bar(current, total), "cyan", s),
                             current, total, label)
     s.write("\r" + line)
     if current >= total:

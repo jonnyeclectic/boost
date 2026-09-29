@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>74</b><span>Planned</span></div>
-      <div class="stat"><b>506</b><span>Loop finds</span></div>
+      <div class="stat"><b>75</b><span>Planned</span></div>
+      <div class="stat"><b>507</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2041,6 +2041,49 @@ instead of on a user's machine.</p>
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">Two functions built the same `mcp add` command line, one had never heard of agy, and both got Gemini wrong…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="wrap-width-judged-by-stdout">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3>wrap() sizes a stderr line by stdout's pane</h3>
+        <p><b>A line now gets its colour from the stream it lands on and its
+<em>width</em> from somewhere else.</b> <code>_wrap_lines</code>
+(<code>boost_cli/core/output.py:235</code>) folds to
+<code>term_width() - lead</code>, and <code>term_width</code>
+(<code>:402</code>) takes no stream: it calls
+<code>shutil.get_terminal_size</code>, which consults
+<code>sys.__stdout__</code>. Right beside it, <code>pane_width(stream)</code>
+(<code>:407</code>) does take one, and exists because the same question has a
+different answer per stream.
+
+<br><br>So the emitters that write off stdout and wrap — <code>err(wrap=True)</code>
+(<code>:318</code>, <code>:327</code>) and <code>warn(stream=sys.stderr,
+wrap=True)</code> (<code>:284</code>, reached from <code>catalog.py:346</code>,
+<code>journal.py:65</code>, <code>lockfile.py:185</code>,
+<code>registry.py:594</code> and <code>complete.py:105</code>) — size a stderr
+line by stdout's pane. In a 200-column terminal:
+<code>boost install x &gt;out</code> folds the hint on the terminal at 72
+columns, because stdout is a file, <code>get_terminal_size</code> raises and
+the 80-column fallback applies; <code>boost install x 2&gt;log</code> writes
+192-column lines into the log.
+
+<br><br>This is the twin of <code>err-colour-judged-by-stdout</code>, found while
+verifying it, and deliberately left out of that PR: it is a width bug, not a
+colour one, and it predates the change. <b>Fix sketch:</b> give
+<code>term_width</code> (or <code>_wrap_lines</code>) the stream the emitter
+is about to write to, the way <code>c()</code>, <code>role()</code> and
+<code>aurora()</code> now take one, and have each wrapping emitter pass its
+own. Watch the <code>COLUMNS</code> precedence: <code>pane_width</code>
+honours an explicit <code>COLUMNS</code> either way, and the wrap path must
+keep doing the same or a scripted <code>COLUMNS=100</code> stops applying to
+hints. A test wraps one long hint with stdout a TTY and stderr a plain
+buffer, and asserts the fold point comes from stderr.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">a wrapped stderr line is folded to stdout's width — the colour-stream fix's twin, one layer down</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -6401,37 +6444,14 @@ its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> ra
       </article>
 
       <article class="cap rcard" id="err-colour-judged-by-stdout">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>out.err() judges colour by stdout while writing to stderr</h3>
-        <p><b>Every <code>Error:</code> line asks stdout whether to colour a line it writes to stderr.</b>
-<code>out.err</code> (<code>boost_cli/core/output.py:267</code> and <code>:271</code>) paints with
-<code>c()</code>, which takes no stream and calls <code>use_color()</code>, so the answer is
-<code>sys.stdout.isatty()</code>. Every <code>BoostError</code> reaches the user through it
-(<code>cli.py:398</code>), as do the unknown-command and unknown-option errors.
-
-<br><br><b>Measured</b> through a real pty (Python <code>pty.fork</code>, <code>BOOST_COLOR</code> /
-<code>NO_COLOR</code> / <code>CLICOLOR_FORCE</code> unset), <code>boost bundle install nosuch</code> on
-<code>loop/bundle-audit</code> (<code>err()</code> is unchanged from origin/main). With stdout on
-the terminal and <code>2&gt;log</code>, the log holds
-<code>\x1b[31m\x1b[1mError: \x1b[0mno Boostfile at …/nosuch\n\x1b[2m  hint: create one with `boost bundle dump Boostfile`\x1b[0m\n</code>
-&mdash; five escape sequences written into a file. With stdout to a file and stderr on the
-terminal (<code>&gt;out</code>), the terminal gets <code>Error: no Boostfile at …/nosuch</code> with
-no colour at all.
-Each case gets what the other one should. <code>out.warn(stream=…)</code> had the same bug; the
-bundle audit fixed it by passing the stream through to <code>role()</code>, and left
-<code>err</code> out of scope. A grep for <code>c(</code> on a <code>file=sys.stderr</code> line
-in <code>boost_cli</code> finds only these two.
-
-<br><br><b>Fix:</b> give <code>c()</code> a <code>stream=</code> keyword forwarded to
-<code>use_color</code>, and pass <code>sys.stderr</code> from both calls in <code>err</code>. Test it
-the way <code>tests/unit/test_output.py::TestWarnColourFollowsItsStream</code> tests
-<code>warn</code>: with stdout a TTY and stderr a plain buffer, no <code>\x1b[</code> in stderr;
-with the two swapped, the <code>Error:</code> prefix is coloured.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/err-colour-judged-by-stdout.md">Write-up &middot; err-colour-judged-by-stdout.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">boost … 2&gt;log on a terminal writes escape codes into the log, while boost … &gt;out prints the error line plain</span>
+          <span class="m">fixed — every painter takes the stream it is painting for, and all nine call sites that write off stdout pass theirs, so each line is coloured by where it lands</span>
         </div>
       </article>
 

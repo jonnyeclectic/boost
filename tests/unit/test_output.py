@@ -855,6 +855,107 @@ class _TtyBuffer(io.StringIO):
         return True
 
 
+class TestErrColourFollowsStderr:
+    """`Error:` is written to stderr, so stderr decides whether it is painted.
+
+    `err` asked `use_color()`, which reads `sys.stdout`, for a line it always
+    writes to `sys.stderr`
+    (docs/roadmap/items/err-colour-judged-by-stdout.md). Measured through a
+    real pty: with stdout on the terminal and `2>log`, the log held five
+    escape sequences; with `>out`, the terminal got `Error: …` plain. Each
+    case got the other one's answer.
+    """
+
+    @pytest.fixture(autouse=True)
+    def full_width(self, monkeypatch):
+        # `err(hint=...)` folds the hint to the pane, so a narrow COLUMNS in
+        # the environment splits it into two spans and the counts below move
+        monkeypatch.delenv("COLUMNS", raising=False)
+
+    def test_a_terminal_stderr_is_coloured_while_stdout_is_a_file(
+            self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        e = _TtyBuffer()
+        monkeypatch.setattr(sys, "stderr", e)
+        output.err("boom", hint="try again")
+        text = e.getvalue()
+        assert "\x1b[" in text
+        # the `Error: ` prefix and the whole hint line are each one span
+        assert text.count(output.RESET) == 2
+        assert output.visible_len(text) == len("Error: boom\n  hint: try again\n")
+
+    def test_a_redirected_stderr_stays_plain_while_stdout_is_a_terminal(
+            self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", _TtyBuffer())
+        e = io.StringIO()
+        monkeypatch.setattr(sys, "stderr", e)
+        output.err("boom", hint="try again")
+        assert e.getvalue() == "Error: boom\n  hint: try again\n"
+        # and nothing leaked onto the terminal stdout was pointed at
+        assert sys.stdout.getvalue() == ""
+
+
+class TestHeadingColourFollowsItsStream:
+    """`heading` takes a stream so a report header follows its content off
+    stdout; the colour has to follow it too.
+
+    Both halves of the line were judged by stdout — `role` was called with no
+    ``stream`` and the bold message through `c` — so a header routed to a
+    terminal while stdout was a file printed plain, and one routed to a file
+    while stdout was a terminal wrote escape codes into the file.
+    """
+
+    def test_a_terminal_stream_is_coloured_while_stdout_is_a_file(
+            self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        s = _TtyBuffer()
+        output.heading("Section", stream=s)
+        text = s.getvalue()
+        # the accent marker and the bold message are painted separately
+        assert text.count(output.RESET) == 2
+        assert output.visible_len(text.rstrip("\n")) == len("==> Section")
+
+    def test_a_redirected_stream_stays_plain_while_stdout_is_a_terminal(
+            self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", _TtyBuffer())
+        s = io.StringIO()
+        output.heading("Section", stream=s)
+        assert s.getvalue() == "==> Section\n"
+
+
+class TestTableHeaderColourFollowsItsStream:
+    """A table already picked its separator by the stream and its header
+    cells by stdout, so one row could hold both answers.
+
+    `use_color(stream)` chose the dim `│`, while the bold header cells went
+    through `c()` and asked stdout. Routed to a file from a terminal, the
+    separators came out plain and the headers carried `\x1b[1m`; the other
+    way round, the coloured separators framed plain headers.
+    """
+
+    @pytest.fixture(autouse=True)
+    def full_width(self, monkeypatch):
+        # every COLUMNS-sensitive test in this file pins the width; at <= 14
+        # `_fit_columns` drops the VERSION column and the header count below
+        # would be 1 for a reason that has nothing to do with colour
+        monkeypatch.delenv("COLUMNS", raising=False)
+
+    def test_a_redirected_stream_gets_no_escape_at_all(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", _TtyBuffer())
+        s = io.StringIO()
+        output.table([("alpha", "v1")], headers=("name", "version"), stream=s)
+        assert "\x1b[" not in s.getvalue()
+
+    def test_a_terminal_stream_paints_the_headers_and_the_separator(
+            self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        s = _TtyBuffer()
+        output.table([("alpha", "v1")], headers=("name", "version"), stream=s)
+        head = s.getvalue().splitlines()[0]
+        assert head.count(output.BOLD) == 2      # one per header cell
+        assert "\u2502" in head                      # the dim separator
+
+
 class TestWarnColourFollowsItsStream:
     """A warning routed to stderr is coloured by what stderr is, not stdout.
 
