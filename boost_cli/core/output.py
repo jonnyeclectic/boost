@@ -415,8 +415,8 @@ def _columns_env() -> int | None:
     width and reads as unset, which is what ``shutil`` does with it too.
     """
     try:
-        columns = int(os.environ.get("COLUMNS", ""))
-    except ValueError:
+        columns = int(os.environ["COLUMNS"])
+    except (KeyError, ValueError):
         return None
     return columns if columns > 0 else None
 
