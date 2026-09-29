@@ -2,14 +2,14 @@
 id: audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: install --local writes a lock that uninstall, verify, doctor and list then cannot find
 order: 235
-owner:
+owner: loop/project-scope-seams
 pr:
 title: "Project scope seams: <code>uninstall</code>/<code>verify</code>/<code>list</code>/<code>info</code>/<code>reinstall</code> disagree with what <code>install --local</code> wrote"
 ---
