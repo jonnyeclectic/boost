@@ -944,7 +944,7 @@ def _fall_back(why: str, hint: str) -> None:
     tell "GitHub has no matches" from "GitHub was never searched".
     """
     out.warn("%s — falling back to the local index" % why, stream=sys.stderr)
-    out.info(out.role(hint, "muted"), stream=sys.stderr)
+    out.info(out.role(hint, "muted", stream=sys.stderr), stream=sys.stderr)
     return None
 
 

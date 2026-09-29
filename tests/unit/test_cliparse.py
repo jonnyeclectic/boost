@@ -3,9 +3,20 @@
 """Unit tests: boost_cli/cliparse.BoostArgumentParser — branded errors."""
 from __future__ import annotations
 
+import io
+import sys
+
 import pytest
 
 from boost_cli import cliparse
+from boost_cli.core import output
+
+
+class _TtyBuffer(io.StringIO):
+    """A buffer that claims to be a terminal, so `use_color` says yes."""
+
+    def isatty(self):
+        return True
 
 
 @pytest.fixture(autouse=True)
@@ -90,3 +101,83 @@ class TestHelpWrapKeepsBacktickSpansAtomic:
         out = capsys.readouterr().out
         assert any("`boost demo really long command`" in ln
                    for ln in out.split("\n"))
+
+
+class TestUsageColourFollowsStderr:
+    """The dimmed usage block is written to stderr, so stderr decides it.
+
+    `error()` prints two lines to the same stream and used to ask two
+    different questions about them: `out.err` consults stderr, while the
+    `out.c(..., DIM)` around the usage consulted stdout. `boost demo 2>log`
+    on a terminal wrote a bare `Error:` into the log and then an escape
+    sequence around the usage right under it; `boost demo >out` printed a red
+    `Error:` on the terminal and an undimmed usage below. One error report,
+    two answers.
+    """
+
+    @pytest.fixture(autouse=True)
+    def colour_on(self, monkeypatch, plain):
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
+        monkeypatch.delenv("BOOST_COLOR", raising=False)
+
+    @staticmethod
+    def _fail(monkeypatch, stdout, stderr):
+        monkeypatch.setattr(sys, "stdout", stdout)
+        monkeypatch.setattr(sys, "stderr", stderr)
+        p = cliparse.parser(prog="boost demo")
+        p.add_argument("name")
+        with pytest.raises(SystemExit):
+            p.parse_args([])
+
+    def test_a_redirected_stderr_gets_no_escape_at_all(self, monkeypatch):
+        e = io.StringIO()
+        self._fail(monkeypatch, _TtyBuffer(), e)
+        assert "\x1b[" not in e.getvalue()
+        assert "usage: boost demo" in e.getvalue()
+
+    def test_a_terminal_stderr_dims_the_usage_too(self, monkeypatch):
+        e = _TtyBuffer()
+        self._fail(monkeypatch, io.StringIO(), e)
+        text = e.getvalue()
+        # the branded `Error: ` span, then a DIM span per line of the usage
+        # block -- `format_usage` ends in a newline, so the last of those is
+        # the empty trailing line. Three spans, all on stderr.
+        assert text.count(output.RESET) == 3
+        assert text.startswith(output.RED + output.BOLD + "Error: ")
+        assert output.DIM + "usage: boost demo" in text
+
+    def test_argparse_does_not_paint_the_usage_before_boost_does(
+            self, monkeypatch):
+        """3.14's argparse asks the same wrong question, so boost turns it off.
+
+        `ArgumentParser(color=True)` is the 3.14 default and it decides by
+        calling `_colorize.can_colorize()`, whose `file` defaults to
+        **stdout** -- for text `error()` writes to stderr. On top of the
+        redirect bug this whole class is about, the two paints nest: the
+        usage goes out inside one `out.c(..., DIM)` span, and argparse's own
+        reset after `usage: ` ends the dim two words in. So the text must
+        reach `out.c` bare, whatever the environment says.
+        """
+        monkeypatch.setenv("PYTHON_COLORS", "1")
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        p = cliparse.parser(prog="boost demo")
+        p.add_argument("name")
+        assert "\x1b[" not in p.format_usage()
+        assert "\x1b[" not in p.format_help()
+
+    def test_a_subparser_does_not_paint_it_either(self, monkeypatch):
+        """Every `boost <cmd> --help` is a sub-parser, so the property has to
+        hold there too.
+
+        It holds by inheritance rather than by the `setdefault`: unlike
+        `formatter_class`, argparse forwards `color` down explicitly, filling
+        `add_parser`'s kwargs from the parent (3.14's argparse.py:1252) and
+        stamping `action._color` at :1979. So this pins argparse's forwarding
+        and the user-visible result -- not where boost sets the default,
+        which the test cannot distinguish.
+        """
+        monkeypatch.setenv("PYTHON_COLORS", "1")
+        sub = cliparse.parser(prog="boost").add_subparsers().add_parser("demo")
+        sub.add_argument("name")
+        assert "\x1b[" not in sub.format_usage()

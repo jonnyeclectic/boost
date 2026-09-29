@@ -7,6 +7,7 @@ asserting exact output shapes, exit codes, and on-disk cache effects.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -20,6 +21,13 @@ import types
 import pytest
 
 from boost_cli.core import output, paths, util
+
+
+class _TtyBuffer(io.StringIO):
+    """A buffer that claims to be a terminal, so `use_color` says yes."""
+
+    def isatty(self):
+        return True
 
 
 def _curses_available() -> bool:
@@ -2599,3 +2607,40 @@ class TestReindexShards:
         r = boost("reindex", "--import-shard", str(f))
         assert "imported 7 chunks" in r.out
         assert "acme/skills" in r.out
+
+
+class TestFallBackColourFollowsStderr:
+    """`_fall_back` writes both its lines to stderr, so stderr decides both.
+
+    The warn line already took `stream=sys.stderr` and so consulted it; the
+    hint line under it was painted by a bare `out.role(hint, "muted")`, which
+    consults stdout. `boost discover q --json 2>log` on a terminal put a plain
+    warn line and an escape-wrapped hint in the same log; `boost discover q
+    --json >out` dimmed the warn on the terminal and left the hint beneath it
+    plain. Two lines of one notice, opposite answers.
+    """
+
+    @pytest.fixture(autouse=True)
+    def real_tty_check(self, monkeypatch):
+        for var in ("NO_COLOR", "CLICOLOR_FORCE", "BOOST_COLOR"):
+            monkeypatch.delenv(var, raising=False)
+
+    @staticmethod
+    def _fall_back(monkeypatch, stdout, stderr):
+        from boost_cli.commands import discovery
+        monkeypatch.setattr(sys, "stdout", stdout)
+        monkeypatch.setattr(sys, "stderr", stderr)
+        discovery._fall_back("GitHub unreachable", "try `gh auth login`")
+
+    def test_a_redirected_stderr_gets_no_escape_at_all(self, monkeypatch):
+        e = io.StringIO()
+        self._fall_back(monkeypatch, _TtyBuffer(), e)
+        assert "\x1b[" not in e.getvalue()
+        assert "try `gh auth login`" in e.getvalue()
+
+    def test_a_terminal_stderr_paints_both_lines(self, monkeypatch):
+        e = _TtyBuffer()
+        self._fall_back(monkeypatch, io.StringIO(), e)
+        warn_line, hint_line = e.getvalue().splitlines()[:2]
+        assert "\x1b[" in warn_line
+        assert "\x1b[" in hint_line, "the hint must follow the line above it"
