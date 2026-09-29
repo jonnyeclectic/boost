@@ -402,3 +402,44 @@ def test_owned_by_returns_everything_when_every_row_is_this_repo(tmp_path):
     entries = {"a": {"scope": "project", "base": str(tmp_path)},
                "b": {"scope": "project", "base": str(tmp_path)}}
     assert set(scopes.owned_by(entries, tmp_path)) == {"a", "b"}
+
+
+def test_owned_by_ignores_a_relative_base(tmp_path):
+    # A relative base would be realpath'd against whatever directory the user
+    # is standing in, so "." would make one entry belong to every repo.
+    entries = {"rel": {"scope": "project", "base": "."},
+               "dotdot": {"scope": "project", "base": "../elsewhere"}}
+    assert scopes.owned_by(entries, tmp_path) == {}
+
+
+def test_owned_by_ignores_a_base_that_is_not_a_path(tmp_path):
+    # A lock is a file on disk that anything can write, so a base of the wrong
+    # type is untrusted input, not a crash.
+    entries = {"num": {"scope": "project", "base": 7},
+               "lst": {"scope": "project", "base": ["/tmp"]},
+               "dct": {"scope": "project", "base": {"p": "/tmp"}}}
+    assert scopes.owned_by(entries, tmp_path) == {}
+
+
+def test_resolve_base_is_none_when_there_is_no_cwd(monkeypatch, tmp_path):
+    """A working directory deleted out from under the process.
+
+    `project_root` has always answered None here. `resolve_base` is now what
+    every reader calls, so it has to answer the same — otherwise `boost list`
+    in a deleted cwd crashes for a user who has never typed `--local`.
+    """
+    def boom():
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(scopes.Path, "cwd", staticmethod(boom))
+    assert scopes.resolve_base(scopes.SCOPE_PROJECT) is None
+
+
+def test_resolve_base_with_an_explicit_start_never_needs_the_cwd(monkeypatch,
+                                                                 tmp_path):
+    # The guard must not swallow a perfectly good explicit start.
+    def boom():
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(scopes.Path, "cwd", staticmethod(boom))
+    assert scopes.resolve_base(scopes.SCOPE_PROJECT, start=tmp_path) == tmp_path

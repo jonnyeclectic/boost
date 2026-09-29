@@ -756,7 +756,12 @@ def _project_fallback_base(names: list[str]) -> Path | None:
     base = scopes.resolve_base(scopes.SCOPE_PROJECT)
     if base is None:
         return None
-    if any(lockfile.find_any(n) is None and projectlock.get_skill(base, n)
+    # EVERY name, not any: a mixed batch takes the user-scope route for the
+    # names the user lock resolves, so naming the repo would tell the reader
+    # this is about their checkout while ~/.agents/skills is what empties.
+    # When the batch is mixed the prompt stays generic and each success line
+    # says where that one went.
+    if all(lockfile.find_any(n) is None and projectlock.get_skill(base, n)
            for n in names):
         return base
     return None

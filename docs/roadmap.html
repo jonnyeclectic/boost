@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>507</b><span>Loop finds</span></div>
+      <div class="stat"><b>509</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -5470,6 +5470,44 @@ exactly why plausible similarity was not accepted as evidence.</p>
         </div>
       </article>
 
+      <article class="cap rcard" id="project-scope-in-an-unmarked-tree-does-not-walk-up">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3>Project scope in an unmarked tree does not walk up, so <code>src/</code> becomes its own project</h3>
+        <p><code>scopes.resolve_base</code> walks up for a VCS marker and, finding none, falls back to the
+directory it started in &middot; <em>without</em> walking up. So in a project that is not a git/hg/svn
+checkout, every subdirectory is its own project: <code>install brainstorming --local</code> run from
+<code>proj/src</code> writes <code>proj/src/.boost/skill-lock.json</code> and <code>proj/src/.claude/skills/</code>,
+even when <code>proj/.boost/skill-lock.json</code> already exists; and <code>list --local</code>,
+<code>info</code>, <code>doctor</code>, <code>verify</code> and bare <code>uninstall</code> run from
+<code>proj/src</code> cannot see what was installed at <code>proj</code>. <code>mkdir .git</code> fixes
+both, which is what makes it easy to miss.
+
+This is not the reader/writer split that <code>fix(scope)</code> closed &middot; readers and writers now
+agree, and that is the point: they agree on the <em>cwd</em> rather than on the project.
+<code>project_root</code>'s docstring says walking up is the whole point ("<code>install --local</code>
+run from <code>src/deep/nested</code> must write into the repo's <code>.claude/skills</code>, not create
+a stray one three levels down"), and that promise is simply not kept once the marker is absent.
+
+The fix is a choice, not a bug fix, which is why it is its own card. Option (a): make the fallback
+walk up for an existing <code>.boost/skill-lock.json</code> &middot; but a lock-file marker cannot
+help the very first install, which is the one that creates it. Option (b): let the fallback walk up to
+the nearest ancestor that is not <code>$HOME</code> &middot; too greedy, it would swallow unrelated
+sibling directories. Option (c): keep today's behaviour and say so &middot; have
+<code>install --local</code> warn once when it is about to create a project in a directory with no VCS
+marker, naming the directory, so the second lock is a decision rather than a surprise. (c) is the
+cheapest and the most honest; (a) is worth pairing with it for every command after the first.
+
+Found by the adversarial verification of PR #998, which reproduced it end to end. <code>$HOME</code>
+is still never a project and deletion is still gated by <code>resolve_in_base</code>, so this is a
+wrong-directory bug, not a safety one.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">install --local from a subdirectory of an unmarked project creates a second lock there</span>
+        </div>
+      </article>
+
       <article class="cap rcard" id="rule-and-workflow-rows-carry-a-scope-nothing-but-list-local-reads">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
         <h3>A rule or workflow installed <code>--local</code> reads as a user one everywhere but <code>list --local</code></h3>
@@ -7374,6 +7412,36 @@ its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> ra
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">the tampering case the feature exists for reads as "key unknown", and the sweep exits 0</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="util-rmtree-chmods-a-symlink-target-outside-the-tree">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Bug</span></div>
+        <h3><code>util.rmtree</code>'s retry hook <code>chmod</code>s a symlink's target, outside the tree it is deleting</h3>
+        <p><code>util.rmtree</code> installs an error handler so a read-only file cannot strand a delete: on
+failure it <code>chmod</code>s the path and retries. The handler is handed the path that failed, and
+when that path is a <em>symlink</em> the <code>chmod</code> follows it &middot; so deleting a
+directory that happens to contain a link to a file elsewhere changes that file's permissions, even
+though the delete itself correctly removes only the link.
+
+The containment guards do their job: <code>scopes.resolve_in_base</code> and <code>contains</code>
+still refuse to remove anything outside the base, and the verification of PR #998 confirmed a planted
+victim file survives every escape attempt byte-for-byte. What is not guarded is the
+<em>permission change</em> on the way past, which happens before containment is ever consulted
+because it is inside the retry hook.
+
+Pre-existing and untouched by the project-scope work, but newly easier to reach: bare
+<code>uninstall</code> can now act in an unmarked directory, so a repo copy that carries a symlink
+into the user's home is one command away. The fix is small &middot; use
+<code>os.chmod(..., follow_symlinks=False)</code> where the platform supports it, and otherwise skip
+the retry entirely for a path that <code>os.path.islink</code> reports, since a symlink's own mode is
+not what blocked the unlink. A test wants a link inside the tree pointing at a
+<code>0o400</code> file outside it, asserting the target's mode is unchanged after the delete.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the read-only retry hook follows a symlink and chmods the file it points at</span>
         </div>
       </article>
 

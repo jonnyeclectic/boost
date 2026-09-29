@@ -11,6 +11,7 @@ exactly what committing skills is supposed to fix.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 
@@ -606,8 +607,16 @@ def test_info_project_skill_shows_its_identity_rows(boost, tapped, repo):
     boost("install", "brainstorming", "--local")
     res = boost("info", "brainstorming")
     assert "installed in this project" in res.out
-    for row in ("version", "commit", "sha256", "installed", "agents", "scope"):
+    for row in ("version", "commit", "sha256", "installed", "agents"):
         assert row in res.out, "missing the %s row" % row
+    # The value, not just the label: a card printing `scope  user` for a
+    # project-only install would satisfy a substring check for "scope".
+    assert re.search(r"^\s*scope\s+project\s*$", res.out, re.M), (
+        "the scope row must read project:\n%s" % res.out)
+    # And the version is the repo's record, not the catalog's "latest".
+    entry = projectlock.get_skill(repo, "brainstorming")
+    assert re.search(r"^\s*version\s+%s\s*$" % re.escape(entry["version"]),
+                     res.out, re.M)
 
 
 def test_info_project_skill_omits_the_user_only_rows(boost, tapped, repo):
@@ -640,3 +649,68 @@ def test_info_names_both_copies_when_both_scopes_hold_it(boost, tapped, repo):
     assert "also in this project" in res.out
     # User scope still wins the identity rows.
     assert "pinned" in res.out
+
+
+# ── the confirmation names where it is about to delete from ──────────────
+
+def _tty(monkeypatch, answers):
+    """Make the prompt fire and record what it was asked."""
+    asked = []
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    def fake_confirm(prompt, *a, **k):
+        asked.append(prompt)
+        return answers.pop(0)
+
+    monkeypatch.setattr("boost_cli.core.output.confirm", fake_confirm)
+    return asked
+
+
+def test_bare_uninstall_prompt_names_the_project_it_will_delete_from(
+        boost, tapped, repo, monkeypatch):
+    """The success line must not be the first mention of where.
+
+    Bare `uninstall` can now act in a directory carrying a committed
+    `.boost/`, including one with no VCS marker, so someone who means their
+    user config has to be told which directory this is about before it goes.
+    """
+    boost("install", "brainstorming", "--local")
+    asked = _tty(monkeypatch, [True])
+    boost("uninstall", "brainstorming")
+    assert asked, "the prompt never fired"
+    assert "uninstall brainstorming from " in asked[0]
+    assert repo.name in asked[0]
+    assert projectlock.get_skill(repo, "brainstorming") is None
+
+
+def test_bare_uninstall_prompt_stays_generic_for_a_user_scope_name(
+        boost, tapped, repo, monkeypatch):
+    """A user-scope removal must not be described as a repo one."""
+    boost("install", "brainstorming")
+    asked = _tty(monkeypatch, [True])
+    boost("uninstall", "brainstorming")
+    assert asked == ["uninstall brainstorming?"]
+
+
+def test_bare_uninstall_prompt_stays_generic_for_a_mixed_batch(
+        boost, tapped, repo, monkeypatch):
+    """One answer cannot describe two destinations.
+
+    `commit-messages` is user-scope and `brainstorming` is project-scope, so
+    naming the repo would tell the reader this is about their checkout while
+    the canonical store is what also empties.
+    """
+    boost("install", "commit-messages")
+    boost("install", "brainstorming", "--local")
+    asked = _tty(monkeypatch, [True])
+    boost("uninstall", "brainstorming", "commit-messages")
+    assert asked == ["uninstall 2 skills: brainstorming, commit-messages?"]
+    assert projectlock.get_skill(repo, "brainstorming") is None
+    assert lockfile.get_skill("commit-messages") is None
+
+
+def test_declining_the_prompt_removes_nothing(boost, tapped, repo, monkeypatch):
+    boost("install", "brainstorming", "--local")
+    _tty(monkeypatch, [False])
+    boost("uninstall", "brainstorming", expect=1)
+    assert projectlock.get_skill(repo, "brainstorming") is not None

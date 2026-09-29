@@ -108,7 +108,17 @@ def resolve_base(scope: str, base=None, start=None) -> Path | None:
     found = project_root(start)
     if found is not None:
         return found
-    here = Path(start) if start is not None else Path.cwd()
+    if start is not None:
+        here = Path(start)
+    else:
+        try:
+            here = Path.cwd()
+        except OSError:
+            # No cwd to fall back to — a working directory deleted out from
+            # under the process. `project_root` has always answered None here;
+            # this must too, or the readers that now come through this function
+            # crash where they used to print a user-scope answer and exit 0.
+            return None
     with suppress(OSError):
         if here.resolve() == Path(paths.home()).resolve():
             return None
@@ -137,8 +147,24 @@ def owned_by(entries: dict, base) -> dict:
         return {}
     want = os.path.realpath(base)
     return {n: e for n, e in entries.items()
-            if e.get("scope") == SCOPE_PROJECT and e.get("base")
-            and os.path.realpath(e["base"]) == want}
+            if e.get("scope") == SCOPE_PROJECT and _claims(e.get("base"), want)}
+
+
+def _claims(recorded, want: str) -> bool:
+    """Does a lock entry's recorded ``base`` name the directory ``want``?
+
+    A lock is a file on disk that anything can write, so this takes what it
+    finds rather than what it expects: a `base` that is missing, empty, not a
+    string, or *relative* is not a claim on any particular directory. Relative
+    is the one that looks harmless and is not — `realpath` would resolve it
+    against whatever directory the user happens to be standing in, so `"."`
+    would make one entry belong to every repo at once.
+    """
+    if not recorded or not isinstance(recorded, str | os.PathLike):
+        return False
+    if not os.path.isabs(recorded):
+        return False
+    return os.path.realpath(recorded) == want
 
 
 def check_scope(scope: str) -> str:
