@@ -269,7 +269,7 @@ def cmd_list(argv):
                     help="only show installed items of this kind")
     ap.add_argument("--tag", help="only show skills carrying this tag")
     ap.add_argument("--local", action="store_true",
-                    help="only the skills installed into this repo")
+                    help="only what is installed into this repo")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
     skills = lockfile.installed()
@@ -277,10 +277,20 @@ def cmd_list(argv):
     workflows = lockfile.installed_workflows()
     # Project skills live in the repo's own lock, never the user's — read it
     # separately so a checkout's committed skills show up alongside yours.
-    pbase = scopes.project_root()
+    # `resolve_base` is what `install --local` writes with; asking
+    # `project_root` here denied a repo install in an unmarked directory.
+    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
     project = projectlock.installed(pbase) if pbase is not None else {}
     if args.local:
-        skills, rules, workflows = {}, {}, {}
+        # Project scope holds all three kinds, so --local cannot just drop
+        # rules and workflows. They materialize into the repo but are recorded
+        # in the USER lock with scope+base, because a project lock has no
+        # rules/workflows section (store._check_scope_conflict) — clearing
+        # these two dicts threw away the only record of them and answered
+        # "no rules installed" standing in the repo that has one.
+        skills = {}
+        rules = scopes.owned_by(rules, pbase)
+        workflows = scopes.owned_by(workflows, pbase)
     if args.tag and args.kind not in (None, "skill"):
         # Refuse rather than print an empty table. Tags exist only on skills,
         # so `--kind rule --tag x` can only ever render "no rules installed" —
@@ -461,7 +471,7 @@ def cmd_info(argv):
     # A project-scoped skill is installed — just not at user scope. Without this
     # `boost info` would call it "not installed" while it sits in the repo, and
     # the install banner's own "next: boost info <name>" would lead nowhere.
-    pbase = scopes.project_root()
+    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
     plock = (_for_tap(projectlock.get_skill(pbase, name), qualifier)
              if pbase is not None else None)
     if lock:
@@ -527,14 +537,21 @@ def cmd_info(argv):
         return 0
 
     out.heading(name)
+    # The record to read the shared rows off, user scope winning — the same
+    # `lock or plock` the --json payload above already uses. A project install
+    # stamps version, tap, source_dir, commit, sha256, installed_at, updated_at
+    # and agents exactly as a user install does, so gating those rows on `lock`
+    # alone printed a card with no sign the skill was installed at all, right
+    # after `install --local` told the reader to run this command.
+    entry = lock or plock
     # Identity-card badges: a scannable status strip beneath the name, echoing
     # the web .badge pills. The detailed kv rows below still carry the specifics.
     badges = []
     # One decision for the badge and the "latest" row, compared as versions:
     # string inequality called a tap still at 1.4.0 an update to 1.4.1.
     relation = (staleness.catalog_relation(
-        str(lock.get("version", "?")), str((cat or {}).get("version") or ""))
-        if lock and cat else None)
+        str(entry.get("version", "?")), str((cat or {}).get("version") or ""))
+        if entry and cat else None)
     if lock:
         badges.append(out.badge("installed", "green"))
         if lock.get("pinned"):
@@ -543,10 +560,10 @@ def cmd_info(argv):
             badges.append(out.badge("quarantined", "pink"))
         if lock.get("sidelined_by"):
             badges.append(out.badge("sidelined by %s" % lock["sidelined_by"], "cyan"))
-        if relation == staleness.BEHIND:
-            badges.append(out.badge("update available", "yellow"))
-        elif relation == staleness.AHEAD:
-            badges.append(out.badge("ahead of tap", "cyan"))
+        if plock:
+            # Both scopes hold it. Saying only "installed" here hid the repo's
+            # copy, which --json has always reported.
+            badges.append(out.badge("also in this project", "green"))
     elif plock:
         badges.append(out.badge("installed in this project", "green"))
     else:
@@ -556,7 +573,15 @@ def cmd_info(argv):
         badges.append(out.badge(
             "not installed" if kind == "skill" else "not installed %s" % kind,
             "cyan"))
-    tapname = (lock or cat or {}).get("tap")
+    # Outside the scope arms, because `relation` is read off `entry` and the
+    # "latest" row below is printed for either scope: gating only the badge on
+    # `lock` left a project-only install showing "latest 1.4.0 (update
+    # available)" under a strip that claimed nothing was out of date.
+    if relation == staleness.BEHIND:
+        badges.append(out.badge("update available", "yellow"))
+    elif relation == staleness.AHEAD:
+        badges.append(out.badge("ahead of tap", "cyan"))
+    tapname = (entry or cat or {}).get("tap")
     if tapname:
         badges.append(out.badge(str(tapname), "violet"))
     if badges:
@@ -569,8 +594,8 @@ def cmd_info(argv):
         # replaced hardcoded width=62 (a hand copy of kv's default 16-column
         # lead against a fixed 78-column pane) and ignored COLUMNS entirely.
         out.kv("description", desc, wrap=True)
-    if lock:
-        inst_v = str(lock.get("version", "?"))
+    if entry:
+        inst_v = str(entry.get("version", "?"))
         out.kv("version", inst_v)
         latest = str((cat or {}).get("version") or "")
         if relation == staleness.BEHIND:
@@ -583,7 +608,7 @@ def cmd_info(argv):
                                                "muted"))
     else:
         out.kv("latest", str((cat or {}).get("version", "?")))
-    out.kv("tap", (lock or cat or {}).get("tap", "?"))
+    out.kv("tap", (entry or cat or {}).get("tap", "?"))
     category = (cat or {}).get("category")
     if category:
         out.kv("category", category)
@@ -594,7 +619,7 @@ def cmd_info(argv):
     # commands/rules directory shared by every item of that kind; `skill_md`
     # (despite the name, the generic per-entry relative file path) is the
     # one file this item actually is.
-    src = lock.get("source_dir") if lock else (
+    src = entry.get("source_dir") if entry else (
         (cat or {}).get("skill_md") if kind != "skill" else (cat or {}).get("rel_dir"))
     if lock and lock.get("source_url"):
         # A URL import's source_dir is a path inside that repo, not on disk.
@@ -602,17 +627,27 @@ def cmd_info(argv):
                + ("" if src in (None, "", ".") else " (%s)" % src))
     elif src:
         out.kv("source", _tilde(src))
-    if lock:
-        if lock.get("commit"):
-            out.kv("commit", str(lock["commit"])[:9])
-        if lock.get("sha256"):
-            out.kv("sha256", str(lock["sha256"])[:12])
-        ia, ua = lock.get("installed_at"), lock.get("updated_at")
+    if entry:
+        if entry.get("commit"):
+            out.kv("commit", str(entry["commit"])[:9])
+        if entry.get("sha256"):
+            out.kv("sha256", str(entry["sha256"])[:12])
+        ia, ua = entry.get("installed_at"), entry.get("updated_at")
         if ia:
             out.kv("installed", "%s (%s)" % (ia, util.rel_time(ia)))
         if ua and ua != ia:
             out.kv("updated", "%s (%s)" % (ua, util.rel_time(ua)))
-        out.kv("agents", ", ".join(lock.get("agents") or []) or "(none)")
+        out.kv("agents", ", ".join(entry.get("agents") or []) or "(none)")
+    if plock and not lock:
+        # Which copy the rows above describe. Only worth saying when there is
+        # no user-scope record to confuse it with.
+        out.kv("scope", "project")
+    # `store`, `pinned`, `quarantined`, `sidelined by` and the lock's own tags
+    # are user-scope only: there is no canonical store in a repo, and a project
+    # entry has no such keys (single writer, `store._install_project_skill`).
+    # Omitting them is the honest answer; "pinned no" would assert a field that
+    # cannot exist. If `boost pin --local` is ever added, revisit this guard.
+    if lock:
         out.kv("pinned", "yes" if lock.get("pinned") else "no")
         out.kv("quarantined", "yes" if lock.get("quarantined") else "no")
         if lock.get("sidelined_by"):

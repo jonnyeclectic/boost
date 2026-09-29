@@ -349,6 +349,18 @@ vendoring a skill into a repository never fights with the copy you use
 everywhere, and `boost install --local` run from `src/deep/nested` walks up to
 the repository root rather than scattering a `.claude/` three directories down.
 
+"This repo" means the nearest `.git`/`.hg`/`.svn` above you, or the directory
+you are standing in when there is none — a project does not have to be under
+version control to be a good place to put its skills. Every command agrees on
+that answer, so `verify`, `list`, `info`, `doctor` and `uninstall` find what
+`install --local` wrote wherever it wrote it. The one directory that is never a
+project is `$HOME`: a "project" install there would write into exactly the
+directories user scope owns.
+
+`--local` is not skills-only. A rule or a workflow installed with it lands in
+the repository too — `<repo>/CLAUDE.local.md`, `<repo>/.cursor/rules/`,
+`<repo>/.claude/commands/` — and `boost list --local` shows all three kinds.
+
 After a fresh clone, `boost sync` re-materializes anything the project lock
 records but the checkout is missing. It never deletes a skill directory boost
 didn't write, and won't overwrite a hand-written `.claude/skills/<name>/`

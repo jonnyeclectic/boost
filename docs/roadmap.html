@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>507</b><span>Loop finds</span></div>
+      <div class="stat"><b>513</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -5504,53 +5504,88 @@ exactly why plausible similarity was not accepted as evidence.</p>
       </article>
 
       <article class="cap rcard" id="audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
-        <h3>Project scope seams: <code>uninstall</code>/<code>verify</code>/<code>list</code>/<code>info</code>/<code>reinstall</code> disagree with what <code>install --local</code> wrote</h3>
-        <p>The project-scope-across-every-command item shipped, and the 2026-08 CLI audit found its seams: the
-writers and readers resolve "the project" differently. <code>install --local</code> uses
-<code>scopes.resolve_base</code>, which falls back to the cwd
-(<code>scopes.py:83-104</code>), while <code>uninstall</code>'s project fallback
-(<code>store.py:1249</code>) and <code>verify</code>/<code>doctor</code>/<code>list</code> all go
-through <code>scopes.project_root</code>, which requires a VCS marker (<code>scopes.py:45</code>).
-So from a plain directory, <code>install anthropics/skills:pdf --local</code> writes
-<code>.boost/skill-lock.json</code> and <code>.claude/skills/pdf</code> and reports success &mdash;
-then <code>verify pdf</code> answers <em>&ldquo;Error: not installed: pdf&rdquo;</em>, plain
-<code>uninstall</code> answers <em>&ldquo;brainstorming is not installed&rdquo;</em>, and
-<code>doctor</code>/<code>list</code> show no project row. After <code>mkdir .git</code> the same
-commands find everything. All six findings reproduced.
-
-Four more seams, each confirmed in source. The already-installed error hints
-<em>&ldquo;<code>boost reinstall brainstorming --local</code> to force&rdquo;</em> &mdash; a flag
-<code>reinstall</code> does not have; following the hint exits 2 with
-<em>&ldquo;unrecognized arguments: --local&rdquo;</em> (<code>store.py:615-617</code>).
-<code>verify &lt;project-only name&gt;</code> ignores the filter and grades every user-scope item
-&mdash; <code>cmd_verify</code> already passes <code>[]</code> for project-only names
-(<code>safety.py:355-356</code>) but <code>_iter_installed_all</code> treats <code>[]</code> as
-&ldquo;everything&rdquo; (<code>_common.py:66</code>, <code>if names:</code>), so the run can
-<em>fail</em> on a rule the user never named. <code>list --local --kind rule</code> prints
-<em>&ldquo;&#9675; no rules installed&rdquo;</em> although project scope holds skills only. And
-<code>info</code> on a project-scoped skill shows the not-installed card &mdash; no version,
-installed date, commit or agents rows &mdash; though the project lock records them all and
-<code>--json</code> returns them under <code>project</code>.
-
-The verified fix, one follow-up card: make <code>_iter_installed_all</code> treat <code>[]</code>
-as nothing (<code>_common.py:66</code>) &middot; change the hint to
-<code>boost install NAME --local --force</code> (matching README ~328) or add
-<code>--local</code> to <code>reinstall</code> &middot; unify the uninstall fallback on
-<code>resolve_base</code> or hint <code>--local</code> (<code>store.py:1249</code>) &middot; have
-<code>install --local</code> warn outside a VCS root, or teach <code>project_root</code> to accept
-<code>.boost/skill-lock.json</code> as a marker &middot; refuse
-<code>list --local --kind rule|workflow</code> the way the existing <code>--tag</code> guard does
-(<code>info.py:274-281</code>) &middot; render the plock identity rows in <code>cmd_info</code>.
-Docs: README ~304&ndash;328 (uninstall/reinstall routes), a follow-up note on
-<code>docs/roadmap/items/project-scope-across-every-command.md</code>, and regenerate
-docs/commands.html if <code>reinstall</code> gains <code>--local</code>. Found by the 2026-08 CLI
-audit (cluster <code>project-scope-readers</code>); repro in the audit log.</p>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
+        <h3>Project scope seams: <code>uninstall</code>/<code>verify</code>/<code>list</code>/<code>info</code> disagreed with what <code>install --local</code> wrote</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis.md">Write-up &middot; audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">install --local writes a lock that uninstall, verify, doctor and list then cannot find</span>
+          <span class="m">install --local wrote a lock that uninstall, verify, doctor and list then could not find</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="project-scope-in-an-unmarked-tree-does-not-walk-up">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3>Project scope in an unmarked tree does not walk up, so <code>src/</code> becomes its own project</h3>
+        <p><code>scopes.resolve_base</code> walks up for a VCS marker and, finding none, falls back to the
+directory it started in &middot; <em>without</em> walking up. So in a project that is not a git/hg/svn
+checkout, every subdirectory is its own project: <code>install brainstorming --local</code> run from
+<code>proj/src</code> writes <code>proj/src/.boost/skill-lock.json</code> and <code>proj/src/.claude/skills/</code>,
+even when <code>proj/.boost/skill-lock.json</code> already exists; and <code>list --local</code>,
+<code>info</code>, <code>doctor</code>, <code>verify</code> and bare <code>uninstall</code> run from
+<code>proj/src</code> cannot see what was installed at <code>proj</code>. <code>mkdir .git</code> fixes
+both, which is what makes it easy to miss.
+
+This is not the reader/writer split that <code>fix(scope)</code> closed &middot; readers and writers now
+agree, and that is the point: they agree on the <em>cwd</em> rather than on the project.
+<code>project_root</code>'s docstring says walking up is the whole point ("<code>install --local</code>
+run from <code>src/deep/nested</code> must write into the repo's <code>.claude/skills</code>, not create
+a stray one three levels down"), and that promise is simply not kept once the marker is absent.
+
+The fix is a choice, not a bug fix, which is why it is its own card. Option (a): make the fallback
+walk up for an existing <code>.boost/skill-lock.json</code> &middot; but a lock-file marker cannot
+help the very first install, which is the one that creates it. Option (b): let the fallback walk up to
+the nearest ancestor that is not <code>$HOME</code> &middot; too greedy, it would swallow unrelated
+sibling directories. Option (c): keep today's behaviour and say so &middot; have
+<code>install --local</code> warn once when it is about to create a project in a directory with no VCS
+marker, naming the directory, so the second lock is a decision rather than a surprise. (c) is the
+cheapest and the most honest; (a) is worth pairing with it for every command after the first.
+
+Found by the adversarial verification of PR #998, which reproduced it end to end. <code>$HOME</code>
+is still never a project and deletion is still gated by <code>resolve_in_base</code>, so this is a
+wrong-directory bug, not a safety one.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">install --local from a subdirectory of an unmarked project creates a second lock there</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="rule-and-workflow-rows-carry-a-scope-nothing-but-list-local-reads">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3>A rule or workflow installed <code>--local</code> reads as a user one everywhere but <code>list --local</code></h3>
+        <p>Rules and workflows installed with <code>--local</code> materialize into the repo but are recorded
+in the <em>user</em> lock, tagged <code>scope: project</code> and <code>base: &lt;repo&gt;</code>,
+because a project lock holds skills and nothing else
+(<code>store._check_scope_conflict</code>). <code>boost list --local</code> now filters them with
+<code>scopes.owned_by</code>, and it is the only reader that does.
+
+<code>lockfile.installed_rules()</code> and <code>installed_workflows()</code> have a dozen other
+consumers &mdash; <code>store</code>, <code>complete</code>, <code>taps</code>,
+<code>team</code>, <code>safety</code>, <code>quality</code>, <code>pkg</code> &mdash; and none of
+them ask whose repo a row belongs to. So <code>boost doctor</code> and <code>boost verify</code>
+count another checkout's rule as this machine's, <code>drift</code> and <code>health</code> grade
+it, tab-completion offers it, and plain <code>boost list</code> prints it under
+&ldquo;installed rules&rdquo; with nothing saying it belongs to a directory the user may not be
+standing in. The failure is quiet in both directions: a row for a repo that has since been
+deleted never goes away, and a row for the repo you <em>are</em> in looks identical to one for a
+repo you are not.
+
+Worth settling the design before the sweep, because the honest answer differs per command. A
+<code>scope</code> column on plain <code>list</code>'s rule and workflow tables is cheap and makes
+the ambiguity visible (<code>boost info</code> already prints <code>scope project</code>).
+Whether <code>verify</code> and <code>doctor</code> should <em>grade</em> a rule belonging to
+another repo is a separate question &mdash; they cannot read its materializations from here, so
+counting it is arguably the bug and skipping it with a note the honest fix. Split out of
+<code>audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis</code>, where the
+evidence was gathered.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">a project-scoped rule reads as a user one in doctor, verify, drift, health and update</span>
         </div>
       </article>
 
@@ -6514,6 +6549,42 @@ its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> ra
           <span class="m">a rerun leaves an already-tapped registry where it is, even when the manifest names another commit</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="uninstall-local-cannot-remove-a-rule-or-workflow-list-local-shows">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3><code>uninstall --local</code> cannot remove a rule or workflow that <code>list --local</code> shows</h3>
+        <p><code>boost install &lt;rule&gt; --local</code> works, and since PR #998 <code>boost list
+--local</code> prints the rule it installed. <code>boost uninstall &lt;rule&gt; --local</code>
+then exits 1 with &ldquo;<code>&lt;rule&gt; is not installed in this project</code>&rdquo; and the
+hint <code>see what is with `boost list --local`</code> &middot; which is the command that just
+showed it. There is no way to undo the install through the scope flag that performed it.
+
+The cause is one line: <code>store.uninstall_project</code> (store.py:1291) reads
+<code>projectlock.get_skill</code> and nothing else, because a project lock holds a
+<code>skills</code> key alone. A rule or workflow installed <code>--local</code> is recorded in
+the <em>user</em> lock tagged <code>scope: project</code> with a <code>base</code>, so the
+project lock genuinely has no row &middot; but the user lock does, and bare <code>boost
+uninstall &lt;rule&gt;</code> finds it and works. So the item is removable; only the flag that
+names where it lives is not.
+
+Two candidate fixes, and the choice is a design decision rather than a typo. Either
+<code>uninstall_project</code> falls through to the user lock for a row whose <code>scope</code>
+is project and whose <code>base</code> is this repo (<code>scopes.owned_by</code> already answers
+exactly that question, and is what <code>list --local</code> now uses), or <code>--local</code>
+refuses a non-skill with a message that says <em>use bare <code>uninstall</code></em> rather
+than claiming the thing is not installed. The first is what a reader expects; the second is one
+line. Either way the current message is wrong on its facts, which is the part that must not
+survive. A test wants a rule installed <code>--local</code>, asserted present in <code>list
+--local</code>, then removed by <code>uninstall --local</code> with the context file checked for
+the stripped block. Found while verifying
+<code>audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">list --local prints the repo's rule; uninstall --local says it is not installed</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -7425,6 +7496,45 @@ its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> ra
         </div>
       </article>
 
+      <article class="cap rcard" id="util-rmtree-chmods-a-symlink-target-outside-the-tree">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Bug</span></div>
+        <h3><code>util.rmtree</code>'s retry hook <code>chmod</code>s a symlink's target, outside the tree it is deleting</h3>
+        <p><code>util.rmtree</code> installs an error handler so a read-only file cannot strand a delete: on
+failure it <code>chmod</code>s the path and retries. The handler is handed the path that failed, and
+when that path is a <em>symlink</em> the <code>chmod</code> follows it &middot; so deleting a
+directory that happens to contain a link to a file elsewhere changes that file's permissions.
+
+Measured, because the first draft of this card guessed at the shape and guessed wrong. The hook only
+fires once a delete has already <em>failed</em>, and unlinking a symlink does not fail while its
+parent directory is writable &middot; so in the ordinary case nothing happens at all: the link goes,
+the target keeps its mode byte-for-byte. Make the parent read-only (<code>0o500</code>) and the
+unlink fails, the hook <code>chmod</code>s the link, the target outside the tree goes
+<code>0o400</code> &rarr; <code>0o200</code>, the retry fails again and <code>rmtree</code> raises.
+The link is still there. So the only lasting effect of the hook on this path is the permission
+change on a file it was never asked to touch &middot; the earlier claim that &ldquo;the delete
+itself correctly removes only the link&rdquo; describes a run in which the hook never fires.
+
+The containment guards do their job: <code>scopes.resolve_in_base</code> and <code>contains</code>
+still refuse to remove anything outside the base, and the verification of PR #998 confirmed a planted
+victim file survives every escape attempt byte-for-byte. What is not guarded is the
+<em>permission change</em> on the way past, which happens before containment is ever consulted
+because it is inside the retry hook.
+
+Pre-existing and untouched by the project-scope work, but newly easier to reach: bare
+<code>uninstall</code> can now act in an unmarked directory, so a repo copy that carries a symlink
+into the user's home is one command away. The fix is small &middot; use
+<code>os.chmod(..., follow_symlinks=False)</code> where the platform supports it, and otherwise skip
+the retry entirely for a path that <code>os.path.islink</code> reports, since a symlink's own mode is
+not what blocked the unlink. A test wants a link inside the tree pointing at a
+<code>0o400</code> file outside it, asserting the target's mode is unchanged after the delete.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the read-only retry hook follows a symlink and chmods the file it points at</span>
+        </div>
+      </article>
+
       <article class="cap rcard" id="audit-attest-findings">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Trust · UX</span></div>
         <h3>boost attest: CLI audit findings (2026-08)</h3>
@@ -7446,6 +7556,71 @@ its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> ra
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
           <span class="m">trust add of a missing .pub path blames "invalid base64 in minisign data"</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="project-uninstall-deletes-any-in-repo-directory-the-lock-names">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Security</span></div>
+        <h3><code>uninstall --local</code> deletes any in-repo directory the committed lock names</h3>
+        <p><code>store.uninstall_project</code> re-derives every recorded materialization through
+<code>scopes.resolve_in_base</code> and refuses anything outside the project &middot; the guard
+works, and the verification of PR #998 confirmed a planted victim outside the repo survives every
+escape attempt. What it does not check is that the path is an <em>agent skills directory</em>. A
+lock row reading <code>{"path": "src/core"}</code> is inside the base, so it passes, and
+<code>util.rmtree</code> removes the repo's source tree (store.py:1296-1300).
+
+<code>.boost/skill-lock.json</code> is a committed file: whoever can land a commit can write that
+row, and the victim runs one ordinary <code>boost uninstall &lt;skill&gt; --local</code>. That is a
+narrower threat than it sounds &mdash; someone who can commit to your repo can also commit a
+<code>Makefile</code> &mdash; but this is the one path where the damage happens under a boost
+command the user typed, with boost's own containment check having already said yes.
+
+The fix is to narrow the check from &ldquo;inside the base&rdquo; to &ldquo;inside the base
+<em>and</em> under a known agent dotdir&rdquo;: install only ever writes
+<code>&lt;base&gt;/&lt;agent dotdir&gt;/skills/&lt;name&gt;</code>, so the set of legal paths is
+small, enumerable from <code>agents</code>, and can be derived rather than trusted. Anything else
+in the list is skipped with a warning naming the row, not removed. Newly easier to reach than it
+was: bare <code>uninstall</code> can now act in an unmarked directory, so a cloned repo carrying a
+<code>.boost/</code> no longer needs a VCS marker for the command to find it. Related:
+<code>util-rmtree-chmods-a-symlink-target-outside-the-tree</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">a materialization path of src/core passes the containment check and is removed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="concurrency-probe-measured-a-race-not-the-pool">
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Tests · Flake</span></div>
+        <h3>The <code>add_many</code> concurrency probe measured a race, not the pool</h3>
+        <p><code>test_it_actually_runs_concurrently</code> counted the peak number of fake clones in flight and
+asserted it exceeded one. The fake clone is one <code>mkdir</code> and a small write, so the window
+in which two of them overlap is microseconds wide &middot; on a loaded runner each worker finished
+before the next was scheduled, the peak stayed at 1, and the required <code>tests (macos-latest,
+3.14)</code> check failed with <code>assert 1 &gt; 1</code> against a <code>ThreadPoolExecutor</code>
+that was doing exactly its job. Observed on PR #998, where it blocked a merge for a defect that did
+not exist.
+
+<b>The failure said the wrong thing, which is the part that matters.</b> "This is serial" and "this
+was too fast to catch overlapping" are different diagnoses, and the second wastes whoever reads it.
+A required check that can fail for a reason unrelated to the change also trains the next person to
+re-run rather than read &middot; which is how a real regression gets waved through.
+
+A <code>threading.Barrier(jobs)</code> inverts the dependency. Every worker blocks until
+<code>jobs</code> of them have arrived, so the assertion stops being about timing: a pool of four
+trips the barrier and the call returns, and a pool narrower than four <em>cannot</em> &mdash; the
+first worker waits for peers that will never come and the barrier times out. Slower hardware makes
+the test <em>more</em> reliable rather than less, which is the opposite of the property it had.
+Paired with <code>test_the_concurrency_probe_fails_when_the_pool_is_serial</code>, which drives
+<code>add_many</code> at <code>jobs=1</code> so the probe's own ability to fail is itself asserted,
+and verified by hand against a <code>max_workers=1</code> executor: it fails with "the pool never
+had 4 clones in flight".</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">assert 1 &gt; 1 on macOS/3.14 against a thread pool that was working correctly</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
