@@ -146,11 +146,58 @@ class TestParsingTheTapList:
         with pytest.raises(SystemExit):
             m.parse_taps("owner/repo 123\n")
 
-    def test_a_fourth_field_is_rejected(self):
+    def test_a_fifth_field_is_rejected(self):
         m = _load()
         with pytest.raises(SystemExit) as ei:
-            m.parse_taps("owner/repo %s 1 2\n" % ("f" * 40))
-        assert "at most 3" in str(ei.value)
+            m.parse_taps("owner/repo %s 1 1 1\n" % ("f" * 40))
+        assert "at most 4" in str(ei.value)
+
+    def test_the_distinct_count_is_parsed_and_dropped_by_parse_taps(self):
+        # Three wide is the shape every caller destructures, including the
+        # shards matrix job; the fourth field is read through parse_distinct.
+        m = _load()
+        sha = "f" * 40
+        text = "owner/repo %s 10 4\n" % sha
+        assert m.parse_taps(text) == [("owner/repo", sha, 10)]
+        assert m._rows(text) == [("owner/repo", sha, 10, 4)]
+        assert m.parse_distinct(text) == {"owner/repo": 4}
+
+    def test_a_row_with_no_distinct_count_is_absent_not_zero(self):
+        # Zero would be a measurement. A relock predating the field is not one,
+        # and a 0% concentration nobody measured is the wrong kind of quiet.
+        m = _load()
+        text = "owner/repo %s 10\n" % ("f" * 40)
+        assert m._rows(text) == [("owner/repo", "f" * 40, 10, None)]
+        assert m.parse_distinct(text) == {}
+
+    def test_a_malformed_distinct_count_fails_loudly(self):
+        m = _load()
+        with pytest.raises(SystemExit) as ei:
+            m.parse_taps("owner/repo %s 10 four\n" % ("f" * 40))
+        assert "owner/repo" in str(ei.value)
+        assert "distinct items" in str(ei.value)
+
+    def test_more_distinct_than_entries_is_rejected(self):
+        # Distinct items are entries that survived de-duplication, so this row
+        # was measured against two different trees and describes neither.
+        m = _load()
+        with pytest.raises(SystemExit) as ei:
+            m.parse_taps("owner/repo %s 4 10\n" % ("f" * 40))
+        assert "more distinct than there is" in str(ei.value)
+
+    def test_every_entry_being_distinct_is_allowed(self):
+        # The boundary is inclusive: a registry that vendors nothing has one
+        # distinct item per entry, and that is the healthy case, not an error.
+        m = _load()
+        sha = "f" * 40
+        assert m._rows("owner/repo %s 7 7\n" % sha) == [("owner/repo", sha, 7, 7)]
+
+    def test_a_distinct_count_without_an_entry_count_cannot_be_written(self):
+        # There is no field position for it: `repo sha 4` IS the entry count.
+        # The check that matters is that the two are read in the right order.
+        m = _load()
+        assert m._rows("owner/repo %s 4\n" % ("f" * 40))[0][2] == 4
+        assert m._rows("owner/repo %s 4\n" % ("f" * 40))[0][3] is None
 
 
 class TestTheShippedListIsFullyPinned:
@@ -169,6 +216,24 @@ class TestTheShippedListIsFullyPinned:
         assert uncounted == [], (
             "uncounted repos in taps.txt: %s — run "
             "`python3 scripts/eval_corpus.py --relock`" % uncounted)
+
+    def test_every_repo_carries_a_distinct_count(self):
+        m = _load()
+        rows = m._rows(_TAPS.read_text(encoding="utf-8"))
+        missing = [r for r, _s, _n, d in rows if d is None]
+        assert missing == [], (
+            "repos with no distinct-content count in taps.txt: %s — run "
+            "`python3 scripts/eval_corpus.py --relock`" % missing)
+
+    def test_the_corpus_holds_more_copies_than_it_looks(self):
+        # The reason the fourth field exists, pinned as a fact rather than
+        # left in a comment: if this ever stops being true the two ceilings
+        # have collapsed into one and the second can go.
+        m = _load()
+        rows = m._rows(_TAPS.read_text(encoding="utf-8"))
+        entries = sum(n for _r, _s, n, _d in rows)
+        distinct = sum(d for _r, _s, _n, d in rows)
+        assert distinct < entries * 0.9, (entries, distinct)
 
     def test_the_list_is_not_empty_and_has_no_duplicates(self):
         m = _load()
@@ -223,9 +288,110 @@ class TestConcentration:
         # Exactly at the ceiling passes; the ratchet is "no worse than", not
         # "strictly better than", so re-locking identical counts cannot fail.
         m = _load()
-        top = int(m.MAX_SHARE * 100)
+        top = int(m.MAX_ROW_SHARE * 100)
         rows = [("a/a", "1" * 40, top), ("b/b", "2" * 40, 100 - top)]
         assert m.check_concentration(rows) is None
+
+    def test_a_short_row_is_not_read_as_a_zero_distinct_count(self):
+        # Three-wide Row tuples reach `shares` from every caller that went
+        # through parse_taps. Reading the absent column as zero would report a
+        # content concentration measured on nothing.
+        m = _load()
+        assert m.shares([("a/a", "1" * 40, 90)], column=3) == []
+
+    def test_the_content_column_is_ranked_on_its_own_numbers(self):
+        # The point of the column: the row order and the content order differ.
+        m = _load()
+        rows = [("vendorer/x", "1" * 40, 900, 100),
+                ("author/y", "2" * 40, 200, 200)]
+        assert [r for r, _n, _s in m.shares(rows)] == ["vendorer/x", "author/y"]
+        assert [r for r, _n, _s in m.shares(rows, column=3)] \
+            == ["author/y", "vendorer/x"]
+
+    def test_a_repo_under_the_row_ceiling_can_break_the_content_one(self):
+        # The failure a row-only ceiling cannot see: no vendoring, so the repo
+        # stays small in the index and still owns most of the material.
+        m = _load()
+        rows = [("author/y", "1" * 40, 100, 100),
+                ("vendorer/x", "2" * 40, 200, 15),
+                ("other/z", "3" * 40, 50, 15)]
+        assert m.check_concentration(rows) is None
+        problem = m.check_concentration(rows, column=3)
+        assert problem and "author/y" in problem
+        assert "distinct items" in problem and "content ceiling" in problem
+
+    def test_a_repo_over_the_row_ceiling_can_be_under_the_content_one(self):
+        # The mirror, and the reason the row ceiling over-reports: 900 rows of
+        # 100 distinct items is one publisher's copies, not its house style.
+        m = _load()
+        rows = [("vendorer/x", "1" * 40, 900, 100),
+                ("author/y", "2" * 40, 100, 100),
+                ("other/z", "3" * 40, 100, 100)]
+        assert m.check_concentration(rows) is not None
+        assert m.check_concentration(rows, column=3) is None
+
+    def test_a_corpus_too_small_to_pass_is_not_judged(self):
+        # Two repos cannot get below 50%, so any ceiling under that fails
+        # every two-repo corpus however it is balanced — unsatisfiable, not
+        # strict. The content ceiling is one of those.
+        m = _load()
+        rows = [("a/a", "1" * 40, 1, 1), ("b/b", "2" * 40, 1, 1)]
+        assert m.check_concentration(rows, column=3) is None
+
+    def test_the_floor_is_the_smallest_corpus_that_could_pass(self):
+        # Three repos CAN get below the content ceiling (33% each), so three
+        # are judged — and an unbalanced three still fails. The skip is about
+        # what is possible, not about letting small corpora off.
+        m = _load()
+        even = [(r, "1" * 40, 1, 1) for r in ("a/a", "b/b", "c/c")]
+        assert m.check_concentration(even, column=3) is None
+        skewed = [("a/a", "1" * 40, 8, 8), ("b/b", "2" * 40, 1, 1),
+                  ("c/c", "3" * 40, 1, 1)]
+        assert m.check_concentration(skewed, column=3) is not None
+
+    def test_the_row_ceiling_has_the_same_floor(self):
+        # 1/0.65 < 2, so the row ceiling judges even a two-repo corpus while
+        # the content one does not. The rule is one expression over whichever
+        # ceiling applies, not a per-column exception.
+        m = _load()
+        rows = [("a/a", "1" * 40, 9), ("b/b", "2" * 40, 1)]
+        assert m.check_concentration(rows) is not None
+
+    def test_the_shipped_list_is_far_above_the_floor(self):
+        m = _load()
+        rows = m._rows(_TAPS.read_text(encoding="utf-8"))
+        assert len(rows) * m.MAX_CONTENT_SHARE > 3
+
+    def test_an_unknown_column_is_an_error_not_a_skipped_check(self):
+        # A concentration check that silently ran ungated reads exactly like
+        # one that passed.
+        m = _load()
+        with pytest.raises(KeyError):
+            m.check_concentration([("a/a", "1" * 40, 1, 1)], column=4)
+
+    def test_the_shipped_list_is_under_the_content_ceiling(self):
+        m = _load()
+        rows = m._rows(_TAPS.read_text(encoding="utf-8"))
+        problem = m.check_concentration(rows, column=3)
+        assert problem is None, problem
+
+    def test_the_content_ceiling_is_a_ratchet_on_the_measured_value(self):
+        m = _load()
+        rows = m._rows(_TAPS.read_text(encoding="utf-8"))
+        top = m.shares(rows, column=3)[0]
+        assert 0.2 < top[2] <= m.MAX_CONTENT_SHARE
+        assert m.MAX_CONTENT_SHARE - top[2] < 0.10, (
+            "MAX_CONTENT_SHARE has drifted far above the measured share — "
+            "re-tighten it")
+
+    def test_the_two_ceilings_measure_different_repos_worth_of_bias(self):
+        # If these ever agree, one of them is redundant. Today the row leader
+        # is a vendorer and holds a much smaller share of the material.
+        m = _load()
+        rows = m._rows(_TAPS.read_text(encoding="utf-8"))
+        by_rows = m.shares(rows)[0]
+        by_content = m.shares(rows, column=3)[0]
+        assert by_rows[2] - by_content[2] > 0.15, (by_rows, by_content)
 
     def test_the_shipped_list_is_under_the_ceiling(self):
         m = _load()
@@ -236,9 +402,10 @@ class TestConcentration:
         # If this ever passes trivially, the ratchet has stopped ratcheting.
         m = _load()
         top = m.shares(m.parse_taps(_TAPS.read_text(encoding="utf-8")))[0]
-        assert 0.5 < top[2] <= m.MAX_SHARE
-        assert m.MAX_SHARE - top[2] < 0.10, (
-            "MAX_SHARE has drifted far above the measured share — re-tighten it")
+        assert 0.5 < top[2] <= m.MAX_ROW_SHARE
+        assert m.MAX_ROW_SHARE - top[2] < 0.10, (
+            "MAX_ROW_SHARE has drifted far above the measured share — "
+            "re-tighten it")
 
 
 class TestExtraTaps:
@@ -286,12 +453,51 @@ class TestRelock:
         text = "kept/repo %s 7\n" % ("a" * 40)
         assert m.relock_text(text, {"other/repo": 1}) == text
 
+    def test_a_measured_distinct_count_is_written(self):
+        m = _load()
+        sha = "a" * 40
+        out = m.relock_text("owner/repo %s\n" % sha, {"owner/repo": 9},
+                            distinct={"owner/repo": 4})
+        assert m._rows(out) == [("owner/repo", sha, 9, 4)]
+
+    def test_a_committed_distinct_count_is_carried_forward(self):
+        # Same rule as the SHA: a caller that re-measured only the entry counts
+        # has not learned the old distinct count is wrong, and dropping the
+        # field would quietly un-pin half of what the row describes.
+        m = _load()
+        sha = "a" * 40
+        out = m.relock_text("owner/repo %s 10 4\n" % sha, {"owner/repo": 12})
+        assert m._rows(out) == [("owner/repo", sha, 12, 4)]
+
+    def test_a_measured_count_beats_the_committed_one(self):
+        m = _load()
+        sha = "a" * 40
+        out = m.relock_text("owner/repo %s 10 4\n" % sha, {"owner/repo": 12},
+                            distinct={"owner/repo": 6})
+        assert m._rows(out) == [("owner/repo", sha, 12, 6)]
+
+    def test_a_stale_carried_count_larger_than_the_entries_is_dropped(self):
+        # Writing it would emit a row `_rows` refuses to parse: a relock whose
+        # own parser rejects its output. Only a carry-forward can get here.
+        m = _load()
+        sha = "a" * 40
+        out = m.relock_text("owner/repo %s 10 8\n" % sha, {"owner/repo": 3})
+        assert m._rows(out) == [("owner/repo", sha, 3, None)]
+
+    def test_a_row_with_no_distinct_count_anywhere_keeps_three_fields(self):
+        m = _load()
+        sha = "a" * 40
+        out = m.relock_text("owner/repo %s 10\n" % sha, {"owner/repo": 12})
+        assert out == "owner/repo %s    12\n" % sha
+
     def test_relocking_the_shipped_list_with_its_own_counts_is_a_no_op(self):
         # The file is the output of --relock, so re-running it must not churn.
         m = _load()
         text = _TAPS.read_text(encoding="utf-8")
         counts = {r: n for r, _s, n in m.parse_taps(text) if n is not None}
         assert m.relock_text(text, counts) == text
+        assert m.relock_text(text, counts,
+                             distinct=m.parse_distinct(text)) == text
 
 
 class TestRefreshRewritesThePins:
@@ -404,6 +610,32 @@ class TestTheCorpusSizeBlock:
         out = m.relock_text(text, {"owner/repo": 9})
         assert out == "# header\nowner/repo %s     9\n" % ("a" * 40)
 
+    def test_the_content_line_states_the_distinct_total(self):
+        m = _load()
+        text = self._text([("a/one", 1), ("b/two", 1)])
+        block = self._block(m.relock_text(text, {"a/one": 60, "b/two": 40},
+                                          distinct={"a/one": 20, "b/two": 30}))
+        assert "100 entries in 2 repos" in block
+        assert "50 distinct items" in block
+        assert "b/two holds 60.0%" in block
+        assert "of them, and the rows overstate the corpus 2.00x" in block
+
+    def test_the_content_line_never_says_entries(self):
+        # tests/unit/test_corpus_prose reads every "<number> entries" in this
+        # file as a claim about the corpus size. This is a claim about
+        # something else, so it must not look like one.
+        m = _load()
+        block = self._block(m.relock_text(self._text([("a/one", 1)]),
+                                          {"a/one": 8}, distinct={"a/one": 3}))
+        assert "3 distinct items" in block
+        assert "3 entries" not in block
+
+    def test_a_list_with_no_distinct_counts_has_no_content_line(self):
+        m = _load()
+        block = self._block(m.relock_text(self._text([("a/one", 1)]),
+                                          {"a/one": 8}))
+        assert "distinct" not in block
+
     def test_the_shipped_list_carries_the_block(self):
         # With it, test_relocking_the_shipped_list_with_its_own_counts_is_a_no_op
         # is also the check that the block matches the rows.
@@ -442,6 +674,30 @@ class TestTheRefreshSummary:
         text = m.refresh_summary(self._rows(), {"a/a": "3" * 40},
                                  {"a/a": 88, "b/b": 50})
         assert "100 → 88 (-12)" in text
+
+    def test_the_distinct_total_is_stated_when_it_was_measured(self):
+        m = _load()
+        rows = [("a/a", "1" * 40, 100, 40), ("b/b", "2" * 40, 50, 50)]
+        text = m.refresh_summary(rows, {"a/a": "3" * 40},
+                                 {"a/a": 112, "b/b": 50},
+                                 {"a/a": 41, "b/b": 50})
+        assert "Distinct content 90 → 91 (+1); the rest of the corpus is " \
+            "copies." in text
+
+    def test_no_distinct_measurement_means_no_such_sentence(self):
+        # The monthly job before a relock has nothing to say here, and saying
+        # "0" would report a collapse that did not happen.
+        m = _load()
+        text = m.refresh_summary(self._rows(), {}, {"a/a": 100, "b/b": 50})
+        assert "Distinct content" not in text
+
+    def test_a_three_wide_row_still_summarises(self):
+        # `Row` tuples reach here from every caller that went through
+        # parse_taps, and the summary must not index off the end of them.
+        m = _load()
+        text = m.refresh_summary(self._rows(), {}, {"a/a": 100, "b/b": 50},
+                                 {"a/a": 100, "b/b": 50})
+        assert "Distinct content 0 → 150 (+150)" in text
 
     def test_the_corpus_total_is_stated_with_its_delta(self):
         m = _load()
@@ -1118,7 +1374,7 @@ def pinned_corpus(tmp_path, sandbox):
         origin, sha = _skills_repo(tmp_path, name)
         tap = registry.add(str(origin))
         origins[tap.name] = (origin, sha)
-        lines.append("%s %s 2" % (tap.name, sha))
+        lines.append("%s %s 2 2" % (tap.name, sha))
     taps = tmp_path / "taps.txt"
     taps.write_text("\n".join(lines) + "\n", encoding="utf-8")
     assert m.main(["--ensure", "--taps", str(taps)]) == 0

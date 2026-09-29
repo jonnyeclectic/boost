@@ -176,7 +176,8 @@ class TestTheShippedList:
         So this must NOT assert they are unpinned — that stops being true the
         first time the job runs, and a test that fails on correct behaviour is
         a test someone deletes. What is durable is that a row is either a bare
-        name or a fully measured `repo sha count`: a half-written row would
+        name or a fully measured `repo sha count [distinct]`: a half-written
+        row would
         parse as a bad pin on the next run, when the corpus that produced it is
         already gone.
         """
@@ -184,10 +185,16 @@ class TestTheShippedList:
             if not ln.strip() or ln.lstrip().startswith("#"):
                 continue
             parts = ln.split()
-            assert len(parts) in (1, 3), "half-written row: %s" % ln
-            if len(parts) == 3:
+            assert len(parts) in (1, 3, 4), "half-written row: %s" % ln
+            if len(parts) >= 3:
                 assert re.fullmatch(r"[0-9a-f]{40}", parts[1]), ln
                 assert parts[2].isdigit(), ln
+            if len(parts) == 4:
+                # The distinct-content count, and a subset of the entries it
+                # was measured beside — more of them than there are entries
+                # means the two fields describe different trees.
+                assert parts[3].isdigit(), ln
+                assert int(parts[3]) <= int(parts[2]), ln
 
 
 class TestPinsSurviveRegeneration:
