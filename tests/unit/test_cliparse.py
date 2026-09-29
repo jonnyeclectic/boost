@@ -146,3 +146,31 @@ class TestUsageColourFollowsStderr:
         assert text.count(output.RESET) == 3
         assert text.startswith(output.RED + output.BOLD + "Error: ")
         assert output.DIM + "usage: boost demo" in text
+
+    def test_argparse_does_not_paint_the_usage_before_boost_does(
+            self, monkeypatch):
+        """3.14's argparse asks the same wrong question, so boost turns it off.
+
+        `ArgumentParser(color=True)` is the 3.14 default and it decides by
+        calling `_colorize.can_colorize()`, whose `file` defaults to
+        **stdout** -- for text `error()` writes to stderr. On top of the
+        redirect bug this whole class is about, the two paints nest: the
+        usage goes out inside one `out.c(..., DIM)` span, and argparse's own
+        reset after `usage: ` ends the dim two words in. So the text must
+        reach `out.c` bare, whatever the environment says.
+        """
+        monkeypatch.setenv("PYTHON_COLORS", "1")
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        p = cliparse.parser(prog="boost demo")
+        p.add_argument("name")
+        assert "\x1b[" not in p.format_usage()
+        assert "\x1b[" not in p.format_help()
+
+    def test_a_subparser_does_not_paint_it_either(self, monkeypatch):
+        """`add_subparsers` builds each one through `type(self)(**kwargs)`
+        without forwarding what `parser()` was given, so the default has to
+        be set in `__init__` -- the same reason `formatter_class` is."""
+        monkeypatch.setenv("PYTHON_COLORS", "1")
+        sub = cliparse.parser(prog="boost").add_subparsers().add_parser("demo")
+        sub.add_argument("name")
+        assert "\x1b[" not in sub.format_usage()

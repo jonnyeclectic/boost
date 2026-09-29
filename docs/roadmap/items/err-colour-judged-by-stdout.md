@@ -90,3 +90,23 @@ else: in a 200-column terminal, <code>boost install x &gt;out</code> folds the
 hint at 72 columns and <code>2&gt;log</code> writes 192-column lines into the
 log. It predates this card and is a width bug rather than a colour one, so it
 wants its own item.
+
+<br><br><b>A tenth call site, and it is the standard library's.</b> Python
+3.14 taught <code>argparse</code> to paint its own usage and help, defaulting
+to <code>ArgumentParser(color=True)</code> and deciding by calling
+<code>_colorize.can_colorize()</code> — whose <code>file</code> defaults to
+<b>stdout</b>, for text <code>BoostArgumentParser.error()</code> writes to
+stderr. Exactly this card's bug, arriving from under the floor on a version
+bump. It is worse than a leak here because the two paints nest: boost wraps
+the usage in one <code>out.c(..., DIM)</code> span, and argparse's own reset
+after <code>usage: </code> ends the dim two words in. So
+<code>__init__</code> now defaults <code>color=False</code> on 3.14+, next to
+the <code>formatter_class</code> default and for the same reason —
+<code>add_subparsers</code> builds each sub-parser through
+<code>type(self)(**kwargs)</code> without forwarding what <code>parser()</code>
+was given. Boost paints this text itself, against the stream it is written
+to; argparse must not paint it first. It surfaced as a red mutation gate: on
+3.14 the assertion that a redirected stderr carries no escape at all read
+<code>'Error: the ...ame\x1b[0m\n'</code> — argparse's green
+<code>name</code> at the end of the usage it had just coloured by the wrong
+stream.
