@@ -289,3 +289,53 @@ class TestProjectScope:
         monkeypatch.setattr(integrity.scopes, "project_root", lambda *a, **k: None)
         base, skills = integrity.project_skills()
         assert base is None and skills == {}
+
+
+class TestARowNothingWritesIsNotAMissingArtifact:
+    """`materialized_status` is the fifth reader of a materialization row.
+
+    A row for an agent boost no longer writes names a file nothing wrote and
+    nothing will write. Read as ``STATUS_MISSING`` it failed `boost verify`
+    on every run and made `boost drift` and `boost health` demand a
+    `boost sync` that skips the row by design -- the same closed loop
+    `boost doctor` was fixed for
+    (sync-repairs-a-disabled-agents-row-every-run). Five commands read it:
+    `verify`, `attest`, `drift`, `health` and `serve`.
+    """
+
+    @staticmethod
+    def _entry(kind, agent):
+        gone = paths.home() / ".cursor" / "nothing-wrote-this"
+        return {"kind": kind, "materializations": [
+            {"agent": agent, "mode": "file", "path": str(gone),
+             "sha256": "x" * 64}]}
+
+    @staticmethod
+    def _disable(agent):
+        cfg = config.load()
+        cfg["agents"][agent]["enabled"] = False
+        config.save(cfg)
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_disabled_agents_row_stops_reading_as_missing(self, sandbox,
+                                                            kind):
+        e = self._entry(kind, "cursor")
+        assert integrity.materialized_status("x", e) == integrity.STATUS_MISSING
+        self._disable("cursor")
+        assert integrity.materialized_status("x", e) == integrity.STATUS_OK
+
+    def test_a_workflow_row_is_judged_by_the_narrower_set_here_too(self,
+                                                                   sandbox):
+        """`codex` is enabled and takes rules, and has no command format, so
+        the two kinds must answer differently for the same row."""
+        assert integrity.materialized_status(
+            "x", self._entry("rule", "codex")) == integrity.STATUS_MISSING
+        assert integrity.materialized_status(
+            "x", self._entry("workflow", "codex")) == integrity.STATUS_OK
+
+    def test_an_entry_with_no_kind_is_judged_as_a_rule(self, sandbox):
+        """Locks written before entries carried `kind` must not be read as
+        workflows: that is the narrower set, so it would hide a real gap."""
+        e = self._entry("rule", "codex")
+        del e["kind"]
+        assert integrity.materialized_status("x", e) == integrity.STATUS_MISSING

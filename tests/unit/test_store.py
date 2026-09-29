@@ -15,6 +15,7 @@ from typing import ClassVar
 import pytest
 
 from boost_cli.core import (
+    agents,
     catalog,
     config,
     gitutil,
@@ -4959,6 +4960,10 @@ class TestARowForADisabledAgentIsNotRot:
         store.sync_apply(store.sync_plan())
         assert f.is_file()
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
     def test_an_unwritable_dir_of_a_disabled_agent_is_not_reported(self, tap):
         """`unwritable_agent_dirs` names dirs boost writes into, and a
         disabled agent's is not one — its remedy ends in a write that would
@@ -4973,6 +4978,8 @@ class TestARowForADisabledAgentIsNotRot:
         finally:
             d.chmod(0o700)
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="symlinks need privilege on Windows")
     def test_something_in_the_way_of_a_disabled_agents_dir_is_not_reported(
             self, tap):
         store.install(_rule_entry(tap))
@@ -4983,14 +4990,78 @@ class TestARowForADisabledAgentIsNotRot:
         self._disable("cursor")
         assert store.blocked_agent_dirs() == []
 
-    def test_doctor_is_told_which_rows_and_which_agent(self, tap):
+    def test_doctor_is_told_which_rows_which_agent_and_why(self, tap):
         store.install(_rule_entry(tap))
         store.install(_workflow_entry(tap))
-        assert store.disabled_agent_materializations() == []
+        assert store.unwritten_materializations() == []
         self._disable("cursor")
-        assert store.disabled_agent_materializations() == [
-            ("rule", "team-conventions", "cursor"),
-            ("workflow", "ship-it", "cursor")]
+        assert store.unwritten_materializations() == [
+            ("rule", "team-conventions", "cursor", "is disabled"),
+            ("workflow", "ship-it", "cursor", "is disabled")]
+
+    def test_a_quarantined_entry_is_not_named(self, tap):
+        """Its artifacts are deliberately gone and `sync_plan` skips it, so
+        naming it would print exactly the line this list exists to end: a
+        permanent note whose `boost sync` remedy cannot run."""
+        store.install(_rule_entry(tap))
+        self._disable("cursor")
+        assert len(store.unwritten_materializations()) == 1
+        e = lockfile.get_rule("team-conventions")
+        e["quarantined"] = True
+        lockfile.set_rule("team-conventions", e)
+        assert store.unwritten_materializations() == []
+
+    def test_an_enabled_agent_that_takes_no_workflow_is_not_called_disabled(
+            self, tap):
+        """`codex` is enabled and takes rules; it has no slash-command format.
+        Telling the user to re-enable it sends them to a switch already on."""
+        store.install(_workflow_entry(tap))
+        locked = lockfile.get_workflow("ship-it")
+        locked["materializations"].append(
+            {"agent": "codex", "mode": "file", "path": "/nope"})
+        lockfile.set_workflow("ship-it", locked)
+        assert store.unwritten_materializations() == [
+            ("workflow", "ship-it", "codex", "has no slash-command format")]
+
+    def test_a_skills_only_agent_is_not_called_disabled_either(self, tap):
+        store.install(_rule_entry(tap))
+        locked = lockfile.get_rule("team-conventions")
+        locked["materializations"].append(
+            {"agent": "antigravity", "mode": "file", "path": "/nope"})
+        lockfile.set_rule("team-conventions", locked)
+        assert store.unwritten_materializations() == [
+            ("rule", "team-conventions", "antigravity", "takes skills only")]
+
+    def test_a_row_naming_an_agent_no_longer_in_the_config_says_so(self, tap):
+        store.install(_rule_entry(tap))
+        locked = lockfile.get_rule("team-conventions")
+        locked["materializations"].append(
+            {"agent": "some-retired-cli", "mode": "file", "path": "/nope"})
+        lockfile.set_rule("team-conventions", locked)
+        assert store.unwritten_materializations() == [
+            ("rule", "team-conventions", "some-retired-cli",
+             "is not configured")]
+
+    def test_a_project_row_is_judged_by_the_project_write_set(self, tap):
+        """`base` is the row's own scope, and the two sets really differ: an
+        agent can be enabled for user scope and have no repo-local dir boost
+        could derive. Judging a project row by the user set would report a
+        gap boost is never going to close."""
+        cfg = config.load()
+        cfg["agents"]["cursor"]["project_scope"] = False
+        config.save(cfg)
+        row = {"agent": "cursor", "mode": "file", "path": "/nope"}
+        assert store.materialization_is_written("rule", {"base": None}, row)
+        assert not store.materialization_is_written(
+            "rule", {"base": str(paths.home() / "repo")}, row)
+        assert agents.materialization_skip_reason(
+            "rule", str(paths.home() / "repo"),
+            "cursor") == "has no project scope"
+
+    def test_a_written_row_has_no_reason(self, tap):
+        assert agents.materialization_skip_reason("rule", None,
+                                                  "cursor") is None
+        assert agents.materialization_skip_reason("rule", None, None) is None
 
     def test_a_workflow_row_is_judged_by_the_narrower_workflow_set(self, tap):
         """Codex takes rules (`AGENTS.md`) and has no slash-command format, so

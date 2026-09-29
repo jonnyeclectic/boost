@@ -26,7 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, lockfile, paths, projectlock, scopes, util
+from . import agents, config, lockfile, paths, projectlock, scopes, util
 
 STATUS_OK = "ok"
 STATUS_MODIFIED = "modified"     # on-disk content no longer matches the lock
@@ -81,7 +81,17 @@ def materialized_status(name: str, entry: dict) -> str:
     if entry.get("quarantined"):
         return STATUS_QUARANTINED
     unlocked = False
+    kind = str(entry.get("kind") or "rule")
     for m in entry.get("materializations") or []:
+        # A row naming an agent boost no longer writes is a record, not an
+        # artifact: nothing wrote that file and nothing ever will, so reading
+        # it as MISSING failed `boost verify` forever and sent `boost drift`
+        # and `boost health` to a `boost sync` that skips the row by design.
+        # `boost doctor` names it once instead -- see
+        # `agents.materialization_is_written`.
+        if not agents.materialization_is_written(kind, entry.get("base"),
+                                                 m.get("agent")):
+            continue
         p = Path(m.get("path", ""))
         if m.get("mode") == rules.MODE_CLAUDE:
             try:

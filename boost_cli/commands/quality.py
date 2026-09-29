@@ -49,6 +49,12 @@ from ..core import output as out
 from ..errors import BoostError
 from ._common import _iter_installed, _iter_installed_all, _require_lock_integrity, _s
 
+# How many rows the unwritten-materializations note spells out before it
+# summarises. The note exists to be read in one glance; a lock with one
+# agent turned off has a row per installed rule and workflow, so an uncapped
+# list is as long as the install.
+_MAT_NOTE_SHOWN = 4
+
 # --- conflict: normative-rule extraction -----------------------------------
 
 _NEG_MODALS = {"never", "must not", "do not", "don't", "dont"}
@@ -679,21 +685,25 @@ def cmd_doctor(argv):
                     % (name, m.get("agent", "?"), name))
                 mat_issues += 1
     # Said once, as a note rather than an issue: the row is there because the
-    # user disabled the agent after installing, which is their decision, and
-    # the two ways out are theirs to pick. Reporting it as a fault instead is
-    # what kept `boost doctor` at one permanent issue whose remedy could not
-    # run -- see `store.materialization_is_written`.
-    off = store.disabled_agent_materializations()
+    # user changed that agent's config after installing, which is their
+    # decision, and the two ways out are theirs to pick. Reporting it as a
+    # fault instead is what kept `boost doctor` at one permanent issue whose
+    # remedy could not run -- see `agents.materialization_is_written`. It
+    # names the items and the per-agent reason, because "disabled" is only
+    # one of them: an agent can be enabled and still take no workflow.
+    off = store.unwritten_materializations()
     if off:
-        agents_off = sorted({a for _k, _n, a in off})
-        rep.note("disabled-agent-materializations",
-                 "%d recorded materialization%s %s to a disabled agent "
-                 "(%s) and %s not written: re-enable the agent in "
-                 "~/.boost/config.json and run `boost sync`, or "
-                 "`boost uninstall` the item to drop the record"
-                 % (len(off), _s(len(off)),
-                    "belongs" if len(off) == 1 else "belong",
-                    ", ".join(agents_off), "is" if len(off) == 1 else "are"),
+        shown = ["%s %s → %s (%s)" % (k, n, a, why)
+                 for k, n, a, why in off[:_MAT_NOTE_SHOWN]]
+        if len(off) > _MAT_NOTE_SHOWN:
+            shown.append("and %d more" % (len(off) - _MAT_NOTE_SHOWN))
+        rep.note("unwritten-materializations",
+                 "%d recorded materialization%s name%s an agent boost no "
+                 "longer writes: %s. Change that agent's entry in %s and run "
+                 "`boost sync`, or `boost uninstall` the item to drop the "
+                 "record"
+                 % (len(off), _s(len(off)), "s" if len(off) == 1 else "",
+                    ", ".join(shown), paths.config_path()),
                  wrap=True)
     if (all_rules or all_workflows) and not mat_issues:
         # Quarantined rules/workflows are excluded above so their stashed-but-
@@ -715,7 +725,7 @@ def cmd_doctor(argv):
             # Without this the line reads as a flat contradiction of the note
             # right above it: "fully materialized" is true of the agents boost
             # writes, and that is now a smaller set than the rows record.
-            note += " for every enabled agent"
+            note += " for every agent boost writes"
         rep.ok("rules-workflows", "%d rule%s and %d workflow%s fully materialized%s"
                % (len(rules), _s(len(rules)), len(workflows), _s(len(workflows)),
                   note))

@@ -2832,14 +2832,20 @@ class TestARowForADisabledAgent:
         self._seed()
         self._disable()
         r = boost("doctor")                       # rc 0, not 1
-        assert "1 recorded materialization belongs to a disabled agent " \
-               "(cursor)" in r.out
-        assert "boost uninstall" in r.out
-        assert "missing its cursor materialization" not in r.out
-        assert "issue needs attention" not in r.out
+        # the note is `wrap=True`, so it is folded to the pane -- assert on
+        # the text, not on where this pane happened to break it
+        flat = " ".join(r.out.split())
+        assert "1 recorded materialization names an agent boost no longer " \
+               "writes" in flat
+        # the item and the reason, not just a count -- with three affected
+        # rules, "`boost uninstall` the item" would otherwise be a guess
+        assert "rule house → cursor (is disabled)" in flat
+        assert "boost uninstall" in flat
+        assert "missing its cursor materialization" not in flat
+        assert "issue needs attention" not in flat
         # and the count line must not read as a flat contradiction of it
         assert "1 rule and 0 workflows fully materialized " \
-               "for every enabled agent" in r.out
+               "for every agent boost writes" in flat
 
     def test_the_same_row_is_rot_again_once_the_agent_is_back(self, boost,
                                                               sandbox):
@@ -2853,6 +2859,10 @@ class TestARowForADisabledAgent:
         r = boost("doctor", expect=1)
         assert "rule house missing its cursor materialization" in r.out
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
     def test_a_refused_row_of_a_disabled_agent_is_not_an_issue_either(
             self, boost, sandbox):
         """The card's own measured case: the dir was locked on purpose, so
@@ -2877,3 +2887,20 @@ class TestARowForADisabledAgent:
             assert "not writable" not in r.out
         finally:
             rp.parent.chmod(0o700)
+
+    def test_a_workflow_row_is_skipped_by_doctor_too(self, boost, sandbox):
+        """The rule and the workflow loop are two separate guards; only the
+        rule one is exercised by the tests above."""
+        from boost_cli.core import lockfile
+        wp = paths.home() / ".cursor" / "commands" / "ship.md"
+        lockfile.set_workflow("ship", {"kind": "workflow",
+                                       "materializations": [
+                                           {"agent": "cursor", "mode": "file",
+                                            "path": str(wp)}]})
+        assert "workflow ship missing its cursor file" in \
+            boost("doctor", expect=1).out
+        self._disable()
+        flat = " ".join(boost("doctor").out.split())
+        assert "workflow ship missing its cursor file" not in flat
+        assert "workflow ship → cursor (is disabled)" in flat
+        assert "issue needs attention" not in flat

@@ -37,17 +37,32 @@ The same fix must also cover <code>store.unwritable_agent_dirs()</code>, which r
 rows: a refused row of a disabled agent keeps its locked dir in doctor's issues and in sync's
 warnings, with a <code>boost sync</code> remedy that never writes there.
 
-<b>Shipped.</b> <code>store.materialization_is_written(kind, entry, m)</code> is the one
-question every reader now asks: it answers <code>True</code> for a row with no
-<code>agent</code> (nothing to test, and reporting a real gap beats silently dropping one),
-and otherwise tests the row's agent against the write set for that row's own scope — a
-project row against <code>project_agents</code>, not the user-scope set — and against the
-narrower <code>workflow_agents</code> for a workflow, since an agent can have a verified
-rules format and no command format at all (<code>codex</code> does). Four readers were
-wrong in the same way and all four take it: <code>sync_plan</code>'s two loops,
-<code>_materialized_dirs</code> (so <code>unwritable_agent_dirs</code> stops naming a
-disabled agent's locked dir, whose <code>chmod u+w</code> remedy ends in a write never
-attempted), and doctor's three materialization loops.
+<b>Shipped.</b> <code>agents.materialization_is_written(kind, base, agent)</code> is the
+one question every reader now asks, with
+<code>store.materialization_is_written(kind, entry, m)</code> as the entry-shaped face of
+it. It answers <code>True</code> for a row with no <code>agent</code> (nothing to test, and
+reporting a real gap beats silently dropping one), and otherwise tests the row's agent
+against the write set for that row's own scope — a project row against
+<code>project_agents</code>, not the user-scope set — and against the narrower
+<code>workflow_agents</code> for a workflow, since an agent can have a verified rules format
+and no command format at all (<code>codex</code> does). It lives in <code>agents.py</code>,
+which imports only <code>config</code> and <code>paths</code>, rather than in
+<code>store</code>: <code>integrity</code> is one of the readers and <code>store</code> does
+not import it, so putting the predicate in <code>store</code> would have meant a new edge
+into the module the mutation gate targets, for a question that is about the write sets and
+nothing else.
+
+<b>Five readers were wrong in the same way</b> and all five take it:
+<code>sync_plan</code>'s two loops, <code>_materialized_dirs</code> (so
+<code>unwritable_agent_dirs</code> stops naming a disabled agent's locked dir, whose
+<code>chmod u+w</code> remedy ends in a write never attempted), doctor's three
+materialization loops, and <code>integrity.materialized_status</code> — the fifth, found on
+review, and the widest-reaching of the five. Reading such a row as
+<code>STATUS_MISSING</code> failed <code>boost verify</code> on every run and made
+<code>boost drift</code> and <code>boost health</code> demand the same <code>boost sync</code>
+that skips the row by design: the identical closed loop, five commands further out —
+<code>verify</code>, <code>attest</code>, <code>drift</code>, <code>health</code> and
+<code>serve</code> all call it.
 
 <b>The row is not dropped</b>, and that is deliberate rather than a shortcut:
 <code>_refused_materializations</code> carries untouched rows forward on purpose, because a
@@ -56,15 +71,28 @@ rule's row is what makes its managed <code>CLAUDE.md</code> block removable late
 install time. Doctor says it once, as a <b>note</b> rather than an issue — the user disabled
 the agent after installing, which is their decision, and both ways out are theirs to pick:
 re-enable the agent and <code>boost sync</code>, or <code>boost uninstall</code> the item to
-drop the record. The "fully materialized" count line gained <i>for every enabled agent</i>,
-or it reads as a flat contradiction of the note above it.
+drop the record. The note <b>names the items and the per-agent reason</b>, capped at four
+with an "and N more" tail, because a lock with one agent turned off has a row per installed
+rule and workflow and an uncapped list is as long as the install — and because
+<i>disabled</i> is only one of the reasons. An agent can be enabled and still refuse a row
+for having no slash-command format, no rule format at all, or no project scope; saying
+"disabled agent" for those sends the user to re-enable a switch already on. The path it
+points at is <code>paths.config_path()</code>, not a hardcoded <code>~/.boost</code>, so it
+stays right under <code>$BOOST_HOME</code>. <b>Quarantined entries are left out</b>: their
+artifacts are deliberately gone and <code>sync_plan</code> skips them, so naming one would
+print exactly the line the note exists to end. The "fully materialized" count line gained
+<i>for every agent boost writes</i>, or it reads as a flat contradiction of the note above
+it.
 
 <b>Verified both directions.</b> Reproduced first on the real CLI in a disposable HOME —
 three consecutive <code>boost sync</code> runs each claimed the same repair, and doctor's own
 advertised remedy (<code>boost reinstall</code>) left the issue identical, so the fault was
-never "sync is slow to converge". Twelve tests cover it (nine unit, three functional),
-parametrized over rule and workflow: sync converges on the second run, re-enabling the agent
-makes the row repairable again in one run, a refused row's locked dir drops out of doctor and
-comes back when the agent does, and a workflow row is judged by the narrower set. Neutering
-the helper to <code>return True</code> fails eight of the nine — the ninth is the no-agent
-row, whose expected answer is <code>True</code> either way.
+never "sync is slow to converge". Twenty-four tests cover it (nineteen unit, five
+functional), parametrized over rule and workflow where the two kinds differ: sync converges
+on the second run, re-enabling the agent makes the row repairable again in one run, a refused
+row's locked dir drops out of doctor and comes back when the agent does, a workflow row is
+judged by the narrower set in both <code>store</code> and <code>integrity</code>, an entry
+with no <code>kind</code> is judged as a rule (the wider set — the narrower one would hide a
+real gap), and each of the four reasons is worded from the agent's own flags rather than
+assumed to be "disabled". Seven separate neuter-and-run probes, one per guard, each fail the
+suite; the unneutered run is clean.

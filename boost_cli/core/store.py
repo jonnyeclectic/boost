@@ -659,45 +659,37 @@ def _untouched_materializations(existing: dict | None,
 def materialization_is_written(kind: str, entry: dict, m: dict) -> bool:
     """Whether boost still writes the agent this recorded row names.
 
-    An install records a row per agent it materialized into and
-    :func:`_refused_materializations` carries the untouched ones forward, on
-    purpose: a rule's materialization is a managed block inside a file the
-    user reads every session, and ``_uninstall_rule`` is record-driven, so
-    dropping the record would leave the block unremovable. Disable that agent
-    afterwards and the row is still there, still naming a file, and nothing
-    will ever write it again -- ``install`` only writes
-    :func:`agents.materializing_agents`.
-
-    Every check that reads these rows has to ask this first or it reports a
-    fault whose remedy cannot run. ``sync_plan`` put the row in
+    The entry-shaped face of :func:`agents.materialization_is_written`, which
+    holds the reasoning: a row is kept on purpose so an uninstall can still
+    reverse it, so a check that takes it at face value reports a fault whose
+    remedy cannot run. ``sync_plan`` put such a row in
     ``missing_materializations``, ``sync_apply`` repaired it by calling
-    ``install``, ``install`` skipped the disabled agent, and the next run
-    found it missing again: `boost sync` printed "re-materialized rule X"
-    forever and `boost doctor` sat at one issue forever, telling the user to
-    run a `boost reinstall` that had already been run and could not help.
-
-    A row from before rows carried an ``agent`` is answered ``True``: without
-    the name there is nothing to test, and reporting a real gap is better than
-    silently dropping one. The write set is asked per row, for that row's own
-    scope -- a project rule's agents are :func:`agents.project_agents`, not
-    the user-scope set -- and a workflow's is narrower than a rule's, since an
-    agent can have a verified rules format and no command format at all.
+    ``install``, ``install`` skipped the agent, and the next run found it
+    missing again: `boost sync` printed "re-materialized rule X" forever and
+    `boost doctor` sat at one issue forever, telling the user to run a
+    `boost reinstall` that had already been run and could not help.
     """
-    agent = m.get("agent")
-    if not agent:
-        return True
-    writes = (agents.workflow_agents(entry.get("base")) if kind == "workflow"
-              else agents.materializing_agents(entry.get("base")))
-    return agent in writes
+    return agents.materialization_is_written(kind, entry.get("base"),
+                                             m.get("agent"))
 
 
-def disabled_agent_materializations() -> list[tuple[str, str, str]]:
-    """``(kind, name, agent)`` for every row :func:`materialization_is_written`
-    refuses -- what `boost doctor` names once instead of reporting as rot."""
-    return [(kind, name, m["agent"])
+def unwritten_materializations() -> list[tuple[str, str, str, str]]:
+    """``(kind, name, agent, reason)`` for every row boost no longer writes --
+    what `boost doctor` names once instead of reporting as rot.
+
+    Quarantined entries are left out. Their artifacts are deliberately gone
+    and ``sync_plan`` skips them, so naming one here would print a line whose
+    `boost sync` remedy cannot run -- the very failure this list exists to
+    end. The ``reason`` is :func:`agents.materialization_skip_reason`, because
+    *disabled* is only one of the ways a row stops being written.
+    """
+    return [(kind, name, m["agent"],
+             agents.materialization_skip_reason(kind, entry.get("base"),
+                                                m["agent"]) or "is not written")
             for kind, section in (("rule", lockfile.installed_rules()),
                                   ("workflow", lockfile.installed_workflows()))
             for name, entry in sorted(section.items())
+            if not entry.get("quarantined")
             for m in entry.get("materializations") or []
             if not materialization_is_written(kind, entry, m)]
 
