@@ -9,6 +9,7 @@ impact: Med
 wow: 2
 note: the planner packs six shards for 23,251 mutants; there are 27,060
 order: 358
+pr: 1002
 title: "The mutation shard planner is packing for a mutant set that is 16% smaller than the real one"
 ---
 <code>scripts/mutation_weights.json</code> is the measured input the shard planner bin-packs on, and
