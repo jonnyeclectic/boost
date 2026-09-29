@@ -866,6 +866,12 @@ class TestErrColourFollowsStderr:
     case got the other one's answer.
     """
 
+    @pytest.fixture(autouse=True)
+    def full_width(self, monkeypatch):
+        # `err(hint=...)` folds the hint to the pane, so a narrow COLUMNS in
+        # the environment splits it into two spans and the counts below move
+        monkeypatch.delenv("COLUMNS", raising=False)
+
     def test_a_terminal_stderr_is_coloured_while_stdout_is_a_file(
             self, monkeypatch):
         monkeypatch.setattr(sys, "stdout", io.StringIO())
@@ -926,6 +932,13 @@ class TestTableHeaderColourFollowsItsStream:
     separators came out plain and the headers carried `\x1b[1m`; the other
     way round, the coloured separators framed plain headers.
     """
+
+    @pytest.fixture(autouse=True)
+    def full_width(self, monkeypatch):
+        # every COLUMNS-sensitive test in this file pins the width; at <= 14
+        # `_fit_columns` drops the VERSION column and the header count below
+        # would be 1 for a reason that has nothing to do with colour
+        monkeypatch.delenv("COLUMNS", raising=False)
 
     def test_a_redirected_stream_gets_no_escape_at_all(self, monkeypatch):
         monkeypatch.setattr(sys, "stdout", _TtyBuffer())

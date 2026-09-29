@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>25</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>76</b><span>Planned</span></div>
-      <div class="stat"><b>505</b><span>Loop finds</span></div>
+      <div class="stat"><b>77</b><span>Planned</span></div>
+      <div class="stat"><b>506</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2108,6 +2108,49 @@ instead of on a user's machine.</p>
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">Two functions built the same `mcp add` command line, one had never heard of agy, and both got Gemini wrong…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="wrap-width-judged-by-stdout">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3>wrap() sizes a stderr line by stdout's pane</h3>
+        <p><b>A line now gets its colour from the stream it lands on and its
+<em>width</em> from somewhere else.</b> <code>_wrap_lines</code>
+(<code>boost_cli/core/output.py:235</code>) folds to
+<code>term_width() - lead</code>, and <code>term_width</code>
+(<code>:402</code>) takes no stream: it calls
+<code>shutil.get_terminal_size</code>, which consults
+<code>sys.__stdout__</code>. Right beside it, <code>pane_width(stream)</code>
+(<code>:407</code>) does take one, and exists because the same question has a
+different answer per stream.
+
+<br><br>So the emitters that write off stdout and wrap — <code>err(wrap=True)</code>
+(<code>:318</code>, <code>:327</code>) and <code>warn(stream=sys.stderr,
+wrap=True)</code> (<code>:284</code>, reached from <code>catalog.py:346</code>,
+<code>journal.py:65</code>, <code>lockfile.py:185</code>,
+<code>registry.py:594</code> and <code>complete.py:105</code>) — size a stderr
+line by stdout's pane. In a 200-column terminal:
+<code>boost install x &gt;out</code> folds the hint on the terminal at 72
+columns, because stdout is a file, <code>get_terminal_size</code> raises and
+the 80-column fallback applies; <code>boost install x 2&gt;log</code> writes
+192-column lines into the log.
+
+<br><br>This is the twin of <code>err-colour-judged-by-stdout</code>, found while
+verifying it, and deliberately left out of that PR: it is a width bug, not a
+colour one, and it predates the change. <b>Fix sketch:</b> give
+<code>term_width</code> (or <code>_wrap_lines</code>) the stream the emitter
+is about to write to, the way <code>c()</code>, <code>role()</code> and
+<code>aurora()</code> now take one, and have each wrapping emitter pass its
+own. Watch the <code>COLUMNS</code> precedence: <code>pane_width</code>
+honours an explicit <code>COLUMNS</code> either way, and the wrap path must
+keep doing the same or a scripted <code>COLUMNS=100</code> stops applying to
+hints. A test wraps one long hint with stdout a TTY and stderr a plain
+buffer, and asserts the fold point comes from stderr.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">a wrapped stderr line is folded to stdout's width — the colour-stream fix's twin, one layer down</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -6478,7 +6521,7 @@ its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> ra
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">fixed — c() takes the stream it is painting for, and err, heading and a table's header cells pass theirs, so each line is coloured by where it lands</span>
+          <span class="m">fixed — every painter takes the stream it is painting for, and all nine call sites that write off stdout pass theirs, so each line is coloured by where it lands</span>
         </div>
       </article>
 

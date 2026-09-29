@@ -7,7 +7,7 @@ category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
-note: fixed — c() takes the stream it is painting for, and err, heading and a table's header cells pass theirs, so each line is coloured by where it lands
+note: fixed — every painter takes the stream it is painting for, and all nine call sites that write off stdout pass theirs, so each line is coloured by where it lands
 order: 331
 owner: loop/err-colour-stream
 pr: 996
@@ -55,3 +55,38 @@ separators framing plain headers on a terminal. Five call sites in all, and
 reverting any one of them fails a test: the new classes assert both
 directions (terminal stream while stdout is a file, and the reverse) the way
 <code>TestWarnColourFollowsItsStream</code> does for <code>warn</code>.
+
+<br><br><b>And the sweep this card describes cannot find all of them.</b> It
+greps one painter (<code>c(</code>) against one write idiom
+(<code>file=</code>), so it is blind to <code>stream.write(out.c(…))</code>,
+<code>out.info(out.role(…), stream=…)</code> and
+<code>stream.write(out.aurora(…))</code> alike. The grep that finds them is
+over every painter — <code>c(</code>, <code>role(</code>,
+<code>aurora(</code> — against every write target — <code>file=</code>,
+<code>.write(</code>, <code>stream=</code> — and it finds four more:
+<code>cliparse.py:60</code> writes a <code>DIM</code>-painted usage block to
+<code>sys.stderr</code> and asked stdout, which is on the most common error
+path of all (every argparse rejection in every subcommand) and which fixing
+<code>err</code> alone made <em>internally inconsistent</em> — a red
+<code>Error:</code> above an unpainted usage;
+<code>commands/discovery.py:947</code> paints a hint with a bare
+<code>role()</code> and prints it to stderr right under a <code>warn</code>
+that already followed the stream, so the two lines of one notice disagreed;
+and <code>spin.py:47</code> and <code>:77</code> paint with
+<code>aurora()</code> and write to <code>self.stream</code>. The spinner pair
+can never <em>leak</em> — <code>active()</code> prints nothing at all to a
+non-TTY — but it drops the colour the other way round:
+<code>boost search --smart q &gt; results.txt</code> animates on the terminal
+stderr while <code>color_level(sys.stdout)</code> is 0, so the braille frame
+draws plain. Nine call sites in all.
+
+<br><br><b>Out of scope, same shape:</b> <code>_wrap_lines</code>
+(<code>output.py:235</code>) calls <code>term_width()</code>, which takes no
+stream and consults <code>sys.__stdout__</code>, while
+<code>pane_width(stream)</code> right beside it does take one. So
+<code>err(wrap=True)</code> and <code>warn(stream=sys.stderr, wrap=True)</code>
+now colour a line by where it lands and still <em>size</em> it by somewhere
+else: in a 200-column terminal, <code>boost install x &gt;out</code> folds the
+hint at 72 columns and <code>2&gt;log</code> writes 192-column lines into the
+log. It predates this card and is a width bug rather than a colour one, so it
+wants its own item.

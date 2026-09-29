@@ -57,7 +57,8 @@ class BoostArgumentParser(argparse.ArgumentParser):
     def error(self, message: str):
         """Print a branded error + dimmed usage, then exit 2 (argparse's code)."""
         out.err(message)
-        sys.stderr.write(out.c(self.format_usage(), out.DIM))
+        sys.stderr.write(out.c(self.format_usage(), out.DIM,
+                               stream=sys.stderr))
         self.exit(2)
 
 

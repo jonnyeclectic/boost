@@ -3,9 +3,20 @@
 """Unit tests: boost_cli/cliparse.BoostArgumentParser — branded errors."""
 from __future__ import annotations
 
+import io
+import sys
+
 import pytest
 
 from boost_cli import cliparse
+from boost_cli.core import output
+
+
+class _TtyBuffer(io.StringIO):
+    """A buffer that claims to be a terminal, so `use_color` says yes."""
+
+    def isatty(self):
+        return True
 
 
 @pytest.fixture(autouse=True)
@@ -90,3 +101,48 @@ class TestHelpWrapKeepsBacktickSpansAtomic:
         out = capsys.readouterr().out
         assert any("`boost demo really long command`" in ln
                    for ln in out.split("\n"))
+
+
+class TestUsageColourFollowsStderr:
+    """The dimmed usage block is written to stderr, so stderr decides it.
+
+    `error()` prints two lines to the same stream and used to ask two
+    different questions about them: `out.err` consults stderr, while the
+    `out.c(..., DIM)` around the usage consulted stdout. `boost demo 2>log`
+    on a terminal wrote a bare `Error:` into the log and then an escape
+    sequence around the usage right under it; `boost demo >out` printed a red
+    `Error:` on the terminal and an undimmed usage below. One error report,
+    two answers.
+    """
+
+    @pytest.fixture(autouse=True)
+    def colour_on(self, monkeypatch, plain):
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
+        monkeypatch.delenv("BOOST_COLOR", raising=False)
+
+    @staticmethod
+    def _fail(monkeypatch, stdout, stderr):
+        monkeypatch.setattr(sys, "stdout", stdout)
+        monkeypatch.setattr(sys, "stderr", stderr)
+        p = cliparse.parser(prog="boost demo")
+        p.add_argument("name")
+        with pytest.raises(SystemExit):
+            p.parse_args([])
+
+    def test_a_redirected_stderr_gets_no_escape_at_all(self, monkeypatch):
+        e = io.StringIO()
+        self._fail(monkeypatch, _TtyBuffer(), e)
+        assert "\x1b[" not in e.getvalue()
+        assert "usage: boost demo" in e.getvalue()
+
+    def test_a_terminal_stderr_dims_the_usage_too(self, monkeypatch):
+        e = _TtyBuffer()
+        self._fail(monkeypatch, io.StringIO(), e)
+        text = e.getvalue()
+        # the branded `Error: ` span, then a DIM span per line of the usage
+        # block -- `format_usage` ends in a newline, so the last of those is
+        # the empty trailing line. Three spans, all on stderr.
+        assert text.count(output.RESET) == 3
+        assert text.startswith(output.RED + output.BOLD + "Error: ")
+        assert output.DIM + "usage: boost demo" in text

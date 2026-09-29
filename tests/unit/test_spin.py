@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import sys
 
 import pytest
 
@@ -136,3 +137,42 @@ def test_tty_run_writes_and_clears():
     out = s.getvalue()
     assert "\r" in out                   # in-place redraw
     assert "go" in out                   # the label was shown
+
+
+class TestSpinnerColourFollowsItsOwnStream:
+    """A spinner draws on `self.stream`, so that stream decides the colour.
+
+    `active()` already gated on `color_level(self.stream)`, but the frame was
+    painted by `out.aurora(frame, "cyan")`, which asks stdout. Nothing could
+    leak -- a non-tty stream prints nothing at all -- but the asymmetry costs
+    the colour: `boost search --smart q > results.txt` on a terminal animates
+    the spinner on the tty stderr while `color_level(sys.stdout)` is 0, so the
+    braille frame draws plain.
+    """
+
+    @pytest.fixture(autouse=True)
+    def real_tty_check(self, monkeypatch):
+        # undo the module-level CLICOLOR_FORCE: it short-circuits `use_color`
+        # before the stream is ever consulted, which is the thing under test
+        monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.delenv("BOOST_COLOR", raising=False)
+
+    def test_progress_paints_its_tty_stream_while_stdout_is_a_file(
+            self, monkeypatch):
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        s = FakeStream(tty=True)
+        spin.progress(1, 4, "embedding", stream=s)
+        assert "\x1b[" in s.getvalue()
+
+    def test_a_frame_paints_its_tty_stream_while_stdout_is_a_file(
+            self, monkeypatch):
+        import time
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+        s = FakeStream(tty=True)
+        with spin.Spinner("go", stream=s):
+            for _ in range(50):
+                if s.getvalue():
+                    break
+                time.sleep(0.02)
+        assert "\x1b[" in s.getvalue()
