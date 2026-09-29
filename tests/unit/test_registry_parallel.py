@@ -134,10 +134,77 @@ class TestAddMany:
         assert fake_clone["cloned"].count("https://github.com/o/a") <= 1
         assert len([t for t in registry.list_taps() if t.name == "o/a"]) == 1
 
-    def test_it_actually_runs_concurrently(self, sandbox, fake_clone):
-        registry.add_many(["o/%d" % i for i in range(8)], jobs=4)
+    def test_it_actually_runs_concurrently(self, sandbox, monkeypatch):
+        """Four clones are in flight at once, proved by making them wait.
+
+        Counting an *observed* peak was a race, not a measurement: the fake
+        clone is one `mkdir` and a small write, so on a loaded runner each
+        worker finished before the next was scheduled and `peak` was 1 --
+        `assert 1 > 1` on macOS/3.14, against a pool that was working
+        correctly. The failure said "this is serial" when the truth was
+        "this was too fast to catch overlapping".
+
+        A `Barrier` inverts it. Every worker blocks until `jobs` of them have
+        arrived, so the assertion is no longer about timing: a pool of four
+        trips the barrier and the call returns, and a serial pool cannot --
+        the first worker waits for three that will never come, and the
+        barrier times out. Slower hardware makes this test *more* reliable,
+        which is the opposite of what it did before.
+        """
+        jobs = 4
+        gate = threading.Barrier(jobs, timeout=30)
+        state = {"tripped": 0, "broke": False}
+        lock = threading.Lock()
+
+        def clone(url, dest, sparse=True):
+            try:
+                gate.wait()
+            except threading.BrokenBarrierError:
+                # A pool narrower than `jobs` -- the bug this test is for.
+                with lock:
+                    state["broke"] = True
+            else:
+                with lock:
+                    state["tripped"] += 1
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "SKILL.md").write_text("---\nname: x\n---\nbody\n",
+                                           encoding="utf-8")
+
+        monkeypatch.setattr(gitutil, "clone_shallow", clone)
+        monkeypatch.setattr(policy, "check_tap_signing", lambda path: [])
+
+        res = registry.add_many(["o/%d" % i for i in range(8)], jobs=jobs)
+
         # Without this the change is a refactor: 463 x 1.6 s stays 13 minutes.
-        assert fake_clone["peak"] > 1
+        assert not state["broke"], "the pool never had %d clones in flight" % jobs
+        assert state["tripped"] == 8
+        assert all(r["ok"] for r in res)
+
+    def test_the_concurrency_probe_fails_when_the_pool_is_serial(
+            self, sandbox, monkeypatch):
+        """The probe above must be able to fail, or it asserts nothing.
+
+        `add_many` run at `jobs=1` is the refactor it was written to rule
+        out, so the barrier has to break there -- otherwise a regression to
+        a serial clone would pass the suite unremarked.
+        """
+        gate = threading.Barrier(4, timeout=2)
+        broke = []
+
+        def clone(url, dest, sparse=True):
+            try:
+                gate.wait()
+            except threading.BrokenBarrierError:
+                broke.append(url)
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "SKILL.md").write_text("---\nname: x\n---\nbody\n",
+                                           encoding="utf-8")
+
+        monkeypatch.setattr(gitutil, "clone_shallow", clone)
+        monkeypatch.setattr(policy, "check_tap_signing", lambda path: [])
+
+        registry.add_many(["o/%d" % i for i in range(2)], jobs=1)
+        assert broke, "a serial pool must break a barrier of 4"
 
     def test_no_specs_is_no_work_and_no_write(self, sandbox, fake_clone):
         assert registry.add_many([], jobs=4) == []
