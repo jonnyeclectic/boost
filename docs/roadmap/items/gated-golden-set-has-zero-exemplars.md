@@ -1,17 +1,17 @@
 ---
 id: gated-golden-set-has-zero-exemplars
 board: code
-section: planned
-status: planned
+section: shipped
+status: shipped
 category: Quality · Retrieval eval
 complexity: M
 impact: Med
 wow: 3
 note: CLAUDE.md presents exemplar pinning as a live migration — "relevance is still decided…
 order: 214
-owner:
-pr:
-title: The exemplar mechanism was applied to the ungated set only: golden.jsonl is 0/91 pinned, and 10 of its 43 hit@1 credits are on names the metric cannot adjudicate
+owner: loop/gated-golden-exemplars
+pr: "994"
+title: The exemplar mechanism was applied to the ungated set only: golden.jsonl is 0/91 pinned, and 10 of its 44 hit@1 credits are on names the metric cannot adjudicate
 ---
 <b>Measured.</b> On the 10,731-entry corpus that committed <code>taps.txt</code> materializes today, <code>tests/eval/golden.jsonl</code> — the only set the required <code>eval</code> gate floors — is 0/91 exemplar-pinned while the ungated <code>golden-natural.jsonl</code> is 50/50; 10 of its 44 hit@1 credits (22.7%) are awarded on a name that resolves to more than one distinct body, and the hit@1 floor's entire headroom is 7.60 queries, smaller than the 10 credits the metric cannot adjudicate.
 
@@ -19,7 +19,7 @@ title: The exemplar mechanism was applied to the ungated set only: golden.jsonl 
 
 <code>cd &lt;repo&gt;</code><br>
 <code>export BOOST_HOME=$TMPDIR/eval-home</code><br>
-<code># 0. confirm which corpus you are on (expect 10152)</code><br>
+<code># 0. confirm which corpus you are on (expect 10731)</code><br>
 <code>.venv/bin/python -c "import sys;sys.path.insert(0,'.');from boost_cli.core import catalog;print(len(catalog.all_entries()))"; echo EXIT=$?</code><br>
 <code># 1. exemplar counts per set</code><br>
 <code>python3 -c "</code><br>
@@ -52,6 +52,16 @@ Nothing else in the finding is wrong. 0/91 vs 50/50, the 27 undecided rows / 62 
 
 5. NOT A DEFECT IN THE HARNESS: <code>exemplar_worksheet</code> (scripts/eval_retrieval.py:219) and exemplar grading work correctly and fail loudly on a bad pin.
 
-<b>Why it is worth doing.</b> golden.jsonl is the set the required <code>eval</code> gate floors, so it is the only one that can block a merge. 23.3% of its hit@1 credits are awarded on a name that maps to several genuinely different skills, and the floor's whole margin (6.60 queries) is narrower than the un-adjudicated credit count (10). That does not mean retrieval is worse than reported — the realistic shift is 1-2 queries — it means the published margin cannot be read as precision about the intended skill, so anyone tuning blend weights or pool depth against this gate inherits an unquantified slack.
+<b>Why it is worth doing.</b> golden.jsonl is the set the required <code>eval</code> gate floors, so it is the only one that can block a merge. 22.7% of its hit@1 credits are awarded on a name that maps to several genuinely different skills, and the floor's whole margin (7.60 queries) is narrower than the un-adjudicated credit count (10). That does not mean retrieval is worse than reported — the realistic shift is 1-2 queries — it means the published margin cannot be read as precision about the intended skill, so anyone tuning blend weights or pool depth against this gate inherits an unquantified slack.
 
 <em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em>
+
+<b>Shipped.</b> All 91 rows of <code>tests/eval/golden.jsonl</code> now pin an <code>exemplar</code>, so the required gate grades by content class rather than by name. <code>--worksheet</code> reports 0 rows still name-graded, and <code>prepare_row</code> raises on a spec that resolves to nothing, so a stale pin fails the gate rather than quietly weakening it.
+
+<b>The pins are a judgment, so they were made as one.</b> 64 of the 91 rows resolved to a single body and were pinned by lookup. Clustering the remaining 27 rows' candidate bodies mechanically (difflib ratio 0.90) collapsed 7 of them to a single re-publication cluster, pinnable as a list by <code>diff</code> rather than opinion. That left <b>20</b> genuine homonym rows, each judged by an agent under one rule — keep a cluster if a user typing this query would be correctly served by it; two independent implementations of the same job both count; drop only a cluster doing a different job — and each judgment then attacked by two adversarial verifiers, one hunting over-narrow pins and one hunting over-broad. 60 agents, <b>0 of 20 decisions refuted</b>, 19 of 20 at high confidence. Two clusters were dropped: Sentry's <code>brand-guidelines</code> (copy-writing, not a visual brand system) and oh-my-agent's <code>pdf</code> (PDF&rarr;Markdown conversion, which cannot fill a form field).
+
+<b>What the measurement did, and did not, do.</b> Scored per query against the old set and the new on the same 10,731-entry corpus, <b>exactly 1 of 91 rows changed</b>. The other 90 grade identically under name and content class, which is the honest result: on this corpus the name was already selecting the right body almost everywhere, and the value of pinning is that it can no longer stop doing so silently. The one mover is the set's only two-name row (<code>style an html artifact with a color and font theme</code>, relevant <code>theme-factory</code> + <code>web-artifacts-builder</code>): <code>relevant</code> is documented as names that <em>count as a correct top hit</em> — alternatives — but <code>recall@k</code> over a two-element set scored 0.5 for finding one of them. The four pinned bodies are one class, so it scores 1.0, and the aggregate moved 76.5/91 &rarr; 77.0/91. <code>hit@1</code> and <code>MRR</code> are bit-identical.
+
+BM25 over the twenty taps: 0.841 / 0.484 / 0.607 / 0.655 &rarr; <b>0.846 / 0.484 / 0.607 / 0.659</b>. All four floors still clear, and none was moved &mdash; margins are now 7.8% / 17.3% / 14.3% / 12.1%, a 2.21x spread, recall@k binding at 6.0 queries of 91.
+
+<b>The cost, recorded rather than discovered later.</b> A pin is <code>tap::skill_md</code>, so the set can only be scored over a corpus holding that tap. The six-repo comparison figure in <code>Makefile</code> is therefore <b>historical</b>, not stale: today's <code>golden.jsonl</code> cannot be scored over six taps at all. It stays re-derivable &mdash; <code>git show e11a34f2:tests/eval/golden.jsonl</code> over a six-tap corpus reproduces 0.989 / 0.769 / 0.848 / 0.880 to three places. <code>taps-scale.txt</code> is unaffected: it is a superset of <code>taps.txt</code> (149 rows &supe; 20), so <code>eval-scale.yml</code> keeps scoring the same set. The real exposure is <code>eval-corpus-refresh.yml</code>, whose re-baseline step is not <code>continue-on-error</code>: a monthly pin move past a renamed file now stops 141 pinned rows instead of 50, and the pull request does not open. That is the intended signal and is written up as a non-obvious rule in <code>CLAUDE.md</code>.

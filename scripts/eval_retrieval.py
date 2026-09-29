@@ -140,8 +140,13 @@ METRICS: dict[str, Callable[[Sequence[str], set, int], float]] = {
 # punish a correct answer for arriving from a mirror), while a different skill
 # sharing the name does not.
 #
-# Rows without an exemplar still decide RELEVANCE by name, so the sets can
-# migrate a row at a time. What is no longer name-keyed is IDENTITY: the ranked
+# Rows without an exemplar still decide RELEVANCE by name, which is what let
+# the sets migrate a row at a time. Both shipped sets have now finished --
+# `golden.jsonl` 91/91, `golden-natural.jsonl` 50/50 since #434 -- so NO
+# shipped set exercises this path. It is kept for a set added outside this
+# repo and is covered only by unit tests; treat a coverage report that calls
+# it dead as a statement about the shipped sets, not about the contract.
+# What is no longer name-keyed is IDENTITY: the ranked
 # list de-duplicates on the content hash for every row, exemplar or not. Keying
 # both on the name collapsed 13 different `code-reviewer`s into one rank slot
 # and inflated recall@10 by about one query (0.863 -> 0.852 over the pinned
@@ -366,6 +371,16 @@ def evaluate(rows: list[dict], ranker: Ranker, k: int) -> tuple[list[dict], dict
 
 
 def _aggregate(per_case: list[dict]) -> dict:
+    """Overall metrics, plus an INDICATIVE slice per item kind.
+
+    A row's `kind` is its PRIMARY target's kind, and an exemplar row's
+    relevant set is a content class, which can span kinds: golden.jsonl's
+    Docker and Flutter rows each pin an `agents/*.md` workflow together with
+    a `SKILL.md` that answers the same question, so the `workflow` slice can
+    be credited for retrieving the skill. That is correct grading and a fuzzy
+    slice -- read `by_kind` as "how the gate does on questions shaped like
+    this", not as a per-kind guarantee. Only `overall` is floored.
+    """
     overall = {m: _mean(c["scores"][m] for c in per_case) for m in METRICS}
     by_kind: dict[str, dict] = {}
     for kind in KINDS:

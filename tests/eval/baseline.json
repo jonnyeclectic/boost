@@ -1,23 +1,5 @@
 {
   "sets": {
-    "golden.jsonl@a0617183f8c9": {
-      "k": 10,
-      "golden": "golden.jsonl",
-      "engines": {
-        "catalog.search": {
-          "recall@k": 0.7307692307692307,
-          "hit@1": 0.46153846153846156,
-          "MRR": 0.561042281984482,
-          "nDCG@k": 0.5927377504239227
-        },
-        "BM25 full-content": {
-          "recall@k": 0.8406593406593407,
-          "hit@1": 0.4835164835164835,
-          "MRR": 0.6065168803770766,
-          "nDCG@k": 0.6552333001662786
-        }
-      }
-    },
     "golden-natural.jsonl@0d91b0cd8e41": {
       "k": 10,
       "golden": "golden-natural.jsonl",
@@ -33,6 +15,24 @@
           "hit@1": 0.16,
           "MRR": 0.23714757982716475,
           "nDCG@k": 0.2591292012176286
+        }
+      }
+    },
+    "golden.jsonl@d49143dc71a0": {
+      "k": 10,
+      "golden": "golden.jsonl",
+      "engines": {
+        "catalog.search": {
+          "recall@k": 0.7362637362637363,
+          "hit@1": 0.46153846153846156,
+          "MRR": 0.5608885895230973,
+          "nDCG@k": 0.596988880173753
+        },
+        "BM25 full-content": {
+          "recall@k": 0.8461538461538461,
+          "hit@1": 0.4835164835164835,
+          "MRR": 0.6065168803770766,
+          "nDCG@k": 0.6594844299161087
         }
       }
     }

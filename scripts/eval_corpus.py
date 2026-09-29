@@ -181,7 +181,10 @@ MAX_CONTENT_SHARE = 0.40
 # taps-scale.txt is generated, and its generator owns its header.
 SIZE_START = "# --- corpus size: written from the rows below by eval_corpus.py ---"
 SIZE_END = "# --- end corpus size ---"
-# The rows above this line hold every golden target; the rest are scale.
+# The rows above this line are the six the name-graded floors were first
+# measured on. They are NOT "every golden target" any more: both shipped
+# query sets pin exemplars below the divider too, so the label written from
+# it says "six-repo set", not "targets". taps.txt says why at length.
 SCALE_DIVIDER = "# --- scale"
 
 
@@ -348,8 +351,10 @@ def size_lines(text: str) -> list[str]:
     head, divider, _tail = text.partition("\n" + SCALE_DIVIDER)
     if divider:
         targets = [n for _r, _s, n in parse_taps(head) if n is not None]
-        lines.append("# targets: %s entries in the %d repos above the scale "
-                     "divider" % (f"{sum(targets):,}", len(targets)))
+        lines.append("# sixrepo: %s entries in the %d repos above the scale"
+                     % (f"{sum(targets):,}", len(targets)))
+        lines.append("#          divider -- a historical baseline, not a "
+                     "subset that scores")
     # strict=False: a list of one repo has a largest and no runner-up.
     labels = ("largest:", "next:   ")
     for label, (repo, count, share) in zip(labels, ranked, strict=False):
