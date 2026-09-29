@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>509</b><span>Loop finds</span></div>
+      <div class="stat"><b>511</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -6504,6 +6504,42 @@ its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> ra
           <span class="m">a rerun leaves an already-tapped registry where it is, even when the manifest names another commit</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="uninstall-local-cannot-remove-a-rule-or-workflow-list-local-shows">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3><code>uninstall --local</code> cannot remove a rule or workflow that <code>list --local</code> shows</h3>
+        <p><code>boost install &lt;rule&gt; --local</code> works, and since PR #998 <code>boost list
+--local</code> prints the rule it installed. <code>boost uninstall &lt;rule&gt; --local</code>
+then exits 1 with &ldquo;<code>&lt;rule&gt; is not installed in this project</code>&rdquo; and the
+hint <code>see what is with `boost list --local`</code> &middot; which is the command that just
+showed it. There is no way to undo the install through the scope flag that performed it.
+
+The cause is one line: <code>store.uninstall_project</code> (store.py:1291) reads
+<code>projectlock.get_skill</code> and nothing else, because a project lock holds a
+<code>skills</code> key alone. A rule or workflow installed <code>--local</code> is recorded in
+the <em>user</em> lock tagged <code>scope: project</code> with a <code>base</code>, so the
+project lock genuinely has no row &middot; but the user lock does, and bare <code>boost
+uninstall &lt;rule&gt;</code> finds it and works. So the item is removable; only the flag that
+names where it lives is not.
+
+Two candidate fixes, and the choice is a design decision rather than a typo. Either
+<code>uninstall_project</code> falls through to the user lock for a row whose <code>scope</code>
+is project and whose <code>base</code> is this repo (<code>scopes.owned_by</code> already answers
+exactly that question, and is what <code>list --local</code> now uses), or <code>--local</code>
+refuses a non-skill with a message that says <em>use bare <code>uninstall</code></em> rather
+than claiming the thing is not installed. The first is what a reader expects; the second is one
+line. Either way the current message is wrong on its facts, which is the part that must not
+survive. A test wants a rule installed <code>--local</code>, asserted present in <code>list
+--local</code>, then removed by <code>uninstall --local</code> with the context file checked for
+the stripped block. Found while verifying
+<code>audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">list --local prints the repo's rule; uninstall --local says it is not installed</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -7421,8 +7457,17 @@ its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> ra
         <p><code>util.rmtree</code> installs an error handler so a read-only file cannot strand a delete: on
 failure it <code>chmod</code>s the path and retries. The handler is handed the path that failed, and
 when that path is a <em>symlink</em> the <code>chmod</code> follows it &middot; so deleting a
-directory that happens to contain a link to a file elsewhere changes that file's permissions, even
-though the delete itself correctly removes only the link.
+directory that happens to contain a link to a file elsewhere changes that file's permissions.
+
+Measured, because the first draft of this card guessed at the shape and guessed wrong. The hook only
+fires once a delete has already <em>failed</em>, and unlinking a symlink does not fail while its
+parent directory is writable &middot; so in the ordinary case nothing happens at all: the link goes,
+the target keeps its mode byte-for-byte. Make the parent read-only (<code>0o500</code>) and the
+unlink fails, the hook <code>chmod</code>s the link, the target outside the tree goes
+<code>0o400</code> &rarr; <code>0o200</code>, the retry fails again and <code>rmtree</code> raises.
+The link is still there. So the only lasting effect of the hook on this path is the permission
+change on a file it was never asked to touch &middot; the earlier claim that &ldquo;the delete
+itself correctly removes only the link&rdquo; describes a run in which the hook never fires.
 
 The containment guards do their job: <code>scopes.resolve_in_base</code> and <code>contains</code>
 still refuse to remove anything outside the base, and the verification of PR #998 confirmed a planted
@@ -7466,6 +7511,38 @@ not what blocked the unlink. A test wants a link inside the tree pointing at a
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
           <span class="m">trust add of a missing .pub path blames "invalid base64 in minisign data"</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="project-uninstall-deletes-any-in-repo-directory-the-lock-names">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Security</span></div>
+        <h3><code>uninstall --local</code> deletes any in-repo directory the committed lock names</h3>
+        <p><code>store.uninstall_project</code> re-derives every recorded materialization through
+<code>scopes.resolve_in_base</code> and refuses anything outside the project &middot; the guard
+works, and the verification of PR #998 confirmed a planted victim outside the repo survives every
+escape attempt. What it does not check is that the path is an <em>agent skills directory</em>. A
+lock row reading <code>{"path": "src/core"}</code> is inside the base, so it passes, and
+<code>util.rmtree</code> removes the repo's source tree (store.py:1296-1300).
+
+<code>.boost/skill-lock.json</code> is a committed file: whoever can land a commit can write that
+row, and the victim runs one ordinary <code>boost uninstall &lt;skill&gt; --local</code>. That is a
+narrower threat than it sounds &mdash; someone who can commit to your repo can also commit a
+<code>Makefile</code> &mdash; but this is the one path where the damage happens under a boost
+command the user typed, with boost's own containment check having already said yes.
+
+The fix is to narrow the check from &ldquo;inside the base&rdquo; to &ldquo;inside the base
+<em>and</em> under a known agent dotdir&rdquo;: install only ever writes
+<code>&lt;base&gt;/&lt;agent dotdir&gt;/skills/&lt;name&gt;</code>, so the set of legal paths is
+small, enumerable from <code>agents</code>, and can be derived rather than trusted. Anything else
+in the list is skipped with a warning naming the row, not removed. Newly easier to reach than it
+was: bare <code>uninstall</code> can now act in an unmarked directory, so a cloned repo carrying a
+<code>.boost/</code> no longer needs a VCS marker for the command to find it. Related:
+<code>util-rmtree-chmods-a-symlink-target-outside-the-tree</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">a materialization path of src/core passes the containment check and is removed</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

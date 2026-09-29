@@ -742,8 +742,8 @@ def cmd_install(argv: list[str]) -> int:
 
 # ── uninstall ────────────────────────────────────────────────────────────
 
-def _project_fallback_base(names: list[str]) -> Path | None:
-    """The repo a bare ``uninstall`` would act in, when it would act there.
+def _project_fallback(names: list[str]) -> tuple[list[str], Path | None]:
+    """Which of ``names`` a bare ``uninstall`` would remove from the repo, and where.
 
     Bare uninstall prefers user scope and only falls back to the repo for a name
     the project lock records. That fallback resolves its base the way
@@ -752,19 +752,19 @@ def _project_fallback_base(names: list[str]) -> Path | None:
     ``.git``, someone typing ``boost uninstall x`` meaning their user config
     would be deleting files in the cwd. The prompt says so rather than letting
     the success line be the first mention of where.
+
+    It returns the *subset*, not a yes/no, because a batch can be both: "all of
+    them" and "these two of the five" are different sentences, and answering
+    the second with the first would either claim the whole batch comes out of
+    the repo or — the other way round — drop the warning entirely for the
+    mixed case, which is the one the reader is least likely to have in mind.
     """
     base = scopes.resolve_base(scopes.SCOPE_PROJECT)
     if base is None:
-        return None
-    # EVERY name, not any: a mixed batch takes the user-scope route for the
-    # names the user lock resolves, so naming the repo would tell the reader
-    # this is about their checkout while ~/.agents/skills is what empties.
-    # When the batch is mixed the prompt stays generic and each success line
-    # says where that one went.
-    if all(lockfile.find_any(n) is None and projectlock.get_skill(base, n)
-           for n in names):
-        return base
-    return None
+        return [], None
+    here = [n for n in names
+            if lockfile.find_any(n) is None and projectlock.get_skill(base, n)]
+    return here, (base if here else None)
 
 
 def cmd_uninstall(argv: list[str]) -> int:
@@ -787,11 +787,22 @@ def cmd_uninstall(argv: list[str]) -> int:
     if sys.stdin.isatty() and not args.yes:
         what = (args.names[0] if len(args.names) == 1 else
                 "%d skills: %s" % (len(args.names), ", ".join(args.names)))
-        where = (scopes.resolve_base(scopes.SCOPE_PROJECT)
-                 if args.scope == scopes.SCOPE_PROJECT
-                 else _project_fallback_base(args.names))
-        prompt = ("uninstall %s from %s?" % (what, _tilde(where)) if where
-                  else "uninstall %s?" % what)
+        if args.scope == scopes.SCOPE_PROJECT:
+            from_repo, where = list(args.names), scopes.resolve_base(
+                scopes.SCOPE_PROJECT)
+        else:
+            from_repo, where = _project_fallback(args.names)
+        if where is None:
+            prompt = "uninstall %s?" % what
+        elif len(from_repo) == len(args.names):
+            prompt = "uninstall %s from %s?" % (what, _tilde(where))
+        else:
+            # Part of the batch comes out of the repo and part out of the user
+            # store. Saying "from <repo>" would describe the wrong half, and
+            # saying nothing would drop the warning for the case the reader is
+            # least likely to expect — so name which ones.
+            prompt = "uninstall %s? (%s from %s)" % (
+                what, ", ".join(from_repo), _tilde(where))
         if not out.confirm(prompt):
             out.info("cancelled")
             return 1

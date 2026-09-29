@@ -837,9 +837,15 @@ def cmd_doctor(argv):
                  % (len(crashes), _s(len(crashes)), _tilde(paths.logs_dir()),
                     crashes[-1].name))
 
-    line1 = ("%d skill%s installed · %d tap%s synced · %d broken link%s"
-             % (len(skills), _s(len(skills)), tap_ok, _s(tap_ok),
-                len(broken), _s(len(broken))))
+    # `skills` is the user store only, so in a repo holding committed skills
+    # the summary said "0 skills installed" on the same screen as the project
+    # row that had just counted them. Name the second number rather than fold
+    # it into the first: they live in different places and `boost uninstall`
+    # treats them differently, so one total would be a different claim.
+    line1 = ("%d skill%s installed%s · %d tap%s synced · %d broken link%s"
+             % (len(skills), _s(len(skills)),
+                " (+%d in this project)" % len(pskills) if pskills else "",
+                tap_ok, _s(tap_ok), len(broken), _s(len(broken))))
     (rep.ok if not broken else rep.warn)("summary", line1)
     if lock_ok and rotation:
         rep.ok("integrity", "lock file integrity OK · log rotation healthy")

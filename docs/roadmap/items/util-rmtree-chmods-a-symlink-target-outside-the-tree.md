@@ -16,8 +16,17 @@ title: "<code>util.rmtree</code>'s retry hook <code>chmod</code>s a symlink's ta
 <code>util.rmtree</code> installs an error handler so a read-only file cannot strand a delete: on
 failure it <code>chmod</code>s the path and retries. The handler is handed the path that failed, and
 when that path is a <em>symlink</em> the <code>chmod</code> follows it &middot; so deleting a
-directory that happens to contain a link to a file elsewhere changes that file's permissions, even
-though the delete itself correctly removes only the link.
+directory that happens to contain a link to a file elsewhere changes that file's permissions.
+
+Measured, because the first draft of this card guessed at the shape and guessed wrong. The hook only
+fires once a delete has already <em>failed</em>, and unlinking a symlink does not fail while its
+parent directory is writable &middot; so in the ordinary case nothing happens at all: the link goes,
+the target keeps its mode byte-for-byte. Make the parent read-only (<code>0o500</code>) and the
+unlink fails, the hook <code>chmod</code>s the link, the target outside the tree goes
+<code>0o400</code> &rarr; <code>0o200</code>, the retry fails again and <code>rmtree</code> raises.
+The link is still there. So the only lasting effect of the hook on this path is the permission
+change on a file it was never asked to touch &middot; the earlier claim that &ldquo;the delete
+itself correctly removes only the link&rdquo; describes a run in which the hook never fires.
 
 The containment guards do their job: <code>scopes.resolve_in_base</code> and <code>contains</code>
 still refuse to remove anything outside the base, and the verification of PR #998 confirmed a planted

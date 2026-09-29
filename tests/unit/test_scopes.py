@@ -416,8 +416,8 @@ def test_owned_by_ignores_a_base_that_is_not_a_path(tmp_path):
     # A lock is a file on disk that anything can write, so a base of the wrong
     # type is untrusted input, not a crash.
     entries = {"num": {"scope": "project", "base": 7},
-               "lst": {"scope": "project", "base": ["/tmp"]},
-               "dct": {"scope": "project", "base": {"p": "/tmp"}}}
+               "lst": {"scope": "project", "base": ["/nowhere"]},
+               "dct": {"scope": "project", "base": {"p": "/nowhere"}}}
     assert scopes.owned_by(entries, tmp_path) == {}
 
 

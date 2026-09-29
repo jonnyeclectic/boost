@@ -23,6 +23,7 @@ from boost_cli.core import (
     paths,
     policy,
     registry,
+    scopes,
     store,
     util,
 )
@@ -2678,9 +2679,16 @@ class TestProjectSkills:
         Widening the resolver must not widen *what* is removable: an unmarked
         cwd with no lock entry for the name is still "not installed".
         """
+        # Assert the precondition the docstring rests on — with a marker above
+        # the cwd this would be testing the marked path and proving nothing.
+        assert scopes.project_root() is None
+        assert scopes.resolve_base(scopes.SCOPE_PROJECT) is not None
         with pytest.raises(BoostError) as err:
             store.uninstall("brainstorming")
-        assert "not installed" in err.value.message
+        # Exact, not a substring: "not installed in this project" also contains
+        # "not installed", so the loose form was satisfied by the project-scope
+        # error it is meant to distinguish itself from.
+        assert err.value.message == "brainstorming is not installed"
 
     def test_already_installed_hint_names_a_command_that_exists(self, entry,
                                                                 tmp_path):

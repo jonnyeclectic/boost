@@ -560,10 +560,6 @@ def cmd_info(argv):
             badges.append(out.badge("quarantined", "pink"))
         if lock.get("sidelined_by"):
             badges.append(out.badge("sidelined by %s" % lock["sidelined_by"], "cyan"))
-        if relation == staleness.BEHIND:
-            badges.append(out.badge("update available", "yellow"))
-        elif relation == staleness.AHEAD:
-            badges.append(out.badge("ahead of tap", "cyan"))
         if plock:
             # Both scopes hold it. Saying only "installed" here hid the repo's
             # copy, which --json has always reported.
@@ -577,6 +573,14 @@ def cmd_info(argv):
         badges.append(out.badge(
             "not installed" if kind == "skill" else "not installed %s" % kind,
             "cyan"))
+    # Outside the scope arms, because `relation` is read off `entry` and the
+    # "latest" row below is printed for either scope: gating only the badge on
+    # `lock` left a project-only install showing "latest 1.4.0 (update
+    # available)" under a strip that claimed nothing was out of date.
+    if relation == staleness.BEHIND:
+        badges.append(out.badge("update available", "yellow"))
+    elif relation == staleness.AHEAD:
+        badges.append(out.badge("ahead of tap", "cyan"))
     tapname = (entry or cat or {}).get("tap")
     if tapname:
         badges.append(out.badge(str(tapname), "violet"))

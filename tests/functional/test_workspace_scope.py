@@ -692,19 +692,24 @@ def test_bare_uninstall_prompt_stays_generic_for_a_user_scope_name(
     assert asked == ["uninstall brainstorming?"]
 
 
-def test_bare_uninstall_prompt_stays_generic_for_a_mixed_batch(
+def test_bare_uninstall_prompt_names_the_subset_for_a_mixed_batch(
         boost, tapped, repo, monkeypatch):
     """One answer cannot describe two destinations.
 
-    `commit-messages` is user-scope and `brainstorming` is project-scope, so
-    naming the repo would tell the reader this is about their checkout while
-    the canonical store is what also empties.
+    `commit-messages` is user-scope and `brainstorming` is project-scope.
+    Saying "from <repo>" would describe the wrong half, and saying nothing
+    would drop the warning for exactly the case the reader is least likely to
+    expect — so the prompt names which of them comes out of the repo.
     """
     boost("install", "commit-messages")
     boost("install", "brainstorming", "--local")
     asked = _tty(monkeypatch, [True])
     boost("uninstall", "brainstorming", "commit-messages")
-    assert asked == ["uninstall 2 skills: brainstorming, commit-messages?"]
+    assert len(asked) == 1
+    assert asked[0].startswith(
+        "uninstall 2 skills: brainstorming, commit-messages? (brainstorming from ")
+    assert "commit-messages from" not in asked[0]
+    assert repo.name in asked[0]
     assert projectlock.get_skill(repo, "brainstorming") is None
     assert lockfile.get_skill("commit-messages") is None
 
@@ -714,3 +719,68 @@ def test_declining_the_prompt_removes_nothing(boost, tapped, repo, monkeypatch):
     _tty(monkeypatch, [False])
     boost("uninstall", "brainstorming", expect=1)
     assert projectlock.get_skill(repo, "brainstorming") is not None
+
+
+def _set_project_version(base, version: str) -> None:
+    entry = dict(projectlock.get_skill(base, "brainstorming") or {})
+    entry["version"] = version
+    projectlock.set_skill(base, "brainstorming", entry)
+
+
+def test_info_project_skill_behind_its_tap_gets_the_badge(boost, tapped, repo):
+    """The staleness badge follows the record the card is read off.
+
+    `relation` is computed from `lock or plock`, so the "latest" row already
+    printed "(update available)" for a project-only install — but the badge
+    that says the same thing sat inside the user-scope arm, so the strip
+    contradicted the row two lines below it.
+    """
+    boost("install", "brainstorming", "--local")
+    _set_project_version(repo, "1.3.0")
+    res = boost("info", "brainstorming")
+    assert "[update available]" in res.out, res.out
+    assert re.search(r"latest\s+1\.4\.0\s+\(update available\)", res.out)
+
+
+def test_info_project_skill_ahead_of_its_tap_gets_the_badge(boost, tapped,
+                                                            repo):
+    boost("install", "brainstorming", "--local")
+    _set_project_version(repo, "1.4.1")
+    res = boost("info", "brainstorming")
+    assert "[ahead of tap]" in res.out, res.out
+    assert "update available" not in res.out
+
+
+def test_info_not_installed_card_still_has_no_staleness_badge(boost, tapped,
+                                                              repo):
+    # `relation` is None without a record to compare, so moving the badges out
+    # of the `if lock:` arm must not start decorating a card for something
+    # that is not installed anywhere.
+    res = boost("info", "brainstorming")
+    assert "not installed" in res.out
+    assert "update available" not in res.out
+    assert "ahead of tap" not in res.out
+
+
+def test_doctor_summary_counts_the_project_skills_it_just_listed(
+        boost, tapped, repo):
+    """"0 skills installed" next to "1 project skill intact" is two answers.
+
+    `skills` in the summary is the user store, so in a repo holding committed
+    skills the one-line verdict contradicted the row three lines above it.
+    They stay two numbers rather than one total: they live in different
+    places and `boost uninstall` treats them differently, so summing them
+    would be a different claim, not a clearer one.
+    """
+    boost("install", "brainstorming", "--local")
+    res = boost("doctor")
+    assert "1 project skill intact" in res.out
+    assert "0 skills installed (+1 in this project)" in res.out
+
+
+def test_doctor_summary_says_nothing_extra_without_a_project(boost, tapped):
+    """A machine with no project skills reads exactly as it always did."""
+    boost("install", "brainstorming")
+    res = boost("doctor")
+    assert "1 skill installed ·" in res.out
+    assert "in this project" not in res.out
