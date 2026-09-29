@@ -568,10 +568,12 @@ _FIX = {
     # instead: with it in force, this build goes through the paid API.
     "no-store": "build it: `boost reindex --dense`",
     "version-changed": "rebuild it: `boost reindex --dense --force`",
-    # Only right when the live space is the one the user wants. A store built
-    # through a paid provider that has merely lost its key lands here too, and
-    # for that user this row is the bill `no-key`'s guard exists to prevent —
-    # so `fix_hint` answers it from the status dict before reaching this table.
+    # Only right when the live space is the one the user wants. Two kinds of
+    # store land here without wanting it: one built through a paid provider
+    # that has merely lost its key, and one the local model built on a machine
+    # that has since exported a key. For both this row is the bill the guards
+    # in `fix_hint` exist to prevent, so it answers from the status dict —
+    # `_restore_built_space` and `_restore_local_space` — before reaching here.
     "provider-changed": "rebuild it: `boost reindex --dense --force`",
     "model-changed": "rebuild it: `boost reindex --dense --force`",
     "dim-changed": "rebuild it: `boost reindex --dense --force`",
@@ -664,6 +666,49 @@ def _restore_built_space(built: str, env: str) -> str | None:
     return None
 
 
+def _restore_local_space() -> str | None:
+    """How to put the *local* model back in front of a key, or None.
+
+    The mirror of :func:`_restore_built_space`, and the expensive direction.
+    A store the local model built is displaced by exactly the mechanism that
+    displaces a keyed one — a provider `embed.provider` prefers appears on the
+    machine — and it is the common case rather than the exotic one: `boost
+    quickstart` imports the published shards, those are keyless 384-d local
+    vectors by policy, so the default on-ramp leaves every user one `export`
+    away from this.
+
+    Separate from :func:`_restore_built_space` rather than a fourth branch in
+    it, because the predicate is different in two ways:
+
+    * **`unset` is only right advice when the local model is installed.**
+      Dropping the one key in force on a partial ``[rag]`` install sends
+      `embed.provider` to ``None`` and the ladder to ``no-key`` — advice that
+      switches off the only backend that was working. :func:`free_shard_path`
+      guards the same way and for the same reason; ``local_installed`` rather
+      than ``local_available`` because wording a hint must not import an ONNX
+      runtime.
+    * **There is no ``export`` half.** Local has no key, so the two-fact shape
+      collapses to one, and the sentence has to say what is being put back —
+      the local model, not "the store's own key", which a keyless store does
+      not have.
+
+    None when nothing outranks local, which through :func:`status` means the
+    store is not displaced at all. :func:`fix_hint` is a pure function of its
+    arguments, though, so the case is reachable by a caller and answered.
+    """
+    if not embed.local_installed():
+        return None
+    # `outranking` reads the one preference order there is. Local is not in
+    # `KEY_ENV`, and its docstring is explicit that a name outside the table
+    # is outranked by every key in force — which is the semantics wanted here:
+    # dropping `VOYAGE_API_KEY` alone falls through to `OPENAI_API_KEY`, no
+    # nearer the local space than the key it replaced.
+    drop = embed.outranking("local")
+    if not drop:
+        return None
+    return "`unset %s` puts the local model back in front" % " ".join(drop)
+
+
 def fix_hint(reason: str, status: dict | None = None) -> str:
     """The single next action for a `status()` reason, or a safe default.
 
@@ -685,6 +730,17 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
     `boost reindex --dense --force`. So both reasons consult the status, and
     ``built_provider`` is what separates a store worth reviving from an
     unfinished install with nothing to revive.
+
+    ``built_provider`` is also read for the mirror case, which is the one most
+    users can reach: a store the **local** model built, on a machine that has
+    since exported a key. `boost quickstart` imports keyless 384-d shards, so
+    that is the default shape, and one `export` for an unrelated tool takes
+    semantic search off. `_restore_local_space` answers it with the `unset`
+    that is free, where the table would sell a re-embed through the very API
+    whose key caused the problem. Only ``local`` and the names in
+    :data:`embed.KEY_ENV` are admitted — a blank ``built_provider`` is not a
+    store to revive, and `embed.outranking` would answer for it with every
+    key on the machine.
 
     The two remedies differ in their tail, because the cost differs. Under
     ``no-key`` the local model is missing, so the alternative is installing it
@@ -719,23 +775,39 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
         built = status.get("built_provider") or ""
         env = embed.KEY_ENV.get(built)
         # `chunks` guards the unfinished-install case: without vectors on disk
-        # there is nothing a key would revive, and "build it" is the real next
-        # step. A store built by the local model has no env var and correctly
-        # falls through — that user does need the package back.
+        # there is nothing to revive, and "build it" is the real next step.
         count = status.get("chunks")
         # `None` is "a store is here and never recorded its total" — a legacy
         # store, not an unfinished one. Only a *known* zero means there are no
         # vectors to revive; reading unknown as zero would send exactly the
         # user this branch exists to protect to the re-embed-everything answer.
-        if env and (count is None or count > 0):
+        #
+        # `env or built == "local"` is the admission test, and it is spelled
+        # out rather than "has a recorded provider" on purpose: `outranking`
+        # answers for a name outside `KEY_ENV` with *every* key in force, so a
+        # store whose meta records no provider — `""` here, from a legacy
+        # cache or a synthesised status — would be handed `unset` over the
+        # machine's entire keyring on the strength of a blank field.
+        if (env or built == "local") and (count is None or count > 0):
             n = (f"{int(count):,} vector{'' if count == 1 else 's'}"
                  if count else "vectors")
             if reason == "no-key":
-                return ("set the key it was built with: `export %s=...` — "
-                        "reinstalling the extra swaps in the local model and "
-                        "forces all %s to be re-embedded" % (env, n))
+                if env:
+                    return ("set the key it was built with: `export %s=...` — "
+                            "reinstalling the extra swaps in the local model "
+                            "and forces all %s to be re-embedded" % (env, n))
+                # Local-built, and the model it was built with is what went
+                # missing. The table's row would be nearly right and ends in
+                # the one suggestion that is wrong for this store: setting a
+                # key displaces it into another space, and with the local
+                # backend still absent the next status is `provider-changed`
+                # with nothing to unset back to — the full re-embed.
+                return ("reinstall the extra: `%s` — it is the model all %s "
+                        "were built with, and a key instead re-embeds them"
+                        % (install_extra(), n))
             live = status.get("provider")
-            restore = _restore_built_space(built, env)
+            restore = (_restore_built_space(built, env) if env
+                       else _restore_local_space())
             if restore:
                 # Names the live space rather than "the local model": the
                 # provider that displaced this store is whatever `provider()`

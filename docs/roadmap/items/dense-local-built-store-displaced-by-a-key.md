@@ -1,14 +1,16 @@
 ---
 id: dense-local-built-store-displaced-by-a-key
 board: code
-section: planned
-status: planned
+section: shipped
+status: shipped
 category: Quality · Retrieval eval
 complexity: S
 impact: High
 wow: 4
 note: Exporting an API key takes a locally built store off the air, and doctor answers with a paid re-embed where `unset` is free. Every user who came in through `boost quickstart` is one `export` away from this.
 order: 353
+owner: loop/dense-local-displaced
+pr: 990
 title: A locally built vector store displaced by a new API key is told to re-embed through the paid provider, where unsetting the key is free
 ---
 <b>The mirror of #989, and the expensive direction.</b> #989 taught <code>fix_hint</code> that a store built with an API key can be displaced two ways, and to name the <code>export</code> or the <code>unset</code> that restores it. A store built by the <b>local</b> model is displaced by exactly the same mechanism — a key the resolver prefers appears on the machine — and gets none of it: the branch is gated on <code>env = embed.KEY_ENV.get(built)</code> being truthy, and <code>local</code> has no env var, so it falls through to the table.
@@ -34,4 +36,4 @@ title: A locally built vector store displaced by a new API key is told to re-emb
 
 Two more things fall out of that. The sentence needs a third variant — "puts the store's own key back in front" is false for a store that has no key; it is the local model being put back in front. And the admission test must be <code>built in embed.KEY_ENV or built == "local"</code>, never "has a recorded provider": <code>embed.outranking("")</code> returns <b>every</b> set key, so a store whose meta records no provider would be told to unset the machine's entire keyring on the strength of a blank field.
 
-<b>Where it was found.</b> The adversarial verification pass on #989, which is also why the measurement exists. #989's PR body originally scoped this out as "not measured here"; it is measured now, and <code>docs/semantic-search.md</code> carries a qualifier pointing at this card until it lands.
+<b>Where it was found.</b> The adversarial verification pass on #989, which is also why the measurement exists. #989's PR body originally scoped this out as "not measured here"; it is measured now, and #990 removes the qualifier <code>docs/semantic-search.md</code> was carrying in the meantime.

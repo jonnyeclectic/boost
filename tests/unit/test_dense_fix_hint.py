@@ -200,12 +200,20 @@ class TestNoKeyReadsTheStore:
                                                      chunks=0, store_exists=False))
         assert hint == _table("no-key")
 
-    def test_a_locally_built_store_still_gets_the_table_answer(self):
-        # `local` has no API key to set — this user genuinely dropped the
-        # package and needs it back.
+    def test_a_locally_built_store_keeps_the_extra_and_loses_the_key_offer(
+            self):
+        # `local` has no API key to set, so this user does genuinely need the
+        # package back and the table's first clause is right. Its second is
+        # not: "(or set VOYAGE_API_KEY / OPENAI_API_KEY for a larger model)"
+        # sells this particular user a full re-embed of vectors already on
+        # disk, since a key displaces their store and the local model is
+        # still missing to unset back to. Same remedy, without the bait.
         hint = dense.fix_hint("no-key", self._status(built_provider="local",
                                                      built_model="BAAI/bge-small-en-v1.5"))
-        assert hint == _table("no-key")
+        assert hint.startswith("reinstall the extra: `%s`"
+                               % dense.install_extra())
+        assert hint != _table("no-key")
+        assert "VOYAGE_API_KEY" not in hint
 
     def test_no_status_argument_keeps_the_old_answer(self):
         # Every pre-existing caller passes one argument; none may regress.
@@ -372,8 +380,11 @@ class TestProviderChangedIsWhereALostKeyActuallyLands:
         assert dense.fix_hint("provider-changed", st) == \
             _table("provider-changed")
 
-    def test_a_locally_built_store_keeps_the_table(self):
-        # No key would revive it — the rebuild really is the answer.
+    def test_a_locally_built_store_is_not_this_branch(self):
+        # It has its own, below: no key to export, and an `unset` that is
+        # only safe when the local model is installed. Under this class's
+        # fixture no key is set at all, so nothing outranks local and the
+        # rebuild really is the answer.
         st = self._status(built_provider="local", provider="voyage")
         assert dense.fix_hint("provider-changed", st) == \
             _table("provider-changed")
@@ -534,6 +545,148 @@ class TestProviderChangedIsWhereALostKeyActuallyLands:
             hint = dense.fix_hint("provider-changed",
                                   self._status(built_provider=provider))
             assert env in hint
+
+
+class TestALocallyBuiltStoreDisplacedByAKey:
+    """The mirror of the class above, and the direction that costs money.
+
+    `boost quickstart` imports the published shards, and those are keyless by
+    policy — 384-d `BAAI/bge-small-en-v1.5`, built by the local model. So the
+    default on-ramp leaves every user with a local-built store, and the first
+    time one of them exports a Voyage or OpenAI key for anything at all,
+    `embed.provider` prefers it, semantic search goes quiet, and the table's
+    row bills them to get it back. `embed.outranking("local")` already knows
+    the free answer; before this class nothing asked it.
+
+    Reproduced at 645,592 chunks during the adversarial pass on the keyed
+    branch, which is why that PR shipped with a qualifier in
+    `docs/semantic-search.md` pointing at this one.
+    """
+
+    def _status(self, **over):
+        st = {"reason": "provider-changed", "provider": "voyage",
+              "built_provider": "local", "built_model": "bge-small-en-v1.5",
+              "built_dim": 384, "chunks": 645592, "store_exists": True,
+              "degraded": True}
+        st.update(over)
+        return st
+
+    @pytest.fixture(autouse=True)
+    def _local_is_installed(self, monkeypatch):
+        """The local model present, and the keys under the test's control.
+
+        Patched on `embed` itself rather than on `localembed.installed`:
+        `local_installed` consults the memoised `_backend_cache` *first*, so a
+        test earlier in the same process that cached a missing backend makes a
+        patch one layer down invisible. Patching the name this module actually
+        calls cannot be shadowed that way.
+        """
+        from boost_cli.core import embed
+        for env in embed.KEY_ENV.values():
+            monkeypatch.delenv(env, raising=False)
+        monkeypatch.delenv("BOOST_NO_EMBED", raising=False)
+        monkeypatch.setattr(embed, "local_installed", lambda: True)
+
+    def test_the_remedy_is_the_unset_not_the_rebuild(self, monkeypatch):
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        assert dense.fix_hint("provider-changed", self._status()) == (
+            "`unset VOYAGE_API_KEY` puts the local model back in front — or "
+            "`boost reindex --dense --force` re-embeds all 645,592 vectors "
+            "in voyage's space")
+
+    def test_every_key_in_front_is_named_in_one_unset(self, monkeypatch):
+        # Dropping `VOYAGE_API_KEY` alone falls through to `OPENAI_API_KEY`,
+        # which is no nearer the local space than the key it replaced — so a
+        # remedy naming only the live provider's key does not restore
+        # anything, and the user runs it to no effect.
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        monkeypatch.setenv("OPENAI_API_KEY", "o")
+        hint = dense.fix_hint("provider-changed", self._status())
+        assert "`unset VOYAGE_API_KEY OPENAI_API_KEY`" in hint
+
+    def test_it_never_says_the_store_has_a_key_of_its_own(self, monkeypatch):
+        # The keyed branch's sentence is "puts the store's own key back in
+        # front". A keyless store has no such key; what goes back in front is
+        # the model.
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        hint = dense.fix_hint("provider-changed", self._status())
+        assert "own key" not in hint
+        assert "export" not in hint
+
+    def test_without_the_local_model_the_unset_is_never_offered(
+            self, monkeypatch):
+        # The whole reason this is not a fourth branch of
+        # `_restore_built_space`. On a partial `[rag]` install, unsetting the
+        # one key in force sends `provider()` to None and the ladder to
+        # `no-key` — advice that switches off the only backend that worked.
+        from boost_cli.core import embed
+        monkeypatch.setattr(embed, "local_installed", lambda: False)
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        assert dense.fix_hint("provider-changed", self._status()) == \
+            _table("provider-changed")
+
+    def test_with_nothing_in_front_of_it_the_table_stands(self):
+        # No key set, so nothing displaced this store and there is nothing to
+        # unset. Unreachable through `status()` — `provider()` would resolve
+        # to local and the reason would not be `provider-changed` — but
+        # `fix_hint` is a pure function of its arguments and callers build
+        # these dicts by hand.
+        assert dense.fix_hint("provider-changed", self._status()) == \
+            _table("provider-changed")
+
+    @pytest.mark.parametrize("built", [None, "", "garbage"])
+    def test_a_store_naming_no_provider_is_never_told_to_unset(
+            self, monkeypatch, built):
+        # The hazard that makes the admission test explicit rather than
+        # "has a recorded provider": `embed.outranking` answers for a name
+        # outside `KEY_ENV` with *every* key in force, so a blank field would
+        # otherwise earn this user an `unset` over their whole keyring.
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        monkeypatch.setenv("OPENAI_API_KEY", "o")
+        hint = dense.fix_hint("provider-changed",
+                              self._status(built_provider=built))
+        assert hint == _table("provider-changed")
+        assert "unset" not in hint
+
+    def test_an_empty_store_keeps_the_table(self, monkeypatch):
+        # Nothing on disk to put back in front of anything.
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        assert dense.fix_hint("provider-changed", self._status(chunks=0)) == \
+            _table("provider-changed")
+
+    def test_a_store_that_never_recorded_a_total_is_still_revived(
+            self, monkeypatch):
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        hint = dense.fix_hint("provider-changed", self._status(chunks=None))
+        assert "`unset VOYAGE_API_KEY`" in hint
+        assert "all vectors" in hint
+
+    def test_no_key_offers_the_extra_and_warns_off_the_key(self):
+        # `no-key` is "no key *and* no local backend", so for this store the
+        # model it was built with is precisely what went missing. The table's
+        # row is nearly right and ends in the one suggestion that is wrong
+        # here: setting a key displaces the store into another space, and
+        # with the local backend still absent the next status is
+        # `provider-changed` with nothing to unset back to.
+        #
+        # Pinned as the whole sentence, not a prefix: the clause that does the
+        # warning off is the *tail*, so a prefix assertion would let it be
+        # reworded — or emptied — without a test noticing.
+        hint = dense.fix_hint("no-key", self._status())
+        assert hint == (
+            "reinstall the extra: `%s` — it is the model all 645,592 vectors "
+            "were built with, and a key instead re-embeds them"
+            % dense.install_extra())
+        assert hint != _table("no-key")
+        assert "VOYAGE_API_KEY" not in hint
+
+    def test_no_key_still_exports_for_a_store_built_with_one(self):
+        # The widened admission must not swallow the keyed branch: a store
+        # built through a paid provider still gets its `export`, not the
+        # reinstall.
+        hint = dense.fix_hint("no-key", self._status(built_provider="voyage"))
+        assert "`export VOYAGE_API_KEY=...`" in hint
+        assert "reinstall the extra:" not in hint
 
 
 class TestFallback:
