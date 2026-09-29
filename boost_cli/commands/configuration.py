@@ -1652,7 +1652,7 @@ def _tool_doctor(args: dict):
     mat_issues = ["%s %s: modified since install" % (kind, n)
                   for kind in ("rule", "workflow")
                   for n, e in sorted(everything[kind].items())
-                  if (integrity.materialized_status(n, e)
+                  if (integrity.materialized_status(n, e, kind)
                       == integrity.STATUS_MODIFIED)]
     lines.extend(mat_issues)
     total = issues + len(mat_issues)

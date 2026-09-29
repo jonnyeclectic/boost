@@ -170,6 +170,106 @@ def workflow_agents(base=None) -> dict[str, Path]:
             if known_agents()[n]["workflows"]}
 
 
+def materialization_is_written(kind: str, base, agent) -> bool:
+    """Whether boost still writes ``agent`` for a row of ``kind`` at ``base``.
+
+    A rule or workflow records one materialization row per agent it was
+    written into, and ``store._refused_materializations`` carries the
+    untouched ones forward on purpose: a rule's row is what makes its managed
+    context-file block removable later, since ``store._uninstall_rule`` is
+    record-driven. Change that agent's config afterwards and the row is still
+    there, still naming a file, and nothing will ever write it again --
+    ``install`` writes only :func:`materializing_agents` for a rule and the
+    narrower :func:`workflow_agents` for a workflow.
+
+    Every check that reads those rows has to ask this first or it reports a
+    fault whose remedy cannot run. It lives here rather than in ``store``
+    because it is a question about the write sets and nothing else, so the
+    readers that must not import ``store`` -- ``integrity`` among them -- can
+    still ask it.
+
+    A row from before rows carried an ``agent`` is answered ``True``: without
+    the name there is nothing to test, and reporting a real gap is better than
+    silently dropping one. ``base`` is the row's own scope, so a project rule
+    is judged against :func:`project_agents` rather than the user-scope set.
+    """
+    if not agent:
+        return True
+    writes = (workflow_agents(base) if kind == "workflow"
+              else materializing_agents(base))
+    return agent in writes
+
+
+#: The reasons :func:`materialization_skip_reason` can give, as constants so
+#: a reader can branch on one without matching prose. They split three ways
+#: below, and that split is what ``boost doctor`` words its remedy from -- so
+#: it lives here beside the ladder that produces them rather than in the
+#: command layer, where a new reason could be added and silently miss its
+#: classification.
+REASON_UNCONFIGURED = "is not configured"
+REASON_SKILLS_ONLY = "takes skills only"
+REASON_NO_COMMAND_FORMAT = "has no slash-command format"
+REASON_DISABLED = "is disabled"
+REASON_NO_PROJECT_SCOPE = "has no project scope"
+REASON_UNKNOWN = "is not written"
+
+#: The reasons a config edit reverses: flip the flag, run ``boost sync``, and
+#: the row is written.
+CONFIG_REASONS = (REASON_DISABLED, REASON_NO_PROJECT_SCOPE)
+
+#: The reasons that also name a config flag and where flipping it is the
+#: wrong move. :data:`config.DEFAULTS` says why for each: Antigravity's rule
+#: and workflow formats are unverified, and Codex 0.156.1 has no
+#: user-installable command format at all -- so ``skills_only: false`` or
+#: ``workflows: true`` buys a file the agent silently never loads, which is
+#: worse than the stale record it replaced.
+WITHDRAWN_REASONS = (REASON_SKILLS_ONLY, REASON_NO_COMMAND_FORMAT)
+
+#: Neither: ``REASON_UNCONFIGURED`` names an agent this boost has never heard
+#: of, and ``REASON_UNKNOWN`` is the fallback for a refusal the ladder could
+#: not word. Named so the three groups are a partition a test can check --
+#: ``boost doctor`` words its remedy from the split, so a reason added to the
+#: ladder and to none of these would be classified by silence.
+UNREMEDIED_REASONS = (REASON_UNCONFIGURED, REASON_UNKNOWN)
+
+
+def materialization_skip_reason(kind: str, base, agent) -> str | None:
+    """Why :func:`materialization_is_written` refuses, or ``None`` if it does
+    not -- a verb phrase to complete "the agent ...".
+
+    Set membership stays the single authority; this only words the answer, and
+    falls back to a generic phrase rather than contradicting it. Wording it
+    from the agent's own flags matters because *disabled* is only one of the
+    reasons: an agent can be enabled and still refuse a row for having no
+    verified slash-command format (``codex``), no rule format at all
+    (``skills_only``), or no project scope. Saying "disabled agent" for those
+    sends the user to re-enable something that is already on.
+
+    **Order is by remedy, not by flag.** More than one reason can hold at
+    once, and the caller shows one, so the one shown has to be the one whose
+    remedy is real. The two reasons in :data:`CONFIG_REASONS` are reversible
+    and are therefore reported *last*: ``antigravity`` is both
+    ``skills_only`` and ``project_scope: False``, so ordering scope first
+    told a user with a project rule to give it project scope -- after which
+    the row is still unwritten, with a new reason, because a skills-only
+    agent takes no rule at any scope. The permanent reason is the true one.
+    """
+    if materialization_is_written(kind, base, agent):
+        return None
+    spec = known_agents().get(agent)
+    if spec is None:
+        return REASON_UNCONFIGURED
+    if spec["skills_only"]:
+        return REASON_SKILLS_ONLY
+    if kind == "workflow" and not spec["workflows"]:
+        return REASON_NO_COMMAND_FORMAT
+    if not spec["enabled"]:
+        return REASON_DISABLED
+    if base is not None and not spec["project_scope"]:
+        return REASON_NO_PROJECT_SCOPE
+    return REASON_UNKNOWN
+
+
 def dedupes_by_path() -> set[str]:
     """Agents that collapse two discovery entries resolving to the same file.
 

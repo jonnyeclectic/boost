@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>511</b><span>Loop finds</span></div>
+      <div class="stat"><b>512</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1713,36 +1713,14 @@ NOT ALREADY CARDED, but read the existing card first.
       </article>
 
       <article class="cap rcard" id="sync-repairs-a-disabled-agents-row-every-run">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
         <h3>A rule or workflow row for a disabled agent makes <code>boost sync</code> claim the same repair on every run, and <code>doctor</code> never goes healthy</h3>
-        <p><b>Found while verifying</b> <code>unwritable-rule-or-workflow-dir-crashes-install</code>. A rule
-or workflow keeps one materialization row per agent. <code>sync_plan</code> reads every row,
-but the repair it runs is an install, and an install writes only to
-<code>agents.materializing_agents()</code>. A row for an agent that is no longer enabled is never
-written and never cleared, so it is "missing" again on the next run.
-
-<b>Measured</b> in a disposable HOME. Install a rule with <code>~/.cursor/rules</code> at mode 500,
-so the Cursor row is recorded as refused, then set <code>agents.cursor.enabled</code> to false. That
-is a natural response when the dir was locked on purpose. <code>boost sync</code> then prints
-<code>re-materialized rule team-conventions</code> on every run, and <code>boost doctor</code> stays
-at rc 1 with "rule team-conventions was not written for cursor … <code>boost sync</code> writes it
-once it is", a remedy that cannot work. This is not new with that change. On main, install the
-rule, delete the Cursor file, disable Cursor, and run sync twice: it loops the same way for
-any missing file of a disabled agent.
-
-<b>Fix sketch:</b> have <code>sync_plan</code> and doctor skip rows for agents outside
-<code>materializing_agents()</code> for that row's scope (and say once that the row belongs to a
-disabled agent, with <code>boost uninstall</code> or re-enabling as the next step), or have
-<code>sync_apply</code> claim a repair only when the rows it meant to fix are actually clean
-afterwards. A test should run sync twice and assert the second run is "everything in sync".
-The same fix must also cover <code>store.unwritable_agent_dirs()</code>, which reads the same
-rows: a refused row of a disabled agent keeps its locked dir in doctor's issues and in sync's
-warnings, with a <code>boost sync</code> remedy that never writes there.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/sync-repairs-a-disabled-agents-row-every-run.md">Write-up &middot; sync-repairs-a-disabled-agents-row-every-run.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">a rule or workflow row for an agent later disabled in config makes sync print "re-materialized" on every run and keeps doctor at rc 1</span>
+          <span class="m">fixed — every check that reads a materialization row now asks first whether boost still writes that agent, so a disabled one is named once instead of reported as rot</span>
         </div>
       </article>
 
@@ -3806,6 +3784,54 @@ step at the top of the command whose failure degrades the agent-dependent sectio
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">A single agent whose `dir` names an unset variable makes `boost doctor` exit 1 with one line instead of reporting it as an issue…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="an-item-materialized-nowhere-reads-ok-in-verify-health-drift">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3>An item materialized <em>nowhere</em> reads <code>ok</code> in <code>verify</code>, <code>health</code> and <code>drift</code></h3>
+        <p><b>Found by the second review of</b> <code>sync-repairs-a-disabled-agents-row-every-run</code>.
+That item fixed a row for an agent boost no longer writes being read as a <em>missing artifact</em>:
+nothing wrote the file and nothing ever will, so <code>boost verify</code> failed forever and
+<code>boost drift</code> and <code>boost health</code> sent the user to a <code>boost sync</code>
+that skips the row by design. The fix is right, and it opens a gap at the other end.
+
+<b>Skipping a row is correct per row and wrong per item.</b> Skip <em>every</em> row an item has
+and the item is materialized nowhere — the rule reaches no agent, the workflow is in no command
+palette — and the surfaces say it is fine. Measured on a real install (fixture tap, one rule,
+then every agent disabled): <code>boost verify</code> &rarr;
+<code>team-conventions&nbsp;&nbsp;ok&nbsp;&nbsp;rule</code>, rc 0 &middot; <code>boost drift</code>
+&rarr; <code>in-sync</code> &middot; <code>boost health</code> &rarr;
+<code>rules&nbsp;&nbsp;1 installed</code>, <code>drift&nbsp;&nbsp;1 in-sync</code>,
+<code>● healthy</code> &middot; <code>boost attest --verify</code> &rarr; <code>sha_ok</code>.
+
+<b><code>doctor</code> both names it and denies it.</b> It prints the note —
+<em>5 recorded materializations name an agent boost no longer writes…</em> — and two lines later
+<em>✓ 1 rule and 0 workflows fully materialized for every agent boost writes</em>, then
+<code>● healthy</code>. The count is true as worded and false as read: the write set is empty, so
+every item is trivially materialized for all of it. Only the note carries the news, and only
+<code>doctor</code> has a note channel — a third state that is neither an issue nor silence. The
+other commands have two, so the per-row skip had nowhere to put this and it fell into the healthy
+one.
+
+<b>Why it is not cosmetic.</b> <code>verify</code> is what scripts gate on and
+<code>attest --verify</code> is the provenance check; an install that reaches nothing and passes
+both is wrong in the direction that costs the user something — they installed a rule believing
+some agent would read it.
+
+<b>Shape of a fix.</b> Keep the per-row skip; add a per-<em>item</em> question after the loop. An
+item whose materialization rows are all unwritten is reported distinctly — <em>unreachable</em>,
+neither <code>ok</code> nor <code>missing</code> — and the count line says how many agents it
+actually reaches rather than how many of the empty set it satisfies. The work is the state the
+three commands do not have: <code>verify</code>'s exit code, what <code>health</code>'s counts
+mean, and whether <code>attest --verify</code> should fail it. An item with <em>no</em> rows at all
+is a different case (a skill, or a rule installed before rows existed) and must keep reading
+<code>ok</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">a rule whose every materialization row names an agent boost no longer writes reads "ok" in verify and is counted as installed by health — only doctor says otherwise</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
