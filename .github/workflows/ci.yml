@@ -558,8 +558,12 @@ jobs:
     # So the observed range is 7.4-55.0 min around a 24.1-minute prediction, and
     # a 45-minute ceiling sat 3.6% above the slowest run that ever PASSED (43.4
     # min, on #667). That is the inverse of the convention this repository
-    # applies everywhere else — eval floors sit ~10% clear of their measured
-    # value precisely so ordinary drift cannot flake the build. Here one slow
+    # applies everywhere else — an eval floor is set a margin clear of its
+    # measured value precisely so ordinary drift cannot flake the build. (The
+    # size of that margin is recorded in the Makefile, next to the floors
+    # themselves, because it is not one number and restating it here would be
+    # a second copy to go stale. The point here is the sign, not the size — a ceiling
+    # 3.6% ABOVE the worst pass has no margin at all.) One slow
     # runner was enough, and on #673 it happened: shard 2 was killed mid-run,
     # `mutation` failed "upstream jobs must be conclusive", and a batch whose
     # other five shards were green could not merge.
