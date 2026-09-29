@@ -79,7 +79,7 @@ _DATED = re.compile(r"(?<![&\w])#\d{3,4}\b")
 
 #: A whole-corpus figure is one within this factor of the current total. The
 #: low end is what catches growth — the old total sits BELOW the new one — so
-#: it is as low as it can go while staying above eval_corpus.MAX_SHARE (65%):
+#: it is as low as it can go while staying above eval_corpus.MAX_ROW_SHARE (65%):
 #: the size block names the largest repo's entries on an undated line, and the
 #: cap keeps that figure out. 0.7 catches the old total after a refresh that
 #: grows the corpus by up to 43% (the first one moved it 5.7%); 2.0 catches it
@@ -94,7 +94,12 @@ def _counts(text: str) -> list[int]:
     out = []
     for line in text.splitlines():
         parts = line.split()
-        if len(parts) == 3 and not parts[0].startswith("#"):
+        # `>= 3`, not `== 3`: a row gained a fourth field (its distinct-content
+        # count) and an equality test stopped matching every row at once,
+        # taking the total to zero. Nothing failed — a total of zero makes
+        # every "is this figure stale" check pass vacuously — which is the
+        # failure mode this whole module exists to catch.
+        if len(parts) >= 3 and not parts[0].startswith("#"):
             out.append(int(parts[2]))
     return out
 
@@ -129,7 +134,7 @@ def _figures() -> dict[str, str]:
 
 
 def _max_share() -> float:
-    """``eval_corpus.MAX_SHARE``, the cap on one repo's share of the corpus.
+    """``eval_corpus.MAX_ROW_SHARE``, the cap on one repo's share of the rows.
 
     A limit the window has to respect, not a figure the prose quotes, so
     reading it from the writer's module costs the check none of its
@@ -140,7 +145,7 @@ def _max_share() -> float:
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return float(mod.MAX_SHARE)
+    return float(mod.MAX_ROW_SHARE)
 
 
 def _folded(text: str) -> str:
@@ -164,6 +169,22 @@ def stale_totals(text: str, total: int) -> list[str]:
             if low <= n <= high and n != total:
                 out.append("%d: %s" % (no, line.strip()))
     return out
+
+
+def test_every_pinned_row_is_counted():
+    """The row reader sees every row of the shipped list.
+
+    `_counts` derives the total the rest of this module checks prose against,
+    by field count. When taps.txt gained a fourth field an `== 3` test matched
+    nothing, the total went to zero, and every staleness check passed
+    vacuously. A check that fails open is worse than no check, so this pins
+    the count of rows READ against the count of rows there.
+    """
+    text = _TAPS.read_text(encoding="utf-8")
+    rows = [ln for ln in text.splitlines()
+            if ln.split() and not ln.lstrip().startswith("#")]
+    assert len(_counts(text)) == len(rows) >= 20
+    assert sum(_counts(text)) > 0
 
 
 class TestTheCheckItself:
@@ -203,7 +224,7 @@ class TestTheCheckItself:
 
     def test_the_largest_repo_is_never_read_as_a_total(self):
         # The size block names the largest repo's entries on an undated line,
-        # and eval_corpus.MAX_SHARE is the most that figure may be.
+        # and eval_corpus.MAX_ROW_SHARE is the most that figure may be.
         largest = int(10_731 * _max_share())
         text = "# largest: x/y, %s entries" % f"{largest:,}"
         assert stale_totals(text, 10_731) == []

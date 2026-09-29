@@ -42,6 +42,39 @@ is unsafe in both directions, and the count is what makes the first case
 detectable at all: a corpus that does not match its pins stops the run before
 anything is scored.
 
+WHY A ROW ALSO CARRIES A DISTINCT COUNT. The entry count is
+`len(catalog.scan_dir())` — files on disk — and it is the right number for both
+jobs above, because the index BM25 scores is built from exactly those rows:
+`rag.build` indexes `catalog.all_entries()` with no de-duplication at all, so
+ten vendored copies of one skill really are ten competing documents in the
+ranking. What it is NOT is a measure of how much distinct material the corpus
+holds, and the gap is not small:
+
+    repo                                       entries  distinct  copies
+    sickn33/antigravity-awesome-skills           6,634     2,117    68.1%
+    NeoLabHQ/context-engineering-kit               268        90    66.4%
+    affaan-m/ECC                                 1,621     1,588     2.0%
+    the whole corpus                            10,731     5,938    44.7%
+
+`MAX_ROW_SHARE` is the only shipped guard against the gate's corpus becoming
+one publisher's house style, and it ratcheted on the first column alone. That
+is a quantity a third party can inflate threefold without publishing one new
+skill — rendering the same skill into `.claude/`, `.cursor/` and `.gemini/` is
+a normal thing for a registry to do now — and one it can dodge entirely by
+dominating the content without vendoring. So a row records both counts and
+`--audit` ratchets on both: the first says how many documents the ranker
+sorts, the second how many distinct things it had to sort.
+
+The identity is `catalog._content_digest` — name, description and the
+frontmatter-stripped body — which is what `rag.dedupe_by_content` collapses a
+ranked list on, so the second column is measured with the rule the gate's own
+de-duplication already uses. It is deliberately NOT
+`scripts/measure_registry.py`'s digest, which normalises agent dotdir tokens so
+one skill rendered into `.claude/` and `.cursor/` counts once: that is the
+right question for `est_items` and the wrong one here, because the gate scores
+those renders as separate competing rows and a measure that merges them cannot
+describe the corpus it ranks.
+
 WHY UNAVAILABILITY EXITS 75. `ensure_eval_corpus.sh` runs under `set -euo
 pipefail` inside CI's `lint` job, a required context, so one deleted, renamed or
 privatised repository reddens every open pull request at once. That is a real
@@ -72,7 +105,7 @@ Usage:
   python3 scripts/eval_corpus.py --audit     # static checks, no network
   python3 scripts/eval_corpus.py --relock    # re-measure the entry counts
   python3 scripts/eval_corpus.py --refresh   # move the pins to upstream HEAD
-  python3 scripts/eval_corpus.py --list      # print "repo sha count" rows
+  python3 scripts/eval_corpus.py --list      # print "repo sha count distinct"
 """
 from __future__ import annotations
 
@@ -82,6 +115,7 @@ import subprocess
 import sys
 from collections.abc import Collection, Sequence
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TAPS = ROOT / "tests" / "eval" / "taps.txt"
@@ -91,8 +125,17 @@ SCALE_TAPS = ROOT / "tests" / "eval" / "taps-scale.txt"
 
 _SHA = re.compile(r"[0-9a-f]{40}")
 
-#: ``(owner/repo, pinned commit or None, pinned entry count or None)``.
+#: ``(owner/repo, pinned commit or None, pinned entry count or None)``. A row
+#: in the file carries a fourth field too; :func:`parse_taps` drops it and
+#: :func:`parse_distinct` is how a caller asks for it. Keeping this tuple three
+#: wide is deliberate: the shards matrix job's whole defence against splitting
+#: one row into three registries is that it unpacks this shape by name
+#: (``tests/unit/test_shards_matrix.py``), and widening a tuple every caller
+#: destructures is a change with no local reader.
 Row = tuple[str, str | None, int | None]
+
+#: A row as the file spells it: :data:`Row` plus the distinct-content count.
+FullRow = tuple[str, str | None, int | None, int | None]
 
 #: A repository, or the commit a row pins, could not be fetched.
 UNAVAILABLE = "unavailable"
@@ -105,14 +148,30 @@ DRIFT = "drift"
 EXIT_DRIFT = 1
 EXIT_UNAVAILABLE = 75
 
-# No single repository may hold more than this share of the corpus. Measured,
-# not chosen: sickn33/antigravity-awesome-skills held 62.1% at the #410 pins,
-# and `--audit` prints its share now. So this is a ratchet against making the
-# concentration worse — not a claim that 62% is a healthy number, which it is
-# not. Diluting it means adding breadth, never dropping the big repo: the table
+# No single repository may hold more than this share of the corpus, counted two
+# ways. Both are measured rather than chosen, and both are ratchets against
+# making the concentration worse — not claims that today's figure is healthy.
+# Diluting either means adding breadth, never dropping the big repo: the table
 # above shows that dropping it raises every metric, so "rebalancing" by
 # trimming would flatter the gate.
-MAX_SHARE = 0.65
+#
+# ROWS is documents-in-the-index: what the ranker sorts, and what every recall
+# figure this project publishes is averaged over.
+# sickn33/antigravity-awesome-skills held 62.1% of it at the #410 pins and
+# 61.8% at the #992 ones.
+MAX_ROW_SHARE = 0.65
+# CONTENT is distinct material: what the corpus is a sample OF. It is the lower
+# number for a publisher who vendors and the HIGHER one for a publisher who does
+# not, which is the whole reason both exist. At the #992 pins sickn33 is 61.8%
+# of rows and 35.7% of content, while affaan-m/ECC is 15.1% of rows and 26.7%
+# of content — so a ceiling on rows alone fires on the first repo for copies
+# that add no material, and cannot fire on the second at all.
+#
+# Set like its sibling: a few points above the measured leader (35.7%), loose
+# enough that upstream drift cannot flake the build and tight enough to catch a
+# collapse. It is deliberately NOT 0.65: the two numbers measure different
+# things and there is no reason the same threshold suits both.
+MAX_CONTENT_SHARE = 0.40
 
 # taps.txt states its own size between these two lines, and every rewrite of
 # the rows (`relock_text`, so `--relock` and `--refresh`) rewrites it. It used
@@ -144,17 +203,32 @@ class CorpusError(RuntimeError):
         self.detail = detail
 
 
-def parse_taps(text: str) -> list[Row]:
-    """Rows of ``owner/repo [sha [count]]``, comments and blanks dropped.
+def _count(repo: str, field: str, noun: str) -> int:
+    """One count field, or a fatal error naming what it was meant to count."""
+    if not field.isdigit():
+        raise SystemExit(
+            "tap list: %s records %r %s, which is not a "
+            "non-negative integer" % (repo, field, noun))
+    return int(field)
+
+
+def _rows(text: str) -> list[FullRow]:
+    """Every pinned row of ``text``, fully validated; comments and blanks gone.
+
+    One parser, because the two public readers have to agree about what a row
+    is: a row :func:`parse_taps` accepts and :func:`parse_distinct` silently
+    drops (or the reverse) is a row the corpus half-describes, and nothing
+    would say so.
 
     An absent SHA parses as ``None`` rather than an error so the format stays
     backward compatible, but a SHA that is *present and malformed* is fatal: a
     typo silently degrading to "unpinned" would reintroduce the exact drift this
-    file exists to stop, while still looking pinned to a reader. A count is
-    fatal on the same grounds, and requires a SHA — a count beside an unpinned
-    repo describes a tree that is free to change underneath it.
+    file exists to stop, while still looking pinned to a reader. Both counts are
+    fatal on the same grounds, and each needs the field before it — a count
+    beside an unpinned repo describes a tree free to change underneath it, and
+    a distinct count with no entry count has nothing to be a subset of.
     """
-    rows: list[Row] = []
+    rows: list[FullRow] = []
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -162,7 +236,7 @@ def parse_taps(text: str) -> list[Row]:
         parts = line.split()
         repo = parts[0]
         if len(parts) == 1:
-            rows.append((repo, None, None))
+            rows.append((repo, None, None, None))
             continue
         sha = parts[1]
         if not _SHA.fullmatch(sha):
@@ -170,34 +244,95 @@ def parse_taps(text: str) -> list[Row]:
                 "tap list: %s is pinned to %r, which is not a "
                 "40-character commit SHA" % (repo, sha))
         if len(parts) == 2:
-            rows.append((repo, sha, None))
+            rows.append((repo, sha, None, None))
             continue
-        if len(parts) > 3:
+        if len(parts) > 4:
             raise SystemExit(
-                "tap list: %s has %d fields, expected at most 3 "
-                "(repo, sha, entry count)" % (repo, len(parts)))
-        count = parts[2]
-        if not count.isdigit():
+                "tap list: %s has %d fields, expected at most 4 "
+                "(repo, sha, entry count, distinct count)" % (repo, len(parts)))
+        count = _count(repo, parts[2], "entries")
+        if len(parts) == 3:
+            rows.append((repo, sha, count, None))
+            continue
+        distinct = _count(repo, parts[3], "distinct items")
+        if distinct > count:
+            # Not a style rule. Distinct items are the entries that survive
+            # de-duplication, so more of them than there are entries means the
+            # two fields were measured against different trees, and the row
+            # describes neither of them.
             raise SystemExit(
-                "tap list: %s records %r entries, which is not a "
-                "non-negative integer" % (repo, count))
-        rows.append((repo, sha, int(count)))
+                "tap list: %s records %d distinct items out of %d entries, "
+                "which is more distinct than there is"
+                % (repo, distinct, count))
+        rows.append((repo, sha, count, distinct))
     return rows
 
 
-def shares(rows: Sequence[Row]) -> list[tuple[str, int, float]]:
+def parse_taps(text: str) -> list[Row]:
+    """Rows of ``owner/repo [sha [count [distinct]]]`` as ``(repo, sha, count)``.
+
+    Three wide, with the distinct count dropped, because three wide is what
+    every caller destructures — see :data:`Row`. :func:`parse_distinct` is how
+    the fourth field is read.
+    """
+    return [(repo, sha, count) for repo, sha, count, _d in _rows(text)]
+
+
+def parse_distinct(text: str) -> dict[str, int]:
+    """The distinct-content count of every row that records one.
+
+    A mapping rather than a column, and a row without the field is absent
+    rather than zero: a list relocked before the field existed knows nothing
+    about its own content identity, and a zero would let
+    :func:`check_concentration` report a concentration it never measured.
+    """
+    return {repo: d for repo, _s, _c, d in _rows(text) if d is not None}
+
+
+def shares(rows: Sequence[tuple[Any, ...]], *, column: int = 2
+           ) -> list[tuple[str, int, float]]:
     """``(repo, count, share)`` for every counted row, largest first.
+
+    ``column`` picks which count: 2 is the entry count every relocked row
+    carries, 3 the distinct-content count :func:`_rows` supplies and
+    :func:`parse_taps` drops. It defaults to 2 because that is what the ranker
+    actually sorts, and because a caller holding three-wide :data:`Row` tuples
+    has nothing else to give.
 
     Rows with no recorded count are omitted rather than treated as zero: a
     partially counted list should report the concentration of what it knows,
-    not a share diluted by rows it cannot see.
+    not a share diluted by rows it cannot see. A row too short to hold
+    ``column`` is that same case — it has no count; it does not have zero.
     """
-    counted = [(repo, n) for repo, _sha, n in rows if n is not None]
+    counted = [(row[0], row[column]) for row in rows
+               if len(row) > column and row[column] is not None]
     total = sum(n for _repo, n in counted)
     if not total:
         return []
     return sorted(((repo, n, n / total) for repo, n in counted),
                   key=lambda row: (-row[1], row[0]))
+
+
+def _paired_entries(rows: Sequence[tuple[Any, ...]]) -> int:
+    """Entries on the rows carrying both counts — the only ones a ratio may use.
+
+    A ratio between the two counts has to divide two measurements of the *same*
+    rows. Summing entries over every row that has one and distinct items over
+    every row that has one gives a numerator and a denominator drawn from
+    different populations, which is a ratio of nothing: on ``taps-scale.txt``
+    (141 rows with an entry count, 20 with a distinct one) that arithmetic said
+    84% of the rows were copies where the rows counted both ways say 44.7%. A
+    row missing either number is evidence of neither, so it is in neither half
+    of the fraction.
+
+    Shared by the two places that divide the counts, because they had the same
+    bug and one of them writes its answer into a tracked file: the console
+    report was fixed first and ``size_lines`` kept the cross-population form
+    for a while afterwards, which is the argument for one implementation
+    rather than two corrected independently.
+    """
+    return sum(row[2] for row in rows
+               if len(row) > 3 and row[2] is not None and row[3] is not None)
 
 
 def size_lines(text: str) -> list[str]:
@@ -206,7 +341,8 @@ def size_lines(text: str) -> list[str]:
     The scores are not stated: `--refresh` writes this before the eval runs,
     so the only true thing it can say about them is where they are.
     """
-    ranked = shares(parse_taps(text))
+    rows = _rows(text)
+    ranked = shares(rows)
     total = sum(n for _r, n, _s in ranked)
     lines = ["# total:   %s entries in %d repos" % (f"{total:,}", len(ranked))]
     head, divider, _tail = text.partition("\n" + SCALE_DIVIDER)
@@ -219,6 +355,27 @@ def size_lines(text: str) -> list[str]:
     for label, (repo, count, share) in zip(labels, ranked, strict=False):
         lines.append("# %s %s, %s entries (%.1f%%)"
                      % (label, repo, f"{count:,}", share * 100))
+    # The noun is "distinct items", never "entries": tests/unit/test_corpus_prose
+    # reads every "<number> entries" in this file as a claim about the corpus
+    # size, and this is a claim about something else.
+    content = shares(rows, column=3)
+    if content:
+        c_total = sum(n for _r, n, _s in content)
+        paired = _paired_entries(rows)
+        # Two lines, because the neighbours are ~60 columns and a 120-column
+        # one in the middle of them reads as a different kind of thing.
+        lines.append("# content: %s distinct items; %s holds %.1f%%"
+                     % (f"{c_total:,}", content[0][0], content[0][2] * 100))
+        lines.append("#          of them, and the rows overstate the corpus "
+                     "%.2fx" % (paired / c_total))
+        # A third line only when the two counts do not cover the same rows,
+        # so the shipped block — every row of taps.txt carries both — is
+        # byte-identical. Saying which rows the ratio came from is the whole
+        # point of measuring it over them: a reader who takes `1.12x` for the
+        # whole corpus has been told something the file cannot support.
+        if paired != total:
+            lines.append("#          measured over the %d of %d rows counted "
+                         "both ways" % (len(content), len(ranked)))
     lines.append("# scores:  tests/eval/baseline.json, re-baselined with every "
                  "move")
     return lines
@@ -239,27 +396,57 @@ def with_size(text: str) -> str:
     return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
 
 
-def check_concentration(rows: Sequence[Row]) -> str | None:
-    """Return a message when one repository exceeds ``MAX_SHARE``, else ``None``.
+#: Per counted column: its ceiling, what it counts, and the sentence that
+#: explains why THAT column is the one complaining. A dict rather than two
+#: keyword arguments so an unrecognised column is a ``KeyError`` at the call
+#: site: a concentration check that silently ran ungated would read exactly
+#: like one that passed.
+_CEILINGS: dict[int, tuple[float, str, str]] = {
+    2: (MAX_ROW_SHARE, "entries", ""),
+    3: (MAX_CONTENT_SHARE, "distinct items",
+        " This is the content ceiling, not the row one: the repo dominates "
+        "the distinct material, which no amount of de-duplication dilutes."),
+}
 
-    Static — it reads the counts already in the file, so it costs no network and
+
+def check_concentration(rows: Sequence[tuple[Any, ...]], *,
+                        column: int = 2) -> str | None:
+    """A message when one repository exceeds its ceiling, else ``None``.
+
+    Static — it reads counts already in the file, so it costs no network and
     runs anywhere. Concentration is a sampling bias in every recall figure this
     project publishes, and the bias is invisible in a list of twenty names that
     look equally weighted.
+
+    ``column`` is 2 for entries and 3 for distinct content, and both are
+    checked because they fail differently: a vendoring publisher is over the
+    row ceiling while holding a third of the material, and a publisher who does
+    not vendor can dominate the material while staying well under it.
+
+    A corpus of fewer than ``1 / ceiling`` repositories is not judged, because
+    at that size no arrangement of counts could pass: the smallest possible top
+    share is ``1 / len(rows)``, so two repos cannot get below 50% and a 45%
+    ceiling would fail every two-repo corpus however it was balanced. That is
+    not a strict gate, it is an unsatisfiable one — it would refuse the list
+    rather than describe it, and the remedy it prints ("add breadth") is the
+    only thing that could ever clear it. The shipped list has twenty repos
+    against a floor of three, so this never softens the real check; it is what
+    lets a fixture corpus exercise the same code path.
     """
-    ranked = shares(rows)
-    if not ranked:
+    ceiling, noun, tail = _CEILINGS[column]
+    ranked = shares(rows, column=column)
+    if len(ranked) * ceiling < 1:      # also covers the empty list
         return None
     repo, count, share = ranked[0]
-    if share <= MAX_SHARE:
+    if share <= ceiling:
         return None
-    return ("%s is %d of %d entries (%.1f%%), over the %.0f%% ceiling. The "
+    return ("%s is %d of %d %s (%.1f%%), over the %.0f%% ceiling. The "
             "corpus would be mostly one publisher's house style, which biases "
             "every recall figure this project reports. Add breadth rather than "
             "dropping the big repo: a smaller corpus scores HIGHER, so trimming "
-            "to rebalance would flatter the gate."
-            % (repo, count, sum(n for _r, n, _s in ranked), share * 100,
-               MAX_SHARE * 100))
+            "to rebalance would flatter the gate.%s"
+            % (repo, count, sum(n for _r, n, _s in ranked), noun, share * 100,
+               ceiling * 100, tail))
 
 
 def extra_taps(configured: Sequence[str], pinned: Sequence[str]) -> list[str]:
@@ -337,9 +524,9 @@ def pin_clone(path: Path, sha: str) -> None:
                           "could not check out %s: %s" % (sha, res.stderr.strip()))
 
 
-def _materialise(rows: Sequence[Row], verify: bool = True
-                 ) -> tuple[dict[str, int], list[CorpusError]]:
-    """Tap, pin and rescan every row. Returns ``(counts, failures)``.
+def _materialise(rows: Sequence[FullRow], verify: bool = True
+                 ) -> tuple[dict[str, int], dict[str, int], list[CorpusError]]:
+    """Tap, pin and rescan every row. Returns ``(counts, distinct, failures)``.
 
     Every row is attempted even after one fails. Stopping at the first would
     report "one repository is unreachable" when five are, and the difference
@@ -349,8 +536,9 @@ def _materialise(rows: Sequence[Row], verify: bool = True
     from boost_cli.core import catalog, registry  # deferred: repo-root import shim
 
     counts: dict[str, int] = {}
+    distinct: dict[str, int] = {}
     failures: list[CorpusError] = []
-    for repo, sha, want in rows:
+    for repo, sha, want, want_distinct in rows:
         try:
             try:
                 tap = registry.get(repo)
@@ -389,18 +577,31 @@ def _materialise(rows: Sequence[Row], verify: bool = True
         # branch, so an unrebuilt cache would describe a tree we just replaced.
         entries = catalog.rebuild_tap(tap)
         counts[repo] = len(entries)
+        distinct[repo] = catalog.distinct_content(entries)
         note = ""
         if verify and want is not None and len(entries) != want:
             failures.append(CorpusError(
                 DRIFT, repo,
                 "taps.txt records %d entries, this tree scans into %d"
                 % (want, len(entries))))
-            note = "  != %d pinned" % want
-        print("  %-44s %s  %5d entries%s"
-              % (repo, (sha or "unpinned")[:7], len(entries), note))
+            note += "  != %d pinned" % want
+        # Checked separately, and both are reported: the two counts drift for
+        # different reasons — the scanner finding different files, against the
+        # content-identity rule collapsing them differently — and a row that
+        # matches on one and not the other is the case worth naming.
+        if verify and want_distinct is not None \
+                and distinct[repo] != want_distinct:
+            failures.append(CorpusError(
+                DRIFT, repo,
+                "taps.txt records %d distinct items, this tree scans into %d"
+                % (want_distinct, distinct[repo])))
+            note += "  != %d distinct pinned" % want_distinct
+        print("  %-44s %s  %5d entries (%5d distinct)%s"
+              % (repo, (sha or "unpinned")[:7], len(entries),
+                 distinct[repo], note))
 
     extras = extra_taps([t.name for t in registry.list_taps()],
-                        [r for r, _s, _n in rows])
+                        [r for r, _s, _n, _d in rows])
     if verify and extras:
         failures.append(CorpusError(
             DRIFT, "BOOST_HOME",
@@ -408,7 +609,7 @@ def _materialise(rows: Sequence[Row], verify: bool = True
             "index is built from ALL configured taps: %s"
             % (len(extras), ", ".join(extras[:5])
                + (", ..." if len(extras) > 5 else ""))))
-    return counts, failures
+    return counts, distinct, failures
 
 
 def _report_failures(failures: Sequence[CorpusError], total_rows: int) -> int:
@@ -430,9 +631,10 @@ def _report_failures(failures: Sequence[CorpusError], total_rows: int) -> int:
         print("\nCORPUS DRIFT — what materialised is not what taps.txt pins.")
         for f in drift:
             print("  %s — %s" % (f.repo, f.detail))
-        print("A count mismatch means the scanner changed or a pin moved: "
-              "re-measure with\n`--relock`, then regenerate "
-              "tests/eval/baseline.json. An unpinned tap means\nBOOST_HOME is "
+        print("A count mismatch means the scanner changed, the "
+              "content-identity rule\nchanged, or a pin moved: re-measure with "
+              "`--relock`, then regenerate\ntests/eval/baseline.json. An "
+              "unpinned tap means\nBOOST_HOME is "
               "not a corpus this file describes — point it at a scratch\n"
               "directory (`make eval` uses ./.eval-home).")
     # Drift wins when both happen: it is the one that says something about this
@@ -442,8 +644,9 @@ def _report_failures(failures: Sequence[CorpusError], total_rows: int) -> int:
 
 def relock_text(text: str, counts: dict[str, int],
                 shas: dict[str, str] | None = None,
-                frozen: Collection[str] | None = None) -> str:
-    """Rewrite each pinned row's entry count — and its SHA when ``shas`` says so.
+                frozen: Collection[str] | None = None,
+                distinct: dict[str, int] | None = None) -> str:
+    """Rewrite each pinned row's counts — and its SHA when ``shas`` says so.
 
     A whole-file rewrite would lose the header, which is where the reasoning
     lives; this touches only rows it has a new count for, and the one part of
@@ -459,6 +662,13 @@ def relock_text(text: str, counts: dict[str, int],
     the counts alone. It is optional because the two operations are genuinely
     different: ``--relock`` re-measures the *same* trees (the scanner changed),
     ``--refresh`` moves to *new* trees (the world changed).
+
+    ``distinct`` is the fourth field, and it is optional for the same reason
+    ``shas`` is: a caller may have re-measured one thing and not the other. A
+    row whose distinct count this run did not measure carries its committed one
+    forward — the same rule as the SHA below, and for the same reason. Dropping
+    the field instead would quietly un-pin half of what the row describes, and
+    the next ``--ensure`` would verify only the half that survived.
 
     ``frozen`` names repos whose rows this file does not own, and they are
     emitted byte for byte — not re-pinned, and *not re-columned*. Both halves
@@ -491,7 +701,20 @@ def relock_text(text: str, counts: dict[str, int],
             raise SystemExit(
                 "refusing to write %s: %r is not a 40-character commit SHA"
                 % (repo, sha))
-        out.append("%-*s %s %5d" % (width, repo, sha, counts[repo]))
+        committed_d = (int(parts[3]) if len(parts) > 3 and parts[3].isdigit()
+                       else None)
+        n_distinct = (distinct or {}).get(repo, committed_d)
+        if n_distinct is not None and n_distinct > counts[repo]:
+            # Only a carried-forward count can land here — a measured one is a
+            # subset of the entries it was measured from — and one that now
+            # exceeds them is stale, not a measurement. Writing it would emit a
+            # row `_rows` refuses to parse: a relock whose own parser rejects
+            # its output.
+            n_distinct = None
+        row = "%-*s %s %5d" % (width, repo, sha, counts[repo])
+        if n_distinct is not None:
+            row += " %5d" % n_distinct
+        out.append(row)
     return with_size("\n".join(out) + ("\n" if text.endswith("\n") else ""))
 
 
@@ -516,8 +739,9 @@ def frozen_rows(taps: Path, required: Path = DEFAULT_TAPS) -> set[str]:
             parse_taps(required.read_text(encoding="utf-8"))}
 
 
-def refresh_summary(rows: Sequence[Row], shas: dict[str, str],
-                    counts: dict[str, int]) -> str:
+def refresh_summary(rows: Sequence[tuple[Any, ...]], shas: dict[str, str],
+                    counts: dict[str, int],
+                    distinct: dict[str, int] | None = None) -> str:
     """A Markdown table of what a refresh moved, for the pull request body.
 
     The point of the scheduled refresh is not the refresh — it is that the diff
@@ -529,7 +753,8 @@ def refresh_summary(rows: Sequence[Row], shas: dict[str, str],
     """
     lines = ["| repo | pin | entries |", "| --- | --- | --- |"]
     moved = 0
-    for repo, sha, count in rows:
+    for row in rows:
+        repo, sha, count = row[0], row[1], row[2]
         new_sha = shas.get(repo, sha or "")
         new_count = counts.get(repo, count)
         if new_sha == sha and new_count == count:
@@ -544,42 +769,107 @@ def refresh_summary(rows: Sequence[Row], shas: dict[str, str],
             delta = (new_count or 0) - (count or 0)
             entries = "%s → %s (%+d)" % (count, new_count, delta)
         lines.append("| `%s` | %s | %s |" % (repo, pin, entries))
-    total_old = sum(n for _r, _s, n in rows if n is not None)
-    total_new = sum(counts.get(r, n or 0) for r, _s, n in rows)
+    total_old = sum(r[2] for r in rows if r[2] is not None)
+    total_new = sum(counts.get(r[0], r[2] or 0) for r in rows)
     lines.append("")
     lines.append("**%d of %d repositories moved.** Corpus %d → %d entries (%+d)."
                  % (moved, len(rows), total_old, total_new, total_new - total_old))
+    if distinct is not None:
+        # Stated separately rather than as a fourth column, because it answers
+        # a different question about the same diff: entries can grow by a
+        # thousand while the material behind them does not move at all.
+        old_d = sum(r[3] for r in rows if len(r) > 3 and r[3] is not None)
+        new_d = sum(distinct.get(r[0], (r[3] if len(r) > 3 else None) or 0)
+                    for r in rows)
+        lines.append("")
+        lines.append("Distinct content %d → %d (%+d); the rest of the corpus "
+                     "is copies." % (old_d, new_d, new_d - old_d))
     return "\n".join(lines)
 
 
-def _print_concentration(rows: Sequence[Row]) -> None:
+def _concentration_line(ranked: Sequence[tuple[str, int, float]],
+                        column: int, noun: str) -> str:
+    """One line describing ``ranked``'s top share, or why it is not judged.
+
+    The "not judged" case covers exactly the sizes
+    :func:`check_concentration` refuses, and saying so is the point: a share
+    printed without it reads as a violation that passed. A two-row content
+    ranking at 99/1 printed "is 99.0% of content" and the run exited 0,
+    because the gate had already declined to judge a corpus too small for any
+    arrangement to clear the ceiling.
+    """
+    ceiling = _CEILINGS[column][0]
+    if len(ranked) * ceiling < 1:
+        return ("concentration%s: not judged — %d repos cannot clear a %.0f%% "
+                "ceiling however balanced, since the smallest possible top "
+                "share is %.0f%%"
+                % (noun, len(ranked), ceiling * 100, 100 / len(ranked)))
+    line = "concentration%s: %s is %.1f%%" % (noun, ranked[0][0],
+                                              ranked[0][2] * 100)
+    if len(ranked) > 1:
+        line += "; top two are %.1f%%" % ((ranked[0][2]
+                                           + ranked[1][2]) * 100)
+    return line
+
+
+def _print_concentration(rows: Sequence[tuple[Any, ...]]) -> None:
     ranked = shares(rows)
     if not ranked:
         return
     total = sum(n for _r, n, _s in ranked)
-    top = ranked[0]
     print("corpus: %d entries across %d taps" % (total, len(ranked)))
-    line = "concentration: %s is %.1f%%" % (top[0], top[2] * 100)
-    if len(ranked) > 1:
-        line += "; top two are %.1f%%" % ((top[2] + ranked[1][2]) * 100)
-    print(line)
+    print(_concentration_line(ranked, 2, ""))
+    content = shares(rows, column=3)
+    if not content:
+        return
+    c_total = sum(n for _r, n, _s in content)
+    paired = _paired_entries(rows)
+    if paired == total:
+        print("content: %d distinct items (%.0f%% of the rows are copies)"
+              % (c_total, (1 - c_total / paired) * 100))
+    else:
+        print("content: %d distinct items in the %d rows counted both ways "
+              "(%.0f%% of those are copies); %d rows carry an entry count "
+              "only" % (c_total, len(content),
+                        (1 - c_total / paired) * 100,
+                        len(ranked) - len(content)))
+    print(_concentration_line(content, 3, " of content"))
 
 
 def _ensure(taps: Path, relock: bool = False) -> int:
-    rows = parse_taps(taps.read_text(encoding="utf-8"))
-    counts, failures = _materialise(rows, verify=not relock)
+    rows = _rows(taps.read_text(encoding="utf-8"))
+    counts, distinct, failures = _materialise(rows, verify=not relock)
     if failures:
         return _report_failures(failures, len(rows))
     if relock:
-        taps.write_text(relock_text(taps.read_text(encoding="utf-8"), counts),
-                        encoding="utf-8")
-        print("relocked %d rows in tests/eval/taps.txt" % len(counts))
-        rows = parse_taps(taps.read_text(encoding="utf-8"))
+        # `frozen=` for the same reason --refresh passes it: relocking the
+        # scale list must not re-count or re-column the rows taps.txt owns,
+        # and leaving it off here was the one path that did.
+        frozen = frozen_rows(taps)
+        taps.write_text(
+            relock_text(taps.read_text(encoding="utf-8"), counts,
+                        frozen=frozen, distinct=distinct),
+            encoding="utf-8")
+        print("relocked %d rows in %s"
+              % (len({r for r in counts if r not in frozen}), taps.name))
+        rows = _rows(taps.read_text(encoding="utf-8"))
+    return _concentration_gate(rows)
+
+
+def _concentration_gate(rows: Sequence[FullRow]) -> int:
+    """Print both concentrations and fail on whichever ceiling is exceeded.
+
+    Both, not the worse of the two: they are different biases with different
+    remedies, and a run that reported only the first would let a publisher
+    owning half the material pass for as long as it also vendored enough
+    copies to stay off the top of the row ranking.
+    """
     _print_concentration(rows)
-    problem = check_concentration(rows)
-    if problem:
-        print("\nCORPUS CONCENTRATION — %s" % problem)
-        return EXIT_DRIFT
+    for column in _CEILINGS:
+        problem = check_concentration(rows, column=column)
+        if problem:
+            print("\nCORPUS CONCENTRATION — %s" % problem)
+            return EXIT_DRIFT
     return 0
 
 
@@ -601,7 +891,7 @@ def _refresh(taps: Path, summary_path: str | None = None) -> int:
     sys.path.insert(0, str(ROOT))
     from boost_cli.core import catalog, gitutil, registry  # deferred: path shim
 
-    rows = parse_taps(taps.read_text(encoding="utf-8"))
+    rows = _rows(taps.read_text(encoding="utf-8"))
     # Rows another file owns are neither measured nor written — skipping the
     # measurement is not just an optimisation here, it is what keeps the two
     # tiers pinned to one set of trees. It also saves re-cloning the required
@@ -610,10 +900,11 @@ def _refresh(taps: Path, summary_path: str | None = None) -> int:
     failures: list[CorpusError] = []
     shas: dict[str, str] = {}
     counts: dict[str, int] = {}
+    distinct: dict[str, int] = {}
     if frozen:
         print("  %d rows are owned by %s and are left alone"
-              % (len(frozen & {r for r, _s, _n in rows}), DEFAULT_TAPS.name))
-    for repo, old_sha, _n in rows:
+              % (len(frozen & {r for r, _s, _n, _d in rows}), DEFAULT_TAPS.name))
+    for repo, old_sha, _n, _d in rows:
         if repo in frozen:
             continue
         try:
@@ -641,46 +932,51 @@ def _refresh(taps: Path, summary_path: str | None = None) -> int:
         shas[repo] = sha
         entries = catalog.rebuild_tap(tap)
         counts[repo] = len(entries)
-        print("  %-44s %s -> %s  %5d entries%s"
+        distinct[repo] = catalog.distinct_content(entries)
+        print("  %-44s %s -> %s  %5d entries (%5d distinct)%s"
               % (repo, (old_sha or "?")[:7], sha[:7], len(entries),
-                 "" if sha == old_sha else "   MOVED"))
+                 distinct[repo], "" if sha == old_sha else "   MOVED"))
     if failures:
         return _report_failures(failures, len(rows))
     taps.write_text(
         relock_text(taps.read_text(encoding="utf-8"), counts, shas,
-                    frozen=frozen),
+                    frozen=frozen, distinct=distinct),
         encoding="utf-8")
-    summary = refresh_summary(rows, shas, counts)
+    summary = refresh_summary(rows, shas, counts, distinct)
     print("\n" + summary)
     if summary_path:
         Path(summary_path).write_text(summary + "\n", encoding="utf-8")
-    new_rows = parse_taps(taps.read_text(encoding="utf-8"))
-    _print_concentration(new_rows)
-    problem = check_concentration(new_rows)
-    if problem:
-        # Upstream growth alone can push one publisher over the ceiling, and it
-        # is worth failing the refresh rather than opening a PR that quietly
-        # makes the corpus more lopsided than the ratchet allows.
-        print("\nCORPUS CONCENTRATION — %s" % problem)
-        return EXIT_DRIFT
-    return 0
+    # Upstream growth alone can push one publisher over either ceiling, and it
+    # is worth failing the refresh rather than opening a PR that quietly makes
+    # the corpus more lopsided than the ratchet allows.
+    return _concentration_gate(_rows(taps.read_text(encoding="utf-8")))
 
 
 def _audit(taps: Path) -> int:
     """Static checks over the shipped list — no network, no clones."""
-    rows = parse_taps(taps.read_text(encoding="utf-8"))
+    rows = _rows(taps.read_text(encoding="utf-8"))
+    content = {repo: n for repo, n, _s in shares(rows, column=3)}
     for repo, count, share in shares(rows):
-        print("  %-44s %5d entries  %5.1f%%" % (repo, count, share * 100))
-    _print_concentration(rows)
-    uncounted = [r for r, _s, n in rows if n is None]
+        known = content.get(repo)
+        print("  %-44s %5d entries  %5.1f%%%s"
+              % (repo, count, share * 100,
+                 "" if known is None else "  %5d distinct" % known))
+    uncounted = [r for r, _s, n, _d in rows if n is None]
     if uncounted:
         print("\nuncounted rows (run --relock): %s" % ", ".join(uncounted))
         return EXIT_DRIFT
-    problem = check_concentration(rows)
-    if problem:
-        print("\nCORPUS CONCENTRATION — %s" % problem)
-        return EXIT_DRIFT
-    return 0
+    # Reported, not fatal. A list relocked before the fourth field existed is
+    # still a corpus this file fully describes in every other respect, and
+    # failing it here would red a required job over a field nothing had yet
+    # had the chance to write. The shipped list is held to a higher standard
+    # by tests/unit/test_eval_corpus.py, which is the right place for it.
+    unmeasured = [r for r, _s, _n, d in rows if d is None]
+    if unmeasured:
+        print("\n%d counted rows record no distinct count, so the content "
+              "ceiling is\nunchecked for them (run --relock): %s"
+              % (len(unmeasured), ", ".join(unmeasured[:5])
+                 + (", ..." if len(unmeasured) > 5 else "")))
+    return _concentration_gate(rows)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -696,7 +992,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--audit", action="store_true",
                    help="static concentration/count checks, no network")
     p.add_argument("--list", action="store_true",
-                   help="print the parsed rows and exit")
+                   help="print the parsed rows (repo, sha, entries, "
+                        "distinct items) and exit")
     p.add_argument("--list-repos", action="store_true",
                    help="print one owner/repo per line and exit (a matrix "
                         "source that cannot be field-split by mistake)")
@@ -716,8 +1013,8 @@ def main(argv: list[str] | None = None) -> int:
             print(repo)
         return 0
     if args.list:
-        for repo, sha, count in parse_taps(taps.read_text(encoding="utf-8")):
-            print("%s %s %s" % (repo, sha or "", "" if count is None else count))
+        for row in _rows(taps.read_text(encoding="utf-8")):
+            print(" ".join("" if f is None else str(f) for f in row).rstrip())
         return 0
     if args.audit:
         return _audit(taps)

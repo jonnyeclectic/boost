@@ -26,6 +26,7 @@ import operator
 import os
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 from ..errors import BoostError
@@ -113,6 +114,49 @@ def _content_digest(name: str, description: str, body: str) -> str:
     """
     text = "%s\n%s\n%s" % (name, description, body)
     return hashlib.sha256(text.strip().encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def content_unique(entries: Iterable[dict]) -> list[dict]:
+    """The first entry of each distinct ``content`` digest, in scan order.
+
+    An entry carrying no digest is always kept. Two absences are not a match:
+    a cache written before ``CACHE_FORMAT`` stamped the field, or an entry
+    synthesised without one, says nothing about what that item *is*, and
+    collapsing unknowns into each other silently deletes real items.
+
+    The digest is :func:`_content_digest` — ``name``, ``description`` and the
+    frontmatter-stripped body — which is the identity
+    :func:`rag.dedupe_by_content` collapses a ranked list on. It is not
+    ``scripts/measure_registry.py``'s digest, which hashes the body alone with
+    agent dotdir tokens normalised so one skill rendered into ``.claude/``,
+    ``.cursor/`` and ``.gemini/`` counts once. That is the right question for
+    ``est_items`` and the wrong one here: the gate scores those renders as
+    separate competing rows, so a measure that merges them cannot describe the
+    corpus it ranks.
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for entry in entries:
+        digest = entry.get("content")
+        if not digest:
+            out.append(entry)
+            continue
+        if digest in seen:
+            continue
+        seen.add(digest)
+        out.append(entry)
+    return out
+
+
+def distinct_content(entries: Iterable[dict]) -> int:
+    """How many distinct content identities ``entries`` holds.
+
+    ``len(content_unique(entries))``, and deliberately not
+    ``len({e["content"] for e in entries})``: the set comprehension collapses
+    every entry with no recorded digest into one ``None``, which is the one
+    answer :func:`content_unique` exists to refuse.
+    """
+    return len(content_unique(entries))
 
 
 def _entry_category(meta: dict, tap_category: str) -> str:
@@ -406,9 +450,8 @@ def lint_targets(entries: list[dict], tap_root: Path,
                 "no such name%s in this tap: %s"
                 % ("" if len(unknown) == 1 else "s", ", ".join(unknown)),
                 hint="run without NAMEs to lint everything in the tap")
-    skills: list[dict] = []
+    kept: list[dict] = []
     skipped: list[dict] = []
-    seen_content: set = set()
     for entry in entries:
         if wanted and entry["name"] not in wanted:
             continue
@@ -416,12 +459,10 @@ def lint_targets(entries: list[dict], tap_root: Path,
         if kind != KIND_SKILL:
             skipped.append({"name": entry["name"], "kind": kind})
             continue
-        digest = entry.get("content")
-        if digest:
-            if digest in seen_content:
-                continue
-            seen_content.add(digest)
-        skills.append(entry)
+        kept.append(entry)
+    # One rule, one implementation: mirrors of one skill lint once, and an
+    # entry with no digest is never absorbed into another.
+    skills = content_unique(kept)
 
     name_counts: dict[str, int] = {}
     for entry in skills:
