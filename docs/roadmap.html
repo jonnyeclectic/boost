@@ -2056,12 +2056,31 @@ own. Watch the <code>COLUMNS</code> precedence: <code>pane_width</code>
 honours an explicit <code>COLUMNS</code> either way, and the wrap path must
 keep doing the same or a scripted <code>COLUMNS=100</code> stops applying to
 hints. A test wraps one long hint with stdout a TTY and stderr a plain
-buffer, and asserts the fold point comes from stderr.</p>
+buffer, and asserts the fold point comes from stderr.
+
+<br><br><b>Measured before claiming, and the fix sketch above is wrong.</b>
+<code>pane_width(stream)</code> is not the per-stream model to copy: it uses
+its stream only for the <code>isatty()</code> predicate and then takes the
+<em>number</em> from <code>term_width()</code> (<code>output.py:422</code>),
+so it measured 80 for a 200-column stderr terminal while stdout was a file.
+Routing <code>_wrap_lines</code> through it would have left that intact. A
+third instance the card missed: <code>spin.progress_clear</code>
+(<code>spin.py:98</code>) erases <code>term_width()</code> columns of a line
+it just proved is on <code>s</code> &middot; 80 of a 200-column bar.
+
+<br><br>Two numbers here were budgets rather than widths. <code>192</code> is
+<code>term_width() - len("  hint: ")</code>; the lead is printed too, so the
+lines run to the full pane &mdash; measured 196 for a hint and 199 for a warn
+on a 200-column pty. And the proposed test cannot fail: a fake tty (a
+<code>StringIO</code> whose <code>isatty()</code> returns True) has no file
+descriptor, so broken and fixed both answer 80 &mdash; measured identical fold
+points either way. It needs a real <code>os.openpty()</code> with
+<code>TIOCSWINSZ</code>.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">a wrapped stderr line is folded to stdout's width — the colour-stream fix's twin, one layer down</span>
+          <span class="m">three call sites size a stderr line by stdout — and pane_width, the card's own model, has it too</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

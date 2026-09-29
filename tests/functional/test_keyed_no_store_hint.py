@@ -93,7 +93,7 @@ class TestOneAnswer:
         # names what failed and nothing else; the reason joins the remedy
         # in the hint, which folds.
         from boost_cli.core import output as out
-        monkeypatch.setattr(out, "term_width", lambda: cols)
+        monkeypatch.setattr(out, "term_width", lambda default=80, stream=None: cols)
         res = boost(*argv, expect=1)
         over = [ln for ln in res.err.split("\n") if out.visible_len(ln) > cols]
         assert not over, over
