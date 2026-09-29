@@ -2,13 +2,14 @@
 id: wrap-width-judged-by-stdout
 board: code
 section: planned
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
 note: a wrapped stderr line is folded to stdout's width — the colour-stream fix's twin, one layer down
 order: 354
+owner: loop/wrap-width-stream
 title: "wrap() sizes a stderr line by stdout's pane"
 ---
 <b>A line now gets its colour from the stream it lands on and its
