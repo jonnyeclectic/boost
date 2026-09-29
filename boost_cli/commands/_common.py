@@ -79,7 +79,7 @@ def _iter_installed(names: list[str] | None = None) -> list[tuple[str, dict]]:
     see it in `boost list`, so denying it exists reads as data loss.
     """
     skills = lockfile.installed()
-    if names:
+    if names is not None:
         names = list(dict.fromkeys(names))  # order-preserving dedupe
         missing, other_kind = [], []
         for n in names:
@@ -117,8 +117,15 @@ def _shadowed_kinds(name: str, acted_kind: str) -> list[str]:
 
 def _iter_installed_all(
         names: list[str] | None = None) -> list[tuple[str, str, dict]]:
-    """[(kind, name, lock_entry)] across every section, or the given names."""
-    if names:
+    """[(kind, name, lock_entry)] across every section, or the given names.
+
+    ``None`` is "every section"; ``[]`` is "nothing", and the two are not the
+    same question. `boost verify <project-only name>` builds the user-scope
+    filter by dropping names the user lock cannot resolve, so a name that lives
+    only in the repo leaves it empty — and a truthiness test read that as "grade
+    everything", failing the run on items the user never named.
+    """
+    if names is not None:
         names = list(dict.fromkeys(names))  # order-preserving dedupe
         out, missing = [], []
         for n in names:

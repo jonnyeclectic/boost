@@ -1223,7 +1223,10 @@ def _install_project_skill(entry: dict, force: bool = False,
         raise BoostError(
             "%s is already installed in this project (v%s)"
             % (name, existing.get("version")),
-            hint="`boost reinstall %s --local` to force" % name)
+            # Not `reinstall --local`: reinstall has no scope flag (it would
+            # exit 2), and bare `reinstall` reads the user lock only, so it
+            # answers "not installed" for the very skill this line is about.
+            hint="`boost install %s --local --force` to force" % name)
 
     violations = policy.check_install(entry, len(projectlock.installed(resolved_base)))
     if violations:
@@ -2161,7 +2164,10 @@ def uninstall(name: str) -> dict:
         # Nothing at user scope — but the caller may be standing in a repo that
         # has it installed locally, and "X is not installed" would be a plain
         # falsehood there. Only ever acts on a name the project lock records.
-        pbase = scopes.project_root()
+        # `resolve_base`, not `project_root`: `install --local` writes with the
+        # former, so asking the latter here refused to remove what install had
+        # just put in an unmarked directory.
+        pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
         if pbase is not None and projectlock.get_skill(pbase, name):
             return uninstall_project(name, base=pbase)
         raise BoostError("%s is not installed" % name,
