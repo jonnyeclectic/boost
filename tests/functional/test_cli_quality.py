@@ -2792,3 +2792,174 @@ class TestDoctorAndHealAgreeOnAFileAtTheCachePath:
                 "aside" in doc)
         assert "writable" not in doc
         assert "move ~/.boost/cache aside" in heal
+
+
+class TestARowForADisabledAgent:
+    """`boost sync` and `boost doctor` on a row boost will never write again.
+
+    Disable an agent after installing a rule and its recorded row stays --
+    deliberately, because the row is what makes a `CLAUDE.md` block removable
+    later. Every surface used to read the absent file as rot: `boost sync`
+    printed "re-materialized rule <name>" on every run and `boost doctor` kept
+    one issue whose remedy (`boost reinstall`) had already been run and could
+    not help (sync-repairs-a-disabled-agents-row-every-run).
+    """
+
+    def _seed(self, name="house"):
+        from boost_cli.core import lockfile
+        rp = paths.home() / ".cursor" / "rules" / ("%s.mdc" % name)
+        lockfile.set_rule(name, {"kind": "rule", "materializations": [
+            {"agent": "cursor", "mode": "file", "path": str(rp)}]})
+        return rp
+
+    @staticmethod
+    def _disable(agent="cursor"):
+        from boost_cli.core import config
+        cfg = config.load()
+        cfg["agents"][agent]["enabled"] = False
+        config.save(cfg)
+
+    def test_sync_says_everything_in_sync_on_the_second_run(self, boost,
+                                                            sandbox):
+        self._seed()
+        self._disable()
+        assert "everything in sync" in boost("sync").out
+        # the run the bug made impossible: before it, both said
+        # "re-materialized rule house", forever
+        assert "everything in sync" in boost("sync").out
+
+    def test_doctor_names_the_row_once_and_stays_rc0(self, boost, sandbox):
+        self._seed()
+        self._disable()
+        r = boost("doctor")                       # rc 0, not 1
+        # the note is `wrap=True`, so it is folded to the pane -- assert on
+        # the text, not on where this pane happened to break it
+        flat = " ".join(r.out.split())
+        assert "1 recorded materialization names an agent boost no longer " \
+               "writes" in flat
+        # the item and the reason, not just a count -- with three affected
+        # rules, "`boost uninstall` the item" would otherwise be a guess
+        assert "rule house → cursor (is disabled)" in flat
+        assert "boost uninstall" in flat
+        assert "missing its cursor materialization" not in flat
+        assert "issue needs attention" not in flat
+        # and the count line must not read as a flat contradiction of it
+        assert "1 rule and 0 workflows fully materialized " \
+               "for every agent boost writes" in flat
+
+    def test_the_same_row_is_rot_again_once_the_agent_is_back(self, boost,
+                                                              sandbox):
+        self._seed()
+        self._disable()
+        boost("doctor")
+        from boost_cli.core import config
+        cfg = config.load()
+        cfg["agents"]["cursor"]["enabled"] = True
+        config.save(cfg)
+        r = boost("doctor", expect=1)
+        assert "rule house missing its cursor materialization" in r.out
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unwritable on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_refused_row_of_a_disabled_agent_is_not_an_issue_either(
+            self, boost, sandbox):
+        """The card's own measured case: the dir was locked on purpose, so
+        the row was recorded `unwritable: true` and the user then disabled the
+        agent. Doctor said "was not written for cursor … `boost sync` writes
+        it once it is", which two decisions ago stopped being true."""
+        from boost_cli.core import lockfile
+        rp = paths.home() / ".cursor" / "rules" / "house.mdc"
+        rp.parent.mkdir(parents=True)
+        lockfile.set_rule("house", {"kind": "rule", "materializations": [
+            {"agent": "cursor", "mode": "file", "path": str(rp),
+             "unwritable": True}]})
+        rp.parent.chmod(0o500)
+        try:
+            assert "was not written for cursor" in boost("doctor", expect=1).out
+            self._disable()
+            r = boost("doctor")
+            assert "was not written for cursor" not in r.out
+            assert "issue needs attention" not in r.out
+            # and the locked dir stops being boost's to report, since the
+            # `chmod u+w` it would name ends in a write never attempted
+            assert "not writable" not in r.out
+        finally:
+            rp.parent.chmod(0o700)
+
+    def test_a_workflow_row_is_skipped_by_doctor_too(self, boost, sandbox):
+        """The rule and the workflow loop are two separate guards; only the
+        rule one is exercised by the tests above."""
+        from boost_cli.core import lockfile
+        wp = paths.home() / ".cursor" / "commands" / "ship.md"
+        lockfile.set_workflow("ship", {"kind": "workflow",
+                                       "materializations": [
+                                           {"agent": "cursor", "mode": "file",
+                                            "path": str(wp)}]})
+        assert "workflow ship missing its cursor file" in \
+            boost("doctor", expect=1).out
+        self._disable()
+        flat = " ".join(boost("doctor").out.split())
+        assert "workflow ship missing its cursor file" not in flat
+        assert "workflow ship → cursor (is disabled)" in flat
+        assert "issue needs attention" not in flat
+
+    def test_the_remedy_does_not_offer_a_config_edit_that_cannot_help(
+            self, boost, sandbox):
+        """`codex` has no slash-command format, and that is boost's decision.
+
+        The note's one remedy used to be "change that agent's entry in
+        <config.json> and run `boost sync`" whatever the reason. For this row
+        the only such change is `codex.workflows: true`, which `config`
+        turned off because 0.156.1 loads no `commands/` file at all -- so
+        doctor's first advice produced a file the agent silently ignores, and
+        the user is worse off than with the record they started with. This is
+        also the case a real upgrade creates: every workflow installed before
+        codex gained `workflows: False` left one such row behind.
+        """
+        from boost_cli.core import lockfile
+        wp = paths.home() / ".codex" / "commands" / "ship.md"
+        lockfile.set_workflow("ship", {"kind": "workflow",
+                                       "materializations": [
+                                           {"agent": "codex", "mode": "file",
+                                            "path": str(wp)}]})
+        flat = " ".join(boost("doctor").out.split())
+        assert "workflow ship → codex (has no slash-command format)" in flat
+        assert "not one to turn back on" in flat
+        assert "boost uninstall" in flat
+        # the remedy that cannot help, in either half: no config edit is
+        # offered and no `boost sync` is promised to act on it
+        assert "run `boost sync`" not in flat
+        assert "Change that agent's entry" not in flat
+
+    def test_one_fixable_row_is_enough_to_offer_the_config_edit(self, boost,
+                                                                sandbox):
+        """The two remedies are not exclusive, and the note is one line for
+        every row it shows. A run with both kinds of reason keeps the config
+        edit, since for the disabled row it is the whole fix -- and keeps the
+        warning, since for the codex row the flag is still there to be
+        found."""
+        from boost_cli.core import lockfile
+        lockfile.set_workflow("ship", {"kind": "workflow",
+                                       "materializations": [
+                                           {"agent": "codex", "mode": "file",
+                                            "path": "/nope"}]})
+        self._seed()
+        self._disable()
+        flat = " ".join(boost("doctor").out.split())
+        assert "Change that agent's entry in" in flat
+        assert "run `boost sync`" in flat
+        assert "not one to turn back on" in flat
+
+    def test_a_purely_disabled_run_says_nothing_about_withdrawn_formats(
+            self, boost, sandbox):
+        """The warning names the reasons it applies to, so a run with none of
+        them must not print it -- an unconditional sentence would tell every
+        user with a disabled agent not to turn a format back on that they
+        were never offered."""
+        self._seed()
+        self._disable()
+        flat = " ".join(boost("doctor").out.split())
+        assert "Change that agent's entry in" in flat
+        assert "turn back on" not in flat

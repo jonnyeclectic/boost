@@ -26,7 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, lockfile, paths, projectlock, scopes, util
+from . import agents, config, lockfile, paths, projectlock, scopes, util
 
 STATUS_OK = "ok"
 STATUS_MODIFIED = "modified"     # on-disk content no longer matches the lock
@@ -64,7 +64,8 @@ def status(name: str, entry: dict | None = None) -> str:
     return STATUS_OK if util.sha256_dir(sdir) == recorded else STATUS_MODIFIED
 
 
-def materialized_status(name: str, entry: dict) -> str:
+def materialized_status(name: str, entry: dict,
+                        kind: str | None = None) -> str:
     """Classify a rule/workflow's integrity against its lock entry.
 
     A materialized kind has no store dir — the artifacts it wrote (a CLAUDE.md
@@ -74,6 +75,16 @@ def materialized_status(name: str, entry: dict) -> str:
     An entry from before per-materialization hashes existed has nothing to
     compare — ``UNLOCKED``, not a failure. Quarantine removes the artifacts on
     purpose, so it short-circuits before "missing" can lie about it.
+
+    ``kind`` decides which write set a materialization row is judged against,
+    and every caller already knows it -- each loops one lock section at a
+    time. It is a parameter rather than a read of ``entry["kind"]`` so the
+    two can never disagree: doctor passes the section's kind literally, so an
+    entry whose field was lost (a lock restored from a snapshot older than
+    the field, or hand-edited) would be judged as a rule here and as a
+    workflow there, and the two surfaces would report opposite answers for
+    one row with no way to tell which was right. The field stays the
+    fallback for a caller that has only the entry.
     """
     import hashlib
 
@@ -81,7 +92,17 @@ def materialized_status(name: str, entry: dict) -> str:
     if entry.get("quarantined"):
         return STATUS_QUARANTINED
     unlocked = False
+    kind = str(kind or entry.get("kind") or "rule")
     for m in entry.get("materializations") or []:
+        # A row naming an agent boost no longer writes is a record, not an
+        # artifact: nothing wrote that file and nothing ever will, so reading
+        # it as MISSING failed `boost verify` forever and sent `boost drift`
+        # and `boost health` to a `boost sync` that skips the row by design.
+        # `boost doctor` names it once instead -- see
+        # `agents.materialization_is_written`.
+        if not agents.materialization_is_written(kind, entry.get("base"),
+                                                 m.get("agent")):
+            continue
         p = Path(m.get("path", ""))
         if m.get("mode") == rules.MODE_CLAUDE:
             try:

@@ -656,6 +656,45 @@ def _untouched_materializations(existing: dict | None,
             if m.get("agent") not in linked]
 
 
+def materialization_is_written(kind: str, entry: dict, m: dict) -> bool:
+    """Whether boost still writes the agent this recorded row names.
+
+    The entry-shaped face of :func:`agents.materialization_is_written`, which
+    holds the reasoning: a row is kept on purpose so an uninstall can still
+    reverse it, so a check that takes it at face value reports a fault whose
+    remedy cannot run. ``sync_plan`` put such a row in
+    ``missing_materializations``, ``sync_apply`` repaired it by calling
+    ``install``, ``install`` skipped the agent, and the next run found it
+    missing again: `boost sync` printed "re-materialized rule X" forever and
+    `boost doctor` sat at one issue forever, telling the user to run a
+    `boost reinstall` that had already been run and could not help.
+    """
+    return agents.materialization_is_written(kind, entry.get("base"),
+                                             m.get("agent"))
+
+
+def unwritten_materializations() -> list[tuple[str, str, str, str]]:
+    """``(kind, name, agent, reason)`` for every row boost no longer writes --
+    what `boost doctor` names once instead of reporting as rot.
+
+    Quarantined entries are left out. Their artifacts are deliberately gone
+    and ``sync_plan`` skips them, so naming one here would print a line whose
+    `boost sync` remedy cannot run -- the very failure this list exists to
+    end. The ``reason`` is :func:`agents.materialization_skip_reason`, because
+    *disabled* is only one of the ways a row stops being written.
+    """
+    return [(kind, name, m["agent"],
+             agents.materialization_skip_reason(kind, entry.get("base"),
+                                                m["agent"])
+             or agents.REASON_UNKNOWN)
+            for kind, section in (("rule", lockfile.installed_rules()),
+                                  ("workflow", lockfile.installed_workflows()))
+            for name, entry in sorted(section.items())
+            if not entry.get("quarantined")
+            for m in entry.get("materializations") or []
+            if not materialization_is_written(kind, entry, m)]
+
+
 def unwritable_agent_dirs() -> list[Path]:
     """Existing agent dirs boost writes into and may not.
 
@@ -702,11 +741,19 @@ def blocked_agent_dirs() -> list[tuple[Path, Path]]:
 
 def _materialized_dirs() -> Iterator[tuple[Path, bool]]:
     """``(dir, refused)`` for each recorded rule or workflow row with a path:
-    the dir it writes into, and whether its install was refused there."""
-    for section in (lockfile.installed_rules(), lockfile.installed_workflows()):
+    the dir it writes into, and whether its install was refused there.
+
+    Rows for agents boost no longer writes are left out
+    (:func:`materialization_is_written`). A disabled agent's dir is not one
+    boost writes into, so an unwritable or blocked one is not boost's to
+    report -- and both callers' remedies (`chmod u+w`, then `boost sync`) end
+    in a write that would never be attempted.
+    """
+    for kind, section in (("rule", lockfile.installed_rules()),
+                          ("workflow", lockfile.installed_workflows())):
         for entry in section.values():
             for m in entry.get("materializations") or []:
-                if m.get("path"):
+                if m.get("path") and materialization_is_written(kind, entry, m):
                     yield Path(m["path"]).parent, bool(m.get("unwritable"))
 
 
@@ -2515,13 +2562,15 @@ def sync_plan() -> dict[str, list]:
         if entry.get("quarantined"):
             continue
         if any(m.get("unwritable") or not _rule_materialization_ok(name, m)
-               for m in entry.get("materializations") or []):
+               for m in entry.get("materializations") or []
+               if materialization_is_written("rule", entry, m)):
             plan["missing_materializations"].append(("rule", name))
     for name, entry in lockfile.installed_workflows().items():
         if entry.get("quarantined"):
             continue
         if any(m.get("unwritable") or not Path(m.get("path", "")).is_file()
-               for m in entry.get("materializations") or []):
+               for m in entry.get("materializations") or []
+               if materialization_is_written("workflow", entry, m)):
             plan["missing_materializations"].append(("workflow", name))
     return plan
 

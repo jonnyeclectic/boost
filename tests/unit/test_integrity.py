@@ -289,3 +289,78 @@ class TestProjectScope:
         monkeypatch.setattr(integrity.scopes, "project_root", lambda *a, **k: None)
         base, skills = integrity.project_skills()
         assert base is None and skills == {}
+
+
+class TestARowNothingWritesIsNotAMissingArtifact:
+    """`materialized_status` is the fifth reader of a materialization row.
+
+    A row for an agent boost no longer writes names a file nothing wrote and
+    nothing will write. Read as ``STATUS_MISSING`` it failed `boost verify`
+    on every run and made `boost drift` and `boost health` demand a
+    `boost sync` that skips the row by design -- the same closed loop
+    `boost doctor` was fixed for
+    (sync-repairs-a-disabled-agents-row-every-run). Five commands read it:
+    `verify`, `attest`, `drift`, `health` and `serve`.
+    """
+
+    @staticmethod
+    def _entry(kind, agent):
+        gone = paths.home() / ".cursor" / "nothing-wrote-this"
+        return {"kind": kind, "materializations": [
+            {"agent": agent, "mode": "file", "path": str(gone),
+             "sha256": "x" * 64}]}
+
+    @staticmethod
+    def _disable(agent):
+        cfg = config.load()
+        cfg["agents"][agent]["enabled"] = False
+        config.save(cfg)
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_disabled_agents_row_stops_reading_as_missing(self, sandbox,
+                                                            kind):
+        e = self._entry(kind, "cursor")
+        assert integrity.materialized_status("x", e) == integrity.STATUS_MISSING
+        self._disable("cursor")
+        assert integrity.materialized_status("x", e) == integrity.STATUS_OK
+
+    def test_a_workflow_row_is_judged_by_the_narrower_set_here_too(self,
+                                                                   sandbox):
+        """`codex` is enabled and takes rules, and has no command format, so
+        the two kinds must answer differently for the same row."""
+        assert integrity.materialized_status(
+            "x", self._entry("rule", "codex")) == integrity.STATUS_MISSING
+        assert integrity.materialized_status(
+            "x", self._entry("workflow", "codex")) == integrity.STATUS_OK
+
+    def test_an_entry_with_no_kind_is_judged_as_a_rule(self, sandbox):
+        """Locks written before entries carried `kind` must not be read as
+        workflows: that is the narrower set, so it would hide a real gap."""
+        e = self._entry("rule", "codex")
+        del e["kind"]
+        assert integrity.materialized_status("x", e) == integrity.STATUS_MISSING
+
+    def test_the_callers_kind_wins_over_the_entrys_own_field(self, sandbox):
+        """Every caller loops one lock section at a time, so it knows the
+        kind for certain; the entry's field is a copy that can be wrong.
+
+        A workflow entry whose `kind` says `rule` -- restored from a snapshot
+        older than the field, or hand-edited -- would be judged as a rule
+        here and as a workflow by `store`, and `boost verify` and
+        `boost doctor` would then give opposite answers for one row with
+        nothing to say which was right. Passing the section's kind removes
+        the disagreement at the source.
+        """
+        e = self._entry("rule", "codex")           # says rule, is a workflow
+        assert integrity.materialized_status("x", e) == integrity.STATUS_MISSING
+        assert integrity.materialized_status(
+            "x", e, "workflow") == integrity.STATUS_OK
+
+    def test_the_entrys_field_stays_the_fallback(self, sandbox):
+        """A caller holding only the entry still gets the old answer, and an
+        explicit `None` is that caller, not a third kind."""
+        e = self._entry("workflow", "codex")
+        assert integrity.materialized_status("x", e, None) == \
+            integrity.STATUS_OK
+        assert integrity.materialized_status(
+            "x", self._entry("rule", "codex"), None) == integrity.STATUS_MISSING

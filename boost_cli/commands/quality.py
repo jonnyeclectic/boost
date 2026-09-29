@@ -49,6 +49,12 @@ from ..core import output as out
 from ..errors import BoostError
 from ._common import _iter_installed, _iter_installed_all, _require_lock_integrity, _s
 
+# How many rows the unwritten-materializations note spells out before it
+# summarises. The note exists to be read in one glance; a lock with one
+# agent turned off has a row per installed rule and workflow, so an uncapped
+# list is as long as the install.
+_MAT_NOTE_SHOWN = 4
+
 # --- conflict: normative-rule extraction -----------------------------------
 
 _NEG_MODALS = {"never", "must not", "do not", "don't", "dont"}
@@ -247,7 +253,7 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
     """
     if entry.get("quarantined"):
         return "quarantined"
-    st = integrity.materialized_status(name, entry)
+    st = integrity.materialized_status(name, entry, kind)
     if st == integrity.STATUS_MISSING:
         return "store-missing"
     if st == integrity.STATUS_MODIFIED:
@@ -393,6 +399,47 @@ def _decay_rows(cwd: Path) -> list[dict]:
 
 
 # --- commands ---------------------------------------------------------------
+
+def _mat_remedy(off: list[tuple[str, str, str, str]]) -> str:
+    """The remedy for `boost doctor`'s unwritten-materializations note.
+
+    It is worded from the reasons actually present, because only two of them
+    are the user's to reverse (`agents.CONFIG_REASONS`). The note used to say
+    "change that agent's entry ... and run `boost sync`" for all of them,
+    which for `takes skills only` means setting `antigravity.skills_only:
+    false` and for `has no slash-command format` means `codex.workflows:
+    true` -- and `config.DEFAULTS` records, for each, that boost turned it
+    off because the file written would be one the agent silently never loads
+    (`agents.WITHDRAWN_REASONS`). So doctor's first advice was to undo a
+    deliberate withdrawal for a worse outcome than the stale record, and the
+    warning against it is worth printing precisely because the flag is there
+    to be found.
+
+    The upgrade path is the realistic trigger and it reaches only that half:
+    a user who installed workflows before `codex` gained `workflows: False`
+    now has one codex row per installed workflow, and no config edit helps a
+    single one of them.
+
+    One fixable row is enough to offer the config edit, because the note is
+    one line for every row it shows and for that row the edit is the whole
+    fix. The withdrawal warning is separate and asks its own question, so a
+    mixed run does not lose it -- it is on the branch that had nothing better
+    to say.
+    """
+    drop = "`boost uninstall` the item to drop the record"
+    reasons = {why for _k, _n, _a, why in off}
+    tail = ""
+    if reasons & set(agents.WITHDRAWN_REASONS):
+        tail = (" A format boost withdrew (%s) is not one to turn back on: "
+                "the file written would be one the agent never loads."
+                % ", ".join("`%s`" % r for r in agents.WITHDRAWN_REASONS
+                            if r in reasons))
+    if reasons & set(agents.CONFIG_REASONS):
+        return ("Change that agent's entry in %s and run `boost sync`, or "
+                "%s.%s" % (paths.config_path(), drop, tail))
+    return ("%s, or leave it \u2014 the row is what lets a later uninstall "
+            "remove the artifact.%s" % (drop, tail))
+
 
 def cmd_doctor(argv):
     ap = cliparse.parser(
@@ -634,6 +681,8 @@ def cmd_doctor(argv):
     for kind, section in (("rule", rules), ("workflow", workflows)):
         for name, entry in sorted(section.items()):
             for m in entry.get("materializations") or []:
+                if not store.materialization_is_written(kind, entry, m):
+                    continue  # named once below, not reported as rot
                 if m.get("unwritable"):
                     # Refused at install, so `boost reinstall` would be refused
                     # too until the dir allows it; the agent-dir line below
@@ -654,6 +703,8 @@ def cmd_doctor(argv):
             p = Path(m.get("path", ""))
             if m.get("unwritable"):
                 continue
+            if not store.materialization_is_written("rule", entry, m):
+                continue
             if m.get("mode") == "claude":
                 try:
                     present = p.exists() and ("boost:rule:%s start" % name) in \
@@ -668,10 +719,31 @@ def cmd_doctor(argv):
                 mat_issues += 1
     for name, entry in sorted(workflows.items()):
         for m in entry.get("materializations") or []:
+            if not store.materialization_is_written("workflow", entry, m):
+                continue
             if not m.get("unwritable") and not Path(m.get("path", "")).is_file():
                 bad("workflow", "workflow %s missing its %s file — run `boost reinstall %s`"
                     % (name, m.get("agent", "?"), name))
                 mat_issues += 1
+    # Said once, as a note rather than an issue: the row is there because the
+    # user changed that agent's config after installing, which is their
+    # decision, and the two ways out are theirs to pick. Reporting it as a
+    # fault instead is what kept `boost doctor` at one permanent issue whose
+    # remedy could not run -- see `agents.materialization_is_written`. It
+    # names the items and the per-agent reason, because "disabled" is only
+    # one of them: an agent can be enabled and still take no workflow.
+    off = store.unwritten_materializations()
+    if off:
+        shown = ["%s %s → %s (%s)" % (k, n, a, why)
+                 for k, n, a, why in off[:_MAT_NOTE_SHOWN]]
+        if len(off) > _MAT_NOTE_SHOWN:
+            shown.append("and %d more" % (len(off) - _MAT_NOTE_SHOWN))
+        rep.note("unwritten-materializations",
+                 "%d recorded materialization%s name%s an agent boost no "
+                 "longer writes: %s. %s"
+                 % (len(off), _s(len(off)), "s" if len(off) == 1 else "",
+                    ", ".join(shown), _mat_remedy(off)),
+                 wrap=True)
     if (all_rules or all_workflows) and not mat_issues:
         # Quarantined rules/workflows are excluded above so their stashed-but-
         # removed materializations don't read as rot — but excluding them from
@@ -688,6 +760,11 @@ def cmd_doctor(argv):
                 bits.append("%d workflow%s" % (quarantined_workflows,
                                                _s(quarantined_workflows)))
             note = " (%s quarantined)" % " and ".join(bits)
+        if off:
+            # Without this the line reads as a flat contradiction of the note
+            # right above it: "fully materialized" is true of the agents boost
+            # writes, and that is now a smaller set than the rows record.
+            note += " for every agent boost writes"
         rep.ok("rules-workflows", "%d rule%s and %d workflow%s fully materialized%s"
                % (len(rules), _s(len(rules)), len(workflows), _s(len(workflows)),
                   note))
