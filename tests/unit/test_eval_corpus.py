@@ -619,6 +619,43 @@ class TestTheCorpusSizeBlock:
         assert "50 distinct items" in block
         assert "b/two holds 60.0%" in block
         assert "of them, and the rows overstate the corpus 2.00x" in block
+        # Every row carries both counts, so there is nothing to qualify.
+        assert "counted both ways" not in block
+
+    def test_the_overstatement_divides_the_rows_counted_both_ways(self):
+        # The same defect the console report had, in the one function whose
+        # answer is committed to a tracked file. `total` is over every row
+        # carrying an entry count and `c_total` over every row carrying a
+        # distinct one; on a partly measured list those are different
+        # populations, and dividing across them said the rows overstate the
+        # corpus 40.00x where the rows counted both ways say 2.00x.
+        m = _load()
+        text = self._text([("big/a", 1), ("small/b", 1)])
+        block = self._block(m.relock_text(text,
+                                          {"big/a": 100, "small/b": 1900},
+                                          distinct={"big/a": 50}))
+        assert "overstate the corpus 2.00x" in block
+        assert "40.00x" not in block
+
+    def test_a_partly_measured_block_names_the_rows_behind_the_ratio(self):
+        # A reader who takes the ratio for the whole corpus has been told
+        # something the file cannot support, so the file says which rows it
+        # came from rather than leaving the qualifier to the reader.
+        m = _load()
+        text = self._text([("big/a", 1), ("small/b", 1)])
+        block = self._block(m.relock_text(text,
+                                          {"big/a": 100, "small/b": 1900},
+                                          distinct={"big/a": 50}))
+        assert "measured over the 1 of 2 rows counted both ways" in block
+
+    def test_the_shipped_block_is_what_the_generator_writes(self):
+        # Nothing else pins it. The block is prose in a tracked file, so a
+        # change to how it is computed leaves the committed text standing and
+        # wrong — which is how the cross-population ratio survived: the number
+        # in taps.txt looked settled because nobody recomputed it.
+        m = _load()
+        text = _TAPS.read_text()
+        assert m.with_size(text) == text
 
     def test_the_content_line_never_says_entries(self):
         # tests/unit/test_corpus_prose reads every "<number> entries" in this
@@ -1805,6 +1842,27 @@ class TestPrintConcentration:
         out = capsys.readouterr().out
         assert "concentration of content: r0/x is 98.0%" in out
         assert "not judged" not in out
+        # The runner-up clause is half the line and had no assertion, so a
+        # ranking that reported the top share and dropped the pair -- or
+        # summed the wrong two -- read as correct. 98 + 1 of 100.
+        assert "top two are 99.0%" in out
+
+    def test_two_repos_are_the_fewest_that_can_name_a_runner_up(self, capsys):
+        m = _load()
+        m._print_concentration(self._rows((70, 70), (30, 30)))
+        out = capsys.readouterr().out
+        assert "concentration: r0/x is 70.0%; top two are 100.0%" in out
+        # One repo prints no pair, but the `len(ranked) > 1` guard is not what
+        # stops it: the floor declines to judge a one-repo ranking first, and
+        # returns before the clause. The guard is only load-bearing if a
+        # ceiling ever reaches 1.0, which is what makes a one-repo list
+        # judgeable -- so pin the premise rather than leave the test claiming
+        # to cover a branch nothing can reach.
+        assert all(spec[0] < 1 for spec in m._CEILINGS.values())
+        m._print_concentration(self._rows((70, 70)))
+        out = capsys.readouterr().out
+        assert "top two" not in out
+        assert "not judged" in out
 
     def test_the_row_column_carries_its_own_floor(self, capsys):
         # MAX_ROW_SHARE is 0.65, so its floor is two repos -- one is not

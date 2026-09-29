@@ -313,6 +313,28 @@ def shares(rows: Sequence[tuple[Any, ...]], *, column: int = 2
                   key=lambda row: (-row[1], row[0]))
 
 
+def _paired_entries(rows: Sequence[tuple[Any, ...]]) -> int:
+    """Entries on the rows carrying both counts — the only ones a ratio may use.
+
+    A ratio between the two counts has to divide two measurements of the *same*
+    rows. Summing entries over every row that has one and distinct items over
+    every row that has one gives a numerator and a denominator drawn from
+    different populations, which is a ratio of nothing: on ``taps-scale.txt``
+    (141 rows with an entry count, 20 with a distinct one) that arithmetic said
+    84% of the rows were copies where the rows counted both ways say 44.7%. A
+    row missing either number is evidence of neither, so it is in neither half
+    of the fraction.
+
+    Shared by the two places that divide the counts, because they had the same
+    bug and one of them writes its answer into a tracked file: the console
+    report was fixed first and ``size_lines`` kept the cross-population form
+    for a while afterwards, which is the argument for one implementation
+    rather than two corrected independently.
+    """
+    return sum(row[2] for row in rows
+               if len(row) > 3 and row[2] is not None and row[3] is not None)
+
+
 def size_lines(text: str) -> list[str]:
     """The corpus-size block's body, from the rows of ``text`` alone.
 
@@ -339,12 +361,21 @@ def size_lines(text: str) -> list[str]:
     content = shares(rows, column=3)
     if content:
         c_total = sum(n for _r, n, _s in content)
+        paired = _paired_entries(rows)
         # Two lines, because the neighbours are ~60 columns and a 120-column
         # one in the middle of them reads as a different kind of thing.
         lines.append("# content: %s distinct items; %s holds %.1f%%"
                      % (f"{c_total:,}", content[0][0], content[0][2] * 100))
         lines.append("#          of them, and the rows overstate the corpus "
-                     "%.2fx" % (total / c_total))
+                     "%.2fx" % (paired / c_total))
+        # A third line only when the two counts do not cover the same rows,
+        # so the shipped block — every row of taps.txt carries both — is
+        # byte-identical. Saying which rows the ratio came from is the whole
+        # point of measuring it over them: a reader who takes `1.12x` for the
+        # whole corpus has been told something the file cannot support.
+        if paired != total:
+            lines.append("#          measured over the %d of %d rows counted "
+                         "both ways" % (len(content), len(ranked)))
     lines.append("# scores:  tests/eval/baseline.json, re-baselined with every "
                  "move")
     return lines
@@ -792,15 +823,7 @@ def _print_concentration(rows: Sequence[tuple[Any, ...]]) -> None:
     if not content:
         return
     c_total = sum(n for _r, n, _s in content)
-    # The copies ratio has to divide two counts of the SAME rows. `total` is
-    # over every row carrying an entry count and `c_total` over every row
-    # carrying a distinct one, which on a partially columned list are
-    # different populations: taps-scale.txt has 141 of the first and 20 of
-    # the second, and dividing across them reported 84% copies where the
-    # rows counted both ways say 44.7%. A row missing either number is not
-    # evidence of anything, so it is in neither half of the fraction.
-    paired = sum(row[2] for row in rows
-                 if len(row) > 3 and row[2] is not None and row[3] is not None)
+    paired = _paired_entries(rows)
     if paired == total:
         print("content: %d distinct items (%.0f%% of the rows are copies)"
               % (c_total, (1 - c_total / paired) * 100))
