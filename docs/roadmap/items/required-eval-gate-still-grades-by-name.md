@@ -1,16 +1,16 @@
 ---
 id: required-eval-gate-still-grades-by-name
 board: code
-section: planned
-status: planned
+section: shipped
+status: shipped
 category: Tech-debt
 complexity: M
 impact: Med
 wow: 3
 note: CLAUDE.md states "Relevance is still decided by name (or by content class when a gold…
 order: 243
-owner:
-pr:
+owner: loop/gated-golden-exemplars
+pr: "994"
 title: The exemplar migration never reached the query set the required gate runs: 0 of 91 rows, and 27 of them have an ambiguous target on the gate's own corpus
 ---
 <b>Measured.</b> Both invocations of the merge-blocking retrieval gate — the Makefile <code>eval</code> target and ci.yml's "retrieval quality gate" step — run <code>scripts/eval_retrieval.py</code> with no <code>--golden</code>, so both take <code>DEFAULT_GOLDEN = tests/eval/golden.jsonl</code>; 0 of that file's 91 rows carry an <code>exemplar</code>, and on the gate's own 20-tap corpus 27 of the 91 rows have at least one target name that resolves to more than one content digest (21 of 77 distinct target names are ambiguous).
@@ -40,3 +40,11 @@ Floor-margin exposure, with that qualification attached: hit@1 measures 44/91 = 
 <b>Why it is worth doing.</b> This is the only gate in <code>make check</code> that can fail a merge on retrieval quality, and every retrieval decision validated against it (RRF fusion vs preferring dense, pool depth, whether the LLM rerank earns its keep) inherits the looseness. The project already established the fix and built the harness for it; the required set simply never got migrated, and because the card is closed as shipped nothing tracks the remaining work on the set that matters most.
 
 <em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CONFIRMED</b>. No fix is prescribed here — the measurement is the contribution.</em>
+
+<b>Shipped, with the card above.</b> This card and <code>gated-golden-set-has-zero-exemplars</code> measured one defect from two angles — 0/91 pinned rows, and 27 of those rows ambiguous on the gate's own corpus — and one change closes both. All 91 rows of <code>tests/eval/golden.jsonl</code> now pin an <code>exemplar</code>; the required gate grades by content class.
+
+<b>This card's severity call was right, and the measurement confirms it.</b> The verifier lowered severity from High to Medium on the grounds that most ambiguous names are re-publications of one upstream skill, so a "wrong body" was still a correct answer. That is exactly what the pins found: the 20 judged rows kept 2-4 bodies each and dropped only <b>2</b> clusters in total, and scoring per query showed <b>90 of 91 rows grade identically</b> under name and content class. The looseness was real and worth closing, and it was not inflating the published numbers.
+
+The card's own row arithmetic predicted the result before the pins existed: it stated <em>"recall@10 measures 77/91 = 0.846 against a floor needing 71 rows (margin 6 rows)"</em>, counting a row as matched or not. The metric averaged 76.5/91 = 0.841 because the set's one two-name row scored 0.5 for finding one of two documented alternatives. Pinning makes those alternatives one class, so the metric now reads 77/91 = <b>0.846</b> — the card's figure, arrived at independently.
+
+<b>What was NOT done, deliberately.</b> No floor was moved. The four floors stay at 0.78 / 0.40 / 0.52 / 0.58 and all four still clear; #993 established in this same file that a floor is restated after a measurement, never re-derived from it. The name-grading path is kept, not deleted &mdash; but nothing shipped exercises it any more: <code>golden-natural.jsonl</code> finished migrating in #434 and is 50/50, so with golden.jsonl at 91/91 both shipped sets are fully pinned. It stays for a query set added outside this repo, covered by <code>TestNameGradingIsUnchanged</code> alone.

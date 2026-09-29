@@ -155,7 +155,11 @@ jobs:
         # regression nobody caused.
         #
         # So this step now also stops, naming it, when a golden `exemplar` no
-        # longer resolves at the new pins — every natural-set row pins one.
+        # longer resolves at the new pins. That is 141 rows, not a handful:
+        # every row of golden.jsonl and half of golden-natural.jsonl pin one,
+        # and 26 of them name a path inside the aggregator that is 62% of the
+        # corpus, so a refresh that moves that pin past a renamed file stops
+        # here and the pull request does not open.
         # That is the intended signal, like a vanished repository stopping
         # `--refresh`: the row needs a person to point it at the moved file,
         # and a baseline written without it would score a different set.
