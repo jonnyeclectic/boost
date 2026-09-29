@@ -10,7 +10,7 @@ wow: 3
 note: the read-only retry hook follows a symlink and chmods the file it points at
 order: 237
 owner: loop/rmtree-symlink-hook
-pr:
+pr: 1003
 title: "<code>util.rmtree</code>'s retry hook <code>chmod</code>s a symlink's target, outside the tree it is deleting"
 ---
 <code>util.rmtree</code> installs an error handler so a read-only file cannot strand a delete: on
