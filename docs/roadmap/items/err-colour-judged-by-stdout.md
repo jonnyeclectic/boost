@@ -2,14 +2,14 @@
 id: err-colour-judged-by-stdout
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
-note: boost … 2&gt;log on a terminal writes escape codes into the log, while boost … &gt;out prints the error line plain
+note: fixed — c() takes the stream it is painting for, and err, heading and a table's header cells pass theirs, so each line is coloured by where it lands
 order: 331
-owner:
+owner: loop/err-colour-stream
 pr:
 title: "out.err() judges colour by stdout while writing to stderr"
 ---
@@ -37,3 +37,21 @@ in <code>boost_cli</code> finds only these two.
 the way <code>tests/unit/test_output.py::TestWarnColourFollowsItsStream</code> tests
 <code>warn</code>: with stdout a TTY and stderr a plain buffer, no <code>\x1b[</code> in stderr;
 with the two swapped, the <code>Error:</code> prefix is coloured.
+
+<br><br><b>Shipped.</b> <code>c()</code> now takes a keyword-only
+<code>stream=</code> forwarded to <code>use_color</code> — the rule
+<code>role()</code> already followed — and the emitters that write off stdout
+pass theirs. Fixing only the two <code>err</code> calls this card names would
+have left the bug in two more places, both found by grepping every
+<code>c(</code> against the <code>file=</code> it is printed to:
+<code>heading(msg, stream=…)</code> painted <em>both</em> halves by stdout
+(<code>role</code> was called with no stream, and the bold message through
+<code>c</code>) although the parameter exists so a report header can follow
+its content off stdout; and <code>table()</code> asked
+<code>use_color(stream)</code> for the dim <code>│</code> separator while its
+bold header cells asked stdout, so one row could carry both answers — plain
+separators framing escape-coded headers written into a file, or coloured
+separators framing plain headers on a terminal. Five call sites in all, and
+reverting any one of them fails a test: the new classes assert both
+directions (terminal stream while stdout is a file, and the reverse) the way
+<code>TestWarnColourFollowsItsStream</code> does for <code>warn</code>.
