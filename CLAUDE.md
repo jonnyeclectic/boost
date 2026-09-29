@@ -122,9 +122,24 @@ collapse and homonyms do not. Relevance is still decided by name (or by content
 class when a golden row pins an `exemplar`), so the sets can migrate a row at a
 time.
 
-Each floor sits ~10% under its measured value — loose enough that upstream drift
-can't flake the build, tight enough to catch a collapse. Regression-vs-baseline
-stays relaxed (`--regression-eps 1`), so the absolute floors are the real gate.
+The floors are fixed absolute values, and the uniform "~10%" margin this file
+claimed from 170d52c0 (2026-07-31) onward was never one of them. They sit under
+their measured values (7.2% / 17.3% / 14.3% / 11.5%), recall@k the tightest —
+loose enough that upstream drift can't flake the build, tight enough to catch a
+collapse, but a 2.39x spread rather than one number, and the tightest of them
+is worth 5.5 queries of 91. The spread is the design working, not drifting: the
+monthly refresh re-measures the row and deliberately leaves the floors where
+they are, so every refresh that improves a metric widens that metric's margin.
+Floors are re-stated after a refresh, never re-derived — a floor that follows
+its own measurement ratchets down with the corpus and ends up measuring the
+corpus. `test_corpus_prose.py` holds every margin above to `baseline.json`, to
+`golden.jsonl` and to the argv of the `Makefile`'s own `eval` recipe — read
+through `eval_retrieval.build_parser()` rather than matched, because the
+tightest floor is `--fail-under` and not a `--floor`, and because a tab-indented
+comment is argv to a regex and a no-op to make. So a refresh that moves the row
+fails the build until someone writes the new margin down and looks at it.
+Regression-vs-baseline stays relaxed (`--regression-eps 1`), so the absolute
+floors are the real gate.
 
 **Every row of `taps.txt` pins a commit SHA**, and `scripts/eval_corpus.py`
 checks each clone out at it — most of the corpus is one third-party repo, so an

@@ -127,9 +127,14 @@ dist-check:
 # which is what tests/eval/baseline.json records at the current pins. The
 # second set is what a real user sees, so flooring against the first was
 # measuring the corpus rather than the retrieval — three of the four old floors
-# fail outright once the corpus is realistic. Each floor now sits ~10% below
-# its measured value: loose enough that a query or two cannot flake the build,
-# tight enough that a collapse fails it. Regression-vs-baseline stays relaxed
+# fail outright once the corpus is realistic. The four floors sit a margin
+# under their measured values (7.2% / 17.3% / 14.3% / 11.5%), recall@k the
+# tightest at 5.5 queries of 91: loose enough that a query or two cannot flake
+# the build, tight enough that a collapse fails it. That margin is not uniform
+# and never was -- it is a 2.39x spread, because the row moves with every
+# monthly refresh and the floors deliberately do not. So it is quoted rather
+# than asserted, and tests/unit/test_corpus_prose.py fails until the new
+# spread is written here. Regression-vs-baseline stays relaxed
 # (--regression-eps 1); the absolute floors are the real gate. (It was relaxed
 # while the corpus tracked upstream HEAD. tests/eval/taps.txt pins a commit per
 # row now, so that is no longer the reason.)

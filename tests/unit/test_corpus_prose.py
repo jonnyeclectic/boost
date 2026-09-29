@@ -31,6 +31,7 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[2]
 _TAPS = _ROOT / "tests" / "eval" / "taps.txt"
 _BASELINE = _ROOT / "tests" / "eval" / "baseline.json"
+_GOLDEN = _ROOT / "tests" / "eval" / "golden.jsonl"
 
 pytestmark = pytest.mark.skipif(
     not (_TAPS.exists() and _BASELINE.exists()),
@@ -48,6 +49,12 @@ QUOTED = (
     ("CLAUDE.md", "over the six alone ({targets} entries"),
     ("CLAUDE.md", "**{bm25}**"),
     ("CLAUDE.md", "recorded BM25 row ({natural_bm25})"),
+    ("CLAUDE.md", "under their measured values ({headroom}), {binding} the tightest"),
+    ("CLAUDE.md", "a {spread} spread rather than one number"),
+    ("CLAUDE.md", "the tightest of them is worth {slack}"),
+    ("Makefile", "under their measured values ({headroom}), {binding} the"),
+    ("Makefile", "tightest at {slack}:"),
+    ("Makefile", "it is a {spread} spread"),
     ("Makefile", "Over the six ({targets} entries)"),
     ("Makefile", "over twenty it scores {bm25}"),
     ("Makefile", "records ({natural_bm25} at the current pins"),
@@ -122,6 +129,9 @@ def _figures() -> dict[str, str]:
     # The rows above the scale divider are the ones holding golden targets.
     head = text.split("\n# --- scale", 1)[0]
     bm25 = _bm25()
+    floors = _floors()
+    gaps = _headroom(bm25, floors)
+    tightest = _METRICS[gaps.index(min(gaps))]
     return {
         "total": f"{sum(_counts(text)):,}",
         "targets": f"{sum(_counts(head)):,}",
@@ -130,6 +140,32 @@ def _figures() -> dict[str, str]:
         # `make eval-natural`'s floors are calibrated on the figures quoted.
         "natural_bm25": _four(_bm25("golden-natural.jsonl")),
         "recall": "%.3f" % bm25["recall@k"],
+        # The margin each floor actually has, rather than the single "~10%"
+        # the prose asserted from 170d52c0 (2026-07-31) onward. It was never
+        # uniform: at that twenty-tap calibration the gaps were 9.6 / 15.3 /
+        # 14.4 / 12.4 (recomputed from 170d52c0's own baseline and Makefile —
+        # the roadmap card transposes two of those digits),
+        # and the monthly refresh widens the spread because it re-baselines the
+        # row and leaves the floors where they are, by design. Quoting the four
+        # separately is what makes that visible; holding them here is what
+        # makes a refresh restate them.
+        "headroom": " / ".join("%.1f%%" % g for g in gaps),
+        # Which floor is closest to the row, and so the one a corpus move
+        # actually trips. A judgement stated beside held figures has to be held
+        # too, or it is the next sentence to go quietly stale.
+        "binding": tightest,
+        # How wide the spread is. The claim being replaced was that there was
+        # no spread, so the number that refutes it has to be held like the
+        # rest -- an unheld "2.4x" beside a held "7.2% / 17.3%" is the same
+        # defect one sentence along. Two decimals, not one: the verification
+        # behind this card rejected "2.4x" for "2.39x", and a figure quoted
+        # to the precision it was measured at cannot be argued with.
+        "spread": "%.2fx" % (max(gaps) / min(gaps)),
+        # The binding floor's margin in queries rather than percent. A
+        # percentage does not say whether a margin is one flaky query or ten;
+        # over this set, 1 query is 1.1 points of recall@k.
+        "slack": "%.1f queries of %d" % (
+            (bm25[tightest] - floors[tightest]) * _queries(), _queries()),
     }
 
 
@@ -146,6 +182,99 @@ def _max_share() -> float:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return float(mod.MAX_ROW_SHARE)
+
+
+#: The Makefile recipe whose `--floor` arguments the required gate runs under.
+#: Only this one is parsed: `tests/unit/test_eval_corpus.py` already holds the
+#: Makefile, ci.yml and eval-corpus-refresh.yml to one argv, so a floor read
+#: here is the floor all three use.
+_EVAL_RECIPE = "eval"
+#: The four metrics, in the order the prose quotes them.
+_METRICS = ("recall@k", "hit@1", "MRR", "nDCG@k")
+
+
+def _argv_reader():
+    """`tests/unit/test_eval_corpus.py`, loaded for its argv reader.
+
+    The floors have to be read the way the gate reads them, and the reader
+    already exists one file over: `_recipe` slices the Makefile to one
+    target, `_invocation` joins line continuations, drops comment lines and
+    shlex-splits, and `_meaning` hands the words to
+    `eval_retrieval.build_parser()` itself.
+
+    Re-implementing that here with a regex put a hole in this very check
+    twice. First an unindented comment block, which sits *above* the next
+    target, so slicing to `eval-natural:` swallowed all of its prose. Then —
+    after that was fixed by taking tab-indented lines only — a **tab-indented
+    comment inside the recipe**, which make ignores and a regex does not:
+
+        eval:
+                $(PY) scripts/eval_retrieval.py ... --floor hit@1=0.30 \\
+                # relaxed from --floor hit@1=0.40
+
+    make runs the 0.30 gate; a last-match-wins regex reports 0.40, so the
+    published margin is held to a floor nothing enforces and nothing is red.
+    A third spelling was waiting behind both: argparse accepts
+    `--fail-under=0.60`, and a regex keyed on whitespace never sees it.
+    Delegating cures all three at once, and any fourth, because the thing
+    doing the parsing is the parser.
+
+    Loaded by path rather than imported by name, so this does not depend on
+    `tests/unit` being on `sys.path`, and under a private module name so it
+    cannot collide with pytest's own import of the same file.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_corpus_prose_argv", _ROOT / "tests" / "unit" / "test_eval_corpus.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _floors_in(body: str) -> dict[str, float]:
+    """The floors one recipe body passes, as the gate's own parser sees them.
+
+    recall@k is `--fail-under` rather than `--floor recall@k=`, which is why
+    it is lifted out separately here and why the prose below says "argv"
+    rather than naming one flag.
+    """
+    reader = _argv_reader()
+    meaning = reader._meaning(reader._invocation(body))
+    floors = {"recall@k": float(meaning["fail_under"])}
+    floors.update({k: float(v) for k, v in meaning["floor"].items()})
+    return floors
+
+
+def _floors() -> dict[str, float]:
+    """The required gate's four floors, read from the Makefile's own argv."""
+    reader = _argv_reader()
+    marker = "\n%s:" % _EVAL_RECIPE
+    count = (_ROOT / "Makefile").read_text(encoding="utf-8").count(marker)
+    assert count == 1, (
+        "`%s` is defined %d times; make runs the LAST recipe for a duplicated "
+        "target and this reads the first, so the margin below would be held "
+        "to floors the gate does not run" % (_EVAL_RECIPE, count))
+    return _floors_in(reader._recipe(_EVAL_RECIPE))
+
+
+def _headroom(row: dict[str, float], floors: dict[str, float]) -> list[float]:
+    """How far under the measured row each floor sits, as a percentage."""
+    return [(row[m] - floors[m]) / row[m] * 100 for m in _METRICS]
+
+
+def _queries() -> int:
+    """How many cases the gate actually scores.
+
+    `golden.jsonl` is 102 lines and eleven of them are not queries — ten
+    comment lines and one blank — so a line count is not the query count.
+    `eval_retrieval.load_golden` skips blanks and `#` after stripping, and
+    this must skip exactly what it skips. The blank is the case a naive
+    `startswith('#')` would miss. The prose quotes
+    this figure to turn a percentage into queries, which is the only form in
+    which "is that margin big enough" is answerable.
+    """
+    return sum(1 for line in _GOLDEN.read_text(encoding="utf-8").splitlines()
+               if line.strip() and not line.strip().startswith("#"))
 
 
 def _folded(text: str) -> str:
@@ -257,6 +386,92 @@ class TestTheCheckItself:
     def test_folding_joins_a_wrapped_comment(self):
         assert _folded("# measures\n# 10,731 entries") == \
             "# measures 10,731 entries"
+
+    def test_the_required_recipe_is_read_and_not_the_advisory_one(self):
+        # Two recipes carry `--fail-under` and `--floor hit@1=`: `eval`, which
+        # is the required gate, and `eval-natural`, which is advisory and
+        # whose floors DO follow the row. A bare search over the file returns
+        # whichever comes first, which is the right answer today by ordering
+        # alone. Slicing to the named recipe is what makes it the right answer
+        # tomorrow, so the slicing is what is pinned -- against the real
+        # Makefile, because that is the file the margin is held to.
+        reader = _argv_reader()
+        assert _floors() == _floors_in(reader._recipe("eval"))
+        assert _floors() != _floors_in(reader._recipe("eval-natural"))
+
+    def test_a_target_is_defined_once(self):
+        # make runs the LAST recipe for a duplicated target (it warns, then
+        # overrides), and every reader here takes the first. `_floors`
+        # refuses rather than reading a recipe make would not run; this pins
+        # that the real Makefile satisfies it, so the refusal stays a
+        # tripwire rather than a permanent failure.
+        text = (_ROOT / "Makefile").read_text(encoding="utf-8")
+        assert text.count("\n%s:" % _EVAL_RECIPE) == 1
+
+    def test_a_tab_indented_comment_is_not_argv(self):
+        # The second hole, found after the first was fixed. A comment line
+        # that starts with a TAB is inside the recipe and make ignores it --
+        # so a regex over the recipe text reads floors the gate does not run.
+        # Last-match-wins made it worse than a miss: the stale number won.
+        # Nothing looks broken either way, which is the whole problem.
+        body = ("\t$(PY) scripts/eval_retrieval.py --fail-under 0.78 "
+                "--floor hit@1=0.40\n"
+                "\t# relaxed from --fail-under 0.90 --floor hit@1=0.99\n")
+        assert _floors_in(body) == {"recall@k": 0.78, "hit@1": 0.40}
+
+    def test_an_equals_form_flag_is_read(self):
+        # The third spelling, and the one a regex keyed on whitespace cannot
+        # see at all: argparse accepts `--flag=value`. A regex reported the
+        # OLD floor here -- a silent fail-open in the opposite direction from
+        # the comment, and the reason this reads argv through the gate's own
+        # parser instead of matching text.
+        body = ("\t$(PY) scripts/eval_retrieval.py --fail-under=0.60 "
+                "--floor=hit@1=0.20\n")
+        assert _floors_in(body) == {"recall@k": 0.60, "hit@1": 0.20}
+
+    def test_a_line_continuation_is_joined(self):
+        # The real recipe wraps the call over three lines, so a reader that
+        # did not join continuations would see one flag and miss the rest --
+        # and `_floors` would return fewer than four metrics, which
+        # `test_a_floor_that_is_not_read_fails_the_check` catches. Pinned
+        # here so the failure names the cause.
+        body = ("\t$(PY) scripts/eval_retrieval.py --fail-under 0.78 \\\n"
+                "\t  --floor hit@1=0.40 \\\n"
+                "\t  --floor MRR=0.52\n")
+        assert _floors_in(body) == {
+            "recall@k": 0.78, "hit@1": 0.40, "MRR": 0.52}
+
+    def test_a_repeated_flag_is_read_the_way_argparse_reads_it(self):
+        # argparse takes the LAST occurrence of a repeated flag. Reading
+        # `--fail-under` with re.search took the first, so a duplicate would
+        # have held the prose to a number the gate does not use.
+        body = ("\t$(PY) scripts/eval_retrieval.py --fail-under 0.78 "
+                "--fail-under 0.90 --floor MRR=0.52 --floor MRR=0.61\n")
+        assert _floors_in(body) == {"recall@k": 0.90, "MRR": 0.61}
+
+    def test_a_flag_the_gate_does_not_accept_fails_here(self):
+        # Reading argv through `eval_retrieval.build_parser()` means a flag
+        # the script would reject fails in this test rather than in CI. A
+        # regex would have shrugged and returned the floors it did match.
+        with pytest.raises(SystemExit):
+            _floors_in("\t$(PY) scripts/eval_retrieval.py --no-such-flag 1\n")
+
+    def test_a_floor_that_is_not_read_fails_the_check(self):
+        # `_floors` divides by figures it parsed out of argv, so a regex that
+        # silently stops matching would not raise -- it would drop a metric
+        # and quietly narrow what the prose is held to. Four floors are what
+        # the required gate passes; fewer means the parse broke.
+        floors = _floors()
+        assert sorted(floors) == sorted(_METRICS)
+        assert all(0 < v < 1 for v in floors.values())
+
+    def test_the_query_count_skips_the_header_comment(self):
+        # golden.jsonl carries ten comment lines and a blank, so a line
+        # count is eleven queries too many. `_queries` must skip exactly what
+        # `eval_retrieval.load_golden` skips, blank included.
+        lines = _GOLDEN.read_text(encoding="utf-8").splitlines()
+        assert _queries() == sum(1 for ln in lines if ln.startswith("{"))
+        assert _queries() < len(lines)
 
 
 class TestTheShippedProse:
