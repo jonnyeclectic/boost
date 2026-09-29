@@ -101,16 +101,20 @@ engines over the golden set (`tests/eval/golden.jsonl`) and floors **four**
 metrics on BM25 — recall@k, hit@1, MRR and nDCG@k. Flooring recall alone was a
 hole rather than a simplification: a ranker that finds the right answer every
 time and never ranks it first scores recall@10 1.000 with hit@1 0.000, and
-passed. The golden set grades real catalog items **by name**, so it needs a
-corpus: `scripts/ensure_eval_corpus.sh` first taps the pinned repo list in
+passed. The golden set grades real catalog items **by the body they name**, so it
+needs a corpus: `scripts/ensure_eval_corpus.sh` first taps the pinned repo list in
 `tests/eval/taps.txt` (the minimal set covering all golden targets — `boost tap
 --defaults` is NOT enough, it omits every rule/workflow repo). The list is
 **twenty** repos: the first six cover every golden target, the rest exist so the
 corpus is a realistic size. That matters more than it sounds — over the six
-alone (921 entries at the current pins) BM25 scores 0.989 / 0.769 / 0.848 /
-0.880, and over the twenty (10,731) it scores **0.841 / 0.484 / 0.607 / 0.655**
-on the same golden set (what `tests/eval/baseline.json` records), so three of
-the four old floors fail once the corpus stops being tiny.
+alone (921 entries at the current pins) BM25 scored 0.989 / 0.769 / 0.848 /
+0.880, and over the twenty (10,731) it scores **0.846 / 0.484 / 0.607 / 0.659**
+(what `tests/eval/baseline.json` records), so three of the four old floors fail
+once the corpus stops being tiny. The six-repo row is **historical**: it was
+measured name-graded, before the set was pinned, and cannot be re-run against
+today's `golden.jsonl` — see the coupling rule below. It stays re-derivable:
+`git show e11a34f2:tests/eval/golden.jsonl` scored over a six-tap corpus
+reproduces it exactly.
 
 **The ranked list de-duplicates on the content hash, not the name.** A grade key
 decides both relevance and identity, and keying identity on the name collapsed
@@ -118,16 +122,18 @@ decides both relevance and identity, and keying identity on the name collapsed
 ranker with a compression that existed only in the scoring code, and worth about
 one query of recall@10. That is where the old "recall is 1.000" folklore came
 from; the six-repo corpus measured 0.978 at the pins of the time once mirrors
-collapse and homonyms do not. Relevance is still decided by name (or by content
-class when a golden row pins an `exemplar`), so the sets can migrate a row at a
-time.
+collapse and homonyms do not. Relevance is decided by the content class of the
+bodies a row pins in its `exemplar`, or by name for a row that pins none. The
+two conventions coexist so a set can migrate a row at a time; **`golden.jsonl`
+has finished migrating** — all 91 rows are pinned — while
+`golden-natural.jsonl` is half pinned, so the name path is live and stays.
 
 The floors are fixed absolute values, and the uniform "~10%" margin this file
 claimed from 170d52c0 (2026-07-31) onward was never one of them. They sit under
-their measured values (7.2% / 17.3% / 14.3% / 11.5%), recall@k the tightest —
+their measured values (7.8% / 17.3% / 14.3% / 12.1%), recall@k the tightest —
 loose enough that upstream drift can't flake the build, tight enough to catch a
-collapse, but a 2.39x spread rather than one number, and the tightest of them
-is worth 5.5 queries of 91. The spread is the design working, not drifting: the
+collapse, but a 2.21x spread rather than one number, and the tightest of them
+is worth 6.0 queries of 91. The spread is the design working, not drifting: the
 monthly refresh re-measures the row and deliberately leaves the floors where
 they are, so every refresh that improves a metric widens that metric's margin.
 Floors are re-stated after a refresh, never re-derived — a floor that follows
@@ -155,6 +161,25 @@ parses both calls and fails the build if they diverge, which they had (CI
 floored recall alone at 0.85 against a measured 0.863 — a buffer of 1.15
 queries out of 91 — and applied none of the other three). Moving a pin means
 regenerating the baseline; the file says how.
+
+**A pinned golden row couples the set to a corpus, and that is the trade.**
+An `exemplar` is `tap::skill_md`, so a row can only be scored over a corpus
+holding that tap: `prepare_row` raises `SystemExit` on a spec it cannot
+resolve, deliberately, because a silent fall back to name grading turns a typo
+into a quietly weaker gate that still reports a number. Consequences:
+
+- **A subset corpus can no longer score `golden.jsonl`.** The six-repo
+  comparison figure is historical for this reason, not stale. `taps-scale.txt`
+  is fine — it is a superset of `taps.txt` (149 rows ⊇ 20), so `eval-scale.yml`
+  keeps scoring the same set.
+- **A pin move can invalidate a path.** `eval-corpus-refresh.yml`'s re-baseline
+  step is not `continue-on-error`, so a renamed file stops the monthly refresh
+  before its pull request opens. That is the intended signal and the fix is to
+  re-resolve the path in the new clone — `--worksheet` will not help, because
+  it lists rows still graded **by name** and a pinned row is not one.
+- **Do not "fix" it by tolerating an unresolvable spec in a multi-spec list.**
+  A refresh that drops a repo would then narrow every such row's class to
+  whatever still resolves, which is the same silent weakening one level down.
 
 **Baselines are keyed by query set** (`name@content-digest`), so one file holds
 both `golden.jsonl` and `golden-natural.jsonl` without either overwriting the

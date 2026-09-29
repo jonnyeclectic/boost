@@ -140,8 +140,10 @@ METRICS: dict[str, Callable[[Sequence[str], set, int], float]] = {
 # punish a correct answer for arriving from a mirror), while a different skill
 # sharing the name does not.
 #
-# Rows without an exemplar still decide RELEVANCE by name, so the sets can
-# migrate a row at a time. What is no longer name-keyed is IDENTITY: the ranked
+# Rows without an exemplar still decide RELEVANCE by name, which is what let
+# the sets migrate a row at a time. `golden.jsonl` has finished: all 91 rows
+# pin one. `golden-natural.jsonl` is half pinned, so this path is live, not
+# vestigial. What is no longer name-keyed is IDENTITY: the ranked
 # list de-duplicates on the content hash for every row, exemplar or not. Keying
 # both on the name collapsed 13 different `code-reviewer`s into one rank slot
 # and inflated recall@10 by about one query (0.863 -> 0.852 over the pinned
