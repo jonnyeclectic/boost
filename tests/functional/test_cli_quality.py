@@ -2904,3 +2904,62 @@ class TestARowForADisabledAgent:
         assert "workflow ship missing its cursor file" not in flat
         assert "workflow ship → cursor (is disabled)" in flat
         assert "issue needs attention" not in flat
+
+    def test_the_remedy_does_not_offer_a_config_edit_that_cannot_help(
+            self, boost, sandbox):
+        """`codex` has no slash-command format, and that is boost's decision.
+
+        The note's one remedy used to be "change that agent's entry in
+        <config.json> and run `boost sync`" whatever the reason. For this row
+        the only such change is `codex.workflows: true`, which `config`
+        turned off because 0.156.1 loads no `commands/` file at all -- so
+        doctor's first advice produced a file the agent silently ignores, and
+        the user is worse off than with the record they started with. This is
+        also the case a real upgrade creates: every workflow installed before
+        codex gained `workflows: False` left one such row behind.
+        """
+        from boost_cli.core import lockfile
+        wp = paths.home() / ".codex" / "commands" / "ship.md"
+        lockfile.set_workflow("ship", {"kind": "workflow",
+                                       "materializations": [
+                                           {"agent": "codex", "mode": "file",
+                                            "path": str(wp)}]})
+        flat = " ".join(boost("doctor").out.split())
+        assert "workflow ship → codex (has no slash-command format)" in flat
+        assert "not one to turn back on" in flat
+        assert "boost uninstall" in flat
+        # the remedy that cannot help, in either half: no config edit is
+        # offered and no `boost sync` is promised to act on it
+        assert "run `boost sync`" not in flat
+        assert "Change that agent's entry" not in flat
+
+    def test_one_fixable_row_is_enough_to_offer_the_config_edit(self, boost,
+                                                                sandbox):
+        """The two remedies are not exclusive, and the note is one line for
+        every row it shows. A run with both kinds of reason keeps the config
+        edit, since for the disabled row it is the whole fix -- and keeps the
+        warning, since for the codex row the flag is still there to be
+        found."""
+        from boost_cli.core import lockfile
+        lockfile.set_workflow("ship", {"kind": "workflow",
+                                       "materializations": [
+                                           {"agent": "codex", "mode": "file",
+                                            "path": "/nope"}]})
+        self._seed()
+        self._disable()
+        flat = " ".join(boost("doctor").out.split())
+        assert "Change that agent's entry in" in flat
+        assert "run `boost sync`" in flat
+        assert "not one to turn back on" in flat
+
+    def test_a_purely_disabled_run_says_nothing_about_withdrawn_formats(
+            self, boost, sandbox):
+        """The warning names the reasons it applies to, so a run with none of
+        them must not print it -- an unconditional sentence would tell every
+        user with a disabled agent not to turn a format back on that they
+        were never offered."""
+        self._seed()
+        self._disable()
+        flat = " ".join(boost("doctor").out.split())
+        assert "Change that agent's entry in" in flat
+        assert "turn back on" not in flat

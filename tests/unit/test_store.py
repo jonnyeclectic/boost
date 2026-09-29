@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import errno
+import inspect
 import os
 import re
 import shutil
@@ -5062,6 +5063,62 @@ class TestARowForADisabledAgentIsNotRot:
         assert agents.materialization_skip_reason("rule", None,
                                                   "cursor") is None
         assert agents.materialization_skip_reason("rule", None, None) is None
+
+    def test_the_reason_shown_is_the_one_whose_remedy_is_real(self, tap):
+        """Reasons overlap, and only one is shown, so it has to be the
+        permanent one.
+
+        `antigravity` is both `skills_only` and `project_scope: False`. With
+        scope checked first, a project rule's row read "has no project
+        scope", the user gave the agent project scope, re-ran, and the row
+        was still there under a new reason -- a skills-only agent takes no
+        rule at any scope. The reversible reasons are reported last for
+        exactly that: whichever one is shown, following it helps.
+        """
+        assert agents.materialization_skip_reason(
+            "rule", str(paths.home() / "repo"),
+            "antigravity") == "takes skills only"
+        assert "takes skills only" not in agents.CONFIG_REASONS
+
+    def test_a_disabled_skills_only_agent_still_says_skills_only(self, tap):
+        """Re-enabling it writes the rule no more than widening its scope
+        does, so `is disabled` is the same dead end one flag over."""
+        cfg = config.load()
+        cfg["agents"]["antigravity"]["enabled"] = False
+        config.save(cfg)
+        assert agents.materialization_skip_reason(
+            "rule", None, "antigravity") == "takes skills only"
+
+    def test_every_reason_the_ladder_gives_is_classified(self, tap):
+        """The three constant groups partition the reasons, and doctor words
+        its remedy from that split -- so a reason the ladder can return and
+        no group names would be classified by silence, as neither the user's
+        to reverse nor a format boost withdrew.
+
+        Both directions are checked, and the one that matters is the second:
+        a new `return "some phrase"` is exactly the change that would slip
+        past a test which only walked the constants.
+        """
+        named = {v for k, v in vars(agents).items()
+                 if k.startswith("REASON_") and isinstance(v, str)}
+        src = inspect.getsource(agents.materialization_skip_reason)
+        returned = set(re.findall(r"^\s+return (\S+)$", src, re.M)) - {"None"}
+        assert returned and all(r.startswith("REASON_") for r in returned), \
+            "the ladder returns a bare string: %s" % sorted(returned)
+        assert {getattr(agents, r) for r in returned} == named
+
+        groups = (agents.CONFIG_REASONS, agents.WITHDRAWN_REASONS,
+                  agents.UNREMEDIED_REASONS)
+        flat = [r for g in groups for r in g]
+        assert len(flat) == len(set(flat)), "a reason is in two groups"
+        assert set(flat) == named
+        # the positive, not just the partition: dropping either member from
+        # `CONFIG_REASONS` silently stops doctor offering the one remedy
+        # that works for it
+        assert agents.REASON_DISABLED in agents.CONFIG_REASONS
+        assert agents.REASON_NO_PROJECT_SCOPE in agents.CONFIG_REASONS
+        assert agents.REASON_SKILLS_ONLY in agents.WITHDRAWN_REASONS
+        assert agents.REASON_NO_COMMAND_FORMAT in agents.WITHDRAWN_REASONS
 
     def test_a_workflow_row_is_judged_by_the_narrower_workflow_set(self, tap):
         """Codex takes rules (`AGENTS.md`) and has no slash-command format, so

@@ -114,7 +114,7 @@ def _materialized_text(name: str, kind: str, entry: dict):
             % (kind, name),
             hint="release it with `boost quarantine --release %s`" % name)
     if integrity.enforcement_enabled():
-        st = integrity.materialized_status(name, entry)
+        st = integrity.materialized_status(name, entry, kind)
         if st == integrity.STATUS_MODIFIED:
             raise BoostError(
                 "%s %s has been modified since install — its materialized "

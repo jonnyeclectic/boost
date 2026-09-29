@@ -685,7 +685,8 @@ def unwritten_materializations() -> list[tuple[str, str, str, str]]:
     """
     return [(kind, name, m["agent"],
              agents.materialization_skip_reason(kind, entry.get("base"),
-                                                m["agent"]) or "is not written")
+                                                m["agent"])
+             or agents.REASON_UNKNOWN)
             for kind, section in (("rule", lockfile.installed_rules()),
                                   ("workflow", lockfile.installed_workflows()))
             for name, entry in sorted(section.items())

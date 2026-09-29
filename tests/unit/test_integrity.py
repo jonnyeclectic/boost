@@ -339,3 +339,28 @@ class TestARowNothingWritesIsNotAMissingArtifact:
         e = self._entry("rule", "codex")
         del e["kind"]
         assert integrity.materialized_status("x", e) == integrity.STATUS_MISSING
+
+    def test_the_callers_kind_wins_over_the_entrys_own_field(self, sandbox):
+        """Every caller loops one lock section at a time, so it knows the
+        kind for certain; the entry's field is a copy that can be wrong.
+
+        A workflow entry whose `kind` says `rule` -- restored from a snapshot
+        older than the field, or hand-edited -- would be judged as a rule
+        here and as a workflow by `store`, and `boost verify` and
+        `boost doctor` would then give opposite answers for one row with
+        nothing to say which was right. Passing the section's kind removes
+        the disagreement at the source.
+        """
+        e = self._entry("rule", "codex")           # says rule, is a workflow
+        assert integrity.materialized_status("x", e) == integrity.STATUS_MISSING
+        assert integrity.materialized_status(
+            "x", e, "workflow") == integrity.STATUS_OK
+
+    def test_the_entrys_field_stays_the_fallback(self, sandbox):
+        """A caller holding only the entry still gets the old answer, and an
+        explicit `None` is that caller, not a third kind."""
+        e = self._entry("workflow", "codex")
+        assert integrity.materialized_status("x", e, None) == \
+            integrity.STATUS_OK
+        assert integrity.materialized_status(
+            "x", self._entry("rule", "codex"), None) == integrity.STATUS_MISSING

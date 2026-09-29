@@ -427,7 +427,7 @@ def cmd_verify(argv):
             if status == integrity.STATUS_UNLOCKED and "sha256" not in missing_fields:
                 missing_fields.append("sha256")
         else:
-            status = integrity.materialized_status(name, entry)
+            status = integrity.materialized_status(name, entry, kind)
             if status == integrity.STATUS_UNLOCKED:
                 missing_fields.append("materialization sha256")
         commit_pin = integrity.commit_status(name, entry)
@@ -643,7 +643,7 @@ def cmd_attest(argv):
             else:
                 # The artifact the agent loads, against the hash recorded when
                 # it was written. UNLOCKED (a pre-hash entry) never fails.
-                st = integrity.materialized_status(name, entry)
+                st = integrity.materialized_status(name, entry, kind)
             rec["sha_ok"] = st not in (integrity.STATUS_MODIFIED,
                                        integrity.STATUS_MISSING)
             rec["journal"] = ev is not None
