@@ -756,29 +756,61 @@ def refresh_summary(rows: Sequence[tuple[Any, ...]], shas: dict[str, str],
     return "\n".join(lines)
 
 
+def _concentration_line(ranked: Sequence[tuple[str, int, float]],
+                        column: int, noun: str) -> str:
+    """One line describing ``ranked``'s top share, or why it is not judged.
+
+    The "not judged" case covers exactly the sizes
+    :func:`check_concentration` refuses, and saying so is the point: a share
+    printed without it reads as a violation that passed. A two-row content
+    ranking at 99/1 printed "is 99.0% of content" and the run exited 0,
+    because the gate had already declined to judge a corpus too small for any
+    arrangement to clear the ceiling.
+    """
+    ceiling = _CEILINGS[column][0]
+    if len(ranked) * ceiling < 1:
+        return ("concentration%s: not judged — %d repos cannot clear a %.0f%% "
+                "ceiling however balanced, since the smallest possible top "
+                "share is %.0f%%"
+                % (noun, len(ranked), ceiling * 100, 100 / len(ranked)))
+    line = "concentration%s: %s is %.1f%%" % (noun, ranked[0][0],
+                                              ranked[0][2] * 100)
+    if len(ranked) > 1:
+        line += "; top two are %.1f%%" % ((ranked[0][2]
+                                           + ranked[1][2]) * 100)
+    return line
+
+
 def _print_concentration(rows: Sequence[tuple[Any, ...]]) -> None:
     ranked = shares(rows)
     if not ranked:
         return
     total = sum(n for _r, n, _s in ranked)
-    top = ranked[0]
     print("corpus: %d entries across %d taps" % (total, len(ranked)))
-    line = "concentration: %s is %.1f%%" % (top[0], top[2] * 100)
-    if len(ranked) > 1:
-        line += "; top two are %.1f%%" % ((top[2] + ranked[1][2]) * 100)
-    print(line)
+    print(_concentration_line(ranked, 2, ""))
     content = shares(rows, column=3)
     if not content:
         return
     c_total = sum(n for _r, n, _s in content)
-    print("content: %d distinct items (%.0f%% of the rows are copies)"
-          % (c_total, (1 - c_total / total) * 100))
-    line = "concentration: %s is %.1f%% of content" % (content[0][0],
-                                                       content[0][2] * 100)
-    if len(content) > 1:
-        line += "; top two are %.1f%%" % ((content[0][2]
-                                           + content[1][2]) * 100)
-    print(line)
+    # The copies ratio has to divide two counts of the SAME rows. `total` is
+    # over every row carrying an entry count and `c_total` over every row
+    # carrying a distinct one, which on a partially columned list are
+    # different populations: taps-scale.txt has 141 of the first and 20 of
+    # the second, and dividing across them reported 84% copies where the
+    # rows counted both ways say 44.7%. A row missing either number is not
+    # evidence of anything, so it is in neither half of the fraction.
+    paired = sum(row[2] for row in rows
+                 if len(row) > 3 and row[2] is not None and row[3] is not None)
+    if paired == total:
+        print("content: %d distinct items (%.0f%% of the rows are copies)"
+              % (c_total, (1 - c_total / paired) * 100))
+    else:
+        print("content: %d distinct items in the %d rows counted both ways "
+              "(%.0f%% of those are copies); %d rows carry an entry count "
+              "only" % (c_total, len(content),
+                        (1 - c_total / paired) * 100,
+                        len(ranked) - len(content)))
+    print(_concentration_line(content, 3, " of content"))
 
 
 def _ensure(taps: Path, relock: bool = False) -> int:

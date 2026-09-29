@@ -90,7 +90,8 @@
 #
 # The same table is why the concentration is not fixed by trimming: dropping
 # the big repo raises every number. Diluting it means adding breadth. The
-# ceiling in eval_corpus.py (MAX_SHARE) is a ratchet against making it worse.
+# ceilings in eval_corpus.py (MAX_ROW_SHARE, MAX_CONTENT_SHARE) are
+# ratchets against making it worse.
 #
 # NOTE: `boost tap --defaults` is NOT sufficient — it taps only skill repos and
 # scores 0.000 on every rule and workflow query (overall recall ~0.33). That is

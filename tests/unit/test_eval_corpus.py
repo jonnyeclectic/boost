@@ -1736,3 +1736,103 @@ class TestRefreshPinsARowThatArrivedBare:
                             {"short/x": 1, "much-longer-owner/repo": 2},
                             {"short/x": "a" * 40, "much-longer-owner/repo": "b" * 40})
         assert "short/x                %s     1" % ("a" * 40) in out
+
+
+class TestPrintConcentration:
+    """The report itself, which had no coverage while the gate had plenty.
+
+    Both bugs it grew were in the printing rather than the judging: a run can
+    state a number the gate never tested, or divide two counts of different
+    rows, and exit 0 either way. A green exit code is exactly what stops
+    anyone re-reading the line above it.
+    """
+
+    SHA: ClassVar[str] = "a" * 40
+
+    def _rows(self, *specs):
+        m = _load()
+        text = "".join("r%d/x %s %s\n" % (i, self.SHA,
+                                          " ".join(str(v) for v in spec))
+                       for i, spec in enumerate(specs))
+        return m._rows(text)
+
+    def test_the_copies_ratio_divides_rows_counted_both_ways(self, capsys):
+        # 100 + 900 entries, but only the 100-entry row says how much of it
+        # is distinct. Dividing 50 by 1000 calls the corpus 95% copies; the
+        # row that was actually measured says half of it is.
+        m = _load()
+        m._print_concentration(self._rows((100, 50), (900,), (900,)))
+        out = capsys.readouterr().out
+        assert "50 distinct items in the 1 rows counted both ways" in out
+        assert "(50% of those are copies)" in out
+        assert "95%" not in out
+
+    def test_a_fully_columned_list_says_plainly_what_it_measured(self, capsys):
+        # No qualifier when every row carries both numbers, because there is
+        # no second population to distinguish it from.
+        m = _load()
+        m._print_concentration(self._rows((100, 50), (100, 100),
+                                          (100, 100), (100, 100)))
+        out = capsys.readouterr().out
+        assert "350 distinct items (12% of the rows are copies)" in out
+        assert "counted both ways" not in out
+
+    def test_the_uncounted_rows_are_named_not_hidden(self, capsys):
+        m = _load()
+        m._print_concentration(self._rows((100, 50), (900,), (900,)))
+        assert "2 rows carry an entry count only" in capsys.readouterr().out
+
+    def test_a_share_the_gate_declined_to_judge_says_so(self, capsys):
+        # The regression this class exists for: two repos cannot get a top
+        # content share under 40%, so check_concentration returns None --
+        # and the report used to print "is 99.0% of content" beside that
+        # silence, which reads as a violation that passed.
+        m = _load()
+        rows = self._rows((99, 99), (1, 1))
+        assert m.check_concentration(rows, column=3) is None
+        m._print_concentration(rows)
+        out = capsys.readouterr().out
+        assert "concentration of content: not judged" in out
+        assert "2 repos cannot clear a 40% ceiling" in out
+        assert "smallest possible top share is 50%" in out
+        assert "is 99.0%" not in out.split("of content")[-1]
+
+    def test_a_judgeable_corpus_still_reports_its_share(self, capsys):
+        # The floor must not swallow the real check: three rows clear it.
+        m = _load()
+        rows = self._rows((98, 98), (1, 1), (1, 1))
+        m._print_concentration(rows)
+        out = capsys.readouterr().out
+        assert "concentration of content: r0/x is 98.0%" in out
+        assert "not judged" not in out
+
+    def test_the_row_column_carries_its_own_floor(self, capsys):
+        # MAX_ROW_SHARE is 0.65, so its floor is two repos -- one is not
+        # judged, and the line says why rather than reporting 100%.
+        m = _load()
+        rows = self._rows((10,))
+        assert m.check_concentration(rows, column=2) is None
+        m._print_concentration(rows)
+        out = capsys.readouterr().out
+        assert "concentration: not judged" in out
+        assert "1 repos cannot clear a 65% ceiling" in out
+
+    def test_the_printed_verdict_matches_the_gate_on_the_shipped_list(
+            self, capsys):
+        # The two must never disagree: a printed share with no matching gate
+        # result is the failure mode, so assert the pairing on real data.
+        m = _load()
+        rows = m._rows(_TAPS.read_text(encoding="utf-8"))
+        m._print_concentration(rows)
+        out = capsys.readouterr().out
+        for column, noun in ((2, ""), (3, " of content")):
+            assert "concentration%s: not judged" % noun not in out
+            assert m.check_concentration(rows, column=column) is None
+
+    def test_a_list_with_no_distinct_counts_prints_no_content_lines(
+            self, capsys):
+        m = _load()
+        m._print_concentration(self._rows((10,), (10,), (10,)))
+        out = capsys.readouterr().out
+        assert "content:" not in out
+        assert "of content" not in out
