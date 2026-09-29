@@ -2,14 +2,14 @@
 id: util-rmtree-chmods-a-symlink-target-outside-the-tree
 board: code
 section: trust
-status: planned
+status: inflight
 category: Core · Bug
 complexity: S
 impact: Med
 wow: 3
 note: the read-only retry hook follows a symlink and chmods the file it points at
 order: 237
-owner:
+owner: loop/rmtree-symlink-hook
 pr:
 title: "<code>util.rmtree</code>'s retry hook <code>chmod</code>s a symlink's target, outside the tree it is deleting"
 ---
@@ -41,3 +41,21 @@ into the user's home is one command away. The fix is small &middot; use
 the retry entirely for a path that <code>os.path.islink</code> reports, since a symlink's own mode is
 not what blocked the unlink. A test wants a link inside the tree pointing at a
 <code>0o400</code> file outside it, asserting the target's mode is unchanged after the delete.
+
+<b>Implementing it turned up a second, worse instance of the same bug, which this card did not
+know about.</b> Hand <code>util.rmtree</code> a symlink <em>as its argument</em> and
+<code>shutil.rmtree</code> refuses it by calling the error hook with <code>func</code> set to
+<code>os.path.islink</code>. The old hook chmodded straight through the link and then called
+<code>os.path.islink(path)</code>, which answers True without raising &middot; so the hook returned,
+<code>rmtree</code> returned, and the caller was told a tree had been removed when nothing had.
+Measured: link intact, target directory intact with its contents, target's mode 0o755 &rarr; 0o200.
+Silent, and independent of any 0o500 &mdash; the first variant at least raises.
+
+<b>The repair the card proposed was the wrong one.</b>
+<code>os.chmod(..., follow_symlinks=False)</code> needs <code>lchmod</code>, which
+<code>os.supports_follow_symlinks</code> does not report everywhere this runs (measured True on
+darwin), so it buys a platform branch that cannot be exercised on the runner &mdash; an unkillable
+mutant by construction. It is also treating a mode that was never the blocker: unlinking is gated by
+the parent directory's write bit, not the link's own mode, which is why the retry fails a second
+time in the first variant. Re-raising the exception the hook was handed is correct on both counts
+and needs no branch.

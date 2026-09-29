@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>512</b><span>Loop finds</span></div>
+      <div class="stat"><b>513</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -7478,7 +7478,7 @@ the stripped block. Found while verifying
       </article>
 
       <article class="cap rcard" id="util-rmtree-chmods-a-symlink-target-outside-the-tree">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Core · Bug</span></div>
         <h3><code>util.rmtree</code>'s retry hook <code>chmod</code>s a symlink's target, outside the tree it is deleting</h3>
         <p><code>util.rmtree</code> installs an error handler so a read-only file cannot strand a delete: on
 failure it <code>chmod</code>s the path and retries. The handler is handed the path that failed, and
@@ -7507,7 +7507,25 @@ into the user's home is one command away. The fix is small &middot; use
 <code>os.chmod(..., follow_symlinks=False)</code> where the platform supports it, and otherwise skip
 the retry entirely for a path that <code>os.path.islink</code> reports, since a symlink's own mode is
 not what blocked the unlink. A test wants a link inside the tree pointing at a
-<code>0o400</code> file outside it, asserting the target's mode is unchanged after the delete.</p>
+<code>0o400</code> file outside it, asserting the target's mode is unchanged after the delete.
+
+<b>Implementing it turned up a second, worse instance of the same bug, which this card did not
+know about.</b> Hand <code>util.rmtree</code> a symlink <em>as its argument</em> and
+<code>shutil.rmtree</code> refuses it by calling the error hook with <code>func</code> set to
+<code>os.path.islink</code>. The old hook chmodded straight through the link and then called
+<code>os.path.islink(path)</code>, which answers True without raising &middot; so the hook returned,
+<code>rmtree</code> returned, and the caller was told a tree had been removed when nothing had.
+Measured: link intact, target directory intact with its contents, target's mode 0o755 &rarr; 0o200.
+Silent, and independent of any 0o500 &mdash; the first variant at least raises.
+
+<b>The repair the card proposed was the wrong one.</b>
+<code>os.chmod(..., follow_symlinks=False)</code> needs <code>lchmod</code>, which
+<code>os.supports_follow_symlinks</code> does not report everywhere this runs (measured True on
+darwin), so it buys a platform branch that cannot be exercised on the runner &mdash; an unkillable
+mutant by construction. It is also treating a mode that was never the blocker: unlinking is gated by
+the parent directory's write bit, not the link's own mode, which is why the retry fails a second
+time in the first variant. Re-raising the exception the hook was handed is correct on both counts
+and needs no branch.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -7569,6 +7587,42 @@ was: bare <code>uninstall</code> can now act in an unmarked directory, so a clon
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">a materialization path of src/core passes the containment check and is removed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="is-dir-follows-a-symlink-at-three-rmtree-call-sites">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Bug</span></div>
+        <h3>Three <code>util.rmtree</code> call sites guard with <code>is_dir()</code>, which a symlink satisfies</h3>
+        <p><code>Path.is_dir()</code> and <code>Path.exists()</code> follow symlinks, so a link pointing at a
+directory passes both. Three callers use one of them as the guard before
+<code>util.rmtree</code>: <code>store.uninstall_project</code> (<code>not path.is_dir()</code> on a
+path the project lock names), <code>store.uninstall</code> (<code>dest.exists()</code> on the
+canonical store directory), and <code>boost prune</code> in <code>commands/pkg.py</code>
+(<code>target.is_dir()</code>). A fourth, the snapshot restore in the same file, already gets it
+right with <code>child.is_dir() and not child.is_symlink()</code> &middot; so the distinction was
+known once and was not applied consistently.
+
+Until the <code>rmtree</code> retry hook was fixed, reaching any of the three was silent and
+destructive-adjacent: nothing was deleted and the link's target had its mode rewritten outside the
+tree. The hook now re-raises, so the same input surfaces as an <code>OSError</code> instead &middot;
+which is the right direction and still not the right ending. <code>uninstall_project</code> would
+abort mid-loop having removed some materializations and not others, and report a raw
+<code>OSError</code> rather than a <code>BoostError</code> with a hint, for a store the user can
+actually repair.
+
+The containment layer is not what is missing here. <code>scopes.resolve_in_base</code> refuses a
+path that resolves outside the base, and PR #998's verification confirmed a planted victim survives
+every escape attempt byte-for-byte. What is missing is a decision about a link that resolves
+<em>inside</em> the base: remove the link and count it, or refuse with a message naming the path.
+Overlaps
+<a href="#project-uninstall-deletes-any-in-repo-directory-the-lock-names">project-uninstall-deletes-any-in-repo-directory-the-lock-names</a>,
+which owns the wider question of what the lock is allowed to name &middot; whichever lands first
+should take the guard with it.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">Path.is_dir() and .exists() both follow links, so the guard admits a link</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
