@@ -57,6 +57,13 @@ def project_root(start=None) -> Path | None:
     ``boost install --local`` run from ``src/deep/nested`` must write into the
     repo's ``.claude/skills``, not create a stray one three levels down.
 
+    **This is the marker walk, not the answer to "where is the project".** That
+    is :func:`resolve_base`, which adds the unmarked-directory fallback, and it
+    is what every caller should use — a command that asks this one directly
+    disagrees with ``install --local`` about whether an unmarked directory is a
+    project, which is how ``verify``/``list``/``doctor``/``uninstall`` came to
+    deny skills that ``install`` had just written and ``sync`` could still see.
+
     ``$HOME`` is never a project, even when it is itself a repo (dotfile setups
     do this). A "project" install into ``$HOME`` would write to exactly the
     directories user scope owns — ``~/.claude/skills`` and friends — so the two
@@ -101,11 +108,63 @@ def resolve_base(scope: str, base=None, start=None) -> Path | None:
     found = project_root(start)
     if found is not None:
         return found
-    here = Path(start) if start is not None else Path.cwd()
+    if start is not None:
+        here = Path(start)
+    else:
+        try:
+            here = Path.cwd()
+        except OSError:
+            # No cwd to fall back to — a working directory deleted out from
+            # under the process. `project_root` has always answered None here;
+            # this must too, or the readers that now come through this function
+            # crash where they used to print a user-scope answer and exit 0.
+            return None
     with suppress(OSError):
         if here.resolve() == Path(paths.home()).resolve():
             return None
     return here
+
+
+def owned_by(entries: dict, base) -> dict:
+    """The entries of ``entries`` this project owns — ``{}`` when ``base`` is None.
+
+    Rules and workflows installed with ``--local`` materialize into the repo but
+    are recorded in the *user* lock, tagged ``scope``/``base``, because a project
+    lock holds skills and nothing else. So "what has this repo got?" is a filter
+    over the user lock, not a different file, and a caller that skips the filter
+    reports another checkout's rules as this one's.
+
+    Both sides are resolved before comparing. ``base`` reaches the lock as a
+    string written by whichever call installed it, and on macOS a ``$HOME``
+    under ``/var/folders`` resolves to ``/private/var/...`` — comparing one
+    resolved path against one nominal one never matches, the same trap
+    :func:`store.resolves_into_store` documents. ``realpath`` rather than
+    ``Path.resolve``: it answers for a path that does not exist or loops
+    instead of raising, so there is no error branch here that no input can
+    reach and no test can cover.
+    """
+    if base is None:
+        return {}
+    want = os.path.realpath(base)
+    return {n: e for n, e in entries.items()
+            if e.get("scope") == SCOPE_PROJECT and _claims(e.get("base"), want)}
+
+
+def _claims(recorded, want: str) -> bool:
+    """Does a lock entry's recorded ``base`` name the directory ``want``?
+
+    A lock is a file on disk that anything can write, so this takes what it
+    finds rather than what it expects: a `base` that is missing, empty, not a
+    string, or *relative* is not a claim on any particular directory. Relative
+    is the one that looks harmless and is not — `realpath` would resolve it
+    against whatever directory the user happens to be standing in, so `"."`
+    would make one entry belong to every repo at once.
+    """
+    if not recorded or not isinstance(recorded, str | os.PathLike):
+        return False
+    if not os.path.isabs(recorded):
+        return False
+    return os.path.realpath(recorded) == want
 
 
 def check_scope(scope: str) -> str:

@@ -742,6 +742,31 @@ def cmd_install(argv: list[str]) -> int:
 
 # ── uninstall ────────────────────────────────────────────────────────────
 
+def _project_fallback(names: list[str]) -> tuple[list[str], Path | None]:
+    """Which of ``names`` a bare ``uninstall`` would remove from the repo, and where.
+
+    Bare uninstall prefers user scope and only falls back to the repo for a name
+    the project lock records. That fallback resolves its base the way
+    ``install --local`` writes one, so an unmarked directory counts too — and in
+    an extracted copy of a repo that carries a committed ``.boost/`` but no
+    ``.git``, someone typing ``boost uninstall x`` meaning their user config
+    would be deleting files in the cwd. The prompt says so rather than letting
+    the success line be the first mention of where.
+
+    It returns the *subset*, not a yes/no, because a batch can be both: "all of
+    them" and "these two of the five" are different sentences, and answering
+    the second with the first would either claim the whole batch comes out of
+    the repo or — the other way round — drop the warning entirely for the
+    mixed case, which is the one the reader is least likely to have in mind.
+    """
+    base = scopes.resolve_base(scopes.SCOPE_PROJECT)
+    if base is None:
+        return [], None
+    here = [n for n in names
+            if lockfile.find_any(n) is None and projectlock.get_skill(base, n)]
+    return here, (base if here else None)
+
+
 def cmd_uninstall(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost uninstall",
@@ -760,9 +785,24 @@ def cmd_uninstall(argv: list[str]) -> int:
     # silent no-op exiting 1. A pipeline that cannot see the prompt keeps the
     # behaviour it has today; the prompt is a speed bump for humans only.
     if sys.stdin.isatty() and not args.yes:
-        prompt = ("uninstall %s?" % args.names[0] if len(args.names) == 1 else
-                  "uninstall %d skills: %s?" % (len(args.names),
-                                                ", ".join(args.names)))
+        what = (args.names[0] if len(args.names) == 1 else
+                "%d skills: %s" % (len(args.names), ", ".join(args.names)))
+        if args.scope == scopes.SCOPE_PROJECT:
+            from_repo, where = list(args.names), scopes.resolve_base(
+                scopes.SCOPE_PROJECT)
+        else:
+            from_repo, where = _project_fallback(args.names)
+        if where is None:
+            prompt = "uninstall %s?" % what
+        elif len(from_repo) == len(args.names):
+            prompt = "uninstall %s from %s?" % (what, _tilde(where))
+        else:
+            # Part of the batch comes out of the repo and part out of the user
+            # store. Saying "from <repo>" would describe the wrong half, and
+            # saying nothing would drop the warning for the case the reader is
+            # least likely to expect — so name which ones.
+            prompt = "uninstall %s? (%s from %s)" % (
+                what, ", ".join(from_repo), _tilde(where))
         if not out.confirm(prompt):
             out.info("cancelled")
             return 1
