@@ -61,6 +61,13 @@ class BoostArgumentParser(argparse.ArgumentParser):
             # `out.c(..., DIM)`, and argparse's own reset after "usage: " ends
             # the dim two words in. Boost paints this text itself, against the
             # stream it is written to, so argparse must not paint it first.
+            #
+            # Unlike `formatter_class` above, argparse *does* forward this one
+            # down: `add_parser` fills `kwargs['color']` from the parent
+            # (3.14's argparse.py:1252) before building the sub-parser. It is
+            # still set here rather than in `parser()` because `add_parser`
+            # builds through `type(self)`, so `__init__` is the one door every
+            # parser comes through.
             kwargs.setdefault("color", False)
         super().__init__(*args, **kwargs)
 

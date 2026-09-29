@@ -167,9 +167,16 @@ class TestUsageColourFollowsStderr:
         assert "\x1b[" not in p.format_help()
 
     def test_a_subparser_does_not_paint_it_either(self, monkeypatch):
-        """`add_subparsers` builds each one through `type(self)(**kwargs)`
-        without forwarding what `parser()` was given, so the default has to
-        be set in `__init__` -- the same reason `formatter_class` is."""
+        """Every `boost <cmd> --help` is a sub-parser, so the property has to
+        hold there too.
+
+        It holds by inheritance rather than by the `setdefault`: unlike
+        `formatter_class`, argparse forwards `color` down explicitly, filling
+        `add_parser`'s kwargs from the parent (3.14's argparse.py:1252) and
+        stamping `action._color` at :1979. So this pins argparse's forwarding
+        and the user-visible result -- not where boost sets the default,
+        which the test cannot distinguish.
+        """
         monkeypatch.setenv("PYTHON_COLORS", "1")
         sub = cliparse.parser(prog="boost").add_subparsers().add_parser("demo")
         sub.add_argument("name")

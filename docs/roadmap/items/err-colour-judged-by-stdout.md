@@ -101,11 +101,15 @@ bump. It is worse than a leak here because the two paints nest: boost wraps
 the usage in one <code>out.c(..., DIM)</code> span, and argparse's own reset
 after <code>usage: </code> ends the dim two words in. So
 <code>__init__</code> now defaults <code>color=False</code> on 3.14+, next to
-the <code>formatter_class</code> default and for the same reason —
-<code>add_subparsers</code> builds each sub-parser through
-<code>type(self)(**kwargs)</code> without forwarding what <code>parser()</code>
-was given. Boost paints this text itself, against the stream it is written
-to; argparse must not paint it first. It surfaced as a red mutation gate: on
+the <code>formatter_class</code> default but <i>not</i> for the same reason:
+argparse forwards this one down explicitly, filling <code>add_parser</code>'s
+kwargs from the parent (3.14's <code>argparse.py:1252</code>) and stamping
+<code>action._color</code> at <code>:1979</code>, so a sub-parser inherits
+<code>False</code> rather than re-defaulting it. It sits in
+<code>__init__</code> because <code>add_parser</code> builds through
+<code>type(self)</code>, which is the one door every parser comes through.
+Boost paints this text itself, against the stream it is written to; argparse
+must not paint it first. It surfaced as a red mutation gate: on
 3.14 the assertion that a redirected stderr carries no escape at all read
 <code>'Error: the ...ame\x1b[0m\n'</code> — argparse's green
 <code>name</code> at the end of the usage it had just coloured by the wrong
