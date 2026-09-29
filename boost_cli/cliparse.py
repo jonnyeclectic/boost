@@ -52,12 +52,30 @@ class BoostArgumentParser(argparse.ArgumentParser):
         # than in parser() below) is what brands every subcommand's --help
         # too, not just the top-level one.
         kwargs.setdefault("formatter_class", _BoostHelpFormatter)
+        if sys.version_info >= (3, 14):
+            # 3.14's argparse paints its own usage and help, and decides
+            # whether to by asking `_colorize.can_colorize()`, which defaults
+            # to `sys.stdout` -- so `boost install 2>log` on a terminal wrote
+            # escape sequences into the log, the same wrong question `error()`
+            # below was fixed for. Worse, they nest: the usage goes out inside
+            # `out.c(..., DIM)`, and argparse's own reset after "usage: " ends
+            # the dim two words in. Boost paints this text itself, against the
+            # stream it is written to, so argparse must not paint it first.
+            #
+            # Unlike `formatter_class` above, argparse *does* forward this one
+            # down: `add_parser` fills `kwargs['color']` from the parent
+            # (3.14's argparse.py:1252) before building the sub-parser. It is
+            # still set here rather than in `parser()` because `add_parser`
+            # builds through `type(self)`, so `__init__` is the one door every
+            # parser comes through.
+            kwargs.setdefault("color", False)
         super().__init__(*args, **kwargs)
 
     def error(self, message: str):
         """Print a branded error + dimmed usage, then exit 2 (argparse's code)."""
         out.err(message)
-        sys.stderr.write(out.c(self.format_usage(), out.DIM))
+        sys.stderr.write(out.c(self.format_usage(), out.DIM,
+                               stream=sys.stderr))
         self.exit(2)
 
 

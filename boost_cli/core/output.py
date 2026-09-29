@@ -84,9 +84,18 @@ def _span(code: str, text: str) -> str:
     return "\n".join(code + line + RESET for line in text.split("\n"))
 
 
-def c(text: str, *styles: str) -> str:
-    """Wrap text in the given SGR styles + RESET; plain when color is off."""
-    if not styles or not use_color():
+def c(text: str, *styles: str, stream=None) -> str:
+    """Wrap text in the given SGR styles + RESET; plain when color is off.
+
+    ``stream`` is the stream the painted text is about to be written to, and
+    it is what decides whether to paint — the rule :func:`role` already
+    follows. Defaulting to stdout is right for the emitters that print there
+    and wrong for every one that does not, and each case got the other's
+    answer: `boost … 2>log` on a terminal wrote five escape sequences into
+    the log, while `boost … >out` printed `Error:` on the terminal with no
+    colour at all. Keyword-only, because the styles are varargs.
+    """
+    if not styles or not use_color(stream):
         return text
     return _span("".join(styles), text)
 
@@ -307,7 +316,7 @@ def err(msg: str, hint: str | None = None, wrap: bool = False) -> None:
     _stdout_first(sys.stderr)
     head = "Error: "
     body = _wrap_lines(msg, len(head)) if wrap else [msg]
-    print(c(head, RED, BOLD) + body[0], file=sys.stderr)
+    print(c(head, RED, BOLD, stream=sys.stderr) + body[0], file=sys.stderr)
     for line in body[1:]:
         print(" " * len(head) + line, file=sys.stderr)
     if hint:
@@ -316,7 +325,8 @@ def err(msg: str, hint: str | None = None, wrap: bool = False) -> None:
         # `if hint` above guarantees splitlines() is non-empty.
         for para in hint.splitlines():
             lines.extend(_wrap_lines(para, len(lead)) if para else [""])
-        print(c(lead + ("\n" + " " * len(lead)).join(lines), DIM),
+        print(c(lead + ("\n" + " " * len(lead)).join(lines), DIM,
+                stream=sys.stderr),
               file=sys.stderr)
 
 
@@ -377,7 +387,8 @@ def heading(msg: str, stream=None) -> None:
     # 16-color fallback, plain under NO_COLOR) so every command's headers read
     # as one system.
     _stdout_first(stream)
-    print(role("==>", "accent") + " " + c(msg, BOLD), file=stream)
+    print(role("==>", "accent", stream=stream) + " "
+          + c(msg, BOLD, stream=stream), file=stream)
 
 
 def verdict(ok: bool, msg: str) -> None:
@@ -1160,7 +1171,7 @@ def table(rows, headers=None, stream=None, keep=(), text=(),
     if headers:
         # Bold each header cell individually: a whole-line wrap would be
         # cancelled at the first separator's RESET on color terminals.
-        cells = [c(fmt(str(headers[i]), i), BOLD)
+        cells = [c(fmt(str(headers[i]), i), BOLD, stream=stream)
                  for i in show if i < len(headers)]
         print(sep.join(cells).rstrip(), file=stream)
     for r in rows:
