@@ -10,7 +10,7 @@ wow: 4
 note: taps.txt rows gained a distinct-content count and the gate gained a second ceiling. The raw count stays — BM25 indexes without de-duplicating, so the copies really are documents — but sickn33 is 61.8% of the rows and 35.7% of the content, and only one number was being floored.
 order: 208
 owner: loop/eval-corpus-distinct-count
-pr:
+pr: 992
 title: The eval corpus's size and its concentration ceiling are counted with <code>len(scan_dir)</code> — the measure <code>measure_registry.py</code> exists to say is wrong — so 44.7% of the gate's corpus is vendored …
 ---
 <b>SHIPPED.</b> taps.txt rows gained a fourth field — the distinct-content count — and the concentration gate became two ceilings instead of one.
