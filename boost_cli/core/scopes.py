@@ -128,24 +128,17 @@ def owned_by(entries: dict, base) -> dict:
     string written by whichever call installed it, and on macOS a ``$HOME``
     under ``/var/folders`` resolves to ``/private/var/...`` — comparing one
     resolved path against one nominal one never matches, the same trap
-    :func:`store.resolves_into_store` documents.
+    :func:`store.resolves_into_store` documents. ``realpath`` rather than
+    ``Path.resolve``: it answers for a path that does not exist or loops
+    instead of raising, so there is no error branch here that no input can
+    reach and no test can cover.
     """
     if base is None:
         return {}
-    with suppress(OSError):
-        base = Path(base).resolve()
-
-    def here(entry) -> bool:
-        if entry.get("scope") != SCOPE_PROJECT:
-            return False
-        eb = entry.get("base")
-        if not eb:
-            return False
-        with suppress(OSError):
-            return Path(eb).resolve() == base
-        return False
-
-    return {n: e for n, e in entries.items() if here(e)}
+    want = os.path.realpath(base)
+    return {n: e for n, e in entries.items()
+            if e.get("scope") == SCOPE_PROJECT and e.get("base")
+            and os.path.realpath(e["base"]) == want}
 
 
 def check_scope(scope: str) -> str:
