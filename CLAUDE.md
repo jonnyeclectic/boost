@@ -170,8 +170,8 @@ into a quietly weaker gate that still reports a number. Consequences:
 
 - **A subset corpus can no longer score `golden.jsonl`.** The six-repo
   comparison figure is historical for this reason, not stale. `taps-scale.txt`
-  is fine — it is a superset of `taps.txt` (149 rows ⊇ 20), so `eval-scale.yml`
-  keeps scoring the same set.
+  is fine — it holds every row of `taps.txt` and 129 more, so
+  `eval-scale.yml` keeps scoring the same set.
 - **A pin move can invalidate a path.** `eval-corpus-refresh.yml`'s re-baseline
   step is not `continue-on-error`, so a renamed file stops the monthly refresh
   before its pull request opens. That is the intended signal and the fix is to
