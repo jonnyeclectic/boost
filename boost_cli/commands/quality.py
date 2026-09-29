@@ -634,6 +634,8 @@ def cmd_doctor(argv):
     for kind, section in (("rule", rules), ("workflow", workflows)):
         for name, entry in sorted(section.items()):
             for m in entry.get("materializations") or []:
+                if not store.materialization_is_written(kind, entry, m):
+                    continue  # named once below, not reported as rot
                 if m.get("unwritable"):
                     # Refused at install, so `boost reinstall` would be refused
                     # too until the dir allows it; the agent-dir line below
@@ -654,6 +656,8 @@ def cmd_doctor(argv):
             p = Path(m.get("path", ""))
             if m.get("unwritable"):
                 continue
+            if not store.materialization_is_written("rule", entry, m):
+                continue
             if m.get("mode") == "claude":
                 try:
                     present = p.exists() and ("boost:rule:%s start" % name) in \
@@ -668,10 +672,29 @@ def cmd_doctor(argv):
                 mat_issues += 1
     for name, entry in sorted(workflows.items()):
         for m in entry.get("materializations") or []:
+            if not store.materialization_is_written("workflow", entry, m):
+                continue
             if not m.get("unwritable") and not Path(m.get("path", "")).is_file():
                 bad("workflow", "workflow %s missing its %s file — run `boost reinstall %s`"
                     % (name, m.get("agent", "?"), name))
                 mat_issues += 1
+    # Said once, as a note rather than an issue: the row is there because the
+    # user disabled the agent after installing, which is their decision, and
+    # the two ways out are theirs to pick. Reporting it as a fault instead is
+    # what kept `boost doctor` at one permanent issue whose remedy could not
+    # run -- see `store.materialization_is_written`.
+    off = store.disabled_agent_materializations()
+    if off:
+        agents_off = sorted({a for _k, _n, a in off})
+        rep.note("disabled-agent-materializations",
+                 "%d recorded materialization%s %s to a disabled agent "
+                 "(%s) and %s not written: re-enable the agent in "
+                 "~/.boost/config.json and run `boost sync`, or "
+                 "`boost uninstall` the item to drop the record"
+                 % (len(off), _s(len(off)),
+                    "belongs" if len(off) == 1 else "belong",
+                    ", ".join(agents_off), "is" if len(off) == 1 else "are"),
+                 wrap=True)
     if (all_rules or all_workflows) and not mat_issues:
         # Quarantined rules/workflows are excluded above so their stashed-but-
         # removed materializations don't read as rot — but excluding them from
@@ -688,6 +711,11 @@ def cmd_doctor(argv):
                 bits.append("%d workflow%s" % (quarantined_workflows,
                                                _s(quarantined_workflows)))
             note = " (%s quarantined)" % " and ".join(bits)
+        if off:
+            # Without this the line reads as a flat contradiction of the note
+            # right above it: "fully materialized" is true of the agents boost
+            # writes, and that is now a smaller set than the rows record.
+            note += " for every enabled agent"
         rep.ok("rules-workflows", "%d rule%s and %d workflow%s fully materialized%s"
                % (len(rules), _s(len(rules)), len(workflows), _s(len(workflows)),
                   note))

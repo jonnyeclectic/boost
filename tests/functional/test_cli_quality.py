@@ -2792,3 +2792,88 @@ class TestDoctorAndHealAgreeOnAFileAtTheCachePath:
                 "aside" in doc)
         assert "writable" not in doc
         assert "move ~/.boost/cache aside" in heal
+
+
+class TestARowForADisabledAgent:
+    """`boost sync` and `boost doctor` on a row boost will never write again.
+
+    Disable an agent after installing a rule and its recorded row stays --
+    deliberately, because the row is what makes a `CLAUDE.md` block removable
+    later. Every surface used to read the absent file as rot: `boost sync`
+    printed "re-materialized rule <name>" on every run and `boost doctor` kept
+    one issue whose remedy (`boost reinstall`) had already been run and could
+    not help (sync-repairs-a-disabled-agents-row-every-run).
+    """
+
+    def _seed(self, name="house"):
+        from boost_cli.core import lockfile
+        rp = paths.home() / ".cursor" / "rules" / ("%s.mdc" % name)
+        lockfile.set_rule(name, {"kind": "rule", "materializations": [
+            {"agent": "cursor", "mode": "file", "path": str(rp)}]})
+        return rp
+
+    @staticmethod
+    def _disable(agent="cursor"):
+        from boost_cli.core import config
+        cfg = config.load()
+        cfg["agents"][agent]["enabled"] = False
+        config.save(cfg)
+
+    def test_sync_says_everything_in_sync_on_the_second_run(self, boost,
+                                                            sandbox):
+        self._seed()
+        self._disable()
+        assert "everything in sync" in boost("sync").out
+        # the run the bug made impossible: before it, both said
+        # "re-materialized rule house", forever
+        assert "everything in sync" in boost("sync").out
+
+    def test_doctor_names_the_row_once_and_stays_rc0(self, boost, sandbox):
+        self._seed()
+        self._disable()
+        r = boost("doctor")                       # rc 0, not 1
+        assert "1 recorded materialization belongs to a disabled agent " \
+               "(cursor)" in r.out
+        assert "boost uninstall" in r.out
+        assert "missing its cursor materialization" not in r.out
+        assert "issue needs attention" not in r.out
+        # and the count line must not read as a flat contradiction of it
+        assert "1 rule and 0 workflows fully materialized " \
+               "for every enabled agent" in r.out
+
+    def test_the_same_row_is_rot_again_once_the_agent_is_back(self, boost,
+                                                              sandbox):
+        self._seed()
+        self._disable()
+        boost("doctor")
+        from boost_cli.core import config
+        cfg = config.load()
+        cfg["agents"]["cursor"]["enabled"] = True
+        config.save(cfg)
+        r = boost("doctor", expect=1)
+        assert "rule house missing its cursor materialization" in r.out
+
+    def test_a_refused_row_of_a_disabled_agent_is_not_an_issue_either(
+            self, boost, sandbox):
+        """The card's own measured case: the dir was locked on purpose, so
+        the row was recorded `unwritable: true` and the user then disabled the
+        agent. Doctor said "was not written for cursor … `boost sync` writes
+        it once it is", which two decisions ago stopped being true."""
+        from boost_cli.core import lockfile
+        rp = paths.home() / ".cursor" / "rules" / "house.mdc"
+        rp.parent.mkdir(parents=True)
+        lockfile.set_rule("house", {"kind": "rule", "materializations": [
+            {"agent": "cursor", "mode": "file", "path": str(rp),
+             "unwritable": True}]})
+        rp.parent.chmod(0o500)
+        try:
+            assert "was not written for cursor" in boost("doctor", expect=1).out
+            self._disable()
+            r = boost("doctor")
+            assert "was not written for cursor" not in r.out
+            assert "issue needs attention" not in r.out
+            # and the locked dir stops being boost's to report, since the
+            # `chmod u+w` it would name ends in a write never attempted
+            assert "not writable" not in r.out
+        finally:
+            rp.parent.chmod(0o700)

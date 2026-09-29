@@ -4889,3 +4889,124 @@ class TestRefusingDir:
         finally:
             dot.chmod(0o700)
 
+
+
+class TestARowForADisabledAgentIsNotRot:
+    """A materialization boost will never write again is not a fault to fix.
+
+    An install records a row per agent and `_refused_materializations` carries
+    the untouched ones forward on purpose — a rule's row is what makes its
+    `CLAUDE.md` block removable later. Disable that agent afterwards and every
+    check that read the rows treated the absent file as rot: `sync_plan` put
+    it in `missing_materializations`, `sync_apply` repaired it by calling
+    `install`, `install` writes only `agents.materializing_agents`, and the
+    next run found it missing again. Measured on the real CLI before the fix —
+    `boost sync` printed "re-materialized rule team-conventions" on three
+    consecutive runs and `boost doctor` kept one issue whose remedy
+    (`boost reinstall`) had already been run and could not help
+    (sync-repairs-a-disabled-agents-row-every-run).
+    """
+
+    KIND_FILE: ClassVar[dict[str, tuple[str, str]]] = {
+        "rule": ("rules", "team-conventions.mdc"),
+        "workflow": ("commands", "ship-it.md")}
+
+    @staticmethod
+    def _disable(agent):
+        cfg = config.load()
+        cfg["agents"][agent]["enabled"] = False
+        config.save(cfg)
+
+    def _install(self, tap, kind):
+        entry = _rule_entry(tap) if kind == "rule" else _workflow_entry(tap)
+        catalog.rebuild_tap(tap)          # so sync's repair could find it
+        store.install(entry)
+        return entry
+
+    def _cursor_file(self, kind):
+        sub, leaf = self.KIND_FILE[kind]
+        return paths.home() / ".cursor" / sub / leaf
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_sync_converges_instead_of_repairing_the_same_row_forever(
+            self, tap, kind):
+        self._install(tap, kind)
+        f = self._cursor_file(kind)
+        assert f.is_file()                # cursor was written while enabled
+        self._disable("cursor")
+        f.unlink()
+
+        first = store.sync_apply(store.sync_plan())
+        assert not any("re-materialized" in a for a in first), first
+        # the second run is the one the bug made impossible
+        assert store.sync_plan()["missing_materializations"] == []
+        assert store.sync_apply(store.sync_plan()) == []
+        assert not f.exists(), "a disabled agent must not be written either"
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_re_enabling_the_agent_makes_it_repairable_again(self, tap, kind):
+        entry = self._install(tap, kind)
+        f = self._cursor_file(kind)
+        self._disable("cursor")
+        f.unlink()
+        assert store.sync_plan()["missing_materializations"] == []
+
+        cfg = config.load()
+        cfg["agents"]["cursor"]["enabled"] = True
+        config.save(cfg)
+        assert store.sync_plan()["missing_materializations"] == [
+            (kind, entry["name"])]
+        store.sync_apply(store.sync_plan())
+        assert f.is_file()
+
+    def test_an_unwritable_dir_of_a_disabled_agent_is_not_reported(self, tap):
+        """`unwritable_agent_dirs` names dirs boost writes into, and a
+        disabled agent's is not one — its remedy ends in a write that would
+        never be attempted."""
+        store.install(_rule_entry(tap))
+        d = paths.home() / ".cursor" / "rules"
+        d.chmod(0o500)
+        try:
+            assert d in store.unwritable_agent_dirs()   # while enabled
+            self._disable("cursor")
+            assert store.unwritable_agent_dirs() == []
+        finally:
+            d.chmod(0o700)
+
+    def test_something_in_the_way_of_a_disabled_agents_dir_is_not_reported(
+            self, tap):
+        store.install(_rule_entry(tap))
+        d = paths.home() / ".cursor" / "rules"
+        shutil.rmtree(d)
+        d.symlink_to(paths.home() / "nowhere")          # dangling
+        assert [p for p, _b in store.blocked_agent_dirs()] == [d]
+        self._disable("cursor")
+        assert store.blocked_agent_dirs() == []
+
+    def test_doctor_is_told_which_rows_and_which_agent(self, tap):
+        store.install(_rule_entry(tap))
+        store.install(_workflow_entry(tap))
+        assert store.disabled_agent_materializations() == []
+        self._disable("cursor")
+        assert store.disabled_agent_materializations() == [
+            ("rule", "team-conventions", "cursor"),
+            ("workflow", "ship-it", "cursor")]
+
+    def test_a_workflow_row_is_judged_by_the_narrower_workflow_set(self, tap):
+        """Codex takes rules (`AGENTS.md`) and has no slash-command format, so
+        `materializing_agents` and `workflow_agents` disagree about it. A
+        workflow row judged by the wider set would read as writable."""
+        entry = _workflow_entry(tap)
+        store.install(entry)
+        locked = lockfile.get_workflow(entry["name"])
+        row = {"agent": "codex", "mode": "file", "path": "/nope"}
+        assert store.materialization_is_written("rule", locked, row)
+        assert not store.materialization_is_written("workflow", locked, row)
+
+    def test_a_row_with_no_agent_is_kept(self, tap):
+        """A cache or lock written before rows carried an `agent` has nothing
+        to test, and reporting a real gap beats silently dropping one."""
+        store.install(_rule_entry(tap))
+        locked = lockfile.get_rule("team-conventions")
+        assert store.materialization_is_written(
+            "rule", locked, {"mode": "file", "path": "/nope"})
