@@ -10,6 +10,7 @@ wow: 1
 note: three call sites size a stderr line by stdout — and pane_width, the card's own model, has it too
 order: 354
 owner: loop/wrap-width-stream
+pr: 1000
 title: "wrap() sizes a stderr line by stdout's pane"
 ---
 <b>A line now gets its colour from the stream it lands on and its
