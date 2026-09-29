@@ -10,7 +10,7 @@ wow: 2
 note: install --local wrote a lock that uninstall, verify, doctor and list then could not find
 order: 235
 owner: loop/project-scope-seams
-pr:
+pr: 998
 title: "Project scope seams: <code>uninstall</code>/<code>verify</code>/<code>list</code>/<code>info</code> disagreed with what <code>install --local</code> wrote"
 ---
 The project-scope-across-every-command item shipped, and the 2026-08 CLI audit found its seams: the
