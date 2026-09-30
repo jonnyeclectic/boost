@@ -789,10 +789,23 @@ class TestHarnessJobDiscovery:
         found = {wf for wf, _, _, _ in _harness_jobs()}
         assert "boost-langchain.yml" not in found
 
-    def test_both_workflow_extensions_are_scanned(self):
-        # GitHub reads `.yaml` as readily as `.yml`. Globbing one of them
-        # would make a job written in the other invisible to every check
-        # here — the same failure as naming one job, one character wider.
+    def test_both_workflow_extensions_are_scanned(self, tmp_path, monkeypatch):
+        """GitHub reads ``.yaml`` as readily as ``.yml``.
+
+        Globbing one of them makes a job written in the other invisible to
+        every check in this file — the same failure as naming one job, one
+        character wider. Planted rather than asserted over the real
+        directory, which holds no ``.yaml`` today: a test that passes because
+        the input it guards against is absent is not guarding anything.
+        """
+        (tmp_path / "a.yml").write_text("on: push\n", encoding="utf-8")
+        (tmp_path / "b.yaml").write_text("on: push\n", encoding="utf-8")
+        (tmp_path / "c.md").write_text("not a workflow\n", encoding="utf-8")
+        monkeypatch.setattr("test_canary_deps.WORKFLOWS", tmp_path)
+
+        assert [f.name for f in _workflow_files()] == ["a.yml", "b.yaml"]
+
+    def test_the_real_workflow_directory_is_fully_covered(self):
         found = {f.name for f in _workflow_files()}
         assert found == {f.name for f in WORKFLOWS.iterdir()
                          if f.suffix in {".yml", ".yaml"}}
