@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>515</b><span>Loop finds</span></div>
+      <div class="stat"><b>517</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -7688,60 +7688,61 @@ leaves whole files with no recorded duration, which the planner then imputes at 
       </article>
 
       <article class="cap rcard" id="is-dir-follows-a-symlink-at-eleven-rmtree-call-sites">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Core · Bug</span></div>
         <h3>Eleven <code>util.rmtree</code> call sites guard with <code>exists()</code> or <code>is_dir()</code>, which a symlink satisfies</h3>
-        <p><code>Path.is_dir()</code> and <code>Path.exists()</code> follow symlinks, so a link pointing at a
-directory passes both. Eleven callers use one of them as the guard before
-<code>util.rmtree</code>:
-
-<code>registry.py</code> 271, 338, 356, 582 &middot; <code>store.py</code> 1347, 2178 &middot;
-<code>bmad.py</code> 656, 693, 794, 814 &middot; <code>pkg.py</code> 958.
-
-Exactly one call site guards correctly &mdash; <code>pkg.py:2195</code>, the snapshot restore, with
-<code>child.is_dir() and not child.is_symlink()</code> &middot; so the distinction was known once
-and was not applied anywhere else. Exactly one of the eleven,
-<code>registry.py:338</code>, sits under <code>suppress(OSError)</code>; the other ten now let the
-error out. Six further calls have no existence guard at all
-(<code>registry.py</code> 281, 285, 675 &middot; <code>configuration.py</code> 390, 415 &middot;
-<code>store.py</code> 129, the last of them suppressed).
-
-<b>An earlier draft of this card said "three", naming only the two in <code>store.py</code> and the
-one in <code>pkg.py</code>.</b> That is the whole reason the count is spelled out above: a
-follow-up scoped to three would have left eight sites carrying the identical guard. The same draft
-attributed <code>pkg.py:958</code> to a <code>boost prune</code> command, which does not exist
-&mdash; there is no <code>prune</code> row in <code>cli.COMMANDS</code>; the call is inside
-<code>cmd_sync</code> under <code>if args.prune</code>, so the command is
-<code>boost sync --prune</code>.
-
-Until the <code>rmtree</code> retry hook was fixed, reaching any of them was silent: nothing was
-deleted and the link's target had its mode rewritten outside the tree. The hook now re-raises, so
-the same input surfaces as an <code>OSError</code> &middot; the right direction, and still not the
-right ending. Demonstrated end to end at <code>registry.py:582</code>
-(<code>boost untap</code>) with the tap's clone directory replaced by a link to a directory outside
-the tap:
-
-<b>Before:</b> exit 0, tap de-registered, clone left on disk, and the outside directory silently
-chmodded 0o755 &rarr; 0o200. <b>After:</b> the same de-registration and the same clone left on
-disk, no foreign chmod, but a raw <code>OSError</code> that <code>registry.remove</code> does not
-turn into a <code>BoostError</code> &middot; so the CLI writes a crash report and exits 70.
-
-Strictly better on the filesystem and worse to read, and the inconsistent end state &mdash; tap
-dropped from <code>config.json</code>, clone still present &mdash; is the same in both and belongs
-to <code>registry.remove</code>'s ordering rather than to the guard.
-
-What is missing is a decision about a link that resolves <em>inside</em> the base: remove the link
-and count it, or refuse with a message naming the path. The containment layer is not the gap
-&mdash; <code>scopes.resolve_in_base</code> refuses a path resolving outside the base, and PR
-#998's verification confirmed a planted victim survives every escape attempt byte-for-byte.
-Overlaps
-<a href="#project-uninstall-deletes-any-in-repo-directory-the-lock-names">project-uninstall-deletes-any-in-repo-directory-the-lock-names</a>,
-which owns the wider question of what the lock is allowed to name &middot; whichever lands first
-should take the guard with it.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/is-dir-follows-a-symlink-at-eleven-rmtree-call-sites.md">Write-up &middot; is-dir-follows-a-symlink-at-eleven-rmtree-call-sites.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">eleven guards use exists() or is_dir(), and both of those follow a link</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="floors-job-never-installed-setuptools">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Bug</span></div>
+        <h3>The floors job builds its own venv and never put setuptools in it, so main went red on the weekly cron</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/floors-job-never-installed-setuptools.md">Write-up &middot; floors-job-never-installed-setuptools.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">the same missing dependency, in the second of six hand-built venvs</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="canary-deps-check-skips-in-the-required-job">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI · Coverage</span></div>
+        <h3>test_canary_deps.py needs PyYAML, which the required tests job does not install — so it only runs inside the mutation gate</h3>
+        <p><code>tests/unit/test_canary_deps.py</code> opens with
+<code>yaml = pytest.importorskip("yaml")</code>, because it reads the workflow files to check that
+every job assembling its own venv installs what the suite then imports. PyYAML is pinned in
+<code>requirements/lint-tools.txt</code> and <code>requirements/mutation-tools.txt</code> and in
+neither <code>test-tools.txt</code> nor <code>coverage-tools.txt</code>.
+
+So in CI's required <code>tests</code> job &mdash; the 90% coverage gate, the leg a contributor
+actually reads &mdash; the whole file <b>skips</b>. Same for <code>sonarcloud</code> and for the
+free-threaded canary, the very leg it was written to protect.
+
+<b>It is still enforced, in an odd place.</b> <code>setup.cfg</code> sets
+<code>pytest_add_cli_args_test_selection = tests/unit/</code> and copies <code>.github/</code> into
+<code>mutants/</code>, and <code>mutation-tools.txt</code> pins PyYAML &mdash; so the file runs in
+the mutation gate's baseline, and a failure there fails a required check. But it reports as
+<code>mutation gate: `mutmut run` failed to execute</code> with every shard red and nothing naming
+the workflow file, which is the failure mode <code>setup.cfg</code>'s own comments call out three
+separate times as a confusing way to learn about a missing file.
+
+<b>The fix is one line in a declaration and one regenerated lock:</b> add <code>pyyaml</code> to
+<code>requirements/test-tools.in</code> with the reason, run
+<code>python3 scripts/lock_toolchain.py</code>, commit both. Kept out of the pull request that
+found it deliberately &mdash; adding a dependency to the required gate's hash-pinned install is a
+choice that gets made and reviewed on its own, per that script's own docstring, and it is a
+different defect from "the check only read one job".</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">the test that keeps CI's venvs honest does not run in the job most people read</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

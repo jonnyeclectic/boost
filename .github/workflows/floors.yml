@@ -59,6 +59,15 @@ jobs:
           python -m venv .venv
           # The floors under test come from the compile; the test harness itself
           # (pytest & co) is not a declared dependency, so it installs at newest.
+          #
+          # setuptools is in that harness list, not the floors: it is a TEST
+          # dependency. `pip install -e .` resolves the build backend in an
+          # isolated environment that leaves nothing in .venv, and `venv`
+          # stopped seeding setuptools in 3.12 — so nothing here provides it.
+          # tests/unit/test_sdist_contents.py runs setuptools' own MANIFEST
+          # matcher rather than building an sdist over the network, and without
+          # this the whole job is red on 17 ModuleNotFoundErrors, which is the
+          # one colour that cannot also report a broken floor.
           .venv/bin/pip -q install -r requirements-lowest.txt
-          .venv/bin/pip -q install -e . pytest pytest-cov coverage hypothesis
+          .venv/bin/pip -q install -e . pytest pytest-cov coverage hypothesis setuptools
           .venv/bin/pytest tests/unit tests/functional -q

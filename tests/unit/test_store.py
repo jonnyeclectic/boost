@@ -1181,6 +1181,28 @@ class TestUninstall:
             assert not _link(agent).exists()
         assert lockfile.get_skill("brainstorming") is None
 
+    def test_a_symlinked_store_dir_goes_without_its_target(
+            self, brainstorming, tmp_path):
+        """The canonical store entry pointed at a checkout being edited.
+
+        `dest.exists()` answered True through the link, so uninstall handed
+        `rmtree` a symlink, which refuses one as its argument — and the lock
+        entry is removed on the line after, so the error left the skill
+        half-uninstalled.
+        """
+        dest = paths.store_dir() / "brainstorming"
+        real = tmp_path / "my-skill"
+        real.mkdir()
+        (real / "SKILL.md").write_text("mine", encoding="utf-8")
+        util.rmtree(dest)
+        dest.symlink_to(real, target_is_directory=True)
+
+        store.uninstall("brainstorming")
+
+        assert not dest.is_symlink()
+        assert (real / "SKILL.md").read_text(encoding="utf-8") == "mine"
+        assert lockfile.get_skill("brainstorming") is None
+
     def test_uninstall_missing_raises(self, sandbox):
         with pytest.raises(BoostError) as ei:
             store.uninstall("ghost")
@@ -2650,6 +2672,73 @@ class TestProjectSkills:
         for dotdir in AGENT_DIRS.values():
             assert not (repo / dotdir / "skills" / "brainstorming").exists()
         assert projectlock.get_skill(repo, "brainstorming") is None
+
+    def test_a_symlinked_materialization_goes_without_its_target(
+            self, entry, tmp_path):
+        """`resolve_in_base` checks containment against the *resolved* path
+        but returns the unresolved one, so a materialization recorded as a
+        symlink arrives here as a symlink — and `path.is_dir()` followed it
+        straight into `rmtree`, which refuses a link as its argument."""
+        repo, _ = self._install(entry, tmp_path)
+        mat = repo / AGENT_DIRS["claude-code"] / "skills" / "brainstorming"
+        real = repo / "vendored-skill"           # inside the project
+        real.mkdir()
+        (real / "SKILL.md").write_text("mine", encoding="utf-8")
+        util.rmtree(mat)
+        mat.symlink_to(real, target_is_directory=True)
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        assert "claude-code" in info["unlinked"]
+        assert not mat.is_symlink()
+        assert (real / "SKILL.md").read_text(encoding="utf-8") == "mine"
+
+    def test_a_materialization_naming_a_plain_file_is_left_alone(
+            self, entry, tmp_path):
+        """`remove_path` deletes files; the guard it replaced did not.
+
+        `uninstall_project` gated on `is_dir()`, so a lock entry naming a
+        plain file was skipped. Swapping in `remove_path` wholesale makes
+        `boost uninstall --local` delete any file the project lock names —
+        a real repo file, off a lock entry — which is the wider question
+        the overlapping card owns. Reading the link rather than through it
+        must not settle it by accident.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        victim = repo / "pyproject.toml"
+        victim.write_text("[project]\n", encoding="utf-8")
+        from boost_cli.core import projectlock
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec["materializations"] = [{"agent": "claude-code",
+                                    "path": "pyproject.toml"}]
+        projectlock.set_skill(repo, "brainstorming", rec)
+
+        store.uninstall_project("brainstorming", base=str(repo))
+
+        assert victim.read_text(encoding="utf-8") == "[project]\n"
+
+    def test_a_materialization_linked_out_of_the_project_is_still_refused(
+            self, entry, tmp_path):
+        """Unlinking a link must not become a way past the containment guard.
+
+        `scopes.contains` resolves both sides, so a recorded path pointing out
+        of the repo is refused before anything is removed — and switching this
+        site to `util.remove_path` must not change that, because the lock file
+        is committed and anyone who can land a PR can edit it.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        mat = repo / AGENT_DIRS["claude-code"] / "skills" / "brainstorming"
+        outside = tmp_path / "not-in-the-repo"
+        outside.mkdir()
+        (outside / "SKILL.md").write_text("theirs", encoding="utf-8")
+        util.rmtree(mat)
+        mat.symlink_to(outside, target_is_directory=True)
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        assert "claude-code" not in info["unlinked"]
+        assert mat.is_symlink()                  # refused, so left alone
+        assert (outside / "SKILL.md").read_text(encoding="utf-8") == "theirs"
 
     def test_uninstall_project_errors_when_not_installed(self, tap, tmp_path):
         with pytest.raises(BoostError) as err:

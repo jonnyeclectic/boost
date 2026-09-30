@@ -69,6 +69,58 @@ def rmtree(path) -> None:
     shutil.rmtree(str(path), onexc=_clear_readonly_and_retry)
 
 
+def remove_path(path) -> bool:
+    """Remove whatever is at ``path`` — a link as a link, a tree as a tree.
+
+    Returns True when something was removed and False when the path did not
+    exist. Raises ``OSError`` like the calls it wraps; a caller that must not
+    fail on a leftover catches it.
+
+    The naive guard is ``if path.is_dir(): rmtree(path)``, and it is wrong in
+    both directions, because every ``Path`` predicate except ``is_symlink``
+    answers *through* the link rather than about it:
+
+    * A **symlink to a directory** answers True to ``is_dir()`` and
+      ``exists()`` and goes to :func:`rmtree`, which refuses a link as its
+      argument — so the caller takes an ``OSError`` out of a delete it had
+      already guarded. The guard it wrote is the reason it believed it could
+      not raise.
+    * A **dangling symlink** answers False to both, so the guard skips it and
+      the link survives. Nothing reports it, and the next writer to that path
+      fails with ``FileExistsError`` for a path that "does not exist".
+
+    Neither case is exotic: a skill directory or a tap clone symlinked to a
+    checkout the user is editing, and the dangling link left behind when that
+    checkout moves. ``is_symlink`` first is the whole fix — it is the one
+    predicate that reads the link itself, so a link is unlinked and only a real
+    directory is recursed into.
+
+    A path that means *the working directory* raises ``ValueError`` rather
+    than being obeyed. ``Path("")`` is ``PosixPath(".")`` — the normalisation
+    happens in the constructor, so by the time any callee sees it the empty
+    string and ``"."`` are the same value and neither can be told from the
+    other. ``"."`` is a directory, so an empty path fell straight through to
+    ``rmtree(".")`` and emptied whatever directory boost happened to be run
+    from. No caller can currently produce one — ``resolve_in_base`` returns
+    None for an empty relative path, bmad checks the name, and a tap path
+    always carries a ``safe_name`` — but this is now the single place every
+    one of those deletes goes through, and every real caller names a child.
+    Refusing "here" costs nothing and closes the one argument whose blast
+    radius is unbounded.
+    """
+    path = Path(path)
+    if path == Path():          # `Path()`, `Path("")` and `Path(".")` are one
+        raise ValueError("remove_path() will not remove the working "
+                         "directory; pass the path to remove")
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return True
+    if path.is_dir():
+        rmtree(path)
+        return True
+    return False
+
+
 def remove_items(
         items: list[tuple[Path, str, int]]) -> tuple[int, int, list[tuple[Path, str]]]:
     """Delete each ``(path, kind, size)`` triple; report only what actually went.
@@ -84,11 +136,7 @@ def remove_items(
     failures: list[tuple[Path, str]] = []
     for pth, _kind, size in items:
         try:
-            if pth.is_symlink() or pth.is_file():
-                pth.unlink()
-            elif pth.is_dir():
-                rmtree(pth)
-            else:
+            if not remove_path(pth):
                 continue
         except OSError as e:
             failures.append((pth, str(e)))
