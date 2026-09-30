@@ -41,10 +41,16 @@ weekly ``floors`` cron went red on 2026-09-30 with the same seventeen
 ``ModuleNotFoundError: No module named 'setuptools'``. That job also builds
 its venv by hand, and this file had been written to read exactly one job —
 ``jobs["canary"]`` in ci.yml — so it had nothing to say about the second
-place the same mistake lives. Five jobs across three workflow files run
+place the same mistake lives. :func:`_harness_jobs` now finds them by shape
+rather than by name: **six** jobs across three workflow files run
 ``tests/unit``/``tests/functional`` out of a venv they assemble themselves,
-and :func:`_harness_jobs` now finds them by shape rather than by name, so the
-sixth is covered before it is written.
+and a seventh is covered before it is written.
+
+Six, not five. An earlier draft of this file said five and claimed "the sixth
+is covered before it is written" — while ``ci.yml:onnx-inference``, which
+builds its own venv and runs one file out of ``tests/unit``, was already
+there and was being dropped by a path filter that compared with ``endswith``.
+Finding jobs by shape is only worth anything if the shape is the real one.
 
 Jobs that install from the hash-pinned ``requirements/*.txt`` are checked too,
 not excused. They are merely the ones that happen to be right today, and a
@@ -65,6 +71,12 @@ yaml = pytest.importorskip("yaml")
 ROOT = Path(__file__).resolve().parents[2]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 WORKFLOWS = ROOT / ".github" / "workflows"
+
+
+def _workflow_files() -> list[Path]:
+    """Both spellings. GitHub reads ``.yaml`` as readily as ``.yml``, and a
+    scan that globs one of them would not see a job written in the other."""
+    return sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
 
 #: The suite trees this file speaks for. ``tests/langchain`` is deliberately
 #: out: ``boost-langchain.yml`` installs it as an extra (``-e '.[langchain]'``),
@@ -209,51 +221,175 @@ def _locked_names(rel: str) -> set[str]:
             re.finditer(r"(?m)^([A-Za-z0-9][A-Za-z0-9._-]*)==", path.read_text(encoding="utf-8"))}
 
 
-def _installs(run: str) -> set[str]:
-    """Distributions a job's ``pip install`` lines put in its venv.
+#: `.venv/bin` on POSIX, `.venv/Scripts` on Windows, and `$VENV_BIN` — which
+#: is how ci.yml spells the same thing so one `run:` serves both runners.
+VENV_BIN = re.compile(r"^(?:\.venv/(?:bin|Scripts)|\$\{?VENV_BIN\}?)$")
+SEPARATORS = re.compile(r"\s*(?:\|\||&&|[;|])\s*")
+PYTHON = re.compile(r"(?:.*/)?python[\d.t]*$")
+PIP = re.compile(r"(?:.*/)?pip[\d.]*$")
+PYTEST = re.compile(r"(?:.*/)?pytest$")
+
+
+def _lines(run: str) -> list[str]:
+    """A ``run:`` block's shell lines, decommented and continuations folded.
+
+    Folding is not cosmetic. ``ci.yml`` wraps its longer pytest invocations
+    across a backslash, and a scan that reads raw lines sees ``pytest`` on one
+    and ``tests/unit`` on the next, matches neither, and reports the job as
+    running no tests — which excludes it from every check in this file
+    silently, the same way naming one job excluded four.
+    """
+    out: list[str] = []
+    buf = ""
+    for raw in run.splitlines():
+        line = re.sub(r"(^|\s)#.*$", "", raw)
+        # Comments first, or prose about pip counts as a pip line: the very
+        # comment explaining that `pip install -e .` leaves nothing in .venv
+        # parsed as an install of `an`, `build` and `the`.
+        if line.rstrip().endswith("\\"):
+            buf += line.rstrip()[:-1] + " "
+            continue
+        out.append(buf + line)
+        buf = ""
+    if buf:
+        out.append(buf)
+    return out
+
+
+def _commands(line: str) -> list[list[str]]:
+    """One shell line split into the commands it actually runs.
+
+    Splitting on the separators is what makes ``echo`` an ``echo``: matching
+    ``pip.*install`` anywhere in the line credited
+    ``pip install pytest; echo setuptools`` with setuptools, and a
+    ``words`` list built by ``str.split()`` never contained a bare ``;`` for
+    the stop-token check to find, so the check was dead from the day it was
+    written.
+    """
+    out = []
+    for chunk in SEPARATORS.split(line):
+        words = chunk.split()
+        while words and words[0] in {"then", "do", "sudo", "time", "exec"}:
+            words = words[1:]
+        if words:
+            out.append(words)
+    return out
+
+
+def _interpreter(word: str) -> str:
+    """Which Python a command's executable belongs to.
+
+    ``system`` for a bare name or an absolute one, ``.venv`` for every
+    spelling of the venv this repo builds, and the directory itself for
+    anything else. Without this the checks are satisfiable by installing into
+    the wrong Python: ``floors.yml`` runs ``python -m pip install uv`` on the
+    runner's interpreter at the top of the same block whose venv runs the
+    suite, so a union over the block cannot tell a fixed job from a broken
+    one, and moving ``setuptools`` onto that line would leave this file green
+    with the job still red on seventeen ModuleNotFoundErrors.
+    """
+    bare = word.strip("'\"")
+    head, _, _leaf = bare.rpartition("/")
+    if not head:
+        return "system"
+    if VENV_BIN.match(head):
+        return ".venv"
+    return head
+
+
+def _pip_install(words: list[str]) -> tuple[str, list[str]] | None:
+    """``(interpreter, arguments)`` if this command is a pip install."""
+    head = words[0].strip("'\"")
+    rest = words[1:]
+    if PYTHON.fullmatch(head) and rest[:2] == ["-m", "pip"]:
+        rest = rest[2:]
+    elif not PIP.fullmatch(head):
+        return None
+    while rest and rest[0].startswith("-"):     # pip's own flags, e.g. -q
+        rest = rest[1:]
+    if not rest or rest[0] != "install":
+        return None
+    return _interpreter(words[0]), rest[1:]
+
+
+def _installs(run: str, interpreter: str | None = None) -> set[str]:
+    """Distributions a job's ``pip install`` lines put in one interpreter.
 
     Explicitly named ones, plus everything a committed ``-r`` file pins —
     without the second half, the three jobs that install from
     ``requirements/*.txt`` would read as installing nothing at all and every
     one of them would look broken.
+
+    ``interpreter`` selects which Python to count installs into; ``None``
+    counts them all, which is only ever right for a job with one.
+
+    Known limit: a ``pip install`` inside an ``if``/``case`` is credited
+    unconditionally, because nothing here evaluates shell conditions.
+    :meth:`TestHarnessJobDiscovery.test_no_harness_job_installs_conditionally`
+    fails the build rather than let that become wrong quietly.
     """
     got: set[str] = set()
-    for raw in run.splitlines():
-        # Shell comments first, or prose about pip counts as a pip line: the
-        # very comment explaining that `pip install -e .` leaves nothing in
-        # .venv parsed as an install of `an`, `build` and `the`.
-        line = re.sub(r"(^|\s)#.*$", "", raw).strip()
-        m = re.search(r"pip[\"\']?\s+(?:-q\s+)?install\s+(.*)$", line)
-        if not m:
-            continue
-        words = m.group(1).split()
-        for stop, word in enumerate(words):   # `pip install x || true`
-            if word in {"||", "&&", ";", "|", "#"}:
-                words = words[:stop]
-                break
-        skip_next = False
-        for i, word in enumerate(words):
-            if skip_next:            # the filename after -r is not a package
-                skip_next = False
+    for line in _lines(run):
+        for words in _commands(line):
+            parsed = _pip_install(words)
+            if parsed is None:
                 continue
-            if word in {"-r", "--requirement"} and i + 1 < len(words):
-                got |= _locked_names(words[i + 1])
-                skip_next = True
+            into, args = parsed
+            if interpreter is not None and into != interpreter:
                 continue
-            bare = word.strip("'\"")
-            # `-e .` and `-e '.[rag]'` install something, but not by name.
-            if word.startswith("-") or bare in {".", "-e"} or bare.startswith(".["):
-                continue
-            got.add(_norm(re.split(r"[<>=!\[]", bare)[0]))
+            skip_next = False
+            for i, word in enumerate(args):
+                if skip_next:        # the filename after -r is not a package
+                    skip_next = False
+                    continue
+                if word in {"-r", "--requirement"} and i + 1 < len(args):
+                    got |= _locked_names(args[i + 1])
+                    skip_next = True
+                    continue
+                bare = word.strip("'\"")
+                # `-e .` and `-e '.[rag]'` install something, but not by name.
+                if (word.startswith("-") or bare in {".", "-e"}
+                        or bare.startswith(".[")):
+                    continue
+                got.add(_norm(re.split(r"[<>=!\[]", bare)[0]))
     return got
 
 
+def _pytest_runs(run: str) -> list[tuple[str, list[Path]]]:
+    """``(interpreter, tests/ paths)`` for each pytest invocation in a block."""
+    out = []
+    for line in _lines(run):
+        for words in _commands(line):
+            head = words[0].strip("'\"")
+            rest = words[1:]
+            if PYTHON.fullmatch(head) and rest[:2] == ["-m", "pytest"]:
+                rest = rest[2:]
+            elif not PYTEST.fullmatch(head):
+                continue
+            paths = [ROOT / w.strip("'\"") for w in rest
+                     if w.strip("'\"").startswith("tests/")]
+            if paths:
+                out.append((_interpreter(words[0]), paths))
+    return out
+
+
+def _under_suite(target: Path) -> bool:
+    """Is this path one of the suite trees, or inside one?
+
+    ``endswith`` was the first cut and dropped ``ci.yml:onnx-inference``,
+    which runs a single file out of ``tests/unit`` from a venv it builds
+    itself — the sixth harness job, already written when this file claimed to
+    have covered the sixth before it was.
+    """
+    rel = target.as_posix()
+    return any(rel == (ROOT / tree).as_posix()
+               or rel.startswith((ROOT / tree).as_posix() + "/")
+               for tree in SUITE_TREES)
+
+
 def _targets(run: str) -> list[Path]:
-    """The ``tests/`` paths a ``run:`` block hands pytest."""
-    for line in run.splitlines():
-        if "pytest" in line and "tests/" in line:
-            return [ROOT / w for w in line.split() if w.startswith("tests/")]
-    return []
+    """Every ``tests/`` path a ``run:`` block hands pytest."""
+    return [p for _interp, paths in _pytest_runs(run) for p in paths]
 
 
 def _harness_jobs() -> list[tuple[str, str, set[str], list[Path]]]:
@@ -271,20 +407,28 @@ def _harness_jobs() -> list[tuple[str, str, set[str], list[Path]]]:
     line can miss one.
     """
     out: list[tuple[str, str, set[str], list[Path]]] = []
-    for wf in sorted(WORKFLOWS.glob("*.yml")):
+    for wf in _workflow_files():
         doc = yaml.safe_load(wf.read_text(encoding="utf-8")) or {}
         for job_id, job in (doc.get("jobs") or {}).items():
             runs = [step.get("run") or "" for step in (job.get("steps") or [])]
             if not any("venv" in r for r in runs):
                 continue
-            targets = [t for r in runs for t in _targets(r)
-                       if any(str(t).endswith(tree) for tree in SUITE_TREES)]
-            if not targets:
-                continue
-            installs: set[str] = set()
+            # The interpreter that runs the suite is the one whose installs
+            # count. A job may also install into the runner's Python — uv,
+            # for one — and those packages are not on the suite's path.
+            suite: dict[str, list[Path]] = {}
             for r in runs:
-                installs |= _installs(r)
-            out.append((wf.name, job_id, installs, targets))
+                for interp, paths in _pytest_runs(r):
+                    kept = [p for p in paths if _under_suite(p)]
+                    if kept:
+                        suite.setdefault(interp, []).extend(kept)
+            if not suite:
+                continue
+            for interp, targets in sorted(suite.items()):
+                installs: set[str] = set()
+                for r in runs:
+                    installs |= _installs(r, interp)
+                out.append((wf.name, job_id, installs, targets))
     return out
 
 
@@ -311,12 +455,13 @@ def _canary_targets(run: str) -> list[Path]:
 
 
 #: Every job that assembles its own venv and runs the suite in it, as
-#: ``workflow:job``. Pinned so a sixth is a decision: a new one that this file
-#: has never seen is exactly the shape both regressions took.
+#: ``workflow:job``. Pinned so a seventh is a decision: a new one that this
+#: file has never seen is exactly the shape both regressions took.
 HARNESS_JOBS = {
     "ci.yml:tests",            # the required coverage gate (-r test-tools.txt)
     "ci.yml:patch-coverage",   # diff-cover (-r coverage-tools.txt)
     "ci.yml:canary",           # 3.14t free-threaded, explicit pip line
+    "ci.yml:onnx-inference",   # one file out of tests/unit, own venv, .[rag]
     "floors.yml:lowest",       # uv lowest-direct, explicit pip line
     "sonarcloud.yml:sonar-analyze",
 }
@@ -565,6 +710,61 @@ class TestInstallParsing:
         assert _norm("zope.interface") == _norm("zope-interface")
         assert _norm("py_yaml") != _norm("pyyaml")
 
+    def test_installs_are_attributed_to_the_interpreter_they_land_in(self):
+        """The finding that made the whole check satisfiable the wrong way.
+
+        `floors.yml` installs uv into the *runner's* Python at the top of the
+        same `run:` block whose `.venv` runs the suite. A union over the block
+        cannot tell "setuptools is on the suite's path" from "setuptools is
+        on some path", so moving the name one line up would have left this
+        file green with the job still red on seventeen imports.
+        """
+        run = ("python -m pip -q install uv\n"
+               ".venv/bin/pip -q install pytest\n")
+        assert _installs(run, ".venv") == {"pytest"}
+        assert _installs(run, "system") == {"uv"}
+        assert _installs(run) == {"uv", "pytest"}   # None means "any"
+
+    def test_every_spelling_of_the_venv_is_one_interpreter(self):
+        # ci.yml writes `$VENV_BIN` so one `run:` serves POSIX and Windows;
+        # reading those as three interpreters would split a job's installs
+        # away from the pytest that needs them.
+        for exe in (".venv/bin/pip", ".venv/Scripts/pip", '"$VENV_BIN/pip"',
+                    "${VENV_BIN}/pip"):
+            assert _installs("%s install rich" % exe, ".venv") == {"rich"}
+
+    def test_a_bare_pip_and_python_dash_m_are_both_the_system(self):
+        assert _installs("pip install rich", "system") == {"rich"}
+        assert _installs("python3.12 -m pip install rich", "system") == {"rich"}
+        assert _installs("pip install rich", ".venv") == set()
+
+    def test_a_semicolon_ends_the_command(self):
+        # The stop-token check was dead: `str.split()` leaves the `;` attached
+        # to the word before it, so no element ever equalled ";" and
+        # `pip install pytest; echo setuptools` credited setuptools.
+        got = _installs("pip install pytest; echo setuptools")
+        assert got == {"pytest"}
+
+    def test_a_word_that_is_not_a_command_head_is_not_an_install(self):
+        assert _installs("echo 'run pip install setuptools by hand'") == set()
+        assert _installs("grep -q pip install < notes.txt") == set()
+
+    def test_a_backslash_continuation_is_one_line(self):
+        # ci.yml wraps its longer invocations. Read raw, `pytest` and the
+        # paths land on different lines and the job reads as running nothing.
+        run = ".venv/bin/pytest \\\n  tests/unit tests/functional -q\n"
+        assert [p.name for p in _targets(run)] == ["unit", "functional"]
+        assert _installs(".venv/bin/pip install \\\n  rich \\\n  pyyaml",
+                         ".venv") == {"rich", "pyyaml"}
+
+    def test_a_single_test_file_is_under_the_suite(self):
+        # `endswith` dropped ci.yml:onnx-inference, which runs exactly one
+        # file out of tests/unit from a venv it builds itself.
+        assert _under_suite(ROOT / "tests/unit/test_localembed_e2e.py")
+        assert _under_suite(ROOT / "tests/unit")
+        assert not _under_suite(ROOT / "tests/smoke.sh")
+        assert not _under_suite(ROOT / "tests/eval/golden.jsonl")
+
     def test_a_line_with_no_install_contributes_nothing(self):
         assert _installs("python -m venv .venv\npip download widget\n") == set()
 
@@ -589,8 +789,44 @@ class TestHarnessJobDiscovery:
         found = {wf for wf, _, _, _ in _harness_jobs()}
         assert "boost-langchain.yml" not in found
 
+    def test_both_workflow_extensions_are_scanned(self):
+        # GitHub reads `.yaml` as readily as `.yml`. Globbing one of them
+        # would make a job written in the other invisible to every check
+        # here — the same failure as naming one job, one character wider.
+        found = {f.name for f in _workflow_files()}
+        assert found == {f.name for f in WORKFLOWS.iterdir()
+                         if f.suffix in {".yml", ".yaml"}}
+        assert "ci.yml" in found
+
+    def test_no_harness_job_installs_conditionally(self):
+        """The one shape this file's parser cannot read correctly.
+
+        Nothing here evaluates shell conditions, so a `pip install` inside an
+        `if` or a `case` is credited unconditionally — the dangerous
+        direction, since the job can then be missing at runtime what this
+        check says it has. No harness job does that today. This fails the
+        build the day one starts, rather than letting the check quietly go
+        one-sided.
+        """
+        guilty = []
+        for wf in _workflow_files():
+            doc = yaml.safe_load(wf.read_text(encoding="utf-8")) or {}
+            for job_id, job in (doc.get("jobs") or {}).items():
+                if "%s:%s" % (wf.name, job_id) not in HARNESS_JOBS:
+                    continue
+                for step in job.get("steps") or []:
+                    body = step.get("run") or ""
+                    if not any(_pip_install(c) for ln in _lines(body)
+                               for c in _commands(ln)):
+                        continue
+                    if re.search(r"(?m)^\s*(if|case)\s", body):
+                        guilty.append("%s:%s" % (wf.name, job_id))
+        assert not guilty, (
+            "these jobs wrap a pip install in a shell conditional, which "
+            "_installs() credits unconditionally: %s" % sorted(set(guilty)))
+
     def test_every_collected_job_has_at_least_one_suite_target(self):
         for wf, job, _, targets in _harness_jobs():
             assert targets, f"{wf}:{job} was collected with no test path"
             for t in targets:
-                assert any(str(t).endswith(tree) for tree in SUITE_TREES)
+                assert _under_suite(t), f"{wf}:{job} collected {t}"
