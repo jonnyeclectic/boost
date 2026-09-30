@@ -95,5 +95,5 @@ def progress_clear(stream=None) -> None:
     s = stream if stream is not None else sys.stderr
     if not (out.color_level(s) > 0 and hasattr(s, "isatty") and s.isatty()):
         return
-    s.write("\r" + " " * out.term_width() + "\r")
+    s.write("\r" + " " * out.term_width(stream=s) + "\r")
     s.flush()

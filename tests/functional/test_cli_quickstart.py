@@ -1266,7 +1266,7 @@ class TestThePreviewHeadlineFitsThePane:
                                             defaults_manifest, keyless,
                                             monkeypatch, cols):
         from boost_cli.core import output as out
-        monkeypatch.setattr(out, "term_width", lambda: cols)
+        monkeypatch.setattr(out, "term_width", lambda default=80, stream=None: cols)
         res = boost("quickstart", "--dry-run")
         block = self._headline(res.out)
         assert all(out.visible_len(ln) <= cols for ln in block), block
@@ -1281,7 +1281,7 @@ class TestThePreviewHeadlineFitsThePane:
         # token and must land on one line, like any other atomic span. Which
         # line it lands on depends on the pane, so that is not asserted.
         from boost_cli.core import output as out
-        monkeypatch.setattr(out, "term_width", lambda: cols)
+        monkeypatch.setattr(out, "term_width", lambda default=80, stream=None: cols)
         block = self._headline(boost("quickstart", "--dry-run").out)
         assert len(block) > 1, block
         assert any("(28B)" in ln for ln in block), block
