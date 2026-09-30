@@ -2693,6 +2693,30 @@ class TestProjectSkills:
         assert not mat.is_symlink()
         assert (real / "SKILL.md").read_text(encoding="utf-8") == "mine"
 
+    def test_a_materialization_naming_a_plain_file_is_left_alone(
+            self, entry, tmp_path):
+        """`remove_path` deletes files; the guard it replaced did not.
+
+        `uninstall_project` gated on `is_dir()`, so a lock entry naming a
+        plain file was skipped. Swapping in `remove_path` wholesale makes
+        `boost uninstall --local` delete any file the project lock names —
+        a real repo file, off a lock entry — which is the wider question
+        the overlapping card owns. Reading the link rather than through it
+        must not settle it by accident.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        victim = repo / "pyproject.toml"
+        victim.write_text("[project]\n", encoding="utf-8")
+        from boost_cli.core import projectlock
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec["materializations"] = [{"agent": "claude-code",
+                                    "path": "pyproject.toml"}]
+        projectlock.set_skill(repo, "brainstorming", rec)
+
+        store.uninstall_project("brainstorming", base=str(repo))
+
+        assert victim.read_text(encoding="utf-8") == "[project]\n"
+
     def test_a_materialization_linked_out_of_the_project_is_still_refused(
             self, entry, tmp_path):
         """Unlinking a link must not become a way past the containment guard.

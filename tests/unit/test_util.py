@@ -1128,8 +1128,8 @@ class TestRmtreeRetryHook:
 class TestRemovePath:
     """One removal that reads the link rather than through it.
 
-    Each of these is a mutant the naive `if path.is_dir(): rmtree(path)` guard
-    lets live, and the four together pin the two directions it is wrong in:
+    Most of these are a mutant the naive `if path.is_dir(): rmtree(path)`
+    guard lets live, and together they pin the two directions it is wrong in:
     a link answers for its target, so a dangling one looks absent and a link
     to a directory looks like a directory.
     """

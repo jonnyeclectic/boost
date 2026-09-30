@@ -11,7 +11,7 @@ reason this module exists rather than one `rglob` in the command layer:
   bytes the run could not free: a 1 MiB untracked `scripts/junk.bin` made
   `compact --dry-run` print "would free 1.0MB" and the live run print
   "every tap is already compact", with the file still on disk.
-* `--reclone` is `rmtree` + a fresh blobless clone, so it removes the untracked
+* `--reclone` is `remove_path` + a fresh blobless clone, so it removes the untracked
   freight *and* the clone's whole `.git` — and then re-downloads a `.git` whose
   size only the remote decides. So it frees strictly more than the default and
   its net figure is unknowable; see :class:`Plan`.

@@ -438,6 +438,32 @@ class TestAddRemove:
             registry.remove("nope")
 
 
+class TestCloneOneNeverRaises:
+    """`_clone_one` promises a ThreadPoolExecutor that it never raises.
+
+    It catches `BoostError` and nothing else, so the `remove_path` added in
+    front of its clone — which raises `OSError` like the calls it wraps —
+    would crash a worker and take the whole `add_many` pool with it: one
+    unwritable leftover turning twelve good clones into a 70.
+    """
+
+    def test_a_path_it_cannot_clear_is_one_failed_spec(
+            self, sandbox, tmp_path, monkeypatch):
+        alpha = _make_repo(tmp_path / "alpha")
+        beta = _make_repo(tmp_path / "beta")
+        monkeypatch.setattr(
+            util, "remove_path",
+            lambda p: _refuse_to_remove(p) if "beta" in str(p) else None)
+
+        results = registry.add_many([str(alpha), str(beta)])
+
+        by_name = {r["name"]: r for r in results}
+        assert by_name["alpha"]["ok"] is True
+        assert by_name["beta"]["ok"] is False
+        assert "could not clear" in by_name["beta"]["error"]
+        assert config.get("taps")            # alpha was still written
+
+
 class TestDependents:
     def test_no_dependents_is_empty(self, sandbox):
         assert registry.dependents("some/tap") == []
@@ -497,6 +523,31 @@ class TestUpdate:
 
         assert tap.is_cloned
         assert not tap.path.is_symlink()         # a real clone replaced it
+
+    def test_a_path_it_cannot_clear_fails_only_that_tap(
+            self, sandbox, tmp_path, monkeypatch):
+        """`remove_path` raises OSError; this loop handles BoostError only.
+
+        So the new clear-before-clone turned one tap's unwritable directory
+        into the whole sweep's: the loop aborts, every later tap goes
+        unrefreshed, and the successful pulls are thrown away unreported —
+        the exact regression `test_one_dead_upstream_does_not_stop_the_others`
+        exists to prevent, reintroduced through a different door.
+        """
+        dead = _make_repo(tmp_path / "deadtap")
+        live = _make_repo(tmp_path / "livetap")
+        registry.add(str(dead))
+        registry.add(str(live))
+        util.rmtree(registry.get("deadtap").path)
+        monkeypatch.setattr(
+            util, "remove_path",
+            lambda p: _refuse_to_remove(p) if "deadtap" in str(p) else None)
+
+        results, failures = registry.update()
+
+        assert "livetap" in results          # the healthy tap still refreshed
+        assert "deadtap" in failures
+        assert "could not clear" in str(failures["deadtap"])
 
     def test_update_already_up_to_date(self, sandbox, tmp_path):
         origin = _make_repo(tmp_path / "pullme")

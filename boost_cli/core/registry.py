@@ -267,7 +267,7 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
                          hint="pin with the 40-character hash a manifest names")
     tap = Tap(name=name, url=url, curated=curated)
     paths.ensure_dirs()
-    util.remove_path(tap.path)
+    _clear_path(tap.path)
     gitutil.clone_shallow(url, tap.path)
     if at:
         try:
@@ -336,6 +336,27 @@ def _discard(tap: Tap) -> None:
         util.remove_path(tap.path)
 
 
+def _clear_path(path) -> None:
+    """Remove whatever is at ``path``, as a tap failure rather than a crash.
+
+    ``util.remove_path`` raises ``OSError`` like the calls it wraps, and the
+    three places here that clear a path before cloning are all reached from
+    code that handles ``BoostError`` and nothing else: :func:`update`'s
+    per-tap loop records a ``BoostError`` as that tap's failure and carries
+    on, and :func:`_clone_one` promises "Never raises" to a
+    ``ThreadPoolExecutor``. An ``OSError`` out of either — an unwritable
+    ``repos/`` is enough — turns one tap's problem into the whole sweep's,
+    or into a crashed worker and a 70 from a pool of twelve clones.
+    """
+    try:
+        util.remove_path(path)
+    except OSError as exc:
+        raise BoostError(
+            "could not clear %s" % paths.tilde(Path(path)),
+            hint="something is in the way and cannot be removed; delete it "
+                 "by hand, then retry") from exc
+
+
 def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
     """Clone one tap without touching config. Never raises.
 
@@ -350,7 +371,7 @@ def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
         return {"spec": spec, "name": spec, "ok": False, "error": exc.message}
     tap = Tap(name=name, url=url, curated=curated)
     try:
-        util.remove_path(tap.path)
+        _clear_path(tap.path)
         gitutil.clone_shallow(url, tap.path)
         if at:
             gitutil.checkout_commit(tap.path, at)
@@ -677,7 +698,7 @@ def update(name: str | None = None,
             # create work tree dir ... File exists"). Without the removal the
             # tap can never be recovered: doctor reports it not cloned and
             # points at `update`, and update fails the same way forever.
-            util.remove_path(tap.path)
+            _clear_path(tap.path)
             gitutil.clone_shallow(tap.url, tap.path)
             if tap.pin and not force:
                 try:

@@ -71,8 +71,9 @@ two counts differ and an earlier draft of this paragraph said "twelve guards", c
 The eleven guarded sites are <code>registry.py</code> 271, 338, 356, 582 &middot;
 <code>store.py</code> 1347, 2178 &middot; <code>bmad.py</code> 656, 693, 794, 814 &middot;
 <code>pkg.py</code> 958. <code>configuration.py:390</code> (<code>boost tap --reclone</code>) is
-the twelfth site and had <em>no</em> guard to remove, and
-<code>registry.py:673</code> is the thirteenth and is new work rather than a swap.
+the twelfth site and had <em>no</em> guard to remove, and the call added in
+<code>registry.update</code>'s reclone branch is the thirteenth &mdash; a <em>new</em> call rather
+than a swap, so it removes no guard either.
 
 <b>The dangling-link direction turned out to be the half nobody had named.</b> A link whose target
 is gone answers False to <em>both</em> <code>exists()</code> and <code>is_dir()</code>, so the
@@ -81,11 +82,12 @@ guard skipped it and the link survived &mdash; and the next writer to that path 
 <code>registry.add</code> and at the three <code>bmad</code> sites that clear a destination before
 <code>copytree</code> or <code>move</code>.
 
-<b><code>registry.update</code>'s reclone was a fourth instance of the bug, and the only one with
-no way out.</b> <code>Tap.is_cloned</code> is <code>self.path.is_dir()</code>, which a dangling
+<b>A fourth instance of the bug lived in <code>registry.update</code>, and it was the only one
+with no way out.</b> <code>Tap.is_cloned</code> is <code>self.path.is_dir()</code>, which a dangling
 link answers False to &mdash; so a tap whose clone was symlinked to a checkout that later moved
 lands in the <code>elif not tap.is_cloned</code> branch, where <code>gitutil.clone_shallow</code>
-was called with nothing in front of it. Git refuses to clone onto an existing link, so
+was called with nothing in front of it &mdash; the branch reached precisely <em>because</em> the
+path reads as absent, which is why a dangling link is the one input that breaks it. Git refuses to clone onto an existing link, so
 <code>boost update</code> failed, <code>boost doctor</code> reported the tap not cloned and pointed
 the user at <code>boost update</code>, and the loop closed. It now removes the path first.
 
@@ -96,11 +98,12 @@ directory. It now warns and names the path, exactly as the line below it does fo
 
 Left alone deliberately: <code>store._remove_backup</code>, which hand-rolls the same
 is-symlink-first shape but with <code>ignore_errors=True</code> semantics that
-<code>remove_path</code> does not have; and the calls with no existence guard that act on a
-directory the same function just created &mdash; <code>registry.py</code> 281, 285,
-<code>configuration.py</code> 415 and <code>store.py</code> 129, which is suppressed.
-<b>That description does not fit all six</b>, which is how
-<code>registry.py:673</code> hid: it is reached precisely <em>because</em> nothing is there, so a
-dangling link is the one input that breaks it. Overlaps
+<code>remove_path</code> does not have; and the six calls with no existence guard, which do all
+act on a directory the same function just created &mdash; <code>registry.py</code> 281, 285, 675
+&middot; <code>configuration.py</code> 415 &middot; <code>store.py</code> 129, the last
+suppressed. <b>An earlier draft of this paragraph claimed that description fitted only five of
+them</b>; it fits all six. The thirteenth site is not one of them recategorised &mdash; it is a
+call that did not exist before, added where <code>clone_shallow</code> had nothing in front of it
+at all. Overlaps
 <a href="#project-uninstall-deletes-any-in-repo-directory-the-lock-names">project-uninstall-deletes-any-in-repo-directory-the-lock-names</a>,
 which still owns the wider question of what the lock is allowed to name.
