@@ -30,6 +30,12 @@ def _make_repo(path, author="Test Author"):
     return path
 
 
+
+def _refuse_to_remove(path):
+    """A `util.remove_path` that fails the way a read-only parent does."""
+    raise PermissionError(13, "Permission denied", str(path))
+
+
 class TestTapProperties:
     def test_safe_name_replaces_slash(self):
         assert registry.Tap("owner/repo", "u").safe_name == "owner__repo"
@@ -374,6 +380,46 @@ class TestAddRemove:
                 "(Permission denied) — make %s writable, then run "
                 "`boost clean`" % paths.tilde(paths.cache_dir())) in err
 
+    def test_a_symlinked_clone_is_unlinked_and_its_target_survives(
+            self, sandbox, fixture_tap_src, tmp_path):
+        """`~/.boost/repos/<tap>` pointed at a checkout the user is editing.
+
+        An ordinary thing to do, and `tap.path.exists()` answered True through
+        the link, so `untap` handed `rmtree` a symlink — which refuses one as
+        its argument. The tap was already deregistered by then, so the error
+        exited 70 with the config written and the link still there.
+        """
+        tap = registry.add(str(fixture_tap_src))
+        real = tmp_path / "my-checkout"
+        real.mkdir()
+        (real / "keep.txt").write_text("mine", encoding="utf-8")
+        util.rmtree(tap.path)
+        tap.path.symlink_to(real, target_is_directory=True)
+
+        assert registry.remove("fixture-tap").name == "fixture-tap"
+
+        assert config.get("taps") == []
+        assert not tap.path.is_symlink()
+        assert (real / "keep.txt").read_text(encoding="utf-8") == "mine"
+
+    def test_a_clone_it_cannot_remove_is_a_warning(
+            self, sandbox, fixture_tap_src, monkeypatch, capsys):
+        """Config is saved before the delete, so an unhandled error here left
+        the tap deregistered with its clone on disk and nothing naming it."""
+        tap = registry.add(str(fixture_tap_src))
+        capsys.readouterr()
+        monkeypatch.setattr(util, "remove_path", _refuse_to_remove)
+
+        assert registry.remove("fixture-tap").name == "fixture-tap"
+
+        assert config.get("taps") == []
+        assert tap.path.exists()
+        cap = capsys.readouterr()
+        assert cap.out == ""                       # stdout may be --json
+        err = " ".join(cap.err.split())
+        assert ("! could not remove the clone for fixture-tap (Permission "
+                "denied) — delete %s by hand" % paths.tilde(tap.path)) in err
+
     def test_remove_only_drops_the_named_tap(self, sandbox):
         # Removing one of several taps must leave the others in config. Pins the
         # `cfg["taps"] = [t ... if t["name"] != tap.name]` rewrite and its
@@ -430,6 +476,27 @@ class TestUpdate:
         util.rmtree(tap.path)
         assert registry.update("pullme") == ({"pullme": "cloned"}, {})
         assert tap.is_cloned
+
+    def test_update_reclones_over_a_dangling_link(self, sandbox, tmp_path):
+        """The one failure of this shape that cannot be recovered from.
+
+        `is_cloned` is `path.is_dir()`, which a dangling symlink answers False
+        to — so a tap whose clone was symlinked to a checkout that later moved
+        lands in exactly the branch that clones. Git refuses to clone onto an
+        existing link, so `boost update` failed, `boost doctor` reported the
+        tap not cloned and pointed at `boost update`, and the loop closed.
+        """
+        origin = _make_repo(tmp_path / "pullme")
+        tap = registry.add(str(origin))
+        util.rmtree(tap.path)
+        tap.path.symlink_to(tmp_path / "gone", target_is_directory=True)
+        assert not tap.is_cloned                 # the link is dangling
+        assert tap.path.is_symlink()             # but the path is taken
+
+        assert registry.update("pullme") == ({"pullme": "cloned"}, {})
+
+        assert tap.is_cloned
+        assert not tap.path.is_symlink()         # a real clone replaced it
 
     def test_update_already_up_to_date(self, sandbox, tmp_path):
         origin = _make_repo(tmp_path / "pullme")

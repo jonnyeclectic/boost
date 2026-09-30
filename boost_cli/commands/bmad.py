@@ -652,8 +652,7 @@ def _copy_global_skills(modules) -> tuple[str, list[str]]:
             if not d.is_dir():
                 continue
             t = dest / d.name
-            if t.exists():
-                util.rmtree(t)
+            util.remove_path(t)
             shutil.copytree(d, t)
             names.append(d.name)
         return ver, names
@@ -689,8 +688,7 @@ def _drop_retired_skills(before: dict, installed: list[str],
         # A hand-edited state file must not steer the delete out of the dir.
         if not (name.startswith("bmad-") and Path(name).name == name):
             continue
-        if (dest / name).is_dir():
-            util.rmtree(dest / name)
+        if util.remove_path(dest / name):
             dropped.append(name)
     return dropped
 
@@ -790,8 +788,7 @@ def _disable(scope, force: bool = False) -> int:
     moved = 0
     for d in sorted(_skills_dir(scope).glob("bmad-*")):
         target = qdir / d.name
-        if target.exists():
-            util.rmtree(target)
+        util.remove_path(target)
         shutil.move(str(d), str(target))
         moved += 1
     _set_scope_state(scope, startup=False, disabled=True)
@@ -810,8 +807,7 @@ def _enable(scope) -> int:
         dest.mkdir(parents=True, exist_ok=True)
         for d in sorted(qdir.glob("bmad-*")):
             target = dest / d.name
-            if target.exists():
-                util.rmtree(target)
+            util.remove_path(target)
             shutil.move(str(d), str(target))
             restored += 1
     _set_scope_state(scope, disabled=False)

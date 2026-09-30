@@ -1342,9 +1342,13 @@ def uninstall_project(name: str, base=None) -> dict:
     removed: list[str] = []
     for m in entry.get("materializations") or []:
         path = scopes.resolve_in_base(resolved_base, m.get("path"))
-        if path is None or not path.is_dir():
+        # `resolve_in_base` checks containment against the *resolved* path but
+        # returns the unresolved one, so a materialization recorded as a
+        # symlink arrives here as a symlink. A link out of the project was
+        # already refused above; one that stays inside is unlinked rather than
+        # handed to `rmtree`, which refuses a link as its argument.
+        if path is None or not util.remove_path(path):
             continue          # refused or already gone — nothing was removed
-        util.rmtree(path)
         if m.get("agent"):
             removed.append(m["agent"])
     projectlock.remove_skill(resolved_base, name)
@@ -2173,9 +2177,7 @@ def uninstall(name: str) -> dict:
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     removed_links = unlink_agents(name)
-    dest = skill_store_dir(name)
-    if dest.exists():
-        util.rmtree(dest)
+    util.remove_path(skill_store_dir(name))
     lockfile.remove_skill(name)
     journal.log("uninstall", name)
     return {"name": name, "unlinked": removed_links, "entry": entry, "kind": "skill"}

@@ -169,9 +169,9 @@ def freight_bytes(repo: Path, keep_dirs: list[str]) -> int:
 def worktree_freight_bytes(repo: Path, keep_dirs: list[str]) -> int:
     """Bytes a `--reclone` removes from the working tree — tracked or not.
 
-    `--reclone` is `util.rmtree` followed by a fresh clone, so whether git knows
-    about a file has no bearing on whether it survives. This is the count the
-    default path used to use, and it was right only for this mode.
+    `--reclone` is `util.remove_path` followed by a fresh clone, so whether git
+    knows about a file has no bearing on whether it survives. This is the count
+    the default path used to use, and it was right only for this mode.
     """
     return sum(size for _rel, size in _off_cone_files(repo, keep_dirs))
 

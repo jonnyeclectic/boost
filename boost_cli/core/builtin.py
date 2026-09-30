@@ -14,7 +14,7 @@ the wheel instead of over the network.
 **The tap directory is under ``~/.boost/repos/`` and never inside the wheel.**
 That is not an implementation detail, it is the whole safety argument. A
 ``Tap`` whose ``path`` pointed at package data would sit one ``boost untap``
-away from :func:`registry.remove`, which ends in ``util.rmtree(tap.path)`` —
+away from :func:`registry.remove`, which ends in ``util.remove_path(tap.path)`` —
 deleting part of the user's installed package. Here the worst case is that a
 recreatable directory goes away and :func:`ensure_tap` rebuilds it.
 

@@ -387,7 +387,7 @@ def cmd_compact(argv) -> int:
             continue
         try:
             if args.reclone:
-                util.rmtree(tap.path)
+                util.remove_path(tap.path)
                 gitutil.clone_shallow(tap.url, tap.path)
                 if tap.pin:
                     # A pinned tap re-clones at the default branch like any
