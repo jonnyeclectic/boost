@@ -23,7 +23,36 @@ from . import paths
 IGNORED = {".git", "__pycache__", ".DS_Store"}
 
 
-def _clear_readonly_and_retry(func, path, _exc) -> None:
+def _clear_readonly_and_retry(func, path, exc) -> None:
+    """Clear a read-only bit and retry the failed operation — never on a link.
+
+    ``os.chmod`` follows symlinks, and the path handed to this hook is the one
+    that failed, so chmod-ing it blind changes the mode of whatever the link
+    points at — a file outside the tree being deleted, which nothing asked to
+    modify. A link's own mode never blocked the operation anyway: on POSIX,
+    unlinking is gated by the *parent* directory's write bit, so the retry
+    fails a second time and the permission change is the only lasting effect.
+
+    ``follow_symlinks=False`` is the obvious repair and is the wrong one on
+    both counts. It is not portable — ``os.chmod`` supports the keyword only
+    where the platform has ``lchmod``. ``os.supports_follow_symlinks`` is what
+    reports that, it is not True everywhere this runs (measured True on
+    darwin), and where the call does work it changes a mode that
+    was never the problem. Re-raising needs no platform branch, and a branch
+    that cannot be taken on the runner is a mutant that cannot be killed.
+
+    The worse instance is a symlink passed to :func:`rmtree` *as its argument*.
+    ``shutil.rmtree`` refuses one by calling this hook with ``func`` set to
+    ``os.path.islink``; the old body chmod-ed straight through the link, then
+    called ``os.path.islink(path)``, which answers True without raising — so
+    the hook returned, ``rmtree`` returned, and the caller was told a tree had
+    been removed when nothing had. Measured: the link survived, its target
+    directory survived with its contents, and the target's mode went 0o755 to
+    0o200. Re-raising restores ``shutil``'s own "Cannot call rmtree on a
+    symbolic link" instead of that silent success.
+    """
+    if os.path.islink(path):
+        raise exc
     os.chmod(path, stat.S_IWRITE)
     func(path)
 

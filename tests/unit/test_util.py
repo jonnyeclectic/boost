@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import os
 import re
+import stat
 import sys
 import time
 from datetime import UTC, datetime, timedelta
@@ -990,3 +993,132 @@ class TestRemoveItems:
 
     def test_empty_input_reports_nothing(self):
         assert util.remove_items([]) == (0, 0, [])
+
+
+# The retry hook only runs once an operation has already FAILED, so every test
+# here has to engineer a real failure first. A directory at 0o500 is the lever:
+# it permits lookup and refuses unlink, which is precisely the read-only case
+# the hook exists for. Root ignores the mode, and Windows has neither these
+# semantics nor unprivileged symlinks, so both are skipped rather than asserted
+# vacuously.
+requires_posix_modes = pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX permission semantics")
+requires_unprivileged = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root ignores the 0o500 that makes the operation fail")
+
+
+@pytest.fixture
+def sealed(tmp_path):
+    """Yield a callable that seals a directory at 0o500, unsealing at teardown.
+
+    The unseal has to happen even when the test fails, or pytest's own tmp_path
+    reaper inherits a tree it cannot delete and poisons a later run.
+    """
+    sealed_dirs = []
+
+    def seal(d):
+        d.chmod(0o500)
+        sealed_dirs.append(d)
+        return d
+
+    yield seal
+    for d in sealed_dirs:
+        with contextlib.suppress(OSError):
+            d.chmod(0o700)
+
+
+@requires_posix_modes
+@requires_unprivileged
+class TestRmtreeRetryHook:
+    """`util.rmtree`'s read-only retry must not chmod through a symlink.
+
+    `os.chmod` follows links, and the hook is handed the path that failed, so
+    the unguarded version changed the mode of whatever the link pointed at —
+    a file outside the tree being deleted. Nothing covered these two lines
+    before; the bug was found by reading, not by a failing test.
+    """
+
+    def test_a_link_in_the_tree_does_not_change_its_target_s_mode(
+            self, tmp_path, sealed):
+        victim = tmp_path / "victim.txt"
+        victim.write_text("do not touch\n", encoding="utf-8")
+        victim.chmod(0o400)
+        tree = tmp_path / "tree"
+        tree.mkdir()
+        (tree / "lnk").symlink_to(victim)
+        sealed(tree)
+
+        # The delete cannot succeed — that is what summons the hook at all.
+        with pytest.raises(OSError):
+            util.rmtree(tree)
+
+        assert stat.S_IMODE(victim.stat().st_mode) == 0o400
+        assert victim.read_text(encoding="utf-8") == "do not touch\n"
+
+    def test_a_real_read_only_file_is_still_chmodded(self, tmp_path, sealed):
+        """The guard must be `islink`, not "give up on anything that fails".
+
+        This is the case the hook was written for, and it is what keeps the
+        fix from being "stop retrying": the chmod still happens, and it is
+        observable because chmod needs ownership plus search on the parent,
+        not write on it.
+        """
+        stubborn = tmp_path / "tree2"
+        stubborn.mkdir()
+        target = stubborn / "ro.txt"
+        target.write_text("x", encoding="utf-8")
+        target.chmod(0o400)
+        sealed(stubborn)
+
+        with pytest.raises(OSError):
+            util.rmtree(stubborn)
+
+        # Reading the child's mode needs search on the parent, and the hook
+        # took that away on its way past: `scandir` fails too, so the
+        # directory is chmodded to S_IWRITE as well and loses its x bit.
+        stubborn.chmod(0o700)
+        assert stat.S_IMODE(target.stat().st_mode) == stat.S_IMODE(
+            stat.S_IWRITE)
+
+    def test_rmtree_of_a_symlink_refuses_instead_of_reporting_success(
+            self, tmp_path):
+        """The silent variant, and the reason this is more than a mode change.
+
+        `shutil.rmtree` refuses a symlink argument by routing it through the
+        error hook with `func=os.path.islink`. The unguarded hook chmodded the
+        target through the link and then called `os.path.islink(path)`, which
+        answers True without raising — so the hook returned and `rmtree`
+        returned, having deleted nothing, while the caller was told the tree
+        was gone. No 0o500 is needed here: the refusal is unconditional.
+        """
+        real = tmp_path / "real"
+        real.mkdir()
+        (real / "keep.txt").write_text("keep", encoding="utf-8")
+        before = stat.S_IMODE(real.stat().st_mode)
+        link = tmp_path / "link"
+        link.symlink_to(real, target_is_directory=True)
+
+        with pytest.raises(OSError):
+            util.rmtree(link)
+
+        assert stat.S_IMODE(real.stat().st_mode) == before
+        assert (real / "keep.txt").read_text(encoding="utf-8") == "keep"
+        assert link.is_symlink()
+
+    def test_the_hook_reraises_the_exception_it_was_given(self, tmp_path):
+        """Not a fresh one: the caller's traceback must name the real failure.
+
+        Called directly, because reaching a chosen exception type through
+        `shutil.rmtree` would be testing shutil's dispatch instead.
+        """
+        link = tmp_path / "l"
+        link.symlink_to(tmp_path / "nowhere")
+        planted = PermissionError(13, "planted")
+
+        with pytest.raises(PermissionError) as caught:
+            util._clear_readonly_and_retry(os.unlink, str(link), planted)
+
+        assert caught.value is planted
+        assert link.is_symlink()   # and it did not delete it on the way out
+
