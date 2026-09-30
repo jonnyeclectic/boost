@@ -1122,3 +1122,186 @@ class TestRmtreeRetryHook:
         assert caught.value is planted
         assert link.is_symlink()   # and it did not delete it on the way out
 
+
+
+@requires_posix_modes
+class TestRemovePath:
+    """One removal that reads the link rather than through it.
+
+    Most of these are a mutant the naive `if path.is_dir(): rmtree(path)`
+    guard lets live, and together they pin the two directions it is wrong in:
+    a link answers for its target, so a dangling one looks absent and a link
+    to a directory looks like a directory.
+    """
+
+    def test_a_real_directory_is_removed_with_its_contents(self, tmp_path):
+        d = tmp_path / "tree"
+        (d / "sub").mkdir(parents=True)
+        (d / "sub" / "f.txt").write_text("x", encoding="utf-8")
+
+        assert util.remove_path(d) is True
+        assert not d.exists()
+
+    def test_a_regular_file_is_removed(self, tmp_path):
+        f = tmp_path / "f.txt"
+        f.write_text("x", encoding="utf-8")
+
+        assert util.remove_path(f) is True
+        assert not f.exists()
+
+    def test_a_dangling_symlink_is_unlinked_rather_than_skipped(self, tmp_path):
+        """`exists()` and `is_dir()` both answer False, so the old guard
+        skipped it — and the next writer to that path then failed with
+        `FileExistsError` for something that "does not exist"."""
+        link = tmp_path / "gone"
+        link.symlink_to(tmp_path / "nowhere")
+        assert not link.exists()          # the reading that made it invisible
+
+        assert util.remove_path(link) is True
+        assert not link.is_symlink()
+
+    def test_a_symlink_to_a_directory_goes_without_its_target(self, tmp_path):
+        """`is_dir()` follows the link, so the old guard handed `rmtree` a
+        symlink — which refuses one as its argument and raises."""
+        real = tmp_path / "real"
+        real.mkdir()
+        (real / "keep.txt").write_text("keep", encoding="utf-8")
+        link = tmp_path / "link"
+        link.symlink_to(real, target_is_directory=True)
+        assert link.is_dir()              # the reading that sent it to rmtree
+
+        assert util.remove_path(link) is True
+        assert not link.is_symlink()
+        assert real.is_dir()
+        assert (real / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+    def test_a_symlink_to_a_file_goes_without_its_target(self, tmp_path):
+        real = tmp_path / "real.txt"
+        real.write_text("keep", encoding="utf-8")
+        link = tmp_path / "link.txt"
+        link.symlink_to(real)
+
+        assert util.remove_path(link) is True
+        assert not link.is_symlink()
+        assert real.read_text(encoding="utf-8") == "keep"
+
+    def test_a_path_that_is_not_there_returns_false(self, tmp_path):
+        """False, not an exception: callers use it to mean "nothing to undo"."""
+        assert util.remove_path(tmp_path / "never") is False
+
+    def test_a_string_path_is_accepted(self, tmp_path):
+        """Callers pass `Path`, but the coercion is what makes that a choice."""
+        d = tmp_path / "tree"
+        d.mkdir()
+
+        assert util.remove_path(str(d)) is True
+        assert not d.exists()
+
+    @requires_unprivileged
+    def test_an_oserror_propagates(self, tmp_path, sealed):
+        """It raises like the call it wraps; callers that must not fail catch."""
+        parent = tmp_path / "sealed"
+        parent.mkdir()
+        victim = parent / "f.txt"
+        victim.write_text("x", encoding="utf-8")
+        sealed(parent)
+
+        with pytest.raises(OSError):
+            util.remove_path(victim)
+
+
+@requires_posix_modes
+class TestRemovePathRefusesTheWorkingDirectory:
+    """`Path("")` is `Path(".")`, and `"."` is a directory.
+
+    The normalisation happens in the constructor, so the empty string cannot
+    be told from an explicit `"."` by the time the function runs — refusing
+    the value they share is the only guard available. No caller can currently
+    produce one, but this is now the single place every guarded delete in the
+    codebase goes through and every real caller names a child.
+    """
+
+    @pytest.mark.parametrize("arg", ["", ".", Path(""), Path("."), Path()])
+    def test_a_path_meaning_here_raises_rather_than_emptying_the_cwd(
+            self, arg, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "keep.txt").write_text("mine", encoding="utf-8")
+
+        with pytest.raises(ValueError) as e:
+            util.remove_path(arg)
+
+        assert "working directory" in str(e.value)
+        assert (tmp_path / "keep.txt").read_text(encoding="utf-8") == "mine"
+
+    def test_a_relative_path_naming_a_child_still_works(
+            self, tmp_path, monkeypatch):
+        # The guard is about "here", not about refusing relative paths.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "f.txt").write_text("x", encoding="utf-8")
+
+        assert util.remove_path("sub") is True
+
+        assert not (tmp_path / "sub").exists()
+
+    def test_the_cwd_named_absolutely_is_not_refused(
+            self, tmp_path, monkeypatch):
+        # `Path(tmp_path)` is not `Path(".")`, so an absolute path that
+        # happens to be the cwd is a caller saying what it means. Pins that
+        # the guard is a literal comparison and not a resolved one — making
+        # it resolved would cost a syscall on every delete boost does.
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        monkeypatch.chdir(sub)
+
+        assert util.remove_path(sub) is True
+
+        assert not sub.exists()
+
+
+class TestRemoveItemsUsesRemovePath:
+    """`remove_items` kept its contract when its body became one call."""
+
+    def test_a_link_a_file_and_a_tree_all_count_as_removed(self, tmp_path):
+        d = tmp_path / "tree"
+        d.mkdir()
+        (d / "f").write_text("x", encoding="utf-8")
+        f = tmp_path / "file.txt"
+        f.write_text("yy", encoding="utf-8")
+        link = tmp_path / "link"
+        link.symlink_to(tmp_path / "nowhere")
+
+        removed, freed, failures = util.remove_items(
+            [(d, "dir", 10), (f, "file", 2), (link, "link", 1)])
+
+        assert (removed, freed, failures) == (3, 13, [])
+        assert not d.exists() and not f.exists() and not link.is_symlink()
+
+    def test_a_missing_path_is_neither_removed_nor_a_failure(self, tmp_path):
+        removed, freed, failures = util.remove_items(
+            [(tmp_path / "never", "dir", 99)])
+
+        assert (removed, freed, failures) == (0, 0, [])
+
+    @requires_posix_modes
+    @requires_unprivileged
+    def test_a_failure_is_reported_and_the_rest_still_go(self, tmp_path, sealed):
+        # `sealed` is a 0o500 parent, which is what makes the unlink fail.
+        # Windows has no such semantics: the file deletes, both items are
+        # removed, and the assertion reads (2, 12) — the test's premise gone
+        # rather than the code wrong. The sibling tests in this class need no
+        # mark; they turn on `remove_path` alone.
+        parent = tmp_path / "sealed"
+        parent.mkdir()
+        stuck = parent / "f.txt"
+        stuck.write_text("x", encoding="utf-8")
+        sealed(parent)
+        ok = tmp_path / "ok.txt"
+        ok.write_text("y", encoding="utf-8")
+
+        removed, freed, failures = util.remove_items(
+            [(stuck, "file", 5), (ok, "file", 7)])
+
+        assert (removed, freed) == (1, 7)
+        assert [p for p, _ in failures] == [stuck]
+        assert not ok.exists()

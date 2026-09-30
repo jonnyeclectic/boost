@@ -11,7 +11,7 @@ reason this module exists rather than one `rglob` in the command layer:
   bytes the run could not free: a 1 MiB untracked `scripts/junk.bin` made
   `compact --dry-run` print "would free 1.0MB" and the live run print
   "every tap is already compact", with the file still on disk.
-* `--reclone` is `rmtree` + a fresh blobless clone, so it removes the untracked
+* `--reclone` is `remove_path` + a fresh blobless clone, so it removes the untracked
   freight *and* the clone's whole `.git` — and then re-downloads a `.git` whose
   size only the remote decides. So it frees strictly more than the default and
   its net figure is unknowable; see :class:`Plan`.
@@ -169,9 +169,9 @@ def freight_bytes(repo: Path, keep_dirs: list[str]) -> int:
 def worktree_freight_bytes(repo: Path, keep_dirs: list[str]) -> int:
     """Bytes a `--reclone` removes from the working tree — tracked or not.
 
-    `--reclone` is `util.rmtree` followed by a fresh clone, so whether git knows
-    about a file has no bearing on whether it survives. This is the count the
-    default path used to use, and it was right only for this mode.
+    `--reclone` is `util.remove_path` followed by a fresh clone, so whether git
+    knows about a file has no bearing on whether it survives. This is the count
+    the default path used to use, and it was right only for this mode.
     """
     return sum(size for _rel, size in _off_cone_files(repo, keep_dirs))
 

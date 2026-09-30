@@ -30,6 +30,12 @@ def _make_repo(path, author="Test Author"):
     return path
 
 
+
+def _refuse_to_remove(path):
+    """A `util.remove_path` that fails the way a read-only parent does."""
+    raise PermissionError(13, "Permission denied", str(path))
+
+
 class TestTapProperties:
     def test_safe_name_replaces_slash(self):
         assert registry.Tap("owner/repo", "u").safe_name == "owner__repo"
@@ -374,6 +380,46 @@ class TestAddRemove:
                 "(Permission denied) — make %s writable, then run "
                 "`boost clean`" % paths.tilde(paths.cache_dir())) in err
 
+    def test_a_symlinked_clone_is_unlinked_and_its_target_survives(
+            self, sandbox, fixture_tap_src, tmp_path):
+        """`~/.boost/repos/<tap>` pointed at a checkout the user is editing.
+
+        An ordinary thing to do, and `tap.path.exists()` answered True through
+        the link, so `untap` handed `rmtree` a symlink — which refuses one as
+        its argument. The tap was already deregistered by then, so the error
+        exited 70 with the config written and the link still there.
+        """
+        tap = registry.add(str(fixture_tap_src))
+        real = tmp_path / "my-checkout"
+        real.mkdir()
+        (real / "keep.txt").write_text("mine", encoding="utf-8")
+        util.rmtree(tap.path)
+        tap.path.symlink_to(real, target_is_directory=True)
+
+        assert registry.remove("fixture-tap").name == "fixture-tap"
+
+        assert config.get("taps") == []
+        assert not tap.path.is_symlink()
+        assert (real / "keep.txt").read_text(encoding="utf-8") == "mine"
+
+    def test_a_clone_it_cannot_remove_is_a_warning(
+            self, sandbox, fixture_tap_src, monkeypatch, capsys):
+        """Config is saved before the delete, so an unhandled error here left
+        the tap deregistered with its clone on disk and nothing naming it."""
+        tap = registry.add(str(fixture_tap_src))
+        capsys.readouterr()
+        monkeypatch.setattr(util, "remove_path", _refuse_to_remove)
+
+        assert registry.remove("fixture-tap").name == "fixture-tap"
+
+        assert config.get("taps") == []
+        assert tap.path.exists()
+        cap = capsys.readouterr()
+        assert cap.out == ""                       # stdout may be --json
+        err = " ".join(cap.err.split())
+        assert ("! could not remove the clone for fixture-tap (Permission "
+                "denied) — delete %s by hand" % paths.tilde(tap.path)) in err
+
     def test_remove_only_drops_the_named_tap(self, sandbox):
         # Removing one of several taps must leave the others in config. Pins the
         # `cfg["taps"] = [t ... if t["name"] != tap.name]` rewrite and its
@@ -390,6 +436,32 @@ class TestAddRemove:
     def test_remove_unknown_raises(self, sandbox):
         with pytest.raises(BoostError):
             registry.remove("nope")
+
+
+class TestCloneOneNeverRaises:
+    """`_clone_one` promises a ThreadPoolExecutor that it never raises.
+
+    It catches `BoostError` and nothing else, so the `remove_path` added in
+    front of its clone — which raises `OSError` like the calls it wraps —
+    would crash a worker and take the whole `add_many` pool with it: one
+    unwritable leftover turning twelve good clones into a 70.
+    """
+
+    def test_a_path_it_cannot_clear_is_one_failed_spec(
+            self, sandbox, tmp_path, monkeypatch):
+        alpha = _make_repo(tmp_path / "alpha")
+        beta = _make_repo(tmp_path / "beta")
+        monkeypatch.setattr(
+            util, "remove_path",
+            lambda p: _refuse_to_remove(p) if "beta" in str(p) else None)
+
+        results = registry.add_many([str(alpha), str(beta)])
+
+        by_name = {r["name"]: r for r in results}
+        assert by_name["alpha"]["ok"] is True
+        assert by_name["beta"]["ok"] is False
+        assert "could not clear" in by_name["beta"]["error"]
+        assert config.get("taps")            # alpha was still written
 
 
 class TestDependents:
@@ -430,6 +502,52 @@ class TestUpdate:
         util.rmtree(tap.path)
         assert registry.update("pullme") == ({"pullme": "cloned"}, {})
         assert tap.is_cloned
+
+    def test_update_reclones_over_a_dangling_link(self, sandbox, tmp_path):
+        """The one failure of this shape that cannot be recovered from.
+
+        `is_cloned` is `path.is_dir()`, which a dangling symlink answers False
+        to — so a tap whose clone was symlinked to a checkout that later moved
+        lands in exactly the branch that clones. Git refuses to clone onto an
+        existing link, so `boost update` failed, `boost doctor` reported the
+        tap not cloned and pointed at `boost update`, and the loop closed.
+        """
+        origin = _make_repo(tmp_path / "pullme")
+        tap = registry.add(str(origin))
+        util.rmtree(tap.path)
+        tap.path.symlink_to(tmp_path / "gone", target_is_directory=True)
+        assert not tap.is_cloned                 # the link is dangling
+        assert tap.path.is_symlink()             # but the path is taken
+
+        assert registry.update("pullme") == ({"pullme": "cloned"}, {})
+
+        assert tap.is_cloned
+        assert not tap.path.is_symlink()         # a real clone replaced it
+
+    def test_a_path_it_cannot_clear_fails_only_that_tap(
+            self, sandbox, tmp_path, monkeypatch):
+        """`remove_path` raises OSError; this loop handles BoostError only.
+
+        So the new clear-before-clone turned one tap's unwritable directory
+        into the whole sweep's: the loop aborts, every later tap goes
+        unrefreshed, and the successful pulls are thrown away unreported —
+        the exact regression `test_one_dead_upstream_does_not_stop_the_others`
+        exists to prevent, reintroduced through a different door.
+        """
+        dead = _make_repo(tmp_path / "deadtap")
+        live = _make_repo(tmp_path / "livetap")
+        registry.add(str(dead))
+        registry.add(str(live))
+        util.rmtree(registry.get("deadtap").path)
+        monkeypatch.setattr(
+            util, "remove_path",
+            lambda p: _refuse_to_remove(p) if "deadtap" in str(p) else None)
+
+        results, failures = registry.update()
+
+        assert "livetap" in results          # the healthy tap still refreshed
+        assert "deadtap" in failures
+        assert "could not clear" in str(failures["deadtap"])
 
     def test_update_already_up_to_date(self, sandbox, tmp_path):
         origin = _make_repo(tmp_path / "pullme")

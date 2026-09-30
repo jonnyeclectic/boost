@@ -953,9 +953,7 @@ def cmd_sync(argv: list[str]) -> int:
                                               ", ".join(orphans))))
         if go:
             for name in orphans:
-                target = store.skill_store_dir(name)
-                if target.is_dir():
-                    util.rmtree(target)
+                util.remove_path(store.skill_store_dir(name))
                 journal.log("prune", name)
                 pruned.append(name)
     left = [n for n in orphans if n not in pruned]

@@ -1342,9 +1342,25 @@ def uninstall_project(name: str, base=None) -> dict:
     removed: list[str] = []
     for m in entry.get("materializations") or []:
         path = scopes.resolve_in_base(resolved_base, m.get("path"))
-        if path is None or not path.is_dir():
-            continue          # refused or already gone — nothing was removed
-        util.rmtree(path)
+        # `resolve_in_base` checks containment against the *resolved* path but
+        # returns the unresolved one, so a materialization recorded as a
+        # symlink arrives here as a symlink. A link out of the project was
+        # already refused above; one that stays inside is unlinked rather than
+        # handed to `rmtree`, which refuses a link as its argument.
+        #
+        # The guard stays "a link or a directory" rather than becoming
+        # `remove_path`'s "anything that is there". The old `is_dir()` skipped
+        # a materialization naming a plain FILE, and `remove_path` would
+        # delete it: `boost uninstall --local` reads these paths out of the
+        # project lock, so widening what it will delete off a lock entry is a
+        # separate question that has its own card, and this change — read the
+        # link rather than through it — must not decide it by accident. A link
+        # is still removed whatever it points at, because the link is boost's
+        # and unlinking it leaves the target untouched.
+        if path is None or not (path.is_symlink() or path.is_dir()):
+            continue          # refused, absent, or a file we did not create
+        if not util.remove_path(path):
+            continue          # vanished between the check and the call
         if m.get("agent"):
             removed.append(m["agent"])
     projectlock.remove_skill(resolved_base, name)
@@ -2173,9 +2189,7 @@ def uninstall(name: str) -> dict:
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     removed_links = unlink_agents(name)
-    dest = skill_store_dir(name)
-    if dest.exists():
-        util.rmtree(dest)
+    util.remove_path(skill_store_dir(name))
     lockfile.remove_skill(name)
     journal.log("uninstall", name)
     return {"name": name, "unlinked": removed_links, "entry": entry, "kind": "skill"}
