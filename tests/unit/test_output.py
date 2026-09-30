@@ -343,27 +343,256 @@ class TestHeadingAndVerdictColor:
             "\033[38;2;250;204;21m1 issue\033[0m\n")
 
 
+class _FdStream(io.StringIO):
+    """A buffer that reports someone else's file descriptor.
+
+    `term_width` reaches `os.get_terminal_size` only through `stream.fileno()`,
+    and a plain StringIO raises there — so a test that wants the ioctl branch
+    has to supply a descriptor. Which one does not matter: every test using
+    this patches `os.get_terminal_size`.
+    """
+
+    def __init__(self, fd: int = 1) -> None:
+        super().__init__()
+        self._fd = fd
+
+    def fileno(self) -> int:
+        return self._fd
+
+
+class TestColumnsEnv:
+    """The one COLUMNS rule, asserted directly.
+
+    Every caller writes `if columns:`, which would swallow a `> 0` -> `>= 0`
+    mutant by reading the 0 as falsey anyway. Asserting None-vs-int here is
+    what makes that boundary a killer.
+    """
+
+    @pytest.mark.parametrize("value", ["0", "-1", "-10", "", "wide", " ", "1.5"])
+    def test_not_a_width_reads_as_unset(self, monkeypatch, value):
+        monkeypatch.setenv("COLUMNS", value)
+        assert output._columns_env() is None
+
+    @pytest.mark.parametrize(("value", "want"), [("1", 1), ("123", 123),
+                                                 (" 100 ", 100), ("+100", 100)])
+    def test_a_positive_width_is_taken(self, monkeypatch, value, want):
+        monkeypatch.setenv("COLUMNS", value)
+        assert output._columns_env() == want
+
+    def test_unset_is_none(self, monkeypatch):
+        monkeypatch.delenv("COLUMNS", raising=False)
+        assert output._columns_env() is None
+
+    def test_term_width_and_pane_width_agree_on_a_signed_value(self, monkeypatch):
+        """`+100` used to be a pane for a table and no pane for a hint.
+
+        `pane_width` asked `.strip().isdigit()` and `term_width` inherited
+        shutil's `int()`, so one said 100 and the other said there was no
+        explicit width at all. One function now answers for both.
+        """
+        monkeypatch.setenv("COLUMNS", "+100")
+        assert output.term_width() == 100
+        assert output.pane_width(_FdStream()) == 100
+
+
 class TestTermWidth:
     def test_honors_columns_env(self, monkeypatch):
         monkeypatch.setenv("COLUMNS", "123")
         assert output.term_width() == 123
 
+    def test_columns_env_beats_the_stream(self, monkeypatch):
+        """COLUMNS is checked before any stream is consulted.
+
+        A scripted `COLUMNS=100` must keep applying to a hint; the stream
+        parameter is a fallback for when nobody said.
+        """
+        monkeypatch.setenv("COLUMNS", "100")
+        monkeypatch.setattr(output.os, "get_terminal_size",
+                            lambda fd: os.terminal_size((200, 24)))
+        assert output.term_width(stream=_FdStream()) == 100
+
     def test_detected_columns(self, monkeypatch):
-        monkeypatch.setattr(output.shutil, "get_terminal_size",
-                            lambda fb: os.terminal_size((93, 24)))
-        assert output.term_width() == 93
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setattr(output.os, "get_terminal_size",
+                            lambda fd: os.terminal_size((93, 24)))
+        assert output.term_width(stream=_FdStream()) == 93
+
+    def test_the_stream_decides_which_descriptor_is_asked(self, monkeypatch):
+        """Two streams, two widths, one call each — the bug in miniature."""
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setattr(output.os, "get_terminal_size",
+                            lambda fd: os.terminal_size(((200, 60)[fd == 2], 24)))
+        assert output.term_width(stream=_FdStream(1)) == 200
+        assert output.term_width(stream=_FdStream(2)) == 60
 
     def test_default_80_when_undetectable(self, monkeypatch):
         monkeypatch.delenv("COLUMNS", raising=False)
-        monkeypatch.setattr(output.shutil, "get_terminal_size",
-                            lambda fb: os.terminal_size(fb))
-        assert output.term_width() == 80
+        assert output.term_width(stream=io.StringIO()) == 80
 
     def test_custom_default_when_undetectable(self, monkeypatch):
         monkeypatch.delenv("COLUMNS", raising=False)
-        monkeypatch.setattr(output.shutil, "get_terminal_size",
-                            lambda fb: os.terminal_size(fb))
-        assert output.term_width(77) == 77
+        assert output.term_width(77, stream=io.StringIO()) == 77
+
+    def test_a_zero_column_terminal_is_no_terminal(self, monkeypatch):
+        """`or None` in `_tty_width`, which a pty cannot reach.
+
+        A terminal reporting zero columns would otherwise wrap every line to
+        nothing at all.
+        """
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setattr(output.os, "get_terminal_size",
+                            lambda fd: os.terminal_size((0, 24)))
+        assert output.term_width(stream=_FdStream()) == 80
+
+    def test_an_ioctl_that_raises_is_not_a_terminal(self, monkeypatch):
+        monkeypatch.delenv("COLUMNS", raising=False)
+
+        def boom(fd):
+            raise OSError(25, "Inappropriate ioctl for device")
+
+        monkeypatch.setattr(output.os, "get_terminal_size", boom)
+        assert output.term_width(stream=_FdStream()) == 80
+
+    def test_a_stream_of_none_is_not_a_terminal(self, monkeypatch):
+        """`boost … >&-` leaves `sys.stdout` None; nothing may raise."""
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setattr(output.sys, "stdout", None)
+        assert output.term_width() == 80
+
+    def test_no_stream_means_stdout(self, monkeypatch):
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setattr(output.sys, "stdout", _FdStream(7))
+        monkeypatch.setattr(output.os, "get_terminal_size",
+                            lambda fd: os.terminal_size((111 if fd == 7 else 9, 24)))
+        assert output.term_width() == 111
+
+    def test_a_detached_stdout_does_not_borrow_the_real_terminal(self, monkeypatch):
+        """No second chance through `sys.__stdout__`.
+
+        Falling back to it is exactly the bug: it would size a redirected
+        stderr by the terminal that stdout is not writing to either.
+        """
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setattr(output.sys, "stdout", io.StringIO())
+        monkeypatch.setattr(output.sys, "__stdout__", _FdStream(1))
+        monkeypatch.setattr(output.os, "get_terminal_size",
+                            lambda fd: os.terminal_size((200, 24)))
+        assert output.term_width() == 80
+
+
+class TestWrapFollowsTheStreamItPrintsTo:
+    """The defect the change exists to fix, at the emitter boundary.
+
+    A stream-sensitive stub rather than a pty, so the assertion is about
+    *which stream each emitter asks about* — the thing that was wrong — and so
+    it runs on Windows. `TestPtyWidth` below covers the real ioctl.
+    """
+
+    @staticmethod
+    def _width_by_stream(monkeypatch, wide, narrow):
+        monkeypatch.setattr(
+            output, "term_width",
+            lambda default=80, stream=None: 200 if stream is wide else 40)
+
+    def test_warn_sizes_by_its_own_stream(self, monkeypatch, capsys):
+        err = io.StringIO()
+        self._width_by_stream(monkeypatch, err, None)
+        output.warn(" ".join(["remedy"] * 40), stream=err, wrap=True)
+        assert max(len(ln) for ln in err.getvalue().splitlines()) > 100
+
+    def test_warn_on_stdout_still_sizes_by_stdout(self, monkeypatch, capsys):
+        """The default path is unchanged: no stream means stdout's pane."""
+        self._width_by_stream(monkeypatch, io.StringIO(), None)
+        output.warn(" ".join(["remedy"] * 40), wrap=True)
+        assert max(len(ln) for ln in capsys.readouterr().out.splitlines()) <= 40
+
+    def test_err_sizes_its_message_by_stderr(self, monkeypatch, capsys):
+        self._width_by_stream(monkeypatch, sys.stderr, None)
+        output.err(" ".join(["remedy"] * 40), wrap=True)
+        assert max(len(ln) for ln in capsys.readouterr().err.splitlines()) > 100
+
+    def test_err_sizes_its_hint_by_stderr(self, monkeypatch, capsys):
+        self._width_by_stream(monkeypatch, sys.stderr, None)
+        output.err("boom", hint=" ".join(["remedy"] * 40))
+        got = capsys.readouterr().err
+        assert max(output.visible_len(ln) for ln in got.splitlines()) > 100
+
+    def test_info_sizes_by_its_own_stream(self, monkeypatch):
+        err = io.StringIO()
+        self._width_by_stream(monkeypatch, err, None)
+        output.info(" ".join(["remedy"] * 40), stream=err, wrap=True)
+        assert max(len(ln) for ln in err.getvalue().splitlines()) > 100
+
+    def test_a_narrow_stream_still_folds_narrow(self, monkeypatch):
+        """The other direction: the wide pane must not leak in either."""
+        err, wide = io.StringIO(), io.StringIO()
+        self._width_by_stream(monkeypatch, wide, err)
+        output.warn(" ".join(["remedy"] * 40), stream=err, wrap=True)
+        assert max(len(ln) for ln in err.getvalue().splitlines()) <= 40
+
+
+@pytest.mark.skipif(not hasattr(os, "openpty"), reason="POSIX pty only")
+class TestPtyWidth:
+    """The real ioctl, against a terminal of a width we chose.
+
+    Nothing else in the suite can reach `os.get_terminal_size` unmocked: under
+    pytest every standard stream is a capture buffer with no descriptor.
+    """
+
+    @staticmethod
+    def _pty(cols):
+        import fcntl
+        import struct
+        import termios
+        primary, secondary = os.openpty()
+        fcntl.ioctl(secondary, termios.TIOCSWINSZ,
+                    struct.pack("HHHH", 24, cols, 0, 0))
+        return primary, os.fdopen(secondary, "w", buffering=1)
+
+    def test_a_streams_own_terminal_is_measured(self, monkeypatch):
+        monkeypatch.delenv("COLUMNS", raising=False)
+        primary, tty = self._pty(200)
+        try:
+            assert output.term_width(stream=tty) == 200
+            assert output.pane_width(tty) == 200
+            # ... while the captured stdout beside it has no terminal at all.
+            assert output.term_width() == 80
+        finally:
+            tty.close()
+            os.close(primary)
+
+    def test_two_terminals_of_different_widths_do_not_borrow(self, monkeypatch):
+        monkeypatch.delenv("COLUMNS", raising=False)
+        p1, wide = self._pty(200)
+        p2, narrow = self._pty(60)
+        try:
+            assert output.term_width(stream=wide) == 200
+            assert output.term_width(stream=narrow) == 60
+        finally:
+            wide.close()
+            narrow.close()
+            os.close(p1)
+            os.close(p2)
+
+    def test_a_wrapped_line_folds_to_its_own_terminal(self, monkeypatch):
+        """End to end through `warn`, which is where a user sees it."""
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setenv("NO_COLOR", "1")
+        p1, wide = self._pty(200)
+        p2, narrow = self._pty(60)
+        try:
+            output.warn(" ".join(["remedy"] * 40), stream=narrow, wrap=True)
+            narrow.flush()
+            got = os.read(p2, 65536).decode()
+        finally:
+            wide.close()
+            narrow.close()
+            os.close(p1)
+            os.close(p2)
+        widths = [len(ln) for ln in got.replace("\r", "").splitlines() if ln]
+        assert widths and max(widths) <= 60
+        # It really did fold, rather than fitting by accident.
+        assert len(widths) > 1
 
 
 class TestTruncate:
@@ -554,7 +783,7 @@ class TestPanelFitsTerminal:
         # `boost count | cat`'s summary and dropped its tail.
         monkeypatch.setenv("NO_COLOR", "1")
         monkeypatch.setattr(output, "pane_width", lambda stream=None: None)
-        monkeypatch.setattr(output, "term_width", lambda: 40)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 40)
         rows = output.panel("q" * 110, title="t" * 90).split("\n")
         assert rows[1] == "│ " + "q" * 110 + " │"
         assert "t" * 90 in rows[0]
@@ -647,7 +876,7 @@ class TestEmptyStateWrap:
 
     def test_message_wraps_to_the_pane(self, monkeypatch):
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: 40)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 40)
         rendered = output.empty_state(self.LONG, wrap=True)
         lines = rendered.split("\n")
         assert len(lines) > 1
@@ -656,7 +885,7 @@ class TestEmptyStateWrap:
 
     def test_hint_wraps_independently_and_keeps_its_marker(self, monkeypatch):
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: 40)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 40)
         rendered = output.empty_state("short", hint=self.LONG, wrap=True)
         lines = rendered.split("\n")
         assert lines[0] == "  ○ short"
@@ -665,7 +894,7 @@ class TestEmptyStateWrap:
 
     def test_backtick_command_in_hint_stays_atomic(self, monkeypatch):
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: 60)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 60)
         hint = ("create one: `boost cohort create pilot "
                "--skills tdd-workflow --percent 50`")
         rendered = output.empty_state("no cohorts defined", hint=hint,
@@ -677,7 +906,7 @@ class TestEmptyStateWrap:
         # wrap=False (the default) must still be safe at any width — no crash,
         # single line, same as before this feature existed.
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: 10)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 10)
         assert output.empty_state(self.LONG).count("\n") == 0
 
 
@@ -699,7 +928,7 @@ class TestTitlebar:
 
     def test_basic_dots_use_16color_fallback(self, monkeypatch):
         # Force the 16-color tier: dots fall back to basic RED/YELLOW/GREEN.
-        monkeypatch.setattr(output, "color_level", lambda: 1)
+        monkeypatch.setattr(output, "color_level", lambda default=80, stream=None: 1)
         bar = output.titlebar("x")
         assert output.RED + "●" + output.RESET in bar
         assert output.YELLOW + "●" + output.RESET in bar
@@ -985,7 +1214,7 @@ class TestWarnColourFollowsItsStream:
 
     def test_wrapped_continuations_follow_the_stream_too(self, monkeypatch):
         monkeypatch.setattr(sys, "stdout", _TtyBuffer())
-        monkeypatch.setattr(output, "term_width", lambda default=80: 20)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 20)
         err = io.StringIO()
         output.warn("one two three four five six seven", stream=err, wrap=True)
         assert "\x1b[" not in err.getvalue()
@@ -1424,7 +1653,7 @@ class TestPaneWidth:
 
     def test_a_tty_reports_its_width(self, monkeypatch):
         monkeypatch.delenv("COLUMNS", raising=False)
-        monkeypatch.setattr(output, "term_width", lambda: 91)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 91)
 
         class Tty(io.StringIO):
             def isatty(self):
@@ -1525,7 +1754,7 @@ class TestTableWidthAware:
         monkeypatch.setenv("NO_COLOR", "1")
 
     def test_numeric_column_is_right_aligned(self, capsys, monkeypatch):
-        monkeypatch.setattr(output, "term_width", lambda: 80)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 80)
         output.table([("alpha", "5"), ("b", "100")], headers=("NAME", "N"))
         # the count column is right-justified so 5 and 100 share a right edge.
         assert capsys.readouterr().out == (
@@ -1534,7 +1763,7 @@ class TestTableWidthAware:
             "b      100\n")
 
     def test_dash_placeholder_row_stays_right_aligned(self, capsys, monkeypatch):
-        monkeypatch.setattr(output, "term_width", lambda: 80)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 80)
         output.table([("alpha", "5"), ("b", "—"), ("cc", "100")],
                      headers=("NAME", "N"))
         # a placeholder row keeps the count column right-aligned instead of
@@ -1565,7 +1794,7 @@ class TestTableWidthAware:
     def test_all_digit_column_right_aligns_by_default(self, capsys, monkeypatch):
         # An all-decimal fingerprint is content-indistinguishable from a count
         # column, which is exactly the defect `text=` exists to override below.
-        monkeypatch.setattr(output, "term_width", lambda: 80)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 80)
         output.table([("acme", "1122334455667788")],
                      headers=("NAME", "FINGERPRINT"))
         lines = capsys.readouterr().out.splitlines()
@@ -1574,7 +1803,7 @@ class TestTableWidthAware:
 
     def test_text_column_stays_left_aligned_even_when_all_digit(
             self, capsys, monkeypatch):
-        monkeypatch.setattr(output, "term_width", lambda: 80)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 80)
         output.table([("acme", "1122334455667788"), ("bb", "22")],
                      headers=("NAME", "FINGERPRINT"), text=("FINGERPRINT",))
         lines = capsys.readouterr().out.splitlines()
@@ -1587,7 +1816,7 @@ class TestTableWidthAware:
 
     def test_text_resolves_by_header_name_or_index_like_keep(
             self, capsys, monkeypatch):
-        monkeypatch.setattr(output, "term_width", lambda: 80)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 80)
         output.table([("a", "10")], headers=("NAME", "N"), text=(1,))
         line = capsys.readouterr().out.splitlines()[1]
         assert line == "a     10"  # left-aligned via numeric column index too
@@ -2236,7 +2465,7 @@ class TestWrap:
         assert all(ln.strip() for ln in lines)
 
     def test_width_defaults_to_the_terminal(self, monkeypatch):
-        monkeypatch.setattr(output, "term_width", lambda: 24)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 24)
         text = " ".join(["word"] * 20)
         assert all(output.visible_len(ln) <= 24 for ln in output.wrap(text))
 
@@ -2330,7 +2559,7 @@ class TestWrappingEmitters:
 
     def _out(self, capsys, monkeypatch, fn, text, cols=40, **kw):
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: cols)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: cols)
         fn(text, **kw)
         return capsys.readouterr().out.rstrip("\n").split("\n")
 
@@ -2372,13 +2601,13 @@ class TestWrappingEmitters:
 
     def test_an_empty_wrapped_message_still_prints_a_blank_line(self, capsys,
                                                                monkeypatch):
-        monkeypatch.setattr(output, "term_width", lambda: 40)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 40)
         output.info("", wrap=True)
         assert capsys.readouterr().out == "\n"
 
     def test_wrapped_warn_reaches_the_requested_stream(self, capsys, monkeypatch):
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: 40)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 40)
         output.warn(self.LONG, stream=sys.stderr, wrap=True)
         cap = capsys.readouterr()
         assert cap.out == ""
@@ -2390,7 +2619,7 @@ class TestKvWrap:
 
     def _lines(self, capsys, monkeypatch, value, cols=40, **kw):
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: cols)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: cols)
         output.kv("key", value, **kw)
         return capsys.readouterr().out.rstrip("\n").split("\n")
 
@@ -2472,7 +2701,7 @@ class TestErrorAndHintWrap:
 
     def _err(self, capsys, monkeypatch, msg, hint=None, cols=40):
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: cols)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: cols)
         output.err(msg, hint)
         return capsys.readouterr().err.rstrip("\n").split("\n")
 
@@ -2481,7 +2710,7 @@ class TestErrorAndHintWrap:
         # Opt-in, like `warn(wrap=True)`: a refusal that is a sentence folds
         # and its continuations align under the `Error: ` label.
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: 40)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 40)
         output.err(self.MSG, wrap=True)
         lines = capsys.readouterr().err.rstrip("\n").split("\n")
         assert len(lines) > 1
@@ -2532,7 +2761,7 @@ class TestErrorAndHintWrap:
         # gh's own failure text arrives with newlines in it; they are the
         # author's paragraph breaks, and wrapping must fold within them.
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: 80)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 80)
         output.err("failed", "first line\nsecond line")
         lines = capsys.readouterr().err.rstrip("\n").split("\n")
         assert lines[1] == "  hint: first line"
@@ -2552,7 +2781,7 @@ class TestErrorAndHintWrap:
         # A blank paragraph break is a line the author wrote, not an empty
         # wrap result to drop.
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: 80)
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: 80)
         output.err("boom", "first\n\nsecond")
         lines = capsys.readouterr().err.rstrip("\n").split("\n")
         assert lines[1:] == ["  hint: first", "        ", "        second"]

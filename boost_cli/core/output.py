@@ -14,7 +14,6 @@ from __future__ import annotations
 import contextlib
 import os
 import re
-import shutil
 import sys
 import unicodedata
 from collections.abc import Sequence
@@ -225,14 +224,19 @@ def gradient(text: str, stream=None) -> str:
     return "".join(out)
 
 
-def _wrap_lines(msg: str, lead: int) -> list[str]:
+def _wrap_lines(msg: str, lead: int, stream=None) -> list[str]:
     """Wrap `msg` for an emitter whose own prefix costs `lead` columns.
 
     Returns at least one line so an emitter never silently prints nothing for a
     message it was given; the emitter decides what its prefix and continuation
     padding look like.
+
+    ``stream`` is the one the emitter is about to print to, and it must be
+    passed: a caller that omits it gets stdout's pane for a line that may not
+    land there. None means stdout, which is the right default only for the
+    emitters that have no other option.
     """
-    return wrap(msg, term_width() - lead) or [msg]
+    return wrap(msg, term_width(stream=stream) - lead) or [msg]
 
 
 def _stdout_first(stream) -> None:
@@ -281,7 +285,7 @@ def warn(msg: str, stream=None, wrap: bool = False) -> None:
     terminal. Asking stdout left the first plain and wrote escape codes into
     the second.
     """
-    body = _wrap_lines(msg, 4) if wrap else [msg]
+    body = _wrap_lines(msg, 4, stream) if wrap else [msg]
     _stdout_first(stream)
     for i, line in enumerate(body):
         lead = "  " + role("!", "warn", stream=stream) + " " if i == 0 else "    "
@@ -315,7 +319,7 @@ def err(msg: str, hint: str | None = None, wrap: bool = False) -> None:
     """
     _stdout_first(sys.stderr)
     head = "Error: "
-    body = _wrap_lines(msg, len(head)) if wrap else [msg]
+    body = _wrap_lines(msg, len(head), sys.stderr) if wrap else [msg]
     print(c(head, RED, BOLD, stream=sys.stderr) + body[0], file=sys.stderr)
     for line in body[1:]:
         print(" " * len(head) + line, file=sys.stderr)
@@ -324,7 +328,8 @@ def err(msg: str, hint: str | None = None, wrap: bool = False) -> None:
         lines: list[str] = []
         # `if hint` above guarantees splitlines() is non-empty.
         for para in hint.splitlines():
-            lines.extend(_wrap_lines(para, len(lead)) if para else [""])
+            lines.extend(
+                _wrap_lines(para, len(lead), sys.stderr) if para else [""])
         print(c(lead + ("\n" + " " * len(lead)).join(lines), DIM,
                 stream=sys.stderr),
               file=sys.stderr)
@@ -339,7 +344,7 @@ def info(msg: str = "", stream=None, wrap: bool = False) -> None:
     """
     _stdout_first(stream)
     if wrap and msg:
-        for line in _wrap_lines(msg, 2):
+        for line in _wrap_lines(msg, 2, stream):
             print("  " + line, file=stream)
         return
     print("  " + msg if msg else "", file=stream)
@@ -399,9 +404,59 @@ def verdict(ok: bool, msg: str) -> None:
     print("  " + role("●", name) + " " + role(msg, name))
 
 
-def term_width(default: int = 80) -> int:
-    """Best-effort terminal column count; a stable default when detached."""
-    return shutil.get_terminal_size((default, 20)).columns
+def _columns_env() -> int | None:
+    """An explicit ``COLUMNS``, or None when it is unset or not a width.
+
+    This is ``shutil``'s own rule written out, because the module now has to
+    apply it in two places and used to apply two different ones: this path
+    inherited ``int()`` from ``shutil`` while :func:`pane_width` asked
+    ``.strip().isdigit()``, so ``COLUMNS=+100`` was a hundred-column pane for
+    a table and no pane at all for a hint. A non-positive value is not a
+    width and reads as unset, which is what ``shutil`` does with it too.
+    """
+    try:
+        columns = int(os.environ["COLUMNS"])
+    except (KeyError, ValueError):
+        return None
+    return columns if columns > 0 else None
+
+
+def _tty_width(stream) -> int | None:
+    """Columns of the terminal behind `stream`, or None when it has none.
+
+    ``os.get_terminal_size`` rather than ``shutil``'s, because shutil's takes
+    no stream: it reads ``sys.__stdout__`` and nothing else, which is the
+    whole bug this function exists to fix. Each exception in the tuple is
+    reachable — ``AttributeError`` when the stream is None (``boost … >&-``
+    leaves ``sys.stdout`` None, as :func:`_stdout_first` already documents),
+    ``ValueError``/``OSError`` from ``fileno()`` on a buffer that has no
+    descriptor or from the ioctl on a file or pipe. ``or None`` folds a
+    terminal claiming zero columns into "no terminal", as shutil does.
+    """
+    try:
+        return os.get_terminal_size(stream.fileno()).columns or None
+    except (AttributeError, ValueError, OSError):
+        return None
+
+
+def term_width(default: int = 80, stream=None) -> int:
+    """Best-effort column count for `stream`; `default` when detached.
+
+    ``stream`` defaults to stdout, which is right for the ~15 command-layer
+    callers that print there. It exists because the emitters that write
+    *elsewhere* were sizing their lines by stdout's pane: `boost install x
+    >out` folded a hint on a 200-column terminal to 76 columns, because
+    stdout was a file and the 80-column fallback applied, and `2>log` wrote
+    the terminal's full width into the log. Colour already resolves per
+    stream (:func:`use_color`, :func:`role`); width now does too.
+
+    There is deliberately no second chance through ``sys.__stdout__`` when
+    the stream cannot answer. Falling back to it would size a redirected
+    stderr by the terminal again — the bug, restored.
+    """
+    return (_columns_env()
+            or _tty_width(sys.stdout if stream is None else stream)
+            or default)
 
 
 def pane_width(stream=None) -> int | None:
@@ -414,12 +469,12 @@ def pane_width(stream=None) -> int | None:
     argument. An explicit ``COLUMNS`` is a deliberate answer about width and is
     honored either way, TTY or not.
     """
-    columns = os.environ.get("COLUMNS", "").strip()
-    if columns.isdigit() and int(columns) > 0:
-        return int(columns)
+    columns = _columns_env()
+    if columns:
+        return columns
     stream = stream or sys.stdout
     if hasattr(stream, "isatty") and stream.isatty():
-        return term_width()
+        return term_width(stream=stream)
     return None
 
 

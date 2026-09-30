@@ -108,10 +108,25 @@ class TestProgressClear:
         # a caller who doesn't know the last line's exact width blanks a
         # full terminal width instead, then returns to column 0
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
-        monkeypatch.setattr(spin.out, "term_width", lambda default=80: 12)
+        monkeypatch.setattr(spin.out, "term_width", lambda default=80, stream=None: 12)
         s = FakeStream(tty=True)
         spin.progress_clear(stream=s)
         assert s.getvalue() == "\r" + " " * 12 + "\r"
+
+    def test_blanks_the_width_of_the_stream_it_writes_to(self, monkeypatch):
+        """It erases the pane it drew on, not stdout's.
+
+        `progress_clear` writes to stderr by default and proved `s.isatty()`
+        two lines up, so asking stdout how wide the line is left 120 columns
+        of a 200-column bar on screen whenever stdout was redirected.
+        """
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        s = FakeStream(tty=True)
+        monkeypatch.setattr(spin.out, "term_width",
+                            lambda default=80, stream=None: 200 if stream is s
+                            else 80)
+        spin.progress_clear(stream=s)
+        assert s.getvalue() == "\r" + " " * 200 + "\r"
 
     def test_clears_a_line_left_by_progress(self, monkeypatch):
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
