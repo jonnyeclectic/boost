@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import ast
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -224,7 +225,12 @@ def _locked_names(rel: str) -> set[str]:
 #: `.venv/bin` on POSIX, `.venv/Scripts` on Windows, and `$VENV_BIN` — which
 #: is how ci.yml spells the same thing so one `run:` serves both runners.
 VENV_BIN = re.compile(r"^(?:\.venv/(?:bin|Scripts)|\$\{?VENV_BIN\}?)$")
-SEPARATORS = re.compile(r"\s*(?:\|\||&&|[;|])\s*")
+#: A token made only of these ends a command: the shell separators
+#: (`;` `|` `||` `&&` `&`) and the redirects (`>` `>>` `<`). `shlex`
+#: with `punctuation_chars` hands each back on its own, so this is a
+#: match over one token rather than a split of the raw line.
+BOUNDARY = re.compile(r"[;|&<>]+")
+GROUPING = {"(", ")", "{", "}"}
 PREFIXES = {"then", "do", "sudo", "time", "exec", "env"}
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 PYTHON = re.compile(r"(?:.*/)?python[\d.t]*$")
@@ -258,19 +264,59 @@ def _lines(run: str) -> list[str]:
     return out
 
 
+def _split_on_boundaries(tokens: list[str]) -> list[list[str]]:
+    """Token runs between the boundaries, dropping empty runs."""
+    out: list[list[str]] = [[]]
+    for tok in tokens:
+        if BOUNDARY.fullmatch(tok):
+            out.append([])
+        else:
+            out[-1].append(tok)
+    return [run for run in out if run]
+
+
+def _tokens(line: str) -> list[str]:
+    """One shell line as tokens, with separators broken out and quotes gone.
+
+    ``punctuation_chars`` is what makes ``;`` and ``&&`` their own tokens
+    instead of sticking to the word beside them; ``posix`` is what keeps a
+    separator *inside* a quoted string from becoming one. An unbalanced
+    quote is not a line this file can read, so it falls back to the
+    whitespace split rather than raising out of a collection-time helper.
+    """
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""           # `_lines` already stripped the comments
+    try:
+        return list(lexer)
+    except ValueError:
+        return line.split()
+
+
 def _commands(line: str) -> list[list[str]]:
     """One shell line split into the commands it actually runs.
 
     Splitting on the separators is what makes ``echo`` an ``echo``: matching
     ``pip.*install`` anywhere in the line credited
-    ``pip install pytest; echo setuptools`` with setuptools, and a
-    ``words`` list built by ``str.split()`` never contained a bare ``;`` for
-    the stop-token check to find, so the check was dead from the day it was
-    written.
+    ``pip install pytest; echo setuptools`` with setuptools.
+
+    The split is over *tokens*, not over the raw text, because a separator
+    inside a quoted string is not a separator. Splitting the text credited
+    ``echo "a; pip install setuptools"`` with setuptools — a false credit in
+    the direction that matters, since what is being decided is whether a job
+    installs what its suite imports — and tore a real line, ci.yml's
+    ``grep -E '^(FAILED|ERROR) ' /tmp/pytest.out``, into two commands that
+    were never run. Redirects end a command for the same reason: without
+    that, ``pip install rich >> log`` credits a distribution named ``log``.
+
+    (An earlier draft of this docstring said the stop-token check "was dead
+    from the day it was written". It was not: a ``words`` list built by
+    ``str.split()`` does contain a bare ``||``, ``&&`` or ``|``. Only ``;``
+    was unreachable, because it sticks to the word before it.)
     """
     out = []
-    for chunk in SEPARATORS.split(line):
-        words = [w for w in chunk.split() if w not in {"(", ")"}]
+    for chunk in _split_on_boundaries(_tokens(line)):
+        words = [w for w in chunk if w not in GROUPING]
         # Wrappers, and the `A=1 pip …` / `env A=1 pip …` assignment prefix.
         while words and (words[0] in PREFIXES
                          or ASSIGNMENT.fullmatch(words[0])):
@@ -283,14 +329,25 @@ def _commands(line: str) -> list[list[str]]:
 def _interpreter(word: str) -> str:
     """Which Python a command's executable belongs to.
 
-    ``system`` for a bare name or an absolute one, ``.venv`` for every
-    spelling of the venv this repo builds, and the directory itself for
-    anything else. Without this the checks are satisfiable by installing into
-    the wrong Python: ``floors.yml`` runs ``python -m pip install uv`` on the
-    runner's interpreter at the top of the same block whose venv runs the
-    suite, so a union over the block cannot tell a fixed job from a broken
-    one, and moving ``setuptools`` onto that line would leave this file green
-    with the job still red on seventeen ModuleNotFoundErrors.
+    ``system`` for a bare name, ``.venv`` for every spelling of the venv
+    this repo builds, and the containing directory for anything else —
+    including an absolute path, which buckets as *that directory* and not as
+    ``system``. (An earlier draft of this docstring said an absolute path
+    read as ``system``; it never did.) Bucketing
+    ``/opt/hostedtoolcache/.../bin/python -m pip install x`` apart from a
+    bare ``pytest`` is the conservative direction: the job reports the
+    distribution missing, which is loud, rather than credited, which is not.
+
+    Without this the checks are satisfiable by installing into the wrong
+    Python. ``floors.yml:lowest`` is the live example: its "resolve the
+    declared floors" step runs ``python -m pip -q install uv`` on the
+    *runner's* interpreter, and the **next** step builds the ``.venv`` that
+    runs the suite. :func:`_harness_jobs` collects per job and so unions
+    those two steps, which is why the split has to be by interpreter and not
+    by block — an earlier draft of this paragraph put both on one ``run:``
+    block, which understates the union rather than overstating it. Moving
+    ``setuptools`` onto the runner's line would otherwise leave this file
+    green with the job still red on seventeen ModuleNotFoundErrors.
     """
     bare = word.strip("'\"")
     head, _, _leaf = bare.rpartition("/")
@@ -384,9 +441,16 @@ def _installs(run: str, interpreter: str | None = None) -> set[str]:
     """Distributions a job's ``pip install`` lines put in one interpreter.
 
     Explicitly named ones, plus everything a committed ``-r`` file pins —
-    without the second half, the three jobs that install from
-    ``requirements/*.txt`` would read as installing nothing at all and every
-    one of them would look broken.
+    without the second half, every job that installs from
+    ``requirements/*.txt`` would read as installing nothing at all and so
+    look broken. That is **four** of the six harness jobs —
+    ``ci.yml:{tests,patch-coverage,onnx-inference}`` and
+    ``sonarcloud.yml:sonar-analyze`` — not the three an earlier draft of
+    this docstring counted, plus ``floors.yml:lowest``, which reads a
+    ``requirements-lowest.txt`` it generates a step earlier. A number in
+    prose that nothing checks is how that got stale;
+    ``test_which_jobs_install_from_a_requirements_file`` now pins both sets
+    as equalities.
 
     ``interpreter`` selects which Python to count installs into; ``None``
     counts them all, which is only ever right for a job with one.
@@ -480,6 +544,13 @@ def _targets(run: str) -> list[Path]:
     return [p for _interp, paths in _pytest_runs(run) for p in paths]
 
 
+def _runs_of(workflow: str, job_id: str) -> list[str]:
+    """Every ``run:`` body of one job, by workflow file name and job id."""
+    doc = yaml.safe_load((WORKFLOWS / workflow).read_text(encoding="utf-8")) or {}
+    job = (doc.get("jobs") or {}).get(job_id) or {}
+    return [step.get("run") or "" for step in (job.get("steps") or [])]
+
+
 def _harness_jobs() -> list[tuple[str, str, set[str], list[Path]]]:
     """Every workflow job that builds a venv by hand and runs the suite in it.
 
@@ -530,9 +601,25 @@ def _canary_step() -> dict:
     pytest.fail("no venv+pytest step in the canary job")
 
 
+def _canary_interpreter(run: str) -> str:
+    """The interpreter the canary step's suite run actually uses."""
+    for interp, paths in _pytest_runs(run):
+        if any(_under_suite(p) for p in paths):
+            return interp
+    pytest.fail("the canary step runs no tests/ path")
+
+
 def _canary_installs(run: str) -> set[str]:
-    """Distributions the canary's ``pip install`` lines name explicitly."""
-    return _installs(run)
+    """Distributions the canary's installs put in the Python the suite uses.
+
+    Attribution, not a union over the step. This pin exists so the fix
+    "cannot be undone by accident", and it was the last place still counting
+    every interpreter: moving ``setuptools`` onto a ``python -m pip`` line
+    beside the venv left this assertion green while the venv running the
+    suite could not import it — the exact move the rest of the file was
+    rewritten to catch.
+    """
+    return _installs(run, _canary_interpreter(run))
 
 
 def _canary_targets(run: str) -> list[Path]:
@@ -694,6 +781,21 @@ class TestCanaryDependencies:
         assert "setuptools" in required
         assert "setuptools" not in optional
         assert "setuptools" in _canary_installs(_canary_step()["run"])
+
+    def test_moving_it_off_the_suite_interpreter_breaks_the_pin(self):
+        """The pin above is attribution, not a union over the step.
+
+        Installing setuptools into the runner's Python instead of the venv
+        leaves the canary red on seventeen ModuleNotFoundErrors, so the pin
+        must go red too. It did not: `_canary_installs` unioned every
+        interpreter, and this is the one move it could not see.
+        """
+        moved = ("python -m venv .venv\n"
+                 "python -m pip -q install setuptools\n"
+                 ".venv/bin/pip -q install pytest\n"
+                 ".venv/bin/pytest tests/unit tests/functional -q\n")
+        assert "setuptools" not in _canary_installs(moved)
+        assert "pytest" in _canary_installs(moved)
 
     def test_the_optional_ones_stay_optional(self):
         """The other four third-party imports are guarded, and must stay so.
@@ -906,9 +1008,12 @@ class TestInstallParsing:
         assert _installs("pip install rich", ".venv") == set()
 
     def test_a_semicolon_ends_the_command(self):
-        # The stop-token check was dead: `str.split()` leaves the `;` attached
-        # to the word before it, so no element ever equalled ";" and
-        # `pip install pytest; echo setuptools` credited setuptools.
+        # `;` is the separator the old stop-token check could not see:
+        # `str.split()` leaves it attached to the word before it, so no
+        # element ever equalled ";" and `pip install pytest; echo setuptools`
+        # credited setuptools. (`||`, `&&` and `|` are surrounded by spaces in
+        # every real line here and did split, so the check was under-reaching
+        # rather than dead — an earlier comment here said dead.)
         got = _installs("pip install pytest; echo setuptools")
         assert got == {"pytest"}
 
@@ -916,9 +1021,62 @@ class TestInstallParsing:
         assert _installs("echo 'run pip install setuptools by hand'") == set()
         assert _installs("grep -q pip install < notes.txt") == set()
 
+    def test_a_separator_inside_quotes_is_not_a_separator(self):
+        """The false credit a raw-text split produced.
+
+        `echo "…; pip install setuptools"` runs no pip at all. Splitting the
+        text made the quoted tail its own command, so a job that merely
+        *mentions* the fix in a step-summary line was credited with having
+        applied it — and `test_every_harness_job_installs_what_the_suite_
+        imports` would have gone green on a venv that cannot import it.
+        """
+        assert _installs('echo "a; pip install setuptools"') == set()
+        noisy = 'echo x ; echo "y | pip install rich"'
+        assert _installs(noisy) == set()
+        # …while the same words unquoted still are two commands.
+        assert _installs('echo a; pip install setuptools') == {"setuptools"}
+
+    def test_a_quoted_separator_does_not_tear_a_real_line(self):
+        # ci.yml really runs this. Split on the raw text it became
+        # ['grep', '-E', "'^(FAILED"] and ['ERROR)', "'", '/tmp/pytest.out'].
+        # S108: the path is ci.yml's, quoted so the assertion is that line
+        # and not a paraphrase of it. Nothing here opens it.
+        line = "grep -E '^(FAILED|ERROR) ' /tmp/pytest.out"
+        assert _commands(line) == [
+            ["grep", "-E", "^(FAILED|ERROR) ", "/tmp/pytest.out"]]   # noqa: S108
+
+    def test_a_redirect_ends_the_arguments(self):
+        # Otherwise the redirect target is counted as a distribution name.
+        assert _installs("pip install rich >> install.log") == {"rich"}
+
+    def test_an_unbalanced_quote_falls_back_instead_of_raising(self):
+        # A helper called at collection time must not turn an unreadable
+        # line into a collection error for the whole module.
+        assert _installs('pip install rich "unclosed') == {"rich", "unclosed"}
+
+    def test_an_absolute_interpreter_is_its_own_bucket(self):
+        """Not `system` — the docstring used to say it was.
+
+        A job installing with `/opt/hostedtoolcache/.../bin/python -m pip`
+        and running a bare `pytest` reports the distribution missing rather
+        than credited. That is the conservative direction, but only the
+        docstring was wrong about which direction it is.
+        """
+        run = ("/opt/hostedtoolcache/Python/3.12/x64/bin/python -m pip "
+               "install setuptools")
+        assert _installs(run, "system") == set()
+        assert _installs(run, "/opt/hostedtoolcache/Python/3.12/x64/bin") \
+            == {"setuptools"}
+
     def test_a_backslash_continuation_is_one_line(self):
-        # ci.yml wraps its longer invocations. Read raw, `pytest` and the
-        # paths land on different lines and the job reads as running nothing.
+        # Defensive, and labelled as such: no workflow here wraps a `pytest`
+        # or `pip install` line today — `grep -n 'pytest.*\\$'` over
+        # .github/workflows is empty — so this pins a shape the parser must
+        # keep handling, not one it currently meets. An earlier comment
+        # claimed ci.yml wrapped its longer invocations and that the job
+        # "reads as running nothing"; it does not, because no such line
+        # exists. Read raw, a wrapped invocation *would* put `pytest` and its
+        # paths on different lines, which is why the folding stays.
         run = ".venv/bin/pytest \\\n  tests/unit tests/functional -q\n"
         assert [p.name for p in _targets(run)] == ["unit", "functional"]
         assert _installs(".venv/bin/pip install \\\n  rich \\\n  pyyaml",
@@ -1154,8 +1312,52 @@ jobs:
         assert _unreadable_suite_jobs() == []
         assert [j for _w, j, _i, _t in _harness_jobs()] == ["readable"]
 
-    def test_every_collected_job_has_at_least_one_suite_target(self):
-        for wf, job, _, targets in _harness_jobs():
-            assert targets, f"{wf}:{job} was collected with no test path"
-            for t in targets:
-                assert _under_suite(t), f"{wf}:{job} collected {t}"
+    def test_which_jobs_install_from_a_requirements_file(self):
+        """An equality, so a new job fails as loudly as a removed one.
+
+        `_installs` expands `-r <file>` because a job that installs only
+        that way would otherwise read as installing nothing. The docstring
+        said three such jobs long after there were four — a number in prose
+        that nothing checked.
+
+        Two sets, because they are not the same question. The committed
+        `requirements/*.txt` files are the hash-pinned ones a lock audit
+        covers; `floors.yml:lowest` reads `requirements-lowest.txt`, which
+        the job *generates* a step earlier with `uv pip compile`, so it is
+        expanded by the same code path and pinned by nothing else.
+        """
+        committed, generated = set(), set()
+        for wf, job, _installed, _t in _harness_jobs():
+            for run in _runs_of(wf, job):
+                for _active, words in _stream(run):
+                    pair = _pip_install(words)
+                    for arg in pair[1] or () if pair else ():
+                        if arg.startswith("requirements/"):
+                            committed.add(f"{wf}:{job}")
+                        elif arg.endswith(".txt"):
+                            generated.add(f"{wf}:{job}")
+        assert committed == {
+            "ci.yml:tests", "ci.yml:patch-coverage", "ci.yml:onnx-inference",
+            "sonarcloud.yml:sonar-analyze",
+        }
+        assert generated == {"floors.yml:lowest"}
+        # `ci.yml:canary` is in neither: it names every distribution on the
+        # command line, which is why it is the job this file pins hardest.
+        assert "ci.yml:canary" not in committed | generated
+
+    def test_the_single_file_job_resolves_to_that_file(self):
+        """A pin on what a job's targets *are*, not that it has some.
+
+        The assertion this replaces looped over `_harness_jobs()` and
+        re-checked the two conditions `_harness_jobs` filters on — `targets`
+        non-empty and every target `_under_suite`. Both hold by construction
+        for every row it can emit, so the test passed with `_under_suite`
+        stubbed to `True` (nothing changes) and with it stubbed to `False`
+        (no rows, loop body never runs). `_under_suite` is covered directly
+        by `test_a_single_test_file_is_under_the_suite`; what was not covered
+        is that a target survives collection intact.
+        """
+        rows = {job: targets for _wf, job, _i, targets in _harness_jobs()}
+        assert "onnx-inference" in rows, "the single-file harness job moved"
+        assert [p.relative_to(ROOT).as_posix() for p in rows["onnx-inference"]] \
+            == ["tests/unit/test_localembed_e2e.py"]

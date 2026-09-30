@@ -7,7 +7,7 @@ category: CI · Bug
 complexity: S
 impact: Med
 wow: 2
-note: the same missing dependency, in the second of three hand-built venvs
+note: the same missing dependency, in the second of six hand-built venvs
 order: 360
 pr: 1006
 title: "The floors job builds its own venv and never put setuptools in it, so main went red on the weekly cron"
