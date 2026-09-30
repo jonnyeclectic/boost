@@ -24,7 +24,6 @@ colorama ; sys_platform == 'win32'
 
 [mutation-tools]
 colorama ; sys_platform == 'win32'
-pyyaml ; python_full_version != '3.13.*'
 pyyaml-ft ; python_full_version == '3.13.*'
 
 [coverage-tools]
