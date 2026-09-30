@@ -575,8 +575,12 @@ jobs:
     # per-job limit the shard matrix already documents.
     #
     # This is a ceiling, not a budget: if a shard ever genuinely approaches it,
-    # the answer is to re-measure `scripts/mutation_weights.json` (last written
-    # 2026-07-30) and re-pack, not to raise this again.
+    # the answer is to re-measure `scripts/mutation_weights.json` and re-pack,
+    # not to raise this again. It was last refreshed on 2026-09-08 by #834 and
+    # is now ~16% light (23,251 recorded mutants against 27,060 measured), so
+    # that re-measure is already owed. Take it from a CI run, not a laptop: the
+    # tier-1 weights are milliseconds, and a developer machine's durations are
+    # not the runner's.
     timeout-minutes: 75
     permissions:
       contents: read
