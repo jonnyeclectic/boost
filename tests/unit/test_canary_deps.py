@@ -194,12 +194,13 @@ def _norm(dist: str) -> str:
 def _locked_names(rel: str) -> set[str]:
     """Distributions a committed ``-r`` requirements file installs.
 
-    Returns the empty set for a file that is not in the repo. That is the case
-    for ``floors.yml``, whose ``requirements-lowest.txt`` is compiled by the job
-    itself from pyproject at the lowest-direct resolution, and it is the
-    conservative reading in the right direction: an unreadable file can only
-    make this module claim something is *missing* that is really there — a loud
-    false positive someone fixes — never let a real gap pass silently.
+    Returns the empty set for a file that is not there. ``floors.yml`` compiles
+    its ``requirements-lowest.txt`` from pyproject at the lowest-direct
+    resolution, so whether it exists depends on *where this runs*: absent in a
+    plain checkout, present in that job's own workspace by the time it runs the
+    suite. Both readings are safe, which is the point — an unreadable file can
+    only make this module claim something is *missing* that is really there, a
+    loud false positive someone fixes, and never let a real gap pass silently.
     """
     path = ROOT / rel
     if not path.is_file():
@@ -533,13 +534,17 @@ class TestInstallParsing:
         got = _installs("pip install -r requirements/test-tools.txt")
         assert not any(g.startswith("test-tools") for g in got)
 
-    def test_a_requirements_file_that_is_not_in_the_repo_contributes_nothing(self):
-        """floors.yml compiles `requirements-lowest.txt` at runtime.
+    def test_a_requirements_file_that_is_not_there_contributes_nothing(self):
+        """The conservative reading: a loud false positive, never a silent pass.
 
-        Empty is the conservative reading: it can only produce a loud false
-        positive, never let a real gap pass.
+        Spelled with a name that cannot exist rather than with floors.yml's
+        real `requirements-lowest.txt`, which this test first used and which
+        made it environment-dependent — that job compiles the file into its
+        own workspace before running the suite, so the assertion held in a
+        checkout and failed inside the one job it described.
         """
-        assert _installs("pip install -r requirements-lowest.txt") == set()
+        assert not (ROOT / "requirements/no-such-file.txt").exists()
+        assert _installs("pip install -r requirements/no-such-file.txt") == set()
 
     def test_a_marker_gated_pin_still_counts(self):
         """`pyyaml==6.0.3 ; python_full_version != '3.13.*' \\` is a real shape."""
