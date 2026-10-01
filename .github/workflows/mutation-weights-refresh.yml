@@ -1,0 +1,225 @@
+name: mutation-weights-refresh
+
+# Put the mutation gate's measured balance hints back into the tree, and open a
+# PR with what that does to the split.
+#
+# WHY THIS EXISTS. `scripts/mutation_weights.json` is the measured input
+# `scripts/mutation_shards.py` bin-packs the six mutation shards on. ci.yml
+# already *produces* a fresh one on every run that reaches the gate — the
+# "refresh balance hints" step, whose own comment says it is uploaded "so a
+# maintainer can drop a measured file in rather than hand-editing one". In the
+# nine weeks since that step landed (216a65ac, 2026-07-30, #346) a maintainer
+# did it exactly once, by hand, three weeks ago (29d90908, 2026-09-08, #834).
+# That is the failure mode: the artifact has a 7-day retention, so the remedy
+# expires weekly while the file ages, and it only ever lands when somebody
+# happens to remember. The remedy existed, was documented, and had no hands.
+#
+# WHAT THE STALENESS COSTS, measured rather than asserted. Against the times
+# recorded by the 2026-09-30 run on `main`, the plan built from the committed
+# hints puts 150 minutes of mutant work on its slowest shard and 75 on its
+# fastest — 1.311x the best achievable makespan — while the plan built from
+# those same measurements is flat at 115. That is not a model: the six shards
+# of that very run took 46.5, 40.1, 37.5, 37.0, 25.8 and 22.9 wall-clock
+# minutes, a 2.03x spread against the 2.00x predicted, in the same order. The
+# slowest shard carries `timeout-minutes: 75`, and on #1000 one ran 75.6
+# minutes and was killed, reddening a required check on a change that had
+# nothing to do with it. Balance is the headroom that absorbs a slow runner.
+#
+# WHY A `workflow_run` AND NOT A CRON. The data this needs is an artifact of a
+# specific CI run, kept for seven days. lock-refresh.yml and
+# eval-corpus-refresh.yml are monthly because they re-derive their input from
+# the outside world on demand; this one cannot — a monthly job would wake up
+# and find nothing. So it follows `ci` on `main` and takes the artifact that
+# run just produced.
+#
+# WHY IT IS THRESHOLDED. The file is 60 KB of generated JSON and every merge to
+# main cuts a PyPI release, so a PR per run would be pure churn. `drift` opens
+# one only when the committed plan costs at least 5% more than the measured
+# best; below that the imbalance is not worth anyone's review. The branch is
+# reused, so a second qualifying run updates the open PR instead of adding one.
+#
+# A FAILURE HERE BLOCKS NOTHING. The hints are an optimisation and never a
+# correctness input (see scripts/mutation_shards.py) — a stale file costs
+# balance, a missing one costs balance, and neither can change the mutation
+# score. The gate that matters already ran before this workflow starts.
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-weights-refresh
+  cancel-in-progress: false      # never kill a half-written weights file
+
+jobs:
+  # NOT `refresh`: lock-refresh.yml already has a job by that name, GitHub keys
+  # required checks on the name alone, and scripts/check_required_checks.py
+  # fails the build on the ambiguity.
+  rebalance:
+    # A red `ci` run has nothing to offer: the "refresh balance hints" step runs
+    # after the gate passes, so a failed run uploaded no artifact and the
+    # download below would be the only thing that noticed.
+    #
+    # The other two conditions are the fork guard publish.yml and sbom.yml both
+    # carry, and for the same reason: `branches: [main]` above filters on the
+    # TRIGGERING run's head_branch, not on the event type and not on the
+    # repository. ci.yml runs `on: pull_request`, so a fork PR opened from a
+    # branch named `main` produces a ci run whose head_branch is `main` and
+    # satisfies that filter — and this job holds contents:write plus
+    # pull-requests:write. Requiring the triggering run to be a `push` from THIS
+    # repository closes it. The `workflow_dispatch` arm stays first: on a manual
+    # dispatch `github.event.workflow_run` is null and every field under it
+    # evaluates empty.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    # Nothing here embeds, runs tests, or clones a corpus — it downloads 16 KB,
+    # bin-packs the 66 mutatable files of boost_cli/core into 156 units
+    # (store.py is split per top-level function; `__init__.py` is excluded,
+    # which is the 67th) twice, and opens a PR.
+    timeout-minutes: 15
+    permissions:
+      contents: write            # push the branch carrying the refreshed hints
+      pull-requests: write       # open the PR that carries it
+      actions: read              # read the triggering run's artifacts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: which run measured the mutants
+        id: source
+        # `github.event.workflow_run.id` is empty on a manual dispatch, so that
+        # path asks for the most recent successful `ci` on main instead. Both
+        # end at a run id, which is the only thing the download needs.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING: ${{ github.event.workflow_run.id }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          id="$TRIGGERING"
+          if [ -z "$id" ]; then
+            id="$(gh run list --repo "$REPO" --workflow ci.yml --branch main \
+                    --status success --limit 1 --json databaseId \
+                    -q '.[0].databaseId')"
+          fi
+          echo "run-id=$id" >> "$GITHUB_OUTPUT"
+          echo "measuring run $id"
+      - name: download the measured hints
+        id: fetch
+        # `continue-on-error`, because "that run did not reach the mutation
+        # gate" is the ordinary case, not a fault: ci.yml skips the whole gate
+        # when nothing mutable changed, and then there is no artifact to take.
+        # Failing the job there would alert on a docs-only merge every time.
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mutation-weights
+          path: candidate
+          run-id: ${{ steps.source.outputs.run-id }}
+          github-token: ${{ github.token }}
+      - name: no measurement to apply
+        if: steps.fetch.outcome != 'success'
+        env:
+          RUN_ID: ${{ steps.source.outputs.run-id }}
+        run: |
+          {
+            echo "Run \`$RUN_ID\` published no \`mutation-weights\` artifact —"
+            echo "it did not reach the mutation gate (nothing mutable changed),"
+            echo "or the artifact has passed its 7-day retention."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: is the committed plan far enough behind to be worth a PR
+        id: drift
+        if: steps.fetch.outcome == 'success'
+        run: |
+          python3 scripts/mutation_shards.py drift \
+            --candidate candidate/mutation_weights.json \
+            --shards 6 \
+            --summary-md "$RUNNER_TEMP/drift.md" \
+            --github-output "$GITHUB_OUTPUT"
+          # `|| true` even though `cmd_drift` now writes --summary-md on
+          # every return path: `cat` is the last command in this step, so its
+          # exit status IS the step's, and a missing file turned "keeping the
+          # committed hints" — a designed outcome — into a red job on main,
+          # which this workflow's own entry in ci-failure-issue.yml would then
+          # have filed an issue about.
+          cat "$RUNNER_TEMP/drift.md" >> "$GITHUB_STEP_SUMMARY" || true
+      - name: apply the measurement
+        if: steps.drift.outputs.moved == 'true'
+        run: cp candidate/mutation_weights.json scripts/mutation_weights.json
+      - name: assemble the pull request body
+        id: body
+        if: steps.drift.outputs.moved == 'true'
+        env:
+          RUN_ID: ${{ steps.source.outputs.run-id }}
+          SERVER: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "text<<PRBODY"
+            echo "Measured by [CI run \`$RUN_ID\`]($SERVER/$REPO/actions/runs/$RUN_ID)"
+            echo "and applied verbatim — this diff is generated output, not an edit."
+            echo
+            cat "$RUNNER_TEMP/drift.md" || true
+            echo
+            echo "The hints are an **optimisation, never a correctness input**:"
+            echo "a stale file costs shard balance and can no more change the"
+            echo "mutation score than a missing one can. What it does change is"
+            echo "headroom — the slowest shard carries \`timeout-minutes: 75\`,"
+            echo "and #1000 lost a required check to a shard that ran 75.6."
+            echo
+            echo "**This PR arrives with no check runs** unless \`BOT_PR_TOKEN\`"
+            echo "exists: a \`GITHUB_TOKEN\` push never triggers workflows, so"
+            echo "required contexts will not report until someone presses"
+            echo "**Update branch**. An empty check list looks identical to"
+            echo "\"CI has not started yet\"."
+            echo
+            echo "Close it if the refresh is not wanted; the next \`ci\` run on"
+            echo "main that clears the gate re-opens it from fresher numbers."
+            echo "PRBODY"
+          } >> "$GITHUB_OUTPUT"
+      - name: open a PR if the plan moved
+        if: steps.drift.outputs.moved == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          # The token, and why it is not the default one.
+          #
+          # A pull request opened with the repository's `GITHUB_TOKEN` cannot
+          # trigger other workflows — GitHub suppresses it deliberately, to stop
+          # a workflow re-triggering itself forever. The consequence here is not
+          # a missing convenience: `ci.yml` runs `on: pull_request`, so none of
+          # its required checks ever start, and branch protection then refuses
+          # the merge. #617 and #631 both sat unmergeable in exactly that state.
+          #
+          # `|| github.token` keeps the workflow working where the secret does
+          # not exist — a fork, or this repo before the secret is created — in
+          # which case the PR is opened as before and simply needs a human to
+          # close-and-reopen it to start the checks.
+          token: ${{ secrets.BOT_PR_TOKEN || github.token }}
+          # DCO + signing, for the same reason every other bot PR here sets
+          # them: `author` defaults to `${{ github.actor }}`, so the commit
+          # arrives authored by a human who never wrote it and never signed off,
+          # and `scripts/check_dco.py` then fails the PR this workflow just
+          # opened (#617). Naming the bot is what check_dco exempts.
+          # `sign-commits` has GitHub build the commit through its API so it
+          # lands Verified rather than unsigned.
+          author: 'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'
+          sign-commits: true
+          add-paths: scripts/mutation_weights.json
+          branch: bot/mutation-weights
+          delete-branch: true
+          commit-message: "perf(ci): re-pack the mutation shards on measured times"
+          title: "perf(ci): re-pack the mutation shards on measured times"
+          body: ${{ steps.body.outputs.text }}

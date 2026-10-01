@@ -88,21 +88,73 @@ Usage
   mutation_shards.py plan --shards N --explain   # the whole split + speedup cap
   mutation_shards.py merge --shards N --into mutants results/*  # rebuild results
   mutation_shards.py weights --source mutants    # refresh the balance hints
+  mutation_shards.py drift --candidate new.json # is a refresh worth a PR?
   mutation_shards.py cache-key                   # hash half of a shard's actions/cache key
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import hashlib
 import json
+import math
 import sys
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = Path("boost_cli/core")
 WEIGHTS = Path("scripts/mutation_weights.json")
+
+#: "No override is in force", which is a different state from "the override is
+#: no file at all" — ``None`` has to stay available as a value, because that is
+#: how ``drift`` compares against a checkout with no committed hints.
+_UNSET = object()
+
+#: Read the weights from here instead of ``root / WEIGHTS``, while set.
+#:
+#: ``drift`` has to pack the same source tree twice — once on the committed
+#: hints and once on a freshly measured candidate — and score both packs
+#: against the candidate. Every loader below resolves the file from ``root``,
+#: so without this the only way to ask the second question would be to
+#: overwrite the committed file mid-comparison: destructive in a checkout, and
+#: in a test a global side effect that leaks into whatever runs next.
+_WEIGHTS_OVERRIDE: Path | object | None = _UNSET
+
+
+@contextlib.contextmanager
+def using_weights(path: Path | None):
+    """Resolve weights from ``path`` for the duration of the block.
+
+    ``None`` means "no weights file at all", which is how the fallback tiers
+    are exercised without deleting anything.
+
+    Restores its predecessor rather than clearing, which is what a context
+    manager owes its caller and not an observation about ``drift`` — measured,
+    ``drift`` never reaches a depth above one. Resetting to the unset state
+    would make the manager safe only at the outermost level, which is the kind
+    of contract that holds until the first caller wraps it.
+    """
+    global _WEIGHTS_OVERRIDE
+    previous = _WEIGHTS_OVERRIDE
+    _WEIGHTS_OVERRIDE = path
+    try:
+        yield
+    finally:
+        _WEIGHTS_OVERRIDE = previous
+
+
+def weights_path(root: Path) -> Path | None:
+    """The weights file in play, or ``None`` for "there is no weights file".
+
+    ``None`` is a value the callers already handle: a missing hints file is the
+    ordinary state of a fresh checkout, so every loader below returns empty for
+    it rather than raising.
+    """
+    if _WEIGHTS_OVERRIDE is _UNSET:
+        return root / WEIGHTS
+    return cast("Path | None", _WEIGHTS_OVERRIDE)
 
 
 def line_weight(path: Path) -> int:
@@ -120,16 +172,38 @@ def line_weight(path: Path) -> int:
     return max(n, 1)
 
 
+def _mapping(data: dict, key: str) -> dict:
+    """``data[key]`` when it is a mapping, else ``{}``.
+
+    The top-level ``isinstance(data, dict)`` check is not enough on its own:
+    ``{"millis_by_file": []}`` parses, is an object, and then raises
+    ``AttributeError: 'list' object has no attribute 'items'`` from inside the
+    planner. ``.get(k, {})`` does not cover it either, and ``.get(k) or {}``
+    covers only the falsy cases — an explicit ``null`` and an empty list, but
+    not ``[1]`` or ``"x"``. Every loader goes through here so the four of them
+    cannot drift apart again.
+    """
+    value = data.get(key)
+    return value if isinstance(value, dict) else {}
+
+
 def load_weights(root: Path) -> dict[str, int]:
     """Real mutant counts, if a previous run left any. Missing file is normal."""
-    path = root / WEIGHTS
-    if not path.exists():
+    path = weights_path(root)
+    if path is None or not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text())
-    except ValueError:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return {}
-    counts = data.get("mutants_by_file", {})
+    if not isinstance(data, dict):
+        # A valid JSON document that is not an object — `[]`, `null`, a bare
+        # number. Only a *parse* failure was caught above, and `data.get(...)`
+        # on a list raises AttributeError straight out of the planner: a crash
+        # in a tier whose whole contract is that a corrupt file is survivable.
+        # `_mapping` covers the same hazard one level down.
+        return {}
+    counts = _mapping(data, "mutants_by_file")
     return {k: int(v) for k, v in counts.items() if isinstance(v, int) and v > 0}
 
 
@@ -139,15 +213,22 @@ def load_symbol_weights(root: Path) -> dict[str, dict[str, int]]:
     Same contract as ``load_weights``: advisory, and a missing or corrupt file
     is normal rather than fatal — a stale hint costs balance, never correctness.
     """
-    path = root / WEIGHTS
-    if not path.exists():
+    path = weights_path(root)
+    if path is None or not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text())
-    except ValueError:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        # A valid JSON document that is not an object — `[]`, `null`, a bare
+        # number. Only a *parse* failure was caught above, and `data.get(...)`
+        # on a list raises AttributeError straight out of the planner: a crash
+        # in a tier whose whole contract is that a corrupt file is survivable.
+        # `_mapping` covers the same hazard one level down.
         return {}
     out: dict[str, dict[str, int]] = {}
-    for name, syms in (data.get("mutants_by_symbol") or {}).items():
+    for name, syms in _mapping(data, "mutants_by_symbol").items():
         if isinstance(syms, dict):
             out[name] = {s: int(v) for s, v in syms.items()
                          if isinstance(v, int) and v > 0}
@@ -164,15 +245,22 @@ def load_symbol_durations(root: Path) -> dict[str, dict[str, int]]:
     of its mutants. Apportioning by count therefore under-weights it badly, and
     a shard that drew it ran 8.9 minutes against a 4.8-minute sibling.
     """
-    path = root / WEIGHTS
-    if not path.exists():
+    path = weights_path(root)
+    if path is None or not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text())
-    except ValueError:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        # A valid JSON document that is not an object — `[]`, `null`, a bare
+        # number. Only a *parse* failure was caught above, and `data.get(...)`
+        # on a list raises AttributeError straight out of the planner: a crash
+        # in a tier whose whole contract is that a corrupt file is survivable.
+        # `_mapping` covers the same hazard one level down.
         return {}
     out: dict[str, dict[str, int]] = {}
-    for name, syms in (data.get("millis_by_symbol") or {}).items():
+    for name, syms in _mapping(data, "millis_by_symbol").items():
         if isinstance(syms, dict):
             out[name] = {s: int(v) for s, v in syms.items()
                          if isinstance(v, (int, float)) and v > 0}
@@ -193,15 +281,22 @@ def load_durations(root: Path) -> dict[str, int]:
     counting mutants. Sub-file units remove that floor, so time-weighting now
     changes the answer.
     """
-    path = root / WEIGHTS
-    if not path.exists():
+    path = weights_path(root)
+    if path is None or not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text())
-    except ValueError:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        # A valid JSON document that is not an object — `[]`, `null`, a bare
+        # number. Only a *parse* failure was caught above, and `data.get(...)`
+        # on a list raises AttributeError straight out of the planner: a crash
+        # in a tier whose whole contract is that a corrupt file is survivable.
+        # `_mapping` covers the same hazard one level down.
         return {}
     out = {}
-    for name, ms in (data.get("millis_by_file") or {}).items():
+    for name, ms in _mapping(data, "millis_by_file").items():
         if isinstance(ms, (int, float)) and ms > 0:
             out[name] = int(ms)
     return out
@@ -218,9 +313,37 @@ def weight_fn(root: Path):
     lines are interchangeable per-file because they share a scale; time is not,
     so it is all-or-nothing.
     """
-    millis = load_durations(root)
+    millis, imputed, use_millis = _millis_basis(root)
     recorded = load_weights(root)
+
+    def weight(root_: Path, path: Path) -> int:
+        name = rel_name(root_, path)
+        if use_millis:
+            return millis.get(name) or imputed.get(name) or line_weight(path)
+        return recorded.get(name) or line_weight(path)
+
+    return weight
+
+
+def weight_unit(root: Path) -> str:
+    """``"ms"`` when :func:`weight_fn` is weighting in milliseconds, else ``""``.
+
+    It exists so a *caller* can label a number it did not compute. `drift`
+    printed every load as minutes, but a weight is only milliseconds when
+    every mutatable file is covered — a candidate carrying `millis_by_file`
+    and no `mutants_by_file` falls back to line counts, and the table then
+    read "0 min" directly above a paragraph reporting 660. The decision lives
+    in `_millis_basis` and both functions ask it, rather than being written
+    out twice and drifting.
+    """
+    return "ms" if _millis_basis(root)[2] else ""
+
+
+def _millis_basis(root: Path) -> tuple[dict[str, int], dict[str, int], bool]:
+    """``(measured, imputed, use_millis)`` — the time-weighting decision."""
+    millis = load_durations(root)
     files = [f for f in source_files(root) if not is_init(f)]
+    recorded = load_weights(root)
 
     # A file with no recorded duration is IMPUTED from the measured mean rate
     # (milliseconds per mutant across everything that was measured) rather than
@@ -245,14 +368,7 @@ def weight_fn(root: Path):
     use_millis = bool(millis) and all(
         rel_name(root, f) in millis or imputed.get(rel_name(root, f))
         for f in files)
-
-    def weight(root_: Path, path: Path) -> int:
-        name = rel_name(root_, path)
-        if use_millis:
-            return millis.get(name) or imputed.get(name) or line_weight(path)
-        return recorded.get(name) or line_weight(path)
-
-    return weight
+    return millis, imputed, use_millis
 
 
 def source_files(root: Path) -> list[Path]:
@@ -270,7 +386,7 @@ def source_files(root: Path) -> list[Path]:
     return sorted((root / SOURCE).rglob("*.py"))
 
 
-def rel_name(root: Path, path: Path) -> str:
+def rel_name(root: Path, path: Path | Unit) -> str:
     """Key files by their path under the source root, not by basename.
 
     ``core/util.py`` and ``core/rag/util.py`` are different files with the same
@@ -299,7 +415,7 @@ class Unit(NamedTuple):
         return self.path.name
 
 
-def _as_path(path) -> Path:
+def _as_path(path: Path | Unit) -> Path:
     """Accept a Unit wherever a Path is expected.
 
     ``pack`` returns Units now, but the identity helpers below are about the
@@ -413,7 +529,7 @@ def unit_weight(root: Path, unit: Unit) -> int:
     return max(file_weight * shares.get(unit.symbol, 1) // total, 1)
 
 
-def pack(root: Path, shards: int) -> list[list[Path]]:
+def pack(root: Path, shards: int) -> list[list[Unit]]:
     """Longest-processing-time-first bin packing.
 
     Deterministic: every shard runs this and selects its own index, so they all
@@ -584,7 +700,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
             if src is None:
                 missing.append(shard)
                 continue
-            data = json.loads(src.read_text())
+            data = json.loads(src.read_text(encoding="utf-8"))
             for key, value in (data.get("exit_code_by_key") or {}).items():
                 if codes.get(key) is None:
                     codes[key] = value
@@ -615,7 +731,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
         for field in ("type_check_error_by_key", "durations_by_key",
                       "estimated_durations_by_key"):
             payload[field] = extras.get(field, {})
-        dest.write_text(json.dumps(payload))
+        dest.write_text(json.dumps(payload), encoding="utf-8",
+                        newline="\n")
         merged.append((name, len(codes), min(shards)))
 
     # Every mutatable file must be accounted for. Without this, a file the
@@ -641,7 +758,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
             found = shard_meta(Path(args.source), args.prefix, shard, name)
             if found is not None:
                 break
-        if found is not None and json.loads(found.read_text()).get("exit_code_by_key"):
+        if found is not None and json.loads(found.read_text(encoding="utf-8")).get("exit_code_by_key"):
             problems.append(
                 "%s now generates mutants, but mutmut rewrites its mutant names so no "
                 "shard pattern can address them. Move the code out of __init__.py, or "
@@ -715,7 +832,7 @@ def cmd_scope(args: argparse.Namespace) -> int:
         if not path.exists():
             print("true")
             return 0
-        changed = path.read_text().splitlines()
+        changed = path.read_text(encoding="utf-8").splitlines()
 
     if not changed:
         print("true")
@@ -794,6 +911,253 @@ def cmd_cache_key(args: argparse.Namespace) -> int:
     return 0
 
 
+#: How much worse the committed plan may be, measured against the candidate,
+#: before a refresh is worth a pull request. 1.05 is a slowest-shard 5% over
+#: the best those same measurements admit — under that, the diff is churn in a
+#: 60 KB generated file for a balance nobody would notice.
+DRIFT_THRESHOLD = 1.05
+
+
+def score(root: Path, bins: list[list[Unit]], weights: Path | None) -> list[int]:
+    """What ``weights`` says each of these bins costs.
+
+    Separating *which units a shard holds* from *what they cost* is the whole
+    point of the comparison: a weights file always reports its own plan as the
+    best one going, because that is what the packer optimised it for. The
+    number that means anything is the stale plan scored against the measured
+    truth.
+    """
+    with using_weights(weights):
+        return [sum(unit_weight(root, u) for u in b) for b in bins]
+
+
+def _spread(loads: list[int]) -> tuple[float, float]:
+    """``(slowest / ideal, slowest / fastest)`` for one scored pack.
+
+    Both are descriptive only. Neither is a verdict on staleness, because a
+    current weights file still reports a makespan above the ideal whenever
+    some indivisible unit outweighs an even share — which is the ordinary
+    state of this repo, not a defect in the hints.
+
+    A shard that drew no work makes the second ratio meaningless rather than
+    enormous, so it is reported as infinite and the caller prints ``n/a``.
+    Clamping the divisor to 1 instead turned "more shards than units" into a
+    measured 300000.00x, a number that reads as a catastrophic imbalance and
+    describes an empty bin.
+    """
+    ideal = sum(loads) / len(loads)
+    low = min(loads)
+    return max(loads) / ideal, (max(loads) / low) if low else math.inf
+
+
+def _ratio(value: float) -> str:
+    """A slowest/fastest ratio for the report, or ``n/a`` when a shard is empty."""
+    return "%.2fx" % value if math.isfinite(value) else "n/a"
+
+
+def _unusable(candidate: Path, was: dict[str, int], now: dict[str, int],
+              present: set[str] | None = None) -> str:
+    """Why this candidate must not replace the committed hints, or ``""``.
+
+    The three tiers below are ordered by how badly they fail, and all three
+    were reachable: every loader in this file treats an unreadable or
+    schema-less weights file as "no weights" and returns ``{}``, which is the
+    right answer for a fresh checkout and the wrong one for a file that was
+    supposed to be a measurement. With both sides falling back to line counts
+    the committed pack looks lopsided — it was optimised for milliseconds —
+    and the comparison recommends replacing a good file with an empty one.
+    """
+    try:
+        # JSON is UTF-8 by spec and `cmd_weights` writes it as such, so the
+        # encoding is named rather than left to the locale: on a Windows
+        # runner the default is cp1252, which raises UnicodeDecodeError — a
+        # ValueError, so it would be caught here and reported as "not
+        # readable JSON" for a file that is perfectly readable.
+        data = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return "candidate %s is not readable JSON (%s)" % (candidate, exc)
+    if not isinstance(data, dict):
+        return "candidate %s is not an object" % candidate
+    if not now:
+        return ("candidate %s records no per-file durations, so it cannot be "
+                "weighed against the committed hints" % candidate)
+    # Coverage must not go backwards. A run that timed fewer files than the
+    # committed file did is not a newer measurement of the same thing — it is
+    # a partial one, and it still packs to something the comparison scores as
+    # an improvement: dropping one shard's worth of durations (63 files to 55)
+    # measured 1.235 and reported `moved=true`.
+    #
+    # Counted over the files that STILL EXIST, which is the whole reason
+    # `present` is threaded in. A plain len() comparison makes deleting a
+    # module from boost_cli/core a one-way door: every later candidate
+    # legitimately times one file fewer, so every later candidate is refused,
+    # and the only writer that could clear the condition is the refresh this
+    # guard is blocking. Latched off, permanently, with no way back but a
+    # hand edit.
+    if present is not None:
+        was = {k: v for k, v in was.items() if k in present}
+        now = {k: v for k, v in now.items() if k in present}
+    if len(now) < len(was):
+        return ("candidate %s times %d files where the committed hints time "
+                "%d — a partial measurement, not a fresher one"
+                % (candidate, len(now), len(was)))
+    return ""
+
+
+def _emit_drift(args: argparse.Namespace, report: str,
+                moved: bool, cost: float | None) -> int:
+    """Write the report everywhere it was asked for. Always returns 0.
+
+    EVERY return path of ``cmd_drift`` goes through here, and that is the
+    point. The three guard paths used to print to stdout and return, leaving
+    ``--summary-md`` unwritten — while the workflow step's next command was an
+    unguarded ``cat "$RUNNER_TEMP/drift.md" >> "$GITHUB_STEP_SUMMARY"``. As the
+    last command in the step, its exit status IS the step's: a missing file
+    turned "keeping the committed hints", a *designed* outcome, into a red job
+    on `main`. The same change had just added this workflow to
+    ci-failure-issue.yml's watch list, so it would also have filed an issue —
+    for a workflow whose header says "A FAILURE HERE BLOCKS NOTHING".
+
+    Writing the reason into the step summary is the other half: it is what a
+    maintainer reads to find out why no PR appeared, and stdout alone is
+    buried in a collapsed log group.
+    """
+    # `newline="\n"` as well as the encoding, and for the same class of
+    # reason: text mode translates "\n" to the platform separator on write, so
+    # on a Windows runner the file would hold CRLF while `sys.stdout.write`
+    # below emits LF, and the artifact a maintainer reads would differ byte for
+    # byte from the log beside it. These two are one report written twice, so
+    # they must agree; `$GITHUB_OUTPUT` is parsed line by line and has no
+    # reason to carry a carriage return either.
+    if args.summary_md:
+        Path(args.summary_md).write_text(report, encoding="utf-8", newline="\n")
+    sys.stdout.write(report)
+    if args.github_output:
+        with open(args.github_output, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write("moved=%s\n" % ("true" if moved else "false"))
+            if cost is not None:
+                fh.write("makespan=%.3f\n" % cost)
+    return 0
+
+
+def cmd_drift(args: argparse.Namespace) -> int:
+    """Has the committed balance hint decayed enough to be worth replacing?
+
+    Advisory like everything else in this file, so it never fails: it answers
+    the question and leaves the decision to whoever reads it.
+
+    The comparison is deliberately asymmetric. Both packs are scored against
+    the CANDIDATE's weights, because the candidate is the measurement and the
+    committed file is the belief being tested. Scoring each plan against its
+    own weights would compare two self-reports and always find them equal.
+    """
+    root = Path(args.root)
+    candidate = Path(args.candidate)
+    if not candidate.exists():
+        return _emit_drift(
+            args,
+            "mutation_shards: no candidate at %s — nothing to compare\n"
+            % candidate, moved=False, cost=None)
+
+    committed = weights_path(root)
+    with using_weights(committed):
+        old_bins = pack(root, args.shards)
+        was = load_durations(root)
+    with using_weights(candidate):
+        new_bins = pack(root, args.shards)
+        now = load_durations(root)
+
+    # Refuse before comparing, because every loader here treats an unreadable
+    # or schema-less file as "no weights" and returns {} — so a corrupt
+    # candidate scores BOTH packs on line counts, the committed pack is
+    # genuinely lopsided in that unit, and `moved` comes back true. Measured
+    # on the real 66-file tree: `{not json`, `{}` and `[]` each reported a
+    # refresh "worth it" at 1.438, and a file carrying only `mutants_by_file`
+    # at 1.588 — which the workflow would then commit over the real
+    # measurements. A
+    # balance hint is advisory, but replacing a good one with an empty one is
+    # not an advisory outcome.
+    present = {rel_name(root, f) for f in source_files(root) if not is_init(f)}
+    why = _unusable(candidate, was, now, present)
+    if why:
+        return _emit_drift(
+            args,
+            "mutation_shards: %s — keeping the committed hints\n" % why,
+            moved=False, cost=None)
+
+    old = score(root, old_bins, candidate)
+    new = score(root, new_bins, candidate)
+    old_makespan, old_ratio = _spread(old)
+    new_makespan, new_ratio = _spread(new)
+
+    # The verdict is the two plans against EACH OTHER, not either against a
+    # flat ideal. A perfectly current weights file still scores above 1.0
+    # whenever an indivisible unit is heavier than an even share, so flooring
+    # the absolute number declared a refresh "worth it" on weights that had
+    # not drifted at all. `test_identical_weights_do_not_move` is that case:
+    # its two weights files are byte-identical and the best pack its own
+    # measurements admit still reads 1.200 against a flat ideal, comfortably
+    # over the 1.05 floor. The stale plan beside it reads 1.800, and the
+    # ratio between the two — 1.5 — is what actually separates them.
+    cost = max(old) / max(max(new), 1)
+    moved = cost >= args.threshold
+
+    added = sorted(set(now) - set(was))
+    gone = sorted(set(was) - set(now))
+
+    # A load is only minutes when the candidate's weights put EVERY mutatable
+    # file in milliseconds; otherwise `weight_fn` is counting mutants or lines
+    # and "min" is a lie. The table read "0 min" above a paragraph reporting
+    # 660 min for a candidate carrying `millis_by_file` and no
+    # `mutants_by_file`, because the imputation rate needs both.
+    with using_weights(candidate):
+        in_millis = weight_unit(root) == "ms"
+
+    def load(value: int) -> str:
+        return "%.0f min" % (value / 60000.0) if in_millis else "%d units" % value
+
+    def minutes(ms: int) -> float:
+        return ms / 60000.0
+
+    lines = [
+        "| plan built from | slowest shard | fastest shard | slowest/fastest | slowest/ideal |",
+        "| --- | --- | --- | --- | --- |",
+        "| committed `%s` | %s | %s | %s | %.3f |"
+        % (WEIGHTS.as_posix(), load(max(old)), load(min(old)),
+           _ratio(old_ratio), old_makespan),
+        "| the candidate | %s | %s | %s | %.3f |"
+        % (load(max(new)), load(min(new)), _ratio(new_ratio), new_makespan),
+        "",
+        "Both rows are scored against the **candidate's** measured times. The "
+        "second is the best split those measurements admit — not necessarily "
+        "1.000, because a unit heavier than an even share is a floor on the "
+        "slowest shard no packer can get under. The number that decides is the "
+        "ratio between them: the committed plan costs **%.3fx** the measured "
+        "best." % cost,
+        "",
+        "Recorded total: %.0f min committed, %.0f min measured (%s), over "
+        "%d timed files against %d."
+        % (minutes(sum(was.values())), minutes(sum(now.values())),
+           ("%+.0f%%" % (100.0 * (sum(now.values()) / sum(was.values()) - 1.0))
+            if sum(was.values()) else "no committed total to compare"),
+           len(was), len(now)),
+    ]
+    if added:
+        lines.append("")
+        lines.append("Files measured for the first time: %s." % ", ".join(
+            "`%s`" % f for f in added))
+    if gone:
+        lines.append("")
+        lines.append("Files no longer measured: %s." % ", ".join(
+            "`%s`" % f for f in gone))
+
+    lines.append("")
+    lines.append("verdict: %s (threshold %.2f)"
+                 % ("refresh is worth it" if moved else "close enough, no PR",
+                    args.threshold))
+    return _emit_drift(args, "\n".join(lines) + "\n", moved=moved, cost=cost)
+
+
 def cmd_weights(args: argparse.Namespace) -> int:
     """Record real mutant counts so the next split balances better.
 
@@ -807,7 +1171,7 @@ def cmd_weights(args: argparse.Namespace) -> int:
     by_symbol: dict[str, dict[str, int]] = {}
     millis_by_symbol: dict[str, dict[str, int]] = {}
     for meta in sorted(src.rglob("*.py.meta")):
-        data = json.loads(meta.read_text())
+        data = json.loads(meta.read_text(encoding="utf-8"))
         codes = data.get("exit_code_by_key", {})
         if codes:
             rel = meta.relative_to(src).as_posix()
@@ -853,7 +1217,21 @@ def cmd_weights(args: argparse.Namespace) -> int:
     if not counts:
         print("mutation_shards: no .meta results under %s — nothing to record" % src)
         return 1
-    out = root / WEIGHTS
+    # `--out` exists because the obvious way to get the data somewhere else is
+    # a trap: this subcommand writes the file IN PLACE and prints only a
+    # summary, so `weights --source mutants > new.json` overwrites the
+    # committed hints and puts the summary line — not the data — in new.json.
+    #
+    # An empty `--out` is refused rather than treated as absent. `--out ""` is
+    # what an unset shell variable expands to (`--out "$OUT"`), and falling
+    # back to the default there overwrites the committed hints — precisely the
+    # accident the flag was added to prevent, now with the user believing they
+    # had redirected it.
+    if args.out is not None and not args.out.strip():
+        print("mutation_shards: --out was given an empty path; refusing to "
+              "fall back to %s" % (root / WEIGHTS))
+        return 1
+    out = Path(args.out) if args.out else root / WEIGHTS
     out.write_text(json.dumps(
         {"_comment": "Advisory shard-balance hints; see scripts/mutation_shards.py. "
                      "Stale entries cost balance, never correctness.",
@@ -861,7 +1239,7 @@ def cmd_weights(args: argparse.Namespace) -> int:
          "mutants_by_symbol": by_symbol,
          "millis_by_file": millis,
          "millis_by_symbol": millis_by_symbol},
-        indent=2, sort_keys=True) + "\n")
+        indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     print("wrote %s: %d files, %d mutants, %d with per-symbol counts, "
           "%d timed, %d with per-symbol times"
           % (out, len(counts), sum(counts.values()), len(by_symbol),
@@ -897,7 +1275,21 @@ def main() -> int:
 
     w = sub.add_parser("weights", help="record real mutant counts to improve balance")
     w.add_argument("--source", default="mutants", help="a mutants/ tree from a full run")
+    w.add_argument("--out", help="write the hints here instead of in place "
+                                 "(a plain `> file` captures the summary, not the data)")
     w.set_defaults(func=cmd_weights)
+
+    d = sub.add_parser("drift", help="is the committed balance hint worth replacing?")
+    d.add_argument("--candidate", required=True,
+                   help="a freshly measured mutation_weights.json to compare against")
+    d.add_argument("--shards", type=int, default=6)
+    d.add_argument("--threshold", type=float, default=DRIFT_THRESHOLD,
+                   help="slowest-shard cost over the measured best, above which "
+                        "a refresh is worth a pull request (default: %(default)s)")
+    d.add_argument("--summary-md", help="also write the Markdown report here")
+    d.add_argument("--github-output",
+                   help="append `moved=` and `makespan=` to this file ($GITHUB_OUTPUT)")
+    d.set_defaults(func=cmd_drift)
 
     k = sub.add_parser("cache-key", help="hash half of a shard's actions/cache key")
     k.set_defaults(func=cmd_cache_key)

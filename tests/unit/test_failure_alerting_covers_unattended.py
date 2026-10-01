@@ -61,9 +61,20 @@ def runs_unattended(text: str) -> bool:
     after the pull request's checks are already green and merged, so its failure
     surfaces only on a commit list — which is how ``demo`` failed six runs out
     of six before a manual audit found it.
+
+    ``workflow_run`` is the same situation one step further removed, and it was
+    the hole in this guard: such a workflow starts *after* the run that
+    triggered it has already reported, so its own result appears on no pull
+    request and in no commit's check list. Three were in that blind spot —
+    ``release`` (publish.yml, which is what actually uploads to PyPI on every
+    merge to main), ``sbom`` and ``mutation-weights-refresh`` — and the rule
+    this file enforces, "any workflow that runs on main and nobody watches
+    belongs here", covered none of them because the parser only ever looked
+    for a cron or a push.
     """
     return bool(re.search(r"^\s*schedule:", text, re.M)
-                or re.search(r"^\s*push:", text, re.M))
+                or re.search(r"^\s*push:", text, re.M)
+                or re.search(r"^\s*workflow_run:", text, re.M))
 
 
 def watched() -> set[str]:
@@ -104,6 +115,17 @@ class TestTheGuardCanActuallySee:
 
     def test_a_known_cron_workflow_is_classified_as_unattended(self):
         assert "fuzz" in unattended(), unattended()
+
+    def test_a_workflow_run_workflow_is_classified_as_unattended(self):
+        # The hole this guard had: `release` (publish.yml) is triggered by
+        # `workflow_run` alone, so before `runs_unattended` learned that
+        # trigger, the one workflow that publishes to PyPI was invisible here.
+        assert "release" in unattended(), unattended()
+
+    def test_a_workflow_run_only_trigger_is_recognised(self):
+        # Fed the shape directly, so a parser that stops matching fails here
+        # rather than silently shrinking the set it is meant to police.
+        assert runs_unattended("on:\n  workflow_run:\n    workflows: [ci]\n")
 
 
 class TestEveryUnattendedWorkflowIsWatched:
