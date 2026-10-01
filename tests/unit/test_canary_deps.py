@@ -745,6 +745,36 @@ class TestHarnessJobs:
             + " — add them to that job's pip install line, or guard the "
               "import with pytest.importorskip")
 
+    def test_every_harness_job_can_import_yaml(self):
+        """This file's own dependency, which it used to skip over instead.
+
+        The module opens with `pytest.importorskip("yaml")`, because it reads
+        `.github/workflows/*.yml`. PyYAML was pinned in `lint-tools.txt` and
+        `mutation-tools.txt` and in neither `test-tools.txt` nor
+        `coverage-tools.txt`, and neither hand-typed pip line named it — so
+        the file skipped in **all six** jobs that run the suite, including
+        the required `tests` leg and the free-threaded canary it was written
+        to protect. (The card that raised this said three jobs; measuring
+        them said six.)
+
+        It was still enforced, in a place nobody reads it: `setup.cfg` copies
+        `.github/` into `mutants/`, so it runs in the mutation gate's
+        baseline and a failure fails a required check — reported as
+        "mutation gate: `mutmut run` failed to execute", every shard red, the
+        workflow file named nowhere.
+
+        `test_every_harness_job_installs_what_the_suite_imports` cannot catch
+        this, and correctly so: it scans for *unguarded* imports, and an
+        `importorskip` is guarded by construction. A guard that turns the
+        whole file off in every job it guards is the one case where being
+        guarded is the defect, so it gets its own assertion.
+        """
+        skipping = [f"{wf}:{job}" for wf, job, installed, _t in _harness_jobs()
+                    if "pyyaml" not in {_norm(d) for d in installed}]
+        assert not skipping, (
+            "test_canary_deps.py needs PyYAML and these jobs do not install "
+            "it, so the whole file skips there: " + ", ".join(skipping))
+
     def test_the_set_of_hand_built_jobs_is_the_one_we_know_about(self):
         """A new job assembling its own venv has to be looked at, not inherited.
 

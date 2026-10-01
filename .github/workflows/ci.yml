@@ -941,7 +941,7 @@ jobs:
           # ModuleNotFoundErrors and a real no-GIL regression would not change
           # its colour. tests/unit/test_canary_deps.py keeps this list in step
           # with what the suite imports unguarded.
-          .venv/bin/pip -q install pytest pytest-cov coverage hypothesis setuptools
+          .venv/bin/pip -q install pytest pytest-cov coverage hypothesis setuptools pyyaml
           .venv/bin/pip -q install -e .
           .venv/bin/pytest tests/unit tests/functional -q
 
