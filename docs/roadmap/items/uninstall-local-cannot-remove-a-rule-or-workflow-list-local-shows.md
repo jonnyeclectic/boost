@@ -2,14 +2,14 @@
 id: uninstall-local-cannot-remove-a-rule-or-workflow-list-local-shows
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 3
 note: list --local prints the repo's rule; uninstall --local says it is not installed
 order: 355
-owner:
+owner: loop/uninstall-local-rules
 pr:
 title: "<code>uninstall --local</code> cannot remove a rule or workflow that <code>list --local</code> shows"
 ---
