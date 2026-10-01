@@ -2705,12 +2705,18 @@ class TestProjectSkills:
         must not settle it by accident.
         """
         repo, _ = self._install(entry, tmp_path)
-        victim = repo / "pyproject.toml"
+        # A *legal* path holding a plain file. It was `pyproject.toml`, which
+        # the identity check now refuses two guards earlier — so the test
+        # went on passing while the `is_dir()` guard it exists to pin stopped
+        # being exercised at all. The row has to survive identity for the
+        # type check to be what saves the file.
+        victim = repo / AGENT_DIRS["claude-code"] / "skills" / "brainstorming"
+        util.rmtree(victim)
         victim.write_text("[project]\n", encoding="utf-8")
         from boost_cli.core import projectlock
         rec = projectlock.get_skill(repo, "brainstorming")
         rec["materializations"] = [{"agent": "claude-code",
-                                    "path": "pyproject.toml"}]
+                                    "path": ".claude/skills/brainstorming"}]
         projectlock.set_skill(repo, "brainstorming", rec)
 
         store.uninstall_project("brainstorming", base=str(repo))
@@ -2739,6 +2745,454 @@ class TestProjectSkills:
         assert "claude-code" not in info["unlinked"]
         assert mat.is_symlink()                  # refused, so left alone
         assert (outside / "SKILL.md").read_text(encoding="utf-8") == "theirs"
+
+    def _retarget(self, repo, rows):
+        """Rewrite the lock's materializations, as an edited commit would."""
+        from boost_cli.core import projectlock
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec["materializations"] = rows
+        projectlock.set_skill(repo, "brainstorming", rec)
+
+    def test_a_materialization_naming_a_source_tree_is_left_alone(
+            self, entry, tmp_path):
+        """Inside the project is not the same question as "boost put it there".
+
+        `.boost/skill-lock.json` is committed, so a row reading `src/core`
+        is something anyone with merge rights can write. It is inside the
+        base, so the containment guard passed it, and `uninstall --local`
+        removed the repo's own source tree under a command the user typed.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        victim = repo / "src" / "core"
+        victim.mkdir(parents=True)
+        (victim / "main.py").write_text("print(1)\n", encoding="utf-8")
+        self._retarget(repo, [{"agent": "claude-code", "path": "src/core"}])
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        assert (victim / "main.py").read_text(encoding="utf-8") == "print(1)\n"
+        assert info["refused"] == ["src/core"]
+        assert "claude-code" not in info["unlinked"]
+
+    def test_the_lock_row_is_dropped_even_when_its_path_is_refused(
+            self, entry, tmp_path):
+        """A refused row must not leave the skill installed forever.
+
+        Skipping the delete is right; skipping the *record* removal would
+        mean the one doctored row pins the entry in the lock, so every
+        later `uninstall` re-reads it and the skill can never be removed.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        (repo / "src").mkdir()
+        self._retarget(repo, [{"agent": "claude-code", "path": "src"}])
+
+        store.uninstall_project("brainstorming", base=str(repo))
+
+        from boost_cli.core import projectlock
+        assert projectlock.get_skill(repo, "brainstorming") is None
+        assert (repo / "src").is_dir()
+
+    def test_a_row_naming_another_skills_directory_is_refused(
+            self, entry, tmp_path):
+        """The leaf name has to be this skill, not merely *a* skill.
+
+        `<repo>/.claude/skills/<other>` is under an agent dotdir and would
+        pass any check that only asked "is this an agent skills dir?" —
+        so `boost uninstall --local a` would take `b` with it.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        other = repo / AGENT_DIRS["claude-code"] / "skills" / "someone-elses"
+        other.mkdir(parents=True, exist_ok=True)
+        (other / "SKILL.md").write_text("theirs", encoding="utf-8")
+        self._retarget(repo, [{"agent": "claude-code",
+                               "path": ".claude/skills/someone-elses"}])
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        assert (other / "SKILL.md").read_text(encoding="utf-8") == "theirs"
+        assert info["refused"] == [".claude/skills/someone-elses"]
+
+    def test_a_row_naming_the_agent_dotdir_itself_is_refused(
+            self, entry, tmp_path):
+        """`.claude` is the parent of a legal path, which is not the same."""
+        repo, _ = self._install(entry, tmp_path)
+        self._retarget(repo, [{"agent": "claude-code", "path": ".claude"}])
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        assert (repo / ".claude").is_dir()
+        assert info["refused"] == [".claude"]
+
+    def test_a_legal_path_symlinked_at_an_in_repo_target_stays_a_string(
+            self, entry, tmp_path):
+        """The legal path is a repo path too, so it can be made to lie.
+
+        This is the sharp edge of comparing unresolved. A commit can replace
+        the materialization `.claude/skills/brainstorming` with a *symlink*
+        to `src/core` and file a row of `src/core`. Resolve both sides and
+        they meet at `<base>/src/core`: the row is accepted, `is_dir()` is
+        true through the link, and the source tree is deleted — exactly the
+        bug this guard exists to stop, re-entered through the comparison
+        rather than through the containment check.
+
+        Compared as strings the row is simply not one of the legal paths, so
+        it is refused and `src/core` survives. The link itself is left where
+        it is, because the row that named it was not in the lock.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        mat = repo / AGENT_DIRS["claude-code"] / "skills" / "brainstorming"
+        victim = repo / "src" / "core"
+        victim.mkdir(parents=True)
+        (victim / "main.py").write_text("print(1)\n", encoding="utf-8")
+        util.rmtree(mat)
+        mat.symlink_to(victim, target_is_directory=True)
+        self._retarget(repo, [{"agent": "claude-code", "path": "src/core"}])
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        assert info["refused"] == ["src/core"]
+        assert (victim / "main.py").read_text(encoding="utf-8") == "print(1)\n"
+
+    def test_a_symlinked_skills_dir_does_not_redirect_the_delete(
+            self, entry, tmp_path):
+        """A path is a string *and* a place, and only one of them was checked.
+
+        The leaf-only comparison is equal **by construction** here: the row
+        is spelled `.claude/skills/<name>`, which is exactly the legal
+        string. The lie is one component up — `.claude/skills` committed as
+        a symlink to `src` — so `is_dir()` follows it happily and `rmtree`
+        takes `src/<name>`. That is this card's own bug, re-entered through
+        an ancestor, and the first round of this change shipped with it
+        open: the probe printed `refused=[]` and the victim gone.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        victim = repo / "src" / "brainstorming"
+        victim.mkdir(parents=True)
+        (victim / "main.py").write_text("print(1)\n", encoding="utf-8")
+        skills = repo / AGENT_DIRS["claude-code"] / "skills"
+        util.rmtree(skills)
+        skills.symlink_to(repo / "src", target_is_directory=True)
+        self._retarget(repo, [{"agent": "claude-code",
+                               "path": ".claude/skills/brainstorming"}])
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        # `redirected`, not `refused`: the row IS in the derived set —
+        # that is what makes the string check pass and the walk the only
+        # thing standing between the lock and the victim.
+        assert info["redirected"] == [".claude/skills/brainstorming"]
+        assert info["refused"] == []
+        assert (victim / "main.py").read_text(encoding="utf-8") == "print(1)\n"
+
+    def test_a_symlinked_agent_dotdir_does_not_redirect_the_delete(
+            self, entry, tmp_path):
+        """The same lie two components up, so the walk is not special-cased.
+
+        A guard that only compared the immediate parent would pass this one.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        victim = repo / "lib" / "skills" / "brainstorming"
+        victim.mkdir(parents=True)
+        (victim / "main.py").write_text("print(1)\n", encoding="utf-8")
+        dotdir = repo / AGENT_DIRS["claude-code"]
+        util.rmtree(dotdir)
+        dotdir.symlink_to(repo / "lib", target_is_directory=True)
+        self._retarget(repo, [{"agent": "claude-code",
+                               "path": ".claude/skills/brainstorming"}])
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        # `redirected`, not `refused`: the row IS in the derived set —
+        # that is what makes the string check pass and the walk the only
+        # thing standing between the lock and the victim.
+        assert info["redirected"] == [".claude/skills/brainstorming"]
+        assert info["refused"] == []
+        assert (victim / "main.py").read_text(encoding="utf-8") == "print(1)\n"
+
+    def test_a_repo_reached_through_a_symlink_is_not_refused_wholesale(
+            self, entry, tmp_path):
+        """The ancestor check must compare real against real.
+
+        A repo can sit under a symlink without containing one — a checkout
+        below `/tmp` on macOS, a home behind an automount, a worktree reached
+        through a convenience link. Resolving the walked path and *not* the
+        base compares real against nominal, matches nothing, and refuses
+        every row of that repo. This is the regression that version would
+        have shipped.
+
+        The link is built here rather than inherited from the runner: pytest
+        resolves `tmp_path`, so a symlinked `$TMPDIR` never reaches the code
+        under test and the revert survives it. An earlier version of this
+        docstring claimed otherwise, and measuring it was how that was found.
+        """
+        repo, _ = self._install(entry, tmp_path, name="real")
+        link = tmp_path / "through-a-link"
+        link.symlink_to(repo, target_is_directory=True)
+        mat = link / AGENT_DIRS["claude-code"] / "skills" / "brainstorming"
+        assert mat.is_dir()
+
+        info = store.uninstall_project("brainstorming", base=str(link))
+
+        assert info["refused"] == []
+        assert "claude-code" in info["unlinked"]
+        assert not mat.exists()
+
+    def test_a_row_that_escapes_the_repo_is_reported_not_swallowed(
+            self, entry, tmp_path):
+        """Containment stopped the delete; nothing said so.
+
+        An absolute path or one climbing out with `..` makes
+        `resolve_in_base` answer None, and that fell through every branch to
+        a bare `continue`. No deletion — and no output either, under a
+        change whose argument is that a silent survival teaches the user
+        nothing. It is also the most hostile row of the set, so it was the
+        one case producing no trace at all.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        outside = tmp_path / "not-mine"
+        outside.mkdir()
+        (outside / "x").write_text("theirs", encoding="utf-8")
+        self._retarget(repo, [{"agent": "claude-code",
+                               "path": "../not-mine"},
+                              {"agent": "cursor", "path": "/etc"}])
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        assert info["escaped"] == ["../not-mine", "/etc"]
+        assert info["refused"] == []
+        assert (outside / "x").read_text(encoding="utf-8") == "theirs"
+
+    def test_a_refused_row_does_not_stop_the_rows_after_it(
+            self, entry, tmp_path):
+        """One bad row must not strand every row behind it.
+
+        `continue` rather than `break`, and the difference is invisible to a
+        single-row lock — which is what every other refusal test here uses.
+        Under `break` the legal copy stays on disk while `remove_skill` runs
+        anyway, so boost orphans a directory it can never find again.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        mat = repo / AGENT_DIRS["claude-code"] / "skills" / "brainstorming"
+        assert mat.is_dir()
+        (repo / "src").mkdir()
+        self._retarget(repo, [{"agent": "windsurf", "path": "src"},
+                              {"agent": "claude-code",
+                               "path": ".claude/skills/brainstorming"}])
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        assert info["refused"] == ["src"]
+        assert not mat.exists(), "a refused row stranded the row after it"
+        assert (repo / "src").is_dir()
+
+    def test_the_result_names_what_an_uninstall_would_remove(
+            self, entry, tmp_path):
+        """`expected` is what the CLI prints instead of a hardcoded shape.
+
+        Asserted here rather than only in the functional suite, because the
+        mutation gate runs `tests/unit` alone — a key only the CLI test
+        touches is an unkilled mutant in `boost_cli/core`.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        self._retarget(repo, [{"agent": "claude-code", "path": "src"}])
+        (repo / "src").mkdir()
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        assert ".claude/skills/brainstorming" in info["expected"]
+        assert info["expected"] == sorted(info["expected"])
+        for rel in info["expected"]:
+            assert not rel.startswith("/") and "\\" not in rel
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="install cannot stage a copy through a relative directory "
+                               "symlink on Windows; the guard itself is covered "
+                               "there by the two ancestor tests, which symlink "
+                               "after the install")
+    def test_an_in_repo_symlinked_dotdir_is_reported_as_redirected(
+            self, entry, tmp_path):
+        """A legitimate `<repo>/.cursor -> config/cursor` is its own class.
+
+        Install gates on `ensure_in_base`, which is containment only, so it
+        writes straight through the symlink and records the row it spelled.
+        Uninstall will not delete through it, because a committed symlink is
+        input and this layout is byte-identical to the attack
+        (`.claude/skills -> ../src`) — so the copy is left behind on purpose.
+
+        What the first revision of that guard got wrong is the *reporting*: a
+        redirected row is in `expected` by construction, so folding it into
+        `refused` told the user their path was "not a path boost removes
+        here" directly above a list containing that exact string.
+        """
+        from boost_cli.core import projectlock
+        repo = self._repo(tmp_path)
+        (repo / "config" / "cursor").mkdir(parents=True)
+        (repo / ".cursor").symlink_to("config/cursor", target_is_directory=True)
+        store.install(entry, scope="project", base=str(repo))
+        landed = repo / "config" / "cursor" / "skills" / "brainstorming"
+        assert landed.is_dir(), "install did not write through the symlink"
+        info = store.uninstall_project("brainstorming", base=str(repo))
+        assert info["redirected"] == [".cursor/skills/brainstorming"]
+        assert info["refused"] == []
+        # Left behind, deliberately — and still named in `expected`, which is
+        # why the two lists cannot share a message.
+        assert landed.is_dir()
+        assert ".cursor/skills/brainstorming" in info["expected"]
+        # Every other agent's copy still goes; one redirect is not a veto.
+        assert not (repo / ".claude" / "skills" / "brainstorming").exists()
+        assert projectlock.get_skill(str(repo), "brainstorming") is None
+
+    def test_a_row_without_an_agent_still_counts_as_removed(
+            self, entry, tmp_path):
+        """`unlinked` is the agent list, and a lock row need not name one.
+
+        The delete is not gated on `agent` and must not be — an agentless row
+        at a legal path is still the skill's own directory. Gating the
+        caller's "removed from <repo>" line on `unlinked` therefore told a
+        user with such a row that nothing had been removed while the
+        directory was gone: the round-2 fix for the opposite lie, told
+        backwards. `removed_count` is what the caller reads.
+        """
+        from boost_cli.core import projectlock
+        repo = self._repo(tmp_path)
+        store.install(entry, scope="project", base=str(repo))
+        rec = projectlock.get_skill(str(repo), "brainstorming")
+        rec["materializations"] = [{"path": ".claude/skills/brainstorming"}]
+        projectlock.set_skill(str(repo), "brainstorming", rec)
+        legal = repo / ".claude" / "skills" / "brainstorming"
+        assert legal.is_dir()
+        info = store.uninstall_project("brainstorming", base=str(repo))
+        assert not legal.exists(), "the delete must not depend on `agent`"
+        assert info["unlinked"] == []
+        assert info["removed_count"] == 1
+
+    def test_a_users_own_symlink_to_the_skill_dir_is_refused(
+            self, entry, tmp_path):
+        """Identity is the path, not the object the path lands on.
+
+        One of the two tests that pin the *unresolved* half of the
+        comparison — this one for the benign direction, and
+        `test_a_legal_path_symlinked_at_an_in_repo_target_stays_a_string`
+        for the attack. (An earlier draft of this docstring claimed to be
+        the only one; the commit's own falsification table measures two.)
+        Nothing pinned it before either: a project materialization is a real
+        directory, so the legal path and the row naming it are the same
+        string and a resolved comparison looks identical.
+
+        A resolved comparison is strictly weaker, never stronger — it
+        additionally accepts a *different* path that denotes the same
+        object. `<repo>/my-link -> .claude/skills/brainstorming` is a link
+        the user made, it is inside the base, and it resolves onto a legal
+        target, so the resolved variant takes the row and unlinks an alias
+        boost never created. The shipped code refuses it on the string.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        real = repo / AGENT_DIRS["claude-code"] / "skills" / "brainstorming"
+        assert real.is_dir() and not real.is_symlink()
+        alias = repo / "my-link"
+        alias.symlink_to(real)
+        self._retarget(repo, [{"agent": "claude-code", "path": "my-link"}])
+
+        info = store.uninstall_project("brainstorming", base=str(repo))
+
+        assert info["refused"] == ["my-link"]
+        assert alias.is_symlink(), "boost unlinked an alias it never created"
+        assert real.is_dir(), "and the thing it pointed at is still there"
+
+    def test_every_real_materialization_is_in_the_legal_set(
+            self, entry, tmp_path):
+        """The guard must not be stricter than the installer.
+
+        Written as install-then-compare rather than as a list of expected
+        paths: a legal set disagreeing with `_install_project_skill` would
+        `uninstall` a no-op that still cleared the lock, leaving every copy
+        on disk — a quieter failure than the one being fixed.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        from boost_cli.core import projectlock
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rows = rec["materializations"]
+        assert rows, "fixture installed nothing to compare"
+        legal = store.project_skill_targets(repo, "brainstorming")
+        for m in rows:
+            assert repo / m["path"] in legal, (m["path"], sorted(legal))
+
+    def test_the_legal_set_uses_the_declared_dotdir_not_the_derived_one(
+            self, entry, tmp_path, monkeypatch):
+        """`project_dotdir` is the only part of the derivation with a seam.
+
+        Every other agent's project dotdir falls out of its user skills dir,
+        so dropping the `dotdir=` argument changes nothing and no test
+        notices. Codex is the exception: its user root moves with
+        `$CODEX_HOME` while its project root is the literal `.codex`, so
+        with the variable relocated the derived name (`moved`) and the
+        declared one (`.codex`) disagree. `tests/conftest.py` unsets
+        `CODEX_HOME`, which is why this has to set it back — without that
+        the guard could stop asking for the declared name and still pass,
+        and `uninstall --local` would walk past the copy it wrote.
+        """
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "moved"))
+        repo, _ = self._install(entry, tmp_path)
+        mat = repo / ".codex" / "skills" / "brainstorming"
+        assert mat.is_dir(), "install did not use the declared dotdir"
+        assert mat in store.project_skill_targets(repo, "brainstorming")
+        assert not (repo / "moved").exists()
+
+        store.uninstall_project("brainstorming", base=str(repo))
+
+        assert not mat.exists()
+
+    @pytest.mark.parametrize("bad", ["../evil", "a/b", ".", "..", ""])
+    def test_an_unusable_skill_name_has_an_empty_legal_set(self, bad, tmp_path):
+        """Fail closed, and do it without raising from inside the guard.
+
+        A project lock is committed, so its *keys* are input too: a row
+        filed under `../evil` reaches `uninstall_project`, and
+        `scopes.skill_target` refuses the name. Letting that escape would
+        abort the command — after `remove_skill` for an earlier name had
+        already run in a multi-name uninstall. An empty set refuses every
+        row instead, which is the same answer the guard gives to any path
+        it cannot vouch for.
+        """
+        assert store.project_skill_targets(tmp_path, bad) == set()
+
+    def test_an_unusable_name_refuses_rather_than_deletes(self, entry, tmp_path):
+        """End to end: the empty legal set must reach the delete loop."""
+        repo, _ = self._install(entry, tmp_path)
+        mat = repo / AGENT_DIRS["claude-code"] / "skills" / "brainstorming"
+        from boost_cli.core import projectlock
+        rec = projectlock.get_skill(repo, "brainstorming")
+        projectlock.set_skill(repo, "..", dict(rec))
+
+        info = store.uninstall_project("..", base=str(repo))
+
+        assert info["refused"], "an unusable name must refuse, not delete"
+        assert mat.is_dir()
+
+    def test_an_agent_disabled_after_the_install_still_gets_cleaned_up(
+            self, entry, tmp_path, monkeypatch):
+        """Disabling an agent must not strand the directory boost wrote.
+
+        The legal set is derived from `known_agents()` filtered on
+        `project_scope` and deliberately *not* on `enabled`. Keying it on
+        the enabled set would trade this delete bug for an orphan bug:
+        the copy is already in the repo, and the command whose job is to
+        remove it would quietly walk past.
+        """
+        repo, _ = self._install(entry, tmp_path)
+        mat = repo / AGENT_DIRS["claude-code"] / "skills" / "brainstorming"
+        assert mat.is_dir()
+        real = agents.known_agents()
+
+        def half_off():
+            out = {n: dict(v) for n, v in real.items()}
+            out["claude-code"]["enabled"] = False
+            return out
+
+        monkeypatch.setattr(agents, "known_agents", half_off)
+        store.uninstall_project("brainstorming", base=str(repo))
+
+        assert not mat.exists()
 
     def test_uninstall_project_errors_when_not_installed(self, tap, tmp_path):
         with pytest.raises(BoostError) as err:

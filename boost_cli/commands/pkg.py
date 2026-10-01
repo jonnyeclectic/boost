@@ -832,10 +832,73 @@ def cmd_uninstall(argv: list[str]) -> int:
                 else "removed from"
             out.ok("%s %s" % (verb, " · ".join(info["unlinked"])))
         if is_project:
-            # Report where it actually went, not where a user-scope install
-            # would have put it — a project skill never touches the
-            # canonical store.
-            out.ok("removed from %s" % _tilde(info.get("base", "this repo")))
+            refused = info.get("refused") or []
+            escaped = info.get("escaped") or []
+            redirected = info.get("redirected") or []
+            at = _tilde(info.get("base", "this repo"))
+            # Only claim a removal that happened, and read it off what came
+            # off disk rather than off `unlinked`, which is the *agent* list:
+            # a lock row need not name an agent, and gating on the agent list
+            # told a user whose row was agentless that nothing had been
+            # removed while the directory was gone. An unconditional "removed
+            # from <repo>" over an empty removal is the green panel this
+            # change exists to stop the user trusting, and this is the same
+            # sentence in the other direction. The lock *entry* does go
+            # either way, so the summary panel still counts the skill.
+            if info.get("removed_count"):
+                # Where it actually went, not where a user-scope install
+                # would have put it — a project skill never touches the
+                # canonical store.
+                out.ok("removed from %s" % at)
+            elif refused or escaped or redirected:
+                out.warn("nothing removed from %s — every path the lock named "
+                         "was left alone" % at, wrap=True)
+            # A lock row boost will not act on, named rather than swallowed:
+            # the row is in a committed file, so a user who sees nothing has
+            # no way to learn their lock was edited. Through `out.plain`
+            # because the row *is* the attacker-controlled input — a path
+            # carrying `\x1b[1A\x1b[2K` would erase the lines above it.
+            for row in refused:
+                out.warn("left alone: the lock names %s, which is not a path "
+                         "boost removes here" % out.plain(row), wrap=True)
+            # Worded apart from the above on purpose: this row may well be a
+            # path an install writes, with the lie in the filesystem rather
+            # than in the string.
+            for row in escaped:
+                out.warn("left alone: the lock names %s, which resolves "
+                         "outside this repo" % out.plain(row), wrap=True)
+            # And this one *is* a path an install writes — it is in the
+            # derived set by construction, which is why it must not borrow
+            # `refused`'s wording: that printed "not a path boost removes
+            # here" directly above a list containing the same string. The
+            # remedy is a real one, because `rm` follows the committed
+            # symlink exactly as the install did.
+            for row in redirected:
+                out.warn("left alone: the lock names %s, but a symlink inside "
+                         "the repo redirects the path to it. boost will not "
+                         "delete through a symlink it did not create; "
+                         "`rm -rf %s/%s` removes it if it is yours."
+                         % (out.plain(row), at, out.plain(row)), wrap=True)
+            if refused:
+                # The derived set, not a `<repo>/<dotdir>/skills/<name>`
+                # shape: the leaf comes from the agent's `dir`, so the shape
+                # told a user with a renamed skills dir that their path was
+                # not one an install writes — directly above a shape it
+                # matched. And worded as what boost *removes* rather than
+                # what an install *writes*, because the set keeps disabled
+                # agents on purpose and an install skips them.
+                #
+                # Gated on `refused` alone. A redirected row is in `expected`
+                # by construction, so printing this under one contradicts the
+                # line above it; its own message carries its own remedy.
+                expected = info.get("expected") or []
+                out.info(("boost only removes %s here. The lock entry is gone "
+                          "from your working copy; the directory is not, so "
+                          "remove it by hand if it is not yours."
+                          % ", ".join(expected)) if expected else
+                         ("boost cannot derive where this skill installs, so "
+                          "every row was left alone; remove the directories "
+                          "by hand if they are yours"), wrap=True)
             unregistered = info.get("mcp_unregistered") or []
             if unregistered:
                 from ..core import mcpdecl
