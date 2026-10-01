@@ -398,6 +398,62 @@ def test_owned_by_resolves_both_sides(tmp_path):
     assert set(scopes.owned_by(entries, real)) == {"x"}
 
 
+# ── owns: the same question about one row ────────────────────────────────
+#
+# `list --local` filters with owned_by and `uninstall --local` admits with
+# owns, so these cover the single-entry form against the same cases: the
+# two commands disagreeing about whose a row is would show a rule and then
+# refuse to remove it, which is the bug this pair exists to close.
+
+def test_owns_accepts_a_project_row_naming_this_repo(tmp_path):
+    assert scopes.owns({"scope": "project", "base": str(tmp_path)}, tmp_path)
+
+
+def test_owns_rejects_a_project_row_naming_another_repo(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    assert not scopes.owns({"scope": "project", "base": str(b)}, a)
+
+
+def test_owns_rejects_a_user_row_whose_base_matches(tmp_path):
+    # The half that is easy to drop: a user-scope row can still carry a
+    # `base` left over from an earlier project install, and admitting it
+    # would let `uninstall --local` delete out of the user's own config.
+    assert not scopes.owns({"scope": "user", "base": str(tmp_path)}, tmp_path)
+
+
+def test_owns_rejects_a_relative_base(tmp_path, monkeypatch):
+    # `.` would otherwise resolve against wherever the caller is standing,
+    # making one row belong to every repo at once.
+    monkeypatch.chdir(tmp_path)
+    assert not scopes.owns({"scope": "project", "base": "."}, tmp_path)
+
+
+def test_owns_is_false_without_a_base(tmp_path):
+    # Answered before realpath: resolving None raises rather than deciding.
+    assert not scopes.owns({"scope": "project", "base": str(tmp_path)}, None)
+
+
+def test_owns_without_a_base_is_false_even_standing_in_that_repo(tmp_path,
+                                                                 monkeypatch):
+    # The guard has to be an early `return False`, not a coerced default.
+    # Falsification caught this: swapping it for `realpath(base or "")`
+    # resolves to the CWD, so "no project at all" silently became "whichever
+    # directory you happen to be standing in" — True here, and the previous
+    # test could not see it because its CWD was elsewhere.
+    monkeypatch.chdir(tmp_path)
+    assert not scopes.owns({"scope": "project", "base": str(tmp_path)}, None)
+
+
+def test_owns_resolves_both_sides(tmp_path):
+    real = tmp_path / "repo"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    assert scopes.owns({"scope": "project", "base": str(link)}, real)
+
+
 def test_owned_by_returns_everything_when_every_row_is_this_repo(tmp_path):
     entries = {"a": {"scope": "project", "base": str(tmp_path)},
                "b": {"scope": "project", "base": str(tmp_path)}}

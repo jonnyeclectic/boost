@@ -146,8 +146,33 @@ def owned_by(entries: dict, base) -> dict:
     if base is None:
         return {}
     want = os.path.realpath(base)
-    return {n: e for n, e in entries.items()
-            if e.get("scope") == SCOPE_PROJECT and _claims(e.get("base"), want)}
+    return {n: e for n, e in entries.items() if _owns(e, want)}
+
+
+def owns(entry: dict, base) -> bool:
+    """Does one user-lock entry belong to the project rooted at ``base``?
+
+    The single-entry form of :func:`owned_by`, and the same predicate rather
+    than a second opinion about it — ``list --local`` decides what a repo has
+    with the filter, and ``uninstall --local`` decides what it may remove with
+    this, so the two cannot disagree about one row. Both halves are load
+    bearing: a user-scope entry can carry a ``base`` (an earlier project
+    install the user re-installed globally leaves the key behind), so dropping
+    the ``scope`` test would hand ``--local`` a row that lives in the user's
+    own config.
+
+    ``False`` for ``base is None`` — a caller standing outside any project
+    owns nothing — which is answered before ``realpath``, since resolving
+    ``None`` is a TypeError rather than an answer.
+    """
+    if base is None:
+        return False
+    return _owns(entry, os.path.realpath(base))
+
+
+def _owns(entry: dict, want: str) -> bool:
+    """:func:`owns` over an already-resolved ``want``, for the bulk filter."""
+    return entry.get("scope") == SCOPE_PROJECT and _claims(entry.get("base"), want)
 
 
 def _claims(recorded, want: str) -> bool:

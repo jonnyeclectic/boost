@@ -3574,6 +3574,173 @@ class TestProjectSkills:
                    ["materializations"]) == 5
 
 
+class TestProjectRulesAndWorkflows:
+    """``uninstall --local`` reaching the two kinds a project lock cannot hold.
+
+    A project lock has a ``skills`` key and nothing else, so an
+    ``install --local`` of a rule or workflow materializes into the repo and
+    records itself in the *user* lock tagged ``scope``/``base``.
+    ``list --local`` already filters that lock with ``scopes.owned_by``;
+    ``uninstall_project`` read the project lock alone and so denied, by name,
+    the row the other command had just printed.
+    """
+
+    @staticmethod
+    def _repo(tmp_path, name="proj"):
+        repo = tmp_path / name
+        (repo / ".git").mkdir(parents=True)
+        return repo
+
+    def _install(self, entry, tmp_path, name="proj"):
+        repo = self._repo(tmp_path, name)
+        store.install(entry, scope="project", base=str(repo))
+        return repo
+
+    # ── project_materialized: whose row is this ──────────────────────────
+
+    def test_finds_a_rule_this_repo_owns(self, tap, tmp_path):
+        e = _rule_entry(tap)
+        repo = self._install(e, tmp_path)
+        found = store.project_materialized(e["name"], repo)
+        assert found is not None
+        kind, row = found
+        assert kind == "rule"
+        assert row["scope"] == "project"
+
+    def test_finds_a_workflow_this_repo_owns(self, tap, tmp_path):
+        e = _workflow_entry(tap)
+        repo = self._install(e, tmp_path)
+        found = store.project_materialized(e["name"], repo)
+        assert found is not None and found[0] == "workflow"
+
+    def test_does_not_find_a_user_scope_rule(self, tap, tmp_path):
+        e = _rule_entry(tap)
+        store.install(e)
+        assert store.project_materialized(e["name"], self._repo(tmp_path)) is None
+
+    def test_does_not_find_another_repos_rule(self, tap, tmp_path):
+        e = _rule_entry(tap)
+        self._install(e, tmp_path, name="theirs")
+        assert store.project_materialized(e["name"],
+                                          self._repo(tmp_path, "mine")) is None
+
+    def test_finds_nothing_without_a_base(self, tap, tmp_path):
+        e = _rule_entry(tap)
+        self._install(e, tmp_path)
+        assert store.project_materialized(e["name"], None) is None
+
+    def test_a_skill_of_the_same_name_does_not_shadow_the_rule(self, tap, tmp_path,
+                                                               entry):
+        # `lockfile.find_any` answers with the first SECTION holding the name,
+        # so a user-scope skill called `x` would outrank a project rule called
+        # `x` this repo owns — and `--local` would refuse the row `list
+        # --local` shows. Ownership is asked of the rule/workflow sections
+        # directly for exactly this reason.
+        shared = "brainstorming"
+        store.install(entry)                       # user-scope skill
+        e = _rule_entry(tap, name=shared)
+        repo = self._install(e, tmp_path)
+        assert lockfile.find_any(shared)[0] == "skill"
+        found = store.project_materialized(shared, repo)
+        assert found is not None and found[0] == "rule"
+
+    # ── uninstall_project falls through ──────────────────────────────────
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_uninstall_project_removes_the_row_and_its_files(self, tap, tmp_path,
+                                                             kind):
+        e = (_rule_entry if kind == "rule" else _workflow_entry)(tap)
+        repo = self._install(e, tmp_path)
+        get = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+        rows = get(e["name"])["materializations"]
+        assert rows, "nothing materialized — the test would assert nothing"
+
+        info = store.uninstall_project(e["name"], base=str(repo))
+
+        assert info["kind"] == kind
+        assert get(e["name"]) is None
+        for m in rows:
+            assert not os.path.lexists(m["path"]), m["agent"]
+
+    def test_the_result_carries_the_scope_and_base(self, tap, tmp_path):
+        e = _rule_entry(tap)
+        repo = self._install(e, tmp_path)
+        info = store.uninstall_project(e["name"], base=str(repo))
+        # Read off the lock entry, so bare `uninstall` of the same row
+        # describes it identically — see `_materialized_result`.
+        assert info["scope"] == "project"
+        assert Path(info["base"]) == repo
+        assert info["removed_count"] > 0
+
+    def test_a_user_scope_removal_claims_no_scope(self, tap):
+        # The other direction of the same key: `cmd_uninstall` branches on
+        # `scope`, so a user-scope rule must not acquire one and start
+        # reporting a repo it never touched.
+        e = _rule_entry(tap)
+        store.install(e)
+        info = store.uninstall(e["name"])
+        assert "scope" not in info and "base" not in info
+        assert info["removed_count"] > 0
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_the_count_is_files_not_rows(self, tap, tmp_path, kind):
+        # Every agent in the default table writes its own file, so counting
+        # rows and counting files agree there and the first version of this
+        # test could not tell them apart — the mutant survived. Two agents
+        # pointed at ONE directory is the case that separates them: the rows
+        # differ, the file does not, and `_remove_all_or_nothing`
+        # de-duplicates before removing. Reporting "removed from <repo>" off
+        # a row count would over-state it by the number of agents sharing a
+        # file, which on a shared context file is most of them.
+        cfg = config.load()
+        cfg["agents"]["windsurf-next"] = {"dir": "~/.windsurf/skills",
+                                          "enabled": True}
+        config.save(cfg)
+        e = (_rule_entry if kind == "rule" else _workflow_entry)(tap)
+        repo = self._install(e, tmp_path)
+        get = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+        rows = get(e["name"])["materializations"]
+        distinct = {os.path.realpath(m["path"]) for m in rows}
+        assert len(distinct) < len(rows), (
+            "no two rows share a file — this would assert nothing")
+
+        info = store.uninstall_project(e["name"], base=str(repo))
+
+        assert info["removed_count"] == len(distinct)
+
+    # ── and the refusals, worded from where the item really is ───────────
+
+    def test_a_user_scope_rule_is_refused_and_named_as_such(self, tap, tmp_path):
+        e = _rule_entry(tap)
+        store.install(e)
+        repo = self._repo(tmp_path)
+        with pytest.raises(BoostError) as ei:
+            store.uninstall_project(e["name"], base=str(repo))
+        assert "user scope" in ei.value.message
+        assert "rule" in ei.value.message
+        assert "boost uninstall %s" % e["name"] in (ei.value.hint or "")
+        # refused, not half-removed
+        assert lockfile.get_rule(e["name"]) is not None
+
+    def test_another_repos_rule_is_refused_and_names_that_repo(self, tap, tmp_path):
+        e = _rule_entry(tap)
+        theirs = self._install(e, tmp_path, name="theirs")
+        mine = self._repo(tmp_path, "mine")
+        with pytest.raises(BoostError) as ei:
+            store.uninstall_project(e["name"], base=str(mine))
+        assert str(theirs) in ei.value.message
+        assert lockfile.get_rule(e["name"]) is not None
+
+    def test_a_name_nothing_installed_keeps_the_original_wording(self, tmp_path):
+        # The one branch that was always true, kept byte-identical: it is what
+        # a second `uninstall --local` of a skill already removed says.
+        repo = self._repo(tmp_path)
+        with pytest.raises(BoostError) as ei:
+            store.uninstall_project("nope", base=str(repo))
+        assert ei.value.message == "nope is not installed in this project"
+        assert ei.value.hint == "see what is with `boost list --local`"
+
+
 class TestARelocatableProjectDotdir:
     """A configured ``project_dir`` decides the repo-local directory name.
 
