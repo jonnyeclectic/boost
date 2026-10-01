@@ -13,6 +13,14 @@ rules:
       # workflow_run head_sha), so a fork PR can't smuggle code into a run
       # holding contents:write + PyPI Trusted Publisher OIDC.
       - publish.yml:19
+      # Re-packs the mutation shards from the `mutation-weights` artifact that
+      # the `ci` run just uploaded. It holds contents:write + pull-requests:
+      # write, so the fork guard matters and it carries the same one publish.yml
+      # and sbom.yml do: the triggering run must be a `push` from this
+      # repository. It never checks out the workflow_run head_sha — the
+      # checkout is the default ref — and the only PR-reachable bytes it touches
+      # are the artifact's JSON, which is parsed, not executed.
+      - mutation-weights-refresh.yml:46
       # Reacts to `pages-build-deployment` finishing, to check the site that was
       # actually published. The danger in workflow_run is a privileged run
       # executing PR-controlled code; none of that applies here. It holds only

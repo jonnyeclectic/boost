@@ -27,11 +27,17 @@ name: ci-failure-alert
 
 on:
   workflow_run:
+    # `release`, `sbom` and `mutation-weights-refresh` are themselves
+    # `workflow_run` workflows, which is why they were missing: this list's
+    # guard only looked for a cron or a push, so three workflows that run on
+    # main after everything else has reported were invisible to it. `release`
+    # is publish.yml — the job that actually uploads to PyPI on every merge.
     workflows: ["adapter-conformance", "boost-langchain", "ci", "codeql",
       "demo", "eval-corpus-refresh", "eval-explain", "eval-scale",
       "eval-stats", "floors", "fuzz", "html-validate", "licenses",
       "lighthouse", "links", "lock-refresh", "markdownlint",
-      "package-metadata", "pip-audit", "post-deploy", "prose-lint",
+      "mutation-weights-refresh", "package-metadata", "pip-audit",
+      "post-deploy", "prose-lint", "release", "sbom",
       "scorecard", "shards", "sonarcloud", "theme-lint", "visual"]
     types: [completed]
 
