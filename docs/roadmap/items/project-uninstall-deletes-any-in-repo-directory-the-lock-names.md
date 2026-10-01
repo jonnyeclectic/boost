@@ -2,14 +2,14 @@
 id: project-uninstall-deletes-any-in-repo-directory-the-lock-names
 board: code
 section: trust
-status: planned
+status: inflight
 category: Core · Security
 complexity: S
 impact: Med
 wow: 3
 note: a materialization path of src/core passes the containment check and is removed
 order: 356
-owner:
+owner: loop/uninstall-local-dotdir-guard
 pr:
 title: "<code>uninstall --local</code> deletes any in-repo directory the committed lock names"
 ---
