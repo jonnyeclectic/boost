@@ -1372,10 +1372,15 @@ def _not_in_this_project(name: str) -> BoostError:
 
     **No ``base`` parameter**, though the caller has one resolved. Every
     branch is decided by :func:`lockfile.find_any`, which searches the user
-    lock as a whole: by the time this is reached, ``scopes.owns`` has already
-    said the row is not this repo's, so the only question left is where it is
-    instead. A parameter nothing reads is one no test can pin — a mutation of
-    it is unkillable by construction — so it is not taken.
+    lock as a whole and answers with the first *section* holding the name.
+    That is wider than what ``--local`` just rejected:
+    :func:`project_materialized` put ``scopes.owns`` only to the rules and
+    workflows sections, so a row this reports can be a **skill** no ownership
+    test has seen. Which is right for a message whose whole job is to say
+    where the item is *instead* — the row's own ``scope`` decides the wording,
+    and a user-scope skill is named as one. A parameter nothing reads is one
+    no test can pin — a mutation of it is unkillable by construction — so it
+    is not taken.
     """
     found = lockfile.find_any(name)
     if found is not None:
@@ -2373,10 +2378,14 @@ def _materialized_result(name: str, removed: list[str], entry: dict,
     over a removal that worked.
 
     The test is :func:`scopes.names_a_directory`, the same one ownership is
-    decided with, rather than a truthiness check beside it. Those differ
-    exactly on the values a lock can hold and an install cannot write: a
-    non-string, and a *relative* path, which names a different repo depending
-    on where the user is standing when they read the line.
+    decided with, rather than a truthiness check beside it. Measured, the two
+    agree on every *falsy* base — ``None``, ``""``, ``{}``, ``0`` are dropped
+    either way — and differ on exactly two things, both of which a lock can
+    hold and an install cannot write: a **truthy** non-string, which would
+    print *removed from 17*, and a **relative** path, which names a different
+    repo depending on where the reader is standing. The relative case is the
+    one that carries the difference in practice, so it is the one the test
+    turns on.
     """
     res = {"name": name, "unlinked": removed, "entry": entry, "kind": kind,
            "removed_count": gone}

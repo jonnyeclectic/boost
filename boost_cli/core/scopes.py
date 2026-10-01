@@ -207,10 +207,18 @@ def names_a_directory(recorded) -> bool:
     point — a base this rejects is one no project claims, so a result that
     named it would print a repo that owns nothing.
 
-    Each clause rejects a value that would otherwise reach a path join or a
-    print: empty, a JSON object or number out of a hand-edited lock, or a
-    relative path, which ``realpath`` would resolve against wherever the user
-    happens to be standing.
+    The three clauses are **ordered, not independent**. ``isabs`` raises
+    ``TypeError: expected str, bytes or os.PathLike object, not dict`` on a
+    hand-edited lock's ``{"base": {}}``, so the ``isinstance`` test has to
+    come first and is what makes the last one safe to call at all. ``bool``
+    first is for reading, not for filtering: ``isabs("")`` is already False,
+    so the empty case would be caught anyway, and saying so up front is
+    cheaper than making the reader work it out.
+
+    What it rejects that a plain truthiness check does not is therefore two
+    things: a *truthy* non-string, and a *relative* path — which ``realpath``
+    would resolve against wherever the user happens to be standing, making
+    one entry belong to whichever repo is read from.
     """
     return (bool(recorded) and isinstance(recorded, str | os.PathLike)
             and os.path.isabs(recorded))

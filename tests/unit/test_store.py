@@ -3682,24 +3682,40 @@ class TestProjectRulesAndWorkflows:
         assert "scope" not in info and "base" not in info
         assert info["removed_count"] > 0
 
+    # `base=DROP` deletes the key; every other value is written as-is. The
+    # distinction is not cosmetic: a user-scope install already writes
+    # `"base": None` (store.py, `str(resolved_base) if ... else None`), so
+    # "leave it alone" produces present-and-None, not absent, and the absent
+    # case needs the explicit `del`.
+    DROP = object()
+
     @pytest.mark.parametrize("base", [
-        None,            # the key absent entirely
+        DROP,            # the key absent entirely
+        None,            # present, and what a user-scope install writes
         "",              # present and empty
         {},              # a hand-edited lock holds whatever JSON holds
+        17,              # ...including a truthy non-string
         "relative/repo",  # names a different repo per reader's cwd
-    ], ids=["absent", "empty", "not-a-path", "relative"])
+    ], ids=["absent", "none", "empty", "not-a-path", "truthy-non-path",
+            "relative"])
     def test_a_project_row_naming_no_repo_claims_no_scope(self, tap, base):
         # A lock is a file on disk, so `scope: project` over a base that names
         # no directory is a shape that exists — `owned_by` already drops every
         # one of these. Carrying `scope` anyway puts the base in the dict,
         # where the caller's `.get("base", "this repo")` default can never
         # fire, and `paths.tilde` is `str(p)`: bare `uninstall` would print
-        # "removed from None" / "removed from {}" over a removal that worked.
+        # "removed from None" / "removed from 17" over a removal that worked.
+        #
+        # Only the last two ids pin *this* gate. The falsy ones were already
+        # dropped by the truthiness check this replaced, and are here as
+        # regression cover rather than as the measurement.
         e = _rule_entry(tap)
         store.install(e)
         row = lockfile.get_rule(e["name"])
         row["scope"] = "project"
-        if base is not None:
+        if base is self.DROP:
+            row.pop("base", None)
+        else:
             row["base"] = base
         lockfile.set_rule(e["name"], row)
 
