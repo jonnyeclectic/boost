@@ -1327,12 +1327,106 @@ def _install_project_skill(entry: dict, force: bool = False,
     return res
 
 
+def project_skill_targets(base, name: str) -> set[Path]:
+    """Every path a project install of ``name`` could legally have written.
+
+    :func:`_install_project_skill` writes exactly
+    ``<base>/<dotdir>/<skills dir>/<name>``, once per agent, so the legal set is
+    small and *derivable* — which is the point. :func:`uninstall_project` reads
+    its paths out of a committed lock file and so must decide "is this mine?"
+    from the agent table rather than from the record being checked.
+
+    Built from :func:`agents.known_agents` filtered on ``project_scope``, and
+    deliberately **not** on ``enabled``. An agent turned off after the install
+    still has its directory in the repo, and a legal-set that forgot it would
+    turn ``uninstall`` into a command that silently leaves real directories
+    behind — trading a delete bug for an orphan bug. Disabling an agent stops
+    boost writing there; it does not stop boost cleaning up what it wrote.
+
+    Derived from *this* machine's config, which has a cost worth stating: the
+    project lock is committed and read on other people's machines, so any drift
+    between the config that wrote a row and the config that reads it refuses a
+    directory a real install wrote. An agent deleted from ``config.json``, one
+    hand-added on a teammate's machine but not here, one whose ``dir`` was
+    renamed since — all three leave the copy in the repo rather than removing
+    it. That is deliberate and it is the fail-closed direction: the user is
+    told which row was skipped *and* what boost removes here, so the drift is
+    on screen and the directory can go by hand. The other way round, boost
+    deletes a path it can no longer explain — and the alternative that would
+    cover drift (checking the path's *shape* rather than deriving it) reads the
+    dotdir back out of the lock, which is the attacker-controlled input this
+    whole function exists not to trust.
+    """
+    out: set[Path] = set()
+    for agent, spec in agents.known_agents().items():
+        if not spec.get("project_scope"):
+            continue
+        skills_dir = spec["dir"]
+        try:
+            out.add(scopes.skill_target(
+                skills_dir, name, base=base,
+                dotdir=agents.project_dotdir(agent, skills_dir)))
+        except BoostError:
+            # An unusable skill name is the *caller's* problem to report, not
+            # a reason for the legal set to be wrong. Nothing matches it.
+            return set()
+    return out
+
+
 def uninstall_project(name: str, base=None) -> dict:
     """Remove a project-scoped skill: its per-agent copies and its lock entry.
 
-    Every recorded path is re-derived and checked to sit inside the project
-    before it is deleted (:func:`scopes.contains`) — the lock is a committed file
-    anyone with merge rights can edit, so a path out of it is input, not truth.
+    Every recorded path is re-derived and checked against the set of paths an
+    install could have produced (:func:`project_skill_targets`) — the lock is a
+    committed file anyone with merge rights can edit, so a path out of it is
+    input, not truth.
+
+    Containment inside the project was the whole guard and is not enough:
+    ``{"path": "src/core"}`` is inside the base, so it passed, and the repo's
+    own source tree was removed under a command the user typed with boost
+    having already said the path was safe. Being *inside the project* is the
+    weaker property; being *a path this install writes* is the real one, and
+    it is derivable.
+
+    Derivable, and then checked twice, because a path is a string and a place.
+    The string must be in the derived set, and the walk to it must not be
+    redirected by a committed symlink at an ancestor — ``.claude/skills -> src``
+    makes the legal spelling denote ``src/<name>``, so a set-membership test
+    alone passes it *by construction*. The first revision of this change
+    shipped with exactly that open. :func:`scopes.parent_matches_spelling` is
+    the second half.
+
+    Rows boost will not act on come back in three lists, because the remedy
+    differs. ``refused`` is a contained row that is not one of the paths an
+    uninstall removes here. ``escaped`` is one containment stopped outright —
+    absolute, climbing out with ``..``, or sitting on a symlink that resolves
+    out of the repo — which may well be a path an install writes, with the lie
+    in the filesystem rather than in the string. ``redirected`` is the third
+    and the quiet one: a row *in* the derived set whose walk is bent by a
+    committed symlink at an ancestor. None is deleted and all three are
+    reported; an escaped row used to be dropped in silence, and a redirected
+    one used to be reported as ``refused``, which printed "not a path boost
+    removes here" directly above a list containing that exact string.
+
+    A ``redirected`` row is also where install and uninstall disagree, and the
+    disagreement is deliberate. ``_install_project_skill`` gates on
+    :func:`scopes.ensure_in_base`, which is containment only, so
+    ``boost install --local`` writes straight through an in-repo
+    ``<repo>/.cursor -> config/cursor`` and records the row it spelled.
+    Uninstall will not delete through that redirect, because a committed
+    symlink is input: the benign layout and the attack
+    (``.claude/skills -> ../src``) are byte-identical on disk, and no test
+    distinguishes the intent behind them. Creating through a redirect is safe
+    and destroying through one is not, so the asymmetry is the right way
+    round — but it does leave boost's own copy behind, which the message says
+    by path. Making install refuse too is its own card.
+
+    The lock entry goes in all four cases (see the ``refused`` note in the
+    body), so the command still exits 0 on an all-refused run. That is also
+    why a redirected row does not hold the entry open: an attacker commits a
+    redirect as easily as a doctored path, so keeping it would be the same
+    denial of service by another route. ``uninstall`` has no ``--json``, so
+    the warning lines are the whole signal a caller gets.
     """
     resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
     entry = projectlock.get_skill(resolved_base, name) if resolved_base else None
@@ -1340,8 +1434,64 @@ def uninstall_project(name: str, base=None) -> dict:
         raise BoostError("%s is not installed in this project" % name,
                         hint="see what is with `boost list --local`")
     removed: list[str] = []
+    refused: list[str] = []
+    redirected: list[str] = []
+    escaped: list[str] = []
+    gone = 0
+    legal = project_skill_targets(resolved_base, name)
     for m in entry.get("materializations") or []:
+        row = str(m.get("path"))
         path = scopes.resolve_in_base(resolved_base, m.get("path"))
+        if path is None:
+            # Empty, absolute, climbing out with `..` — or spelled legally and
+            # sitting on a symlink that resolves out of the repo, which
+            # `contains` catches because it resolves. Containment already
+            # stopped the delete; what was missing is saying so. This was the
+            # one doctored row that produced *no* output at all, under a
+            # change whose whole argument is that a silent survival teaches
+            # the user nothing. Kept apart from `refused` because the two need
+            # different words: this row may well be a path an install writes,
+            # with the lie in the filesystem rather than in the string.
+            escaped.append(row)
+            continue
+        # Identity, in two parts, because a path is a string *and* a place.
+        #
+        # The string must be one an install writes, compared **unresolved**,
+        # and that is load-bearing rather than incidental: resolving both
+        # sides reopens the hole this function closes. The legal path is
+        # itself a repo path, so a commit can make `.claude/skills/<name>` a
+        # *symlink* to `src/core` and file a row of `src/core`; both sides
+        # then resolve to `<base>/src/core`, the row is accepted, and the
+        # source tree is deleted again. Resolving is strictly weaker in the
+        # benign direction too — a user's own `<repo>/my-link ->
+        # .claude/skills/<name>` starts matching, and boost unlinks an alias
+        # it never created.
+        #
+        # And the walk to it must not be redirected, which comparing strings
+        # cannot tell on its own. `<repo>/.claude/skills` committed as a
+        # symlink to `src` leaves the row `.claude/skills/<name>` *equal to
+        # the legal path by construction* while denoting `src/<name>`:
+        # `is_dir()` follows the ancestor happily and `rmtree` takes the
+        # victim, which is this card's bug one component up. The leaf is
+        # honest and the ancestor is not, so the leaf-only check sees nothing.
+        # `scopes.parent_matches_spelling` walks the parent for real.
+        #
+        # Pinned by `test_a_legal_path_symlinked_at_an_in_repo_target_stays_a_
+        # string`, `test_a_users_own_symlink_to_the_skill_dir_is_refused` and
+        # `test_a_symlinked_skills_dir_does_not_redirect_the_delete`.
+        #
+        # The two halves fail differently and are reported differently. A row
+        # outside the derived set is not a path an uninstall writes here. A row
+        # *in* the set whose walk is redirected is the opposite — it is in
+        # `expected` by construction, so folding it into `refused` printed "not
+        # a path boost removes here" directly above a list containing that
+        # exact string.
+        if path not in legal:
+            refused.append(row)
+            continue
+        if not scopes.parent_matches_spelling(resolved_base, row):
+            redirected.append(row)
+            continue
         # `resolve_in_base` checks containment against the *resolved* path but
         # returns the unresolved one, so a materialization recorded as a
         # symlink arrives here as a symlink. A link out of the project was
@@ -1357,10 +1507,18 @@ def uninstall_project(name: str, base=None) -> dict:
         # link rather than through it — must not decide it by accident. A link
         # is still removed whatever it points at, because the link is boost's
         # and unlinking it leaves the target untouched.
-        if path is None or not (path.is_symlink() or path.is_dir()):
-            continue          # refused, absent, or a file we did not create
+        if not (path.is_symlink() or path.is_dir()):
+            continue          # absent, or a plain file we did not create
         if not util.remove_path(path):
             continue          # vanished between the check and the call
+        gone += 1
+        # `removed` is the *agent* list, and a lock row need not name one. The
+        # delete above is not gated on `agent` and must not be: an agentless
+        # row at a legal path is still the skill's own directory. So the count
+        # of what came off disk is tracked separately — gating the caller's
+        # "removed from <repo>" line on the agent list told a user whose lock
+        # had an agentless row that nothing had been removed, while the
+        # directory was gone.
         if m.get("agent"):
             removed.append(m["agent"])
     projectlock.remove_skill(resolved_base, name)
@@ -1371,6 +1529,30 @@ def uninstall_project(name: str, base=None) -> dict:
     unregistered = unregister_project_mcp(resolved_base, name)
     journal.log("uninstall", name, scope=scopes.SCOPE_PROJECT)
     return {"name": name, "unlinked": removed, "entry": entry,
+            # How many paths actually came off disk, which `unlinked` does not
+            # answer — see the `gone` note in the body.
+            "removed_count": gone,
+            "refused": refused,
+            # In the legal set, but an ancestor of the row is a symlink, so the
+            # walk to it is redirected. Its own list because the remedy is the
+            # opposite of `refused`'s: this *is* a path boost writes, and the
+            # spelling the user is shown still removes it by hand, since `rm`
+            # follows the ancestor the way the install did.
+            "redirected": redirected,
+            # Rows the containment check stopped. Separate from `refused`
+            # because the remedy differs: a refused row is not a path an
+            # install writes, where an escaped one may be exactly that with a
+            # symlink under it that leaves the repo.
+            "escaped": escaped,
+            # What an install writes *here*. The refusal message used to spell
+            # the shape out as `<repo>/<agent dotdir>/skills/<name>`, which
+            # hardcodes a leaf that comes from `spec["dir"]` — so for a renamed
+            # skills dir it told the user their path was "not a path a project
+            # install writes" directly above a shape that path matched. Naming
+            # the derived set instead is true under any config, and it is what
+            # puts config drift on screen.
+            "expected": sorted(scopes.relative_to_base(resolved_base, p)
+                               for p in legal),
             "mcp_unregistered": unregistered, "kind": "skill",
             "scope": scopes.SCOPE_PROJECT, "base": str(resolved_base)}
 

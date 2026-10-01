@@ -14,6 +14,8 @@ import json
 import re
 import shutil
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -197,6 +199,140 @@ def test_uninstall_never_deletes_outside_the_project(boost, tapped, repo,
     projectlock.set_skill(repo, "brainstorming", entry)
     store.uninstall_project("brainstorming", base=repo)
     assert (victim / "keep.txt").is_file(), "escaped the project and deleted it"
+
+
+def test_uninstall_local_names_the_lock_row_it_refused(boost, tapped, repo):
+    """The user has to learn their committed lock was edited.
+
+    Being inside the repo was the whole guard, so a row of `src/core`
+    passed it and `boost uninstall --local` removed the source tree. The
+    directory now survives — but surviving silently is its own failure: the
+    row is still in a committed file, so a user who sees a clean "removed"
+    panel has no reason to look.
+    """
+    boost("install", "brainstorming", "--local")
+    victim = Path(repo) / "src" / "core"
+    victim.mkdir(parents=True)
+    (victim / "main.py").write_text("print(1)\n", encoding="utf-8")
+    entry = projectlock.get_skill(repo, "brainstorming")
+    entry["materializations"] = [{"agent": "claude-code", "path": "src/core"}]
+    projectlock.set_skill(repo, "brainstorming", entry)
+
+    res = boost("uninstall", "brainstorming", "--local", expect=0)
+
+    assert (victim / "main.py").read_text(encoding="utf-8") == "print(1)\n"
+    assert "src/core" in res.out
+    assert "left alone" in res.out
+    # Every row was refused, so nothing came off disk — and the panel used to
+    # say "removed from <repo>" regardless. A green line over a tampered lock
+    # is the one outcome this whole change exists to stop the user trusting.
+    assert "nothing removed from" in res.out
+    # The remedy, not just the complaint — and it must name the paths boost
+    # removes *here* rather than a `<repo>/<dotdir>/skills/<name>` shape. The
+    # shape hardcoded a leaf that comes from the agent's config, so under a
+    # renamed skills dir it told the user their path was not one an install
+    # writes directly above a shape that path matched.
+    assert ".claude/skills/brainstorming" in res.out
+    assert "<agent dotdir>" not in res.out
+
+
+def test_uninstall_local_reports_a_removal_a_row_did_not_attribute(
+        boost, tapped, repo):
+    """"removed from <repo>" must follow the disk, not the agent list.
+
+    `unlinked` names agents, and a lock row need not name one; the delete
+    above it is not gated on `agent` and must not be, since an agentless row
+    at a legal path is still the skill's own directory. Reading the success
+    line off that list therefore told a user with such a row that nothing had
+    been removed while the directory was gone — the round-2 fix for the
+    opposite lie, told backwards.
+    """
+    boost("install", "brainstorming", "--local")
+    landed = Path(repo) / ".claude" / "skills" / "brainstorming"
+    entry = projectlock.get_skill(repo, "brainstorming")
+    entry["materializations"] = [{"path": ".claude/skills/brainstorming"}]
+    projectlock.set_skill(repo, "brainstorming", entry)
+
+    res = boost("uninstall", "brainstorming", "--local", expect=0)
+
+    assert not landed.exists(), "the delete must not depend on `agent`"
+    flat = " ".join(res.out.split())
+    assert "removed from" in flat
+    assert "nothing removed from" not in flat
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="install cannot stage a copy through a relative directory "
+                           "symlink on Windows; the guard itself is covered "
+                           "there by the two ancestor tests, which symlink "
+                           "after the install")
+def test_uninstall_local_does_not_contradict_itself_on_a_redirect(
+        boost, tapped, repo):
+    """A redirected row is in the remedy list, so it cannot borrow the words.
+
+    `<repo>/.cursor -> config/cursor` is an ordinary in-repo dotfile layout.
+    Install writes through it — `ensure_in_base` is containment only — and
+    uninstall will not delete through it, because a committed symlink is
+    input and this is byte-identical to `.claude/skills -> ../src`.
+
+    That trade is deliberate. What is not acceptable is how it read: the row
+    is in the derived set by construction, so reporting it as `refused`
+    printed "not a path boost removes here" three lines above a list
+    containing that exact string.
+    """
+    (Path(repo) / "config" / "cursor").mkdir(parents=True)
+    (Path(repo) / ".cursor").symlink_to("config/cursor",
+                                        target_is_directory=True)
+    boost("install", "brainstorming", "--local")
+    landed = Path(repo) / "config" / "cursor" / "skills" / "brainstorming"
+    assert landed.is_dir(), "install did not write through the symlink"
+
+    res = boost("uninstall", "brainstorming", "--local", expect=0)
+
+    # Folded to the pane, so match on the unwrapped text. The `rm -rf ...`
+    # span stays on a line of its own whatever the width — a backtick span is
+    # one atomic token, and a command split across two lines does not run.
+    flat = " ".join(res.out.split())
+    assert ".cursor/skills/brainstorming" in flat
+    assert "will not delete through a symlink it did not create" in flat
+    assert "rm -rf" in flat
+    # The two messages this row must NOT get: `refused`'s, which contradicts
+    # the remedy list, and the remedy list itself, which names this very row.
+    assert "is not a path boost removes here" not in flat
+    assert "boost only removes" not in flat
+    # Left behind on purpose, and the printed remedy really does remove it —
+    # `rm` follows the committed symlink exactly as the install did.
+    assert landed.is_dir()
+    # One redirect is not a veto: every other agent's copy still goes, so the
+    # run is not a "nothing removed" run.
+    assert not (Path(repo) / ".claude" / "skills" / "brainstorming").exists()
+    assert "nothing removed from" not in flat
+
+
+def test_uninstall_local_reports_a_row_that_escapes_the_repo(
+        boost, tapped, repo):
+    """The most hostile row was the one that produced no output at all.
+
+    An absolute path or one climbing out with `..` is stopped by the
+    containment check, which is right — but it then fell through every
+    branch to a bare `continue`, so boost printed a clean "removed" panel
+    and said nothing. Being refused silently is the same failure as
+    surviving silently.
+    """
+    boost("install", "brainstorming", "--local")
+    outside = Path(repo).parent / "not-mine"
+    outside.mkdir(exist_ok=True)
+    (outside / "x").write_text("theirs", encoding="utf-8")
+    entry = projectlock.get_skill(repo, "brainstorming")
+    entry["materializations"] = [{"agent": "claude-code",
+                                  "path": "../not-mine"}]
+    projectlock.set_skill(repo, "brainstorming", entry)
+
+    res = boost("uninstall", "brainstorming", "--local", expect=0)
+
+    assert (outside / "x").read_text(encoding="utf-8") == "theirs"
+    assert "../not-mine" in res.out
+    assert "outside this repo" in res.out
 
 
 # ── dry run ──────────────────────────────────────────────────────────────
