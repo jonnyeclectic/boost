@@ -576,11 +576,19 @@ jobs:
     #
     # This is a ceiling, not a budget: if a shard ever genuinely approaches it,
     # the answer is to re-measure `scripts/mutation_weights.json` and re-pack,
-    # not to raise this again. It was last refreshed on 2026-09-08 by #834 and
-    # is now ~16% light (23,251 recorded mutants against 27,060 measured), so
-    # that re-measure is already owed. Take it from a CI run, not a laptop: the
-    # tier-1 weights are milliseconds, and a developer machine's durations are
-    # not the runner's.
+    # not to raise this again. That re-measure is no longer a manual debt —
+    # `mutation-weights-refresh.yml` follows this workflow on main, takes the
+    # `mutation-weights` artifact uploaded below, and opens a PR when the
+    # committed plan has fallen 5% or more behind the measured best. It has to
+    # come from a CI run rather than a laptop: the tier-1 weights are
+    # milliseconds, and a developer machine's durations are not the runner's.
+    #
+    # What the ceiling is worth therefore depends on the pack being current.
+    # On 2026-09-30 the six shards ran 46.5 / 40.1 / 37.5 / 37.0 / 25.8 / 22.9
+    # minutes — a 2.03x spread against a plan built from hints that were three
+    # weeks stale, leaving 1.61x of headroom on the slowest. Packed on those
+    # same measurements the spread is flat and the worst shard is ~35 minutes,
+    # which is 2.14x. Balance is what absorbs a slow runner.
     timeout-minutes: 75
     permissions:
       contents: read

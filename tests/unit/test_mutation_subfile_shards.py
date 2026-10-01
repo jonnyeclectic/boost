@@ -522,7 +522,10 @@ class TestWeightsRecording:
     def _run(self, tmp_path, repo, codes, durations=None):
         self._meta(tmp_path, codes, durations)
         (repo / "scripts").mkdir(exist_ok=True)
-        args = type("A", (), {"root": str(repo), "source": str(tmp_path / "mutants")})()
+        # `out: None` is the parsed default of `weights --out`; this stand-in
+        # has to carry every attribute the real Namespace does.
+        args = type("A", (), {"root": str(repo), "source": str(tmp_path / "mutants"),
+                              "out": None})()
         rc = ms.cmd_weights(args)
         return rc, json.loads((repo / "scripts" / "mutation_weights.json").read_text())
 
