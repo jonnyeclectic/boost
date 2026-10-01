@@ -1327,6 +1327,83 @@ def _install_project_skill(entry: dict, force: bool = False,
     return res
 
 
+def project_materialized(name: str, base) -> tuple[str, dict] | None:
+    """The user-lock rule or workflow row ``base``'s project owns — or None.
+
+    The two kinds a project lock cannot hold, looked up where they actually
+    live. Ownership is :func:`scopes.owns`, the same predicate ``list --local``
+    filters with, so the command that shows a row and the command that removes
+    it cannot disagree about whose it is.
+
+    **Ownership is tested before the name is resolved anywhere else.**
+    ``lockfile.find_any`` would be the obvious lookup and is the wrong one
+    here: it answers with the first *section* that holds the name, so a
+    user-scope skill called ``x`` outranks a project rule called ``x`` that
+    this repo owns, and ``--local`` would refuse to remove the row it can see
+    in ``list --local``. Rules before workflows only to fix an order; a name
+    in both sections is already ambiguous for bare ``uninstall``, which
+    resolves it the same way.
+
+    No ``base is None`` short-circuit, deliberately: :func:`scopes.owns`
+    answers ``False`` for it, so a guard here would be a branch no input can
+    reach — a falsification pass deleted one and every test still passed,
+    which is the definition of a line that is not doing anything. The cost of
+    leaving it out is two dict lookups on a path that then returns None.
+    """
+    for kind, get in (("rule", lockfile.get_rule),
+                      ("workflow", lockfile.get_workflow)):
+        row = get(name)
+        if row and scopes.owns(row, base):
+            return kind, row
+    return None
+
+
+def _not_in_this_project(name: str) -> BoostError:
+    """``uninstall --local``'s refusal, worded from where the item really is.
+
+    One sentence covered three states. It is **true** in all three — a rule
+    in the user's own config really is not installed in this project — and
+    useless in two, because it reports the one fact the reader already has
+    and withholds the one they need. Its hint sends them to ``boost list
+    --local``, which correctly shows nothing, so the message and the remedy
+    agree with each other and not with the machine. Each branch now names the
+    scope it found and the command that removes it from there, because the
+    item *is* removable and only the flag naming where it lives was not.
+
+    **No ``base`` parameter**, though the caller has one resolved. Every
+    branch is decided by :func:`lockfile.find_any`, which searches the user
+    lock as a whole and answers with the first *section* holding the name.
+    That is wider than what ``--local`` just rejected:
+    :func:`project_materialized` put ``scopes.owns`` only to the rules and
+    workflows sections, so a row this reports can be a **skill** no ownership
+    test has seen. Which is right for a message whose whole job is to say
+    where the item is *instead* — the row's own ``scope`` decides the wording,
+    and a user-scope skill is named as one. A parameter nothing reads is one
+    no test can pin — a mutation of it is unkillable by construction — so it
+    is not taken.
+    """
+    found = lockfile.find_any(name)
+    if found is not None:
+        kind, row = found
+        if row.get("scope") == scopes.SCOPE_PROJECT:
+            # Owned by some other checkout — `owns` already said not this one.
+            # The recorded base is named: it is the user's own lock, and a
+            # reader who cannot see which repo has it cannot act on this.
+            return BoostError(
+                "%s is a %s installed in %s, not in this project"
+                % (name, kind, row.get("base") or "another project"),
+                hint="remove it from there, or with `boost uninstall %s`"
+                     % name)
+        return BoostError(
+            "%s is a %s installed at user scope, not in this project" % (name, kind),
+            hint="remove it with `boost uninstall %s` (no --local)" % name)
+    # Genuinely absent. Byte-identical to what this raised before — the one
+    # state where naming where the item is instead is no help, because it is
+    # nowhere.
+    return BoostError("%s is not installed in this project" % name,
+                      hint="see what is with `boost list --local`")
+
+
 def project_skill_targets(base, name: str) -> set[Path]:
     """Every path a project install of ``name`` could legally have written.
 
@@ -1427,12 +1504,35 @@ def uninstall_project(name: str, base=None) -> dict:
     redirect as easily as a doctored path, so keeping it would be the same
     denial of service by another route. ``uninstall`` has no ``--json``, so
     the warning lines are the whole signal a caller gets.
+
+    **A rule or workflow gets none of those guards, and that is correct.**
+    A project lock holds a ``skills`` key and nothing else, so an
+    ``install --local`` of the other two kinds materializes into the repo but
+    records itself in the *user* lock tagged ``scope``/``base``. Everything
+    above exists because the project lock is a **committed** file that anyone
+    with merge rights can edit — a path out of it is input. The user lock is
+    not committed; it is the same file bare ``boost uninstall`` has always
+    read, and :func:`_uninstall_rule` / :func:`_uninstall_workflow` are the
+    same functions it has always called. So the fall-through adds no path
+    boost could not already be asked to delete, and re-deriving a legal set
+    for it would be ceremony over a threat that is not there.
+
+    What ``--local`` does is **narrow** eligibility, never widen it:
+    :func:`scopes.owns` admits only a row this repo claims, so a user-scope
+    rule and another checkout's rule both stay put. Before this,
+    ``list --local`` printed the rule and ``uninstall --local`` answered "not
+    installed in this project" — so the flag that performed the install could
+    not undo it, and said something false while refusing.
     """
     resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
     entry = projectlock.get_skill(resolved_base, name) if resolved_base else None
     if not entry:
-        raise BoostError("%s is not installed in this project" % name,
-                        hint="see what is with `boost list --local`")
+        owned = project_materialized(name, resolved_base)
+        if owned is not None:
+            owned_kind, owned_entry = owned
+            return (_uninstall_rule if owned_kind == "rule"
+                    else _uninstall_workflow)(name, owned_entry)
+        raise _not_in_this_project(name)
     removed: list[str] = []
     refused: list[str] = []
     redirected: list[str] = []
@@ -1912,8 +2012,8 @@ def _refused_removal(name: str, path: Path):
         raise _removal_refused(name, path) from None
 
 
-def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> None:
-    """Apply an uninstall's removals, or none of them.
+def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> int:
+    """Apply an uninstall's removals, or none of them. Returns how many files.
 
     ``plan`` holds ``(path, new_text)`` for each file to change: ``""`` to
     delete it, other text to rewrite it. Every dir is checked before the
@@ -1924,6 +2024,18 @@ def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> None:
     Two rows can name one file (two enabled agents whose dirs resolve to one
     path), so the plan is de-duplicated on the resolved dir, not the resolved
     file, and a file already gone counts as removed.
+
+    The count is **files**, after that de-duplication, and never ``len(plan)``.
+    On the default agent table the two agree — a project rule measures five
+    rows at five distinct paths, because ``rules.CONTEXT_FILES`` gives each
+    context-file agent its own name there (``CLAUDE.local.md``,
+    ``GEMINI.md``, ``AGENTS.md``) and Cursor and Windsurf take a rules dir
+    each. They diverge on exactly what the de-duplication is for: two agents
+    configured at one dir, or a dotdir that is a symlink to another, which
+    ``path.parent.resolve()`` collapses. ``len(plan)`` would then tell the
+    user boost removed a file it removed once. The caller reports "removed
+    from <repo>" off this, the way :func:`uninstall_project` reports it off
+    paths that came off disk rather than off the agent list.
     """
     once: dict[Path, tuple[Path, str]] = {}
     for path, text in plan:
@@ -1937,6 +2049,7 @@ def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> None:
                 util.atomic_write_text(path, text)
             else:
                 path.unlink(missing_ok=True)
+    return len(once)
 
 
 def _present(path: Path) -> bool:
@@ -1977,10 +2090,10 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
                 plan.append((path, ""))
         if m.get("agent"):
             removed.append(m["agent"])
-    _remove_all_or_nothing(name, plan)
+    gone = _remove_all_or_nothing(name, plan)
     lockfile.remove_rule(name)
     journal.log("uninstall", name)
-    return {"name": name, "unlinked": removed, "entry": rule, "kind": "rule"}
+    return _materialized_result(name, removed, rule, "rule", gone)
 
 
 def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
@@ -2234,10 +2347,53 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
                 plan.append((path, ""))
         if m.get("agent"):
             removed.append(m["agent"])
-    _remove_all_or_nothing(name, plan)
+    gone = _remove_all_or_nothing(name, plan)
     lockfile.remove_workflow(name)
     journal.log("uninstall", name)
-    return {"name": name, "unlinked": removed, "entry": workflow, "kind": "workflow"}
+    return _materialized_result(name, removed, workflow, "workflow", gone)
+
+
+def _materialized_result(name: str, removed: list[str], entry: dict,
+                         kind: str, gone: int) -> dict:
+    """The uninstall result for a rule or workflow, scope carried through.
+
+    ``scope`` and ``base`` come off the lock entry rather than off how the
+    caller got here, because both callers reach the same row: bare
+    ``boost uninstall`` and ``boost uninstall --local`` remove one
+    ``--local`` rule by the same two functions. Reporting the repo only on
+    the flagged path would make the same removal describe itself two ways.
+
+    A user-scope entry has neither key and gets neither, so ``cmd_uninstall``
+    reads ``scope`` as absent and prints exactly what it printed before.
+
+    **Both keys or neither**, and a ``base`` that names a directory is
+    required for it. A lock is a file on disk, so a row can say
+    ``scope: project`` and record no usable directory —
+    :func:`scopes.owned_by` already treats that shape as real and drops it,
+    because a row that claims no directory is claimed by none. Carrying
+    ``scope`` without one would put the key in the dict with that value,
+    where the caller's ``info.get("base", "this repo")`` default can never
+    fire: ``paths.tilde`` is ``str(p)``, so ``None`` prints as *removed from
+    None* and a hand-edited ``{"base": {}}`` prints as *removed from {}* —
+    over a removal that worked.
+
+    The test is :func:`scopes.names_a_directory`, the same one ownership is
+    decided with, rather than a truthiness check beside it. Measured, the two
+    agree on every *falsy* base — ``None``, ``""``, ``{}``, ``0`` are dropped
+    either way — and differ on exactly two things, both of which a lock can
+    hold and an install cannot write: a **truthy** non-string, which would
+    print *removed from 17*, and a **relative** path, which names a different
+    repo depending on where the reader is standing. The relative case is the
+    one that carries the difference in practice, so it is the one the test
+    turns on.
+    """
+    res = {"name": name, "unlinked": removed, "entry": entry, "kind": kind,
+           "removed_count": gone}
+    if (entry.get("scope") == scopes.SCOPE_PROJECT
+            and scopes.names_a_directory(entry.get("base"))):
+        res["scope"] = scopes.SCOPE_PROJECT
+        res["base"] = entry["base"]
+    return res
 
 
 def install_from_path(src_dir: Path, name: str | None = None,

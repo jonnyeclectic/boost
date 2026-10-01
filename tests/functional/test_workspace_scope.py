@@ -739,6 +739,125 @@ def test_list_local_json_keeps_the_four_key_shape(boost, tapped, repo):
     assert data["skills"] == {}
 
 
+# ── uninstall --local: the flag that installed it can undo it ────────────
+#
+# These drive a REAL install rather than a synthesized lock row, because the
+# bug was that two commands read two different files for one answer: a
+# hand-written row can agree with whichever of them the test happens to call.
+
+
+@pytest.fixture()
+def trio_tap(boost, fixture_tap_src, tmp_path):
+    """The fixture tap plus one rule and one workflow, tapped.
+
+    The session fixture ships skills only, and the kinds that reproduce this
+    are the two a project lock cannot hold.
+    """
+    tap = tmp_path / "trio-tap"
+    shutil.copytree(fixture_tap_src, tap)
+    (tap / "rules").mkdir()
+    (tap / "rules" / "house.mdc").write_text(
+        "---\nname: house-style\nversion: 1.0.0\n---\n\nAlways write tests first.\n",
+        encoding="utf-8")
+    (tap / "commands").mkdir()
+    (tap / "commands" / "ship-it.md").write_text(
+        "---\nname: ship-it\nversion: 1.0.0\n---\n\nShip-it checklist body.\n",
+        encoding="utf-8")
+    run = lambda *a: subprocess.run(a, cwd=tap, check=True, capture_output=True)
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "add a rule and a workflow")
+    boost("tap", str(tap))
+    return tap
+
+
+def test_uninstall_local_removes_the_project_rule_list_local_shows(
+        boost, trio_tap, repo):
+    """The card, end to end: shown by one command, denied by the other."""
+    boost("install", "house-style", "--local")
+    rows = [Path(m["path"])
+            for m in lockfile.get_rule("house-style")["materializations"]]
+    assert rows, "nothing materialized — this would assert nothing"
+    assert "house-style" in boost("list", "--local", "--kind", "rule").out
+
+    res = boost("uninstall", "house-style", "--local", "-y")
+
+    assert lockfile.get_rule("house-style") is None
+    for p in rows:
+        # The claude-mode rows are a managed block in a context file boost
+        # created, so the file goes with the block; the file rows are deleted
+        # outright. Either way nothing the install wrote is left behind.
+        assert not p.exists(), p
+    assert "no rules installed" in boost("list", "--local", "--kind", "rule").out
+    # The *repo*, not just the agents. `cmd_uninstall` prints "removed from
+    # <agent · agent · …>" for any rule, so a bare `"removed from" in out`
+    # passes with the scope and base never reaching the result at all — it
+    # asserts the line this change did not add. Wrapping folds the path, so
+    # compare against the unfolded output.
+    flat = " ".join(res.out.split())
+    assert "removed from %s" % paths.tilde(repo) in flat, flat
+
+
+def test_uninstall_local_removes_a_project_workflow(boost, trio_tap, repo):
+    boost("install", "ship-it", "--local")
+    rows = [Path(m["path"])
+            for m in lockfile.get_workflow("ship-it")["materializations"]]
+    assert rows
+    boost("uninstall", "ship-it", "--local", "-y")
+    assert lockfile.get_workflow("ship-it") is None
+    for p in rows:
+        assert not p.exists(), p
+
+
+def test_uninstall_local_leaves_a_user_scope_rule_alone(boost, trio_tap, repo):
+    """`--local` narrows what may be removed; it never widens it.
+
+    The rule lives in the user's own config. Removing it under a flag that
+    names the repo would be the opposite of this command's contract, and the
+    old message — "not installed in this project" — sent the reader to `boost
+    list --local`, which correctly shows nothing. Message and remedy agreed
+    with each other and not with the machine.
+    """
+    boost("install", "house-style")
+    rows = [Path(m["path"])
+            for m in lockfile.get_rule("house-style")["materializations"]]
+
+    res = boost("uninstall", "house-style", "--local", "-y", expect=1)
+
+    assert lockfile.get_rule("house-style") is not None
+    assert all(p.exists() for p in rows)
+    flat = " ".join((res.out + " " + res.err).split())
+    assert "user scope" in flat
+    assert "boost uninstall house-style" in flat
+
+
+def test_uninstall_local_leaves_another_repos_rule_alone(boost, trio_tap, repo,
+                                                         tmp_path):
+    other = tmp_path / "elsewhere"
+    (other / ".git").mkdir(parents=True)
+    # Hand-written, because the point is a row this repo must not touch: a
+    # real second install would need a second cwd and would prove no more.
+    lockfile.set_rule("theirs", {
+        "kind": "rule", "version": "1.0.0", "tap": "trio-tap",
+        "scope": "project", "base": str(other),
+        "materializations": [{"agent": "claude-code", "mode": "claude",
+                              "path": str(other / "CLAUDE.local.md")}]})
+    (other / "CLAUDE.local.md").write_text("their rules\n", encoding="utf-8")
+
+    res = boost("uninstall", "theirs", "--local", "-y", expect=1)
+
+    assert lockfile.get_rule("theirs") is not None
+    assert (other / "CLAUDE.local.md").read_text(encoding="utf-8") == "their rules\n"
+    flat = " ".join((res.out + " " + res.err).split())
+    assert str(other) in flat
+
+
+def test_uninstall_local_still_denies_a_name_nothing_installed(boost, tapped,
+                                                               repo):
+    res = boost("uninstall", "nope", "--local", "-y", expect=1)
+    flat = " ".join((res.out + " " + res.err).split())
+    assert "nope is not installed in this project" in flat
+
+
 # ── info on a project-scoped skill ───────────────────────────────────────
 
 def test_info_project_skill_shows_its_identity_rows(boost, tapped, repo):
