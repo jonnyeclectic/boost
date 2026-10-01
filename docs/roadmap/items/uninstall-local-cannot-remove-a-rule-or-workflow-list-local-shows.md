@@ -64,10 +64,17 @@ Ownership is asked of the rule and workflow sections <em>directly</em>, never th
 user-scope skill called <code>x</code> would outrank a project rule called <code>x</code> this
 repo owns, and <code>--local</code> would go on refusing the row <code>list --local</code> shows.
 And <code>_remove_all_or_nothing</code> now returns a count of <em>files</em> after its
-de-duplication rather than rows, because three agents merging a block into one context file would
-otherwise over-report the removal by two.
+de-duplication rather than rows. The two agree on the default agent table &mdash; five rows at
+five distinct paths, since <code>rules.CONTEXT_FILES</code> gives each context-file agent its
+own name at project scope &mdash; and diverge on what the de-duplication exists for: two agents
+configured at one dir, or a dotdir symlinked to another. Counting rows there would report a file
+removed twice.
 
-<b>The message was wrong in two of its three states</b>, and both now name where the item really
-is: a user-scope rule says so and points at bare <code>uninstall</code>; a row owned by another
-checkout names that checkout. The genuinely-absent branch is kept byte-identical, because it is
-the one that was always true.
+<b>The message was useless in two of its three states</b>, which is not the same as wrong: a rule
+in the user&rsquo;s own config really is not installed in this project. It reported the one fact
+the reader already had and withheld the one they needed, and its hint sent them to
+<code>list --local</code>, which correctly shows nothing. Both branches now name where the item
+really is: a user-scope rule says so and points at bare <code>uninstall</code>; a row owned by
+another checkout names that checkout, and both carry the command that removes it from there. The
+genuinely-absent branch is kept byte-identical &mdash; it is the one state where naming where the
+item is instead is no help, because it is nowhere.
