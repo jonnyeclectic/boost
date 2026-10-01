@@ -10,7 +10,7 @@ wow: 3
 note: shipped — the fall-through, plus a refusal that names where the item really is
 order: 355
 owner: loop/uninstall-local-rules
-pr:
+pr: 1021
 title: "<code>uninstall --local</code> cannot remove a rule or workflow that <code>list --local</code> shows"
 ---
 <code>boost install &lt;rule&gt; --local</code> works, and since PR #998 <code>boost list
