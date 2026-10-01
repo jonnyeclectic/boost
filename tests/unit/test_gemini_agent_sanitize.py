@@ -1219,8 +1219,9 @@ def _bundle_source() -> str:
             if not entry.is_file():
                 continue
             for chunk in sorted(set(re.findall(
-                    r"chunk-[A-Z0-9]+\.js", entry.read_text(errors="replace")))):
-                src = (root / chunk).read_text(errors="replace")
+                    r"chunk-[A-Z0-9]+\.js", entry.read_text(errors="replace",
+                            encoding="utf-8")))):
+                src = (root / chunk).read_text(encoding="utf-8", errors="replace")
                 if BUNDLE_MARKER in src:
                     return src
     return pytest.skip("Gemini CLI bundle not installed")

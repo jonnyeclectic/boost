@@ -70,7 +70,7 @@ def _repo(tmp_path, files):
     core = tmp_path / "boost_cli" / "core"
     core.mkdir(parents=True)
     for name, text in files.items():
-        (core / name).write_text(text)
+        (core / name).write_text(text, encoding="utf-8")
     return tmp_path
 
 
@@ -90,7 +90,7 @@ class TestTopLevelSymbols:
 
     def test_plain_functions_are_addressable(self, tmp_path):
         p = tmp_path / "m.py"
-        p.write_text(_fn("alpha") + _fn("beta"))
+        p.write_text(_fn("alpha") + _fn("beta"), encoding="utf-8")
         assert ms.top_level_symbols(p) == ["alpha", "beta"]
 
     def test_a_class_with_methods_disables_splitting(self, tmp_path):
@@ -99,26 +99,28 @@ class TestTopLevelSymbols:
         # mutants would never run — and merge would (correctly) redden the
         # build. A file we cannot partition provably is one we leave whole.
         p = tmp_path / "m.py"
-        p.write_text(_fn("alpha") + "class C:\n    def meth(self):\n        pass\n")
+        p.write_text(_fn("alpha") + "class C:\n    def meth(self):\n        pass\n",
+                encoding="utf-8")
         assert ms.top_level_symbols(p) == []
 
     def test_a_bare_class_still_allows_splitting(self, tmp_path):
         # store.py's InstallResult is a NamedTuple with no method bodies; it
         # generates no mutants of its own, so it is not a reason to give up.
         p = tmp_path / "m.py"
-        p.write_text(_fn("alpha") + _fn("beta") + "class C:\n    x = 1\n")
+        p.write_text(_fn("alpha") + _fn("beta") + "class C:\n    x = 1\n",
+                encoding="utf-8")
         assert ms.top_level_symbols(p) == ["alpha", "beta"]
 
     def test_duplicate_names_disable_splitting(self, tmp_path):
         # Two units sharing one pattern would both run the same mutants and one
         # shard's results would overwrite the other's.
         p = tmp_path / "m.py"
-        p.write_text(_fn("alpha") + _fn("alpha"))
+        p.write_text(_fn("alpha") + _fn("alpha"), encoding="utf-8")
         assert ms.top_level_symbols(p) == []
 
     def test_unparseable_file_is_left_whole(self, tmp_path):
         p = tmp_path / "m.py"
-        p.write_text("def (((\n")
+        p.write_text("def (((\n", encoding="utf-8")
         assert ms.top_level_symbols(p) == []
 
 
@@ -263,7 +265,7 @@ class TestWeighting:
         (repo / "scripts" / "mutation_weights.json").write_text(json.dumps({
             "mutants_by_file": {"a.py": 100, "b.py": 50},
             "millis_by_file": {"a.py": 90_000},          # b.py unmeasured
-        }))
+        }), encoding="utf-8")
         weight = ms.weight_fn(repo)
         assert weight(repo, repo / "boost_cli/core/a.py") == 90_000
         # 900 ms/mutant measured on a.py, applied to b.py's 50 mutants.
@@ -280,7 +282,7 @@ class TestWeighting:
         (repo / "scripts" / "mutation_weights.json").write_text(json.dumps({
             "mutants_by_file": {"a.py": 100, "b.py": 50},
             "millis_by_file": {"a.py": 90_000},
-        }))
+        }), encoding="utf-8")
         weight = ms.weight_fn(repo)
         assert weight(repo, repo / "boost_cli/core/a.py") > 1000, \
             "time weighting must still be in play"
@@ -290,7 +292,7 @@ class TestWeighting:
         (repo / "scripts").mkdir()
         (repo / "scripts" / "mutation_weights.json").write_text(json.dumps({
             "mutants_by_file": {"a.py": 100, "b.py": 50},
-        }))
+        }), encoding="utf-8")
         weight = ms.weight_fn(repo)
         assert weight(repo, repo / "boost_cli/core/a.py") == 100
         assert weight(repo, repo / "boost_cli/core/b.py") == 50
@@ -301,7 +303,7 @@ class TestWeighting:
         (repo / "scripts" / "mutation_weights.json").write_text(json.dumps({
             "mutants_by_file": {"a.py": 100, "b.py": 100},
             "millis_by_file": {"a.py": 90_000, "b.py": 1_000},
-        }))
+        }), encoding="utf-8")
         weight = ms.weight_fn(repo)
         assert weight(repo, repo / "boost_cli/core/a.py") == 90_000
         assert weight(repo, repo / "boost_cli/core/b.py") == 1_000
@@ -320,7 +322,7 @@ class TestWeighting:
             # equal counts, wildly unequal time
             "mutants_by_symbol": {"a.py": {"f_0": 50, "f_1": 50}},
             "millis_by_symbol": {"a.py": {"f_0": 9_000, "f_1": 1_000}},
-        }))
+        }), encoding="utf-8")
         path = repo / "boost_cli/core/a.py"
         slow = ms.unit_weight(repo, ms.Unit(path, "f_0"))
         fast = ms.unit_weight(repo, ms.Unit(path, "f_1"))
@@ -332,7 +334,7 @@ class TestWeighting:
         (repo / "scripts" / "mutation_weights.json").write_text(json.dumps({
             "mutants_by_file": {"a.py": 100},
             "mutants_by_symbol": {"a.py": {"f_0": 75, "f_1": 25}},
-        }))
+        }), encoding="utf-8")
         path = repo / "boost_cli/core/a.py"
         assert ms.unit_weight(repo, ms.Unit(path, "f_0")) == 75
         assert ms.unit_weight(repo, ms.Unit(path, "f_1")) == 25
@@ -346,7 +348,7 @@ class TestWeighting:
             "mutants_by_file": {"a.py": 400},
             "mutants_by_symbol": {"a.py": {"f_0": 100, "f_1": 100,
                                            "f_2": 100, "f_3": 100}},
-        }))
+        }), encoding="utf-8")
         path = repo / "boost_cli/core/a.py"
         total = sum(ms.unit_weight(repo, ms.Unit(path, "f_%d" % i)) for i in range(4))
         assert total == ms.weight_fn(repo)(repo, path)
@@ -354,7 +356,8 @@ class TestWeighting:
     def test_corrupt_weights_do_not_crash_the_split(self, tmp_path):
         repo = _repo(tmp_path, {"a.py": _big("f", 3)})
         (repo / "scripts").mkdir()
-        (repo / "scripts" / "mutation_weights.json").write_text("{not json")
+        (repo / "scripts" / "mutation_weights.json").write_text("{not json",
+                encoding="utf-8")
         assert ms.pack(repo, 2)          # falls back to line counts
 
     def test_a_unit_weight_is_never_zero(self, tmp_path):
@@ -389,7 +392,8 @@ def _write_shard_metas(parent, prefix, bins, repo, results):
                         codes[key] = value
             (d / (name + ".meta")).write_text(json.dumps({
                 "exit_code_by_key": codes, "type_check_error_by_key": {},
-                "durations_by_key": {}, "estimated_durations_by_key": {}}))
+                "durations_by_key": {}, "estimated_durations_by_key": {}}),
+                        encoding="utf-8")
 
 
 class TestMergeAcrossSplitShards:
@@ -423,7 +427,8 @@ class TestMergeAcrossSplitShards:
         rc, into = self._merge(tmp_path, repo, results)
         assert rc == 0, capsys.readouterr().out
         merged = json.loads(
-            (into / "boost_cli/core/big.py.meta").read_text())["exit_code_by_key"]
+            (into / "boost_cli/core/big.py.meta").read_text(
+                encoding="utf-8"))["exit_code_by_key"]
         assert merged == results["big.py"], "union must reproduce the whole file"
 
     def test_a_function_no_shard_ran_fails_closed(self, tmp_path, capsys):
@@ -432,11 +437,11 @@ class TestMergeAcrossSplitShards:
 
         def drop_alpha(art):
             for meta in art.rglob("big.py.meta"):
-                data = json.loads(meta.read_text())
+                data = json.loads(meta.read_text(encoding="utf-8"))
                 for key in data["exit_code_by_key"]:
                     if ".x_alpha__mutmut_" in key:
                         data["exit_code_by_key"][key] = None
-                meta.write_text(json.dumps(data))
+                meta.write_text(json.dumps(data), encoding="utf-8")
 
         rc, _ = self._merge(tmp_path, repo, results, mutate=drop_alpha)
         assert rc == 1
@@ -480,7 +485,8 @@ class TestMergeAcrossSplitShards:
         # export-cicd-stats reads a .meta shaped like an unsharded one.
         repo, results = self._setup(tmp_path)
         _rc, into = self._merge(tmp_path, repo, results)
-        data = json.loads((into / "boost_cli/core/big.py.meta").read_text())
+        data = json.loads(
+            (into / "boost_cli/core/big.py.meta").read_text(encoding="utf-8"))
         for field in ("exit_code_by_key", "type_check_error_by_key",
                       "durations_by_key", "estimated_durations_by_key"):
             assert field in data, field
@@ -516,7 +522,7 @@ class TestWeightsRecording:
         (src / "store.py.meta").write_text(json.dumps({
             "exit_code_by_key": codes,
             "durations_by_key": durations or {},
-        }))
+        }), encoding="utf-8")
         return tmp_path
 
     def _run(self, tmp_path, repo, codes, durations=None):
@@ -527,7 +533,8 @@ class TestWeightsRecording:
         args = type("A", (), {"root": str(repo), "source": str(tmp_path / "mutants"),
                               "out": None})()
         rc = ms.cmd_weights(args)
-        return rc, json.loads((repo / "scripts" / "mutation_weights.json").read_text())
+        return rc, json.loads(
+            (repo / "scripts" / "mutation_weights.json").read_text(encoding="utf-8"))
 
     def test_per_symbol_counts_are_recorded(self, tmp_path):
         repo = _repo(tmp_path / "r", {"store.py": _fn("install")})

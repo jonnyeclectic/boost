@@ -363,7 +363,7 @@ class TestDrift:
         Reading the bytes and decoding them explicitly is what makes both
         halves testable on *every* platform rather than only on the runner
         that disagrees — though only the second half can actually fail here,
-        which is why `test_mutation_shards_names_its_encoding.py` walks the
+        which is why `test_text_io_names_its_encoding.py` walks the
         source as well.
         """
         repo = _repo(tmp_path, list("abcdef"))

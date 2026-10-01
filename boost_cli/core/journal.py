@@ -52,7 +52,7 @@ def log(action: str, subject: str = "", **fields) -> None:
     p = paths.pulse_path()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a") as f:
+        with p.open("a", encoding="utf-8") as f:
             f.write(json.dumps(event) + "\n")
     except OSError as e:
         if not _WARNED_UNSAVED:

@@ -70,14 +70,14 @@ def test_scope_fails_safe_on_no_information(tmp_path, capsys):
     assert capsys.readouterr().out.strip() == "true"
 
     empty = tmp_path / "empty.txt"
-    empty.write_text("")
+    empty.write_text("", encoding="utf-8")
     assert ms.cmd_scope(_ns(changed=str(empty))) == 0
     assert capsys.readouterr().out.strip() == "true"
 
 
 def test_scope_blank_lines_are_not_a_change(tmp_path, capsys):
     listing = tmp_path / "changed.txt"
-    listing.write_text("docs/a.md\n\n   \nREADME.md\n")
+    listing.write_text("docs/a.md\n\n   \nREADME.md\n", encoding="utf-8")
     assert ms.cmd_scope(_ns(changed=str(listing))) == 0
     assert capsys.readouterr().out.strip() == "false"
 
@@ -91,7 +91,8 @@ def _repo(tmp_path, files):
     core = tmp_path / "boost_cli" / "core"
     core.mkdir(parents=True)
     for name, lines in files.items():
-        (core / name).write_text("".join("x = %d\n" % i for i in range(lines)))
+        (core / name).write_text("".join("x = %d\n" % i for i in range(lines)),
+                encoding="utf-8")
     return tmp_path
 
 
@@ -116,7 +117,7 @@ def test_recorded_weights_beat_line_counts(tmp_path):
     repo = _repo(tmp_path, {"dense.py": 10, "sparse.py": 100})
     (repo / "scripts").mkdir()
     (repo / ms.WEIGHTS).write_text(json.dumps(
-        {"mutants_by_file": {"dense.py": 5000, "sparse.py": 10}}))
+        {"mutants_by_file": {"dense.py": 5000, "sparse.py": 10}}), encoding="utf-8")
     bins = ms.pack(repo, 2)
     # dense.py dominates, so it gets a shard to itself
     solo = [b for b in bins if [f.name for f in b] == ["dense.py"]]
@@ -127,7 +128,8 @@ def test_missing_weight_entries_fall_back_per_file(tmp_path):
     """A partial weights file is still useful; it must not poison the rest."""
     repo = _repo(tmp_path, {"known.py": 5, "unknown.py": 200})
     (repo / "scripts").mkdir()
-    (repo / ms.WEIGHTS).write_text(json.dumps({"mutants_by_file": {"known.py": 9000}}))
+    (repo / ms.WEIGHTS).write_text(json.dumps({"mutants_by_file": {"known.py": 9000}}),
+            encoding="utf-8")
     weight = ms.weight_fn(repo)
     assert weight(repo, repo / "boost_cli/core/known.py") == 9000     # recorded
     assert weight(repo, repo / "boost_cli/core/unknown.py") == 200    # line fallback
@@ -136,7 +138,7 @@ def test_missing_weight_entries_fall_back_per_file(tmp_path):
 def test_corrupt_weights_file_is_ignored(tmp_path):
     repo = _repo(tmp_path, {"a.py": 10})
     (repo / "scripts").mkdir()
-    (repo / ms.WEIGHTS).write_text("{not json")
+    (repo / ms.WEIGHTS).write_text("{not json", encoding="utf-8")
     assert ms.load_weights(repo) == {}
 
 
@@ -190,7 +192,7 @@ def _shard_artifacts(repo, parent, shards, results, flat=False):
                 "type_check_error_by_key": {},
                 "durations_by_key": {},
                 "estimated_durations_by_key": {},
-            }))
+            }), encoding="utf-8")
 
 
 def test_sharded_merge_is_lossless(tmp_path, capsys):
@@ -213,7 +215,8 @@ def test_sharded_merge_is_lossless(tmp_path, capsys):
 
     merged = {}
     for meta in (out / "boost_cli" / "core").glob("*.meta"):
-        merged[meta.name[: -len(".meta")]] = json.loads(meta.read_text())["exit_code_by_key"]
+        merged[meta.name[: -len(".meta")]] = json.loads(
+            meta.read_text(encoding="utf-8"))["exit_code_by_key"]
     assert merged == results, "merge did not reproduce the unsharded results"
 
 
@@ -254,9 +257,9 @@ def test_merge_fails_closed_on_unrun_mutants(tmp_path, capsys):
     parent = tmp_path / "shard-results"
     _shard_artifacts(repo, parent, 2, results)
     for meta in parent.rglob("*.meta"):
-        data = json.loads(meta.read_text())
+        data = json.loads(meta.read_text(encoding="utf-8"))
         data["exit_code_by_key"] = dict.fromkeys(data["exit_code_by_key"])
-        meta.write_text(json.dumps(data))
+        meta.write_text(json.dumps(data), encoding="utf-8")
         break
 
     rc = ms.cmd_merge(_ns(root=str(repo), shards=2, into=str(tmp_path / "m"),
@@ -298,8 +301,8 @@ def test_nested_modules_are_sharded(tmp_path):
     repo = _repo(tmp_path, {"flat.py": 20})
     nested = repo / "boost_cli" / "core" / "rag"
     nested.mkdir()
-    (nested / "bm25.py").write_text("x = 1\n" * 30)
-    (nested / "__init__.py").write_text("")
+    (nested / "bm25.py").write_text("x = 1\n" * 30, encoding="utf-8")
+    (nested / "__init__.py").write_text("", encoding="utf-8")
 
     found = {ms.rel_name(repo, f) for f in ms.source_files(repo)}
     assert "rag/bm25.py" in found, "nested module invisible to the planner"
@@ -318,7 +321,7 @@ def test_init_files_get_no_pattern(tmp_path):
     the merge-time check below enforces.
     """
     repo = _repo(tmp_path, {"a.py": 10})
-    (repo / "boost_cli" / "core" / "__init__.py").write_text("")
+    (repo / "boost_cli" / "core" / "__init__.py").write_text("", encoding="utf-8")
     assert ms.pattern_for(repo, repo / "boost_cli/core/__init__.py") is None
     placed = {f.name for b in ms.pack(repo, 2) for f in b}
     assert "__init__.py" not in placed
@@ -333,7 +336,7 @@ def test_merge_rejects_a_file_no_shard_owned(tmp_path, capsys, monkeypatch):
     _shard_artifacts(repo, parent, 2, results)
 
     # A file appears in the tree that the planner never enumerated.
-    (repo / "boost_cli" / "core" / "ghost.py").write_text("x = 1\n")
+    (repo / "boost_cli" / "core" / "ghost.py").write_text("x = 1\n", encoding="utf-8")
     monkeypatch.setattr(ms, "pack", lambda root, shards: [
         [repo / "boost_cli/core/a.py"], [repo / "boost_cli/core/b.py"]])
 
@@ -348,13 +351,16 @@ def test_merge_rejects_init_that_gained_mutants(tmp_path, capsys):
     """If __init__.py ever generates mutants, say so instead of skipping them."""
     files = {"a.py": 30}
     repo = _repo(tmp_path, files)
-    (repo / "boost_cli" / "core" / "__init__.py").write_text("x = 1\n")
+    (repo / "boost_cli" / "core" / "__init__.py").write_text("x = 1\n",
+            encoding="utf-8")
     results = {"a.py": {"boost_cli.core.a.x_fn__mutmut_1": 0}}
     parent = tmp_path / "shard-results"
     _shard_artifacts(repo, parent, 1, results)
     # mutmut did produce mutants for __init__.py, and they ran nowhere
     init_meta = parent / "mutation-shard-0" / "boost_cli" / "core" / "__init__.py.meta"
-    init_meta.write_text(json.dumps({"exit_code_by_key": {"boost_cli.core.x_f__mutmut_1": None}}))
+    init_meta.write_text(json.dumps(
+        {"exit_code_by_key": {"boost_cli.core.x_f__mutmut_1": None}}),
+            encoding="utf-8")
 
     rc = ms.cmd_merge(_ns(root=str(repo), shards=1, into=str(tmp_path / "m"),
                           source=str(parent), prefix="mutation-shard-"))
@@ -368,7 +374,7 @@ def test_same_basename_in_different_packages_stays_distinct(tmp_path):
     repo = _repo(tmp_path, {"util.py": 40})
     nested = repo / "boost_cli" / "core" / "rag"
     nested.mkdir()
-    (nested / "util.py").write_text("x = 1\n" * 10)
+    (nested / "util.py").write_text("x = 1\n" * 10, encoding="utf-8")
     names = {ms.rel_name(repo, f) for b in ms.pack(repo, 2) for f in b}
     assert names == {"util.py", "rag/util.py"}
     pats = {ms.pattern_for(repo, repo / "boost_cli/core/util.py"),
@@ -385,20 +391,25 @@ def _cache_repo(tmp_path):
     plus a core source file and an irrelevant doc, so a single fixture can
     exercise inclusion, exclusion, and irrelevance in one place."""
     (tmp_path / "boost_cli" / "core").mkdir(parents=True)
-    (tmp_path / "boost_cli" / "core" / "store.py").write_text("x = 1\n")
+    (tmp_path / "boost_cli" / "core" / "store.py").write_text("x = 1\n",
+            encoding="utf-8")
     (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_store.py").write_text("def test_a(): pass\n")
+    (tmp_path / "tests" / "test_store.py").write_text("def test_a(): pass\n",
+            encoding="utf-8")
     (tmp_path / "requirements").mkdir()
-    (tmp_path / "requirements" / "mutation-tools.txt").write_text("mutmut==3.7.0\n")
+    (tmp_path / "requirements" / "mutation-tools.txt").write_text("mutmut==3.7.0\n",
+            encoding="utf-8")
     (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts" / "mutation_gate.py").write_text("# gate\n")
-    (tmp_path / "scripts" / "mutation_shards.py").write_text("# shards\n")
+    (tmp_path / "scripts" / "mutation_gate.py").write_text("# gate\n", encoding="utf-8")
+    (tmp_path / "scripts" / "mutation_shards.py").write_text("# shards\n",
+            encoding="utf-8")
     (tmp_path / ".github" / "workflows").mkdir(parents=True)
-    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("name: ci\n")
-    (tmp_path / "setup.cfg").write_text("[mutmut]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("name: ci\n",
+            encoding="utf-8")
+    (tmp_path / "setup.cfg").write_text("[mutmut]\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
     (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "index.html").write_text("<html></html>\n")
+    (tmp_path / "docs" / "index.html").write_text("<html></html>\n", encoding="utf-8")
     return tmp_path
 
 
@@ -421,7 +432,7 @@ def test_cache_key_paths_covers_every_prefix_and_excludes_core(tmp_path):
 def test_cache_key_paths_skips_missing_files(tmp_path):
     """A fixture repo that only sets up part of the tree still works."""
     (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_a.py").write_text("x = 1\n")
+    (tmp_path / "tests" / "test_a.py").write_text("x = 1\n", encoding="utf-8")
     assert [p.name for p in ms.cache_key_paths(tmp_path)] == ["test_a.py"]
 
 
@@ -435,21 +446,23 @@ def test_cache_key_hash_is_deterministic(tmp_path):
 def test_cache_key_hash_changes_when_a_relevant_file_changes(tmp_path):
     repo = _cache_repo(tmp_path)
     before = ms.cache_key_hash(repo)
-    (repo / "tests" / "test_store.py").write_text("def test_a(): assert False\n")
+    (repo / "tests" / "test_store.py").write_text("def test_a(): assert False\n",
+            encoding="utf-8")
     assert ms.cache_key_hash(repo) != before
 
 
 def test_cache_key_hash_changes_when_the_gate_scripts_change(tmp_path):
     repo = _cache_repo(tmp_path)
     before = ms.cache_key_hash(repo)
-    (repo / "scripts" / "mutation_gate.py").write_text("# gate v2\n")
+    (repo / "scripts" / "mutation_gate.py").write_text("# gate v2\n", encoding="utf-8")
     assert ms.cache_key_hash(repo) != before
 
 
 def test_cache_key_hash_changes_when_ci_yml_changes(tmp_path):
     repo = _cache_repo(tmp_path)
     before = ms.cache_key_hash(repo)
-    (repo / ".github" / "workflows" / "ci.yml").write_text("name: ci\non: push\n")
+    (repo / ".github" / "workflows" / "ci.yml").write_text("name: ci\non: push\n",
+            encoding="utf-8")
     assert ms.cache_key_hash(repo) != before
 
 def test_cache_key_hash_ignores_core_source_changes(tmp_path):
@@ -457,15 +470,16 @@ def test_cache_key_hash_ignores_core_source_changes(tmp_path):
     boost_cli/ reuse, so the cache key must not evict on a core-only edit."""
     repo = _cache_repo(tmp_path)
     before = ms.cache_key_hash(repo)
-    (repo / "boost_cli" / "core" / "store.py").write_text("x = 2\n")
+    (repo / "boost_cli" / "core" / "store.py").write_text("x = 2\n", encoding="utf-8")
     assert ms.cache_key_hash(repo) == before
 
 
 def test_cache_key_hash_ignores_irrelevant_files(tmp_path):
     repo = _cache_repo(tmp_path)
     before = ms.cache_key_hash(repo)
-    (repo / "docs" / "index.html").write_text("<html>changed</html>\n")
-    (repo / "README.md").write_text("hello\n")
+    (repo / "docs" / "index.html").write_text("<html>changed</html>\n",
+            encoding="utf-8")
+    (repo / "README.md").write_text("hello\n", encoding="utf-8")
     assert ms.cache_key_hash(repo) == before
 
 
@@ -474,7 +488,8 @@ def test_cache_key_hash_changes_on_a_new_relevant_file(tmp_path):
     or a brand-new test would silently reuse a cache that never ran it."""
     repo = _cache_repo(tmp_path)
     before = ms.cache_key_hash(repo)
-    (repo / "tests" / "test_new.py").write_text("def test_b(): pass\n")
+    (repo / "tests" / "test_new.py").write_text("def test_b(): pass\n",
+            encoding="utf-8")
     assert ms.cache_key_hash(repo) != before
 
 
@@ -483,10 +498,10 @@ def test_cache_key_hash_distinguishes_same_bytes_at_different_paths(tmp_path):
     in too, not just the concatenated bytes."""
     repo_a = tmp_path / "a"
     (repo_a / "tests").mkdir(parents=True)
-    (repo_a / "tests" / "test_one.py").write_text("x = 1\n")
+    (repo_a / "tests" / "test_one.py").write_text("x = 1\n", encoding="utf-8")
     repo_b = tmp_path / "b"
     (repo_b / "tests").mkdir(parents=True)
-    (repo_b / "tests" / "test_two.py").write_text("x = 1\n")
+    (repo_b / "tests" / "test_two.py").write_text("x = 1\n", encoding="utf-8")
     assert ms.cache_key_hash(repo_a) != ms.cache_key_hash(repo_b)
 
 

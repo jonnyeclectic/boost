@@ -400,7 +400,7 @@ def test_a_local_install_records_mcp_servers_in_the_repo(boost, tapped, repo):
     boost("install", "brainstorming", "--local")
     sidecar = repo / mcpdecl.SIDECAR
     assert sidecar.is_file(), "no .mcp.json written into the repo"
-    servers = json.loads(sidecar.read_text())[mcpdecl.SERVERS_KEY]
+    servers = json.loads(sidecar.read_text(encoding="utf-8"))[mcpdecl.SERVERS_KEY]
     assert "gh" in servers
     assert servers["gh"][mcpdecl.MARKER_KEY] == "brainstorming", \
         "the entry must name the skill that asked for it, so uninstall can reverse it"
@@ -423,7 +423,8 @@ def test_uninstalling_locally_removes_the_servers_it_added(boost, tapped, repo):
     _declare_mcp(tapped, "brainstorming")
     boost("install", "brainstorming", "--local")
     boost("uninstall", "brainstorming", "--local")
-    servers = json.loads((repo / mcpdecl.SIDECAR).read_text())[mcpdecl.SERVERS_KEY]
+    servers = json.loads(
+        (repo / mcpdecl.SIDECAR).read_text(encoding="utf-8"))[mcpdecl.SERVERS_KEY]
     assert "gh" not in servers, \
         "a skill removed from the repo must stop launching its server"
 
@@ -445,7 +446,8 @@ def test_uninstall_leaves_a_hand_written_server_alone(boost, tapped, repo):
     _declare_mcp(tapped, "brainstorming")
     boost("install", "brainstorming", "--local")
     boost("uninstall", "brainstorming", "--local")
-    servers = json.loads((repo / mcpdecl.SIDECAR).read_text())[mcpdecl.SERVERS_KEY]
+    servers = json.loads(
+        (repo / mcpdecl.SIDECAR).read_text(encoding="utf-8"))[mcpdecl.SERVERS_KEY]
     assert servers["mine"] == {"command": "my-own-thing"}, \
         "boost must only reverse what boost wrote"
 

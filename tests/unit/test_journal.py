@@ -50,6 +50,37 @@ class TestLog:
         journal.log("b", "2")
         assert len(paths.pulse_path().read_text(encoding="utf-8").splitlines()) == 2
 
+    def test_the_feed_is_written_in_the_encoding_it_is_read_in(
+            self, sandbox, monkeypatch):
+        """``log`` must name UTF-8, because ``events`` reads UTF-8.
+
+        A round trip cannot show this. On Linux and macOS the locale is
+        already UTF-8, and ``json.dumps`` defaults to ``ensure_ascii=True``,
+        so write-then-read passes identically with the encoding named or
+        omitted — the assertion would be true for the wrong reason. On a
+        Windows runner the locale is cp1252, and the reader's
+        ``errors="replace"`` would turn the first byte the two disagree
+        about into U+FFFD rather than raising. So this watches the argument
+        instead of the result, which also fails if the keyword is dropped
+        rather than merely misspelt.
+        """
+        path_type = type(paths.pulse_path())
+        real_open = path_type.open
+        seen = []
+
+        def spy(self, *a, **kw):
+            mode = kw.get("mode", a[0] if a else "r")
+            if self == paths.pulse_path() and "b" not in mode:
+                seen.append((mode, kw.get("encoding")))
+            return real_open(self, *a, **kw)
+
+        monkeypatch.setattr(path_type, "open", spy)
+        journal.log("install", "brainstorming")
+        # `log` appends; the rotation check behind it reads. Both are text
+        # opens of the same file, so both have to agree with `events`.
+        assert ("a", "utf-8") in seen, seen
+        assert all(enc == "utf-8" for _, enc in seen), seen
+
 
 class TestEvents:
     def test_missing_file_is_empty_list(self, sandbox):
@@ -94,7 +125,7 @@ class TestEvents:
 
     def test_corrupt_lines_skipped(self, sandbox):
         journal.log("install", "good")
-        with paths.pulse_path().open("a") as f:
+        with paths.pulse_path().open("a", encoding="utf-8") as f:
             f.write("this is not json\n")
             f.write("{\"also: broken\n")
         journal.log("install", "good2")
