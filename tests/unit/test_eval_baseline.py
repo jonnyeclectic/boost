@@ -73,7 +73,7 @@ class TestBaselineIsKeyedToItsQuerySet:
         ev.save_baseline(10, [_result()], golden=KEYWORD)
         ev.save_baseline(10, [_result(**{"recall@k": 0.69, "hit@1": 0.24})],
                          golden=NATURAL)
-        data = json.loads(baseline.read_text())
+        data = json.loads(baseline.read_text(encoding="utf-8"))
         keys = set(data["sets"])
         assert len(keys) == 2, "one set's baseline overwrote the other: %s" % keys
 
@@ -96,9 +96,11 @@ class TestBaselineIsKeyedToItsQuerySet:
         # Editing the queries changes what the numbers mean, even under the same
         # filename — so identity is the content, not the path.
         golden = tmp_path / "golden.jsonl"
-        golden.write_text('{"query": "a", "relevant": ["x"], "kind": "skill"}\n')
+        golden.write_text('{"query": "a", "relevant": ["x"], "kind": "skill"}\n',
+                encoding="utf-8")
         ev.save_baseline(10, [_result()], golden=golden)
-        golden.write_text('{"query": "b", "relevant": ["y"], "kind": "skill"}\n')
+        golden.write_text('{"query": "b", "relevant": ["y"], "kind": "skill"}\n',
+                encoding="utf-8")
         assert ev.check_regressions([_result(**{"recall@k": 0.1})],
                                     eps=0.02, golden=golden) == []
 
@@ -111,7 +113,7 @@ class TestBackCompat:
             "k": 10,
             "engines": {"BM25 full-content": {
                 "recall@k": 1.0, "hit@1": 0.78, "MRR": 0.86, "nDCG@k": 0.89}},
-        }))
+        }), encoding="utf-8")
         problems = ev.check_regressions([_result(**{"hit@1": 0.10})],
                                         eps=0.02, golden=KEYWORD)
         assert problems, "a pre-existing baseline stopped catching regressions"
@@ -121,7 +123,7 @@ class TestBackCompat:
             "k": 10,
             "engines": {"BM25 full-content": {
                 "recall@k": 1.0, "hit@1": 0.78, "MRR": 0.86, "nDCG@k": 0.89}},
-        }))
+        }), encoding="utf-8")
         assert ev.check_regressions([_result(**{"hit@1": 0.10})],
                                     eps=0.02, golden=NATURAL) == []
 

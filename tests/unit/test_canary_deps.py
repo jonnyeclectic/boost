@@ -918,8 +918,8 @@ class TestGuardDetection:
         files never touch it, and one imports it without a guard.
         """
         (tmp_path / "a_test.py").write_text(
-            "import pytest\nwidget = pytest.importorskip('widget')\n")
-        (tmp_path / "b_test.py").write_text("import widget\n")
+            "import pytest\nwidget = pytest.importorskip('widget')\n", encoding="utf-8")
+        (tmp_path / "b_test.py").write_text("import widget\n", encoding="utf-8")
         required, optional = _scan([tmp_path])
         assert "widget" in required
         assert "widget" not in optional

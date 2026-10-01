@@ -663,7 +663,7 @@ class TestTheCorpusSizeBlock:
         # wrong — which is how the cross-population ratio survived: the number
         # in taps.txt looked settled because nobody recomputed it.
         m = _load()
-        text = _TAPS.read_text()
+        text = _TAPS.read_text(encoding="utf-8")
         assert m.with_size(text) == text
 
     def test_the_content_line_never_says_entries(self):

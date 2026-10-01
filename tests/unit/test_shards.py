@@ -341,7 +341,7 @@ class TestDownload:
         manifest = shards.fetch_manifest(mpath.as_uri())
         dest = tmp_path / "out" / "a__b.shard.json"
         shards.download(row, dest, manifest)
-        assert json.loads(dest.read_text())["tap"] == "a/b"
+        assert json.loads(dest.read_text(encoding="utf-8"))["tap"] == "a/b"
 
     def test_a_bad_digest_is_refused_and_deleted(self, tmp_path):
         _, row = _shard_file(tmp_path, "a/b", "1" * 40)
