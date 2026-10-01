@@ -7185,7 +7185,7 @@ the stripped block. Found while verifying
       </article>
 
       <article class="cap rcard" id="text-io-leaves-its-encoding-to-the-locale">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Portability · Windows</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Portability · Windows</span></div>
         <h3>73 reads and writes leave the text encoding to the locale, and the Windows jobs are the only thing that notices</h3>
         <p><code>Path.read_text()</code>, <code>Path.write_text()</code> and <code>open()</code> in text mode use
 <code>locale.getencoding()</code> when no <code>encoding=</code> is given. On Linux and macOS that is UTF-8

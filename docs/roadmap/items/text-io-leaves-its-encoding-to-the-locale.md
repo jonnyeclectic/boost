@@ -2,14 +2,14 @@
 id: text-io-leaves-its-encoding-to-the-locale
 board: code
 section: compat
-status: planned
+status: inflight
 category: Portability · Windows
 complexity: M
 impact: Med
 wow: 2
 note: 73 reads and writes take the locale's encoding; 910 writes take its line ending
 order: 362
-owner:
+owner: loop/text-io-encoding
 pr:
 title: "73 reads and writes leave the text encoding to the locale, and the Windows jobs are the only thing that notices"
 ---
