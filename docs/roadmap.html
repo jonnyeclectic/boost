@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>520</b><span>Loop finds</span></div>
+      <div class="stat"><b>521</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -7635,29 +7635,9 @@ and needs no branch.</p>
       </article>
 
       <article class="cap rcard" id="project-uninstall-deletes-any-in-repo-directory-the-lock-names">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Security</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Core · Security</span></div>
         <h3><code>uninstall --local</code> deletes any in-repo directory the committed lock names</h3>
-        <p><code>store.uninstall_project</code> re-derives every recorded materialization through
-<code>scopes.resolve_in_base</code> and refuses anything outside the project &middot; the guard
-works, and the verification of PR #998 confirmed a planted victim outside the repo survives every
-escape attempt. What it does not check is that the path is an <em>agent skills directory</em>. A
-lock row reading <code>{"path": "src/core"}</code> is inside the base, so it passes, and
-<code>util.rmtree</code> removes the repo's source tree (store.py:1296-1300).
-
-<code>.boost/skill-lock.json</code> is a committed file: whoever can land a commit can write that
-row, and the victim runs one ordinary <code>boost uninstall &lt;skill&gt; --local</code>. That is a
-narrower threat than it sounds &mdash; someone who can commit to your repo can also commit a
-<code>Makefile</code> &mdash; but this is the one path where the damage happens under a boost
-command the user typed, with boost's own containment check having already said yes.
-
-The fix is to narrow the check from &ldquo;inside the base&rdquo; to &ldquo;inside the base
-<em>and</em> under a known agent dotdir&rdquo;: install only ever writes
-<code>&lt;base&gt;/&lt;agent dotdir&gt;/skills/&lt;name&gt;</code>, so the set of legal paths is
-small, enumerable from <code>agents</code>, and can be derived rather than trusted. Anything else
-in the list is skipped with a warning naming the row, not removed. Newly easier to reach than it
-was: bare <code>uninstall</code> can now act in an unmarked directory, so a cloned repo carrying a
-<code>.boost/</code> no longer needs a VCS marker for the command to find it. Related:
-<code>util-rmtree-chmods-a-symlink-target-outside-the-tree</code>.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/project-uninstall-deletes-any-in-repo-directory-the-lock-names.md">Write-up &middot; project-uninstall-deletes-any-in-repo-directory-the-lock-names.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -7696,6 +7676,50 @@ had 4 clones in flight".</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">assert 1 &gt; 1 on macOS/3.14 against a thread pool that was working correctly</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="install-writes-through-a-redirected-dotdir-uninstall-will-not">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Security</span></div>
+        <h3><code>install --local</code> writes through a redirected dotdir that <code>uninstall --local</code> will not remove</h3>
+        <p>A repo that commits <code>&lt;repo&gt;/.cursor &rarr; config/cursor</code> &mdash; an ordinary
+dotfile layout, not an attack &mdash; gets two different answers from the two halves of the same
+command. <code>_install_project_skill</code> gates its target with
+<code>scopes.ensure_in_base</code>, which is containment only, so <code>boost install --local</code>
+writes <code>config/cursor/skills/&lt;name&gt;</code> and records the row it spelled,
+<code>.cursor/skills/&lt;name&gt;</code>. <code>boost uninstall --local</code> then refuses that row,
+because <code>scopes.parent_matches_spelling</code> walks the parent for real and finds the
+redirect. Boost's own copy is left on disk and the lock entry goes anyway, so a second uninstall
+answers <em>not installed in this project</em>.
+
+Reproduced on the commit that introduced the guard: install wrote through the symlink, uninstall
+reported the row as <code>redirected</code>, and the directory survived.
+
+<b>The uninstall side is right and is not the thing to change.</b> The benign layout and the attack
+are byte-identical on disk: <code>.claude/skills &rarr; ../src</code> with a legally-spelled lock row
+is the same two objects in the same two places, and nothing in the filesystem carries the intent
+behind them. Creating through a redirect is safe; destroying through one hands an attacker with
+merge rights an <code>rmtree</code> aimed wherever the symlink points. So the asymmetry stays, and
+<code>uninstall</code> now names the row, says a symlink redirects it, and prints an
+<code>rm -rf</code> that works &mdash; because <code>rm</code> follows the ancestor exactly as the
+install did (shipped in #1016).
+
+What is left is the other half: <b>install should not write somewhere uninstall cannot reach.</b>
+The options are not equivalent and the choice needs measuring rather than guessing &mdash; refuse
+the install outright (safe, breaks a layout that works today); record the <em>resolved</em> path in
+the lock so uninstall's walk agrees (keeps the layout, but the lock then carries a path the repo
+never spells, and a teammate whose clone resolves differently gets a row that matches nothing); or
+record both and match on either (most forgiving, widest attack surface to re-audit). Whichever
+lands, <code>boost doctor</code> should report a project whose lock rows no longer resolve to where
+the install put them, since today nothing notices until an uninstall leaves a directory behind.
+
+Related: <code>project-uninstall-deletes-any-in-repo-directory-the-lock-names</code>, which added
+the walk and the <code>redirected</code> reporting this card inherits.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">install gates on containment and writes through an in-repo symlinked dotdir; uninstall refuses to delete through one, so the copy is orphaned</span>
         </div>
       </article>
 

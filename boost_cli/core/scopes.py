@@ -246,6 +246,44 @@ def resolve_in_base(base, rel: str) -> Path | None:
     return candidate
 
 
+def parent_matches_spelling(base, rel: str) -> bool:
+    """True when walking to ``rel``'s parent is not redirected on the way.
+
+    The third question about a committed path, and the one the other two miss.
+    :func:`contains` resolves and answers "does this end up inside the repo?".
+    :func:`resolve_in_base` returns the path *unresolved*, so an identity check
+    can compare the strings an install writes. Between them sits a row that is
+    contained, and spelled exactly like a legal path, and still points
+    somewhere else: a committed ``<repo>/.claude/skills -> ../src`` makes the
+    row ``.claude/skills/<name>`` string-equal to the legal target while
+    denoting ``src/<name>``. The leaf is honest and an ancestor is not, so a
+    guard that only inspects the leaf walks straight through it and
+    ``rmtree`` takes the victim.
+
+    So the parent is walked for real and compared against where the spelling
+    says it should be, anchored on the **real** base. ``realpath`` on both
+    sides, because a repo can sit *under* a symlink without containing one —
+    a checkout below ``/tmp`` on macOS, a home directory behind an automount,
+    a worktree reached through a convenience link. Resolve the walk and not
+    the base and every row of such a repo is compared real-against-nominal,
+    matches nothing, and is refused. The symlinked-base test builds that
+    link itself rather than relying on the runner's ``$TMPDIR``, which pytest
+    resolves before a test ever sees it.
+
+    The leaf itself is deliberately left unresolved. A materialization that
+    *is* a symlink is boost's own, and ``util.remove_path`` unlinks it without
+    following it — judging it by what it points at is the bug one layer down.
+    """
+    if not rel or not isinstance(rel, str) or Path(rel).is_absolute():
+        return False
+    try:
+        anchor = Path(os.path.realpath(base))
+        return Path(os.path.realpath((Path(base) / rel).parent)) == (
+            anchor / rel).parent
+    except (OSError, ValueError):
+        return False
+
+
 def contains(base, path) -> bool:
     """True when ``path`` sits inside ``base`` — the guard before any delete.
 
