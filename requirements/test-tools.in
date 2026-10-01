@@ -21,3 +21,12 @@ hypothesis
 # installs release-tools.txt, which pins it, and the test passed on every
 # developer machine while every leg of the CI matrix raised ModuleNotFoundError.
 setuptools
+# tests/unit/test_canary_deps.py reads .github/workflows/*.yml to check that
+# every CI job assembling its own venv installs what the suite then imports.
+# It opened with `pytest.importorskip("yaml")`, and PyYAML was pinned only in
+# lint-tools.txt and mutation-tools.txt — so the file skipped in ALL SIX jobs
+# that run the suite, including the required `tests` leg it was written to
+# protect. A check that silently skips in every job it guards is not a check;
+# `test_every_harness_job_can_import_yaml` now fails the build if that comes
+# back.
+pyyaml

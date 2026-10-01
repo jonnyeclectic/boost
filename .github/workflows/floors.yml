@@ -69,5 +69,5 @@ jobs:
           # this the whole job is red on 17 ModuleNotFoundErrors, which is the
           # one colour that cannot also report a broken floor.
           .venv/bin/pip -q install -r requirements-lowest.txt
-          .venv/bin/pip -q install -e . pytest pytest-cov coverage hypothesis setuptools
+          .venv/bin/pip -q install -e . pytest pytest-cov coverage hypothesis setuptools pyyaml
           .venv/bin/pytest tests/unit tests/functional -q
