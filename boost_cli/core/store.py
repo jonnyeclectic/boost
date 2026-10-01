@@ -2346,12 +2346,22 @@ def _materialized_result(name: str, removed: list[str], entry: dict,
 
     A user-scope entry has neither key and gets neither, so ``cmd_uninstall``
     reads ``scope`` as absent and prints exactly what it printed before.
+
+    **Both keys or neither**, and the ``base`` is required for it. A lock is a
+    file on disk, so a row can say ``scope: project`` and name no directory —
+    :func:`scopes.owned_by` already treats that shape as real and drops it,
+    because a row that claims no directory is claimed by none. Carrying
+    ``scope`` without a ``base`` would put the key in the dict with a ``None``
+    value, where the caller's ``info.get("base", "this repo")`` default can
+    never fire: ``paths.tilde(None)`` is the string ``"None"``, so bare
+    ``boost uninstall`` on such a row would print *removed from None* over a
+    removal that worked. There is no repo to name, so none is claimed.
     """
     res = {"name": name, "unlinked": removed, "entry": entry, "kind": kind,
            "removed_count": gone}
-    if entry.get("scope") == scopes.SCOPE_PROJECT:
+    if entry.get("scope") == scopes.SCOPE_PROJECT and entry.get("base"):
         res["scope"] = scopes.SCOPE_PROJECT
-        res["base"] = entry.get("base")
+        res["base"] = entry["base"]
     return res
 
 

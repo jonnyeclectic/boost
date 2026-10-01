@@ -3682,6 +3682,24 @@ class TestProjectRulesAndWorkflows:
         assert "scope" not in info and "base" not in info
         assert info["removed_count"] > 0
 
+    def test_a_project_row_naming_no_repo_claims_no_scope(self, tap):
+        # A lock is a file on disk, so `scope: project` with no `base` is a
+        # shape that exists — `owned_by` already drops it. Carrying `scope`
+        # alone puts `base: None` in the dict, where the caller's
+        # `.get("base", "this repo")` default can never fire, and
+        # `paths.tilde(None)` is the string "None": bare `uninstall` would
+        # print "removed from None" over a removal that worked.
+        e = _rule_entry(tap)
+        store.install(e)
+        row = lockfile.get_rule(e["name"])
+        row["scope"] = "project"          # ...and deliberately no "base"
+        lockfile.set_rule(e["name"], row)
+
+        info = store.uninstall(e["name"])
+
+        assert lockfile.get_rule(e["name"]) is None
+        assert "scope" not in info and "base" not in info
+
     @pytest.mark.parametrize("kind", ["rule", "workflow"])
     def test_the_count_is_files_not_rows(self, tap, tmp_path, kind):
         # Every agent in the default table writes its own file, so counting
