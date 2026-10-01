@@ -1358,16 +1358,24 @@ def project_materialized(name: str, base) -> tuple[str, dict] | None:
     return None
 
 
-def _not_in_this_project(name: str, base) -> BoostError:
+def _not_in_this_project(name: str) -> BoostError:
     """``uninstall --local``'s refusal, worded from where the item really is.
 
-    One sentence used to cover three states, and was false in two of them:
-    "%s is not installed in this project" over a rule sitting in the user's
-    own config, or in a sibling checkout, sends the reader to ``boost list
-    --local`` — which correctly shows nothing, so the message and the remedy
-    agree with each other and not with the machine. Each branch names the
+    One sentence covered three states. It is **true** in all three — a rule
+    in the user's own config really is not installed in this project — and
+    useless in two, because it reports the one fact the reader already has
+    and withholds the one they need. Its hint sends them to ``boost list
+    --local``, which correctly shows nothing, so the message and the remedy
+    agree with each other and not with the machine. Each branch now names the
     scope it found and the command that removes it from there, because the
     item *is* removable and only the flag naming where it lives was not.
+
+    **No ``base`` parameter**, though the caller has one resolved. Every
+    branch is decided by :func:`lockfile.find_any`, which searches the user
+    lock as a whole: by the time this is reached, ``scopes.owns`` has already
+    said the row is not this repo's, so the only question left is where it is
+    instead. A parameter nothing reads is one no test can pin — a mutation of
+    it is unkillable by construction — so it is not taken.
     """
     found = lockfile.find_any(name)
     if found is not None:
@@ -1384,8 +1392,9 @@ def _not_in_this_project(name: str, base) -> BoostError:
         return BoostError(
             "%s is a %s installed at user scope, not in this project" % (name, kind),
             hint="remove it with `boost uninstall %s` (no --local)" % name)
-    # Genuinely absent. Byte-identical to what this raised before, because it
-    # is the one branch that was always true.
+    # Genuinely absent. Byte-identical to what this raised before — the one
+    # state where naming where the item is instead is no help, because it is
+    # nowhere.
     return BoostError("%s is not installed in this project" % name,
                       hint="see what is with `boost list --local`")
 
@@ -1518,7 +1527,7 @@ def uninstall_project(name: str, base=None) -> dict:
             owned_kind, owned_entry = owned
             return (_uninstall_rule if owned_kind == "rule"
                     else _uninstall_workflow)(name, owned_entry)
-        raise _not_in_this_project(name, resolved_base)
+        raise _not_in_this_project(name)
     removed: list[str] = []
     refused: list[str] = []
     redirected: list[str] = []
@@ -2011,10 +2020,15 @@ def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> int:
     path), so the plan is de-duplicated on the resolved dir, not the resolved
     file, and a file already gone counts as removed.
 
-    The count is **files**, after that de-duplication, and never ``len(plan)``:
-    on a project install Gemini and Codex both merge their block into a file
-    the Claude row already names, so the row count over-states the removal by
-    the number of agents sharing a context file. The caller reports "removed
+    The count is **files**, after that de-duplication, and never ``len(plan)``.
+    On the default agent table the two agree — a project rule measures five
+    rows at five distinct paths, because ``rules.CONTEXT_FILES`` gives each
+    context-file agent its own name there (``CLAUDE.local.md``,
+    ``GEMINI.md``, ``AGENTS.md``) and Cursor and Windsurf take a rules dir
+    each. They diverge on exactly what the de-duplication is for: two agents
+    configured at one dir, or a dotdir that is a symlink to another, which
+    ``path.parent.resolve()`` collapses. ``len(plan)`` would then tell the
+    user boost removed a file it removed once. The caller reports "removed
     from <repo>" off this, the way :func:`uninstall_project` reports it off
     paths that came off disk rather than off the agent list.
     """
@@ -2347,19 +2361,27 @@ def _materialized_result(name: str, removed: list[str], entry: dict,
     A user-scope entry has neither key and gets neither, so ``cmd_uninstall``
     reads ``scope`` as absent and prints exactly what it printed before.
 
-    **Both keys or neither**, and the ``base`` is required for it. A lock is a
-    file on disk, so a row can say ``scope: project`` and name no directory —
+    **Both keys or neither**, and a ``base`` that names a directory is
+    required for it. A lock is a file on disk, so a row can say
+    ``scope: project`` and record no usable directory —
     :func:`scopes.owned_by` already treats that shape as real and drops it,
     because a row that claims no directory is claimed by none. Carrying
-    ``scope`` without a ``base`` would put the key in the dict with a ``None``
-    value, where the caller's ``info.get("base", "this repo")`` default can
-    never fire: ``paths.tilde(None)`` is the string ``"None"``, so bare
-    ``boost uninstall`` on such a row would print *removed from None* over a
-    removal that worked. There is no repo to name, so none is claimed.
+    ``scope`` without one would put the key in the dict with that value,
+    where the caller's ``info.get("base", "this repo")`` default can never
+    fire: ``paths.tilde`` is ``str(p)``, so ``None`` prints as *removed from
+    None* and a hand-edited ``{"base": {}}`` prints as *removed from {}* —
+    over a removal that worked.
+
+    The test is :func:`scopes.names_a_directory`, the same one ownership is
+    decided with, rather than a truthiness check beside it. Those differ
+    exactly on the values a lock can hold and an install cannot write: a
+    non-string, and a *relative* path, which names a different repo depending
+    on where the user is standing when they read the line.
     """
     res = {"name": name, "unlinked": removed, "entry": entry, "kind": kind,
            "removed_count": gone}
-    if entry.get("scope") == scopes.SCOPE_PROJECT and entry.get("base"):
+    if (entry.get("scope") == scopes.SCOPE_PROJECT
+            and scopes.names_a_directory(entry.get("base"))):
         res["scope"] = scopes.SCOPE_PROJECT
         res["base"] = entry["base"]
     return res

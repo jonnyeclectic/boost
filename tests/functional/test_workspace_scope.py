@@ -788,9 +788,13 @@ def test_uninstall_local_removes_the_project_rule_list_local_shows(
         # outright. Either way nothing the install wrote is left behind.
         assert not p.exists(), p
     assert "no rules installed" in boost("list", "--local", "--kind", "rule").out
-    # Wrapping folds the repo path, so compare against the unfolded line.
+    # The *repo*, not just the agents. `cmd_uninstall` prints "removed from
+    # <agent · agent · …>" for any rule, so a bare `"removed from" in out`
+    # passes with the scope and base never reaching the result at all — it
+    # asserts the line this change did not add. Wrapping folds the path, so
+    # compare against the unfolded output.
     flat = " ".join(res.out.split())
-    assert "removed from" in flat
+    assert "removed from %s" % paths.tilde(repo) in flat, flat
 
 
 def test_uninstall_local_removes_a_project_workflow(boost, trio_tap, repo):

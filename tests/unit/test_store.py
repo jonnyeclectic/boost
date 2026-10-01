@@ -3682,17 +3682,25 @@ class TestProjectRulesAndWorkflows:
         assert "scope" not in info and "base" not in info
         assert info["removed_count"] > 0
 
-    def test_a_project_row_naming_no_repo_claims_no_scope(self, tap):
-        # A lock is a file on disk, so `scope: project` with no `base` is a
-        # shape that exists — `owned_by` already drops it. Carrying `scope`
-        # alone puts `base: None` in the dict, where the caller's
-        # `.get("base", "this repo")` default can never fire, and
-        # `paths.tilde(None)` is the string "None": bare `uninstall` would
-        # print "removed from None" over a removal that worked.
+    @pytest.mark.parametrize("base", [
+        None,            # the key absent entirely
+        "",              # present and empty
+        {},              # a hand-edited lock holds whatever JSON holds
+        "relative/repo",  # names a different repo per reader's cwd
+    ], ids=["absent", "empty", "not-a-path", "relative"])
+    def test_a_project_row_naming_no_repo_claims_no_scope(self, tap, base):
+        # A lock is a file on disk, so `scope: project` over a base that names
+        # no directory is a shape that exists — `owned_by` already drops every
+        # one of these. Carrying `scope` anyway puts the base in the dict,
+        # where the caller's `.get("base", "this repo")` default can never
+        # fire, and `paths.tilde` is `str(p)`: bare `uninstall` would print
+        # "removed from None" / "removed from {}" over a removal that worked.
         e = _rule_entry(tap)
         store.install(e)
         row = lockfile.get_rule(e["name"])
-        row["scope"] = "project"          # ...and deliberately no "base"
+        row["scope"] = "project"
+        if base is not None:
+            row["base"] = base
         lockfile.set_rule(e["name"], row)
 
         info = store.uninstall(e["name"])
@@ -3747,6 +3755,11 @@ class TestProjectRulesAndWorkflows:
         with pytest.raises(BoostError) as ei:
             store.uninstall_project(e["name"], base=str(mine))
         assert str(theirs) in ei.value.message
+        assert "rule" in ei.value.message
+        # The hint too, as on the user-scope branch: naming the repo and then
+        # not saying what removes the row leaves the reader where the old
+        # single sentence left them.
+        assert "boost uninstall %s" % e["name"] in (ei.value.hint or "")
         assert lockfile.get_rule(e["name"]) is not None
 
     def test_a_name_nothing_installed_keeps_the_original_wording(self, tmp_path):

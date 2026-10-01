@@ -155,11 +155,18 @@ def owns(entry: dict, base) -> bool:
     The single-entry form of :func:`owned_by`, and the same predicate rather
     than a second opinion about it — ``list --local`` decides what a repo has
     with the filter, and ``uninstall --local`` decides what it may remove with
-    this, so the two cannot disagree about one row. Both halves are load
-    bearing: a user-scope entry can carry a ``base`` (an earlier project
-    install the user re-installed globally leaves the key behind), so dropping
-    the ``scope`` test would hand ``--local`` a row that lives in the user's
-    own config.
+    this, so the two cannot disagree about one row.
+
+    **Both halves are load bearing, and the ``scope`` half defends a shape
+    boost's own install path does not write.** ``_install_rule`` and
+    ``_install_workflow`` emit ``scope`` and ``base`` in one dict, so the two
+    agree on every row an install produces. Two things read a row back and do
+    not: a hand-edited lock — the project lock is a *committed* file — and
+    ``update``/``reinstall``, which rebuild the install from
+    ``lk.get("scope", "user")`` and ``lk.get("base")`` *independently*
+    (``commands/pkg.py``), so a row carrying a ``base`` and no ``scope`` comes
+    back as user scope with the base intact. Dropping the ``scope`` test would
+    hand ``--local`` that row, which lives in the user's own config.
 
     ``False`` for ``base is None`` — a caller standing outside any project
     owns nothing — which is answered before ``realpath``, since resolving
@@ -185,11 +192,28 @@ def _claims(recorded, want: str) -> bool:
     against whatever directory the user happens to be standing in, so `"."`
     would make one entry belong to every repo at once.
     """
-    if not recorded or not isinstance(recorded, str | os.PathLike):
-        return False
-    if not os.path.isabs(recorded):
+    if not names_a_directory(recorded):
         return False
     return os.path.realpath(recorded) == want
+
+
+def names_a_directory(recorded) -> bool:
+    """Is a recorded ``base`` a claim on *some* directory at all?
+
+    The half of :func:`_claims` that needs no directory to compare against,
+    split out because one caller has none to offer: ``store`` decides whether
+    a removal result may *name* the repo it came from, where the question is
+    only whether the lock recorded a directory. Sharing the predicate is the
+    point — a base this rejects is one no project claims, so a result that
+    named it would print a repo that owns nothing.
+
+    Each clause rejects a value that would otherwise reach a path join or a
+    print: empty, a JSON object or number out of a hand-edited lock, or a
+    relative path, which ``realpath`` would resolve against wherever the user
+    happens to be standing.
+    """
+    return (bool(recorded) and isinstance(recorded, str | os.PathLike)
+            and os.path.isabs(recorded))
 
 
 def check_scope(scope: str) -> str:
