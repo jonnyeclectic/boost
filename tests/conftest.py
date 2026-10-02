@@ -418,15 +418,56 @@ def pytest_configure(config):
     Upstream the offending line is dead code in the default configuration: its
     only consumer sits behind ``if max_stack_depth != -1``, and -1 is the
     default, so it computes a value nothing reads and raises while doing it.
+
+    mutmut 3.8.0 both moved the accessor and fixed the line, which is why the
+    config is fetched through :func:`_mutmut_config` rather than named here —
+    see its docstring.
     """
     del config
     if not os.environ.get("MUTANT_UNDER_TEST"):
         return          # not a mutmut run — nothing to normalize
-    try:
-        from mutmut.configuration import Config
-    except Exception:   # mutmut absent, or its internals moved
+    cfg = _mutmut_config()
+    if cfg is None:
         return
-    absolutize_source_paths(Config.get())
+    absolutize_source_paths(cfg)
+
+
+def _mutmut_config():
+    """mutmut's live config object, or ``None`` — across the 3.8 rename.
+
+    mutmut 3.7.0 exposes it as the staticmethod ``Config.get()``; 3.8.0 moved
+    it to a module-level ``config()`` and left the ``Config`` dataclass in
+    place without a ``get``. The old call therefore did not fail to *import* —
+    the class is still there — it failed at the call, outside the ``try`` that
+    was written for exactly this ("mutmut absent, or its internals moved").
+    An ``AttributeError`` out of ``pytest_configure`` is an ``INTERNALERROR``
+    rather than a test failure, so it takes the whole session: on the branch
+    that bumped 3.7.0 → 3.8.0, ``mutation-shard (0)`` reported "failed to
+    collect stats" and exited 1 in 88 seconds, before a single mutant ran.
+
+    Both names are tried, newest first, and neither being present returns
+    ``None`` instead of raising. The cost of a no-op is one upstream bug
+    coming back as a visible ``FileNotFoundError``; the cost of raising is a
+    green suite reporting nothing at all.
+
+    **On 3.8.0 the normalization has nothing to fix, and is kept anyway.**
+    ``record_trampoline_hit`` now reads ``resolved_mutated_source_paths``,
+    which ``_load_config`` builds from ``Path.cwd()`` once, so the hot path no
+    longer resolves a relative path per call. Making ``source_paths``
+    absolute is then idempotent and free, and it is still the field
+    ``__main__`` iterates — a version test here would encode which upstream
+    lines are buggy today, which is a worse thing to be wrong about.
+    """
+    try:
+        from mutmut import configuration
+    except Exception:   # mutmut absent
+        return None
+    getter = getattr(configuration, "config", None)             # 3.8.0+
+    if getter is None:
+        getter = getattr(getattr(configuration, "Config", None), "get", None)
+    if getter is None:  # renamed again — a no-op beats an INTERNALERROR
+        return None
+    return getter()
 
 
 @pytest.fixture(autouse=True)
