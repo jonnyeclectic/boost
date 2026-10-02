@@ -10,7 +10,7 @@ wow: 4
 note: the alerting that exists to make a red main impossible to miss asks only about 'failure', and the run that skipped a release was 'cancelled'
 order: 365
 owner: loop/ci-alert-conclusions
-pr:
+pr: 1025
 title: "A <code>cancelled</code> <code>ci</code> on main skips the release and alerts nobody, because the alert asks only about <code>failure</code>"
 ---
 <b>Two independent gates, both keyed on the wrong half of the same enum.</b>
