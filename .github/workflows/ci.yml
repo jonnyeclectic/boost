@@ -484,7 +484,7 @@ jobs:
   #   mutation-scope   can the score have changed at all? (for 38% of this
   #                    repo's merged PRs — docs, roadmap cards, other workflows
   #                    — provably not)
-  #   mutation-shard   eight parallel slices of the mutant set. A file heavier
+  #   mutation-shard   twelve parallel slices of the mutant set. A file heavier
   #                    than an even share is split per top-level function
   #                    (mutant names are addressable that way), so store.py —
   #                    18% of all mutants — is no longer a floor of its own.
@@ -553,7 +553,7 @@ jobs:
     # because its figures are a snapshot of the pack and the weights as they
     # stood then. The retraction at the end of this block is NOT part of that
     # snapshot and is dated separately. For what the cap is worth against the
-    # pack committed today, run `scripts/mutation_shards.py plan --shards 8
+    # pack committed today, run `scripts/mutation_shards.py plan --shards 12
     # --explain --timeout-minutes 75` rather than trust a number restated here.
     #
     # The split was never the problem — the runners were. The committed pack
@@ -591,8 +591,10 @@ jobs:
     # *successful* shard jobs puts the worst at 72.5 min (see TAIL_MULTIPLIER
     # in mutation_shards.py), and 75 sits 3.4% above that — thinner than the
     # 3.7% this same block condemns 45 for. The margin was real and the gate
-    # grew into it. Eight shards, below, is the answer to that; raising the
-    # cap a second time is not.
+    # grew into it. Splitting wider is the answer to that; raising the cap a
+    # second time is not. That was eight shards when this was written and is
+    # TWELVE below as of 2026-10-02 — the number moves, the conclusion does
+    # not, so read it off the matrix rather than off this sentence.
     #
     # This is a ceiling, not a budget: if a shard ever genuinely approaches it,
     # the answer is to re-measure `scripts/mutation_weights.json` and re-pack,
@@ -621,13 +623,31 @@ jobs:
     # constants are fitted over 169 successful shard jobs and carry their
     # provenance where they are defined.
     #
-    # Held against this line the old six-shard pack scores 37.8 median minutes
+    # Held against this line the old six-shard pack scored 37.8 median minutes
     # x 1.91 = a 72.3-minute tail: 96% of the cap, which is the cancellation,
-    # predicted. The matrix is therefore EIGHT, where the same arithmetic gives
-    # 28.4 x 1.91 = 54.2 minutes, 72% of the cap. More shards is cheap here
-    # because store.py is already split per function, so the speedup cap is
-    # 8.00x at eight — the largest unit (4,063,161 ms) still fits inside an
-    # even share (5,543,280 ms).
+    # predicted. Eight was the answer to that, and it did not survive the next
+    # weights refresh: on the measured times committed here the same arithmetic
+    # gives 42.7 x 1.91 = 81.5 minutes at eight, which is 109% of the cap — the
+    # pack would be cancelled before it finished. The matrix is therefore
+    # TWELVE, where it gives 28.5 x 1.91 = 54.4 minutes, 72% of the cap.
+    #
+    # The widths in between were measured, not skipped. Nine reaches 97% of
+    # the cap and ten 87%, so both fail the planner's 80% headroom gate.
+    # Eleven passes it — 59.3 min, 79% — and is still not the number here,
+    # because passing a 80% gate by one point is not headroom, it is the
+    # rounding; the gate exists to absorb the next weights refresh, and the
+    # last one moved the pack 1.44x. TWELVE is the smallest width that clears
+    # with something left over.
+    #
+    # Past nine, none of this is bought with a better split. The per-unit
+    # *floor* stops moving at NINE, where `catalog.py` joins `registry.py`
+    # and `store.py` and the largest unit drops 7,580,730 -> 4,495,978 ms;
+    # every width from nine to sixteen sits on that same floor. So ten
+    # through twelve buy exactly one thing — runner minutes — and twelve is
+    # where that purchase is worth making.
+    #
+    # Figures are the pack committed today. Run `plan --shards 12 --explain
+    # --timeout-minutes 75` for the live ones rather than trusting these.
     #
     # tests/unit/test_mutation_shard_count.py pins all of it: that this number
     # and the matrix below and every `--shards` in this repo agree, and that
@@ -643,7 +663,7 @@ jobs:
       # rerun of the whole matrix to learn anything.
       fail-fast: false
       matrix:
-        index: [0, 1, 2, 3, 4, 5, 6, 7]
+        index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -704,11 +724,11 @@ jobs:
           .venv/bin/pip -q install -r requirements/mutation-tools.txt
           # sqlite-vec so dense.py's mutants are covered by the dense tests
           .venv/bin/pip -q install sqlite-vec || true
-      - name: mutate shard ${{ matrix.index }} of 8
+      - name: mutate shard ${{ matrix.index }} of 12
         env:
           SHARD: ${{ matrix.index }}
         run: |
-          PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 8 --index "$SHARD")"
+          PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 12 --index "$SHARD")"
           echo "shard $SHARD patterns: $PATTERNS"
           # `mutmut run` with no arguments runs EVERY mutant. An empty plan must
           # therefore run nothing at all, not silently become a full 26-minute
@@ -809,7 +829,7 @@ jobs:
         # partial result: mutmut counts an unrun mutant as "not checked" and the
         # gate divides by total, so silently accepting one would quietly lower
         # the score instead of failing.
-        run: python3 scripts/mutation_shards.py merge --shards 8 --into mutants --source shard-results
+        run: python3 scripts/mutation_shards.py merge --shards 12 --into mutants --source shard-results
       - name: mutation strength gate (>=80% killed)
         if: needs.mutation-scope.outputs.relevant == 'true'
         run: .venv/bin/python scripts/mutation_gate.py --min 80

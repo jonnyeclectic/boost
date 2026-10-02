@@ -137,7 +137,7 @@ WEIGHTS = Path("scripts/mutation_weights.json")
 #: spelled in two workflows, pinned against them by
 #: ``tests/unit/test_mutation_shard_count.py`` — ``timeout-minutes`` cannot be
 #: read through ``${{ }}``, so the agreement is asserted rather than derived.
-SHARDS = 8
+SHARDS = 12
 
 #: ``mutmut``'s worker count on the runner. It defaults to ``os.cpu_count()``
 #: and ``setup.cfg`` sets no ``max_children``, so on ``ubuntu-latest`` — 4 vCPU
@@ -187,6 +187,14 @@ RUNNER_WORKERS = 4
 #: *more* time and therefore toward refusing a pack rather than passing one.
 #: If the cache ever stops hitting, that 0.6 is what grows — re-measure before
 #: trusting the extrapolation again.
+#:
+#: **Re-checked at eight shards on 2026-10-02 and left unchanged.** The above
+#: is a six-shard fit extrapolated; eight shards have since actually run, 24
+#: of them over three pushes to main, at an observed median of 41.8 min
+#: against this constant's predicted 42.7 — an implied 0.832 where 0.814 is
+#: committed, so the extrapolation held and still errs toward refusing a pack.
+#: Twelve has not run yet; when it has, re-check it the same way.
+#: ``tests/unit/test_mutation_shard_count.py`` carries the figures.
 RUNNER_EFFICIENCY = 0.814
 
 #: How much worse the *worst* run of a shard is than that shard's median.
