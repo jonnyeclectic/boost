@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>521</b><span>Loop finds</span></div>
+      <div class="stat"><b>522</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -7748,7 +7748,7 @@ the walk and the <code>redirected</code> reporting this card inherits.</p>
       </article>
 
       <article class="cap rcard" id="shard-weights-do-not-predict-the-job-timeout">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CI · Bug</span></div>
         <h3>Mutation shard weights balance perfectly and predict nothing, so a shard can time out and cancel a release</h3>
         <p><b>Observed, on the merge of #1015.</b> <code>mutation-shard (4)</code> ran 75 minutes against the
 job's <code>timeout-minutes: 75</code> and was cancelled. The aggregate <code>mutation</code> job
@@ -7791,12 +7791,98 @@ give the heaviest shard headroom &mdash; at eight shards the ideal drops by a qu
 speedup cap is 6.0x only because <code>store.py</code> is split per function already, so more
 shards is cheap. Separately, a cancelled <code>ci</code> on main should be loud: it currently
 looks identical to a success from the release path's point of view, because
-<code>publish.yml</code> only asks whether the conclusion was <code>success</code>.</p>
+<code>publish.yml</code> only asks whether the conclusion was <code>success</code>.
+
+<b>Fixed, and the calibration is measured.</b> Fitted over the Actions job API on 2026-10-01:
+<b>169 successful <code>mutation-shard</code> jobs</b>, of which 26 runs completed all six
+shards. Two numbers come out, and they answer different questions. Per <em>run</em> &mdash; the
+sum over its six shards, which is pack-invariant and so isolates runner speed from packing
+&mdash; observed minutes over committed weight-minutes is min 0.265, <b>median 0.307</b>, max
+0.355: a spread of only <b>1.34x</b>. Per <em>shard</em> against its own median the range is
+1.10x (shard 3) to <b>1.91x</b> (shard 2: median 38.0 min, worst 72.5). <b>So the mean is not
+what fails.</b> A single slow runner inside an otherwise ordinary run is, and a check scored on
+the median would have passed the pack that was cancelled &mdash; its median shard was 37.8
+minutes against a 75-minute cap, half the ceiling.
+
+<b>The 0.307 is not a fudge factor, it is parallelism.</b> Weights are summed per-mutant
+durations &mdash; the work a shard holds laid end to end &mdash; and the runner executes it
+four-way parallel (<code>max_children</code> defaults to <code>os.cpu_count()</code>;
+<code>ubuntu-latest</code> is 4 vCPU). The median inverts to 3.26 effective workers of 4, so what
+is stored is <b>81.4% parallel efficiency</b> and the worker count separately: a runner with more
+vCPUs then moves one constant and contention moves the other, where a single fitted number would
+hide which had happened.
+
+<b>It reproduces the failure it was derived to predict.</b> Six shards at these weights:
+37.8 median minutes &times; 1.91 = a <b>72.3-minute tail</b> against a real worst job of
+<b>72.5</b> &mdash; 96% of the cap. <code>plan --explain --timeout-minutes 75</code> now prints
+that and exits 1. The matrix moved to <b>eight</b>, where the same arithmetic gives 28.4 &times;
+1.91 = <b>54.2 min, 72% of the cap</b>; the largest unit (4,063,161 ms) still fits inside an even
+share (5,543,280 ms), so the speedup cap is a full 8.00x and more shards cost nothing but runner
+slots. <code>tests/unit/test_mutation_shard_count.py</code> pins the shard count across
+<code>ci.yml</code> and <code>mutation-weights-refresh.yml</code> (<code>timeout-minutes</code>
+cannot be read through <code>${{ }}</code>, so agreement is asserted rather than derived), and
+re-runs the headroom check on the committed pack every build &mdash; a pack that would be
+cancelled now fails in the <code>test</code> job in milliseconds.
+
+<b>Not fixed here, and now its own card:</b> a <code>cancelled</code> <code>ci</code> on main is
+still silent. <code>ci-failure-alert</code> gates on
+<code>conclusion == 'failure'</code>, so the run that skipped the release notified nobody either
+&mdash; see <code>cancelled-ci-on-main-is-silent-and-skips-the-release</code>.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">the pack is balanced to within 700ms of ideal and a shard still timed out at 75 min, cancelling a release</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="cancelled-ci-on-main-is-silent-and-skips-the-release">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI · Bug</span></div>
+        <h3>A <code>cancelled</code> <code>ci</code> on main skips the release and alerts nobody, because the alert asks only about <code>failure</code></h3>
+        <p><b>Two independent gates, both keyed on the wrong half of the same enum.</b>
+<code>publish.yml</code> fires on <code>workflow_run</code> and ships only when
+<code>conclusion == 'success'</code>; <code>ci-failure-alert</code> opens the tracking issue
+only when <code>conclusion == 'failure'</code>. A <code>ci</code> run that concludes
+<code>cancelled</code> satisfies neither. <b>It does not ship and it does not tell anyone</b>
+&mdash; the one conclusion that falls through both.
+
+<b>Observed, on the merge of #1015.</b> <code>mutation-shard (4)</code> hit
+<code>timeout-minutes: 75</code> and was cancelled, the aggregate <code>mutation</code> job
+failed, and the run concluded <code>cancelled</code> rather than <code>failure</code>. No
+release, no issue, no notification. It was found by reading job durations by hand weeks later.
+
+<b>This is the exact blind spot <code>ci-failure-alert</code>'s own header describes.</b> That
+file opens by explaining that <code>demo</code> "failed six runs out of six on main, alerted
+nobody, and was found by a manual audit instead", and concludes that "any workflow that runs on
+main and nobody watches belongs here". The list was then enforced by
+<code>tests/unit/test_failure_alerting_covers_unattended.py</code> so a new workflow cannot
+quietly join the blind spot. <b>The enforcement is over <em>which workflows</em> are watched,
+and the hole here is <em>which conclusions</em> are</b> &mdash; <code>ci</code> is on the list
+and still said nothing.
+
+<b>Why a timeout is not an exotic case.</b> It is the designed behaviour of every
+<code>timeout-minutes</code> in the repo, and <code>mutation-shard</code>'s is reached by an
+ordinary slow runner rather than by a bug: across 169 measured shard jobs the worst was 72.5
+minutes against a 75-minute cap. A job can also be cancelled by the concurrency group, by a
+runner eviction (<code>mutation-shard (4)</code> on #1012 died at 15.1 min with exit 143), or by
+a human pressing the button &mdash; and only the last of those is one anybody already knows
+about.
+
+<b>Shape of the work.</b> Widen the alert's condition from <code>== 'failure'</code> to the set
+of conclusions that mean "main is not green", which is every one except <code>success</code>,
+<code>skipped</code> and <code>neutral</code> &mdash; naming what is <em>excluded</em> rather
+than what is included, so the next conclusion GitHub adds defaults to loud. The issue body
+should say which conclusion it was, because <em>cancelled</em> and <em>failure</em> want
+different first moves. Then pin it: the sibling test already enforces the workflow list, so the
+conclusion set wants the same treatment rather than a comment. Worth checking at the same time
+whether <code>publish.yml</code> should distinguish "CI did not pass" from "CI did not finish"
+&mdash; today both are a silent no-op, and a release that was skipped because a runner was slow
+is recoverable by a rerun that nobody currently knows to start.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">the alerting that exists to make a red main impossible to miss asks only about 'failure', and the run that skipped a release was 'cancelled'</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

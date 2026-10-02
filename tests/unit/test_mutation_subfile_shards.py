@@ -499,7 +499,8 @@ class TestPlanCli:
         repo = _repo(tmp_path, {"big.py": _big("f", 8, 20), "s.py": _fn("g")})
         for index in range(3):
             args = type("A", (), {"root": str(repo), "shards": 3,
-                                  "index": index, "explain": False})()
+                                  "index": index, "explain": False,
+                                  "timeout_minutes": None})()
             assert ms.cmd_plan(args) == 0
             assert capsys.readouterr().out.strip(), \
                 "shard %d planned nothing — CI refuses to run unfiltered" % index
@@ -507,7 +508,7 @@ class TestPlanCli:
     def test_explain_reports_what_was_split(self, tmp_path, capsys):
         repo = _repo(tmp_path, {"big.py": _big("f", 8, 20), "s.py": _fn("g")})
         args = type("A", (), {"root": str(repo), "shards": 2, "index": None,
-                              "explain": True})()
+                              "explain": True, "timeout_minutes": None})()
         assert ms.cmd_plan(args) == 0
         assert "split files : big.py" in capsys.readouterr().out
 

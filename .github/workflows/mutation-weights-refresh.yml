@@ -146,7 +146,7 @@ jobs:
         run: |
           python3 scripts/mutation_shards.py drift \
             --candidate candidate/mutation_weights.json \
-            --shards 6 \
+            --shards 8 \
             --summary-md "$RUNNER_TEMP/drift.md" \
             --github-output "$GITHUB_OUTPUT"
           # `|| true` even though `cmd_drift` now writes --summary-md on

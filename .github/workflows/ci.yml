@@ -583,12 +583,37 @@ jobs:
     # come from a CI run rather than a laptop: the tier-1 weights are
     # milliseconds, and a developer machine's durations are not the runner's.
     #
-    # What the ceiling is worth therefore depends on the pack being current.
-    # On 2026-09-30 the six shards ran 46.5 / 40.1 / 37.5 / 37.0 / 25.8 / 22.9
-    # minutes — a 2.03x spread against a plan built from hints that were three
-    # weeks stale, leaving 1.61x of headroom on the slowest. Packed on those
-    # same measurements the spread is flat and the worst shard is ~35 minutes,
-    # which is 2.14x. Balance is what absorbs a slow runner.
+    # WHAT THE CEILING IS WORTH IS NOW A NUMBER, AND IT USED TO BE A HOPE.
+    # Everything above reasons about the cap from runs that had already
+    # happened, because nothing could predict one that had not: the planner
+    # packs weight-milliseconds, so `plan --explain` said "7391040 ms" where
+    # this line says "75 min", and no comparison between them existed anywhere
+    # in the repo. On the merge of #1015 that gap cashed in — `mutation-shard
+    # (4)` ran the full 75 minutes, was cancelled, the `ci` run concluded
+    # `cancelled` rather than `failure`, and publish.yml (which fires only on
+    # `success`) skipped. A merge to main silently did not ship.
+    #
+    # scripts/mutation_shards.py now converts, and the conversion is measured
+    # rather than guessed: a shard's weight is work laid end to end, the runner
+    # executes it 4-way parallel (mutmut's `max_children` defaults to
+    # `os.cpu_count()`; ubuntu-latest is 4 vCPU) at a measured 81.4%
+    # efficiency, and the worst run of a shard is 1.91x its own median. Both
+    # constants are fitted over 169 successful shard jobs and carry their
+    # provenance where they are defined.
+    #
+    # Held against this line the old six-shard pack scores 37.8 median minutes
+    # x 1.91 = a 72.3-minute tail: 96% of the cap, which is the cancellation,
+    # predicted. The matrix is therefore EIGHT, where the same arithmetic gives
+    # 28.4 x 1.91 = 54.2 minutes, 72% of the cap. More shards is cheap here
+    # because store.py is already split per function, so the speedup cap is
+    # 8.00x at eight — the largest unit (4,063,161 ms) still fits inside an
+    # even share (5,543,280 ms).
+    #
+    # tests/unit/test_mutation_shard_count.py pins all of it: that this number
+    # and the matrix below and every `--shards` in this repo agree, and that
+    # the committed pack passes `plan --timeout-minutes` against this cap with
+    # 20% headroom. So the next pack that would be cancelled fails a unit test
+    # instead, which is the point.
     timeout-minutes: 75
     permissions:
       contents: read
@@ -598,7 +623,7 @@ jobs:
       # rerun of the whole matrix to learn anything.
       fail-fast: false
       matrix:
-        index: [0, 1, 2, 3, 4, 5]
+        index: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -659,11 +684,11 @@ jobs:
           .venv/bin/pip -q install -r requirements/mutation-tools.txt
           # sqlite-vec so dense.py's mutants are covered by the dense tests
           .venv/bin/pip -q install sqlite-vec || true
-      - name: mutate shard ${{ matrix.index }} of 6
+      - name: mutate shard ${{ matrix.index }} of 8
         env:
           SHARD: ${{ matrix.index }}
         run: |
-          PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 6 --index "$SHARD")"
+          PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 8 --index "$SHARD")"
           echo "shard $SHARD patterns: $PATTERNS"
           # `mutmut run` with no arguments runs EVERY mutant. An empty plan must
           # therefore run nothing at all, not silently become a full 26-minute
@@ -764,7 +789,7 @@ jobs:
         # partial result: mutmut counts an unrun mutant as "not checked" and the
         # gate divides by total, so silently accepting one would quietly lower
         # the score instead of failing.
-        run: python3 scripts/mutation_shards.py merge --shards 6 --into mutants --source shard-results
+        run: python3 scripts/mutation_shards.py merge --shards 8 --into mutants --source shard-results
       - name: mutation strength gate (>=80% killed)
         if: needs.mutation-scope.outputs.relevant == 'true'
         run: .venv/bin/python scripts/mutation_gate.py --min 80
