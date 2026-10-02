@@ -2,15 +2,15 @@
 id: shard-weights-do-not-predict-the-job-timeout
 board: code
 section: trust
-status: planned
+status: inflight
 category: CI · Bug
 complexity: M
 impact: High
 wow: 4
 note: the pack is balanced to within 700ms of ideal and a shard still timed out at 75 min, cancelling a release
 order: 364
-owner:
-pr:
+owner: loop/shard-headroom
+pr: 1023
 title: "Mutation shard weights balance perfectly and predict nothing, so a shard can time out and cancel a release"
 ---
 <b>Observed, on the merge of #1015.</b> <code>mutation-shard (4)</code> ran 75 minutes against the
@@ -55,3 +55,40 @@ speedup cap is 6.0x only because <code>store.py</code> is split per function alr
 shards is cheap. Separately, a cancelled <code>ci</code> on main should be loud: it currently
 looks identical to a success from the release path's point of view, because
 <code>publish.yml</code> only asks whether the conclusion was <code>success</code>.
+
+<b>Fixed, and the calibration is measured.</b> Fitted over the Actions job API on 2026-10-01:
+<b>169 successful <code>mutation-shard</code> jobs</b>, of which 26 runs completed all six
+shards. Two numbers come out, and they answer different questions. Per <em>run</em> &mdash; the
+sum over its six shards, which is pack-invariant and so isolates runner speed from packing
+&mdash; observed minutes over committed weight-minutes is min 0.265, <b>median 0.307</b>, max
+0.355: a spread of only <b>1.34x</b>. Per <em>shard</em> against its own median the range is
+1.10x (shard 3) to <b>1.91x</b> (shard 2: median 38.0 min, worst 72.5). <b>So the mean is not
+what fails.</b> A single slow runner inside an otherwise ordinary run is, and a check scored on
+the median would have passed the pack that was cancelled &mdash; its median shard was 37.8
+minutes against a 75-minute cap, half the ceiling.
+
+<b>The 0.307 is not a fudge factor, it is parallelism.</b> Weights are summed per-mutant
+durations &mdash; the work a shard holds laid end to end &mdash; and the runner executes it
+four-way parallel (<code>max_children</code> defaults to <code>os.cpu_count()</code>;
+<code>ubuntu-latest</code> is 4 vCPU). The median inverts to 3.26 effective workers of 4, so what
+is stored is <b>81.4% parallel efficiency</b> and the worker count separately: a runner with more
+vCPUs then moves one constant and contention moves the other, where a single fitted number would
+hide which had happened.
+
+<b>It reproduces the failure it was derived to predict.</b> Six shards at these weights:
+37.8 median minutes &times; 1.91 = a <b>72.3-minute tail</b> against a real worst job of
+<b>72.5</b> &mdash; 96% of the cap. <code>plan --explain --timeout-minutes 75</code> now prints
+that and exits 1. The matrix moved to <b>eight</b>, where the same arithmetic gives 28.4 &times;
+1.91 = <b>54.2 min, 72% of the cap</b>; the largest unit (4,063,161 ms) still fits inside an even
+share (5,543,280 ms), so the speedup cap is a full 8.00x and more shards cost nothing but runner
+slots. <code>tests/unit/test_mutation_shard_count.py</code> pins the shard count across
+<code>ci.yml</code> and <code>mutation-weights-refresh.yml</code> (<code>timeout-minutes</code>
+cannot be read through <code>${{ }}</code>, so agreement is asserted rather than derived), and
+re-runs the headroom check on the committed pack every build &mdash; a pack that would be
+cancelled now fails in the <code>test</code> job in milliseconds.
+
+<b>Not fixed here, and now its own card:</b> a <code>cancelled</code> <code>ci</code> on main is
+still silent. <code>ci-failure-alert</code> gates on
+<code>conclusion == 'failure'</code>, so the run that skipped the release notified nobody either
+&mdash; see <code>cancelled-ci-on-main-is-silent-and-skips-the-release</code>.
+

@@ -4,8 +4,9 @@
 """Split the mutation gate across parallel CI shards, and merge the results back.
 
 The gate runs ~10.5k mutants over ``boost_cli/core`` and is the single longest
-job in CI — roughly 26 minutes against ~9 for the next-slowest, so it alone sets
-how long a PR (and therefore a release) waits.
+job in CI — measured at a median 37.5 minutes a shard over 169 real shard jobs,
+against ~9 for the next-slowest job, so it alone sets how long a PR (and
+therefore a release) waits.
 
 mutmut's ``run`` accepts fnmatch patterns over mutant names
 (``boost_cli.core.lockfile.x__skeleton__mutmut_1``), and each source file owns a
@@ -78,14 +79,39 @@ needs no freshness gate — unlike every other generated file in this repo.
 
 The bound worth knowing: the largest *unit* is a floor on the slowest shard.
 That used to be the largest file — ``store.py``, capping the useful speedup at
-about 5.4x — and is now the largest unsplittable file, which lifts the cap to
-about 6.0x at six shards. ``plan --explain`` prints the cap, which files were
-split, and the resulting per-shard loads.
+about 5.4x — and is now the largest unsplittable file, which at the committed
+:data:`SHARDS` still fits inside an even share and so leaves the cap at the
+shard count itself. ``plan --explain`` prints the cap, which files were split,
+and the resulting per-shard loads.
+
+Ratios, and the one question they cannot answer
+-----------------------------------------------
+Everything above is scale-free: the packer needs only that one unit is twice
+another, so the weights can be in any unit that is consistent with itself, and
+they are in summed per-mutant milliseconds. That was fine until it was asked a
+question in a different unit. ``ci.yml`` caps each shard at ``timeout-minutes``;
+a cancelled shard fails the aggregate ``mutation`` job; a ``ci`` run that is
+*cancelled* rather than *failed* does not satisfy ``publish.yml``'s
+``conclusion == 'success'``; so a merge to main stops shipping, quietly. That
+happened on the merge of #1015, with ``plan --explain`` reporting ``7391040``
+against a ceiling written in minutes and nothing anywhere converting between
+them.
+
+:func:`runner_minutes` converts, by dividing the serial weight by the
+parallelism the runner actually delivers — see :data:`RUNNER_EFFICIENCY` and
+:data:`TAIL_MULTIPLIER`, both fitted over the job API rather than assumed.
+``plan --explain --timeout-minutes N`` then answers the question directly and
+exits non-zero when the answer is no;
+``tests/unit/test_mutation_shard_count.py`` asks it of the committed pack on
+every run, so a pack that would be cancelled fails in the ``test`` job in
+milliseconds instead of 75 minutes into the matrix.
 
 Usage
 -----
   mutation_shards.py plan --shards N --index I   # patterns for one shard
   mutation_shards.py plan --shards N --explain   # the whole split + speedup cap
+  mutation_shards.py plan --shards N --explain --timeout-minutes M
+                                                 # ...and does it fit in M minutes?
   mutation_shards.py merge --shards N --into mutants results/*  # rebuild results
   mutation_shards.py weights --source mutants    # refresh the balance hints
   mutation_shards.py drift --candidate new.json # is a refresh worth a PR?
@@ -106,6 +132,82 @@ from typing import NamedTuple, cast
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = Path("boost_cli/core")
 WEIGHTS = Path("scripts/mutation_weights.json")
+
+#: How many shards the CI matrix runs. Python's copy of a number that is also
+#: spelled in two workflows, pinned against them by
+#: ``tests/unit/test_mutation_shard_count.py`` — ``timeout-minutes`` cannot be
+#: read through ``${{ }}``, so the agreement is asserted rather than derived.
+SHARDS = 8
+
+#: ``mutmut``'s worker count on the runner. It defaults to ``os.cpu_count()``
+#: and ``setup.cfg`` sets no ``max_children``, so on ``ubuntu-latest`` — 4 vCPU
+#: — the mutant set runs four at a time.
+RUNNER_WORKERS = 4
+
+#: The fraction of those four workers the runner actually delivers.
+#:
+#: **This is the number that made the plan predictive, and it is measured, not
+#: assumed.** The weights are summed per-mutant durations, so a shard's weight
+#: is the work it holds *serially* while the job runs it four-way parallel: a
+#: plan in weight-milliseconds was predicting 123 minutes a shard against 27-76
+#: observed, and nothing in the repo could answer "will a shard exceed the
+#: cap?".
+#:
+#: Fitted over the GitHub Actions job API on 2026-10-01: **169 successful
+#: `mutation-shard` jobs**, of which **26 runs completed all six shards**, from
+#: 2026-09-30 to 2026-10-01. Per *run* (the sum over its six shards, which is
+#: pack-invariant and so isolates runner speed from packing) the ratio of
+#: observed minutes to committed weight-minutes was min 0.265, **median
+#: 0.307**, p90 0.347, max 0.355 — a 1.34x spread. The median inverts to 3.26
+#: effective workers of 4, hence 81.4%.
+#:
+#: **Two days, and the window is the weakest part of the fit.** The sample is
+#: large (169 jobs) but short, because the weights it is a ratio *against* were
+#: themselves re-measured on 2026-09-30 — before that the denominator is a
+#: different number and the ratio is not comparable. So 1.34x is how much
+#: runners varied over two days, not over a quarter, and a seasonal effect
+#: would not be in it. That is an argument for re-fitting when the weights
+#: move, which is the same event that already opens a PR
+#: (``mutation-weights-refresh.yml``), not for widening the constant on a
+#: guess.
+#:
+#: Expressed as efficiency rather than as the 0.307 itself so that the two
+#: things that could move it stay separable: a runner with more vCPUs changes
+#: ``RUNNER_WORKERS`` and leaves this alone, where contention changes this and
+#: leaves that alone. A single fitted constant would hide which had happened.
+#:
+#: **The model is linear in the weight because the fixed cost is negligible,
+#: and that was measured too, not assumed.** Extrapolating a constant fitted
+#: at six shards to eight is only sound if per-job overhead — checkout, Python
+#: setup, the pip install, the cache restore — does not survive the split, and
+#: it does: over 41 shard jobs the ``mutate shard`` step is a median 35.6
+#: minutes inside a 36.2-minute job, so everything else is **0.6 min, 1.7%**.
+#: Predicting eight shards by the step alone (35.6 x 6/8 + 0.6 = 27.3 min)
+#: lands 4% under what this model gives (28.4), i.e. the model errs toward
+#: *more* time and therefore toward refusing a pack rather than passing one.
+#: If the cache ever stops hitting, that 0.6 is what grows — re-measure before
+#: trusting the extrapolation again.
+RUNNER_EFFICIENCY = 0.814
+
+#: How much worse the *worst* run of a shard is than that shard's median.
+#:
+#: The mean is not what fails. Per-run totals vary by only 1.34x, but an
+#: individual shard against its own median ranges 1.10x (shard 3) to **1.91x**
+#: (shard 2: median 38.0 min, worst 72.5) — one slow runner inside an otherwise
+#: ordinary run. The cap is reached by that tail, so the headroom check is
+#: scored against it and not against the median.
+#:
+#: It is a *measured* multiplier and it reproduces the observed worst case:
+#: 37.8 predicted median minutes at six shards x 1.91 = 72.2, against a real
+#: worst job of 72.5 — which is 97% of ``timeout-minutes: 75``. That is the
+#: cancellation this constant exists to predict, and at the time it was
+#: observed nothing printed a number anyone could have compared to the cap.
+TAIL_MULTIPLIER = 1.91
+
+#: Fraction of ``timeout-minutes`` the predicted tail may reach before
+#: ``plan --timeout-minutes`` calls the pack unsafe. 0.80 leaves the slowest
+#: shard a fifth of the cap in hand; the pack that was cancelled scored 0.97.
+HEADROOM = 0.80
 
 #: "No override is in force", which is a different state from "the override is
 #: no file at all" — ``None`` has to stay available as a value, because that is
@@ -596,6 +698,66 @@ def pattern_for(root: Path, path: Path):
     return "%s.x_%s__mutmut_*" % (dotted, unit.symbol)
 
 
+def runner_minutes(weight_ms: float) -> float:
+    """Weight-milliseconds as wall-clock minutes on a CI runner.
+
+    The two units are not the same quantity and the gap is not a fudge: a
+    shard's weight is summed per-mutant durations — the work it holds laid end
+    to end — and the runner executes that work ``RUNNER_WORKERS``-way parallel
+    at ``RUNNER_EFFICIENCY``. Dividing is the whole of the model.
+
+    It is the *only* thing that lets the plan be compared to anything. Weights
+    are self-consistent ratios, which is all the packer needs, so the packer
+    was right to ignore this; but a ratio cannot be held against
+    ``timeout-minutes``, and the question "will this shard be cancelled?" is
+    asked in minutes or not at all.
+    """
+    return weight_ms / 60000.0 / (RUNNER_WORKERS * RUNNER_EFFICIENCY)
+
+
+def tail_minutes(weight_ms: float) -> float:
+    """The slow-runner case for a shard of this weight — what the cap must clear.
+
+    :func:`runner_minutes` gives the median run. Scoring the cap against that
+    would have passed the pack that was cancelled: its median shard was 37.8
+    minutes against a 75-minute cap, a comfortable-looking 50%, while the job
+    that actually died ran 72.5. See :data:`TAIL_MULTIPLIER`.
+    """
+    return runner_minutes(weight_ms) * TAIL_MULTIPLIER
+
+
+def headroom_report(loads: list[int], cap: int) -> tuple[bool, list[str]]:
+    """Does the heaviest shard fit inside ``cap`` minutes, with margin?
+
+    Returns ``(safe, lines)``. The caller decides what a false means, because
+    the two callers want different things: ``plan --explain`` prints the lines
+    and exits non-zero, and the lockstep test asserts on the bool.
+
+    The budget is ``cap * HEADROOM`` rather than ``cap`` itself, and **not**
+    because the prediction is a median — :func:`tail_minutes` has already
+    applied the slow-runner multiplier, so the number being compared is the
+    tail, not the middle. The margin is for the two things the tail estimate
+    does not contain: :data:`TAIL_MULTIPLIER` is a *max over 28 samples per
+    shard*, which is an estimate that only grows as runs accumulate, and the
+    weights it scales drift between refreshes. Twenty percent is what keeps a
+    pack that is merely near the line from being called fine until the day a
+    worse runner than any yet seen turns up.
+    """
+    worst = max(loads)
+    tail = tail_minutes(worst)
+    budget = cap * HEADROOM
+    safe = tail <= budget
+    lines = [
+        "timeout     : %d min (ci.yml), budget %.1f min at %.0f%% headroom"
+        % (cap, budget, HEADROOM * 100),
+        "slowest tail: %.1f min  (%.1f min median x %.2f slow-runner)"
+        % (tail, runner_minutes(worst), TAIL_MULTIPLIER),
+        "headroom    : %s — slowest shard reaches %.0f%% of the cap"
+        % ("OK" if safe else "TOO TIGHT", 100.0 * tail / cap),
+    ]
+    return safe, lines
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
     root = Path(args.root)
     bins = pack(root, args.shards)
@@ -625,15 +787,55 @@ def cmd_plan(args: argparse.Namespace) -> int:
         else:
             unit = "lines"
             print("weights     : lines of code (no %s yet)" % WEIGHTS)
+        # Minutes only where the weights ARE time. On the count and line tiers
+        # the number is a ratio with no runner behind it, and printing "min"
+        # against it would be the same category error this whole calibration
+        # exists to remove — one unit further along.
+        def also_minutes(value: float) -> str:
+            return " (~%.1f min)" % runner_minutes(value) if unit == "ms" else ""
+
         print("total weight: %d %s" % (total, unit))
-        print("ideal shard : %d %s" % (total // args.shards, unit))
+        print("ideal shard : %d %s%s"
+              % (total // args.shards, unit, also_minutes(total / args.shards)))
         heaviest = max(unit_weight(root, u) for b in bins for u in b)
         print("largest unit: %d  (floor on the slowest shard)" % heaviest)
         print("speedup cap : %.2fx" % (total / max(loads)))
         for i, (b, ld) in enumerate(zip(bins, loads, strict=True)):
-            print("  shard %d: weight %5d, %2d units" % (i, ld, len(b)))
-        return 0
+            print("  shard %d: weight %5d, %2d units%s"
+                  % (i, ld, len(b), also_minutes(ld)))
 
+        if args.timeout_minutes is None:
+            return 0
+        if unit != "ms":
+            # Refuse rather than answer. A headroom verdict computed off line
+            # counts would read exactly like one computed off measured time,
+            # and the whole point of the check is that it can be trusted
+            # against the cap.
+            print("headroom    : not checked — weights are %s, not measured time"
+                  % unit)
+            return 0
+        safe, lines = headroom_report(loads, args.timeout_minutes)
+        for line in lines:
+            print(line)
+        return 0 if safe else 1
+
+    if args.timeout_minutes is not None:
+        # Not merely unsupported — actively refused. ci.yml does
+        # PATTERNS="$(plan --shards N --index $SHARD)", so every word this
+        # prints on the --index path becomes an argument to `mutmut run`.
+        #
+        # Checked against mutmut rather than assumed, because the obvious
+        # guess is wrong: it does NOT quietly run an empty set. A filter that
+        # matches nothing trips `assert filtered_mutants, "Filtered for
+        # specific mutants, but nothing matches"`, and a stray word with no
+        # `*` in it goes to `tests_by_mangled_function_name[...]` and raises
+        # KeyError. Both are loud. What is NOT loud is the mixed case — a
+        # stray word alongside real patterns leaves the assert satisfied, and
+        # the word is silently ignored. So the cost is a confusing crash or
+        # nothing at all, and neither is a reason to let prose onto that
+        # stdout. ci.yml's own `[ -z "$PATTERNS" ]` guard catches only the
+        # empty case and would not see any of this.
+        raise SystemExit("mutation_shards plan: --timeout-minutes needs --explain")
     if args.index is None:
         raise SystemExit("mutation_shards plan: --index is required without --explain")
     if not 0 <= args.index < args.shards:
@@ -822,8 +1024,8 @@ def cmd_scope(args: argparse.Namespace) -> int:
 
     Fails SAFE. An empty or unreadable file list means we could not prove the
     score is unchanged, so we say `true` and do the work. The expensive outcome
-    is a wasted 26 minutes; the cheap-looking one is a gate that silently stops
-    gating.
+    is one wasted shard — ~28 minutes at the committed :data:`SHARDS` — and the
+    cheap-looking one is a gate that silently stops gating.
     """
     if args.changed == "-":
         changed = sys.stdin.read().splitlines()
@@ -1257,6 +1459,11 @@ def main() -> int:
     p.add_argument("--shards", type=int, required=True)
     p.add_argument("--index", type=int)
     p.add_argument("--explain", action="store_true", help="print the whole split instead")
+    p.add_argument("--timeout-minutes", type=int,
+                   help="ci.yml's per-shard ceiling; with --explain, exit 1 "
+                        "when the slowest shard's predicted tail reaches it "
+                        "(requires --explain — the --index path's stdout is "
+                        "captured into mutmut's argv and must stay patterns)")
     p.set_defaults(func=cmd_plan)
 
     m = sub.add_parser("merge", help="merge per-shard .meta results for the gate")
@@ -1282,7 +1489,7 @@ def main() -> int:
     d = sub.add_parser("drift", help="is the committed balance hint worth replacing?")
     d.add_argument("--candidate", required=True,
                    help="a freshly measured mutation_weights.json to compare against")
-    d.add_argument("--shards", type=int, default=6)
+    d.add_argument("--shards", type=int, default=SHARDS)
     d.add_argument("--threshold", type=float, default=DRIFT_THRESHOLD,
                    help="slowest-shard cost over the measured best, above which "
                         "a refresh is worth a pull request (default: %(default)s)")
