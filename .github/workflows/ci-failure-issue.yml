@@ -48,9 +48,45 @@ permissions: {}
 
 jobs:
   open-issue:
-    if: >
-      github.event.workflow_run.conclusion == 'failure' &&
-      github.event.workflow_run.head_branch == 'main'
+    # Keyed on the conclusions that mean "main is green", NEGATED — not on the
+    # one conclusion that means it failed. `ci` concluding `cancelled` on the
+    # merge of #1015 satisfied neither this job's old `== 'failure'` nor
+    # publish.yml's `== 'success'`: no release, no issue, no notification. It
+    # was found by someone reading per-shard job durations out of the Actions
+    # API for an unrelated reason, which is not a detection mechanism.
+    #
+    # A timeout is the designed behaviour of every `timeout-minutes` here, so
+    # this is not an exotic conclusion: `mutation-shard` is capped at 75 and the
+    # worst of 169 measured jobs took 72.5. `cancelled` also covers the
+    # concurrency group and a human pressing the button.
+    #
+    # `head_branch == 'main'` is NOT a provenance check, and widening the
+    # conclusion set is what made that matter. ci.yml runs on `pull_request`,
+    # so a fork PR opened from a branch named `main` produces a ci run whose
+    # head_branch is `main`; ci.yml's `cancel-in-progress` then concludes it
+    # `cancelled` on every superseded push. Before, only an outright `failure`
+    # on such a PR opened an issue — rare. Now a routine PR iteration would,
+    # with a body claiming a release was skipped for a run that was never
+    # release-eligible. publish.yml, sbom.yml and mutation-weights-refresh.yml
+    # all carry the event+repository pair; this file was the only
+    # `workflow_run` consumer without it.
+    #
+    # `event != 'pull_request'` rather than publish.yml's `== 'push'`: three
+    # watched workflows are themselves `workflow_run`-triggered, and `== 'push'`
+    # would silently stop alerting for all of them.
+    #
+    # Naming the GREEN set means the next conclusion GitHub adds defaults to
+    # loud rather than silent. `skipped` and `neutral` are in it because they
+    # are ordinary: `release` skips on every run it does not publish from (its
+    # own guard declines a non-push), and codeql reports `neutral`. A null
+    # conclusion is not in the list, so it alerts — which is the right default
+    # for a shape we have not seen.
+    if: >-
+      ${{ !contains(fromJSON('["success", "skipped", "neutral"]'),
+                    github.event.workflow_run.conclusion)
+          && github.event.workflow_run.head_branch == 'main'
+          && github.event.workflow_run.event != 'pull_request'
+          && github.event.workflow_run.head_repository.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -80,9 +116,33 @@ jobs:
               });
             }
 
+            // Read off the payload object, never interpolated into this
+            // script as a GitHub expression — that is the template-injection
+            // shape zizmor flags, and the reason this comment does not spell
+            // an empty one out either: zizmor parses the whole script body,
+            // so `${`+`{ }}` written in a comment is a parse error that makes
+            // six audits log `couldn't parse expression` and skip THAT
+            // expression. Measured: the rest of the file is still analysed —
+            // a template-injection planted alongside it is still reported —
+            // so this is noise plus one unaudited span, not file-wide
+            // blindness.
+            const how = run.conclusion;
+            // A cancelled run and a failed one want different first moves —
+            // rerun the job versus read the log — so the issue leads with it.
             const note =
-              `\`${run.name}\` failed on \`main\` — commit ${run.head_sha}\n` +
+              `\`${run.name}\` concluded **${how}** on \`main\` — ` +
+              `commit ${run.head_sha}\n` +
               `run: ${run.html_url} (attempt ${run.run_attempt})`;
+
+            // publish.yml ships only on `conclusion == 'success'`, so any other
+            // conclusion of `ci` silently skips the release for that commit.
+            // Saying so here is the difference between "CI is red" and "and
+            // nothing was published" — the second needs a rerun, not a fix.
+            const noRelease = run.name === 'ci'
+              ? '\n\n**No release was cut for this commit** — `publish.yml` ' +
+                'ships only on a `success` conclusion. Once this is green ' +
+                'again, rerun the failed jobs on that run to publish it.'
+              : '';
 
             const open = await github.rest.issues.listForRepo({
               owner, repo, state: 'open', labels: label, per_page: 20,
@@ -93,17 +153,21 @@ jobs:
               // Already tracking — append a comment instead of opening a duplicate.
               await github.rest.issues.createComment({
                 owner, repo, issue_number: hit.number,
-                body: `Still failing — ${note}`,
+                // Calling a repeat a failure was wrong the moment the gate
+                // widened — the repeat may be a cancel. `noRelease` rides
+                // along because each repeat is a different run, and the
+                // rerun that publishes is the one named in THIS note.
+                body: `Still not green — ${note}${noRelease}`,
               });
             } else {
               await github.rest.issues.create({
                 owner, repo, labels: [label],
-                title: `CI failing on main (${run.name})`,
+                title: `CI not green on main (${run.name})`,
                 body: [
                   marker,
-                  `The **${run.name}** workflow is failing on \`main\`.`,
+                  `The **${run.name}** workflow is not green on \`main\`.`,
                   '',
-                  note,
+                  note + noRelease,
                   '',
                   'Opened automatically; updated on repeat failures, and ' +
                   'closed automatically once this workflow is green on main.',
@@ -119,9 +183,15 @@ jobs:
   # which makes every OTHER open tracker look equally suspect. An alert that
   # cannot stand down is only half an alert.
   close-issue:
-    if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main'
+    # Same provenance guard as the opener, and for a sharper reason: without
+    # it a *green* fork PR from a branch named `main` closes a tracker for a
+    # failure that is still live on main.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.head_branch == 'main'
+          && github.event.workflow_run.event != 'pull_request'
+          && github.event.workflow_run.head_repository.full_name
+             == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
