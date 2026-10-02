@@ -549,27 +549,32 @@ jobs:
     if: needs.mutation-scope.outputs.relevant == 'true'
     # mutmut needs 3.11+; one representative environment keeps CI fast
     runs-on: ubuntu-latest
-    # WHY 75 AND NOT 45 — the record from 2026-09-01, in the past tense because
-    # every figure in it is a snapshot of the pack and the weights as they were
-    # then. For what the cap is worth against the pack committed today, read the
-    # block below, or run `scripts/mutation_shards.py plan --shards 8 --explain
-    # --timeout-minutes 75` rather than trust a number restated here.
+    # WHY 75 AND NOT 45 — the record from `5769dd94` (2026-09-01), past-tensed
+    # because its figures are a snapshot of the pack and the weights as they
+    # stood then. The retraction at the end of this block is NOT part of that
+    # snapshot and is dated separately. For what the cap is worth against the
+    # pack committed today, run `scripts/mutation_shards.py plan --shards 8
+    # --explain --timeout-minutes 75` rather than trust a number restated here.
     #
-    # The split was never the problem — the runners were. The planner packs the
-    # shards to within a small fraction of a percent of each other (`--explain`
-    # prints each one's weight), and identical `boost_cli/core` code still
-    # measured 43.4 min on shard 4 in one run and 17.0 min in the next: a 2.6x
-    # swing on the same work, against the ~24 min a raw reading of the
-    # six-shard weights predicted then.
+    # The split was never the problem — the runners were. The committed pack
+    # balances to within a hundredth of a percent (`--explain` prints each
+    # shard's weight). That is a property of these weights and not a guarantee
+    # the packer makes: on a tree whose hints are missing or stale it falls
+    # back to line counts and spreads much wider. And yet identical
+    # `boost_cli/core` code still measured 43.4 min on shard 4 in one run and
+    # 17.0 min in the next — a 2.6x swing on the same work, against the ~24 min
+    # a raw reading of the then-current six-shard weights gave. That reading is
+    # not comparable to the "7391040 ms" quoted further down: the weights were
+    # re-measured later and grew, so only the method is shared.
     #
-    # Against that spread a 45-minute ceiling sat 3.6% above the slowest run
+    # Against that spread a 45-minute ceiling sat 3.7% above the slowest run
     # that had ever PASSED (43.4 min, on #667). That is the inverse of the
     # convention this repository applies everywhere else — an eval floor is set
     # a margin clear of its measured value precisely so ordinary drift cannot
     # flake the build. (The size of that margin is recorded in the Makefile,
     # next to the floors themselves, because it is not one number and restating
     # it here would be a second copy to go stale. The point here is the sign,
-    # not the size — a ceiling 3.6% ABOVE the worst pass has no margin at all.)
+    # not the size — a ceiling 3.7% ABOVE the worst pass has no margin at all.)
     # One slow runner was enough, and on #673 it happened: shard 2 was killed
     # mid-run, `mutation` failed "upstream jobs must be conclusive", and a batch
     # whose other five shards were green could not merge.
@@ -577,12 +582,17 @@ jobs:
     # A ceiling costs nothing on a run that does not reach it — the shards that
     # finish early are unaffected — so the trade was a rare long job against a
     # gate that blocked merges at random, and 75 stays far under the 6-hour
-    # per-job limit the shard matrix already documents. What it did NOT buy was
-    # margin, though this comment claimed it did: "36% above the worst run yet
-    # seen" was taken from a 55.0-minute snapshot, and the later fit over 169
-    # real shard jobs put the worst completed shard at 72.5 min (see
-    # TAIL_MULTIPLIER in mutation_shards.py). 75 is 3.4% above that — the very
-    # condition this block condemns 45 for. Eight shards, below, is the answer.
+    # per-job limit the shard matrix already documents.
+    #
+    # WHAT THAT MARGIN WAS WORTH, AND HOW IT WENT (2026-10-01, a later fit and
+    # not part of the record above). The paragraph above used to close "75 …
+    # and 36% above the worst run yet seen", measured against a 55.0-minute
+    # observation. It was true when written. It is not now: the fit over 169
+    # *successful* shard jobs puts the worst at 72.5 min (see TAIL_MULTIPLIER
+    # in mutation_shards.py), and 75 sits 3.4% above that — thinner than the
+    # 3.7% this same block condemns 45 for. The margin was real and the gate
+    # grew into it. Eight shards, below, is the answer to that; raising the
+    # cap a second time is not.
     #
     # This is a ceiling, not a budget: if a shard ever genuinely approaches it,
     # the answer is to re-measure `scripts/mutation_weights.json` and re-pack,
