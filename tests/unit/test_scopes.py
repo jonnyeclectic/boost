@@ -398,6 +398,106 @@ def test_owned_by_resolves_both_sides(tmp_path):
     assert set(scopes.owned_by(entries, real)) == {"x"}
 
 
+# ── owns: the same question about one row ────────────────────────────────
+#
+# `list --local` filters with owned_by and `uninstall --local` admits with
+# owns, so these cover the single-entry form against the same cases: the
+# two commands disagreeing about whose a row is would show a rule and then
+# refuse to remove it, which is the bug this pair exists to close.
+
+def test_owns_accepts_a_project_row_naming_this_repo(tmp_path):
+    assert scopes.owns({"scope": "project", "base": str(tmp_path)}, tmp_path)
+
+
+def test_owns_rejects_a_project_row_naming_another_repo(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    assert not scopes.owns({"scope": "project", "base": str(b)}, a)
+
+
+def test_owns_rejects_a_user_row_whose_base_matches(tmp_path):
+    # The half that is easy to drop: a user-scope row can still carry a
+    # `base` left over from an earlier project install, and admitting it
+    # would let `uninstall --local` delete out of the user's own config.
+    assert not scopes.owns({"scope": "user", "base": str(tmp_path)}, tmp_path)
+
+
+def test_owns_rejects_a_relative_base(tmp_path, monkeypatch):
+    # `.` would otherwise resolve against wherever the caller is standing,
+    # making one row belong to every repo at once.
+    monkeypatch.chdir(tmp_path)
+    assert not scopes.owns({"scope": "project", "base": "."}, tmp_path)
+
+
+def test_owns_is_false_without_a_base(tmp_path):
+    # Answered before realpath: resolving None raises rather than deciding.
+    assert not scopes.owns({"scope": "project", "base": str(tmp_path)}, None)
+
+
+def test_owns_without_a_base_is_false_even_standing_in_that_repo(tmp_path,
+                                                                 monkeypatch):
+    # The guard has to be an early `return False`, not a coerced default.
+    # Falsification caught this: swapping it for `realpath(base or "")`
+    # resolves to the CWD, so "no project at all" silently became "whichever
+    # directory you happen to be standing in" — True here, and the previous
+    # test could not see it because its CWD was elsewhere.
+    monkeypatch.chdir(tmp_path)
+    assert not scopes.owns({"scope": "project", "base": str(tmp_path)}, None)
+
+
+# ── names_a_directory: the half of the claim with nothing to compare to ──
+#
+# `_claims` asks it first and `store._materialized_result` asks it alone, so
+# a base that cannot be owned is also one no removal will print. Pinned
+# directly because the second caller has no `want` to go through `_claims`
+# with, and a truthiness check beside it would agree on every value except
+# the ones a lock can hold and an install cannot write.
+
+
+@pytest.mark.parametrize("recorded", [None, "", 0, {}, [], 17, True],
+                         ids=["none", "empty", "zero", "dict", "list", "int",
+                              "bool"])
+def test_names_a_directory_rejects_what_is_not_a_path(recorded):
+    assert not scopes.names_a_directory(recorded)
+
+
+def test_names_a_directory_rejects_a_relative_path(tmp_path, monkeypatch):
+    # True of "." from every directory, which is the bug: it would name
+    # whichever repo the reader happened to be standing in.
+    monkeypatch.chdir(tmp_path)
+    assert not scopes.names_a_directory(".")
+    assert not scopes.names_a_directory("repo/skills")
+
+
+def test_names_a_directory_accepts_an_absolute_path_string_or_object(tmp_path):
+    assert scopes.names_a_directory(str(tmp_path))
+    assert scopes.names_a_directory(tmp_path)   # os.PathLike, as Path is
+
+
+def test_names_a_directory_does_not_require_the_directory_to_exist(tmp_path):
+    # It answers "is this a claim", not "is the claim satisfiable". A repo
+    # deleted from disk still has a lock row naming it, and a removal that
+    # refused to say where it came from would be less useful, not safer.
+    assert scopes.names_a_directory(str(tmp_path / "gone"))
+
+
+@pytest.mark.parametrize("linked", ["recorded", "argument", "both"])
+def test_owns_resolves_both_sides(tmp_path, linked):
+    # Both sides, and each named on its own, because symlinking only the
+    # recorded base leaves the *argument* side pinned by the platform rather
+    # than by the test: on macOS a $TMPDIR path already resolves through
+    # /private, so dropping `realpath(base)` fails there and passes on the
+    # Linux runner, where tmp_path holds no symlink.
+    real = tmp_path / "repo"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    recorded = link if linked in ("recorded", "both") else real
+    argument = link if linked in ("argument", "both") else real
+    assert scopes.owns({"scope": "project", "base": str(recorded)}, argument)
+
+
 def test_owned_by_returns_everything_when_every_row_is_this_repo(tmp_path):
     entries = {"a": {"scope": "project", "base": str(tmp_path)},
                "b": {"scope": "project", "base": str(tmp_path)}}
