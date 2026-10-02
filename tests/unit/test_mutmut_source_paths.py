@@ -138,15 +138,27 @@ class TestPytestConfigureGuard:
         mod.pytest_configure(object())
         assert len(seen) == 1, "must normalize exactly once, via Config.get()"
 
-    def test_the_module_level_accessor_mutmut_3_8_added_is_used(self,
-                                                                monkeypatch):
-        # 3.8.0 moved `Config.get()` to a module-level `config()`.
+    def test_the_real_mutmut_3_8_shape_normalizes_through_config(self,
+                                                                 monkeypatch):
+        # 3.8.0 *as shipped*, which is the shape that broke CI: it keeps the
+        # `Config` dataclass and moves the accessor to a module-level
+        # `config()`, so both names are present and only `Config.get` is gone.
+        # The old call therefore imported fine and raised AttributeError on
+        # the *call*, outside the try — an INTERNALERROR in pytest_configure,
+        # which takes the whole session rather than one test. `mutation-shard
+        # (0)` on this branch failed that way in 88 seconds.
         monkeypatch.setenv("MUTANT_UNDER_TEST", "stats")
         mod = load_conftest()
         seen = []
         cfg = FakeConfig([Path("boost_cli/core/")])
-        fake = _fake_mutmut(monkeypatch, config=lambda: cfg)
-        assert not hasattr(fake, "Config"), "3.8 has no Config.get to find"
+
+        class ConfigWithoutGet:
+            """3.8.0's dataclass: the name still imports, the accessor is gone."""
+
+        fake = _fake_mutmut(monkeypatch, Config=ConfigWithoutGet,
+                            config=lambda: cfg)
+        assert not hasattr(fake.Config, "get"), \
+            "the whole point is that this attribute is missing"
         monkeypatch.setattr(mod, "absolutize_source_paths",
                             lambda c: seen.append(c) or c.source_paths)
 
@@ -154,18 +166,18 @@ class TestPytestConfigureGuard:
 
         assert seen == [cfg], "must normalize exactly once, via config()"
 
-    def test_a_config_class_without_get_is_not_an_error(self, monkeypatch):
-        # The shape that broke CI: 3.8.0 keeps the `Config` dataclass, so the
-        # import succeeded and `Config.get()` raised AttributeError *outside*
-        # the try — an INTERNALERROR in pytest_configure, which takes the whole
-        # session rather than one test. Every mutation shard reported "failed
-        # to collect stats" ~90s in.
+    def test_neither_accessor_present_is_not_an_error(self, monkeypatch):
+        # Not a release upstream ships — it is the next rename, whatever it
+        # turns out to be. The hook exists to stop a crash, so a name it does
+        # not recognise has to leave the suite running: the cost of a no-op is
+        # one upstream bug coming back as a visible FileNotFoundError, and the
+        # cost of raising is a green suite reporting nothing at all.
         monkeypatch.setenv("MUTANT_UNDER_TEST", "stats")
         mod = load_conftest()
         called = []
 
-        class ConfigWithoutGet:          # deliberately no `get`
-            """3.8.0's dataclass: the name still imports, the accessor is gone."""
+        class ConfigWithoutGet:
+            """Importable, and carrying nothing the hook knows how to call."""
 
         _fake_mutmut(monkeypatch, Config=ConfigWithoutGet)
         monkeypatch.setattr(mod, "absolutize_source_paths",

@@ -441,9 +441,9 @@ def _mutmut_config():
     the class is still there — it failed at the call, outside the ``try`` that
     was written for exactly this ("mutmut absent, or its internals moved").
     An ``AttributeError`` out of ``pytest_configure`` is an ``INTERNALERROR``
-    rather than a test failure, so it takes the whole session: the toolchain
-    refresh that bumped 3.7.0 → 3.8.0 turned every mutation shard into
-    "failed to collect stats" in about 90 seconds.
+    rather than a test failure, so it takes the whole session: on the branch
+    that bumped 3.7.0 → 3.8.0, ``mutation-shard (0)`` reported "failed to
+    collect stats" and exited 1 in 88 seconds, before a single mutant ran.
 
     Both names are tried, newest first, and neither being present returns
     ``None`` instead of raising. The cost of a no-op is one upstream bug
