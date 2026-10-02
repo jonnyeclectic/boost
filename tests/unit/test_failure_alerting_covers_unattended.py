@@ -237,6 +237,40 @@ def names_conclusion(gate: str, conclusion: str) -> bool:
     return ('"%s"' % conclusion in gate) or ("'%s'" % conclusion in gate)
 
 
+def strip_js_comments(script: str) -> str:
+    """``script`` with whole-line ``//`` comments removed.
+
+    Every assertion about this script is about what it *does*, and prose is
+    not behaviour. Twice now a comment explaining a rule contained the token
+    the test looked for and made the assertion pass against code that had
+    stopped doing the thing: a falsification run found ``noRelease`` still
+    "present" with the interpolation deleted, because the comment beside it
+    named ``noRelease``. Strip the prose, assert on the code.
+
+    Whole-line only, so a ``//`` inside a string literal survives.
+    """
+    return "\n".join(line for line in script.splitlines()
+                      if not line.lstrip().startswith("//"))
+
+
+def opener_script() -> str:
+    """The github-script body of the issue-OPENING job, comments stripped."""
+    yaml = pytest.importorskip("yaml")
+    doc = yaml.safe_load(ALERT.read_text(encoding="utf-8"))
+    for step in doc["jobs"]["open-issue"]["steps"]:
+        script = (step.get("with") or {}).get("script")
+        if script:
+            return strip_js_comments(script)
+    raise AssertionError("no script found in the open-issue job")
+
+
+def call_args(script: str, fn: str) -> str:
+    """The argument text of ``fn(`` up to its closing ``});``."""
+    _, _, tail = script.partition(fn + "(")
+    assert tail, "no %s call found" % fn
+    return tail.split("});", 1)[0]
+
+
 class TestEveryNonGreenConclusionIsLoud:
     """The gate keys on the GREEN set negated, not on `failure` alone.
 
@@ -284,6 +318,36 @@ class TestEveryNonGreenConclusionIsLoud:
         # the two assertions above contradict each other and one would win.
         assert not set(GREEN) & set(NOT_GREEN)
 
+    @pytest.mark.parametrize("job", ["open-issue", "close-issue"])
+    def test_the_job_checks_provenance_not_just_the_branch_name(self, job):
+        """`head_branch == 'main'` does not mean "a run on our main".
+
+        ci.yml runs on `pull_request`, so a fork PR opened from a branch
+        named `main` produces a ci run whose ``head_branch`` is ``main``.
+        publish.yml documents that as verified fact and guards with the
+        event+repository pair; sbom.yml and mutation-weights-refresh.yml do
+        too. This file was the only ``workflow_run`` consumer without it, and
+        widening the conclusion set is what made it bite: a fork PR's
+        superseded push concludes ``cancelled``, which the old
+        ``== 'failure'`` gate ignored and the new one would not.
+        """
+        text = ALERT.read_text(encoding="utf-8")
+        block = text.split("  %s:" % job, 1)[1].split("runs-on:", 1)[0]
+        assert "event != 'pull_request'" in block, (
+            "%s does not exclude pull_request-triggered runs" % job)
+        assert "head_repository.full_name" in block, (
+            "%s does not check the run came from this repository" % job)
+
+    def test_the_guard_does_not_use_push_only(self):
+        """`== 'push'` would also be wrong here, in the other direction.
+
+        Three watched workflows — release, sbom, mutation-weights-refresh —
+        are themselves `workflow_run`-triggered, so requiring a push would
+        stop alerting for all of them while looking stricter.
+        """
+        text = ALERT.read_text(encoding="utf-8")
+        assert "workflow_run.event == 'push'" not in text
+
     def test_only_a_real_success_stands_the_tracker_down(self):
         """Opening widened; closing must not.
 
@@ -319,24 +383,57 @@ class TestEveryNonGreenConclusionIsLoud:
     def test_a_non_green_ci_says_the_release_was_skipped(self):
         """publish.yml ships only on `success`, so a non-green `ci` silently
         skips that commit's release. The issue has to say so: "CI is red" and
-        "and nothing was published" need different follow-ups."""
-        text = ALERT.read_text(encoding="utf-8")
-        assert "No release was cut" in text
+        "and nothing was published" need different follow-ups.
+
+        Scoped to the opening script and to the *use*, not to the file. As a
+        whole-file substring check this passed while the note was computed and
+        never concatenated — the string was present, the issue body was not.
+        """
+        script = opener_script()
+        assert "No release was cut" in script, "the note is not written"
+        assert "noRelease" in call_args(script, "issues.create"), (
+            "`noRelease` is computed but never reaches the issue body — the "
+            "string is in the file and absent from what GitHub posts")
+
+    def test_the_repeat_comment_says_the_same_things_as_the_body(self):
+        """The second non-green run of a workflow comments instead of opening.
+
+        That path said "Still failing" and dropped the release note, so a
+        `cancelled` repeat was reported as a failure and the one actionable
+        sentence — rerun to publish — appeared only on the first occurrence.
+        """
+        script = opener_script()
+        assert "Still failing" not in script, (
+            "a repeat may be a cancel; the comment must not call it a failure")
+        call = call_args(script, "createComment")
+        assert "noRelease" in call, (
+            "the repeat comment drops the release note the body carries")
+        assert "note" in call, "the repeat comment does not carry the note"
 
 
 class TestNoScriptBodyHoldsAnUnparseableExpression:
-    """An empty ``${{ }}`` in a *run or script body* silently disables zizmor.
+    """An empty ``${{ }}`` in a run or script body goes unaudited by zizmor.
 
     Measured while writing the change above. A comment inside this file's
     ``github-script`` body that mentioned an empty expression — to explain why
     the script avoids interpolation — made zizmor emit ``couldn't parse
-    expression`` for six audits (template_injection, overprovisioned_secrets,
-    unredacted_secrets, obfuscation, secrets_outside_env, unsound_ternary)
-    against the whole file, **while still printing "No findings to report.
-    Good job!"**. A SAST tool that goes quiet and congratulates you is the
-    worst available failure shape, and nothing in the build would have said so.
+    expression`` from six audits: template_injection, overprovisioned_secrets,
+    unredacted_secrets, obfuscation, secrets_outside_env and unsound_ternary.
 
-    The scope is the body, not the file, and that was measured both ways:
+    **What that does and does not cost, measured rather than assumed.** An
+    earlier draft of this docstring said it disabled those six audits "for the
+    whole file", and that is false. Planting a real finding — a
+    ``github.event.…head_commit.message`` interpolated into a ``run:`` — in two
+    copies of this file, one clean and one carrying an empty expression, zizmor
+    reported the template-injection in **both** (2 findings each). So the rest
+    of the file is still analysed; what is lost is the unparseable expression
+    itself, which no audit inspects, plus six warning lines that are easy to
+    scroll past because the run still ends in "No findings to report".
+
+    Worth preventing on those terms: a span that silently opts out of SAST is
+    a bad place for a mistake to hide, even when its neighbours are covered.
+
+    The scope is the body, not the file, and that was measured three ways:
 
     * in a YAML ``#`` comment  -> 0 parse warnings (zizmor does not read them)
     * in a ``script:`` body    -> 6
@@ -346,6 +443,11 @@ class TestNoScriptBodyHoldsAnUnparseableExpression:
     expression parser", which is every ``run:`` and every ``script:``. Three
     workflows mention ``${{ }}`` in ordinary YAML comments and are fine; a
     file-wide check would have failed them for nothing.
+
+    **Known limit.** This catches one spelling. Any expression zizmor cannot
+    parse costs the same six warnings, and enumerating those is a parser's job,
+    not a regex's. The empty one is pinned because it is the one a comment
+    explaining the rule naturally produces — which is exactly how it got here.
     """
 
     @staticmethod
@@ -376,10 +478,37 @@ class TestNoScriptBodyHoldsAnUnparseableExpression:
                 "reports success." % path.name)
 
     def test_the_guard_can_actually_see_a_body(self):
-        """Vacuous if the walker finds nothing — these files are all run:."""
+        """Vacuous if the walker finds nothing.
+
+        Checked across every workflow, not just this one. Against ALERT alone
+        the guard proved only that two ``script:`` bodies parse — and ALERT has
+        no ``run:`` at all, so the half of the rule that covers shell steps was
+        never exercised by the thing meant to prove the walker works.
+        """
         yaml = pytest.importorskip("yaml")
-        doc = yaml.safe_load(ALERT.read_text(encoding="utf-8"))
-        assert len(self.bodies(doc)) >= 2, self.bodies(doc)
+        total = 0
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            total += len(self.bodies(
+                yaml.safe_load(path.read_text(encoding="utf-8"))))
+        assert total > 50, (
+            "the walker found %d bodies across %d workflows — it is not "
+            "reading them" % (total, len(list(WORKFLOWS.glob("*.yml")))))
+
+    def test_the_walker_finds_both_kinds_of_body(self):
+        """`run:` and `script:` are different keys and both must be walked."""
+        yaml = pytest.importorskip("yaml")
+        doc = yaml.safe_load("""
+jobs:
+  a:
+    steps:
+      - run: echo shell
+      - uses: actions/github-script@v9
+        with:
+          script: console.log('js')
+""")
+        found = self.bodies(doc)
+        assert any("echo shell" in b for b in found), found
+        assert any("console.log" in b for b in found), found
 
     def test_the_pattern_matches_the_shape_that_broke_it(self):
         assert re.search(r"\$\{\{\s*\}\}", "// mentions ${{ }} here")
@@ -405,3 +534,23 @@ class TestTheQuotingHelperIsNotTheWeakLink:
 
     def test_it_is_false_for_something_absent(self):
         assert not names_conclusion('fromJSON(\'["success"]\')', "cancelled")
+
+
+class TestTheCommentStripperIsNotTheWeakLink:
+    """``strip_js_comments`` is what stops prose standing in for behaviour."""
+
+    def test_it_removes_a_whole_line_comment(self):
+        assert "noRelease" not in strip_js_comments("  // about noRelease\n x")
+
+    def test_it_keeps_the_code_beside_it(self):
+        out = strip_js_comments("// gone\nconst a = 1;")
+        assert "const a = 1;" in out
+
+    def test_it_does_not_touch_a_slash_inside_a_string(self):
+        line = "const u = 'https://example.test/x';"
+        assert line in strip_js_comments(line)
+
+    def test_the_real_script_still_has_its_code_after_stripping(self):
+        script = opener_script()
+        assert "issues.create(" in script
+        assert "const note =" in script

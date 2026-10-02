@@ -7907,15 +7907,37 @@ rerun, which is what the new body does.
 
 <b>Found on the way, and fixed in the same change.</b> An empty GitHub expression written
 inside a <code>run:</code> or <code>script:</code> body makes zizmor emit
-<code>couldn't parse expression</code> for six audits &mdash; template_injection,
+<code>couldn't parse expression</code> from six audits &mdash; template_injection,
 overprovisioned_secrets, unredacted_secrets, obfuscation, secrets_outside_env and
-unsound_ternary &mdash; across the <em>whole file</em>, while still printing
-<b>"No findings to report. Good job!"</b>. A comment explaining why the script avoids
-interpolation was enough to cause it. Measured three ways: in a YAML <code>#</code> comment it
-is harmless (zizmor does not read those), in a <code>script:</code> body it costs six audits,
-and in a <code>run:</code> body it costs six even behind a shell <code>#</code>. A parametrised
-test now walks every workflow's run/script bodies, so the SAST tool cannot go quiet and
-congratulate us again.</p>
+unsound_ternary. A comment explaining why the script avoids interpolation was enough to cause
+it. Measured three ways: in a YAML <code>#</code> comment it is harmless (zizmor does not read
+those), in a <code>script:</code> body it costs six, and in a <code>run:</code> body it costs
+six even behind a shell <code>#</code>.
+
+<b>An earlier draft of this section said that blinded the audits for the whole file. It does
+not, and the review that asked caught it.</b> Planting a real finding &mdash; a
+<code>head_commit.message</code> interpolated into a <code>run:</code> &mdash; in two copies of
+the file, one clean and one carrying an empty expression, zizmor reported the
+template-injection in <b>both</b>. What is actually lost is the unparseable span itself, which
+no audit inspects, plus six warning lines above a run that still ends in "No findings to
+report". Worth preventing on those terms rather than the dramatic ones: a span that silently
+opts out of SAST is a bad place for a mistake to hide. A parametrised test now walks every
+workflow's parsed run/script bodies.
+
+<b>One more hole the widening opened, and the review found it.</b>
+<code>head_branch == 'main'</code> is not a provenance check. <code>ci.yml</code> runs on
+<code>pull_request</code>, so a fork PR opened from a branch named <code>main</code> produces a
+<code>ci</code> run whose <code>head_branch</code> is <code>main</code> &mdash; and
+<code>cancel-in-progress</code> concludes it <code>cancelled</code> on every superseded push.
+Under the old <code>== 'failure'</code> gate that was rare; under the new one it is routine PR
+iteration, and the issue would have claimed a release was skipped for a run that was never
+release-eligible. <code>publish.yml</code>, <code>sbom.yml</code> and
+<code>mutation-weights-refresh.yml</code> all carry the event+repository pair and this file was
+the only <code>workflow_run</code> consumer without it, so the fix is the house guard on
+<em>both</em> jobs &mdash; the closer needed it just as much, since a <em>green</em> fork PR
+could otherwise close a tracker for a failure still live on main. It is
+<code>event != 'pull_request'</code> rather than <code>== 'push'</code> because three watched
+workflows are themselves <code>workflow_run</code>-triggered.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
