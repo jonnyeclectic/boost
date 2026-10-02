@@ -10,7 +10,7 @@ wow: 5
 note: a 30-line class with zero recorded mutants makes the other 7.3M weight-ms of registry.py one indivisible unit, flooring the mutation gate at 95% of its timeout at every shard count
 order: 366
 owner: loop/registry-unsplittable-floor
-pr:
+pr: 1027
 title: One 30-line class makes <code>registry.py</code> unsplittable, and floors the mutation gate at 95% of its timeout no matter how many shards you add
 ---
 <b>Found by measuring the first eight-shard run on main against its own prediction.</b>
