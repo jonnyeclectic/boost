@@ -599,4 +599,8 @@ def test_the_partition_is_complete_at_every_shard_count(shards):
         if mine[0].symbol is None:
             assert len(mine) == 1
         else:
-            assert sorted(u.symbol for u in mine) == sorted(ms.top_level_symbols(f))
+            # Whichever route cleared the file for splitting, the units must be
+            # exactly its addressable partition — `measured_partition` is the
+            # second route, for a class-bearing module a real run has cleared.
+            expected = ms.top_level_symbols(f) or ms.measured_partition(ROOT, f)
+            assert sorted(u.symbol for u in mine) == sorted(expected)

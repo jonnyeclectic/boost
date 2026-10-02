@@ -592,10 +592,60 @@ def units_for(root: Path, path: Path, ceiling: int) -> list[Unit]:
     weight = weight_fn(root)(root, path)
     if weight <= ceiling:
         return [Unit(path)]
-    symbols = top_level_symbols(path)
+    symbols = top_level_symbols(path) or measured_partition(root, path)
     if len(symbols) < 2:
         return [Unit(path)]        # nothing to split it into
     return [Unit(path, s) for s in symbols]
+
+
+def measured_partition(root: Path, path: Path) -> list[str]:
+    """``top_level_symbols`` again, for a module a *measured run* has cleared.
+
+    That function refuses any module holding a class with methods, because
+    mutmut mangles a method's name differently and a wrong guess leaves
+    mutants unrun. The refusal is right when the AST is all we have. It is too
+    strong once a run has recorded which symbols actually carried mutants:
+    ``cmd_weights`` writes ``millis_by_symbol[file]`` **only when every mutant
+    of the file was timed**, and it derives each key by the exact inverse of
+    the mangling ``pattern_for`` applies — strip ``__mutmut_<n>``, take the
+    last dotted component, require and strip ``x_``. So the recorded names
+    both cover every mutant and address it.
+
+    The guard that remains is the one that bites. A name from *inside* a class
+    round-trips to ``<module>.x_<method>__mutmut_*``, which never matches
+    mutmut's ``<module>.<Class>.x_<method>__mutmut_*``; that pattern would run
+    nothing. So every recorded name must be a top-level ``def`` of this
+    module, and this returns [] if one is not.
+
+    Measured before relying on it: over both committed weight generations and
+    all eleven class-bearing files in ``boost_cli/core``, no recorded name has
+    ever come from inside a class. What it costs when that stops being true is
+    bounded too -- ``cmd_merge`` fails closed, naming the file and the count
+    ("N/M mutants unrun"), so the failure is a loud red build and not a score
+    computed over a short set.
+
+    The split is still over the **AST's** functions, not the recorded ones: a
+    function added since the weights were measured has no record, and
+    splitting on the record alone would leave its mutants unaddressed. The
+    record is the proof, not the partition.
+    """
+    recorded = load_symbol_durations(root).get(rel_name(root, path))
+    if not recorded:
+        return []
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return []
+    names = [node.name for node in tree.body
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    # The duplicate-name bail is NOT relaxed by measurement: two units sharing
+    # one pattern run the same mutants twice and one overwrites the other's
+    # results, which no amount of recorded timing makes safe.
+    if len(names) != len(set(names)):
+        return []
+    if not set(recorded) <= set(names):
+        return []
+    return names
 
 
 def unit_weight(root: Path, unit: Unit) -> int:
