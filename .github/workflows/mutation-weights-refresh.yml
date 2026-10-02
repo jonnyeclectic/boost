@@ -4,7 +4,7 @@ name: mutation-weights-refresh
 # PR with what that does to the split.
 #
 # WHY THIS EXISTS. `scripts/mutation_weights.json` is the measured input
-# `scripts/mutation_shards.py` bin-packs the six mutation shards on. ci.yml
+# `scripts/mutation_shards.py` bin-packs the mutation shards on. ci.yml
 # already *produces* a fresh one on every run that reaches the gate — the
 # "refresh balance hints" step, whose own comment says it is uploaded "so a
 # maintainer can drop a measured file in rather than hand-editing one". In the

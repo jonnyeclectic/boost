@@ -9,10 +9,16 @@ spelled in the ``mutation-shard`` matrix, in the ``plan --shards`` the shard
 step runs, in the ``merge --shards`` the gate runs, and in
 ``mutation-weights-refresh.yml``. They are not one value with four readers:
 a matrix cannot call Python, and ``merge`` reconstructs the same pack from
-scratch to know which shard owned which file. Disagreement is silent in the
-worst direction — ``merge --shards 6`` over an eight-shard matrix repacks into
-six bins, looks for ``mutation-shard-6``/``-7`` that it never asks for, and
-gates on whichever files its own re-pack happened to place.
+scratch to know which shard owned which file.
+
+Disagreement is *loud*, and that is still worth a test. ``cmd_merge`` fails
+closed — it collects the shards whose ``.meta`` it cannot find and returns 1
+naming them, so ``merge --shards 6`` over an eight-shard matrix is a red
+required check rather than a gate quietly scored on two-thirds of the mutants.
+What it is not is *legible*: the failure arrives 40 minutes into the matrix,
+names artifacts rather than the mismatch, and reads like a lost upload. The
+test turns that into a one-line failure in the ``test`` job before any of it
+runs.
 
 **The headroom.** ``timeout-minutes`` cannot be read through ``${{ }}``, so no
 job can check itself against it. The check runs here instead, which is better
@@ -50,16 +56,21 @@ def _ci() -> str:
 def _matrix_indices() -> list[int]:
     """The `index:` list under the mutation-shard matrix.
 
-    Parsed with a regex rather than a YAML loader on purpose: the assertion is
-    about the literal a human edits. A loader would normalise `[0, 1]` and
-    `["0", "1"]` to the same thing, and the matrix is interpolated into
-    `--index "$SHARD"`, where the string form is what reaches the shell.
+    Regex, not a YAML loader, and the honest reason is that the repo's test
+    tier is stdlib-only — there is no YAML dependency to import here. So this
+    only understands the flow-sequence form the file actually uses
+    (``index: [0, 1, ...]``); a block sequence, or a list split over lines,
+    is equally valid YAML and would make this *fail*, not silently pass. That
+    is the acceptable direction for a mis-parse, and the assertion below says
+    which form it wants, so the failure explains itself.
     """
     body = _ci()
     start = body.index("  mutation-shard:")
     end = body.index("\n  mutation:", start)
     m = re.search(r"^\s+index:\s*\[([^\]]+)\]", body[start:end], re.M)
-    assert m, "no `index:` matrix under mutation-shard"
+    assert m, ("no inline `index: [...]` matrix under mutation-shard — if it "
+               "was reformatted as a block sequence, teach this helper that "
+               "form rather than deleting the check")
     return [int(x) for x in m.group(1).split(",")]
 
 
@@ -113,15 +124,19 @@ class TestHeadroom:
         assert safe, "\n".join(lines)
 
     def test_the_six_shard_pack_this_replaced_does_not(self):
-        # The regression that justifies the change, kept executable. Six shards
-        # over the same weights is a 72.3-minute tail against a 75-minute cap,
-        # and `mutation-shard (4)` really was cancelled at 75 on the merge of
-        # #1015. If this ever starts passing, the gate got cheaper and the move
-        # to eight can be revisited -- it should not fail silently either way.
-        bins = ms.pack(ROOT, 6)
-        loads = [sum(ms.unit_weight(ROOT, u) for u in b) for b in bins]
-        safe, _ = ms.headroom_report(loads, timeout_minutes())
-        assert not safe, "six shards now fits — re-derive the matrix size"
+        # The regression that justifies the change, kept executable: six
+        # shards of the weights the constants were fitted against is a
+        # 72.3-minute tail under a 75-minute cap, and `mutation-shard (4)`
+        # really was cancelled at 75 on the merge of #1015.
+        #
+        # Scored on FITTED_TOTAL_MS, not on the live weights, for the reason
+        # that constant exists -- this is a claim about the past, and a
+        # weights refresh that legitimately made six shards viable again must
+        # not red the bot's own PR. Whether six is viable TODAY is
+        # `test_the_real_pack_fits_with_margin`'s business, at whatever
+        # `SHARDS` says.
+        safe, _ = ms.headroom_report([int(FITTED_TOTAL_MS / 6)], 75)
+        assert not safe, "the pack that was cancelled now scores as safe"
 
     def test_it_is_scored_on_the_heaviest_shard_not_the_lightest(self):
         # The real packer balances to within 0.01%, so over the committed tree
@@ -179,7 +194,19 @@ class TestPlanCliContract:
         assert ms.cmd_plan(self._args(index=0)) == 0
         out = capsys.readouterr().out
         assert out.strip(), "shard 0 planned nothing"
-        assert "min" not in out and "headroom" not in out, out
+        # Checked as SHAPE, not by hunting for substrings. `"min" not in out`
+        # is the obvious spelling and it is wrong twice over:
+        # `boost_cli.core.minisign.*` is a real pattern containing "min", so
+        # it fails or passes depending on which shard the packer happens to
+        # give minisign.py -- a test that flips on a weights refresh while
+        # testing nothing about this change.
+        #
+        # What must hold is that every word is a mutant pattern, on one line,
+        # since each word becomes an argv entry for `mutmut run`.
+        assert out.count("\n") == 1, "more than one line reaches mutmut's argv"
+        for word in out.split():
+            assert word.startswith("boost_cli."), \
+                "%r is not a mutant pattern, and would become one" % word
 
     def test_a_pack_that_fits_exits_zero_and_one_that_does_not_exits_one(self,
                                                                         capsys):
@@ -210,29 +237,90 @@ class TestPlanCliContract:
             "silence would read as a pack that passed the check"
 
 
+#: The committed weights' total **at the moment the constants were fitted**.
+#:
+#: Frozen on purpose, and this is the important part of this file. The
+#: calibration tests below check that the model reproduces measurements taken
+#: against *this* total; the live `scripts/mutation_weights.json` is a
+#: different question and is allowed to move. It does move, on its own:
+#: `mutation-weights-refresh.yml` runs after every `ci` on main and opens a PR
+#: when the committed plan has fallen 5% behind the measured best. Reading the
+#: live file here would mean that bot's PR -- whose entire purpose is to change
+#: this number -- reds the required `tests` check, and the prescribed response
+#: to a tight pack ("re-measure the weights and re-pack", per the comment above
+#: ci.yml's `timeout-minutes`) would do the same. A gate that fires on the fix
+#: it recommends is worse than no gate.
+FITTED_TOTAL_MS = 44_346_245
+
+#: How far the committed weights may drift from the fit before the
+#: calibration counts as extrapolating. Named rather than inlined so the
+#: bound itself is testable: against the live weights alone, widening it to
+#: anything is a change no assertion can see.
+FIT_DRIFT_LIMIT = 0.25
+
+
+def fit_drift(live_total_ms: float) -> float:
+    """How far a weights total has moved from the one the constants were fitted at."""
+    return abs(live_total_ms - FITTED_TOTAL_MS) / FITTED_TOTAL_MS
+
+
 class TestConversion:
-    """`runner_minutes` reproduces what the runners were measured doing."""
+    """`runner_minutes` reproduces what the runners were measured doing.
+
+    Against :data:`FITTED_TOTAL_MS`, never against the live weights file --
+    see its comment. What the live file must still satisfy is
+    :class:`TestHeadroom`, which is a *relative* question (does the pack fit?)
+    and so stays true across a refresh, and is supposed to go red when a
+    refresh genuinely makes the gate too slow.
+    """
 
     def test_it_matches_the_observed_median(self):
         # 169 successful shard jobs, 26 complete six-shard runs, 2026-09-30 to
-        # 2026-10-01: observed p50 was 37.5 min per shard against the committed
-        # six-shard pack. Asserting the model reproduces that to within a
-        # minute is what makes it a calibration rather than a fudge factor --
-        # a constant chosen to make the arithmetic come out would pass the
-        # headroom tests above and fail this one.
-        bins = ms.pack(ROOT, 6)
-        loads = [sum(ms.unit_weight(ROOT, u) for u in b) for b in bins]
-        predicted = ms.runner_minutes(max(loads))
+        # 2026-10-01: observed p50 was 37.5 min per shard over the six-shard
+        # pack of FITTED_TOTAL_MS. Asserting the model reproduces that to
+        # within a minute is what makes it a calibration rather than a fudge
+        # factor -- a constant chosen to make the arithmetic come out would
+        # pass the headroom tests above and fail this one.
+        predicted = ms.runner_minutes(FITTED_TOTAL_MS / 6)
         assert abs(predicted - 37.5) < 1.0, (
             "predicted %.1f min against a measured p50 of 37.5" % predicted)
 
     def test_the_tail_reproduces_the_job_that_was_cancelled(self):
         # Observed worst successful job: 72.5 min (shard 2). Same six-shard
-        # pack, same constants -- so the model is checked against the single
+        # total, same constants -- so the model is checked against the single
         # data point the whole change is about, not only against the middle.
-        bins = ms.pack(ROOT, 6)
-        loads = [sum(ms.unit_weight(ROOT, u) for u in b) for b in bins]
-        assert abs(ms.tail_minutes(max(loads)) - 72.5) < 1.5
+        assert abs(ms.tail_minutes(FITTED_TOTAL_MS / 6) - 72.5) < 1.5
+
+    def test_the_fitted_total_is_still_close_to_the_committed_weights(self):
+        # Not a gate on the weights -- a staleness check on the *fit*. The
+        # constants are a ratio against FITTED_TOTAL_MS, so once the real
+        # weights have moved far from it the calibration is extrapolating.
+        # 25% is deliberately loose: the refresh bot's own threshold is a 5%
+        # makespan regression, so several ordinary refreshes pass this, and
+        # only a change of scale (a file added to or dropped from
+        # source_paths, a runner image change) reaches it. When it fires the
+        # answer is to re-fit from the job API, not to widen the bound.
+        live = sum(ms.load_durations(ROOT).values())
+        assert live, "no measured durations committed — cannot judge the fit"
+        assert fit_drift(live) < FIT_DRIFT_LIMIT, (
+            "committed weights total %d ms against a fit made at %d (%.0f%% "
+            "off) — re-fit RUNNER_EFFICIENCY/TAIL_MULTIPLIER from the Actions "
+            "job API" % (live, FITTED_TOTAL_MS, 100 * fit_drift(live)))
+
+    @pytest.mark.parametrize("factor, within", [
+        (1.00, True),    # the fit itself
+        (1.20, True),    # several ordinary refreshes
+        (0.80, True),    # ...in the other direction
+        (1.30, False),   # a change of scale
+        (0.70, False),
+    ], ids=["exact", "up-20", "down-20", "up-30", "down-30"])
+    def test_the_staleness_bound_is_where_it_claims_to_be(self, factor, within):
+        # The bound pinned directly, because the test above cannot see it: it
+        # reads one live number that happens to sit near the fit, so widening
+        # FIT_DRIFT_LIMIT to any value at all leaves it passing. Driving both
+        # sides of the threshold is what makes the 25% a decision rather than
+        # a number nobody can change wrongly.
+        assert (fit_drift(FITTED_TOTAL_MS * factor) < FIT_DRIFT_LIMIT) is within
 
     def test_zero_weight_is_zero_minutes(self):
         assert ms.runner_minutes(0) == 0.0

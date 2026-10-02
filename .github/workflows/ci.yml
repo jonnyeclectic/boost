@@ -484,7 +484,7 @@ jobs:
   #   mutation-scope   can the score have changed at all? (for 38% of this
   #                    repo's merged PRs — docs, roadmap cards, other workflows
   #                    — provably not)
-  #   mutation-shard   six parallel slices of the mutant set. A file heavier
+  #   mutation-shard   eight parallel slices of the mutant set. A file heavier
   #                    than an even share is split per top-level function
   #                    (mutant names are addressable that way), so store.py —
   #                    18% of all mutants — is no longer a floor of its own.
@@ -550,7 +550,7 @@ jobs:
     # mutmut needs 3.11+; one representative environment keeps CI fast
     runs-on: ubuntu-latest
     # 75, NOT 45, AND THE OLD NUMBER HAD NO MARGIN AT ALL. The planner packs the
-    # six shards to within 0.11% of each other (1,444,148-1,445,766 ms), so the
+    # shards to within 0.11% of each other, so the
     # split is not the problem — the runners are. Identical `boost_cli/core`
     # code measured 43.4 min on shard 4 in one run and 17.0 min in the next, a
     # 2.6x swing on the same work, against a planned 24.1 min per shard.
@@ -619,7 +619,7 @@ jobs:
       contents: read
     strategy:
       # The gate needs every slice's results, so cancelling the siblings when
-      # one shard fails would only turn a single failure into six — and cost a
+      # one shard fails would only turn a single failure into all of them — and cost a
       # rerun of the whole matrix to learn anything.
       fail-fast: false
       matrix:
@@ -692,7 +692,7 @@ jobs:
           echo "shard $SHARD patterns: $PATTERNS"
           # `mutmut run` with no arguments runs EVERY mutant. An empty plan must
           # therefore run nothing at all, not silently become a full 26-minute
-          # run in six places at once.
+          # run in every shard at once.
           if [ -z "$PATTERNS" ]; then
             echo "::error::shard $SHARD planned no patterns — refusing to run unfiltered"
             exit 1

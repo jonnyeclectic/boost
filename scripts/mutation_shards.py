@@ -158,13 +158,35 @@ RUNNER_WORKERS = 4
 #: 2026-09-30 to 2026-10-01. Per *run* (the sum over its six shards, which is
 #: pack-invariant and so isolates runner speed from packing) the ratio of
 #: observed minutes to committed weight-minutes was min 0.265, **median
-#: 0.307**, p90 0.347, max 0.355 — a 1.34x spread across a month of runners.
-#: The median inverts to 3.26 effective workers of 4, hence 81.4%.
+#: 0.307**, p90 0.347, max 0.355 — a 1.34x spread. The median inverts to 3.26
+#: effective workers of 4, hence 81.4%.
+#:
+#: **Two days, and the window is the weakest part of the fit.** The sample is
+#: large (169 jobs) but short, because the weights it is a ratio *against* were
+#: themselves re-measured on 2026-09-30 — before that the denominator is a
+#: different number and the ratio is not comparable. So 1.34x is how much
+#: runners varied over two days, not over a quarter, and a seasonal effect
+#: would not be in it. That is an argument for re-fitting when the weights
+#: move, which is the same event that already opens a PR
+#: (``mutation-weights-refresh.yml``), not for widening the constant on a
+#: guess.
 #:
 #: Expressed as efficiency rather than as the 0.307 itself so that the two
 #: things that could move it stay separable: a runner with more vCPUs changes
 #: ``RUNNER_WORKERS`` and leaves this alone, where contention changes this and
 #: leaves that alone. A single fitted constant would hide which had happened.
+#:
+#: **The model is linear in the weight because the fixed cost is negligible,
+#: and that was measured too, not assumed.** Extrapolating a constant fitted
+#: at six shards to eight is only sound if per-job overhead — checkout, Python
+#: setup, the pip install, the cache restore — does not survive the split, and
+#: it does: over 41 shard jobs the ``mutate shard`` step is a median 35.6
+#: minutes inside a 36.2-minute job, so everything else is **0.6 min, 1.7%**.
+#: Predicting eight shards by the step alone (35.6 x 6/8 + 0.6 = 27.3 min)
+#: lands 4% under what this model gives (28.4), i.e. the model errs toward
+#: *more* time and therefore toward refusing a pack rather than passing one.
+#: If the cache ever stops hitting, that 0.6 is what grows — re-measure before
+#: trusting the extrapolation again.
 RUNNER_EFFICIENCY = 0.814
 
 #: How much worse the *worst* run of a shard is than that shard's median.
@@ -711,9 +733,15 @@ def headroom_report(loads: list[int], cap: int) -> tuple[bool, list[str]]:
     the two callers want different things: ``plan --explain`` prints the lines
     and exits non-zero, and the lockstep test asserts on the bool.
 
-    The budget is ``cap * HEADROOM`` rather than ``cap`` itself: a shard that
-    is *predicted* to land exactly on the ceiling has already lost, since the
-    prediction is a median over runners and the tail is what arrives.
+    The budget is ``cap * HEADROOM`` rather than ``cap`` itself, and **not**
+    because the prediction is a median — :func:`tail_minutes` has already
+    applied the slow-runner multiplier, so the number being compared is the
+    tail, not the middle. The margin is for the two things the tail estimate
+    does not contain: :data:`TAIL_MULTIPLIER` is a *max over 28 samples per
+    shard*, which is an estimate that only grows as runs accumulate, and the
+    weights it scales drift between refreshes. Twenty percent is what keeps a
+    pack that is merely near the line from being called fine until the day a
+    worse runner than any yet seen turns up.
     """
     worst = max(loads)
     tail = tail_minutes(worst)
@@ -793,10 +821,20 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
     if args.timeout_minutes is not None:
         # Not merely unsupported — actively refused. ci.yml does
-        # PATTERNS="$(plan --shards N --index $SHARD)", so anything this prints
-        # on the --index path becomes an argument to `mutmut run`. A headroom
-        # line reaching that substitution would be a glob mutmut matches
-        # against nothing, and the shard would silently test an empty set.
+        # PATTERNS="$(plan --shards N --index $SHARD)", so every word this
+        # prints on the --index path becomes an argument to `mutmut run`.
+        #
+        # Checked against mutmut rather than assumed, because the obvious
+        # guess is wrong: it does NOT quietly run an empty set. A filter that
+        # matches nothing trips `assert filtered_mutants, "Filtered for
+        # specific mutants, but nothing matches"`, and a stray word with no
+        # `*` in it goes to `tests_by_mangled_function_name[...]` and raises
+        # KeyError. Both are loud. What is NOT loud is the mixed case — a
+        # stray word alongside real patterns leaves the assert satisfied, and
+        # the word is silently ignored. So the cost is a confusing crash or
+        # nothing at all, and neither is a reason to let prose onto that
+        # stdout. ci.yml's own `[ -z "$PATTERNS" ]` guard catches only the
+        # empty case and would not see any of this.
         raise SystemExit("mutation_shards plan: --timeout-minutes needs --explain")
     if args.index is None:
         raise SystemExit("mutation_shards plan: --index is required without --explain")

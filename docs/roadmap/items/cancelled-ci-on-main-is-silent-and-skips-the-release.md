@@ -23,7 +23,9 @@ only when <code>conclusion == 'failure'</code>. A <code>ci</code> run that concl
 <b>Observed, on the merge of #1015.</b> <code>mutation-shard (4)</code> hit
 <code>timeout-minutes: 75</code> and was cancelled, the aggregate <code>mutation</code> job
 failed, and the run concluded <code>cancelled</code> rather than <code>failure</code>. No
-release, no issue, no notification. It was found by reading job durations by hand weeks later.
+release, no issue, no notification. It surfaced the same day, and only because somebody was
+reading per-shard job durations out of the Actions API for an unrelated reason &mdash; nothing
+in the repo would have raised it, and the next one will be found the same way or not at all.
 
 <b>This is the exact blind spot <code>ci-failure-alert</code>'s own header describes.</b> That
 file opens by explaining that <code>demo</code> "failed six runs out of six on main, alerted
