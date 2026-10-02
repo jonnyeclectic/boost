@@ -10,7 +10,7 @@ wow: 4
 note: the pack is balanced to within 700ms of ideal and a shard still timed out at 75 min, cancelling a release
 order: 364
 owner: loop/shard-headroom
-pr:
+pr: 1023
 title: "Mutation shard weights balance perfectly and predict nothing, so a shard can time out and cancel a release"
 ---
 <b>Observed, on the merge of #1015.</b> <code>mutation-shard (4)</code> ran 75 minutes against the
