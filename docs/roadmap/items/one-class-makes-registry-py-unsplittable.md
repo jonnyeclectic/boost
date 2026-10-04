@@ -2,7 +2,7 @@
 id: one-class-makes-registry-py-unsplittable
 board: code
 section: pipeline
-status: inflight
+status: shipped
 category: CI · Bug
 complexity: M
 impact: High
