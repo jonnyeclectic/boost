@@ -13,8 +13,8 @@ scratch to know which shard owned which file.
 
 Disagreement is *loud*, and that is still worth a test. ``cmd_merge`` fails
 closed — it collects the shards whose ``.meta`` it cannot find and returns 1
-naming them, so ``merge --shards 6`` over an eight-shard matrix is a red
-required check rather than a gate quietly scored on two-thirds of the mutants.
+naming them, so ``merge --shards 6`` over a twelve-shard matrix is a red
+required check rather than a gate quietly scored on half the mutants.
 What it is not is *legible*: the failure arrives 40 minutes into the matrix,
 names artifacts rather than the mismatch, and reads like a lost upload. The
 test turns that into a one-line failure in the ``test`` job before any of it
@@ -129,13 +129,18 @@ class TestHeadroom:
         # 72.3-minute tail under a 75-minute cap, and `mutation-shard (4)`
         # really was cancelled at 75 on the merge of #1015.
         #
-        # Scored on FITTED_TOTAL_MS, not on the live weights, for the reason
-        # that constant exists -- this is a claim about the past, and a
+        # Scored on LEGACY_SIX_SHARD_TOTAL_MS, not on the live weights and
+        # not on FITTED_TOTAL_MS, because this is a claim about the past: the
+        # 72.3 above is six shards of *the weights the constants were fitted
+        # against*, and only that frozen total reproduces it. Scoring it on
+        # FITTED_TOTAL_MS worked only while the two were the same number --
+        # after the 2026-10-02 re-anchor the same line computes a 104.3-minute
+        # tail, so the comment and the code would have quietly disagreed. A
         # weights refresh that legitimately made six shards viable again must
-        # not red the bot's own PR. Whether six is viable TODAY is
+        # not red the bot's own PR; whether six is viable TODAY is
         # `test_the_real_pack_fits_with_margin`'s business, at whatever
         # `SHARDS` says.
-        safe, _ = ms.headroom_report([int(FITTED_TOTAL_MS / 6)], 75)
+        safe, _ = ms.headroom_report([int(LEGACY_SIX_SHARD_TOTAL_MS / 6)], 75)
         assert not safe, "the pack that was cancelled now scores as safe"
 
     def test_it_is_scored_on_the_heaviest_shard_not_the_lightest(self):
@@ -250,7 +255,71 @@ class TestPlanCliContract:
 #: to a tight pack ("re-measure the weights and re-pack", per the comment above
 #: ci.yml's `timeout-minutes`) would do the same. A gate that fires on the fix
 #: it recommends is worse than no gate.
-FITTED_TOTAL_MS = 44_346_245
+#:
+#: Re-anchored 2026-10-02 from 44,346,245, because the drift assertion in
+#: `test_the_fitted_total_is_still_close_to_the_committed_weights` fired at
+#: 44%. That test prescribes re-fitting from the job API rather than widening
+#: the bound, so this is a re-fit and `FIT_DRIFT_LIMIT` is untouched.
+#:
+#: **The re-anchor also fixes a mixed basis, and that is why the old number
+#: looks off by more than the weights moved.** 44,346,245 was a *planned*
+#: total -- `sum(unit_weight)` over a pack, which is also where ci.yml's
+#: 7,391,040 ms even share comes from -- but the assertion compares it against
+#: `sum(load_durations)`, which counts only the files a run has timed. The two
+#: were close enough to pass while the gap was 4%, so the mismatch went
+#: unnoticed. 63,989,009 is a `load_durations` sum, the same basis the
+#: assertion uses; `PLANNED_TOTAL_MS` below carries the other one.
+#:
+#: Like for like the weights moved **1.50x**, not the 44% the assertion
+#: printed: timed 42,506,911 -> 63,989,009 (1.505) and planned 44,346,245 ->
+#: 66,708,651 (1.504). Nearly all of that is re-measured *cost per mutant*,
+#: not new mutants -- the count rose 27,219 -> 28,084 (+3.2%) while ms/mutant
+#: rose 1,562 -> 2,279 (+46%), unevenly across files (per-file ratio median
+#: 1.21, range 0.78 to 4.52). Do not read it as mutation growth.
+#:
+#: What the re-fit did NOT find is any error in the constants. Over the 24
+#: successful `mutation-shard` jobs of the three eight-shard runs on main
+#: (e9718617, 6aef52c4, dd416340) the observed p50 is 41.8 min against a
+#: predicted 42.7, an implied `RUNNER_EFFICIENCY` of 0.832 where 0.814 is
+#: committed. So the drift was the weights moving, not the model coming
+#: apart, and nothing but this anchor needed to change.
+#:
+#: `TAIL_MULTIPLIER` is deliberately NOT re-fitted. It is a max over 28 samples
+#: per shard and there are 3 per shard at this width -- the worst per-shard
+#: ratio in those 24 jobs is 1.49 against the committed 1.91, so the committed
+#: value over-estimates the tail, which is the safe direction for a cap check.
+#: Re-fit it when a comparable sample exists at the current shard count.
+FITTED_TOTAL_MS = 63_989_009
+
+#: What the *planner* totals over the same committed file, which is larger, and
+#: the two are not interchangeable. `load_durations` sums the 63 files with a
+#: recorded time; `pack` covers every file that has mutants, imputing the three
+#: that have never been timed -- 66,708,651 ms against 63,989,009, 4.2% more.
+#: `FITTED_TOTAL_MS` has to be the former, because the drift check below
+#: compares it against `sum(load_durations(...).values())`. A prediction to be
+#: held against a real job has to be the latter, because a real job runs the
+#: untimed files too.
+#:
+#: FROZEN, exactly like the two totals around it, and for the same reason:
+#: nothing may assert it against a live `pack`. It is the planner's total on
+#: 2026-10-02 at EIGHT shards -- the width the 24 observed jobs ran at -- and
+#: it exists so a historical prediction stays reproducible, not so the current
+#: pack can be checked against it. It is also mildly width-dependent, since
+#: `unit_weight` rounds each split unit: ten or twelve total 66,708,650, one
+#: ms less.
+PLANNED_TOTAL_MS = 66_708_651
+
+#: The shard count `PLANNED_TOTAL_MS` and the median prediction are anchored
+#: to: what main actually ran for the three runs the 24 jobs come from. It is
+#: deliberately NOT `ms.SHARDS` -- that is the width CI uses *now* (twelve),
+#: and re-pointing a historical measurement at it would silently restate what
+#: was observed.
+SHARDS_FOR_FIT = 8
+
+#: The six-shard fit this file used to be anchored on, kept so the two
+#: measurements taken against it stay checkable. Frozen: it describes what was
+#: observed on 2026-09-30..10-01 and no later run can change that.
+LEGACY_SIX_SHARD_TOTAL_MS = 44_346_245
 
 #: How far the committed weights may drift from the fit before the
 #: calibration counts as extrapolating. Named rather than inlined so the
@@ -281,15 +350,54 @@ class TestConversion:
         # within a minute is what makes it a calibration rather than a fudge
         # factor -- a constant chosen to make the arithmetic come out would
         # pass the headroom tests above and fail this one.
-        predicted = ms.runner_minutes(FITTED_TOTAL_MS / 6)
+        predicted = ms.runner_minutes(LEGACY_SIX_SHARD_TOTAL_MS / 6)
         assert abs(predicted - 37.5) < 1.0, (
             "predicted %.1f min against a measured p50 of 37.5" % predicted)
+
+    def test_it_matches_the_observed_median_at_the_current_fit(self):
+        # The same check one weights generation later: 24 successful jobs over
+        # the three eight-shard runs on main, observed p50 41.8 min. Two
+        # different widths, across a 1.50x change in the weights, both landing
+        # inside a minute on one unchanged pair of constants, is what says the
+        # model is a calibration and not a curve bent through a single point.
+        # It is `PLANNED_TOTAL_MS` and not `FITTED_TOTAL_MS` because a real job
+        # runs the untimed files too; see those two definitions.
+        predicted = ms.runner_minutes(PLANNED_TOTAL_MS / SHARDS_FOR_FIT)
+        assert abs(predicted - 41.8) < 1.0, (
+            "predicted %.1f min against a measured p50 of 41.8" % predicted)
+
+    def test_the_planner_counts_more_than_the_files_a_run_has_timed(self):
+        # The invariant `PLANNED_TOTAL_MS` rests on, asserted against the LIVE
+        # weights because -- unlike the constant -- it is true of any weights
+        # file: `pack` covers every mutatable file, `load_durations` covers
+        # only the ones some run has actually timed, so the planner's total is
+        # the larger exactly when something is untimed.
+        #
+        # Deliberately NOT `planned == PLANNED_TOTAL_MS`. That equality was
+        # written here first and is the trap this file already warns about 60
+        # lines up: `pack` reads the live `scripts/mutation_weights.json`, so
+        # pinning its total to a frozen number reds the required `tests` check
+        # on the weights bot's own PR -- every one of them, since changing
+        # that file is the PR's entire purpose. Measured before removing it: a
+        # 1% bump to one file's millis fails the equality while the 25%
+        # staleness gate stays green.
+        timed = ms.load_durations(ROOT)
+        bins = ms.pack(ROOT, ms.SHARDS)
+        planned = sum(ms.unit_weight(ROOT, u) for b in bins for u in b)
+        untimed = {ms.rel_name(ROOT, f) for f in ms.source_files(ROOT)
+                   if not ms.is_init(f)} - set(timed)
+        assert planned >= sum(timed.values())
+        if untimed:
+            assert planned > sum(timed.values()), (
+                "%d mutatable file(s) carry no recorded time (%s), so the "
+                "planner must impute them and total more than the timed sum"
+                % (len(untimed), ", ".join(sorted(untimed))))
 
     def test_the_tail_reproduces_the_job_that_was_cancelled(self):
         # Observed worst successful job: 72.5 min (shard 2). Same six-shard
         # total, same constants -- so the model is checked against the single
         # data point the whole change is about, not only against the middle.
-        assert abs(ms.tail_minutes(FITTED_TOTAL_MS / 6) - 72.5) < 1.5
+        assert abs(ms.tail_minutes(LEGACY_SIX_SHARD_TOTAL_MS / 6) - 72.5) < 1.5
 
     def test_the_fitted_total_is_still_close_to_the_committed_weights(self):
         # Not a gate on the weights -- a staleness check on the *fit*. The
