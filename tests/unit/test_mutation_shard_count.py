@@ -357,7 +357,7 @@ class TestConversion:
     def test_it_matches_the_observed_median_at_the_current_fit(self):
         # The same check one weights generation later: 24 successful jobs over
         # the three eight-shard runs on main, observed p50 41.8 min. Two
-        # different widths, across a 1.44x change in the weights, both landing
+        # different widths, across a 1.50x change in the weights, both landing
         # inside a minute on one unchanged pair of constants, is what says the
         # model is a calibration and not a curve bent through a single point.
         # It is `PLANNED_TOTAL_MS` and not `FITTED_TOTAL_MS` because a real job

@@ -634,9 +634,9 @@ jobs:
     # The widths in between were measured, not skipped. Nine reaches 97% of
     # the cap and ten 87%, so both fail the planner's 80% headroom gate.
     # Eleven passes it — 59.3 min, 79% — and is still not the number here,
-    # because passing a 80% gate by one point is not headroom, it is the
+    # because passing an 80% gate by one point is not headroom, it is the
     # rounding; the gate exists to absorb the next weights refresh, and the
-    # last one moved the pack 1.44x. TWELVE is the smallest width that clears
+    # last one moved the pack 1.50x. TWELVE is the smallest width that clears
     # with something left over.
     #
     # Past nine, none of this is bought with a better split. The per-unit
