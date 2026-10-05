@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import scopes
+from boost_cli.core import projectlock, scopes
 from boost_cli.errors import BoostError
 
 # ── project_root: the walk-up ────────────────────────────────────────────
@@ -115,8 +115,213 @@ def test_project_scope_resolves_the_repo_root_from_a_subdir(tmp_path):
 
 
 def test_project_scope_falls_back_to_start_when_unmarked(tmp_path, monkeypatch):
+    """Still the answer — but only for the install that *creates* the project.
+
+    The lock walk below takes over from the second command onwards. This case
+    is the one it cannot help with, which is why `install --local` warns here
+    instead of resolving somewhere.
+    """
     monkeypatch.setattr(scopes, "PROJECT_MARKERS", (".no-such-marker",))
     assert scopes.resolve_base(scopes.SCOPE_PROJECT, start=tmp_path) == tmp_path
+
+
+def test_an_ancestor_lock_does_not_move_the_base(tmp_path):
+    """Option (a) from the card, deliberately NOT taken — see project_lock_root.
+
+    Moving the resolved base up to an ancestor lock orphans every rule and
+    workflow recorded below it, because those live in the user lock keyed by
+    an absolute base and `--local` eligibility is `owns()` against the base
+    resolved right now. Verification reproduced the dead end: `uninstall
+    --local` refusing a rule while standing in the directory it names. So the
+    lock is *advisory* — `install --local` names it in a warning, and the
+    walk that decides the destination still sees version control markers
+    only.
+    """
+    projectlock.write(tmp_path, projectlock.read(tmp_path))
+    deep = tmp_path / "src" / "deep"
+    deep.mkdir(parents=True)
+    assert scopes.resolve_base(scopes.SCOPE_PROJECT, start=deep) == deep
+    assert scopes.project_lock_root(deep) == tmp_path.resolve()
+
+
+# ── project_lock_root: the second walk ───────────────────────────────────
+
+def test_project_lock_root_finds_a_lock_in_the_same_dir(tmp_path):
+    projectlock.write(tmp_path, projectlock.read(tmp_path))
+    assert scopes.project_lock_root(tmp_path) == tmp_path.resolve()
+
+
+def test_project_lock_root_walks_up_from_a_nested_dir(tmp_path):
+    projectlock.write(tmp_path, projectlock.read(tmp_path))
+    deep = tmp_path / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+    assert scopes.project_lock_root(deep) == tmp_path.resolve()
+
+
+def test_project_lock_root_is_none_when_no_lock_exists(tmp_path):
+    (tmp_path / "sub").mkdir()
+    assert scopes.project_lock_root(tmp_path / "sub") is None
+
+
+def test_project_lock_root_needs_the_file_not_the_directory(tmp_path):
+    """`.boost/` alone is not a project.
+
+    `boost` writes a `.boost` directory for things that are not a lock, and
+    the note on PROJECT_MARKERS turns on `~/.boost` never matching. A walk
+    that accepted the directory would re-introduce exactly what that note
+    refuses.
+    """
+    (tmp_path / projectlock.LOCK_DIRNAME).mkdir()
+    assert scopes.project_lock_root(tmp_path) is None
+
+
+def test_project_lock_root_prefers_the_nearest_lock(tmp_path):
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    projectlock.write(tmp_path, projectlock.read(tmp_path))
+    projectlock.write(inner, projectlock.read(inner))
+    assert scopes.project_lock_root(inner) == inner.resolve()
+
+
+def test_project_lock_root_stops_at_home(tmp_path, monkeypatch):
+    """A lock *above* $HOME is not this user's project.
+
+    $HOME is never a project root, and the walk must not stride past it into
+    whatever directory happens to contain the home directory — on a shared
+    machine that is every other user's parent.
+    """
+    outer = tmp_path / "outer"
+    home = outer / "home"
+    sub = home / "sub"
+    sub.mkdir(parents=True)
+    projectlock.write(outer, projectlock.read(outer))
+    monkeypatch.setenv("HOME", str(home))
+    assert scopes.project_lock_root(sub) is None
+
+
+def test_project_lock_root_still_walks_when_home_cannot_be_resolved(
+        tmp_path, monkeypatch):
+    """An unresolvable $HOME disables the stop, it does not stop the walk.
+
+    `paths.home()` reads an env var, so it can name a directory that is gone,
+    on a dead automount, or behind a permission the process does not have.
+    Answering None there would make `install --local` fall back to the cwd and
+    create the second project this walk exists to prevent — on a machine where
+    the only thing wrong is the home directory.
+    """
+    def boom():
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(scopes.paths, "home", boom)
+    projectlock.write(tmp_path, projectlock.read(tmp_path))
+    deep = tmp_path / "src"
+    deep.mkdir()
+    assert scopes.project_lock_root(deep) == tmp_path.resolve()
+
+
+def test_project_root_still_walks_when_home_cannot_be_resolved(
+        tmp_path, monkeypatch):
+    """The same branch in the marker walk, which had no test of its own.
+
+    Backfilled here rather than left alone: the two walks now run back to back
+    and must agree about a broken $HOME, and an untested branch in `core` is an
+    unkilled mutant for the mutation gate either way.
+    """
+    def boom():
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(scopes.paths, "home", boom)
+    (tmp_path / ".git").mkdir()
+    deep = tmp_path / "src"
+    deep.mkdir()
+    assert scopes.project_root(deep) == tmp_path.resolve()
+
+
+def test_both_walks_reach_the_filesystem_root_and_give_up(tmp_path,
+                                                          monkeypatch):
+    """The loop's own exit, with no $HOME to stop it first.
+
+    With a resolvable $HOME the walk almost always stops there, so the
+    `return None` after the loop is only reached when $HOME is unusable *and*
+    nothing is found all the way to `/`. Both walks are exercised together
+    because they share the shape and the mutation gate grades them separately.
+    """
+    def boom():
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(scopes.paths, "home", boom)
+    deep = tmp_path / "a" / "b"
+    deep.mkdir(parents=True)
+    monkeypatch.setattr(scopes, "PROJECT_MARKERS", (".no-such-marker",))
+    assert scopes.project_root(deep) is None
+    assert scopes.project_lock_root(deep) is None
+
+
+def test_project_lock_root_is_none_when_there_is_no_cwd(monkeypatch):
+    def boom():
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(scopes.Path, "cwd", staticmethod(boom))
+    assert scopes.project_lock_root() is None
+
+
+# ── project_base: the path and the reason, from one walk ─────────────────
+
+def test_project_base_reports_a_vcs_root(tmp_path):
+    (tmp_path / ".git").mkdir()
+    deep = tmp_path / "src"
+    deep.mkdir()
+    assert scopes.project_base(deep) == (tmp_path.resolve(), scopes.BASE_VCS)
+
+
+def test_a_nearer_lock_never_outranks_the_repo_it_sits_in(tmp_path):
+    """A stray lock in a subdirectory of a real checkout changes nothing."""
+    (tmp_path / ".git").mkdir()
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    projectlock.write(inner, projectlock.read(inner))
+    assert scopes.project_base(inner) == (tmp_path.resolve(), scopes.BASE_VCS)
+
+
+def test_project_base_still_says_unmarked_under_an_ancestor_lock(tmp_path):
+    """The advisory walk and the deciding walk give different answers here,
+    and that is the design: one names a project, the other picks a directory.
+    """
+    projectlock.write(tmp_path, projectlock.read(tmp_path))
+    deep = tmp_path / "src"
+    deep.mkdir()
+    assert scopes.project_base(deep) == (deep, scopes.BASE_UNMARKED)
+
+
+def test_project_base_reports_unmarked_for_a_bare_directory(tmp_path):
+    assert scopes.project_base(tmp_path) == (tmp_path, scopes.BASE_UNMARKED)
+
+
+def test_project_base_is_nothing_in_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert scopes.project_base(tmp_path) == (None, None)
+
+
+def test_project_base_is_nothing_without_a_cwd(monkeypatch):
+    def boom():
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(scopes.Path, "cwd", staticmethod(boom))
+    assert scopes.project_base() == (None, None)
+
+
+def test_project_base_and_resolve_base_cannot_disagree(tmp_path):
+    """One walk, one answer — the reason `install --local` does not re-derive.
+
+    A second pair of walks in the command layer is the reader/writer split
+    `fix(scope)` closed, reopened one level up.
+    """
+    projectlock.write(tmp_path, projectlock.read(tmp_path))
+    deep = tmp_path / "src"
+    deep.mkdir()
+    for start in (tmp_path, deep):
+        assert (scopes.project_base(start)[0]
+                == scopes.resolve_base(scopes.SCOPE_PROJECT, start=start))
 
 
 def test_project_scope_refuses_to_fall_back_to_home(tmp_path, monkeypatch):
@@ -543,3 +748,68 @@ def test_resolve_base_with_an_explicit_start_never_needs_the_cwd(monkeypatch,
 
     monkeypatch.setattr(scopes.Path, "cwd", staticmethod(boom))
     assert scopes.resolve_base(scopes.SCOPE_PROJECT, start=tmp_path) == tmp_path
+
+
+# ── parent_matches_spelling: the ancestor-redirect guard ─────────────────
+#
+# Backfilled with this PR. The function is the third question about a committed
+# path — `contains` asks "does it end up inside the repo?", `resolve_in_base`
+# asks "is it spelled like a legal one?", and this asks "is the walk to it
+# redirected?" — and it is what stands between a hostile repo and `rmtree`
+# taking a directory outside the project. It had no direct test anywhere in
+# `tests/`: `store.remove_project_skill` is its only caller, so every branch was
+# reached (or not) through one functional path. Below it is pinned on its own.
+
+def test_parent_matches_spelling_accepts_a_plain_nested_path(tmp_path):
+    (tmp_path / ".claude" / "skills").mkdir(parents=True)
+    assert scopes.parent_matches_spelling(tmp_path, ".claude/skills/x")
+
+
+def test_parent_matches_spelling_refuses_a_redirected_ancestor(tmp_path):
+    """The attack the docstring describes, built for real.
+
+    A committed `<repo>/.claude/skills -> ../src` makes `.claude/skills/<name>`
+    string-equal to the legal target while denoting `src/<name>`. The leaf is
+    honest and the ancestor is not, so a guard that inspects only the leaf
+    walks straight through it.
+    """
+    victim = tmp_path / "src"
+    victim.mkdir()
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "skills").symlink_to(victim, target_is_directory=True)
+    assert not scopes.parent_matches_spelling(tmp_path, ".claude/skills/x")
+
+
+def test_parent_matches_spelling_holds_through_a_symlinked_base(tmp_path):
+    """A repo can sit *under* a symlink without containing one.
+
+    A checkout below `/tmp` on macOS, a home behind an automount, a worktree
+    reached through a convenience link. Resolving the walk but not the base
+    would compare real against nominal, match nothing, and refuse every row of
+    such a repo. The link is built here rather than relying on the runner's
+    $TMPDIR, which pytest resolves before a test ever sees it.
+    """
+    real = tmp_path / "real"
+    (real / ".claude" / "skills").mkdir(parents=True)
+    link = tmp_path / "via-link"
+    link.symlink_to(real, target_is_directory=True)
+    assert scopes.parent_matches_spelling(link, ".claude/skills/x")
+
+
+@pytest.mark.parametrize("rel", ["", None, 123, {"p": "x"},
+                                 "/etc/passwd", Path("/etc")])
+def test_parent_matches_spelling_refuses_what_is_not_a_relative_string(
+        tmp_path, rel):
+    """Ordered clauses: `isabs` raises TypeError on a dict, so the string test
+    has to come first and is what makes the last one safe to call at all."""
+    assert not scopes.parent_matches_spelling(tmp_path, rel)
+
+
+def test_parent_matches_spelling_fails_closed_on_a_value_error(tmp_path):
+    """`realpath` raises ValueError on an embedded NUL rather than answering.
+
+    A lock is a committed file, so the bytes in it are whatever someone wrote.
+    Crashing out of a delete guard is the one outcome it may not have.
+    """
+    assert not scopes.parent_matches_spelling(tmp_path, "a\x00b/x")

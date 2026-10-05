@@ -25,7 +25,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from ..errors import BoostError
-from . import paths
+from . import paths, projectlock
 
 SCOPE_USER = "user"
 SCOPE_PROJECT = "project"
@@ -48,6 +48,12 @@ PROJECT_MARKERS = (".git", ".hg", ".svn")
 # before it is ever joined — the same rule the canonical store applies.
 _SAFE_NAME = re.compile(r"[A-Za-z0-9._-]+")
 
+# How :func:`project_base` decided, so a caller can tell the two apart without
+# walking the tree a second time and risking a different answer than the walk
+# that actually chose the directory.
+BASE_VCS = "vcs"            # a PROJECT_MARKERS entry at or above the start
+BASE_UNMARKED = "unmarked"  # none — the start directory becomes a project
+
 
 def project_root(start=None) -> Path | None:
     """Nearest enclosing project root at or above ``start`` (default: cwd).
@@ -58,8 +64,8 @@ def project_root(start=None) -> Path | None:
     repo's ``.claude/skills``, not create a stray one three levels down.
 
     **This is the marker walk, not the answer to "where is the project".** That
-    is :func:`resolve_base`, which adds the unmarked-directory fallback, and it
-    is what every caller should use — a command that asks this one directly
+    is :func:`resolve_base`, which adds the unmarked-directory fallback on top
+    of it, and it is what every caller should use — a command that asks this one directly
     disagrees with ``install --local`` about whether an unmarked directory is a
     project, which is how ``verify``/``list``/``doctor``/``uninstall`` came to
     deny skills that ``install`` had just written and ``sync`` could still see.
@@ -87,27 +93,74 @@ def project_root(start=None) -> Path | None:
     return None
 
 
-def resolve_base(scope: str, base=None, start=None) -> Path | None:
-    """Directory a scope materializes under — ``None`` for user scope.
+def project_lock_root(start=None) -> Path | None:
+    """Nearest ancestor at or above ``start`` that already holds a project lock.
 
-    An explicit ``base`` always wins, so a re-materialization driven by a lock
-    record (``update``, ``sync``) lands where the original install did rather
-    than in whatever directory the command happens to be run from.
+    **This does not decide where anything is written.** It is an advisory
+    answer to "is there already a boost project up there?", used by
+    ``install --local`` to name it in the warning it prints when it is about
+    to start a new one. :func:`project_base` is what decides the directory,
+    and it consults version control markers and nothing else.
 
-    Project scope with no explicit base resolves the nearest project root, and
-    falls back to ``start``/cwd when there is none — an unmarked directory is
-    still a perfectly good place to put a project's skills, and refusing would
-    only be pedantry. The one directory that is never an acceptable fallback is
-    ``$HOME``: writing "project" files there means writing into the very dirs
-    user scope owns, so callers get ``None`` and can say so.
+    It is deliberately not in the resolution path, and the reason is worth
+    recording because the roadmap card that produced this function proposed
+    putting it there. Moving the resolved base *up* to an ancestor lock
+    orphans every rule and workflow already recorded *below* it: those are
+    kept in the **user** lock tagged with an absolute ``base``
+    (``store._install_rule``), and ``--local`` eligibility is
+    :func:`owns` against the base resolved right now. So one
+    ``install <skill> --local`` at ``proj`` would make a rule installed at
+    ``proj/src`` invisible to ``list --local`` and unremovable by
+    ``uninstall --local`` — from ``proj/src`` as much as from ``proj`` — with
+    ``uninstall`` saying "installed in proj/src, not in this project" to
+    somebody standing in ``proj/src``. Verification reproduced that end to
+    end. The walk also only ever engages for skills: ``_install_rule`` and
+    ``_install_workflow`` write no project lock at all, so it would fix one
+    kind of three.
+
+    **The marker is the lock file, not the ``.boost`` directory**, and that is
+    the whole reason this can exist beside the note on :data:`PROJECT_MARKERS`
+    refusing ``.boost``. boost's own state dir is ``~/.boost`` and it holds a
+    ``config.json``, a ``cache/`` and a ``state/`` — never a
+    ``skill-lock.json``, which only :mod:`.projectlock` writes and only into a
+    project. So the one directory a ``.boost`` marker would have wrongly
+    claimed is the one this never matches, and ``$HOME`` is refused outright
+    below regardless.
     """
-    if base:
-        return Path(base)
-    if scope != SCOPE_PROJECT:
+    try:
+        here = Path(start).resolve() if start is not None else Path.cwd().resolve()
+    except OSError:
         return None
+    try:
+        home = Path(paths.home()).resolve()
+    except OSError:
+        home = None
+    for d in (here, *here.parents):
+        if home is not None and d == home:
+            return None
+        if projectlock.exists(d):
+            return d
+    return None
+
+
+def project_base(start=None) -> tuple[Path | None, str | None]:
+    """Where project scope materializes, **and how that was decided**.
+
+    One walk, one answer. ``install --local`` has to warn when it is the call
+    that creates the project, and re-deriving *that* in the command layer
+    would mean a second walk that can disagree with the one that chose the
+    directory — the exact shape of the reader/writer split ``fix(scope)``
+    closed. So the decision is made once, here, and the reason travels with
+    it. (The command layer does call :func:`project_lock_root` afterwards, to
+    name an existing project in the warning text. That one decides no
+    destination, so it cannot disagree with anything.)
+
+    Returns ``(None, None)`` when there is nowhere to put a project — standing
+    in ``$HOME``, or with no working directory at all.
+    """
     found = project_root(start)
     if found is not None:
-        return found
+        return found, BASE_VCS
     if start is not None:
         here = Path(start)
     else:
@@ -118,11 +171,37 @@ def resolve_base(scope: str, base=None, start=None) -> Path | None:
             # under the process. `project_root` has always answered None here;
             # this must too, or the readers that now come through this function
             # crash where they used to print a user-scope answer and exit 0.
-            return None
+            return None, None
     with suppress(OSError):
         if here.resolve() == Path(paths.home()).resolve():
-            return None
-    return here
+            return None, None
+    return here, BASE_UNMARKED
+
+
+def resolve_base(scope: str, base=None, start=None) -> Path | None:
+    """Directory a scope materializes under — ``None`` for user scope.
+
+    An explicit ``base`` always wins, so a re-materialization driven by a lock
+    record (``update``, ``sync``) lands where the original install did rather
+    than in whatever directory the command happens to be run from.
+
+    Project scope with no explicit base defers to :func:`project_base`: the
+    nearest version control root, else ``start``/cwd — an unmarked directory
+    is still a perfectly good place to put a project's skills, and refusing would only be
+    pedantry. The one directory that is never an acceptable fallback is
+    ``$HOME``: writing "project" files there means writing into the very dirs
+    user scope owns, so callers get ``None`` and can say so.
+
+    This keeps the path and drops the kind. A caller that needs to know
+    *which* of the three answered — ``install --local`` warns when it is the
+    call that creates the project — takes the pair from :func:`project_base`
+    rather than walking again.
+    """
+    if base:
+        return Path(base)
+    if scope != SCOPE_PROJECT:
+        return None
+    return project_base(start)[0]
 
 
 def owned_by(entries: dict, base) -> dict:

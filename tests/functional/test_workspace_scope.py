@@ -47,6 +47,13 @@ def plain_dir(tmp_path, monkeypatch):
     monkeypatch.chdir(d)
     assert scopes.project_root(d) is None, (
         "a VCS marker at or above %s — these tests would assert nothing" % d)
+    # The lock walk is the second way to reach an ancestor, and it answers
+    # from exactly the directories a VCS marker does not. Asserting only the
+    # first half would let a stray `.boost/skill-lock.json` above TMPDIR make
+    # every test below pass, or fail, for the wrong reason.
+    assert scopes.project_lock_root(d) is None, (
+        "a boost project lock at or above %s — these tests would assert"
+        " nothing" % d)
     return d.resolve()
 
 
@@ -87,6 +94,78 @@ def test_local_install_records_the_project_lock(boost, tapped, repo):
 def test_scope_project_is_the_same_as_local(boost, tapped, repo):
     boost("install", "brainstorming", "--scope", "project")
     assert projectlock.get_skill(repo, "brainstorming") is not None
+
+
+# ── the unmarked tree walks up, and says so when it cannot ───────────────
+
+def test_the_first_local_install_warns_that_it_is_starting_a_project(
+        boost, tapped, plain_dir):
+    """(c) from the card: a second lock becomes a decision, not a surprise."""
+    res = boost("install", "brainstorming", "--local")
+    text = res.out + res.err
+    assert "starts a new one here" in text
+    assert str(plain_dir) in text
+
+
+def test_the_warning_is_said_once_for_several_skills(boost, tapped, plain_dir):
+    res = boost("install", "brainstorming", "commit-messages", "--local")
+    assert (res.out + res.err).count("starts a new one here") == 1
+
+
+def test_the_warning_names_an_existing_project_above(
+        boost, tapped, plain_dir, monkeypatch):
+    """The second half of (c): when there IS a project up there, say where.
+
+    The base still resolves to `src` — option (a) was withdrawn, see
+    `scopes.project_lock_root` — so the user is about to get a second
+    project. Telling them the first one's path is the whole remedy.
+    """
+    boost("install", "brainstorming", "--local")
+    sub = plain_dir / "src"
+    sub.mkdir()
+    monkeypatch.chdir(sub)
+    res = boost("install", "commit-messages", "--local")
+    text = res.out + res.err
+    assert "already a boost project" in text
+    assert str(plain_dir) in text
+    assert "nothing between" not in text
+
+
+def test_a_rule_below_an_ancestor_lock_is_still_removable_locally(
+        boost, trio_tap, plain_dir, monkeypatch):
+    """The regression that withdrew option (a), pinned so nobody re-adds it.
+
+    A rule installed with `--local` is recorded in the USER lock against an
+    absolute base, and `--local` eligibility is `scopes.owns` against the
+    base resolved right now. Had the lock walk moved that base up to `proj`,
+    this rule would have become invisible to `list --local` and unremovable
+    by `uninstall --local` — from `proj/src` as much as from `proj`, with the
+    refusal naming the very directory the user was standing in.
+    """
+    src = plain_dir / "src"
+    src.mkdir()
+    monkeypatch.chdir(src)
+    boost("install", "house-style", "--local")
+
+    monkeypatch.chdir(plain_dir)
+    boost("install", "brainstorming", "--local")
+    assert projectlock.lock_path(plain_dir).is_file()
+
+    monkeypatch.chdir(src)
+    assert "house-style" in boost("list", "--local", "--kind", "rule").out
+    boost("uninstall", "house-style", "--local", "-y")
+    assert lockfile.get_rule("house-style") is None
+
+
+def test_no_warning_in_a_real_repo(boost, tapped, repo):
+    res = boost("install", "brainstorming", "--local")
+    assert "starts a new one here" not in (res.out + res.err)
+
+
+def test_no_warning_for_a_user_scope_install(boost, tapped, plain_dir):
+    """The warning is about `--local` and must not leak into the default."""
+    res = boost("install", "brainstorming")
+    assert "starts a new one here" not in (res.out + res.err)
 
 
 def test_global_is_the_default_and_uses_the_store(boost, tapped, repo):

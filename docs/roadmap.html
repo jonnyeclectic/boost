@@ -5552,7 +5552,25 @@ the nearest ancestor that is not <code>$HOME</code> &middot; too greedy, it woul
 sibling directories. Option (c): keep today's behaviour and say so &middot; have
 <code>install --local</code> warn once when it is about to create a project in a directory with no VCS
 marker, naming the directory, so the second lock is a decision rather than a surprise. (c) is the
-cheapest and the most honest; (a) is worth pairing with it for every command after the first.
+cheapest and the most honest; (a) looked worth pairing with it for every command after the first.
+
+<b>(c) shipped alone &middot; (a) was built, reproduced as a regression, and withdrawn.</b> The lock
+walk exists (<code>scopes.project_lock_root</code>) but is <em>advisory</em>: it lets the warning name
+the project above you, and decides no destination. Putting it in the resolution path broke two things
+the sketch above did not anticipate. First, <b>it orphans the records below it</b> &middot; a rule or
+workflow installed with <code>--local</code> lives in the <em>user</em> lock against an absolute
+<code>base</code>, and <code>--local</code> eligibility is <code>scopes.owns</code> against the base
+resolved <em>now</em> &mdash; so one <code>install &lt;skill&gt; --local</code> at <code>proj</code>
+made a rule at <code>proj/src</code> invisible to <code>list --local</code> and unremovable by
+<code>uninstall --local</code>, from <code>proj/src</code> as much as from <code>proj</code>, with the
+refusal naming the directory the user was standing in and the two error messages giving mutually
+unsatisfiable instructions. Second, <b>it engages for one kind of three</b> &middot;
+<code>_install_rule</code> and <code>_install_workflow</code> write no
+<code>.boost/skill-lock.json</code> at all, so a tree holding only those never gains the marker, which
+is also why the warning (c) adds can never be silenced there. Both are pinned by
+<code>test_a_rule_below_an_ancestor_lock_is_still_removable_locally</code>, which fails the moment the
+walk is put back. Making the walk safe means giving rules and workflows a project boundary of their
+own, and that is a different card.
 
 Found by the adversarial verification of PR #998, which reproduced it end to end. <code>$HOME</code>
 is still never a project and deletion is still gated by <code>resolve_in_base</code>, so this is a
@@ -5561,7 +5579,7 @@ wrong-directory bug, not a safety one.</p>
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">install --local from a subdirectory of an unmarked project creates a second lock there</span>
+          <span class="m">(c) shipped; (a) built, reproduced as a regression and withdrawn — it orphans the rules and workflows recorded below the lock it walks up to, and engages for one item kind of three</span>
         </div>
       </article>
 

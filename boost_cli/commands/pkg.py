@@ -506,7 +506,37 @@ def cmd_install(argv: list[str]) -> int:
     # one of them used to bind it: the preview returns early, so a `pbase`
     # assigned inside `if args.dry_run:` is unbound by the time the run path
     # reports prerequisites. `None` for every scope but `--local`.
-    pbase = scopes.resolve_base(args.scope)
+    pbase, pbase_kind = (scopes.project_base()
+                         if args.scope == scopes.SCOPE_PROJECT
+                         else (None, None))
+    # Said once, before anything is written, and naming the directory. An
+    # unmarked tree has no project root to walk up to, so this call is what
+    # decides where the project *is* — and `proj/src` stays a different project
+    # from `proj` for every command afterwards. The warning is the difference
+    # between that being a decision and being a surprise. It does not fire once
+    # a lock exists at or above here, because then there is nothing new to
+    # create: `project_base` has already walked up to it.
+    if pbase is not None and pbase_kind == scopes.BASE_UNMARKED:
+        # `project_lock_root` is advisory and decides nothing: it only lets
+        # the warning NAME the project the user probably meant. Resolution
+        # stays on version control markers alone, because moving the base up
+        # to an ancestor lock orphans the rules and workflows recorded below
+        # it — see that function for what verification reproduced.
+        above = scopes.project_lock_root(pbase)
+        if above is not None and above != pbase.resolve():
+            out.warn("there is already a boost project at `%s`, and --local "
+                     "here starts a second one — cd there if you meant that "
+                     "one" % above, wrap=True)
+        elif above is None:
+            # "between here and your home directory", not "at or above here":
+            # the walk stops at `$HOME` without testing it, so a dotfiles repo
+            # at `~/.git` — a setup `project_root`'s own docstring calls out —
+            # is a marker above this directory that it may not use. Claiming
+            # otherwise sent the reader to `~`, where the same command refuses.
+            out.warn("nothing between `%s` and your home directory marks a "
+                     "project — no git/hg/svn checkout, no "
+                     ".boost/skill-lock.json — so --local starts a new one "
+                     "here" % pbase, wrap=True)
     only = _check_agents(args.agent)
     multi = len(args.names) > 1
     entries, failed = [], 0
