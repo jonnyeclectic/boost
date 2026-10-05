@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>523</b><span>Loop finds</span></div>
+      <div class="stat"><b>524</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -7760,86 +7760,9 @@ the walk and the <code>redirected</code> reporting this card inherits.</p>
       </article>
 
       <article class="cap rcard" id="shard-weights-do-not-predict-the-job-timeout">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Bug</span></div>
         <h3>Mutation shard weights balance perfectly and predict nothing, so a shard can time out and cancel a release</h3>
-        <p><b>Observed, on the merge of #1015.</b> <code>mutation-shard (4)</code> ran 75 minutes against the
-job's <code>timeout-minutes: 75</code> and was cancelled. The aggregate <code>mutation</code> job
-then failed, the whole <code>ci</code> run concluded <code>cancelled</code> rather than
-<code>failure</code>, and <code>publish.yml</code> &mdash; which gates on
-<code>workflow_run.conclusion == 'success'</code> &mdash; skipped. <b>A merge to main silently did
-not ship</b>, which is the exact failure mode the long comment above <code>ci.yml</code>'s
-<code>concurrency:</code> block was written to prevent by a different route.
-
-<b>The packer is not at fault, and that is the finding.</b>
-<code>mutation_shards.py plan --shards 6 --explain</code> reports every shard within <b>700 ms</b>
-of the ideal 6,884,259 ms &mdash; a balance of 0.01%. The same run measured 39, 27, 38, 36,
-<b>76</b> and 65 minutes. Perfect balance against numbers that do not predict wall clock.
-
-<b>The units are the tell.</b> Total weight is 41,305,555 ms over six shards, so the plan
-predicts <b>114 minutes per shard</b> while shards finish in 27&ndash;76. The weights are
-self-consistent ratios measured somewhere other than a CI runner, and ratios are all the
-packer needs &mdash; but it means <b>nothing in the repo can answer "will a shard exceed the
-cap?"</b>. <code>plan --explain</code> prints the speedup cap and the largest unit; it never
-mentions <code>timeout-minutes</code>, and <code>grep</code> finds no comparison between the two
-anywhere in <code>scripts/mutation_shards.py</code>.
-
-<b>Run-to-run variance eats the margin.</b> The same tree, built twice: shard 4 took 66 min on
-<code>5aaf8bc4</code> (the PR) and 76 min on <code>f196160d</code> (its merge commit); shard 5 went
-42 &rarr; 65. On <code>8c4a5094</code> shard 4 was 32. So the heaviest shard's observed range is
-32&ndash;76 minutes for identical work, and the cap is 75. Related and probably the same cause:
-<code>mutation-shard (4)</code> on #1012 died at 15.1 minutes with exit 143 (SIGTERM), diagnosed
-then as runner eviction.
-
-<b>Why the open weights-refresh PR does not fix it.</b> #1014 re-measures and re-packs; under its
-weights the plan is again balanced to within ~400 ms, and predicts 121 min/shard. Re-measuring a
-quantity that was never in runner time produces a better-calibrated version of the same
-unanswerable question.
-
-<b>Shape of the work.</b> Three independent pieces, in increasing order of how much they fix:
-calibrate the weights against observed job duration (the API has it per shard, per run) so the
-plan is in minutes a human can compare to the cap; have <code>plan</code> fail, or at least warn,
-when a packed shard's predicted time is within some margin of <code>timeout-minutes</code>; and
-give the heaviest shard headroom &mdash; at eight shards the ideal drops by a quarter, and the
-speedup cap is 6.0x only because <code>store.py</code> is split per function already, so more
-shards is cheap. Separately, a cancelled <code>ci</code> on main should be loud: it currently
-looks identical to a success from the release path's point of view, because
-<code>publish.yml</code> only asks whether the conclusion was <code>success</code>.
-
-<b>Fixed, and the calibration is measured.</b> Fitted over the Actions job API on 2026-10-01:
-<b>169 successful <code>mutation-shard</code> jobs</b>, of which 26 runs completed all six
-shards. Two numbers come out, and they answer different questions. Per <em>run</em> &mdash; the
-sum over its six shards, which is pack-invariant and so isolates runner speed from packing
-&mdash; observed minutes over committed weight-minutes is min 0.265, <b>median 0.307</b>, max
-0.355: a spread of only <b>1.34x</b>. Per <em>shard</em> against its own median the range is
-1.10x (shard 3) to <b>1.91x</b> (shard 2: median 38.0 min, worst 72.5). <b>So the mean is not
-what fails.</b> A single slow runner inside an otherwise ordinary run is, and a check scored on
-the median would have passed the pack that was cancelled &mdash; its median shard was 37.8
-minutes against a 75-minute cap, half the ceiling.
-
-<b>The 0.307 is not a fudge factor, it is parallelism.</b> Weights are summed per-mutant
-durations &mdash; the work a shard holds laid end to end &mdash; and the runner executes it
-four-way parallel (<code>max_children</code> defaults to <code>os.cpu_count()</code>;
-<code>ubuntu-latest</code> is 4 vCPU). The median inverts to 3.26 effective workers of 4, so what
-is stored is <b>81.4% parallel efficiency</b> and the worker count separately: a runner with more
-vCPUs then moves one constant and contention moves the other, where a single fitted number would
-hide which had happened.
-
-<b>It reproduces the failure it was derived to predict.</b> Six shards at these weights:
-37.8 median minutes &times; 1.91 = a <b>72.3-minute tail</b> against a real worst job of
-<b>72.5</b> &mdash; 96% of the cap. <code>plan --explain --timeout-minutes 75</code> now prints
-that and exits 1. The matrix moved to <b>eight</b>, where the same arithmetic gives 28.4 &times;
-1.91 = <b>54.2 min, 72% of the cap</b>; the largest unit (4,063,161 ms) still fits inside an even
-share (5,543,280 ms), so the speedup cap is a full 8.00x and more shards cost nothing but runner
-slots. <code>tests/unit/test_mutation_shard_count.py</code> pins the shard count across
-<code>ci.yml</code> and <code>mutation-weights-refresh.yml</code> (<code>timeout-minutes</code>
-cannot be read through <code>${{ }}</code>, so agreement is asserted rather than derived), and
-re-runs the headroom check on the committed pack every build &mdash; a pack that would be
-cancelled now fails in the <code>test</code> job in milliseconds.
-
-<b>Not fixed here, and now its own card:</b> a <code>cancelled</code> <code>ci</code> on main is
-still silent. <code>ci-failure-alert</code> gates on
-<code>conclusion == 'failure'</code>, so the run that skipped the release notified nobody either
-&mdash; see <code>cancelled-ci-on-main-is-silent-and-skips-the-release</code>.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/shard-weights-do-not-predict-the-job-timeout.md">Write-up &middot; shard-weights-do-not-predict-the-job-timeout.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -7955,6 +7878,83 @@ workflows are themselves <code>workflow_run</code>-triggered.</p>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">the alerting that exists to make a red main impossible to miss asks only about 'failure', and the run that skipped a release was 'cancelled'</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="the-shard-model-has-no-per-job-fixed-cost">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI · Model</span></div>
+        <h3>The shard model runs through the origin, so <code>plan</code> gets more optimistic with every shard added</h3>
+        <p><b>The cleanest statement of it needs no weights at all.</b> Going from eight shards to twelve,
+a model that divides work by the shard count predicts the median job falls to <b>0.667</b> of
+itself. It fell to <b>0.83</b> &mdash; 41.8 min over the 24 jobs of the three eight-shard runs to
+34.6 over the 24 jobs of the two twelve-shard runs. Correcting for the one thing the weights
+do say &mdash; #1032 re-timed the same mutants 0.884&times; cheaper &mdash; moves the prediction
+to <b>0.589</b> and widens the gap, so the uncorrected figure is the conservative one. No value
+of <code>RUNNER_EFFICIENCY</code> produces either, because the error is in the shape and not in the
+constant: <code>runner_minutes</code> is <code>weight / (RUNNER_WORKERS &times;
+RUNNER_EFFICIENCY)</code>, linear through the origin, and what is missing is a per-job
+<em>fixed</em> cost.
+
+<b>Graded like for like, the two widths disagree by 40%.</b> Each width has to be scored against
+weights measured at that width: #1029's 66,708,651 ms total was measured on an eight-shard run,
+and #1032's 58,969,820 was re-timed from CI run 37200431822 &mdash; which is
+<code>58ace415</code>, one of the two twelve-shard runs being graded. On that footing eight
+implies an efficiency of <b>0.832</b> and twelve implies <b>0.593</b>. Reading both against one
+frozen total hides this, and understates the gap as 24%.
+
+<b>C is large and five routes do not agree on how large.</b> They differ in whether they use
+medians or machine-minute sums, and in whether #1032's 0.884x re-timing is read as the work
+really getting cheaper between the two widths: <b>20.2</b> and <b>24.2</b> min a job from the two
+p50s, <b>14.4</b> and <b>19.8</b> from the matrix totals (347.6 machine-minutes at eight over
+four runs, 404.9 at twelve over two), and <b>26.9</b> from the six-to-eight step of 2026-10-02
+&mdash; 287.2 &rarr; 341.0 machine-minutes two hours apart with the width the only change. So
+<b>C is 14 to 27 min a job</b>. A two-point solve is exactly determined and therefore not
+falsifiable; fitting C needs a third width, not more runs at twelve.
+
+<b>And C cannot be bolted on beside the efficiency, which is the part that makes this a card
+rather than a one-line patch.</b> Subtract any C in that range from the matrix total and the
+parallel work left over implies a speedup above four on a four-vCPU runner: C = 14.4 leaves 232.7
+min against 1,111.8 weight-minutes, which is <b>4.78</b> effective workers, and C = 24.2 leaves
+153.9, which is <b>7.22</b>. An efficiency over 1.0 is a contradiction, not a tight fit, so the
+weights overstate real serial work by roughly the same factor and
+<code>PLANNED_TOTAL_MS</code> cannot serve as the fixed reference a re-fit is measured against.
+A hypothesis, named as one because it has not been measured: mutmut times each mutant while four
+of them run at once, so a per-mutant duration may already carry the contention
+<code>RUNNER_EFFICIENCY</code> exists to apply.
+
+<b>The naive remedy is worse than the status quo, so it is worth writing down as refuted.</b>
+Adding C to the existing conversion with the committed efficiency &mdash; <code>C +
+runner_minutes(w)</code> at C = 20, each width on its own weights as this card requires &mdash;
+predicts <b>62.7 min at eight</b> against an observed 41.8 and <b>45.2 at twelve</b> against an
+observed 34.6: over-predicting by <b>50%</b> and <b>31%</b>. The bias is not even, which is the
+point &mdash; a fixed term added to an unchanged efficiency does not just shift the answer, it
+gets the width dependence wrong in the other direction. The tail it produces at twelve is
+<b>86.2 min, 115% of the cap</b>: the planner would refuse the width CI
+runs green today. C and <code>RUNNER_EFFICIENCY</code> have to move together, and whatever they
+do to the predicted median then has to be reconciled with
+<code>TAIL_MULTIPLIER</code>, whose over-estimate is currently covering for the median being low.
+
+<b>It is not CI setup, and that is the cheap half to check.</b> Stepping all 24 twelve-shard jobs
+through the Actions job API, everything that is not the <code>mutate shard</code> step is a
+median <b>0.5 min</b> &mdash; the 1.7% the constant's docstring already measured at six, still
+true. So the fixed cost is inside mutmut: a baseline test run (the <code>tests</code> job on
+those two runs took 7.8 and 8.6 min) and per-job mutant collection are the candidates, and
+neither has been measured. Measuring them would turn the 14-27 range into a mechanism.
+
+<b>Why it matters even though nothing is red.</b> Twelve sits at 74% of the cap empirically and
+the gate passes. But <code>plan</code> reports 64% on the committed pack against that same
+measured 74%, and goes on reporting 48% at sixteen, where the real floor is <code>C &times;
+TAIL_MULTIPLIER</code> however many shards are added. So the one question the planner exists to
+answer &mdash; "is this width safe?" &mdash; is answered optimistically for every width above the
+fitted one, and the answer gets more optimistic the further you go. Until C is fitted,
+<code>test_the_committed_width_has_actually_run</code> refuses a <code>SHARDS</code> nothing has
+been observed at, and <code>test_the_live_gate_under_predicts_the_worst_twelve_shard_job</code>
+pins the 7.8-minute shortfall so it cannot drift unnoticed.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the plan divides by every shard added, so it flatters every width above the one it was fitted at</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
