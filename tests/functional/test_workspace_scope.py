@@ -96,7 +96,7 @@ def test_scope_project_is_the_same_as_local(boost, tapped, repo):
     assert projectlock.get_skill(repo, "brainstorming") is not None
 
 
-# ── the unmarked tree walks up, and says so when it cannot ───────────────
+# ── the unmarked tree does not walk up, and --local says so ────────────
 
 def test_the_first_local_install_warns_that_it_is_starting_a_project(
         boost, tapped, plain_dir):
