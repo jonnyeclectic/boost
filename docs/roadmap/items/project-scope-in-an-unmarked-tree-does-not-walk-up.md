@@ -2,14 +2,14 @@
 id: project-scope-in-an-unmarked-tree-does-not-walk-up
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: install --local from a subdirectory of an unmarked project creates a second lock there
 order: 236
-owner:
+owner: loop/project-scope-walks-up
 pr:
 title: "Project scope in an unmarked tree does not walk up, so <code>src/</code> becomes its own project"
 ---
