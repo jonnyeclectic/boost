@@ -513,9 +513,12 @@ def cmd_install(argv: list[str]) -> int:
     # unmarked tree has no project root to walk up to, so this call is what
     # decides where the project *is* — and `proj/src` stays a different project
     # from `proj` for every command afterwards. The warning is the difference
-    # between that being a decision and being a surprise. It does not fire once
-    # a lock exists at or above here, because then there is nothing new to
-    # create: `project_base` has already walked up to it.
+    # between that being a decision and being a surprise. It warns and does
+    # not redirect, so it fires in both shapes: with an older project above it
+    # names that one, and with nothing above it says a new one starts here.
+    # The single silent case is a lock at this very directory, where `above`
+    # comes back equal to `pbase` — the project being used is the one already
+    # here, and there is nothing to tell anybody.
     if pbase is not None and pbase_kind == scopes.BASE_UNMARKED:
         # `project_lock_root` is advisory and decides nothing: it only lets
         # the warning NAME the project the user probably meant. Resolution

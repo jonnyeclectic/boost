@@ -115,11 +115,11 @@ def test_project_scope_resolves_the_repo_root_from_a_subdir(tmp_path):
 
 
 def test_project_scope_falls_back_to_start_when_unmarked(tmp_path, monkeypatch):
-    """Still the answer — but only for the install that *creates* the project.
+    """Still the answer, for the first install here and for every one after.
 
-    The lock walk below takes over from the second command onwards. This case
-    is the one it cannot help with, which is why `install --local` warns here
-    instead of resolving somewhere.
+    Nothing takes over from this: an ancestor lock is advisory and moves no
+    base (`test_an_ancestor_lock_does_not_move_the_base` below). Which is why
+    `install --local` warns here rather than resolving somewhere else.
     """
     monkeypatch.setattr(scopes, "PROJECT_MARKERS", (".no-such-marker",))
     assert scopes.resolve_base(scopes.SCOPE_PROJECT, start=tmp_path) == tmp_path
@@ -205,9 +205,10 @@ def test_project_lock_root_still_walks_when_home_cannot_be_resolved(
 
     `paths.home()` reads an env var, so it can name a directory that is gone,
     on a dead automount, or behind a permission the process does not have.
-    Answering None there would make `install --local` fall back to the cwd and
-    create the second project this walk exists to prevent — on a machine where
-    the only thing wrong is the home directory.
+    The walk decides no destination, so what an answer of None costs is the
+    warning: `install --local` would print "nothing between here and your home
+    directory marks a project" while standing under one, and never name it —
+    on a machine where the only thing wrong is the home directory.
     """
     def boom():
         raise OSError(5, "Input/output error")
@@ -801,8 +802,8 @@ def test_parent_matches_spelling_holds_through_a_symlinked_base(tmp_path):
                                  "/etc/passwd", Path("/etc")])
 def test_parent_matches_spelling_refuses_what_is_not_a_relative_string(
         tmp_path, rel):
-    """Ordered clauses: `isabs` raises TypeError on a dict, so the string test
-    has to come first and is what makes the last one safe to call at all."""
+    """Ordered clauses: `Path(rel).is_absolute()` raises TypeError on a dict,
+    so the string test has to come first and is what makes it safe to call."""
     assert not scopes.parent_matches_spelling(tmp_path, rel)
 
 

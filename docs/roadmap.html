@@ -5567,9 +5567,10 @@ refusal naming the directory the user was standing in and the two error messages
 unsatisfiable instructions. Second, <b>it engages for one kind of three</b> &middot;
 <code>_install_rule</code> and <code>_install_workflow</code> write no
 <code>.boost/skill-lock.json</code> at all, so a tree holding only those never gains the marker, which
-is also why the warning (c) adds can never be silenced there. Both are pinned by
+is also why the warning (c) adds can never be silenced there. The first is pinned by
 <code>test_a_rule_below_an_ancestor_lock_is_still_removable_locally</code>, which fails the moment the
-walk is put back. Making the walk safe means giving rules and workflows a project boundary of their
+walk is put back; the second is a property of the installers rather than of this change, so nothing
+here asserts it. Making the walk safe means giving rules and workflows a project boundary of their
 own, and that is a different card.
 
 Found by the adversarial verification of PR #998, which reproduced it end to end. <code>$HOME</code>
