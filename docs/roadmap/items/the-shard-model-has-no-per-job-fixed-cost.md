@@ -71,8 +71,9 @@ those two runs took 7.8 and 8.6 min) and per-job mutant collection are the candi
 neither has been measured. Measuring them would turn the 14-27 range into a mechanism.
 
 <b>Why it matters even though nothing is red.</b> Twelve sits at 74% of the cap empirically and
-the gate passes. But <code>plan</code> reports 64% on the committed pack against that same
-measured 74%, and goes on reporting 48% at sixteen, where the real floor is <code>C &times;
+the gate passes. But <code>plan</code> reported 64% on #1032's pack against that same
+measured 74%, and goes on reporting around half the cap at sixteen &mdash; 48% on #1032's weights, 50% on
+#1038's &mdash; where the real floor is <code>C &times;
 TAIL_MULTIPLIER</code> however many shards are added. So the one question the planner exists to
 answer &mdash; "is this width safe?" &mdash; is answered optimistically for every width above the
 fitted one, and the answer gets more optimistic the further you go. Until C is fitted,

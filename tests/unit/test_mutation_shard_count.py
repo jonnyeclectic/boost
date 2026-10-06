@@ -368,9 +368,11 @@ EIGHT_SHARD_P50_MIN = 41.8
 #: the two runs `TWELVE_SHARD_P50_MIN` is drawn from -- and totals
 #: 58,969,820 ms over the same 67 files.
 #:
-#: Frozen like its sibling, and for a sharper reason than usual: it happens
-#: to equal the live weights today, and an assertion that read the live file
-#: would red the weights bot's own PR the moment it moved.
+#: Frozen like its sibling, and for a sharper reason than usual: it equalled
+#: the live weights when it was recorded, and an assertion that read the live
+#: file would red the weights bot's own PR the moment it moved. #1038 moved
+#: them, which is exactly the event this freezing was for -- the live planner
+#: total is no longer this number, and the assertions below are unaffected.
 TWELVE_PLANNED_TOTAL_MS = 58_969_820
 
 #: The six-shard fit this file used to be anchored on, kept so the two
@@ -494,7 +496,7 @@ class TestConversion:
         # It is needed because the model cannot object for itself: the tail
         # scales 1/n, so every width above the committed one looks SAFER to
         # every other assertion here -- raising ms.SHARDS to 16 reds nothing,
-        # and `plan` cheerfully reports 48% of the cap.
+        # and `plan` cheerfully reports around half the cap.
         #
         # Widening is still allowed; it just cannot be done on the planner's
         # word alone. Run the wider matrix once, record its p50 and worst

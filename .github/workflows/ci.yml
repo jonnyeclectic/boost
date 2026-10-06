@@ -635,13 +635,16 @@ jobs:
     # the 24 jobs of those two runs the observed p50 is 34.6 min and the worst
     # job 55.8 — 74% of the cap, past the 54.4 those runs' own gate predicted.
     # That is not new: replay every run's gate as it stood and the predicted
-    # tail has been beaten at three of six, the largest by 8.9 min at EIGHT
+    # tail has been beaten at four of six, the largest by 8.9 min at EIGHT
     # shards (dd416340: 54.2 predicted, 63.1 worst). The width stands: 74% is
     # measured and inside the 80% gate. What does not stand is the margin the
-    # planner prints. On the weights committed now (#1032, a re-timing of the
-    # same mutants) `plan --shards 12` says 25.2 median and a 48.0 tail, 64%
-    # of the cap — so today's pack, asked about the run its own weights were
-    # timed from, under-predicts that job by 7.8 minutes. Score the committed
+    # planner prints. On #1032's weights -- the pack as committed when this
+    # was measured -- `plan --shards 12` said 25.2 median and a 48.0 tail, 64%
+    # of the cap, so that pack, asked about the run its own weights were
+    # timed from, under-predicted that job by 7.8 minutes. (#1038 has since
+    # re-timed them; `plan` now prints 26.2 / 50.1, 67%. The observed figures
+    # in this block are job durations and do not move with a refresh.)
+    # Score the committed
     # TAIL_MULTIPLIER against the OBSERVED median and the pack is 34.6 x 1.91
     # = 66.0 min, 88% of the cap: past the 80% gate `plan` reports it clearing
     # with 36 points in hand. The model has no per-job fixed cost (14-27 min,
@@ -650,13 +653,22 @@ jobs:
     # widening — and note a unit test now refuses a width nothing has run at,
     # because `plan` will approve every one of them.
     #
-    # THE WIDTHS IN BETWEEN WERE MEASURED, AND #1032 MOVED THEM. On the
-    # committed pack `plan --explain --timeout-minutes 75` now prints eight at
-    # 72.1 min / 96%, nine 64.1 / 85%, ten 57.7 / 77%, eleven 52.4 / 70% and
-    # twelve 48.0 / 64% — so TEN flips from fail to pass, 87% on the previous
-    # generation against 77% now. Eleven is not a flip: it scored 79% then and
-    # passed then too, and was rejected on margin rather than on the gate.
-    # Neither is a reason to trim the matrix. Those are the same optimistic figures as the 64% above,
+    # THE WIDTHS IN BETWEEN WERE MEASURED, AND EVERY RE-TIMING MOVES THEM.
+    # On #1032's weights `plan --explain --timeout-minutes 75` printed eight
+    # at 72.1 min / 96%, nine 64.1 / 85%, ten 57.7 / 77%, eleven 52.4 / 70%
+    # and twelve 48.0 / 64% — so TEN flipped from fail to pass, 87% on the
+    # generation before it against 77% then. Eleven was not a flip: it scored
+    # 79% then and passed then too, and was rejected on margin rather than on
+    # the gate.
+    #
+    # #1038 RE-TIMED THE SAME MUTANTS AND TEN FLIPPED BACK. On #1038's
+    # weights: eight 75.1 / 100%, nine 66.7 / 89%, ten 60.1 /
+    # 80%, eleven 54.6 / 73%, twelve 50.1 / 67%. Ten is TOO TIGHT again,
+    # landing exactly on the 80% gate, and planning ten exits 1. That a
+    # width crossed the gate in both directions on two re-timings of the same
+    # mutants is the argument, not a footnote: the verdict for anything but
+    # twelve is inside the noise of a weights refresh. Those are the same
+    # optimistic figures as the 64%/67% above,
     # and on the fixed-cost arithmetic ten's honest tail is 37.5 x 1.91 = 71.5
     # min, 95% of the cap. TWELVE stays until something has been measured at
     # another width.

@@ -101,9 +101,11 @@ eight.
 
 <b>The width stands on that measured 74%. What does not stand is the margin the planner
 prints.</b> On the weights committed since (#1032, a re-timing of the same mutants)
-<code>plan --shards 12</code> says a 25.2-minute median and a 48.0-minute tail, 64% of the cap
-&mdash; so today's pack, asked about the run its own weights were timed from, under-predicts that
-job by <b>7.8 minutes</b>. That is the prospective basis, which is the one that matters before
+<code>plan --shards 12</code> said a 25.2-minute median and a 48.0-minute tail, 64% of the cap
+&mdash; so that pack, asked about the run its own weights were timed from, under-predicted that
+job by <b>7.8 minutes</b>. (#1038 has since re-timed the weights from the twelve-shard run on
+<code>6fd38785</code>; <code>plan</code> now prints 26.2 / 50.1 min, 67% of the cap. That era's
+shortfall is against <em>that</em> run's jobs, not the 55.8 above.) That is the prospective basis, which is the one that matters before
 the next run and is <em>not</em> comparable to the replay figures above. Scored on the observed
 median at the committed <code>TAIL_MULTIPLIER</code> the pack is 34.6 &times; 1.91 = 66.0 min,
 <b>88% of the cap</b>.

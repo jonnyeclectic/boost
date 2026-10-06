@@ -240,19 +240,36 @@ RUNNER_WORKERS = 4
 #: against.
 #:
 #: **What the gate is actually running on, which is the operational part.**
-#: On the committed pack ``plan --shards 12`` prints a 25.2-minute median and
-#: a 48.0-minute tail, 64% of the cap. Observed: a 34.6-minute median, 37%
-#: higher, and a worst job of 55.8 — so today's pack, asked about the run its
-#: own weights were timed from, under-predicts that job by **7.8 minutes**.
+#: Every **planner** figure in this paragraph is measured on **#1032's
+#: weights** (the observed ones -- 34.6, 55.8, 66.0, 88%, 74% and the 12
+#: points -- are job durations, and do not move when the weights do), the
+#: pack as committed when it was written, and is dated rather than live for
+#: the reason the paragraph itself ends on: a refresh moves the printed
+#: number without moving the real one, so a live reading here would go
+#: quietly wrong the next time one lands. On that pack ``plan --shards 12``
+#: printed a 25.2-minute median and a 48.0-minute tail, 64% of the cap.
+#: Observed: a 34.6-minute median, 37% higher, and a worst job of 55.8 — so
+#: that pack, asked about the run its own weights were timed from,
+#: under-predicted that job by **7.8 minutes**.
 #: That is the prospective basis — what ``plan`` will say before the next
 #: run — and it is not the same question as what the gate printed at the
 #: time, which is answered under :data:`TAIL_MULTIPLIER`. Score the committed
 #: :data:`TAIL_MULTIPLIER` against the observed median instead and the
 #: committed pack is 34.6 x 1.91 = **66.0 min, 88% of the cap**, past the
-#: 80% :data:`HEADROOM` gate ``plan`` reports it clearing with 36 points in
+#: 80% :data:`HEADROOM` gate ``plan`` reported it clearing with 36 points in
 #: hand. Twelve still stands on measurement — 55.8 is 74% of 75 — but the
 #: margin is nearer 12 points than 36, and a weights refresh moves the
 #: printed number without moving the real one.
+#:
+#: **That refresh has since landed, which is why the above is dated.** #1038
+#: re-timed the weights from the twelve-shard ``ci`` run on ``6fd38785``, and
+#: ``plan --shards 12`` now prints a 26.2-minute median and a 50.1-minute
+#: tail, 67% of the cap. The shortfall for *that* era has to be scored
+#: against that run's own observed jobs, which this file does not record
+#: yet — so do not subtract the new tail from the 55.8 above. That number
+#: belongs to ``58ace415``/``d7027cf8``, and pairing it with a tail timed on
+#: a different run is the two-bases conflation this docstring already warns
+#: about one paragraph up.
 #:
 #: **It is not CI setup, and the 0.6 min above is still true.** Stepping all
 #: 24 twelve-shard jobs through the job API, everything that is not ``mutate
@@ -264,7 +281,8 @@ RUNNER_WORKERS = 4
 #: **Until it is, do not use ``plan`` to justify a width above twelve.**
 #: Through the origin the model divides the time by every shard added, and
 #: goes on saying so past the point where the fixed cost dominates — sixteen
-#: reports 48% of the cap, where the real floor is ``C x TAIL_MULTIPLIER``
+#: reports around half the cap (48% on #1032's weights, 50% on #1038's),
+#: where the real floor is ``C x TAIL_MULTIPLIER``
 #: however many shards are thrown at it. That is no longer only a comment:
 #: ``test_the_committed_width_has_actually_run`` fails the build if
 #: :data:`SHARDS` is raised past a width that has been observed.
