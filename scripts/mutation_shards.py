@@ -240,19 +240,34 @@ RUNNER_WORKERS = 4
 #: against.
 #:
 #: **What the gate is actually running on, which is the operational part.**
-#: On the committed pack ``plan --shards 12`` prints a 25.2-minute median and
-#: a 48.0-minute tail, 64% of the cap. Observed: a 34.6-minute median, 37%
-#: higher, and a worst job of 55.8 — so today's pack, asked about the run its
-#: own weights were timed from, under-predicts that job by **7.8 minutes**.
+#: Every figure in this paragraph is measured on **#1032's weights**, the
+#: pack as committed when it was written, and is dated rather than live for
+#: the reason the paragraph itself ends on: a refresh moves the printed
+#: number without moving the real one, so a live reading here would go
+#: quietly wrong the next time one lands. On that pack ``plan --shards 12``
+#: printed a 25.2-minute median and a 48.0-minute tail, 64% of the cap.
+#: Observed: a 34.6-minute median, 37% higher, and a worst job of 55.8 — so
+#: that pack, asked about the run its own weights were timed from,
+#: under-predicted that job by **7.8 minutes**.
 #: That is the prospective basis — what ``plan`` will say before the next
 #: run — and it is not the same question as what the gate printed at the
 #: time, which is answered under :data:`TAIL_MULTIPLIER`. Score the committed
 #: :data:`TAIL_MULTIPLIER` against the observed median instead and the
 #: committed pack is 34.6 x 1.91 = **66.0 min, 88% of the cap**, past the
-#: 80% :data:`HEADROOM` gate ``plan`` reports it clearing with 36 points in
+#: 80% :data:`HEADROOM` gate ``plan`` reported it clearing with 36 points in
 #: hand. Twelve still stands on measurement — 55.8 is 74% of 75 — but the
 #: margin is nearer 12 points than 36, and a weights refresh moves the
 #: printed number without moving the real one.
+#:
+#: **That refresh has since landed, which is why the above is dated.** #1038
+#: re-timed the weights from the twelve-shard ``ci`` run on ``6fd38785``, and
+#: ``plan --shards 12`` now prints a 26.2-minute median and a 50.1-minute
+#: tail, 67% of the cap. The shortfall for *that* era has to be scored
+#: against that run's own observed jobs, which this file does not record
+#: yet — so do not subtract the new tail from the 55.8 above. That number
+#: belongs to ``58ace415``/``d7027cf8``, and pairing it with a tail timed on
+#: a different run is the two-bases conflation this docstring already warns
+#: about one paragraph up.
 #:
 #: **It is not CI setup, and the 0.6 min above is still true.** Stepping all
 #: 24 twelve-shard jobs through the job API, everything that is not ``mutate
