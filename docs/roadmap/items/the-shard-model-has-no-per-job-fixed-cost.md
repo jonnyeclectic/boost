@@ -42,9 +42,9 @@ falsifiable; fitting C needs a third width, not more runs at twelve.
 
 <b>And C cannot be bolted on beside the efficiency, which is the part that makes this a card
 rather than a one-line patch.</b> Subtract any C in that range from the matrix total and the
-parallel work left over implies a speedup above four on a four-vCPU runner: C = 14.4 leaves 232.7
+parallel work left over implies a speedup above four on a four-vCPU runner: C = 14.4 leaves 232.4
 min against 1,111.8 weight-minutes, which is <b>4.78</b> effective workers, and C = 24.2 leaves
-153.9, which is <b>7.22</b>. An efficiency over 1.0 is a contradiction, not a tight fit, so the
+154.0, which is <b>7.22</b>. An efficiency over 1.0 is a contradiction, not a tight fit, so the
 weights overstate real serial work by roughly the same factor and
 <code>PLANNED_TOTAL_MS</code> cannot serve as the fixed reference a re-fit is measured against.
 A hypothesis, named as one because it has not been measured: mutmut times each mutant while four
@@ -77,5 +77,5 @@ TAIL_MULTIPLIER</code> however many shards are added. So the one question the pl
 answer &mdash; "is this width safe?" &mdash; is answered optimistically for every width above the
 fitted one, and the answer gets more optimistic the further you go. Until C is fitted,
 <code>test_the_committed_width_has_actually_run</code> refuses a <code>SHARDS</code> nothing has
-been observed at, and <code>test_the_live_gate_under_predicts_the_worst_twelve_shard_job</code>
+been observed at, and <code>test_todays_pack_under_predicts_the_worst_twelve_shard_job</code>
 pins the 7.8-minute shortfall so it cannot drift unnoticed.

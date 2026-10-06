@@ -94,7 +94,7 @@ the worst job <b>55.8</b> against the 54.4-minute tail those runs' own gate prin
 cap. That exceedance is not new, and the tempting reading &mdash; that twelve is where the tail
 estimate first broke &mdash; is wrong in the flattering direction. Replay every run's gate as it
 actually stood &mdash; that commit's
-own script against its own weights &mdash; and the predicted tail has been beaten at <b>three of
+own script against its own weights &mdash; and the predicted tail has been beaten at <b>four of
 the six runs on record</b>: +1.1, +0.4 and <b>+8.9</b> at eight shards (<code>dd416340</code>,
 54.2 predicted against a 63.1 worst) and +1.4 at twelve. The largest miss on record belongs to
 eight.

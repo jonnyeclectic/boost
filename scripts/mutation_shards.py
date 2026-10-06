@@ -227,9 +227,9 @@ RUNNER_WORKERS = 4
 #:
 #: **And a fixed term cannot just be added beside this constant.** Subtract
 #: any C in that range from the matrix total and the parallel work left over
-#: implies a speedup above four on a four-vCPU runner: C = 14.4 leaves 232.7
+#: implies a speedup above four on a four-vCPU runner: C = 14.4 leaves 232.4
 #: min against 1,111.8 weight-minutes, which is 4.78 effective workers, and
-#: C = 24.2 leaves 153.9, which is 7.22. An efficiency over 1.0 is not a
+#: C = 24.2 leaves 154.0, which is 7.22. An efficiency over 1.0 is not a
 #: tight fit, it is a contradiction — so the weights overstate real serial
 #: work by roughly the same factor. The mechanism is not measured and this
 #: file does not record guesses, so it is named as one: mutmut times each
@@ -292,7 +292,7 @@ RUNNER_EFFICIENCY = 0.814
 #: **Exceedance is routine, and it is not this multiplier's doing.** Replay
 #: each run's gate as it actually stood — that commit's own script and its
 #: own ``mutation_weights.json`` — and the predicted tail has been beaten at
-#: three of the six runs on record::
+#: four of the six runs on record::
 #:
 #:     e9718617  8 shards   54.2 predicted   55.3 worst   +1.1
 #:     6aef52c4  8 shards   54.2 predicted   54.6 worst   +0.4
@@ -306,7 +306,7 @@ RUNNER_EFFICIENCY = 0.814
 #: twelve-shard data is that twelve is where the tail estimate first broke,
 #: and it is not — the figures are only striking at twelve because that is
 #: the width someone went and looked at. (Six was beaten too, 72.2 against
-#: 72.5, by 0.24 min at its own fit point.) Two separate things are going on and they
+#: 72.5, by 0.3 min at its own fit point.) Two separate things are going on and they
 #: must not be run together: every run in that table was scored on weights
 #: measured at the *previous* width, which is a lag, and the median under the
 #: multiplier does not divide the way the model says, which is a shape

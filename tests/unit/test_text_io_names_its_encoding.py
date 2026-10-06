@@ -551,15 +551,60 @@ class TestNothingLeavesAnEncodingToTheLocale:
             "text)." % ", ".join(bad))
 
 
+def _callee_name(call: ast.Call) -> str | None:
+    """How a call is spelled: ``f()`` -> ``f``, ``a.b.f()`` -> ``f``."""
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return getattr(call.func, "id", None)
+
+
+def _calls_to(path: Path, name: str) -> list[ast.Call]:
+    """Every call in *path* spelled *name*, found on the parse tree.
+
+    The two writers below are identified by callee and nothing else,
+    which a regex over the source cannot do without also encoding how
+    the call happens to be *formatted*. Both earlier spellings here had
+    exactly that fault -- one required a newline straight after the open
+    paren, the other understood a single level of nested parentheses --
+    so a reflow changing no behaviour would have failed the guard with
+    "no longer writes through ..." about a call still sitting there. A
+    guard that misreports its own cause is worse than the hole it
+    closes, because the obvious response to it is to delete it.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return [n for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and _callee_name(n) == name]
+
+
+def _keyword(call: ast.Call, name: str) -> ast.expr | None:
+    """The value passed as keyword *name*, if the call passes one."""
+    for kw in call.keywords:
+        if kw.arg == name:
+            return kw.value
+    return None
+
+
+def _names_utf8(call: ast.Call) -> bool:
+    """Whether *call* passes a literal ``encoding="utf-8"``.
+
+    Literal on purpose: a name or an f-string could evaluate to anything
+    at run time, and this guard exists precisely because no walker in
+    this module will ever see the file these calls open.
+    """
+    enc = _keyword(call, "encoding")
+    return isinstance(enc, ast.Constant) and enc.value == "utf-8"
+
+
 class TestTheWalkersCannotSeeTheseButTheyAreStillPinned:
     """The two text opens no walker in this module recognises.
 
     Named in the module docstring, asserted here. Neither shape goes
     through ``open``/``fdopen``/``write_text``, so both report clean to a
-    guard that has never looked at them — the same way ``os.fdopen`` did
-    until this change. Reading the source is cruder than an AST walk and
-    deliberately so: the point is to fail if someone deletes the
-    ``encoding=``, not to re-implement the walker for two call sites.
+    guard that has never looked at them -- the same way ``os.fdopen`` did
+    until this change. Each is located by callee name on the parse tree
+    and checked for a literal ``encoding="utf-8"``: narrower than
+    teaching the walkers two more shapes, and unlike matching the source
+    text it cannot be broken by reformatting the call.
     """
 
     def test_the_temporary_runner_script_names_its_encoding(self):
@@ -570,14 +615,18 @@ class TestTheWalkersCannotSeeTheseButTheyAreStillPinned:
         be folded into ``_TEXT_IO`` without teaching ``_mode`` that a
         missing mode means ``"w+b"`` here and text everywhere else.
         """
-        src = (ROOT / "boost_cli/commands/run.py").read_text(encoding="utf-8")
-        call = re.search(r"NamedTemporaryFile\((?:[^()]|\([^()]*\))*\)", src)
-        assert call, "the runner no longer writes through NamedTemporaryFile"
-        assert 'encoding="utf-8"' in call.group(0), (
-            "boost_cli/commands/run.py writes the child runner through "
-            "NamedTemporaryFile without an encoding. No walker in this "
-            "module can see that call, so this assertion is the only "
-            "thing standing between it and cp1252 on a Windows runner.")
+        rel = "boost_cli/commands/run.py"
+        calls = _calls_to(ROOT / rel, "NamedTemporaryFile")
+        assert len(calls) == 1, (
+            "%s makes %d NamedTemporaryFile calls, not the one this guard "
+            "was written against. Pin each of them, or narrow the guard -- "
+            "as written it would check only the first."
+            % (rel, len(calls)))
+        assert _names_utf8(calls[0]), (
+            "%s writes the child runner through NamedTemporaryFile without "
+            "a literal encoding=\"utf-8\". No walker in this module can see "
+            "that call, so this assertion is the only thing standing "
+            "between it and cp1252 on a Windows runner." % rel)
 
     def test_the_rotating_log_handler_names_its_encoding(self):
         """The diagnostic log, written by ``logging`` rather than by boost.
@@ -588,14 +637,18 @@ class TestTheWalkersCannotSeeTheseButTheyAreStillPinned:
         terminates every record with ``"\n"`` through a text stream it
         owns.
         """
-        src = (ROOT / "boost_cli/core/logs.py").read_text(encoding="utf-8")
-        call = re.search(r"_BestEffortFileHandler\(\s*\n(?:.*\n)*?\s*\)", src)
-        assert call, "logs.py no longer constructs the rotating handler"
-        assert 'encoding="utf-8"' in call.group(0), (
-            "boost_cli/core/logs.py attaches the rotating file handler "
-            "without an encoding. logging opens the file itself, so no "
+        rel = "boost_cli/core/logs.py"
+        calls = _calls_to(ROOT / rel, "_BestEffortFileHandler")
+        assert len(calls) == 1, (
+            "%s constructs _BestEffortFileHandler %d times, not the one "
+            "this guard was written against. The class statement is a "
+            "ClassDef and is not counted; every construction needs the "
+            "encoding." % (rel, len(calls)))
+        assert _names_utf8(calls[0]), (
+            "%s attaches the rotating file handler without a literal "
+            "encoding=\"utf-8\". logging opens the file itself, so no "
             "walker here sees it and ~/.boost/logs/boost.log would be "
-            "written in cp1252 on Windows.")
+            "written in cp1252 on Windows." % rel)
 
 
 class TestAPinnedWriterReallyEmitsLF:

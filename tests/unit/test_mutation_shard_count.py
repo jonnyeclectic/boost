@@ -336,7 +336,7 @@ TWELVE_SHARD_WORST_MIN = 55.8
 #: matrix runs; this one is the divisor in twelve's two frozen assertions and
 #: must never move. Sharing one constant made the ceiling test's own
 #: remediation instruction ("raise SHARDS_OBSERVED") red
-#: `test_the_live_gate_under_predicts_the_worst_twelve_shard_job` -- at
+#: `test_todays_pack_under_predicts_the_worst_twelve_shard_job` -- at
 #: sixteen it grades a sixteen-shard prediction against a twelve-shard
 #: observation and reports a 19.8-minute shortfall -- while quietly loosening
 #: the ratio test from 1.40 to 1.87.
@@ -470,7 +470,7 @@ class TestConversion:
         # its own weights were timed from, which is what `plan` will say
         # before the NEXT run. It is not what the gate printed at the time --
         # `58ace415`'s own gate said 54.4 and was beaten by 1.4 min. On that
-        # replay basis the record is three exceedances in six runs and the
+        # replay basis the record is four exceedances in six runs and the
         # largest is 8.9 min at EIGHT shards, so nothing here is twelve being
         # the first; see TAIL_MULTIPLIER's docstring for the table.
         #
