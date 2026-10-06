@@ -442,10 +442,14 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         # advertised the five agents the rule does not reach while the
         # harmless no-rows case showed none — the two read backwards from
         # how a user judges risk.
+        # Both halves inflect. One row is the commonest shape by far -- most
+        # items record exactly one -- so a noun-only plural put the ungrammar
+        # on the usual path and hid it on the rare one.
         rows = len(entry.get("materializations") or [])
         out.kv("materialized",
-               "(none — %d recorded row%s name an agent boost no longer "
-               "writes)" % (rows, "" if rows == 1 else "s"))
+               "(none — %d recorded row%s name%s an agent boost no longer "
+               "writes)" % (rows, "" if rows == 1 else "s",
+                            "s" if rows == 1 else ""))
     else:
         out.kv("materialized",
                ", ".join(lockfile.agent_names(kind, entry)) or "(none)")

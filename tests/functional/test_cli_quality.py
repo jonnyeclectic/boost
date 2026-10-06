@@ -3028,6 +3028,41 @@ class TestAnItemMaterializedNowhere:
         cfg["agents"]["cursor"]["enabled"] = False
         config.save(cfg)
 
+    def _seed_rows(self, n, name="many"):
+        """`n` rows for one disabled agent, so row count is the only variable."""
+        from boost_cli.core import config, lockfile
+        rows = [{"agent": "cursor", "mode": "file",
+                 "path": str(paths.home() / ".cursor" / "rules"
+                            / ("%s-%d.mdc" % (name, i))),
+                 "sha256": "b" * 64} for i in range(n)]
+        lockfile.set_rule(name, {
+            "kind": "rule", "tap": "local", "version": "1.0.0",
+            "sha256": "a" * 64, "installed_at": "2026-01-01T00:00:00Z",
+            "materializations": rows})
+        cfg = config.load()
+        cfg["agents"]["cursor"]["enabled"] = False
+        config.save(cfg)
+
+    def test_info_says_none_and_counts_the_rows(self, boost, sandbox):
+        """`boost info` used to list the agents the item does NOT reach --
+        `agent_names` walks every recorded row -- so the dangerous case
+        advertised five agents and the harmless no-rows case showed none,
+        exactly backwards from how a user judges risk."""
+        self._seed_unreachable()
+        out = boost("info", "house").out
+        assert "(none — 1 recorded row names an agent boost no longer " \
+               "writes)" in out
+        # the row's agent is the thing that must NOT be advertised as reached
+        assert "materialized  cursor" not in out
+
+    def test_the_count_line_inflects_both_halves(self, boost, sandbox):
+        """One row is the commonest shape by far, so a noun-only plural put
+        the ungrammar on the usual path: "1 recorded row name an agent"."""
+        self._seed_rows(1, "one")
+        assert "1 recorded row names an agent" in boost("info", "one").out
+        self._seed_rows(2, "two")
+        assert "2 recorded rows name an agent" in boost("info", "two").out
+
     def test_verify_fails_it(self, boost, sandbox):
         """`verify` is what scripts gate on, and it passed an install that
         reaches nothing -- the reason this is not cosmetic."""

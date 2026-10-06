@@ -503,8 +503,18 @@ class TestAnItemMaterializedNowhere:
     def test_a_written_row_that_is_gone_still_reads_missing(self, sandbox,
                                                             tmp_path):
         """MISSING, MODIFIED and UNLOCKED each need a *written* row, so the
-        new early return can never shadow one. Pinned rather than argued:
-        the mutant that moves the check after the loop dies here."""
+        new early return can never shadow one.
+
+        What this pins is the *over-firing* direction: a `reaches_no_agent`
+        that answered True for a partially reached entry would shadow MISSING
+        here, and the `not any(...)` -> `any(...)` mutant fails on this exact
+        test. The early return's *position* is not pinned and cannot be --
+        moving it below the loop leaves the whole unit suite green, because
+        every in-loop return and the only `unlocked = True` require a written
+        row while this predicate is True only when none is, so the two
+        placements are observationally identical. Measured, not predicted: an
+        earlier draft of this docstring claimed the move "dies here" and it
+        does not. The position is argued in the source comment instead."""
         row = self._written_row(tmp_path)
         (tmp_path / "written.md").unlink()
         e = {"kind": "rule", "materializations": [self._skipped_row(), row]}
@@ -555,6 +565,37 @@ class TestAnItemMaterializedNowhere:
         # is reported rather than silently hidden
         del e["kind"]
         assert integrity.reaches_no_agent(None, e) is False
+
+    def test_the_rows_own_scope_decides_the_write_set(self, sandbox):
+        """`entry["base"]` is load-bearing, and nothing used to prove it.
+
+        Every other test here builds a user-scope entry, so replacing
+        `entry.get("base")` with `None` left the whole unit suite green --
+        a free survivor against the 80% gate on a line this change added.
+        It is not an equivalent mutant: `project_scope` is read per agent
+        out of config exactly as `enabled` is, so one agent turned off for
+        project scope makes `materializing_agents(base)` a strict subset of
+        `materializing_agents(None)`. A project-scoped rule whose only row
+        names that agent is the one input class where the mutant silently
+        restores the bug this whole change exists to fix -- it reads OK
+        while reaching nothing.
+        """
+        from boost_cli.core import config
+        cfg = config.load()
+        cfg["agents"]["cursor"]["project_scope"] = False
+        config.save(cfg)
+        row = {"agent": "cursor", "mode": "file",
+               "path": "/repo/.cursor/rules/x.mdc", "sha256": "a" * 64}
+        scoped = {"kind": "rule", "base": "/repo", "materializations": [row]}
+        # cursor does not materialize under a project base, so the row's own
+        # scope is what condemns the item
+        assert integrity.reaches_no_agent("rule", scoped) is True
+        # the same row at user scope reaches cursor, so the only difference
+        # between the two answers is the `base` the mutant drops
+        unscoped = {k: v for k, v in scoped.items() if k != "base"}
+        assert integrity.reaches_no_agent("rule", unscoped) is False
+        assert integrity.materialized_status("x", scoped, "rule") == \
+            integrity.STATUS_UNREACHABLE
 
     def test_a_row_with_no_agent_counts_as_written(self, sandbox):
         """`agents` answers True for it, preferring a reported gap to a
