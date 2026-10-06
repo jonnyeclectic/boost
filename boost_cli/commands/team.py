@@ -594,9 +594,24 @@ def cmd_protocol(argv) -> int:
         paths.ensure_dirs()
         shim = paths.launcher()
         script = _handler_script()
+        # newline="\n" because this artifact is a bash script and bash is a
+        # non-Python parser reading it byte for byte. The write sits *above*
+        # the platform branch below, so unlike the Linux .desktop file it
+        # does run on Windows, where the stub at the end of this command
+        # tells the user to invoke the script themselves.
+        #
+        # Which CR failure bites is shell-specific and is deliberately not
+        # claimed here: "bad interpreter: bash\r" is kernel binfmt_script
+        # behaviour, and Windows has no kernel shebang support, so under
+        # Git Bash the shebang is likely tolerated while under WSL the
+        # launcher path is unexecutable for unrelated reasons. The URL route
+        # is ruled out — `_parse_boost_url` goes through `urlparse`, which
+        # strips CR. What is left is simply that the file is wrong, which is
+        # reason enough for a one-keyword pin.
         script.write_text("#!/usr/bin/env bash\n"
                           "# boost:// URL handler — invoked with the URL as $1\n"
-                          'exec "%s" protocol open "$1"\n' % shim, encoding="utf-8")
+                          'exec "%s" protocol open "$1"\n' % shim,
+                          encoding="utf-8", newline="\n")
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
         out.ok("wrote handler script %s" % _tilde(script))
         if system == "Darwin":

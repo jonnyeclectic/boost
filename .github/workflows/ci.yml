@@ -626,28 +626,54 @@ jobs:
     # Held against this line the old six-shard pack scored 37.8 median minutes
     # x 1.91 = a 72.3-minute tail: 96% of the cap, which is the cancellation,
     # predicted. Eight was the answer to that, and it did not survive the next
-    # weights refresh: on the measured times committed here the same arithmetic
-    # gives 42.7 x 1.91 = 81.5 minutes at eight, which is 109% of the cap — the
-    # pack would be cancelled before it finished. The matrix is therefore
-    # TWELVE, where it gives 28.5 x 1.91 = 54.4 minutes, 72% of the cap.
+    # weights refresh: on the weights of 2026-10-02 the same arithmetic gave
+    # 42.7 x 1.91 = 81.5 minutes at eight, 109% of the cap — the pack would be
+    # cancelled before it finished — and 28.5 x 1.91 = 54.4 at twelve, 72%.
+    # That is the arithmetic the matrix below was set to TWELVE on.
     #
-    # The widths in between were measured, not skipped. Nine reaches 97% of
-    # the cap and ten 87%, so both fail the planner's 80% headroom gate.
-    # Eleven passes it — 59.3 min, 79% — and is still not the number here,
-    # because passing an 80% gate by one point is not headroom, it is the
-    # rounding; the gate exists to absorb the next weights refresh, and the
-    # last one moved the pack 1.50x. TWELVE is the smallest width that clears
-    # with something left over.
+    # TWELVE HAS SINCE RUN TWICE, AND IT COST MORE THAN THE PLAN SAID. Over
+    # the 24 jobs of those two runs the observed p50 is 34.6 min and the worst
+    # job 55.8 — 74% of the cap, past the 54.4 those runs' own gate predicted.
+    # That is not new: replay every run's gate as it stood and the predicted
+    # tail has been beaten at three of six, the largest by 8.9 min at EIGHT
+    # shards (dd416340: 54.2 predicted, 63.1 worst). The width stands: 74% is
+    # measured and inside the 80% gate. What does not stand is the margin the
+    # planner prints. On the weights committed now (#1032, a re-timing of the
+    # same mutants) `plan --shards 12` says 25.2 median and a 48.0 tail, 64%
+    # of the cap — so today's pack, asked about the run its own weights were
+    # timed from, under-predicts that job by 7.8 minutes. Score the committed
+    # TAIL_MULTIPLIER against the OBSERVED median and the pack is 34.6 x 1.91
+    # = 66.0 min, 88% of the cap: past the 80% gate `plan` reports it clearing
+    # with 36 points in hand. The model has no per-job fixed cost (14-27 min,
+    # bounded five ways), so it flatters every width above the one it was
+    # fitted at. See RUNNER_EFFICIENCY in scripts/mutation_shards.py before
+    # widening — and note a unit test now refuses a width nothing has run at,
+    # because `plan` will approve every one of them.
+    #
+    # THE WIDTHS IN BETWEEN WERE MEASURED, AND #1032 MOVED THEM. On the
+    # committed pack `plan --explain --timeout-minutes 75` now prints eight at
+    # 72.1 min / 96%, nine 64.1 / 85%, ten 57.7 / 77%, eleven 52.4 / 70% and
+    # twelve 48.0 / 64% — so TEN flips from fail to pass, 87% on the previous
+    # generation against 77% now. Eleven is not a flip: it scored 79% then and
+    # passed then too, and was rejected on margin rather than on the gate.
+    # Neither is a reason to trim the matrix. Those are the same optimistic figures as the 64% above,
+    # and on the fixed-cost arithmetic ten's honest tail is 37.5 x 1.91 = 71.5
+    # min, 95% of the cap. TWELVE stays until something has been measured at
+    # another width.
     #
     # Past nine, none of this is bought with a better split. The per-unit
-    # *floor* stops moving at NINE, where `catalog.py` joins `registry.py`
-    # and `store.py` and the largest unit drops 7,580,730 -> 4,495,978 ms;
-    # every width from nine to sixteen sits on that same floor. So ten
+    # *floor* stops moving at NINE, where `registry.py` joins `catalog.py`
+    # and `store.py` and the largest unit drops 6,627,388 -> 3,638,539 ms;
+    # every width from nine to sixteen sits on that same floor. (Which file
+    # joins, and both numbers, move with the weights: the pre-#1032 pack
+    # split registry.py at eight and read 7,580,730 -> 4,495,978.) So ten
     # through twelve buy exactly one thing — runner minutes — and twelve is
     # where that purchase is worth making.
     #
-    # Figures are the pack committed today. Run `plan --shards 12 --explain
-    # --timeout-minutes 75` for the live ones rather than trusting these.
+    # Figures re-derived 2026-10-05 against the pack committed that day, and
+    # they go stale on the next weights refresh: run `plan --shards 12
+    # --explain --timeout-minutes 75` for the live ones rather than trusting
+    # these, and read them next to the observed 34.6 / 55.8 rather than alone.
     #
     # tests/unit/test_mutation_shard_count.py pins all of it: that this number
     # and the matrix below and every `--shards` in this repo agree, and that

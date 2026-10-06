@@ -547,7 +547,8 @@ class TestPtyWidth:
         primary, secondary = os.openpty()
         fcntl.ioctl(secondary, termios.TIOCSWINSZ,
                     struct.pack("HHHH", 24, cols, 0, 0))
-        return primary, os.fdopen(secondary, "w", buffering=1)
+        return primary, os.fdopen(secondary, "w", buffering=1,
+                                  encoding="utf-8")
 
     def test_a_streams_own_terminal_is_measured(self, monkeypatch):
         monkeypatch.delenv("COLUMNS", raising=False)

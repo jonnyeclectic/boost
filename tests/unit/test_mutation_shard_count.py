@@ -316,6 +316,63 @@ PLANNED_TOTAL_MS = 66_708_651
 #: was observed.
 SHARDS_FOR_FIT = 8
 
+#: What the width CI runs at actually did, and the reason there is a second
+#: observation constant at all: unlike eight, twelve did not reproduce.
+#:
+#: The 24 successful jobs of the only two runs at this width -- `d7027cf8`
+#: and main's `58ace415`, 2026-10-04 -- have a p50 of 34.55 min and a worst
+#: job of 55.8. Frozen like every other measurement in this file: it
+#: describes those two runs and no later one can restate it.
+TWELVE_SHARD_P50_MIN = 34.55
+TWELVE_SHARD_WORST_MIN = 55.8
+
+#: The width those 24 jobs ran at. Spelled out rather than reusing
+#: `ms.SHARDS` for the same reason `SHARDS_FOR_FIT` is: `ms.SHARDS` is what
+#: CI runs *now*, and pointing a historical measurement at a live constant
+#: silently restates what was observed the day someone changes it.
+#:
+#: It is deliberately NOT `SHARDS_OBSERVED` either, though the two are equal
+#: today. That one is a policy ceiling and is meant to move the day a wider
+#: matrix runs; this one is the divisor in twelve's two frozen assertions and
+#: must never move. Sharing one constant made the ceiling test's own
+#: remediation instruction ("raise SHARDS_OBSERVED") red
+#: `test_todays_pack_under_predicts_the_worst_twelve_shard_job` -- at
+#: sixteen it grades a sixteen-shard prediction against a twelve-shard
+#: observation and reports a 19.8-minute shortfall -- while quietly loosening
+#: the ratio test from 1.40 to 1.87.
+TWELVE_SHARDS = 12
+
+#: The widest matrix width anyone has observed, and a live policy ceiling
+#: rather than a measurement: `test_the_committed_width_has_actually_run`
+#: refuses an `ms.SHARDS` above it. This is the constant to raise after
+#: running a wider matrix; `TWELVE_SHARDS` above is the one to leave alone.
+SHARDS_OBSERVED = 12
+
+#: The eight-shard p50 the fit was re-checked against, named so the two
+#: widths can be compared in one assertion instead of one of them being a
+#: literal inside it. It is the median of the 24 jobs of the THREE
+#: eight-shard runs the comment on `FITTED_TOTAL_MS` names; a fourth run
+#: (`f3f87c5b`) has since happened and moves it to 42.0, which changes
+#: nothing any assertion here depends on.
+EIGHT_SHARD_P50_MIN = 41.8
+
+#: The planner's total over the weights measured ON A TWELVE-SHARD RUN, and
+#: the reason it has to exist beside `PLANNED_TOTAL_MS`.
+#:
+#: Grading a width against a total measured at a different width is not like
+#: for like, and `PLANNED_TOTAL_MS` is eight's -- #1032's body is where that
+#: is said outright ("the cost per mutant was re-timed, this time on a
+#: twelve-shard run rather than an eight-shard one"); #1029 records only the
+#: width in force at the time. #1032 (`9559440d`) re-timed
+#: the same mutants from CI run 37200431822 -- which is `58ace415`, one of
+#: the two runs `TWELVE_SHARD_P50_MIN` is drawn from -- and totals
+#: 58,969,820 ms over the same 67 files.
+#:
+#: Frozen like its sibling, and for a sharper reason than usual: it happens
+#: to equal the live weights today, and an assertion that read the live file
+#: would red the weights bot's own PR the moment it moved.
+TWELVE_PLANNED_TOTAL_MS = 58_969_820
+
 #: The six-shard fit this file used to be anchored on, kept so the two
 #: measurements taken against it stay checkable. Frozen: it describes what was
 #: observed on 2026-09-30..10-01 and no later run can change that.
@@ -363,8 +420,96 @@ class TestConversion:
         # It is `PLANNED_TOTAL_MS` and not `FITTED_TOTAL_MS` because a real job
         # runs the untimed files too; see those two definitions.
         predicted = ms.runner_minutes(PLANNED_TOTAL_MS / SHARDS_FOR_FIT)
-        assert abs(predicted - 41.8) < 1.0, (
-            "predicted %.1f min against a measured p50 of 41.8" % predicted)
+        assert abs(predicted - EIGHT_SHARD_P50_MIN) < 1.0, (
+            "predicted %.1f min against a measured p50 of %.1f"
+            % (predicted, EIGHT_SHARD_P50_MIN))
+
+    def test_the_fit_does_not_extrapolate_to_twelve(self):
+        # The counterpart of the two tests above, and the one that says the
+        # model has a shape problem rather than a tuning problem. Each width
+        # is graded against weights measured AT THAT WIDTH, which is what
+        # makes the eight-shard check above like for like -- so twelve is
+        # graded on TWELVE_PLANNED_TOTAL_MS, not on eight's. Eight implies a
+        # RUNNER_EFFICIENCY of 0.832 and twelve implies 0.593. There is no
+        # value of that one constant at which both widths are reproduced,
+        # and re-fitting it to twelve would move a 40% error onto eight.
+        #
+        # Written as a ratio on purpose: both implied efficiencies are
+        # independent of the committed one: `runner_minutes` is inversely
+        # proportional to RUNNER_EFFICIENCY and each term multiplies it back
+        # in, so the constant cancels INSIDE each term -- not across the
+        # ratio. Either way this is a statement about two measurements rather
+        # than about a constant somebody may re-fit, and it can only change
+        # if the recorded observations change, which is what frozen means
+        # here.
+        #
+        # What is missing is a per-job fixed cost -- see RUNNER_EFFICIENCY in
+        # `scripts/mutation_shards.py` for the five routes that bound it to
+        # 14-27 min a job, and for why no C in that range can be bolted on
+        # beside the efficiency without re-fitting it too.
+        implied_eight = (ms.RUNNER_EFFICIENCY
+                         * ms.runner_minutes(PLANNED_TOTAL_MS / SHARDS_FOR_FIT)
+                         / EIGHT_SHARD_P50_MIN)
+        implied_twelve = (ms.RUNNER_EFFICIENCY
+                          * ms.runner_minutes(TWELVE_PLANNED_TOTAL_MS / TWELVE_SHARDS)
+                          / TWELVE_SHARD_P50_MIN)
+        assert implied_eight / implied_twelve > 1.15, (
+            "eight and twelve now imply the same efficiency to within 15%% "
+            "(%.3f vs %.3f) -- if the model has gained a fixed term, replace "
+            "this with the ordinary median check at twelve"
+            % (implied_eight, implied_twelve))
+
+    def test_todays_pack_under_predicts_the_worst_twelve_shard_job(self):
+        # The operational number, and the one the other two do not reach:
+        # what the pack CI actually runs scores against what twelve actually
+        # did. On TWELVE_PLANNED_TOTAL_MS the tail is 48.0 min; the worst of
+        # the 24 observed jobs was 55.8, a 7.8-minute shortfall.
+        #
+        # PROSPECTIVE BASIS, and the name says so because the other basis
+        # gives a different answer: this is today's pack asked about a run
+        # its own weights were timed from, which is what `plan` will say
+        # before the NEXT run. It is not what the gate printed at the time --
+        # `58ace415`'s own gate said 54.4 and was beaten by 1.4 min. On that
+        # replay basis the record is four exceedances in six runs and the
+        # largest is 8.9 min at EIGHT shards, so nothing here is twelve being
+        # the first; see TAIL_MULTIPLIER's docstring for the table.
+        #
+        # Asserted as a band rather than a point because it is a miss and not
+        # a calibration: the lower bound says the gap is real and not
+        # rounding, the upper says the model has not come apart further than
+        # it had on 2026-10-05. Either edge means re-reading
+        # RUNNER_EFFICIENCY's docstring and re-fitting from the job API --
+        # which, per that docstring, also means re-fitting TAIL_MULTIPLIER
+        # and not treating PLANNED_TOTAL_MS as a fixed reference.
+        predicted = ms.tail_minutes(TWELVE_PLANNED_TOTAL_MS / TWELVE_SHARDS)
+        shortfall = TWELVE_SHARD_WORST_MIN - predicted
+        assert 5.0 < shortfall < 11.0, (
+            "predicted tail %.1f min against a measured worst job of %.1f, a "
+            "shortfall of %.1f min where 7.8 was recorded"
+            % (predicted, TWELVE_SHARD_WORST_MIN, shortfall))
+
+    def test_the_committed_width_has_actually_run(self):
+        # The one executable form of "do not use `plan` to justify a width
+        # above twelve", which otherwise exists only as prose in three files.
+        # It is needed because the model cannot object for itself: the tail
+        # scales 1/n, so every width above the committed one looks SAFER to
+        # every other assertion here -- raising ms.SHARDS to 16 reds nothing,
+        # and `plan` cheerfully reports 48% of the cap.
+        #
+        # Widening is still allowed; it just cannot be done on the planner's
+        # word alone. Run the wider matrix once, record its p50 and worst
+        # here the way twelve is recorded, and raise SHARDS_OBSERVED -- which
+        # is this assertion's constant and nothing else's. Leave
+        # TWELVE_SHARDS where it is: it is the divisor twelve's frozen
+        # observations are graded on, and moving it grades a wider
+        # prediction against a twelve-shard measurement.
+        assert ms.SHARDS <= SHARDS_OBSERVED, (
+            "SHARDS is %d but the widest matrix anyone has observed is %d. "
+            "The model has no per-job fixed cost, so it flatters every width "
+            "above the one it was fitted at -- see "
+            "the-shard-model-has-no-per-job-fixed-cost. Run it, record the "
+            "p50 and the worst job, then raise SHARDS_OBSERVED."
+            % (ms.SHARDS, SHARDS_OBSERVED))
 
     def test_the_planner_counts_more_than_the_files_a_run_has_timed(self):
         # The invariant `PLANNED_TOTAL_MS` rests on, asserted against the LIVE

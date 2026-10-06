@@ -187,7 +187,8 @@ def try_lock(path, stale_after: float = 300.0):
         yield False
         return
     try:
-        with contextlib.suppress(OSError), os.fdopen(fd, "w") as f:
+        with contextlib.suppress(OSError), os.fdopen(
+                fd, "w", encoding="utf-8") as f:
             fd = None                      # fdopen owns it now
             f.write(str(os.getpid()))
         yield True
@@ -209,13 +210,38 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     complete new one atomically replaces it. This is the corruption-safe
     substitute for a bare ``Path.write_text`` on any file boost must not lose —
     the lock file, the config, the pulse journal.
+
+    ``newline="\\n"`` is load-bearing, and it is the one line here that a
+    Linux run cannot check. Text mode translates ``"\\n"`` to the platform
+    separator on write, so on Windows this wrote CRLF into seventeen of the
+    nineteen — measured, not predicted: ``tests (windows-latest, 3.14)`` on
+    this branch's parent commit reported ``assert b'\\r' not in
+    b'a\\r\\nb\\r\\n'`` against the test below. The other two
+    (``rag.py``'s BM25 index and rerank cache) pass bare ``json.dumps`` and
+    emit no literal newline at all, so the pin is inert for them.
+
+    **The reader that makes it matter is git, and only one call site hands
+    it anything.** ``projectlock.write`` stamps
+    ``<repo>/.boost/skill-lock.json``, which that module's own docstring
+    says "is meant to be **committed** … git is its history". Everything
+    else here is read back through ``json`` or ``read_text``, both of which
+    fold. It is explicitly **not** ``sha256_dir``: all eighteen of those
+    call sites hash a ``copytree``-populated skill dir or a tap clone, never
+    a file this function wrote — an earlier draft of this paragraph claimed
+    otherwise and was wrong.
+
+    ``tests/unit/test_text_io_names_its_encoding.py``'s
+    ``TestAPinnedWriterReallyEmitsLF`` asserts on bytes rather than on the
+    presence of this keyword, because an AST check proves only that it is
+    spelled. That test arrived with this change, so it corroborates the pin
+    rather than independently motivating it.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent),
                                prefix="." + path.name + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding=encoding) as f:
+        with os.fdopen(fd, "w", encoding=encoding, newline="\n") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
