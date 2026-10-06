@@ -10,7 +10,7 @@ wow: 2
 note: 917 text writes take the platform line ending; only the compared ones are bugs
 order: 363
 owner: loop/pin-compared-newlines
-pr:
+pr: 1035
 title: "917 text writes leave the line ending to the platform, and only some of them are bugs"
 ---
 Text mode decides two things, and naming the encoding fixes one of them. It also translates
