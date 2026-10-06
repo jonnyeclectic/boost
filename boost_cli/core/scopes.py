@@ -19,12 +19,10 @@ given scope puts a given skill. ``store`` owns the filesystem writes and
 """
 from __future__ import annotations
 
-import ntpath
 import os
-import posixpath
 import re
 from contextlib import suppress
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from ..errors import BoostError
 from . import paths, projectlock
@@ -412,33 +410,39 @@ def parent_matches_spelling(base, rel: str) -> bool:
     *is* a symlink is boost's own, and ``util.remove_path`` unlinks it without
     following it — judging it by what it points at is the bug one layer down.
 
-    **Absolute is asked of both platforms, not of this one.** ``Path(rel)`` is
-    a ``WindowsPath`` on Windows, where ``/etc/passwd`` has no drive and so
-    ``is_absolute()`` is ``False``; the join then yields ``C:\etc\passwd``,
-    outside the base, and *both sides of the comparison escape it the same
-    way*, so the walk agrees with itself and this returns True for a path that
-    is not in the repo at all. The three ``tests (windows-latest, 3.1x)`` jobs
-    said so the first time these clauses were tested directly. ``ntpath`` and
-    ``posixpath`` are asked together because the lock is a committed file: the
-    machine that wrote the row is not necessarily the one reading it, so the
-    spelling to refuse is whatever is absolute *anywhere*. A posix directory
-    genuinely named ``C:`` is refused as collateral, which is the safe
-    direction for a guard whose other answer hands ``rmtree`` a target.
+    **Absolute is asked of both platforms, not of the one running.** A plain
+    ``Path(rel)`` is a ``WindowsPath`` on Windows, where ``/etc/passwd``
+    carries no drive and ``is_absolute()`` is therefore ``False``. The join
+    then yields ``C:\\etc\\passwd`` — outside the base — and *both sides of
+    comparison leave it the same way*, so the walk agrees with itself and this
+    answers True for a path that is not in the repo at all. All three
+    ``tests (windows-latest, 3.1x)`` jobs said so the first time these clauses
+    were tested directly. The mirror case is a drive letter or a UNC path,
+    which ``PurePosixPath`` does not call absolute either. A lock is a
+    committed file and the machine that wrote a row need not be the one
+    reading it, so the spelling to refuse is whatever is absolute *anywhere*.
+    A posix directory genuinely named ``C:`` is refused as collateral, which
+    is the safe direction for a guard whose other answer hands ``rmtree`` a
+    target.
 
-    The NUL is refused by name for the same reason. On posix ``realpath``
-    raises ``ValueError`` and the ``except`` below fails closed; on Windows it
-    does not raise, and the guard returned True. Relying on a platform to
-    raise is relying on the half of the behaviour that differs.
+    **The NUL is refused by name, on both arguments.** Relying on ``realpath``
+    to raise is relying on the half of the behaviour that differs: posix
+    raises ``ValueError`` and the ``except`` catches it, Windows does not
+    raise and the guard returned True. ``base`` is checked as well as ``rel``
+    because it has the same provenance — ``store`` derives it from the lock's
+    own recorded ``base`` — and none of the ``rel`` clauses can see it.
     """
     if not rel or not isinstance(rel, str):
         return False
-    if ntpath.isabs(rel) or posixpath.isabs(rel) or "\x00" in rel:
+    if PurePosixPath(rel).is_absolute() or PureWindowsPath(rel).is_absolute():
         return False
     try:
+        if "\x00" in rel or "\x00" in os.fspath(base):
+            return False
         anchor = Path(os.path.realpath(base))
         return Path(os.path.realpath((Path(base) / rel).parent)) == (
             anchor / rel).parent
-    except (OSError, ValueError):
+    except (OSError, TypeError, ValueError):
         return False
 
 

@@ -804,8 +804,8 @@ def test_parent_matches_spelling_holds_through_a_symlinked_base(tmp_path):
                                  "\\\\server\\share\\x", "a\x00b/x"])
 def test_parent_matches_spelling_refuses_what_is_not_a_relative_string(
         tmp_path, rel):
-    """Ordered clauses: `ntpath.isabs` raises TypeError on a dict, so the
-    string test has to come first and is what makes it safe to call.
+    """Ordered clauses: `PurePosixPath(rel)` raises TypeError on a dict, so
+    the string test has to come first and is what makes it safe to call.
 
     The spellings are deliberately from both platforms and are asserted on
     whichever one is running. A drive letter and a UNC path are not absolute
@@ -830,9 +830,27 @@ def test_parent_matches_spelling_fails_closed_on_an_unusable_base(tmp_path):
 
     `store` hands this `resolved_base`, which descends from the lock's own
     recorded `base` — same provenance as the row, same lack of a guarantee.
-    `realpath` raises `ValueError` on a NUL there on posix and the walk
-    cannot run on any platform, so the `except` is what answers rather than
-    a traceback out of a delete guard.
+    Refused by name rather than by letting `realpath` raise: posix raises
+    `ValueError` on a NUL and Windows does not, so the platform that does
+    not raise is the one where a delete guard would answer True.
     """
     assert not scopes.parent_matches_spelling("%s/a\x00b" % tmp_path,
                                               ".claude/x")
+
+
+def test_parent_matches_spelling_fails_closed_when_the_walk_itself_raises(
+        tmp_path, monkeypatch):
+    """`realpath` can still fail after both arguments have been vetted.
+
+    A symlink loop is `OSError(ELOOP)`, and a path longer than the platform
+    allows is `OSError` too — neither is a doctored string, so no clause
+    above can anticipate them. Raised deliberately rather than built on
+    disk, because the shapes that produce it differ per platform and this
+    asserts the answer, not the cause: a delete guard may return False, and
+    may not raise.
+    """
+    def boom(_):
+        raise OSError(40, "Too many levels of symbolic links")
+
+    monkeypatch.setattr(scopes.os.path, "realpath", boom)
+    assert not scopes.parent_matches_spelling(tmp_path, ".claude/skills/x")
