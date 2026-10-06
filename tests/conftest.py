@@ -582,11 +582,25 @@ def sandbox(tmp_path, monkeypatch):
     # `TMPDIR` inside a Mercurial or Subversion working copy resolves exactly
     # the same way, and checking one of the three would let the inversion this
     # assertion exists to announce pass silently.
-    assert not any((d / m).exists()
-                   for d in (cwd, *cwd.parents) for m in _VCS_MARKERS), (
-        "pytest's tmp_path is inside a working tree (%s) — set TMPDIR or"
-        " --basetemp somewhere else, or every project-scope test writes into"
-        " it" % cwd)
+    #
+    # ...and a VCS marker is no longer the only thing worth refusing, for a
+    # weaker reason that still breaks tests. An existing
+    # `.boost/skill-lock.json` above `cwd` moves no destination —
+    # `scopes.project_base` resolves on markers alone — but
+    # `scopes.project_lock_root` does walk up to it advisorily, which flips
+    # which of `install --local`'s two warnings fires and so rewrites what the
+    # functional tests here assert. The home stop cannot save us either: this
+    # fixture's fake `$HOME` is a *sibling* of `cwd`, never an ancestor, so
+    # that walk runs clean past it to `/`. Leaving it out of the guard made
+    # the one directory nothing cleans up the one directory nothing checks.
+    _captures = [d for d in (cwd, *cwd.parents)
+                 if any((d / m).exists() for m in _VCS_MARKERS)
+                 or (d / ".boost" / "skill-lock.json").is_file()]
+    assert not _captures, (
+        "pytest's tmp_path is inside a working tree or an existing boost"
+        " project (%s) — set TMPDIR or --basetemp somewhere else. A VCS"
+        " marker makes every project-scope test write into it; a stray lock"
+        " changes which warning they see" % _captures[0])
     monkeypatch.delenv("BOOST_HOME", raising=False)
     monkeypatch.delenv("BOOST_AGENTS_STORE", raising=False)
     monkeypatch.delenv("BOOST_DEBUG", raising=False)
