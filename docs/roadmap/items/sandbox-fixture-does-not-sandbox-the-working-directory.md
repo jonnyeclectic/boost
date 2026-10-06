@@ -2,7 +2,7 @@
 id: sandbox-fixture-does-not-sandbox-the-working-directory
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Test hygiene · Bug
 complexity: M
 impact: Medium

@@ -2,7 +2,7 @@
 id: tool-call-eval-tier
 board: code
 section: planned
-status: inflight
+status: shipped
 category: Quality · Eval
 complexity: L
 impact: High

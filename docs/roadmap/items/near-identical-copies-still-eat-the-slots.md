@@ -2,7 +2,7 @@
 id: near-identical-copies-still-eat-the-slots
 board: code
 section: planned
-status: inflight
+status: shipped
 owner: loop/near-dup-bound
 pr: 645
 category: Search · Ranking
