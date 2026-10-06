@@ -8,6 +8,7 @@ behaviour has its own coverage in tests/functional/test_integrity_enforce.py.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -338,6 +339,12 @@ class TestARowNothingWritesIsNotAMissingArtifact:
     `boost doctor` was fixed for
     (sync-repairs-a-disabled-agents-row-every-run). Five commands read it:
     `verify`, `attest`, `drift`, `health` and `serve`.
+
+    `_entry` builds exactly **one** row, so every entry here is also the
+    all-rows-unwritten case and now reads ``UNREACHABLE`` rather than ``OK``
+    -- still not ``MISSING``, which is the whole of what this class pins.
+    The per-item question these answers could not express lives in
+    :class:`TestAnItemMaterializedNowhere` below.
     """
 
     @staticmethod
@@ -359,7 +366,8 @@ class TestARowNothingWritesIsNotAMissingArtifact:
         e = self._entry(kind, "cursor")
         assert integrity.materialized_status("x", e) == integrity.STATUS_MISSING
         self._disable("cursor")
-        assert integrity.materialized_status("x", e) == integrity.STATUS_OK
+        assert integrity.materialized_status("x", e) == \
+            integrity.STATUS_UNREACHABLE
 
     def test_a_workflow_row_is_judged_by_the_narrower_set_here_too(self,
                                                                    sandbox):
@@ -368,7 +376,8 @@ class TestARowNothingWritesIsNotAMissingArtifact:
         assert integrity.materialized_status(
             "x", self._entry("rule", "codex")) == integrity.STATUS_MISSING
         assert integrity.materialized_status(
-            "x", self._entry("workflow", "codex")) == integrity.STATUS_OK
+            "x", self._entry("workflow", "codex")) == \
+            integrity.STATUS_UNREACHABLE
 
     def test_an_entry_with_no_kind_is_judged_as_a_rule(self, sandbox):
         """Locks written before entries carried `kind` must not be read as
@@ -391,13 +400,190 @@ class TestARowNothingWritesIsNotAMissingArtifact:
         e = self._entry("rule", "codex")           # says rule, is a workflow
         assert integrity.materialized_status("x", e) == integrity.STATUS_MISSING
         assert integrity.materialized_status(
-            "x", e, "workflow") == integrity.STATUS_OK
+            "x", e, "workflow") == integrity.STATUS_UNREACHABLE
 
     def test_the_entrys_field_stays_the_fallback(self, sandbox):
         """A caller holding only the entry still gets the old answer, and an
         explicit `None` is that caller, not a third kind."""
         e = self._entry("workflow", "codex")
         assert integrity.materialized_status("x", e, None) == \
-            integrity.STATUS_OK
+            integrity.STATUS_UNREACHABLE
         assert integrity.materialized_status(
             "x", self._entry("rule", "codex"), None) == integrity.STATUS_MISSING
+
+
+class TestAnItemMaterializedNowhere:
+    """Skipping a row is correct per row and wrong per *item*.
+
+    Skip every row an item has and it reached no agent at all -- the rule is
+    in no context file, the workflow in no command palette -- and the loop
+    that skipped them had nothing left to judge, so it fell through to
+    ``OK``. `verify` passed it, `drift` called it in-sync, `health` counted
+    it installed and healthy and `attest --verify` said ``sha_ok``. Only
+    `doctor` carried the news, in the one channel the others do not have.
+
+    The opposite error is the dangerous one: keying on "no row was written"
+    rather than "rows existed and none was written" condemns every pre-rows
+    lock entry on five surfaces at once, so the no-rows case is pinned here
+    in all three of its spellings.
+    """
+
+    @staticmethod
+    def _row(agent, path, sha):
+        return {"agent": agent, "mode": "file", "path": str(path),
+                "sha256": sha}
+
+    @staticmethod
+    def _disable(agent):
+        cfg = config.load()
+        cfg["agents"][agent]["enabled"] = False
+        config.save(cfg)
+
+    def _written_row(self, tmp_path, body="hello\n"):
+        """A row for an agent boost still writes, present and correctly hashed."""
+        f = tmp_path / "written.md"
+        f.write_text(body, encoding="utf-8")
+        return self._row("cursor", f,
+                         hashlib.sha256(body.encode("utf-8")).hexdigest())
+
+    def _skipped_row(self):
+        """A row for an agent boost no longer writes (windsurf, disabled)."""
+        self._disable("windsurf")
+        return self._row("windsurf", paths.home() / ".windsurf" / "gone.md",
+                         "x" * 64)
+
+    # ---------------------------------------------------- the new state
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_every_row_skipped_is_unreachable(self, sandbox, kind):
+        e = {"kind": kind, "materializations": [self._skipped_row()]}
+        assert integrity.materialized_status("x", e, kind) == \
+            integrity.STATUS_UNREACHABLE
+        assert integrity.reaches_no_agent(kind, e) is True
+
+    # ------------------------------------- the control case, all 3 spellings
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    @pytest.mark.parametrize("entry", [
+        {},                             # key absent -- a pre-rows lock entry
+        {"materializations": []},       # present and empty
+        {"materializations": None},     # present and null
+    ], ids=["absent", "empty", "null"])
+    def test_an_item_with_no_rows_is_not_unreachable(self, sandbox, kind,
+                                                     entry):
+        """`bool(rows)` is the entire guard, and this is what it guards.
+
+        A rule installed before rows existed has nothing to be unreachable
+        about. Without the conjunct every such entry turns into a fault on
+        `verify`, `attest`, `drift`, `health` and the MCP doctor at once.
+        """
+        e = dict(entry, kind=kind)
+        assert integrity.reaches_no_agent(kind, e) is False
+        assert integrity.materialized_status("x", e, kind) == \
+            integrity.STATUS_OK
+
+    # ------------------------------------------------- the partial case
+
+    def test_one_written_row_is_enough_to_reach_somewhere(self, sandbox,
+                                                          tmp_path):
+        """The trigger is *every* row skipped, never *any* row skipped.
+
+        This is the mutant one edit away from the bug: `not any(...)` versus
+        a count comparison that treats a partially-reached item as lost.
+        """
+        skipped = self._skipped_row()
+        e = {"kind": "rule",
+             "materializations": [skipped, self._written_row(tmp_path)]}
+        assert integrity.reaches_no_agent("rule", e) is False
+        assert integrity.materialized_status("x", e, "rule") == \
+            integrity.STATUS_OK
+
+    # ------------------------------------------- mutual exclusivity
+
+    def test_a_written_row_that_is_gone_still_reads_missing(self, sandbox,
+                                                            tmp_path):
+        """MISSING, MODIFIED and UNLOCKED each need a *written* row, so the
+        new early return can never shadow one. Pinned rather than argued:
+        the mutant that moves the check after the loop dies here."""
+        row = self._written_row(tmp_path)
+        (tmp_path / "written.md").unlink()
+        e = {"kind": "rule", "materializations": [self._skipped_row(), row]}
+        assert integrity.materialized_status("x", e, "rule") == \
+            integrity.STATUS_MISSING
+
+    def test_a_written_row_with_no_sha_still_reads_unlocked(self, sandbox,
+                                                            tmp_path):
+        row = self._written_row(tmp_path)
+        del row["sha256"]
+        e = {"kind": "rule", "materializations": [self._skipped_row(), row]}
+        assert integrity.materialized_status("x", e, "rule") == \
+            integrity.STATUS_UNLOCKED
+
+    def test_quarantine_still_wins(self, sandbox):
+        """Its artifacts are gone on purpose. Calling that unreachable sends
+        the user to a remedy that re-arms what quarantine disarmed."""
+        e = {"kind": "rule", "quarantined": True,
+             "materializations": [self._skipped_row()]}
+        assert integrity.materialized_status("x", e, "rule") == \
+            integrity.STATUS_QUARANTINED
+
+    # ------------------------------------------------ the kind decides
+
+    def test_the_kind_decides_the_write_set_here_too(self, sandbox):
+        """`codex` is enabled and takes rules, and has no command format. One
+        row, two answers -- which is what kills the mutant that drops the
+        `kind` argument on the way through."""
+        e = {"materializations": [
+            self._row("codex", paths.home() / ".codex" / "AGENTS.md",
+                      "x" * 64)]}
+        assert integrity.reaches_no_agent("workflow", e) is True
+        assert integrity.reaches_no_agent("rule", e) is False
+
+    def test_it_resolves_its_own_kind_when_asked_without_one(self, sandbox):
+        """`materialized_status` hands it an already-resolved kind, and
+        `doctor` and `info` pass the section's. Nothing in the tree reaches
+        the fallback, so it is pinned here or the mutant that drops it
+        survives -- and a caller holding only the entry would then judge
+        every workflow against the wider rule set.
+        """
+        e = {"kind": "workflow", "materializations": [
+            self._row("codex", paths.home() / ".codex" / "AGENTS.md",
+                      "x" * 64)]}
+        assert integrity.reaches_no_agent(None, e) is True
+        assert integrity.reaches_no_agent(None, dict(e, kind="rule")) is False
+        # and with no kind anywhere, a rule -- the wider set, so a real gap
+        # is reported rather than silently hidden
+        del e["kind"]
+        assert integrity.reaches_no_agent(None, e) is False
+
+    def test_a_row_with_no_agent_counts_as_written(self, sandbox):
+        """`agents` answers True for it, preferring a reported gap to a
+        dropped one -- so such an entry is judged by the loop, never
+        condemned by the new early return."""
+        e = {"kind": "rule", "materializations": [
+            {"mode": "file", "path": str(paths.home() / "nope.md"),
+             "sha256": "x" * 64}]}
+        assert integrity.reaches_no_agent("rule", e) is False
+        assert integrity.materialized_status("x", e, "rule") == \
+            integrity.STATUS_MISSING
+
+    # --------------------------------------------- the verify wiring
+
+    def test_verify_fails_an_unreachable_row(self):
+        """`verification_passed` is an allowlist, so a new status fails by
+        inheritance. That is convenient and invisible, so it is pinned."""
+        assert integrity.verification_passed(
+            integrity.STATUS_UNREACHABLE, [], None) is False
+
+    def test_unreachable_wears_the_warn_role(self):
+        assert integrity.verification_role(
+            integrity.STATUS_UNREACHABLE, False) == "warn"
+
+    def test_every_status_has_a_verify_role(self):
+        """`verification_role` falls back to "warn" for an unknown status, so
+        a constant added without a row here would be coloured by accident and
+        would silently skip the not-passed upgrade beside it."""
+        statuses = {v for k, v in vars(integrity).items()
+                    if k.startswith("STATUS_") and isinstance(v, str)}
+        assert statuses <= set(integrity._VERIFY_ROLE_BY_STATUS)
+

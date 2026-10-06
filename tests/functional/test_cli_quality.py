@@ -2843,9 +2843,51 @@ class TestARowForADisabledAgent:
         assert "boost uninstall" in flat
         assert "missing its cursor materialization" not in flat
         assert "issue needs attention" not in flat
-        # and the count line must not read as a flat contradiction of it
+        # This fixture is one rule with one row, so it is also the per-ITEM
+        # case: skip the only row and the rule reaches nothing. The count
+        # line must therefore not count it. Before this it said "1 rule ...
+        # fully materialized for every agent boost writes" -- true as worded
+        # and false as read, because the write set was empty and every item
+        # satisfies all of nothing.
+        assert "0 rules and 0 workflows fully materialized " \
+               "for every agent boost writes" in flat
+        assert "1 item reaches no agent boost writes" in flat
+        assert "rule house" in flat
+        # named, never scored: doctor's convention is that a config-orphaned
+        # row is the user's own decision
+        assert r.rc == 0
+        # ...but the verdict may not then call the machine healthy, because
+        # `boost health` keys "needs attention" on this and sends the reader
+        # straight here
+        assert "1 item installed but loaded by nothing" in flat
+        assert "● healthy" not in r.out
+
+    def test_an_item_that_still_reaches_one_agent_is_not_named(self, boost,
+                                                               sandbox):
+        """The partial case, which proves the suffix is no longer vacuous.
+
+        Two rows, one agent disabled: four surfaces must stay quiet. The
+        per-row note still fires -- that is its job -- but the item reaches
+        `windsurf`, so it is counted and not named as unreachable.
+        """
+        from boost_cli.core import lockfile
+        cur = paths.home() / ".cursor" / "rules" / "house.mdc"
+        wnd = paths.home() / ".windsurf" / "rules" / "house.md"
+        for f in (cur, wnd):
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("x\n", encoding="utf-8")
+        lockfile.set_rule("house", {"kind": "rule", "materializations": [
+            {"agent": "cursor", "mode": "file", "path": str(cur)},
+            {"agent": "windsurf", "mode": "file", "path": str(wnd)}]})
+        self._disable()
+        flat = " ".join(boost("doctor").out.split())
+        assert "1 recorded materialization names an agent boost no longer " \
+               "writes" in flat
         assert "1 rule and 0 workflows fully materialized " \
                "for every agent boost writes" in flat
+        assert "reaches no agent boost writes" not in flat
+        assert "loaded by nothing" not in flat
+
 
     def test_the_same_row_is_rot_again_once_the_agent_is_back(self, boost,
                                                               sandbox):
@@ -2963,3 +3005,89 @@ class TestARowForADisabledAgent:
         flat = " ".join(boost("doctor").out.split())
         assert "Change that agent's entry in" in flat
         assert "turn back on" not in flat
+
+
+class TestAnItemMaterializedNowhere:
+    """An item whose every row names an agent boost no longer writes.
+
+    Skipping a row is right per row; skipping every row an item has means it
+    reached no agent at all, and `verify`, `drift`, `health` and
+    `attest --verify` all read that as fine. Only `doctor` had a channel for
+    it, and it then contradicted itself two lines later.
+    """
+
+    def _seed_unreachable(self, name="house"):
+        from boost_cli.core import config, lockfile
+        rp = paths.home() / ".cursor" / "rules" / ("%s.mdc" % name)
+        lockfile.set_rule(name, {
+            "kind": "rule", "tap": "local", "version": "1.0.0",
+            "sha256": "a" * 64, "installed_at": "2026-01-01T00:00:00Z",
+            "materializations": [{"agent": "cursor", "mode": "file",
+                                  "path": str(rp), "sha256": "b" * 64}]})
+        cfg = config.load()
+        cfg["agents"]["cursor"]["enabled"] = False
+        config.save(cfg)
+
+    def test_verify_fails_it(self, boost, sandbox):
+        """`verify` is what scripts gate on, and it passed an install that
+        reaches nothing -- the reason this is not cosmetic."""
+        self._seed_unreachable()
+        r = boost("verify", expect=1)
+        assert "unreachable" in r.out
+
+    def test_verify_json_carries_the_status(self, boost, sandbox):
+        self._seed_unreachable()
+        doc = json.loads(boost("verify", "--json", expect=1).out)
+        row = next(s for s in doc["skills"] if s["name"] == "house")
+        assert row["status"] == "unreachable"
+        assert row["passed"] is False
+        assert doc["failed"] == 1
+
+    def test_attest_names_it_without_accusing_the_user(self, boost, sandbox):
+        """`sha_ok` already does not mean "a sha mismatched" -- MISSING sets
+        it false with no content change. Folding this into "modified" would
+        print "no longer matches the lock sha" at a user whose only act was
+        turning an agent off."""
+        self._seed_unreachable()
+        r = boost("attest", "--verify", expect=1)
+        assert "reaches no agent boost writes" in r.out
+        assert "no longer matches" not in r.out
+        assert "boost sync" not in r.out
+
+    def test_attest_json_gets_its_own_reason(self, boost, sandbox):
+        self._seed_unreachable()
+        doc = json.loads(boost("attest", "--verify", "--json", expect=1).out)
+        row = next(s for s in doc["skills"] if s["name"] == "house")
+        assert row["sha_ok"] is False
+        assert row["reason"] == "unreachable"
+
+    def test_drift_says_so_rather_than_in_sync(self, boost, sandbox):
+        self._seed_unreachable()
+        r = boost("drift")
+        assert "unreachable" in r.out
+        assert "in-sync" not in r.out
+        # not `boost sync`, which filters the row out by design
+        assert "boost doctor" in r.out
+
+    def test_health_needs_attention(self, boost, sandbox):
+        self._seed_unreachable()
+        doc = json.loads(boost("health", "--json").out)
+        assert doc["drift"].get("unreachable") == 1
+        assert doc["ok"] is False
+        assert doc["status"] == "needs attention"
+
+    def test_an_item_with_no_rows_at_all_stays_ok(self, boost, sandbox):
+        """The control case, and the dangerous direction: keying on "no row
+        was written" rather than "rows existed and none was written" turns
+        every pre-rows lock entry into a fault on five surfaces at once."""
+        from boost_cli.core import lockfile
+        lockfile.set_rule("house", {
+            "kind": "rule", "tap": "local", "version": "1.0.0",
+            "sha256": "a" * 64, "installed_at": "2026-01-01T00:00:00Z",
+            "materializations": []})
+        assert "ok" in boost("verify").out
+        assert "unreachable" not in boost("drift").out
+        assert json.loads(boost("health", "--json").out)["ok"] is True
+        flat = " ".join(boost("doctor").out.split())
+        assert "1 rule and 0 workflows fully materialized" in flat
+        assert "loaded by nothing" not in flat

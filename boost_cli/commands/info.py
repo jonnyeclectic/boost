@@ -437,6 +437,15 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         # nothing. Printing the stale agent list here reads as a lie about
         # files that were just removed.
         out.kv("materialized", "(removed — quarantined)")
+    elif integrity.reaches_no_agent(kind, entry):
+        # `agent_names` lists every recorded row, so the dangerous case
+        # advertised the five agents the rule does not reach while the
+        # harmless no-rows case showed none — the two read backwards from
+        # how a user judges risk.
+        rows = len(entry.get("materializations") or [])
+        out.kv("materialized",
+               "(none — %d recorded row%s name an agent boost no longer "
+               "writes)" % (rows, "" if rows == 1 else "s"))
     else:
         out.kv("materialized",
                ", ".join(lockfile.agent_names(kind, entry)) or "(none)")

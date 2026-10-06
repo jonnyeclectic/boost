@@ -1648,12 +1648,22 @@ def _tool_doctor(args: dict):
         if vals:
             lines.append("%s: %s" % (key, ", ".join(str(v) for v in vals)))
     # sync_plan already reports MISSING rule/workflow materializations; the
-    # digest check adds the drift sync cannot see — content edited in place.
-    mat_issues = ["%s %s: modified since install" % (kind, n)
-                  for kind in ("rule", "workflow")
-                  for n, e in sorted(everything[kind].items())
-                  if (integrity.materialized_status(n, e, kind)
-                      == integrity.STATUS_MODIFIED)]
+    # digest check adds the drift sync cannot see — content edited in place,
+    # and an item that reaches no agent at all. The second is squarely the
+    # same case: sync_plan filters an unwritten row out by design, so an item
+    # whose every row is unwritten is invisible to it. A label map rather
+    # than an equality test, so a status added to one of these and not the
+    # other cannot quietly drop out of the count on the one doctor surface
+    # with no human reading it.
+    _MAT_ISSUE_LABEL = {
+        integrity.STATUS_MODIFIED: "modified since install",
+        integrity.STATUS_UNREACHABLE: "reaches no agent boost writes",
+    }
+    mat_issues = [
+        "%s %s: %s" % (kind, n, _MAT_ISSUE_LABEL[st])
+        for kind in ("rule", "workflow")
+        for n, e in sorted(everything[kind].items())
+        if (st := integrity.materialized_status(n, e, kind)) in _MAT_ISSUE_LABEL]
     lines.extend(mat_issues)
     total = issues + len(mat_issues)
     # A machine with no taps has nothing to disagree about, so every check

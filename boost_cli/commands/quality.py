@@ -258,6 +258,11 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
         return "store-missing"
     if st == integrity.STATUS_MODIFIED:
         return "local-edits"
+    if st == integrity.STATUS_UNREACHABLE:
+        # Before the tap comparison below, which would otherwise launder an
+        # item that reaches no agent into "in-sync" on the strength of a
+        # source file matching a hash nothing on disk was written from.
+        return "unreachable"
     if entry.get("tap") == "local":
         return "n/a"
     try:
@@ -270,10 +275,15 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
     return "in-sync"
 
 
+#: Every word `_drift_status` and `_drift_status_materialized` can return.
+#: The render site subscripts this directly, so a missing key is a KeyError --
+#: not a BoostError, so `boost drift` exits 70 with a crash report rather than
+#: mis-painting one cell. `test_drift_vocabulary_is_covered` pins the two
+#: against each other.
 _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
                "upstream-moved": "accent", "source-missing": "danger",
                "store-missing": "danger", "n/a": "muted",
-               "quarantined": "muted"}
+               "quarantined": "muted", "unreachable": "warn"}
 
 
 def _drift_hint(name: str, status: str, tap: str = "") -> str:
@@ -290,6 +300,12 @@ def _drift_hint(name: str, status: str, tap: str = "") -> str:
         return "boost update" if registry.is_tapped(tap) else "boost tap %s" % tap
     if status == "store-missing":
         return "boost heal"
+    if status == "unreachable":
+        # Not `boost sync`: it filters these rows out by design, so it is a
+        # guaranteed no-op. Not "re-enable the agent" either -- that is wrong
+        # advice for `agents.WITHDRAWN_REASONS`. `doctor` is where
+        # `_mat_remedy` words the split correctly.
+        return "boost doctor"
     return ""
 
 
@@ -744,6 +760,32 @@ def cmd_doctor(argv):
                  % (len(off), _s(len(off)), "s" if len(off) == 1 else "",
                     ", ".join(shown), _mat_remedy(off)),
                  wrap=True)
+    # The per-row note above answers "which row, which agent, why". This
+    # answers a different question the surfaces had nowhere to put: skip every
+    # row an item has and the item reached no agent at all. `rep.note`, not
+    # `rep.warn` -- WARN is documented as restating a fault already counted,
+    # and this one is counted nowhere -- and not `rep.issue`, which would
+    # invert doctor's standing convention that a config-orphaned row is the
+    # user's own decision, named once and never scored. `verify` and `attest`
+    # are the surfaces that fail; doctor's job here is to stop contradicting
+    # its own note.
+    nowhere = [(kind, name)
+               for kind, section in (("rule", rules), ("workflow", workflows))
+               for name, entry in sorted(section.items())
+               if integrity.reaches_no_agent(kind, entry)]
+    if nowhere:
+        # No remedy sentence: every one of these items has at least one row,
+        # so the per-row note above has already printed `_mat_remedy`'s
+        # wording for it, and repeating it verbatim one line later is how a
+        # report teaches the reader to skim past it.
+        rep.note("materialized-nowhere",
+                 "%d item%s reach%s no agent boost writes, so %s installed "
+                 "but loaded by nothing: %s"
+                 % (len(nowhere), _s(len(nowhere)),
+                    "es" if len(nowhere) == 1 else "",
+                    "it is" if len(nowhere) == 1 else "they are",
+                    ", ".join("%s %s" % (k, n) for k, n in nowhere)),
+                 wrap=True)
     if (all_rules or all_workflows) and not mat_issues:
         # Quarantined rules/workflows are excluded above so their stashed-but-
         # removed materializations don't read as rot — but excluding them from
@@ -765,9 +807,15 @@ def cmd_doctor(argv):
             # right above it: "fully materialized" is true of the agents boost
             # writes, and that is now a smaller set than the rows record.
             note += " for every agent boost writes"
+        # Counted over the items that reach at least one agent. The suffix
+        # above is what the note said this line contradicted -- "fully
+        # materialized for every agent boost writes" is trivially true of an
+        # item whose write set is empty, so counting it there is what made
+        # the count true as worded and false as read.
+        n_rules = len(rules) - sum(1 for k, _n in nowhere if k == "rule")
+        n_flows = len(workflows) - sum(1 for k, _n in nowhere if k == "workflow")
         rep.ok("rules-workflows", "%d rule%s and %d workflow%s fully materialized%s"
-               % (len(rules), _s(len(rules)), len(workflows), _s(len(workflows)),
-                  note))
+               % (n_rules, _s(n_rules), n_flows, _s(n_flows), note))
 
     root = paths.store_dir()
     orphans = [c.name for c in sorted(root.iterdir())
@@ -939,7 +987,21 @@ def cmd_doctor(argv):
     # MCP `boost_doctor` tool already refused to say "healthy" here; this is
     # the CLI half of the same rule.
     issues = rep.issues
-    if issues == 0 and not configured:
+    if issues == 0 and nowhere:
+        # Same rule as the no-taps case above, for the same reason: "healthy"
+        # is the one word this machine is not. An item nothing loads is not
+        # an issue -- it is the user's own config, and doctor's convention is
+        # to name that rather than score it -- but `boost health` keys
+        # `needs attention` on it and sends the reader here, so a verdict
+        # reading "healthy" would close that loop with a flat contradiction.
+        # Reported, never fatal: the exit code still turns only on issues.
+        # Ahead of the no-taps branch below on purpose: a machine holding an
+        # installed item is not "ready to set up", and that wording would
+        # bury the more specific fact under a setup prompt.
+        rep.verdict(False,
+                    "%d item%s installed but loaded by nothing — see above"
+                    % (len(nowhere), _s(len(nowhere))))
+    elif issues == 0 and not configured:
         rep.verdict(True, "ready to set up — tap a registry to make boost "
                           "searchable")
     else:
@@ -1750,9 +1812,16 @@ def cmd_health(argv):
     kv("journal (7d)", "%d event%s" % (recent, _s(recent)), recent)
     kv("fingerprint", _fingerprint()[0][:16])
 
+    # The membership rule is "is there anything there", not "has it drifted":
+    # `local-edits` and `upstream-moved` are expected states of a *live*
+    # install, while these three each mean the install reaches nothing --
+    # the store dir is gone, the source is gone, or no agent was ever
+    # written. Leaving `unreachable` out would be the bug this status was
+    # added for, wearing a new word.
     attention = (bool(broken) or not coverage_ok
                  or drift_counts.get("store-missing", 0) > 0
                  or drift_counts.get("source-missing", 0) > 0
+                 or drift_counts.get("unreachable", 0) > 0
                  or not journal.rotation_healthy())
     if args.json:
         print(json.dumps(data | {"ok": not attention,
