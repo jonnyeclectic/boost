@@ -2,7 +2,7 @@
 id: catalog-categories-beyond-curated
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Catalog · UX
 complexity: M
 impact: Med
