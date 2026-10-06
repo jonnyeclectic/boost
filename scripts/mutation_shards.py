@@ -240,7 +240,9 @@ RUNNER_WORKERS = 4
 #: against.
 #:
 #: **What the gate is actually running on, which is the operational part.**
-#: Every figure in this paragraph is measured on **#1032's weights**, the
+#: Every **planner** figure in this paragraph is measured on **#1032's
+#: weights** (the observed ones -- 34.6, 55.8, 66.0, 88%, 74% and the 12
+#: points -- are job durations, and do not move when the weights do), the
 #: pack as committed when it was written, and is dated rather than live for
 #: the reason the paragraph itself ends on: a refresh moves the printed
 #: number without moving the real one, so a live reading here would go
@@ -279,7 +281,8 @@ RUNNER_WORKERS = 4
 #: **Until it is, do not use ``plan`` to justify a width above twelve.**
 #: Through the origin the model divides the time by every shard added, and
 #: goes on saying so past the point where the fixed cost dominates — sixteen
-#: reports 48% of the cap, where the real floor is ``C x TAIL_MULTIPLIER``
+#: reports around half the cap (48% on #1032's weights, 50% on #1038's),
+#: where the real floor is ``C x TAIL_MULTIPLIER``
 #: however many shards are thrown at it. That is no longer only a comment:
 #: ``test_the_committed_width_has_actually_run`` fails the build if
 #: :data:`SHARDS` is raised past a width that has been observed.
