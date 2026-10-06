@@ -2,7 +2,7 @@
 id: shard-weights-do-not-predict-the-job-timeout
 board: code
 section: trust
-status: inflight
+status: shipped
 category: CI · Bug
 complexity: M
 impact: High
@@ -78,17 +78,48 @@ hide which had happened.
 <b>It reproduces the failure it was derived to predict.</b> Six shards at these weights:
 37.8 median minutes &times; 1.91 = a <b>72.3-minute tail</b> against a real worst job of
 <b>72.5</b> &mdash; 96% of the cap. <code>plan --explain --timeout-minutes 75</code> now prints
-that and exits 1. The matrix moved to <b>eight</b>, where the same arithmetic gives 28.4 &times;
-1.91 = <b>54.2 min, 72% of the cap</b>; the largest unit (4,063,161 ms) still fits inside an even
-share (5,543,280 ms), so the speedup cap is a full 8.00x and more shards cost nothing but runner
-slots. <code>tests/unit/test_mutation_shard_count.py</code> pins the shard count across
+that and exits 1. The matrix moved to <b>eight</b> and then, once the weights were
+re-anchored, to <b>twelve</b>, where the same arithmetic gives 28.5 &times; 1.91 = <b>54.4 min,
+72% of the cap</b>; the largest unit still fits inside an even share, so the speedup cap is the
+full width and more shards cost nothing but runner slots. <code>tests/unit/test_mutation_shard_count.py</code> pins the shard count across
 <code>ci.yml</code> and <code>mutation-weights-refresh.yml</code> (<code>timeout-minutes</code>
 cannot be read through <code>${{ }}</code>, so agreement is asserted rather than derived), and
 re-runs the headroom check on the committed pack every build &mdash; a pack that would be
 cancelled now fails in the <code>test</code> job in milliseconds.
 
-<b>Not fixed here, and now its own card:</b> a <code>cancelled</code> <code>ci</code> on main is
-still silent. <code>ci-failure-alert</code> gates on
-<code>conclusion == 'failure'</code>, so the run that skipped the release notified nobody either
-&mdash; see <code>cancelled-ci-on-main-is-silent-and-skips-the-release</code>.
+<b>Twelve has now run, and it cost more than the plan said &mdash; which is the finding this
+card closes on.</b> Over the 24 jobs of the two twelve-shard runs (<code>d7027cf8</code> and
+main's <code>58ace415</code>) the observed p50 is <b>34.6 min</b> against the 28.5 predicted, and
+the worst job <b>55.8</b> against the 54.4-minute tail those runs' own gate printed: 74% of the
+cap. That exceedance is not new, and the tempting reading &mdash; that twelve is where the tail
+estimate first broke &mdash; is wrong in the flattering direction. Replay every run's gate as it
+actually stood &mdash; that commit's
+own script against its own weights &mdash; and the predicted tail has been beaten at <b>three of
+the six runs on record</b>: +1.1, +0.4 and <b>+8.9</b> at eight shards (<code>dd416340</code>,
+54.2 predicted against a 63.1 worst) and +1.4 at twelve. The largest miss on record belongs to
+eight.
+
+<b>The width stands on that measured 74%. What does not stand is the margin the planner
+prints.</b> On the weights committed since (#1032, a re-timing of the same mutants)
+<code>plan --shards 12</code> says a 25.2-minute median and a 48.0-minute tail, 64% of the cap
+&mdash; so today's pack, asked about the run its own weights were timed from, under-predicts that
+job by <b>7.8 minutes</b>. That is the prospective basis, which is the one that matters before
+the next run and is <em>not</em> comparable to the replay figures above. Scored on the observed
+median at the committed <code>TAIL_MULTIPLIER</code> the pack is 34.6 &times; 1.91 = 66.0 min,
+<b>88% of the cap</b>.
+
+<b>So the cap question is answered by a model that is the wrong shape, not merely mis-fitted.</b>
+Graded against weights measured at its own width, eight implies a <code>RUNNER_EFFICIENCY</code>
+of 0.832 and twelve implies 0.593 &mdash; 40% apart, and no single multiplicative constant is
+both. The median falling only to 0.83 of itself where division through the origin predicts 0.667
+says the same thing without reference to any weights at all.
+
+<b>Not fixed here, and now its own card:</b> the model has no per-job <em>fixed</em> cost, so it
+flatters every width above the one it was fitted at &mdash; see
+<code>the-shard-model-has-no-per-job-fixed-cost</code>. Still tracked separately, and no longer
+by the mechanism this card first described: a <code>cancelled</code> <code>ci</code> on main used
+to notify nobody, because <code>ci-failure-alert</code> gated on <code>conclusion ==
+'failure'</code>. #1025 inverted that to the negation of the green set, so a cancellation does
+alert now &mdash; see <code>cancelled-ci-on-main-is-silent-and-skips-the-release</code> for what
+is left of it.
 
