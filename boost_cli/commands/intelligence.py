@@ -155,7 +155,12 @@ def _install_generated(name: str, text: str, yes: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="boost-gen-") as td:
         src = Path(td) / name
         src.mkdir()
-        (src / "SKILL.md").write_text(text, encoding="utf-8")
+        # newline="\n": install_from_path copies this into the canonical
+        # store and records util.sha256_dir over it, which hashes read_bytes.
+        # Every comparison against that hash is local today, so this is
+        # latent rather than live — but the digest it stamps into the lock
+        # would otherwise depend on which OS generated the skill.
+        (src / "SKILL.md").write_text(text, encoding="utf-8", newline="\n")
         try:
             res = store.install_from_path(src, name=name, tap_label="local")
         except BoostError as err:
@@ -799,7 +804,11 @@ def cmd_evolve(argv: list[str]) -> int:
     if not args.apply:
         out.info(out.role("re-run with --apply to write these changes", "muted"))
         return 0
-    skill_md.write_text(new, encoding="utf-8")
+    # newline="\n": the next line hashes this file's bytes, and the store is
+    # what gets symlinked into every agent's skills dir. Same latent class as
+    # the generated-skill write above — nothing compares across machines
+    # today, and the recorded digest should not depend on one either way.
+    skill_md.write_text(new, encoding="utf-8", newline="\n")
     entry["sha256"] = util.sha256_dir(store.skill_store_dir(args.name))
     entry["updated_at"] = util.now_iso()
     entry["version"] = new_ver

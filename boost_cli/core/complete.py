@@ -614,9 +614,30 @@ def plan_uninstall(shell: str) -> RcPlan:
 
 def apply(plan: RcPlan) -> Path:
     """Write ``plan``'s result. A no-op when it changes nothing, so an rc file
-    keeps its mtime (and its place in the user's backups) on a repeat run."""
+    keeps its mtime (and its place in the user's backups) on a repeat run.
+
+    ``newline="\\n"`` because the reader here is **bash**, which does not
+    fold. The damage is worse than a stray character: measured on bash 3.2
+    and zsh, a CRLF rc file does not merely mangle tokens, it stops parsing
+    — ``fi\\r`` gives ``syntax error: unexpected end of file``, so nothing
+    after the user's first ``if`` or ``for`` runs at all.
+
+    This rewrites the user's **whole** ``~/.bashrc`` or ``~/.zshrc``, not
+    only the lines boost added, so an unpinned write on Windows re-endings a
+    file boost does not own — ``tests (windows-latest, 3.14)`` measured
+    ``b'export A=1\\r\\neval "$(boost _complete)"\\r\\n'`` from a one-line
+    rc. Pinning cuts the same way: it normalizes the whole file to LF,
+    including lines boost never wrote, which is what bash wants and is still
+    a change beyond boost's own three. The one shell that might forgive CRLF
+    is MSYS2/Cygwin bash with ``shopt igncr``, which is off by default.
+
+    Idempotence is unaffected either way: :func:`_read_rc` reads through
+    universal newlines, so the next run compares LF to LF and reports no
+    change — which is also why boost would never repair a file it had
+    mangled, and would keep saying "already wired" over it.
+    """
     if plan.changes:
-        plan.path.write_text(plan.after, encoding="utf-8")
+        plan.path.write_text(plan.after, encoding="utf-8", newline="\n")
     return plan.path
 
 

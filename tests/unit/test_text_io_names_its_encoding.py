@@ -33,7 +33,9 @@ extend "as the sweep progresses". The sweep is this change: the 73 sites
 it measured are encoded and ``SWEPT`` is now every root that holds Python
 — ``boost_cli``, ``scripts``, ``tests``, ``evals``, ``boost_langchain``,
 ``noxfile.py``. That is every ``.py`` the repo tracks, exactly — pinned
-below against ``git ls-files``, not asserted here. The one file the
+below against ``git ls-files``, not asserted here. It is a claim about
+which *files* are opened and parsed, not about which *calls* inside them
+the walkers recognise; see the blind spots named further down. The one file the
 licence sweep covers and this one does not is the ``./boost`` launcher,
 which is a bash shim rather than Python; the reason sits beside ``SWEPT``.
 The file count is deliberately not written here — it is
@@ -54,6 +56,30 @@ raising. See ``tests/unit/test_journal.py``.
 whose text IO genuinely cannot name an encoding; none exists. A call that
 should not be flagged belongs in ``_is_file_open`` or ``_mode``, where it
 is fixed for every file at once, rather than in a list that mutes one.
+
+**What the walk covers is every tracked ``.py``; what it judges is not
+every text open in them.** The two are easy to read as one claim and they
+are not, which ``os.fdopen`` proved: it was excluded three separate ways
+at once and hid ``util.atomic_write_text``, the canonical writer behind
+nineteen call sites, from *both* guards for as long as they have existed.
+So the remaining blind spots are named here rather than left to be
+rediscovered the same way. Two shapes open a text file without going
+through ``open``/``fdopen``/``write_text``:
+
+* ``tempfile.NamedTemporaryFile(mode, ...)`` — a context manager, not an
+  ``open``. Adding it is not one line: its default mode is ``"w+b"``, so
+  unlike every name in ``_TEXT_IO`` a *missing* mode means binary, and
+  ``_mode`` returning ``None`` would have to stop meaning "assume text".
+* ``logging.FileHandler`` and its ``RotatingFileHandler`` subclass — these
+  take ``encoding=`` but have **no** ``newline=`` at all, so they can only
+  ever join the encoding walker, never the newline one.
+
+Both live sites are correct today — ``commands/run.py`` and
+``core/logs.py`` each pass ``encoding="utf-8"`` — and
+``TestTheWalkersCannotSeeTheseButTheyAreStillPinned`` below asserts that
+directly against the source, so removing one fails a test rather than a
+Windows runner. That is a narrower guarantee than the walk gives, and it
+is stated narrowly on purpose.
 
 **That number was 116 until the walker was corrected**, and the 43 it lost
 are worth naming, because an inflated backlog is not a conservative error:
@@ -525,6 +551,53 @@ class TestNothingLeavesAnEncodingToTheLocale:
             "text)." % ", ".join(bad))
 
 
+class TestTheWalkersCannotSeeTheseButTheyAreStillPinned:
+    """The two text opens no walker in this module recognises.
+
+    Named in the module docstring, asserted here. Neither shape goes
+    through ``open``/``fdopen``/``write_text``, so both report clean to a
+    guard that has never looked at them — the same way ``os.fdopen`` did
+    until this change. Reading the source is cruder than an AST walk and
+    deliberately so: the point is to fail if someone deletes the
+    ``encoding=``, not to re-implement the walker for two call sites.
+    """
+
+    def test_the_temporary_runner_script_names_its_encoding(self):
+        """``boost run`` writes a Python file for a child interpreter.
+
+        ``tempfile.NamedTemporaryFile`` is a context manager rather than an
+        ``open``, and its default mode is binary — which is why it cannot
+        be folded into ``_TEXT_IO`` without teaching ``_mode`` that a
+        missing mode means ``"w+b"`` here and text everywhere else.
+        """
+        src = (ROOT / "boost_cli/commands/run.py").read_text(encoding="utf-8")
+        call = re.search(r"NamedTemporaryFile\((?:[^()]|\([^()]*\))*\)", src)
+        assert call, "the runner no longer writes through NamedTemporaryFile"
+        assert 'encoding="utf-8"' in call.group(0), (
+            "boost_cli/commands/run.py writes the child runner through "
+            "NamedTemporaryFile without an encoding. No walker in this "
+            "module can see that call, so this assertion is the only "
+            "thing standing between it and cp1252 on a Windows runner.")
+
+    def test_the_rotating_log_handler_names_its_encoding(self):
+        """The diagnostic log, written by ``logging`` rather than by boost.
+
+        ``RotatingFileHandler`` takes ``encoding=`` and no ``newline=``, so
+        it can only ever join the encoding walker. It is also the one
+        writer here boost cannot pin even if it wanted to: ``logging``
+        terminates every record with ``"\n"`` through a text stream it
+        owns.
+        """
+        src = (ROOT / "boost_cli/core/logs.py").read_text(encoding="utf-8")
+        call = re.search(r"_BestEffortFileHandler\(\s*\n(?:.*\n)*?\s*\)", src)
+        assert call, "logs.py no longer constructs the rotating handler"
+        assert 'encoding="utf-8"' in call.group(0), (
+            "boost_cli/core/logs.py attaches the rotating file handler "
+            "without an encoding. logging opens the file itself, so no "
+            "walker here sees it and ~/.boost/logs/boost.log would be "
+            "written in cp1252 on Windows.")
+
+
 class TestAPinnedWriterReallyEmitsLF:
     """The dynamic half, and the only half that can fail on the platform.
 
@@ -576,6 +649,148 @@ class TestAPinnedWriterReallyEmitsLF:
                                after="export A=1\neval \"$(boost _complete)\"\n")
         complete.apply(plan)
         assert b"\r" not in rc.read_bytes()
+
+
+def _write_calls_containing(path: Path, marker: str) -> list[ast.Call]:
+    """Every text-write call in *path* whose own source contains *marker*.
+
+    Anchored on the source text of the call rather than on a line number,
+    because a line number in a table goes stale the first time anything
+    above it moves and then silently guards the wrong call. A marker that
+    stops matching fails loudly instead, which is the behaviour wanted: it
+    means the writer was rewritten and its reason needs re-deciding.
+    """
+    src = path.read_text(encoding="utf-8")
+    out: list[ast.Call] = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.Call):
+            continue
+        name = (node.func.attr if isinstance(node.func, ast.Attribute)
+                else getattr(node.func, "id", None))
+        if name not in ("write_text", "open", "fdopen"):
+            continue
+        if marker in (ast.get_source_segment(src, node) or ""):
+            out.append(node)
+    return out
+
+
+#: The writers pinned on purpose, each with the reader that makes it matter.
+#:
+#: Deliberately a *table of five* against 934 unpinned writes in the same
+#: tree, and the asymmetry is the finding, not an omission: a blanket sweep
+#: would be 934 edits of which 929 are churn, and churn is what makes the
+#: five unreviewable. Every row names a reader that sees the bytes without
+#: folding them. A row with no such reader does not belong here — the
+#: roadmap card ``writers-whose-bytes-are-compared-do-not-pin-their-newline``
+#: carries the measured tiering and the two triage rules that keep this
+#: table from growing on plausibility.
+PINNED_WRITERS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "boost_cli/core/util.py",
+        'fd, "w", encoding=encoding',
+        "1-live",
+        "atomic_write_text is the canonical durable writer, behind 19 call"
+        " sites (17 after R1; rag.py's two bare json.dumps emit no literal"
+        " newline). The non-folding reader is git, via exactly one of them:"
+        " projectlock.write stamps <repo>/.boost/skill-lock.json, which that"
+        " module says is meant to be committed. NOT sha256_dir — every one"
+        " of those hashes a copytree'd skill dir, never a file this writes."
+        " Measured red on tests (windows-latest, 3.14): b'a\\r\\nb\\r\\n'.",
+    ),
+    (
+        "boost_cli/core/complete.py",
+        "plan.after",
+        "1-live",
+        "complete.apply rewrites the user's whole ~/.bashrc or ~/.zshrc, and"
+        " bash does not fold. Measured on bash 3.2 and zsh, a CRLF rc does"
+        " not merely mangle tokens — it stops parsing at the first compound"
+        " statement (fi\\r -> syntax error: unexpected end of file), so the"
+        " rest of the user's own file never runs. Measured red on the same"
+        " job: b'export A=1\\r\\neval \"$(boost _complete)\"\\r\\n'.",
+    ),
+    (
+        "boost_cli/commands/team.py",
+        "#!/usr/bin/env bash",
+        "1-live",
+        "boost protocol register writes a bash script, and bash is a"
+        " non-Python parser reading it byte for byte. The write sits above"
+        " the Darwin/Linux branch, so it is the one part of that command"
+        " that runs on Windows. Which CR failure bites is shell-specific"
+        " and deliberately unclaimed: 'bad interpreter: bash\\r' is kernel"
+        " binfmt_script behaviour and Windows has none, and the URL route"
+        " is ruled out because urlparse strips CR. The artifact is simply"
+        " wrong, which is reason enough for one keyword.",
+    ),
+    (
+        "boost_cli/commands/intelligence.py",
+        'SKILL.md").write_text',
+        "2-latent",
+        "distill/infer/absorb stage a generated SKILL.md that"
+        " install_from_path copies into the canonical store and stamps with"
+        " util.sha256_dir. Latent, not live: every comparison against that"
+        " digest is local today, so nothing breaks — but the digest should"
+        " not record which OS generated the skill.",
+    ),
+    (
+        "boost_cli/commands/intelligence.py",
+        "skill_md.write_text",
+        "2-latent",
+        "evolve --apply rewrites a skill in the store and hashes it on the"
+        " very next line. Same latent class, and the store is what gets"
+        " symlinked into every agent's skills dir.",
+    ),
+)
+
+
+class TestEveryPinnedWriterIsStillPinned:
+    """The table above, checked against the tree rather than trusted.
+
+    Three failure modes, and each gets its own assertion: the marker stops
+    matching (the writer was rewritten, so its reason needs re-deciding),
+    it matches more than once (the marker stopped being specific and the
+    row now guards an unknown call), and the ``newline=`` is gone.
+    """
+
+    @pytest.mark.parametrize(("rel", "marker", "tier", "reason"),
+                             PINNED_WRITERS,
+                             ids=[r[0].rsplit("/", 1)[-1] + ":" + r[1][:18]
+                                  for r in PINNED_WRITERS])
+    def test_the_pin_is_there(self, rel, marker, tier, reason):
+        calls = _write_calls_containing(ROOT / rel, marker)
+        assert len(calls) == 1, (
+            "%s: %d writes match %r, expected exactly 1. A row of"
+            " PINNED_WRITERS no longer names one call, so it is guarding"
+            " nothing or guarding the wrong thing." % (rel, len(calls), marker))
+        kw = {k.arg: k.value for k in calls[0].keywords}
+        assert "newline" in kw, (
+            "%s line %d lost newline=\"\\n\". It is pinned (%s) because:"
+            " %s" % (rel, calls[0].lineno, tier, reason))
+        assert isinstance(kw["newline"], ast.Constant), (
+            "%s line %d pins a non-literal newline" % (rel, calls[0].lineno))
+        assert kw["newline"].value == "\n", (
+            "%s line %d pins newline=%r, not LF"
+            % (rel, calls[0].lineno, kw["newline"].value))
+
+    def test_every_tier_is_one_the_card_defines(self):
+        """No row may invent a tier, because the tier is the justification."""
+        assert {t for _, _, t, _ in PINNED_WRITERS} <= {
+            "1-live", "2-latent"}, (
+            "PINNED_WRITERS may only hold writers whose bytes a non-folding"
+            " reader sees (1-live) or will see (2-latent). A 3-tracked or"
+            " 4-folds row is the churn this table exists to refuse.")
+
+    def test_the_table_does_not_quietly_become_a_sweep(self):
+        """Five rows against 934 unpinned writes is the point of the card.
+
+        Not a cap on correctness — a new row with a real reader is welcome.
+        It is a cap on *silence*: crossing it means the scoping argument in
+        the roadmap card has changed and should be rewritten rather than
+        outgrown one row at a time.
+        """
+        assert len(PINNED_WRITERS) <= 12, (
+            "PINNED_WRITERS has grown past a dozen. Re-read the roadmap card"
+            " writers-whose-bytes-are-compared-do-not-pin-their-newline: if"
+            " a sweep is now the right answer, say so there first.")
 
 
 class TestTheScriptPinsItsNewlines:
