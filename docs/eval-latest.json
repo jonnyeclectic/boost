@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "generated": "2026-09-29T12:32:52Z",
-  "commit": "e11a34f2",
+  "generated": "2026-10-06T13:09:49Z",
+  "commit": "75ef121c",
   "engine": "bm25",
   "corpus": {
     "entries": 57,
