@@ -2,14 +2,13 @@
 id: shrink-the-published-index
 board: code
 section: planned
-status: inflight
+status: planned
 category: Performance · Storage
 complexity: M
 impact: Med
 wow: 3
 note: 653 MB of postings holds 1.4 MB of distinct terms — the term string is stored 88 times over
 order: 100
-owner: loop/shrink-postings-index
 pr: 688
 title: shrink the keyword index before publishing it — structure first, then compression
 ---
@@ -74,3 +73,19 @@ this sandbox has no such store to measure against, only a small synthetic one (i
 a 1.8M-posting/20k-term synthetic store from 63.6&nbsp;MB to 47.9&nbsp;MB, directionally consistent
 with the real-store estimate above but not a substitute for it). Left as follow-on work before this
 card can be called shipped.
+
+<b>Partly landed, and un-claimed — 2026-10-06.</b> The <b>interning</b> half shipped:
+<code>terms(id, term, df)</code> with <code>postings(term_id, doc, tf)</code> is on
+<code>main</code> (<code>rag.py</code> <code>_write_postings</code>), and
+<code>stem_expansions</code> reads the precomputed <code>df</code> column instead of
+<code>GROUP BY</code>-ing the whole postings table. It arrived as <b>#691</b>
+(<code>64ac398d</code>), not as this card's <code>pr: 688</code> — that PR's head moved after
+the train was cut, so GitHub never labelled it merged even though the diff against
+<code>main</code> is empty.
+
+<b>What did NOT land is this card's actual deliverable:</b> the measured comparison — raw vs
+interned vs delta+varint, each &times; none/gzip/zstd, with import-side decode time beside each.
+Without that table <a href="#publish-the-keyword-index">publish-the-keyword-index</a> still has
+no size answer, which is why it is held. Claim dropped because branch
+<code>loop/shrink-postings-index</code> no longer exists; take it by setting
+<code>owner</code> again.
