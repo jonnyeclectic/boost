@@ -799,18 +799,40 @@ def test_parent_matches_spelling_holds_through_a_symlinked_base(tmp_path):
 
 
 @pytest.mark.parametrize("rel", ["", None, 123, {"p": "x"},
-                                 "/etc/passwd", Path("/etc")])
+                                 "/etc/passwd", Path("/etc"),
+                                 "C:/Windows", "C:\\Windows",
+                                 "\\\\server\\share\\x", "a\x00b/x"])
 def test_parent_matches_spelling_refuses_what_is_not_a_relative_string(
         tmp_path, rel):
-    """Ordered clauses: `Path(rel).is_absolute()` raises TypeError on a dict,
-    so the string test has to come first and is what makes it safe to call."""
+    """Ordered clauses: `ntpath.isabs` raises TypeError on a dict, so the
+    string test has to come first and is what makes it safe to call.
+
+    The spellings are deliberately from both platforms and are asserted on
+    whichever one is running. A drive letter and a UNC path are not absolute
+    to `posixpath`, and `/etc/passwd` is not absolute to a `WindowsPath` —
+    which is how this guard came to answer True for it on all three
+    `tests (windows-latest, 3.1x)` jobs while passing here.
+    """
     assert not scopes.parent_matches_spelling(tmp_path, rel)
 
 
 def test_parent_matches_spelling_fails_closed_on_a_value_error(tmp_path):
-    """`realpath` raises ValueError on an embedded NUL rather than answering.
+    """The NUL is refused by name, and the `except ValueError` still earns it.
 
     A lock is a committed file, so the bytes in it are whatever someone wrote.
     Crashing out of a delete guard is the one outcome it may not have.
     """
     assert not scopes.parent_matches_spelling(tmp_path, "a\x00b/x")
+
+
+def test_parent_matches_spelling_fails_closed_on_an_unusable_base(tmp_path):
+    """The `rel` clauses cannot vet the *base*, and it is committed data too.
+
+    `store` hands this `resolved_base`, which descends from the lock's own
+    recorded `base` — same provenance as the row, same lack of a guarantee.
+    `realpath` raises `ValueError` on a NUL there on posix and the walk
+    cannot run on any platform, so the `except` is what answers rather than
+    a traceback out of a delete guard.
+    """
+    assert not scopes.parent_matches_spelling("%s/a\x00b" % tmp_path,
+                                              ".claude/x")
