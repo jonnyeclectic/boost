@@ -187,7 +187,8 @@ def try_lock(path, stale_after: float = 300.0):
         yield False
         return
     try:
-        with contextlib.suppress(OSError), os.fdopen(fd, "w") as f:
+        with contextlib.suppress(OSError), os.fdopen(
+                fd, "w", encoding="utf-8") as f:
             fd = None                      # fdopen owns it now
             f.write(str(os.getpid()))
         yield True

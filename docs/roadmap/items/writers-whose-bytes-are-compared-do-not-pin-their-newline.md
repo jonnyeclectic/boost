@@ -2,14 +2,14 @@
 id: writers-whose-bytes-are-compared-do-not-pin-their-newline
 board: code
 section: compat
-status: planned
+status: inflight
 category: Portability · Windows
 complexity: M
 impact: Med
 wow: 2
 note: 917 text writes take the platform line ending; only the compared ones are bugs
 order: 363
-owner:
+owner: loop/pin-compared-newlines
 pr:
 title: "917 text writes leave the line ending to the platform, and only some of them are bugs"
 ---

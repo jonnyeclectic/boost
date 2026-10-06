@@ -88,6 +88,8 @@ from pathlib import Path
 
 import pytest
 
+from boost_cli.core import complete, util
+
 
 def _checkout_root(start: Path) -> Path:
     """The working tree *start* sits in, found by walking up for ``.git``.
@@ -141,7 +143,7 @@ def swept_files() -> list[Path]:
         out.extend([p] if p.is_file() else sorted(p.rglob("*.py")))
     return [p for p in out if p.relative_to(ROOT).as_posix() not in EXEMPT]
 
-_TEXT_IO = frozenset({"read_text", "write_text", "open"})
+_TEXT_IO = frozenset({"read_text", "write_text", "open", "fdopen"})
 
 
 #: Dotted roots whose ``.open`` is not a filesystem text open. ``tarfile``
@@ -150,6 +152,16 @@ _TEXT_IO = frozenset({"read_text", "write_text", "open"})
 #: a URL. Counting them is not a conservative over-report: it inflates the
 #: size of a sweep nobody can then finish, and it would fail the guard on a
 #: call with no encoding to name, now that the walk covers every file.
+#:
+#: ``os`` is here for ``os.open`` and **not** for ``os.fdopen``, which is
+#: :func:`io.open` on a descriptor and takes both ``encoding=`` and
+#: ``newline=``. Excluding the whole module hid the two of them together,
+#: and the one it hid is the one that matters:
+#: ``util.atomic_write_text`` — the canonical writer behind 19 call sites,
+#: among them the lock file, ``config.json``, every tap cache and every
+#: rule materialized into a user's ``CLAUDE.md`` — writes through
+#: ``os.fdopen`` and so reported clean to *both* walkers. ``fdopen`` is
+#: carved out in :func:`_is_file_open` rather than by dropping ``os``.
 _NOT_FILE_OPENS = frozenset({"tarfile", "zipfile", "os", "webbrowser",
                              "socket", "shelve", "dbm", "sqlite3"})
 
@@ -173,6 +185,8 @@ def _is_file_open(call: ast.Call) -> bool:
     without having to resolve the receiver's type.
     """
     if isinstance(call.func, ast.Name):
+        return True
+    if call.func.attr == "fdopen":
         return True
     recv = call.func.value
     if _root_name(recv) in _NOT_FILE_OPENS:
@@ -201,8 +215,16 @@ def _mode(call: ast.Call) -> str | None:
     ``unencoded`` flag binary ``p.open("rb")`` as a missing encoding, and
     made ``unpinned_newline`` skip text ``p.open("w")`` entirely. One bug,
     two guards, opposite directions.
+
+    ``os.fdopen(fd, "w")`` is the third spelling and sides with the builtin:
+    it is an *attribute* call whose mode is nonetheless second, because the
+    descriptor takes the first slot. Reading it as ``Path.open`` yields the
+    ``fd`` name, which is no ``Constant``, so ``_mode`` answered ``None``
+    and ``unpinned_newline`` skipped the call -- exactly the failure this
+    docstring already describes, one spelling later.
     """
-    pos = 0 if isinstance(call.func, ast.Attribute) else 1
+    attr = getattr(call.func, "attr", None)
+    pos = 0 if isinstance(call.func, ast.Attribute) and attr != "fdopen" else 1
     if len(call.args) > pos and isinstance(call.args[pos], ast.Constant):
         return call.args[pos].value
     for kw in call.keywords:
@@ -226,12 +248,12 @@ def unencoded(path: Path) -> list[tuple[int, str]]:
             continue
         if name not in _TEXT_IO:
             continue
-        if name == "open" and not _is_file_open(node):
+        if name in ("open", "fdopen") and not _is_file_open(node):
             continue
         if any(kw.arg == "encoding" for kw in node.keywords):
             continue
         # Binary mode has no encoding to name, and `read_bytes` never did.
-        mode = _mode(node) if name == "open" else None
+        mode = _mode(node) if name in ("open", "fdopen") else None
         if mode and "b" in mode:
             continue
         out.append((node.lineno, name))
@@ -252,7 +274,7 @@ def unpinned_newline(path: Path) -> list[tuple[int, str]]:
             continue
         name = (node.func.attr if isinstance(node.func, ast.Attribute)
                 else node.func.id if isinstance(node.func, ast.Name) else None)
-        if name == "open":
+        if name in ("open", "fdopen"):
             if not _is_file_open(node):
                 continue
             mode = _mode(node)
@@ -280,6 +302,37 @@ class TestTheGuardCanActuallySee:
                     "tests/unit/test_mutation_weights_drift.py",
                     "noxfile.py"):
             assert one in rel, one
+
+    def test_both_walkers_see_os_fdopen(self, tmp_path):
+        """The spelling that hid the repo's canonical writer from both.
+
+        `os.fdopen` is `io.open` on a descriptor and takes `encoding=` and
+        `newline=` — but it was excluded three times over: by name (neither
+        walker's name set held it), by receiver (`os` is in
+        `_NOT_FILE_OPENS`, which is right for `os.open` and wrong for this),
+        and by position (`_mode` reads an attribute call's mode from
+        `args[0]`, which here is the descriptor, so the mode came back
+        `None` and the call was skipped as non-text).
+
+        `util.atomic_write_text` writes through it, so the lock file,
+        `config.json`, every tap cache and every rule materialized into a
+        user's `CLAUDE.md` reported clean to a guard that had never looked
+        at them. Asserted on a synthetic file so the test keeps meaning
+        something after the real call sites are pinned.
+        """
+        f = tmp_path / "w.py"
+        f.write_text("import os\n"
+                     "with os.fdopen(fd, 'w') as h: h.write(t)\n"
+                     "with os.fdopen(fd, 'w', encoding='utf-8') as h: pass\n"
+                     "with os.fdopen(fd, 'wb') as h: pass\n"
+                     "fd2 = os.open(p, 0)\n",
+                     encoding="utf-8", newline="\n")
+        # Line 2 names no encoding; line 3 does; binary and `os.open` are
+        # neither's business.
+        assert [ln for ln, _ in unencoded(f)] == [2]
+        # Both text writes lack `newline=`; the binary one is excluded by
+        # mode, which only works because `_mode` now reads position 1.
+        assert [ln for ln, _ in unpinned_newline(f)] == [2, 3]
 
     def test_the_root_is_the_checkout_not_a_copy_inside_it(self, tmp_path):
         """The ``mutants/`` shape, spelled out.
@@ -470,6 +523,59 @@ class TestNothingLeavesAnEncodingToTheLocale:
             "UTF-8, so the same file reads back as different text. Pass "
             "encoding=\"utf-8\" (or read_bytes() if the content is not "
             "text)." % ", ".join(bad))
+
+
+class TestAPinnedWriterReallyEmitsLF:
+    """The dynamic half, and the only half that can fail on the platform.
+
+    Everything else in this module is an AST walk: it proves a ``newline=``
+    is *spelled*, never that it *matters*. A round trip on Linux passes
+    whether the newline is pinned or not — ``os.linesep`` is already
+    ``"\n"`` — which is exactly the class of test the encoding card's own
+    verification pass caught twice. So these assert on **bytes**, and they
+    are written to be trivially green here and red on
+    ``tests (windows-latest, 3.1x)`` until the writer is pinned.
+
+    Monkeypatching ``os.linesep`` does **not** simulate it. The translation
+    lives in the C ``TextIOWrapper``, which hardcodes ``"\r\n"`` under
+    ``MS_WINDOWS`` and never consults ``os.linesep`` — so a local
+    "simulation" of this test would pass against an unpinned writer and
+    prove the opposite of what it claims. The Windows runner is the
+    instrument; there is no substitute for it.
+    """
+
+    def test_atomic_write_text_emits_lf(self, tmp_path):
+        """The canonical writer, and the one with the widest blast radius.
+
+        ``util.atomic_write_text`` is behind 19 call sites — the user lock,
+        the project lock, ``config.json``, every tap catalog cache, every
+        rule materialized into a user's ``CLAUDE.md``, every rendered
+        workflow, the BM25 index. It writes through ``os.fdopen``, which
+        both walkers were blind to until this change, so none of those 19
+        has ever been counted in the backlog.
+        """
+        p = tmp_path / "x.json"
+        util.atomic_write_text(p, "a\nb\n")
+        assert b"\r" not in p.read_bytes()
+        assert p.read_bytes() == b"a\nb\n"
+
+    def test_the_shell_rc_writer_emits_lf(self, tmp_path):
+        """``boost completions install`` rewrites the user's rc file whole.
+
+        ``complete.apply`` writes ``plan.after`` over all of ``~/.bashrc``
+        or ``~/.zshrc``, and the reader is **bash**, which does not fold: a
+        trailing ``\r`` becomes part of the last word of every command.
+        Pinning normalizes the whole file to LF, not just boost's own
+        lines — which is what bash wants, and is a change beyond the lines
+        boost added, so it is said out loud here.
+        """
+        rc = tmp_path / ".bashrc"
+        rc.write_text("export A=1\n", encoding="utf-8", newline="\n")
+        plan = complete.RcPlan(path=rc, action="add",
+                               before="export A=1\n",
+                               after="export A=1\neval \"$(boost _complete)\"\n")
+        complete.apply(plan)
+        assert b"\r" not in rc.read_bytes()
 
 
 class TestTheScriptPinsItsNewlines:
