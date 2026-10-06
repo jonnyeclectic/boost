@@ -2,14 +2,14 @@
 id: an-item-materialized-nowhere-reads-ok-in-verify-health-drift
 board: code
 section: health
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 2
 note: a rule whose every materialization row names an agent boost no longer writes reads "ok" in verify and is counted as installed by health — only doctor says otherwise
 order: 354
-owner:
+owner: loop/materialized-nowhere
 pr:
 title: An item materialized <em>nowhere</em> reads <code>ok</code> in <code>verify</code>, <code>health</code> and <code>drift</code>
 ---

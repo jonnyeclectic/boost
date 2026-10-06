@@ -645,14 +645,21 @@ def cmd_attest(argv):
                 # it was written. UNLOCKED (a pre-hash entry) never fails.
                 st = integrity.materialized_status(name, entry, kind)
             rec["sha_ok"] = st not in (integrity.STATUS_MODIFIED,
-                                       integrity.STATUS_MISSING)
+                                       integrity.STATUS_MISSING,
+                                       integrity.STATUS_UNREACHABLE)
             rec["journal"] = ev is not None
             if not rec["sha_ok"]:
                 # A missing store dir / materialized artifact is not a content
                 # change — conflating the two sends the user hunting for
-                # tampering when the remedy is `boost heal`.
-                rec["reason"] = ("missing" if st == integrity.STATUS_MISSING
-                                 else "modified")
+                # tampering when the remedy is `boost heal`. Unreachable is a
+                # third thing again: nothing was tampered with and nothing is
+                # missing, because no artifact was ever written. Folding it
+                # into "modified" would accuse a user of editing a file whose
+                # only act was turning an agent off.
+                rec["reason"] = (
+                    "unreachable" if st == integrity.STATUS_UNREACHABLE
+                    else "missing" if st == integrity.STATUS_MISSING
+                    else "modified")
                 failures += 1
         records.append(rec)
 
@@ -673,7 +680,13 @@ def cmd_attest(argv):
     if args.verify:
         for r in records:
             if not r["sha_ok"]:
-                if r["reason"] == "missing":
+                if r["reason"] == "unreachable":
+                    # Not `boost sync`: it filters these rows out by design,
+                    # so it is a guaranteed no-op. `doctor` is where
+                    # `_mat_remedy` words the per-agent remedy correctly.
+                    msg = ("reaches no agent boost writes — nothing was "
+                           "attested (boost doctor names the agents)")
+                elif r["reason"] == "missing":
                     msg = ("store directory missing (boost heal)"
                            if r["kind"] == "skill"
                            else "materialized file missing")

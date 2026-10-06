@@ -33,6 +33,8 @@ STATUS_MODIFIED = "modified"     # on-disk content no longer matches the lock
 STATUS_MISSING = "missing"       # lock says installed, but the store dir is gone
 STATUS_UNLOCKED = "unlocked"     # present on disk but no lock digest to check
 STATUS_QUARANTINED = "quarantined"  # artifacts removed on purpose; stash holds them
+STATUS_UNREACHABLE = "unreachable"  # rows exist and boost writes none of the
+                                    # agents they name: the item reached nothing
 
 ENFORCE_KEY = "security.enforce_digest"
 COMMIT_KEY = "security.enforce_commit"
@@ -64,6 +66,40 @@ def status(name: str, entry: dict | None = None) -> str:
     return STATUS_OK if util.sha256_dir(sdir) == recorded else STATUS_MODIFIED
 
 
+def reaches_no_agent(kind: str | None, entry: dict) -> bool:
+    """Whether every materialization row names an agent boost no longer writes.
+
+    Skipping such a row is right *per row*: nothing wrote that file and
+    nothing ever will, so reading it as ``MISSING`` reported a fault whose
+    remedy could not run (:func:`agents.materialization_is_written`).
+    Skipping *every* row of an item is a different fact -- the rule reaches
+    no agent, the workflow is in no command palette -- and the loop that
+    skipped them has nothing left to judge, so it fell through to ``OK`` and
+    an install that materialized nowhere read as healthy on every surface but
+    ``doctor``'s note.
+
+    An item with **no rows** is not this case and must keep reading ``OK``: a
+    rule installed before rows existed has nothing to be unreachable about.
+    That is the whole of ``bool(rows)``, and keying on "no row was written"
+    instead would condemn every pre-rows entry on five surfaces at once. A
+    row carrying no ``agent`` counts as written -- ``agents`` answers ``True``
+    for it, preferring a reported gap to a dropped one -- so such an entry is
+    judged by the loop, never condemned here.
+
+    One predicate because two surfaces ask it: :func:`materialized_status`
+    below, and ``boost doctor``, which walks the rows itself rather than
+    re-reading every artifact. Re-deriving it in the command layer is how the
+    two would come to disagree -- the same failure the ``kind`` parameter was
+    added to :func:`materialized_status` to prevent.
+    """
+    rows = entry.get("materializations") or []
+    kind = str(kind or entry.get("kind") or "rule")
+    return bool(rows) and not any(
+        agents.materialization_is_written(kind, entry.get("base"),
+                                          m.get("agent"))
+        for m in rows)
+
+
 def materialized_status(name: str, entry: dict,
                         kind: str | None = None) -> str:
     """Classify a rule/workflow's integrity against its lock entry.
@@ -91,8 +127,17 @@ def materialized_status(name: str, entry: dict,
     from . import rules
     if entry.get("quarantined"):
         return STATUS_QUARANTINED
-    unlocked = False
     kind = str(kind or entry.get("kind") or "rule")
+    # Every row skipped means the item reached nothing. Asked before the loop
+    # rather than after it because each of the three in-loop outcomes needs a
+    # *written* row -- MISSING and MODIFIED return from inside the body and
+    # `unlocked` is only set there -- so this is mutually exclusive with all
+    # of them and there is no precedence to settle. Quarantine still wins
+    # above: those artifacts are gone on purpose, and calling that unreachable
+    # would send the user to a remedy that re-arms what quarantine disarmed.
+    if reaches_no_agent(kind, entry):
+        return STATUS_UNREACHABLE
+    unlocked = False
     for m in entry.get("materializations") or []:
         # A row naming an agent boost no longer writes is a record, not an
         # artifact: nothing wrote that file and nothing ever will, so reading
@@ -202,6 +247,7 @@ def verification_passed(status: str, missing_fields: list, commit_pin: str | Non
 _VERIFY_ROLE_BY_STATUS = {
     STATUS_OK: "success", STATUS_MODIFIED: "warn", STATUS_MISSING: "danger",
     STATUS_UNLOCKED: "warn", STATUS_QUARANTINED: "muted",
+    STATUS_UNREACHABLE: "warn",
 }
 
 

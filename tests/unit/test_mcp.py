@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import pathlib
 import re
 
 import pytest
@@ -1569,6 +1570,71 @@ class TestDoctorToolOnACorruptConfig:
         from boost_cli.commands import configuration
         text, is_error = configuration._tool_doctor({})
         assert is_error is False and "boost tap --defaults" in text
+
+
+class TestDoctorToolOnAnItemMaterializedNowhere:
+    """The MCP twin of CLI doctor's unreachable item.
+
+    `sync_plan` filters an unwritten row out by design -- nothing wrote that
+    file and nothing will -- so an item whose *every* row is unwritten is
+    invisible to the plan this tool reports. It reached no agent and the only
+    doctor an agent ever reads called the machine healthy. Asserted through
+    `_tool_doctor` rather than `boost doctor`, because the two derive the
+    count from different code and a fix to one is not a fix to the other.
+    """
+
+    def _seed(self, name="house", agent="cursor"):
+        from boost_cli.core import config, lockfile, paths
+        rp = paths.home() / (".%s" % agent) / "rules" / ("%s.mdc" % name)
+        rp.parent.mkdir(parents=True, exist_ok=True)
+        rp.write_text("# %s\n" % name, encoding="utf-8")
+        lockfile.set_rule(name, {"kind": "rule", "materializations": [
+            {"agent": agent, "mode": "file", "path": str(rp)}]})
+        cfg = config.load()
+        cfg["agents"][agent]["enabled"] = False
+        config.save(cfg)
+        return rp
+
+    def test_it_is_counted_and_named(self, sandbox):
+        from boost_cli.commands import configuration
+        self._seed()
+        text, is_error = configuration._tool_doctor({})
+        assert "rule house: reaches no agent boost writes" in text
+        assert is_error is True
+        assert "0 issue" not in text
+
+    def test_it_is_not_reported_as_modified(self, sandbox):
+        """Nothing was tampered with -- no artifact was ever written. The two
+        share a label map precisely so they cannot be confused for one
+        another."""
+        from boost_cli.commands import configuration
+        self._seed()
+        text, _ = configuration._tool_doctor({})
+        assert "modified since install" not in text
+
+    def test_an_item_that_still_reaches_one_agent_is_silent(self, sandbox):
+        from boost_cli.commands import configuration
+        from boost_cli.core import lockfile, paths
+        rp = paths.home() / ".cursor" / "rules" / "house.mdc"
+        rp.parent.mkdir(parents=True, exist_ok=True)
+        rp.write_text("# house\n", encoding="utf-8")
+        gone = paths.home() / ".windsurf" / "rules" / "house.mdc"
+        lockfile.set_rule("house", {"kind": "rule", "materializations": [
+            {"agent": "cursor", "mode": "file", "path": str(rp)},
+            {"agent": "windsurf", "mode": "file", "path": str(gone)}]})
+        text, _ = configuration._tool_doctor({})
+        # cursor stays enabled, so the item reaches somewhere; whatever the
+        # windsurf row reports, it is not *unreachable*
+        assert "reaches no agent boost writes" not in text
+
+    def test_the_label_map_covers_every_status_this_tool_can_see(self):
+        """A status added to CLI doctor and not here drops out of the count on
+        the one doctor surface with no human reading it."""
+        from boost_cli.commands import configuration
+        from boost_cli.core import integrity
+        src = pathlib.Path(configuration.__file__).read_text(encoding="utf-8")
+        assert "integrity.STATUS_UNREACHABLE:" in src
+        assert integrity.STATUS_UNREACHABLE == "unreachable"
 
 
 class TestTheStatedCostIsPricedPerMachine:
