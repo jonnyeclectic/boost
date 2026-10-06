@@ -2,7 +2,7 @@
 id: wrap-width-judged-by-stdout
 board: code
 section: planned
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Low

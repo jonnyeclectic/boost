@@ -2,7 +2,7 @@
 id: util-rmtree-chmods-a-symlink-target-outside-the-tree
 board: code
 section: trust
-status: inflight
+status: shipped
 category: Core · Bug
 complexity: S
 impact: Med

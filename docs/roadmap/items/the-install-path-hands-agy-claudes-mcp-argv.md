@@ -2,7 +2,7 @@
 id: the-install-path-hands-agy-claudes-mcp-argv
 board: code
 section: planned
-status: inflight
+status: shipped
 category: MCP · Bug
 complexity: S
 impact: Medium
@@ -11,6 +11,7 @@ note: Two functions built the same `mcp add` command line, one had never heard o
 order: 350
 owner: loop/mcpdecl-host-parity
 title: Registering a skill's MCP server handed Antigravity the one argv its CLI rejects
+pr: 978
 ---
 <b>Found by a reviewing subagent on <a href="https://github.com/jonnyeclectic/boost/pull/977">#977</a>,
 which was about a different file.</b> <code>boost install</code> of a skill that declares an MCP

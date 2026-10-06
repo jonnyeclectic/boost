@@ -2,7 +2,7 @@
 id: project-scope-in-an-unmarked-tree-does-not-walk-up
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med

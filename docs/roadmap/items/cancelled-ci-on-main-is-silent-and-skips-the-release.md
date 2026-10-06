@@ -2,7 +2,7 @@
 id: cancelled-ci-on-main-is-silent-and-skips-the-release
 board: code
 section: trust
-status: inflight
+status: shipped
 category: CI · Bug
 complexity: S
 impact: High

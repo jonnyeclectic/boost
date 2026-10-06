@@ -622,120 +622,9 @@
       </article>
 
       <article class="cap rcard" id="tool-call-eval-tier">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Quality · Eval</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Eval</span></div>
         <h3>a Tier 3 eval for tool-call behaviour, floored in <b>both</b> directions</h3>
-        <p>boost's required gate floors <b>four</b> retrieval metrics — recall@k &ge; 0.78, hit@1 &ge; 0.40,
-MRR &ge; 0.52, nDCG@k &ge; 0.58 — over a 91-query golden set and a 10,152-entry corpus, every
-row pinned to a commit SHA. All of it measures what boost returns <i>once it is asked</i>. Nothing
-measures whether an agent asks. **The call itself is unmeasured**, and it is the step everything
-downstream depends on.
-
-<b>The miss that exposed it.</b> A Gemini CLI session was asked to "create a new, simplified app
-demonstrating RAG implementation in Python3 using langGraph, langChain, and langSmith" — a new
-project, an architecture decision and a dependency choice, which is three of the triggers
-<code>boost_search</code>'s description names explicitly. It activated two already-installed
-skills, built the app, and never called boost. Asked why, it paraphrased boost's own lock-in
-trigger list back verbatim, so the text was read and was not persuasive. A gate that floors
-recall@k at 0.78 reported nothing, because retrieval was never invoked.
-
-<b>Every claim in the MCP surface is argued, not measured.</b> The triggers, the 10-15s stated
-cost, the skip list, the three-kind framing, the "already covered is not already checked" defeater
-— each survived a careful review and none has a number behind it. That is a
-high-variance lever tuned blind: <i>Tool Preferences in Agentic LLMs are Unreliable</i>
-(EMNLP 2025, <code>arxiv 2505.18135</code>) measures description-only edits swinging call rate by
-more than <b>10&times;</b>. boost currently ships those edits on reasoning alone.
-
-<b>The design constraint that decides whether this is worth building: floor both directions.</b>
-A tier that measures call rate alone rewards making boost maximally assertive, which is precisely
-the capture the surface is written to avoid — and boost has already learned this exact lesson one
-tier down. Flooring recall alone was <i>a hole rather than a simplification</i>: a ranker that
-finds the right answer every time and never ranks it first scores recall@10 1.000 with hit@1
-0.000, and passed. So the prompt set needs two halves — a <b>should-call</b> set (multi-file work,
-a new subsystem, a config or CI job that outlives the session) and a <b>should-not-call</b> set
-drawn from the shipped skip list (a question, a one-line edit, a command the user just handed
-over) — with a false-call ceiling as binding as the call-rate floor. One number without the other
-is an incentive to ship the thing boost refuses to be.
-
-<b>Per host, never averaged.</b> The two registered hosts do not see the same boost text. Claude
-Code puts server <code>instructions</code> in the system prompt; Gemini CLI never delivers them in
-interactive mode at all — <code>Config.initialize()</code> does not await
-<code>mcpInitializationPromise</code>, so <code>getMcpInstructions()</code> returns <code>""</code>,
-<code>startChat</code> stamps the context entry once with a stable id, and the later
-<code>refreshMcpContext()</code> re-renders Tier 1 only. A single averaged score would hide a host
-where 1,786 characters of guidance are simply absent, and would credit or blame wording for a
-delivery failure.
-
-<b>Shape.</b> An opt-in <code>make eval-tools</code> beside <code>eval-ai</code> /
-<code>eval-rec</code> / <code>eval-explain</code> — real hosts and real LLM calls, so it is
-non-deterministic and key-gated and must <b>not</b> join the required <code>check</code> gate;
-same degrade-cleanly contract as the other Tier 2 evals. Because the outcome is stochastic, report
-N runs per prompt with an interval rather than a single pass/fail, the way
-<code>golden-set-statistical-power</code> established for retrieval — a one-shot replay cannot tell
-a wording regression from a sampling wobble.
-
-<b>Where this stands (2026-08-31), and a correction.</b> The Claude Code arm shipped in #616:
-<code>scripts/eval_tools.py</code>, a 16-prompt set halved into should-call and should-NOT-call,
-Wilson intervals over N runs, and a verdict that floors call rate <em>and</em> ceilings false calls.
-
-<b>Its probe was broken, and the finding this card recorded was an artifact of it.</b> An earlier
-revision of this card reported &ldquo;3/3 false calls &mdash; boost's tools fired on <em>What is the
-difference between a Python list and a tuple?</em>&rdquo;. They did not fire. <code>called_boost()</code>
-substring-scanned the raw event stream, and <code>claude -p --output-format stream-json --verbose</code>
-opens with a <code>system</code>/<code>init</code> event enumerating <em>every tool available to the
-session</em> &mdash; which on any machine where boost is registered contains
-<code>mcp__boost__boost_search</code> and the other three CONSULT names. So the check returned
-<code>true</code> on every run, including runs with no tool call at all. Measured directly:
-<code>Say OK and nothing else.</code> produced zero <code>tool_use</code> blocks and scored as a
-boost consult.
-
-Two consequences shipped with it. <code>make eval-tools</code> could never pass &mdash; eight
-no-call rows &times; three runs is 24 forced trues, so the false-call rate's lower bound sat at
-1.00 against a 0.20 ceiling, red on every machine forever. And the tier built to retire
-unfalsifiable claims had produced one. <b>The lesson is the tier's own:</b> the existing tests
-passed because they fed hand-written one-line fragments with no <code>init</code> event &mdash; a
-fixture the author invented could not catch the author's wrong model of the input. The probe now
-parses the NDJSON and counts only <code>tool_use</code> blocks inside <code>assistant</code>
-events, and the regression test drives a <b>captured real stream</b>.
-
-<b>The second host arm is still unwritten, and should stay that way until the fixed probe is
-re-run.</b> Building arm two on a probe that cannot tell an offer from a call would produce two
-hosts scoring an identical, meaningless 1.00. When it is built, the candidate is <b>Gemini CLI
-proper</b>, not Antigravity CLI: the delivery claim below is about Gemini's Node bundle, and
-<code>agy</code> is a third mode again &mdash; it receives boost's <code>instructions</code> and
-writes them to <code>~/.gemini/antigravity-cli/mcp/boost/instructions.md</code>, pointing the agent
-at the file rather than inlining it. Substituting it would measure a different mechanism than the
-one this card argues about.
-
-<b>Cost, now measured.</b> Two trivial runs on a real host reported <code>$0.657</code> and
-<code>$0.682</code> of <code>total_cost_usd</code>, so 16 prompts &times; 3 runs is roughly
-<b>$30&ndash;50 per host per invocation</b> on a machine with a crowded tool surface.
-<code>--strict-mcp-config</code> with a boost-only config cuts that sharply and controls the
-surface confound in the same move.
-
-<b>2026-08-31: <code>--strict-mcp-config</code> shipped.</b> <code>eval_tools.py</code> now takes
-a <code>--strict-mcp-config</code> flag: it writes a boost-only <code>mcpServers</code> config
-(the same <code>&lt;launcher&gt; mcp --stdio</code> invocation and fork-safety <code>env</code>
-<code>core.mcphost.register_argv</code> uses for a real registration — confirmed against an actual
-<code>claude mcp add-json</code> write, not guessed at the schema) to a temp file and passes
-<code>--strict-mcp-config --mcp-config &lt;path&gt;</code> to every <code>claude -p</code> call,
-cleaning the file up afterward. This session's sandbox had no network path to PyPI, so the pinned
-toolchain (<code>pytest</code>, <code>ruff</code>, <code>mypy</code>, …) could not be installed and
-<code>make check</code> could not be run here; the change was verified by hand instead — direct
-<code>python3.12</code> import of the module, the new unit tests executed by eye against the
-interpreter, <code>py_compile</code>, a manual line-length check against ruff's 88-column default,
-and an end-to-end dry run with <code>subprocess.run</code> mocked that confirms the flags land on
-the argv and the temp file is created and removed. CI runs the real gate on the PR.
-
-<b>Still unwritten: the second host arm (Gemini CLI).</b> No <code>gemini</code> CLI was reachable
-in this sandbox to capture a real stream from, and building that arm on an invented model of
-Gemini's non-interactive output format is the exact mistake this card's own probe fix (2026-08-30)
-already paid for once — "a fixture the author invented cannot catch the author's wrong model of the
-input." That arm stays a placeholder until it can be built against a captured real stream, on a
-machine with the <code>gemini</code> CLI installed.
-
-<b>What it unlocks.</b> The first honest answer to "did that description edit help", a baseline the
-next surface change can regress against, and a way to retire claims that survive only because
-nobody can check them.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/tool-call-eval-tier.md">Write-up &middot; tool-call-eval-tier.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -910,7 +799,7 @@ interning that branch was attempting cannot invalidate a published shard.</p>
       </article>
 
       <article class="cap rcard" id="shrink-the-published-index">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Performance · Storage</span></div>
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Performance · Storage</span></div>
         <h3>shrink the keyword index before publishing it — structure first, then compression</h3>
         <p><a href="#publish-the-keyword-index">publish-the-keyword-index</a> is worth doing only if the
 artifact is small enough to ship weekly. This card is the measurement that decides it, and the
@@ -972,7 +861,23 @@ none/gzip/zstd comparison table with import-side decode times on a real multi-hu
 this sandbox has no such store to measure against, only a small synthetic one (interning alone cut
 a 1.8M-posting/20k-term synthetic store from 63.6&nbsp;MB to 47.9&nbsp;MB, directionally consistent
 with the real-store estimate above but not a substitute for it). Left as follow-on work before this
-card can be called shipped.</p>
+card can be called shipped.
+
+<b>Partly landed, and un-claimed — 2026-10-06.</b> The <b>interning</b> half shipped:
+<code>terms(id, term, df)</code> with <code>postings(term_id, doc, tf)</code> is on
+<code>main</code> (<code>rag.py</code> <code>_write_postings</code>), and
+<code>stem_expansions</code> reads the precomputed <code>df</code> column instead of
+<code>GROUP BY</code>-ing the whole postings table. It arrived as <b>#691</b>
+(<code>64ac398d</code>), not as this card's <code>pr: 688</code> — that PR's head moved after
+the train was cut, so GitHub never labelled it merged even though the diff against
+<code>main</code> is empty.
+
+<b>What did NOT land is this card's actual deliverable:</b> the measured comparison — raw vs
+interned vs delta+varint, each &times; none/gzip/zstd, with import-side decode time beside each.
+Without that table <a href="#publish-the-keyword-index">publish-the-keyword-index</a> still has
+no size answer, which is why it is held. Claim dropped because branch
+<code>loop/shrink-postings-index</code> no longer exists; take it by setting
+<code>owner</code> again.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -994,140 +899,9 @@ card can be called shipped.</p>
       </article>
 
       <article class="cap rcard" id="near-identical-copies-still-eat-the-slots">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Search · Ranking</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Search · Ranking</span></div>
         <h3>Near-identical copies survive content-hash dedup and take the whole result page</h3>
-        <p><a href="#near-duplicate-items-eat-the-result-slots">Content-hash dedup</a> shipped and worked:
-<code>rag.dedupe_by_content</code> took duplicate result slots from <b>4.94 to 0.60 per query</b>
-over a 77-tap corpus. That card closed naming one thing still open &mdash; <em>near-identical
-rather than byte-identical clustering, where <code>core/typosquat.py</code>'s confusion machinery
-would apply</em> &mdash; and buried it under a <code>shipped</code> status where nobody would claim
-it. This card is that remainder, with a measurement that makes it look considerably worse than
-&ldquo;refinement&rdquo;.
-
-<b>Observed on a real 466-tap install</b> with hybrid RRF serving (658,131 chunks): for the query
-<code>exa search</code>, every one of the top ten rows is <code>exa-search</code>, and the
-descriptions are what give the
-shape away &mdash; one Japanese (<code>Exa MCPによるウェブ、コード、企業調査</code>), two Chinese
-(<code>通过Exa MCP进行神经搜索</code>), five English variants of <code>Neural search via Exa MCP</code>,
-plus <code>Use Exa MCP for current web&hellip;</code> and <code>AI-powered web search&hellip;</code>.
-All ten are <code>★ curated</code>. The footer reads
-<code>51 matches &middot; ranked by hybrid RRF (BM25 + dense)</code>.
-
-<b>Every one of those passed dedup correctly.</b> They are not byte-identical: they are the same
-skill in Japanese, in Chinese, and in five English phrasings across different registries. The body
-digest differs, so <code>dedupe_by_content</code> keeps them all &mdash; which is exactly the
-behaviour <code>#366</code> proved must be preserved, since two entries sharing a name can be
-genuinely different rules. The shipped fix is not misbehaving. It simply does not reach this shape.
-
-<b>What the 0.60 residual actually was.</b> The prior card described its leftover as &ldquo;entries
-sharing a <em>name</em> whose bodies genuinely differ, which must stay separate&rdquo; &mdash; true
-as stated, and it reads as a rounding error. At 466 taps the same residual is a full result page.
-The gap between 0.60 and 10.0 is worth understanding before designing anything: the 77-tap
-measurement used 50 natural-language queries averaged, and an <em>average</em> hides the shape here.
-Duplicate pressure was already known to be a step function of <em>which</em> registries are tapped
-rather than how many; near-identical pressure looks like a step function of <b>which query</b> &mdash;
-harmless across a query set, total on any query that lands on a widely-mirrored skill. Re-measure
-per-query maxima, not means.
-
-<b>The hard part is the safety proof, not the clustering.</b> Content hashing was adoptable because
-one count settled it: of 14,153 distinct bodies, clusters spanning more than one name numbered
-<b>zero</b>, so collapsing could not merge two different skills. Near-identical clustering has no
-such free proof &mdash; any similarity threshold loose enough to merge a Japanese translation with
-its English original is loose enough to merge two genuinely different skills that share boilerplate.
-Establish the equivalent bound first (over a real corpus, at the chosen threshold, count clusters
-spanning more than one <em>meaning</em>) or the fix trades a visible problem for a silent one.
-
-<b>Three things to get right.</b> <em>Translations are the motivating case and the hardest</em>: they
-share almost no tokens with the original, so token-overlap similarity will not find them while an
-embedding will &mdash; and the vectors are already on disk, which makes this cheaper here than it
-would be anywhere else. <em>Collapse before <code>k</code></em>, and at both the
-<code>retrieve</code> and <code>retrieve_any</code> seams, for the reason the shipped dedup already
-documents: fusion reintroduces copies either engine dropped, because the copies are distinct
-<code>(tap, skill_md)</code> keys and RRF has no reason to treat them as one. <em>The existing
-quality prior carries over unchanged</em> &mdash; <code>rag.source_rank</code> orders on the user's
-<code>curated</code> flag first and shipped <code>confidence</code> second, and choosing among
-near-identical copies is the same question as choosing among identical ones: where should the user
-install from.
-
-<b>Not to be confused with <code>#629</code></b>, which deduplicated vector <em>storage</em> (one
-row per distinct embedding, 39.7% repeats reclaimed). That is a disk-size fix beneath the index and
-changes no ranking; this is about which rows reach the user's screen.
-
-<b>What shipped, and what did not.</b> <code>rag.collapse_near_duplicate_hits</code> is the same
-"keep the earliest rank slot, promote a better source" contract as <code>dedupe_by_content</code>,
-run over cosine similarity of the entries' first-chunk embeddings
-(<code>dense.entry_vectors</code>, an index probe through <code>chunks_entry</code> on a quantized
-store) instead of a body hash, at the <code>retrieve_any</code> seam before <code>k</code> is
-applied. It is covered by unit tests down to the arithmetic (<code>_cosine</code>'s dimension-
-mismatch and zero-vector guards), the clustering contract (rank order, quality-prior promotion,
-limit-after-collapse), the <code>dense.entry_vectors</code> lookup against a real quantized
-sqlite-vec store, and the <code>retrieve_any</code>/<code>boost search
---collapse-near-duplicates</code> wiring in both directions (on and off).
-
-It ships <b>opt-in and off by default</b> — <code>retrieve_any(..., collapse_near_duplicates=True)</code>
-or <code>boost search --collapse-near-duplicates</code> — rather than replacing
-<code>dedupe_by_content</code>'s output on the default path. Two things this card asks for are still
-open, and both need a real embedding backend (a built dense index, over a real multi-tap corpus)
-that the environment this was implemented in cannot reach — no network path to an embeddings
-provider or to the local ONNX model download, confirmed rather than assumed: <code>huggingface.co</code>
-and <code>pypi.org</code> both refuse at the network policy layer. <b>First</b>, the safety proof
-this card itself demands before defaulting the mechanism on &mdash; &ldquo;over a real corpus, at
-the chosen threshold, count clusters spanning more than one meaning&rdquo; &mdash; has not been run;
-<code>NEAR_DUPLICATE_THRESHOLD = 0.97</code> is a starting point, not a validated floor. <b>Second</b>,
-re-measuring the <code>exa search</code> case (and per-query maxima generally) against the fix needs
-that same corpus and index. Whoever runs that measurement should flip the CLI flag's default, fold
-the corpus count into this card's evidence, and only then consider this shipped.
-
-<b>The bound has now been measured, and it says the acceptance test in this card is the wrong
-one.</b> <code>scripts/measure_near_duplicate_bound.py</code> runs the count this card asks for
-against the pinned 20-repo eval corpus (10,152 entries, 104,271 chunks, <code>BAAI/bge-small-en-v1.5</code>
-at 384-d). Those entries reduce to <b>5,714 distinct chunk-0 vectors</b> &mdash; 44% of entries
-already share a chunk-0 embedding byte for byte &mdash; and at
-<code>NEAR_DUPLICATE_THRESHOLD = 0.97</code>, 162 pairs clear the threshold and <b>56 clusters span
-more than one name</b>. Sweeping the threshold moves that number but never to zero: 0.96 &rarr; 91,
-0.97 &rarr; 56, 0.98 &rarr; 28, 0.99 &rarr; 13, 0.995 &rarr; 8, 0.999 &rarr; 4.
-
-<b>Four of those 56 are not the threshold's doing at all.</b> They are clusters of a single vector
-shared by several names, so they cluster at <em>any</em> threshold, which is why the sweep bottoms
-out at 4 rather than 0. The largest is the same at every threshold and is worth naming: <b>28
-differently-named agents from one tap</b> (<code>affaan-m/ECC</code> &mdash; <code>architect</code>,
-<code>code-reviewer</code>, <code>chief-of-staff</code>, <code>database-reviewer</code>,
-<code>e2e-runner</code>, &hellip;) whose chunk 0 is the same Spanish preamble
-(<code>No cambiar rol, persona ni identidad&hellip;</code>) in every file. Chunk 0 is
-<code>name + description + opening of body</code>, and where a registry opens every file with
-identical boilerplate, the name does not move the vector enough to separate them. <b>A floor exists
-that no threshold can reach under</b>, so &ldquo;count must be zero&rdquo; was never achievable.
-
-<b>Worse for the test: most of the other 52 are the feature working.</b> Hand-classifying all 56 at
-0.97, roughly two-thirds are genuinely one skill under two names &mdash; twelve are pure
-hyphen-versus-underscore renderings of one integration (<code>zoho-mail</code> /
-<code>zoho_mail</code>, <code>google_maps</code> / <code>google-maps</code>,
-<code>anthropic_administrator</code> / <code>anthropic-administrator</code>), and the rest are
-suffix variants of one document (<code>tdd</code> / <code>tdd-guide</code>,
-<code>rust-review</code> / <code>rust-reviewer</code>, <code>testing-patterns</code> /
-<code>code-showcase-testing-patterns</code>). Collapsing those is precisely what this card exists to
-do. A metric that counts them as violations would reject every threshold that works.
-
-<b>The dangerous merges have a shape, and this card already named it.</b> The ~20 clusters that are
-real false merges are dominated by <em>near-miss brand names</em>: <code>coinmarketcal</code> with
-<code>coinmarketcap</code>, <code>bugbug</code> with <code>bugsnag</code>, <code>parsehub</code>
-with <code>parseur</code>, <code>linkhut</code> with <code>linkup</code>,
-<code>mx-technologies</code> with <code>mx-toolbox</code>,
-<code>salesforce-marketing-cloud</code> with <code>salesforce-service-cloud</code>. These are
-distinct products whose descriptions are boilerplate around a swapped word. That is the
-<code>core/typosquat.py</code> confusion shape this card's opening paragraph pointed at, arrived at
-independently from the other end: the guard this needs is not a tighter cosine floor but a
-<em>name-confusability veto</em> &mdash; refuse to collapse two entries whose names are a confusable
-edit apart, however close their vectors sit.
-
-<b>So the default stays off, for a better-supported reason than before.</b> The measurement does not
-say 0.97 is too loose; it says similarity alone cannot separate <code>tdd</code>/<code>tdd-guide</code>
-(collapse) from <code>coinmarketcal</code>/<code>coinmarketcap</code> (never collapse), because both
-pairs sit in the same cosine band. Flipping the default needs the confusability veto first, and a
-re-count with it applied. <b>And this bound is space-specific</b>: it was measured in
-<code>bge-small</code> 384-d, while a keyed production install is <code>voyage-4</code> at 1024-d.
-Cosine thresholds do not transfer between embedding spaces &mdash; rerun the script against each
-space before trusting a number in it.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/near-identical-copies-still-eat-the-slots.md">Write-up &middot; near-identical-copies-still-eat-the-slots.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -1950,70 +1724,9 @@ wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every ins
       </article>
 
       <article class="cap rcard" id="the-install-path-hands-agy-claudes-mcp-argv">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">MCP · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">MCP · Bug</span></div>
         <h3>Registering a skill's MCP server handed Antigravity the one argv its CLI rejects</h3>
-        <p><b>Found by a reviewing subagent on <a href="https://github.com/jonnyeclectic/boost/pull/977">#977</a>,
-which was about a different file.</b> <code>boost install</code> of a skill that declares an MCP
-server offers to register it with every agent CLI on PATH, and built that command line in
-<code>core/mcpdecl.py</code> — a second copy of the per-host grammar whose docstring said it
-"mirrors <code>core/mcphost.py</code> exactly". It mirrored two hosts of three. It had a Gemini
-branch and a Claude fallthrough, and <b>agy fell through to Claude's</b> — the single host whose CLI
-rejects that shape.
-<br><br>
-Measured against the old code: <code>agy mcp add gh --scope user -e K=v -- npx -y gh-mcp</code>.
-Antigravity CLI has <i>no scopes</i> (one global file at
-<code>~/.gemini/config/mcp_config.json</code>, inherited from Gemini CLI), so <code>--scope</code> is
-an error rather than a no-op, and it requires every flag <i>before</i> the name, so the
-<code>-e</code> is rejected too. Every declared server, every install, on any machine with
-Antigravity installed — reported as "could not register gh" and never once as a boost bug, because
-the line the user sees is the CLI's.
-<br><br>
-<b>The fix is not the missing branch.</b> Adding one would have left the same two copies, with the
-fourth host (Codex, next) to remember in both. The grammar moved into one function,
-<code>mcphost.add_argv(host, name, command, tail, …)</code>, and both callers became thin:
-<code>register_argv</code> registers boost itself (<code>launcher mcp --stdio</code>) and
-<code>mcpdecl.register_argv</code> turns a declared spec into the same call. Output is byte-identical
-for Claude and Gemini — all 134 existing argv assertions pass untouched — and correct for agy for the
-first time.
-<br><br>
-<b>And the fallthrough is now loud.</b> Claude's shape was the <code>return</code> at the bottom of
-the function, which is <i>why</i> a host with no branch inherited it silently. It is an explicit
-<code>if host == CLAUDE</code>, and the bottom of the function raises. A host can be in
-<code>HOSTS</code> and have no grammar for exactly as long as it takes a test to run.
-<br><br>
-<b>Then a verifying subagent found a worse bug in the code that was now shared</b> — and it was
-Gemini's, the host the old copy had "mirrored" correctly. boost emitted no <code>--</code> for
-gemini at all, on the belief that its trailing variadic would pass the separator through as a
-literal argument. Measured against the real Gemini CLI 0.61.0: it does not.
-<code>unknown-options-as-args</code> rescues only options gemini does <i>not</i> know, and
-<code>gemini mcp add</code> knows ten of them, so the canonical GitHub server spec — which ships
-the bare <code>docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/…</code> — had its
-<code>-e</code> claimed by gemini's own <code>--env</code> (<code>nargs: 1</code>, taking the
-variable's name as its one value) and dropped from the stored entry &mdash; <b>exit 0, "server
-added"</b>, and a container launched with no token. The <code>-e KEY=value</code> spelling is not
-dropped but <i>relocated</i>, into gemini's own <code>env</code> map and out of the args docker
-reads, which is the same outcome by a different route and the one to expect when reading a real
-entry. A <code>-t http</code> in a spec's args is worse: the entry is rewritten as
-<code>{"url": "npx", "type": "http"}</code>. The separator goes <i>after</i> the command for
-gemini — the one host where it does — and it is emitted unconditionally, because
-<code>add x npx --</code> is accepted and stores <code>args: []</code>.
-<br><br>
-The same pass killed the comment justifying agy's <code>--</code>: measured on 1.1.22, agy never
-consumes an argument that follows the command, and rejects a dash-leading command with or without
-it. The <code>--</code> stays (it is agy's documented separator) but is now described as inert
-rather than load-bearing. And <code>boost install</code>'s <i>decline</i> path printed one command
-line for <code>targets[0]</code> after a prompt that named every host — so a user who said no got
-Claude's line and nothing for the two hosts a yes would also have registered with, agy among them.
-<br><br>
-Fifteen new tests and two rewritten ones that had pinned the old, wrong shape. The three literal
-per-host argvs on the install path (none existed: nothing tested <code>mcpdecl.register_argv</code>
-with a <code>host=</code> at all); agy's two rules each pinned separately, so a regression names
-which one broke; gemini's separator pinned three ways, including a spec whose args start with a dash
-— the case that was silently losing data; a cross-module parity test <b>parametrised over
-<code>mcphost.hosts()</code></b>, which is the docstring's promise turned into an assertion and which
-covers a fourth host the moment the table gains one; and a monkeypatched <code>codex</code> row
-asserting <code>ValueError</code> — the regression this shape exists to prevent, failing in CI
-instead of on a user's machine.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/the-install-path-hands-agy-claudes-mcp-argv.md">Write-up &middot; the-install-path-hands-agy-claudes-mcp-argv.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Medium</b></span>
@@ -2023,59 +1736,9 @@ instead of on a user's machine.</p>
       </article>
 
       <article class="cap rcard" id="wrap-width-judged-by-stdout">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>wrap() sizes a stderr line by stdout's pane</h3>
-        <p><b>A line now gets its colour from the stream it lands on and its
-<em>width</em> from somewhere else.</b> <code>_wrap_lines</code>
-(<code>boost_cli/core/output.py:235</code>) folds to
-<code>term_width() - lead</code>, and <code>term_width</code>
-(<code>:402</code>) takes no stream: it calls
-<code>shutil.get_terminal_size</code>, which consults
-<code>sys.__stdout__</code>. Right beside it, <code>pane_width(stream)</code>
-(<code>:407</code>) does take one, and exists because the same question has a
-different answer per stream.
-
-<br><br>So the emitters that write off stdout and wrap — <code>err(wrap=True)</code>
-(<code>:318</code>, <code>:327</code>) and <code>warn(stream=sys.stderr,
-wrap=True)</code> (<code>:284</code>, reached from <code>catalog.py:346</code>,
-<code>journal.py:65</code>, <code>lockfile.py:185</code>,
-<code>registry.py:594</code> and <code>complete.py:105</code>) — size a stderr
-line by stdout's pane. In a 200-column terminal:
-<code>boost install x &gt;out</code> folds the hint on the terminal at 72
-columns, because stdout is a file, <code>get_terminal_size</code> raises and
-the 80-column fallback applies; <code>boost install x 2&gt;log</code> writes
-192-column lines into the log.
-
-<br><br>This is the twin of <code>err-colour-judged-by-stdout</code>, found while
-verifying it, and deliberately left out of that PR: it is a width bug, not a
-colour one, and it predates the change. <b>Fix sketch:</b> give
-<code>term_width</code> (or <code>_wrap_lines</code>) the stream the emitter
-is about to write to, the way <code>c()</code>, <code>role()</code> and
-<code>aurora()</code> now take one, and have each wrapping emitter pass its
-own. Watch the <code>COLUMNS</code> precedence: <code>pane_width</code>
-honours an explicit <code>COLUMNS</code> either way, and the wrap path must
-keep doing the same or a scripted <code>COLUMNS=100</code> stops applying to
-hints. A test wraps one long hint with stdout a TTY and stderr a plain
-buffer, and asserts the fold point comes from stderr.
-
-<br><br><b>Measured before claiming, and the fix sketch above is wrong.</b>
-<code>pane_width(stream)</code> is not the per-stream model to copy: it uses
-its stream only for the <code>isatty()</code> predicate and then takes the
-<em>number</em> from <code>term_width()</code> (<code>output.py:422</code>),
-so it measured 80 for a 200-column stderr terminal while stdout was a file.
-Routing <code>_wrap_lines</code> through it would have left that intact. A
-third instance the card missed: <code>spin.progress_clear</code>
-(<code>spin.py:98</code>) erases <code>term_width()</code> columns of a line
-it just proved is on <code>s</code> &middot; 80 of a 200-column bar.
-
-<br><br>Two numbers here were budgets rather than widths. <code>192</code> is
-<code>term_width() - len("  hint: ")</code>; the lead is printed too, so the
-lines run to the full pane &mdash; measured 196 for a hint and 199 for a warn
-on a 200-column pty. And the proposed test cannot fail: a fake tty (a
-<code>StringIO</code> whose <code>isatty()</code> returns True) has no file
-descriptor, so broken and fixed both answer 80 &mdash; measured identical fold
-points either way. It needs a real <code>os.openpty()</code> with
-<code>TIOCSWINSZ</code>.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/wrap-width-judged-by-stdout.md">Write-up &middot; wrap-width-judged-by-stdout.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -3167,55 +2830,9 @@ points either way. It needs a real <code>os.openpty()</code> with
       </article>
 
       <article class="cap rcard" id="sandbox-fixture-does-not-sandbox-the-working-directory">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Test hygiene · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Test hygiene · Bug</span></div>
         <h3>The sandbox fixture sandboxes every env var except the one project scope reads</h3>
-        <p>`tests/conftest.py`'s `sandbox` fixture is thorough about the environment — it
-redirects `HOME`, clears `BOOST_HOME`, `BOOST_AGENTS_STORE` and `CODEX_HOME`,
-and sets five `BOOST_NO_*` guards so no test reaches AI, the network, the seed
-or a confirm prompt by accident. It never touches the **working directory**,
-and that is the one input project scope resolves against: `scopes.resolve_base`
-walks up from `os.getcwd()`, so a test that installs with `scope="project"` and
-no explicit `base`, or drives `boost install --local` without
-`monkeypatch.chdir`, writes into the developer's own checkout.
-
-What lands there is not a stray temp file. A project install materializes the
-full agent fan-out at the repo root — `.boost/skill-lock.json`, `.claude/skills/`,
-`.cursor/`, `.windsurf/`, `.gemini/`, `.codex/` — plus, for a rule, the context
-files themselves: `AGENTS.md` and `CLAUDE.local.md`, both of which every agent
-working the repo then loads as instructions.
-
-It is also self-propagating, because the state outlives the run that wrote it.
-A killed run left a project-scope `brainstorming` at the root; the next full
-suite read it back and failed twelve tests across four files that assert an
-empty install state — the `test_cli_quality.py` case for a machine that never
-installed anything saw `brainstorming ok project`, and `boost list`, `boost
-info` and the pane-width tests all inherited a row nothing in them had
-installed. The failures name none
-of the tests responsible, and they clear only when someone thinks to look at
-`git status` — where `.boost/` is gitignored and does not appear.
-
-No committed test writes there in its shipped form: `tests/unit`,
-`tests/functional` and `tests/smoke.sh` each leave the checkout clean when run
-directly, watched by a teardown hook that names the offending nodeid. A full
-`make check` does not — it ends with `.boost/skill-lock.json` and five agent
-dotdirs at the repo root, all stamped inside the mutation stage. That stage
-runs those same tests against mutated `boost_cli/core`, so the blast radius of
-a mutant that weakens a scope guard is the developer's own working tree, and
-4,343 of them survive each run. Which is the whole argument for the guard: the
-suite is one edit — or one mutant — away from writing here, and when it does,
-the failures it causes name everything except their cause.
-
-Two halves, both cheap:
-
-- **Chdir the sandbox.** Point `cwd` at a directory under `tmp_path` in the
-  fixture, so a forgotten `chdir` resolves to the sandbox instead of the repo.
-  Needs an audit first — any test that reads a repo-relative path (the
-  generated-file `--check` gates, `test_spdx_headers.py`) must take the repo
-  root explicitly rather than inheriting it.
-- **Fail loudly if it happens anyway.** A session-scoped autouse check that
-  snapshots the known project-scope artifact names at the repo root and fails
-  the run — naming the test — when one appears. That is the half that would
-  have turned twelve misleading failures into one accurate one.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/sandbox-fixture-does-not-sandbox-the-working-directory.md">Write-up &middot; sandbox-fixture-does-not-sandbox-the-working-directory.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Medium</b></span>
@@ -3807,45 +3424,9 @@ step at the top of the command whose failure degrades the agent-dependent sectio
       </article>
 
       <article class="cap rcard" id="an-item-materialized-nowhere-reads-ok-in-verify-health-drift">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>An item materialized <em>nowhere</em> reads <code>ok</code> in <code>verify</code>, <code>health</code> and <code>drift</code></h3>
-        <p><b>Found by the second review of</b> <code>sync-repairs-a-disabled-agents-row-every-run</code>.
-That item fixed a row for an agent boost no longer writes being read as a <em>missing artifact</em>:
-nothing wrote the file and nothing ever will, so <code>boost verify</code> failed forever and
-<code>boost drift</code> and <code>boost health</code> sent the user to a <code>boost sync</code>
-that skips the row by design. The fix is right, and it opens a gap at the other end.
-
-<b>Skipping a row is correct per row and wrong per item.</b> Skip <em>every</em> row an item has
-and the item is materialized nowhere — the rule reaches no agent, the workflow is in no command
-palette — and the surfaces say it is fine. Measured on a real install (fixture tap, one rule,
-then every agent disabled): <code>boost verify</code> &rarr;
-<code>team-conventions&nbsp;&nbsp;ok&nbsp;&nbsp;rule</code>, rc 0 &middot; <code>boost drift</code>
-&rarr; <code>in-sync</code> &middot; <code>boost health</code> &rarr;
-<code>rules&nbsp;&nbsp;1 installed</code>, <code>drift&nbsp;&nbsp;1 in-sync</code>,
-<code>● healthy</code> &middot; <code>boost attest --verify</code> &rarr; <code>sha_ok</code>.
-
-<b><code>doctor</code> both names it and denies it.</b> It prints the note —
-<em>5 recorded materializations name an agent boost no longer writes…</em> — and two lines later
-<em>✓ 1 rule and 0 workflows fully materialized for every agent boost writes</em>, then
-<code>● healthy</code>. The count is true as worded and false as read: the write set is empty, so
-every item is trivially materialized for all of it. Only the note carries the news, and only
-<code>doctor</code> has a note channel — a third state that is neither an issue nor silence. The
-other commands have two, so the per-row skip had nowhere to put this and it fell into the healthy
-one.
-
-<b>Why it is not cosmetic.</b> <code>verify</code> is what scripts gate on and
-<code>attest --verify</code> is the provenance check; an install that reaches nothing and passes
-both is wrong in the direction that costs the user something — they installed a rule believing
-some agent would read it.
-
-<b>Shape of a fix.</b> Keep the per-row skip; add a per-<em>item</em> question after the loop. An
-item whose materialization rows are all unwritten is reported distinctly — <em>unreachable</em>,
-neither <code>ok</code> nor <code>missing</code> — and the count line says how many agents it
-actually reaches rather than how many of the empty set it satisfies. The work is the state the
-three commands do not have: <code>verify</code>'s exit code, what <code>health</code>'s counts
-mean, and whether <code>attest --verify</code> should fail it. An item with <em>no</em> rows at all
-is a different case (a skill, or a rule installed before rows existed) and must keep reading
-<code>ok</code>.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/an-item-materialized-nowhere-reads-ok-in-verify-health-drift.md">Write-up &middot; an-item-materialized-nowhere-reads-ok-in-verify-health-drift.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -5528,54 +5109,9 @@ exactly why plausible similarity was not accepted as evidence.</p>
       </article>
 
       <article class="cap rcard" id="project-scope-in-an-unmarked-tree-does-not-walk-up">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>Project scope in an unmarked tree does not walk up, so <code>src/</code> becomes its own project</h3>
-        <p><code>scopes.resolve_base</code> walks up for a VCS marker and, finding none, falls back to the
-directory it started in &middot; <em>without</em> walking up. So in a project that is not a git/hg/svn
-checkout, every subdirectory is its own project: <code>install brainstorming --local</code> run from
-<code>proj/src</code> writes <code>proj/src/.boost/skill-lock.json</code> and <code>proj/src/.claude/skills/</code>,
-even when <code>proj/.boost/skill-lock.json</code> already exists; and <code>list --local</code>,
-<code>info</code>, <code>doctor</code>, <code>verify</code> and bare <code>uninstall</code> run from
-<code>proj/src</code> cannot see what was installed at <code>proj</code>. <code>mkdir .git</code> fixes
-both, which is what makes it easy to miss.
-
-This is not the reader/writer split that <code>fix(scope)</code> closed &middot; readers and writers now
-agree, and that is the point: they agree on the <em>cwd</em> rather than on the project.
-<code>project_root</code>'s docstring says walking up is the whole point ("<code>install --local</code>
-run from <code>src/deep/nested</code> must write into the repo's <code>.claude/skills</code>, not create
-a stray one three levels down"), and that promise is simply not kept once the marker is absent.
-
-The fix is a choice, not a bug fix, which is why it is its own card. Option (a): make the fallback
-walk up for an existing <code>.boost/skill-lock.json</code> &middot; but a lock-file marker cannot
-help the very first install, which is the one that creates it. Option (b): let the fallback walk up to
-the nearest ancestor that is not <code>$HOME</code> &middot; too greedy, it would swallow unrelated
-sibling directories. Option (c): keep today's behaviour and say so &middot; have
-<code>install --local</code> warn once when it is about to create a project in a directory with no VCS
-marker, naming the directory, so the second lock is a decision rather than a surprise. (c) is the
-cheapest and the most honest; (a) looked worth pairing with it for every command after the first.
-
-<b>(c) shipped alone &middot; (a) was built, reproduced as a regression, and withdrawn.</b> The lock
-walk exists (<code>scopes.project_lock_root</code>) but is <em>advisory</em>: it lets the warning name
-the project above you, and decides no destination. Putting it in the resolution path broke two things
-the sketch above did not anticipate. First, <b>it orphans the records below it</b> &middot; a rule or
-workflow installed with <code>--local</code> lives in the <em>user</em> lock against an absolute
-<code>base</code>, and <code>--local</code> eligibility is <code>scopes.owns</code> against the base
-resolved <em>now</em> &mdash; so one <code>install &lt;skill&gt; --local</code> at <code>proj</code>
-made a rule at <code>proj/src</code> invisible to <code>list --local</code> and unremovable by
-<code>uninstall --local</code>, from <code>proj/src</code> as much as from <code>proj</code>, with the
-refusal naming the directory the user was standing in and the two error messages giving mutually
-unsatisfiable instructions. Second, <b>it engages for one kind of three</b> &middot;
-<code>_install_rule</code> and <code>_install_workflow</code> write no
-<code>.boost/skill-lock.json</code> at all, so a tree holding only those never gains the marker, which
-is also why the warning (c) adds can never be silenced there. The first is pinned by
-<code>test_a_rule_below_an_ancestor_lock_is_still_removable_locally</code>, which fails the moment the
-walk is put back; the second is a property of the installers rather than of this change, so nothing
-here asserts it. Making the walk safe means giving rules and workflows a project boundary of their
-own, and that is a different card.
-
-Found by the adversarial verification of PR #998, which reproduced it end to end. <code>$HOME</code>
-is still never a project and deletion is still gated by <code>resolve_in_base</code>, so this is a
-wrong-directory bug, not a safety one.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/project-scope-in-an-unmarked-tree-does-not-walk-up.md">Write-up &middot; project-scope-in-an-unmarked-tree-does-not-walk-up.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -5741,62 +5277,9 @@ evidence was gathered.</p>
       </article>
 
       <article class="cap rcard" id="audit-adapt-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost adapt: CLI audit findings (2026-08)</h3>
-        <p><b>A subagent named after a declared tool renders modules that compile but cannot run.</b> With a
-subagent <code>grep</code> and tool <code>Grep</code>: crewai emits <code>@tool("grep") def
-grep</code> then <code>grep = Agent(...)</code>, so <code>reviewer_1 = Agent(tools=[read,
-grep])</code> hands the Agent where a tool belongs (stub run: TypeError); langgraph assigns
-<code>grep = create_react_agent(...)</code> inside <code>build_mycrew</code>, making it local, so the
-earlier <code>tools=[read, grep]</code> raises UnboundLocalError. <code>_unique_idents</code>
-(<code>core/adapters.py:188-202</code>) dedups only among agent specs and <code>_unique_tools</code>
-(<code>:205-212</code>) allocates stub names independently. Fix: pass the tool ident set into
-<code>_unique_idents</code> as pre-reserved names (or prefix stubs <code>tool_&lt;name&gt;</code>) in
-<code>render_crew</code>/<code>render_graph</code>, plus a golden test that executes a colliding
-render against stubs.
-
-<br><br><b><code>docs/commands.html</code> brackets required options as optional.</b> Line 369 shows
-<code>boost adapt [--to FRAMEWORK] &hellip;</code> while <code>adapt --help</code> prints an
-unbracketed <code>--to FRAMEWORK</code> and omitting it exits 2 &mdash; and the verify pass found it
-is broader than adapt: evolve's required <code>--feedback</code> and catalog's required
-mutually-exclusive group render all-optional too. Pure generator bug:
-<code>scripts/build_command_reference.py:122-126</code> brackets every option unconditionally. Emit
-required options unbracketed (a required group as <code>(--a | --b)</code>), prefer the short flag
-like argparse, then <code>make generate</code> &mdash; the <code>--check</code> gate holds it after
-that.
-
-<br><br><b>Colon-form model ids get double-prefixed for the LiteLLM targets.</b>
-<code>--model anthropic:claude-x</code> &mdash; the form langgraph accepts <em>and emits</em> &mdash;
-renders <code>llm=LLM(model="anthropic/anthropic:claude-x")</code> for crewai and the same for
-agents-sdk; multi-agent crews inherit it via <code>adapters.py:376</code>.
-<code>_litellm_model</code>'s docstring says a provider-qualified value passes through, but the code
-checks only <code>/</code>. Fix: replace the first <code>:</code> with <code>/</code> before deciding
-to prefix (mirror of <code>_langchain_model</code>); document accepted syntaxes in
-<code>docs/adapters.html</code>'s <code>--model</code> paragraph (~line 344, slash form only today),
-and regenerate <code>docs/commands.html</code> only if the argparse help changes.
-
-<br><br><b><code>adapt -o</code> and <code>run --print -o</code> write generated source mode
-0600</b> &mdash; and re-rendering over an existing 0644 file silently downgrades it, unlike a shell
-redirect (<code>-rw-------</code> vs <code>-rw-r--r--</code> under umask 022).
-<code>util.atomic_write_text</code> (<code>core/util.py:91-116</code>) inherits mkstemp's 0600, right
-for the lock/config it was written for, wrong for source the user asked boost to write. Fix: add an
-optional <code>mode</code> parameter (fchmod the temp fd before <code>os.replace</code>), keep 0600
-the default, and have <code>cmd_adapt</code> (<code>pkg.py:1753-1761</code>) and <code>cmd_run</code>
-(<code>run.py:62</code>) pass the umask default. <b>Still open</b> — an implementation of exactly this
-shape (path-based <code>os.chmod</code>, not <code>os.fchmod</code>, learned the hard way: the latter
-raises on Windows) shipped and then was reverted from PR #728 after three rounds of Windows-only
-<code>windows-latest</code> CI failures in the "unit + functional (90% coverage gate)" step that
-neither pytest-cov nor a temporary diagnostic artifact-upload commit could surface a cause for —
-the session driving that PR could not read Windows job logs (capped and consumed by
-<code>harden-runner</code>'s own diagnostic noise) or download the diagnostic artifact
-(<code>productionresultssa*.blob.core.windows.net</code> blocked by that session's network egress
-policy) to see the actual failure. The other three findings landed clean on every platform. Whoever
-picks this back up needs either a session with working Windows CI log access, or to reproduce
-locally on a real Windows box.
-
-<br><br>Found by the 2026-08 CLI audit (clusters <code>adapt-ident-collision</code>,
-<code>docs-required-flag-synopsis</code>, <code>adapt-model-id-syntax</code>,
-<code>generated-file-mode</code>); repro in the audit log.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-adapt-findings.md">Write-up &middot; audit-adapt-findings.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -6022,66 +5505,9 @@ locally on a real Windows box.
       </article>
 
       <article class="cap rcard" id="audit-install-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost install</code>: CLI audit findings (2026-08)</h3>
-        <p><b>Rule/workflow lock entries are name-keyed across scopes</b> <em>(med)</em>. With the
-benchmarking rule at user scope, <code>install benchmarking --local</code> in a project fails
-<em>&ldquo;Error: benchmarking is already installed / hint: <code>boost reinstall benchmarking</code>
-to force&rdquo;</em> &mdash; the project has no copy, and the hint would reinstall the user one. The
-reverse direction blocks too, and skills coexist fine (separate project lock). Worse, the
-<code>--force</code> escape overwrites the user-scope lock entry with the project one, orphaning the
-user materializations so uninstall can no longer clean them. <code>_install_rule</code>
-(<code>store.py:836-839</code>) and <code>_install_workflow</code> (<code>store.py:1074</code>) gate
-on a name-only lookup with no scope/base comparison. Fix: key entries by scope (or compare
-<code>existing scope/base</code> before raising), word the error &ldquo;already installed at user
-scope&rdquo;, and refuse a cross-scope <code>--force</code> overwrite without cleanup. Docs:
-README's install-scope section (~301-328) and
-<code>docs/roadmap/items/install-scope-user-or-project.md</code>.
-(Cluster <code>cross-scope-name-block</code>.)
-
-<br><br><b><code>--path</code> says &ldquo;under path&rdquo; but matches suffix-only</b>
-<em>(low)</em>. <code>--path plugins/tdd/skills</code> is refused while the error's own hint lists
-<code>plugins/tdd/skills/test-driven-development</code> &mdash; a path that <em>is</em> under it.
-Suffix matching is the shipped design (<code>install-path-disambiguation</code>, PR 483); the wording
-is the defect. Reword the raise in <code>catalog.py:~502</code> to &ldquo;no copy of X whose path ends
-with Y&rdquo; and hint &ldquo;pass a trailing segment of one of: &hellip;&rdquo;.
-(Cluster <code>install-path-prefix-match</code>.)
-
-<br><br><b>The MCP offer never shows the runnable command</b> <em>(low)</em>. The server row prints
-only <em>demo-echo &nbsp;<code>npx</code></em> though the sidecar declares <code>npx -y
-@example/demo-echo-mcp</code> plus env, and on decline the hint is a literal elided
-<em><code>claude mcp add &hellip;</code></em>; the full argv only prints when the host CLI is
-missing. <code>_offer_mcp</code> renders <code>how</code> from <code>spec['command']</code> alone
-(<code>pkg.py:161-164</code>) and <code>mcpdecl.register_argv</code> already exists
-(<code>pkg.py:201</code>) &mdash; render command+args, print the joined argv on decline, and indent
-the confirm prompt to match its neighbours. (Cluster <code>mcp-offer-command-detail</code>.)
-
-<br><br><b>The typosquat warning prints three times</b> <em>(low)</em>.
-<code>install NeoLabHQ/context-engineering-kit:test-driven-development --dry-run</code> prints the
-identical <em>&ldquo;closely resembles test-driven-development
-(sickn33/antigravity-awesome-skills)&rdquo;</em> warning 3&times;, one per mirror copy in the
-look-alike tap. De-duplicate <code>find_confusions</code> on <code>(name.lower(), tap)</code>
-(<code>typosquat.py:79-87</code>) so the <code>[:3]</code> slice in <code>_warn_confusions</code>
-covers three distinct look-alikes. Found by the 2026-08 CLI audit (cluster
-<code>typosquat-warning-dupes</code>); repro in the audit log.
-
-<b>Status (2026-09).</b> Three of the four clusters shipped as described above:
-<code>install-path-prefix-match</code> (catalog.py wording), <code>mcp-offer-command-detail</code>
-(<code>mcpdecl.command_line</code> renders the full command+args, the decline path prints the real
-argv), and <code>typosquat-warning-dupes</code> (<code>find_confusions</code> dedupes on
-<code>(name.lower(), tap)</code>). <code>cross-scope-name-block</code> got the <b>narrower</b> of the
-fix's own two options: <code>store._check_scope_conflict</code> now refuses a rule/workflow install
-whose name collides with an existing lock entry recorded under a <i>different</i> scope/base —
-naming the real location ("already installed at user scope") and refusing even under
-<code>--force</code>, which closes the silent-corruption half of the bug (a forced cross-scope
-install used to overwrite the other scope's lock entry, orphaning its materializations). What is
-still missing is the other half: rules and workflows still cannot <i>coexist</i> across scopes the
-way skills do, because they share one lock keyed by bare name with no per-location table — skills
-got a separate <code>projectlock.py</code> when project scope was added, rules/workflows never did.
-Giving them the same treatment (a <code>rules</code>/<code>workflows</code> section in
-<code>projectlock.py</code>, wiring <code>_install_rule</code>/<code>_install_workflow</code> and
-their uninstall/sync counterparts through it for project scope) is real coexistence but is its own,
-larger change, and belongs in its own card rather than folded into a bugfix PR.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-install-findings.md">Write-up &middot; audit-install-findings.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -6283,26 +5709,9 @@ larger change, and belongs in its own card rather than folded into a bugfix PR.<
       </article>
 
       <article class="cap rcard" id="audit-tag-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost tag: CLI audit findings (2026-08)</h3>
-        <p><b><code>boost tag</code> swallows unknown flags and misreads them as operands.</b> <code>tag brainstorming --verbose</code> prints the current tags and exits 0 — the flag is consumed as a removal of the tag <code>-verbose</code>; <code>tag --verbose</code> gives <em>"Error: --verbose is not installed"</em> (the flag becomes a skill name); verification found a third hole: <code>tag brainstorming --list</code> silently discards the skill-name operand and lists <b>all</b> tags. Cause: <code>cmd_tag</code>'s manual split (<code>boost_cli/commands/info.py:988-993</code>) whitelists only <code>--list</code>/<code>--json</code>/<code>-h</code>/<code>--help</code>; every other <code>--x</code> token falls through as an operand. Every sibling command rejects unknown options with <em>"unrecognized arguments"</em> exit 2.
-
-<b>And the mutation path has no before/after check.</b> <code>tag brainstorming -nosuch</code> removes a tag that was never present — silent, exit 0; <code>tag brainstorming +x -x</code> prints &#10003; and writes the lock plus a journal event for a net no-op (<code>changed</code> is set per-token at <code>info.py:1027-1041</code>, never compared to the before set); <code>"+with space"</code> is accepted as <code>#with space</code>; <code>+Design</code> and <code>#design</code> coexist. The shipped roadmap item <code>robust-tag-argument-parsing</code> (PR 94) built this manual split — these are residual holes in it, not a duplicate.
-
-Fix in <code>cmd_tag</code>: hand any token starting with <code>--</code> (or <code>-letter</code> that is not a tag operand) to argparse so it errors; compute <code>changed = sorted(tags) != sorted(before)</code>; print a one-line notice for removing an absent tag; reject whitespace in tags; document or fold case; error when a name is given with <code>--list</code>. Regenerate <code>docs/commands.html</code> if the help text gains the tag grammar.
-
-Found by the 2026-08 CLI audit (cluster <code>tag-arg-parsing</code>); repro in the audit log.
-
-<b>Partly landed — PR 735.</b> The correctness half shipped: any unrecognized
-<code>--</code> token now reaches argparse (<i>unrecognized arguments</i>, exit 2),
-<code>--list</code> with a skill name is a named error, whitespace in a tag is rejected, and
-<code>changed</code> is a before/after set comparison in the new
-<code>lockfile.apply_tag_mods</code>, so <code>+x -x</code> no longer writes the lock and a
-journal event for a net no-op. <b>Still open</b>, and why this card stays
-<code>inflight</code>: the one-line notice when <code>-tag</code> removes a tag that was
-never present (the remove branch is still a silent no-op), and documenting or folding tag
-case (<code>+Design</code> and <code>#design</code> still coexist). Both are UX asks rather
-than correctness bugs, which is why the PR left them.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-tag-findings.md">Write-up &middot; audit-tag-findings.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -6396,63 +5805,9 @@ than correctness bugs, which is why the PR left them.</p>
       </article>
 
       <article class="cap rcard" id="catalog-categories-beyond-curated">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Catalog · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Catalog · UX</span></div>
         <h3>Per-item categories in <code>search</code>/<code>browse</code>/<code>info</code> — not just a ★ curated bool</h3>
-        <p>From a user request: <em>&ldquo;proper categories for skills (can't have all of them listed as just
-curated)&rdquo;</em>. They are right about the item level: the only taxonomy a catalog entry carries is
-a boolean. A <code>boost search</code> row shows name, kind, tap, description and at most a
-<b>★</b>; <code>boost recommend</code>'s no-match fallback is literally headed
-<em>&ldquo;curated picks&rdquo;</em>; <code>boost info</code> prints no category at all. Across a
-real install of tens of thousands of items, &ldquo;starred or not&rdquo; is the entire
-classification a user can see or filter by.
-
-What the code confirms. <code>catalog._make_entry</code> stamps <code>"curated": curated</code>
-onto every entry (<code>boost_cli/core/catalog.py:119</code>, signature at 105&ndash;106) — and that
-bool is per-<em>tap</em>, from <code>Tap.curated</code> (<code>core/registry.py:23</code>), set by
-<code>tap --defaults</code> or by anyone passing <code>--curated</code>
-(<code>commands/taps.py:126</code>) — a trust star, not a classification. Category-like data does
-exist, but only per tap: <code>data/registries.json</code> rows carry one (487 registries, 21
-values; <code>general</code> alone covers 127), and exactly two surfaces read it —
-<code>browse</code>'s row badge via <code>_tap_categories</code>
-(<code>commands/discovery.py:936&ndash;941</code>, whose own docstring says <em>&ldquo;catalog
-entries themselves carry no category, only their tap does&rdquo;</em>; badge appended last in
-<code>_row_badges</code>, discovery.py:961&ndash;963, so narrow panes drop it first, and taps
-outside the bundled 487 get none) — and <code>boost serve</code>'s web facets
-(<code>core/serve.py:65</code>). <code>cmd_search</code> renders only the star
-(discovery.py:179) and takes no filter flag; <code>info</code> shows frontmatter tags when present
-(<code>commands/info.py</code>, the <code>meta.get("tags")</code> kv) but no category, and its
-<code>--json</code> has no such field. An item's own frontmatter <code>category</code>/<code>tags</code>
-ride along invisibly in <code>entry["meta"]</code> and the substring <code>search_blob</code>
-(catalog.py:131, 621&ndash;627), so they can match a query yet can never be displayed or filtered.
-
-Proposed fix. Stamp a first-class <code>category</code> on each entry at scan time in
-<code>_make_entry</code> (catalog.py:105&ndash;132): the item's frontmatter <code>category</code>
-(or first tag) when declared, else inherited from its tap's registry category — and bump
-<code>catalog.CACHE_FORMAT</code> so hundreds of existing tap caches backfill without a re-tap, per
-the versioned-cache rule. Then surface it where a category would live: a badge in
-<code>search</code> rows and a <code>--category</code> filter on
-<code>search</code>/<code>browse</code>/<code>recommend</code>, a kv row plus JSON field in
-<code>info</code>, and <code>browse</code>'s existing badge switched from tap-level to the entry
-field (which also gives un-bundled taps' items a label for the first time). ★ keeps meaning
-curation/trust only. Consumers must degrade cleanly when <code>category</code> is absent (old
-caches, synthesised entries), same as the <code>content</code> digest rule.
-Docs: regenerate <code>docs/commands.html</code> for the new flags; no other doc names categories.
-Found by the 2026-08 CLI audit (cluster <code>catalog-categories-beyond-curated</code>, filed from
-the user's request); repro in the audit log. Verified against source 2026-08-31.
-
-<b>Status (2026-09-01).</b> Landed: the <code>category</code> stamp at scan time
-(<code>catalog._entry_category</code>, own frontmatter <code>category</code> → first
-<code>tags</code> entry → tap's registry category), <code>CACHE_FORMAT</code> bumped to 2 so
-existing caches backfill on next scan, a <code>--category</code> filter on
-<code>search</code>/<code>browse</code>/<code>recommend</code>
-(<code>catalog.matches_category</code>/<code>filter_by_category</code>), <code>info</code>'s kv row
-and <code>--json</code> field, and <code>browse</code>'s row badge switched from the tap-level
-lookup to the entry's own field (falling back to the tap lookup for a cache not yet rescanned).
-<b>Not done: the badge in plain <code>boost search</code> rows.</b> That row's column widths
-(<code>out.search_layout</code>/<code>format_search_row</code>) are a tuned, heavily-pinned budget
-system (drop order, per-cap name shrinking, a reserved curated tail) — working it out safely needs
-its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> rather than
-<code>shipped</code> for that reason; the next claim on this item is scoped to exactly that piece.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/catalog-categories-beyond-curated.md">Write-up &middot; catalog-categories-beyond-curated.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -7528,54 +6883,9 @@ its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> ra
       </article>
 
       <article class="cap rcard" id="util-rmtree-chmods-a-symlink-target-outside-the-tree">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Core · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Core · Bug</span></div>
         <h3><code>util.rmtree</code>'s retry hook <code>chmod</code>s a symlink's target, outside the tree it is deleting</h3>
-        <p><code>util.rmtree</code> installs an error handler so a read-only file cannot strand a delete: on
-failure it <code>chmod</code>s the path and retries. The handler is handed the path that failed, and
-when that path is a <em>symlink</em> the <code>chmod</code> follows it &middot; so deleting a
-directory that happens to contain a link to a file elsewhere changes that file's permissions.
-
-Measured, because the first draft of this card guessed at the shape and guessed wrong. The hook only
-fires once a delete has already <em>failed</em>, and unlinking a symlink does not fail while its
-parent directory is writable &middot; so in the ordinary case nothing happens at all: the link goes,
-the target keeps its mode byte-for-byte. Make the parent read-only (<code>0o500</code>) and the
-unlink fails, the hook <code>chmod</code>s the link, the target outside the tree goes
-<code>0o400</code> &rarr; <code>0o200</code>, the retry fails again and <code>rmtree</code> raises.
-The link is still there. So the only lasting effect of the hook on this path is the permission
-change on a file it was never asked to touch &middot; the earlier claim that &ldquo;the delete
-itself correctly removes only the link&rdquo; describes a run in which the hook never fires.
-
-The containment guards do their job: <code>scopes.resolve_in_base</code> and <code>contains</code>
-still refuse to remove anything outside the base, and the verification of PR #998 confirmed a planted
-victim file survives every escape attempt byte-for-byte. What is not guarded is the
-<em>permission change</em> on the way past, which happens before containment is ever consulted
-because it is inside the retry hook.
-
-Pre-existing and untouched by the project-scope work, but newly easier to reach: bare
-<code>uninstall</code> can now act in an unmarked directory, so a repo copy that carries a symlink
-into the user's home is one command away. The fix is small &middot; use
-<code>os.chmod(..., follow_symlinks=False)</code> where the platform supports it, and otherwise skip
-the retry entirely for a path that <code>os.path.islink</code> reports, since a symlink's own mode is
-not what blocked the unlink. A test wants a link inside the tree pointing at a
-<code>0o400</code> file outside it, asserting the target's mode is unchanged after the delete.
-
-<b>Implementing it turned up a second, worse instance of the same bug, which this card did not
-know about.</b> Hand <code>util.rmtree</code> a symlink <em>as its argument</em> and
-<code>shutil.rmtree</code> refuses it by calling the error hook with <code>func</code> set to
-<code>os.path.islink</code>. The old hook chmodded straight through the link and then called
-<code>os.path.islink(path)</code>, which answers True without raising &middot; so the hook returned,
-<code>rmtree</code> returned, and the caller was told a tree had been removed when nothing had.
-Measured: link intact, target directory intact with its contents, target's mode 0o755 &rarr; 0o200.
-Silent, and independent of any 0o500 &mdash; the first variant at least raises.
-
-<b>The repair the card proposed was the wrong one.</b>
-<code>os.chmod(..., follow_symlinks=False)</code> needs <code>lchmod</code>, which
-<code>os.supports_follow_symlinks</code> does not report everywhere this runs (measured True on
-darwin), so it buys a platform branch that cannot be exercised on the runner &mdash; an unkillable
-mutant by construction. It is also treating a mode that was never the blocker: unlinking is gated by
-the parent directory's write bit, not the link's own mode, which is why the retry fails a second
-time in the first variant. Re-raising the exception the hook was handed is correct on both counts
-and needs no branch.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/util-rmtree-chmods-a-symlink-target-outside-the-tree.md">Write-up &middot; util-rmtree-chmods-a-symlink-target-outside-the-tree.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -7621,30 +6931,9 @@ and needs no branch.</p>
       </article>
 
       <article class="cap rcard" id="concurrency-probe-measured-a-race-not-the-pool">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Tests · Flake</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Tests · Flake</span></div>
         <h3>The <code>add_many</code> concurrency probe measured a race, not the pool</h3>
-        <p><code>test_it_actually_runs_concurrently</code> counted the peak number of fake clones in flight and
-asserted it exceeded one. The fake clone is one <code>mkdir</code> and a small write, so the window
-in which two of them overlap is microseconds wide &middot; on a loaded runner each worker finished
-before the next was scheduled, the peak stayed at 1, and the required <code>tests (macos-latest,
-3.14)</code> check failed with <code>assert 1 &gt; 1</code> against a <code>ThreadPoolExecutor</code>
-that was doing exactly its job. Observed on PR #998, where it blocked a merge for a defect that did
-not exist.
-
-<b>The failure said the wrong thing, which is the part that matters.</b> "This is serial" and "this
-was too fast to catch overlapping" are different diagnoses, and the second wastes whoever reads it.
-A required check that can fail for a reason unrelated to the change also trains the next person to
-re-run rather than read &middot; which is how a real regression gets waved through.
-
-A <code>threading.Barrier(jobs)</code> inverts the dependency. Every worker blocks until
-<code>jobs</code> of them have arrived, so the assertion stops being about timing: a pool of four
-trips the barrier and the call returns, and a pool narrower than four <em>cannot</em> &mdash; the
-first worker waits for peers that will never come and the barrier times out. Slower hardware makes
-the test <em>more</em> reliable rather than less, which is the opposite of the property it had.
-Paired with <code>test_the_concurrency_probe_fails_when_the_pool_is_serial</code>, which drives
-<code>add_many</code> at <code>jobs=1</code> so the probe's own ability to fail is itself asserted,
-and verified by hand against a <code>max_workers=1</code> executor: it fails with "the pool never
-had 4 clones in flight".</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/concurrency-probe-measured-a-race-not-the-pool.md">Write-up &middot; concurrency-probe-measured-a-race-not-the-pool.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -7758,107 +7047,9 @@ the walk and the <code>redirected</code> reporting this card inherits.</p>
       </article>
 
       <article class="cap rcard" id="cancelled-ci-on-main-is-silent-and-skips-the-release">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Bug</span></div>
         <h3>A <code>cancelled</code> <code>ci</code> on main skips the release and alerts nobody, because the alert asks only about <code>failure</code></h3>
-        <p><b>Two independent gates, both keyed on the wrong half of the same enum.</b>
-<code>publish.yml</code> fires on <code>workflow_run</code> and ships only when
-<code>conclusion == 'success'</code>; <code>ci-failure-alert</code> opens the tracking issue
-only when <code>conclusion == 'failure'</code>. A <code>ci</code> run that concludes
-<code>cancelled</code> satisfies neither. <b>It does not ship and it does not tell anyone</b>
-&mdash; the one conclusion that falls through both.
-
-<b>Observed, on the merge of #1015.</b> <code>mutation-shard (4)</code> hit
-<code>timeout-minutes: 75</code> and was cancelled, the aggregate <code>mutation</code> job
-failed, and the run concluded <code>cancelled</code> rather than <code>failure</code>. No
-release, no issue, no notification. It surfaced the same day, and only because somebody was
-reading per-shard job durations out of the Actions API for an unrelated reason &mdash; nothing
-in the repo would have raised it, and the next one will be found the same way or not at all.
-
-<b>This is the exact blind spot <code>ci-failure-alert</code>'s own header describes.</b> That
-file opens by explaining that <code>demo</code> "failed six runs out of six on main, alerted
-nobody, and was found by a manual audit instead", and concludes that "any workflow that runs on
-main and nobody watches belongs here". The list was then enforced by
-<code>tests/unit/test_failure_alerting_covers_unattended.py</code> so a new workflow cannot
-quietly join the blind spot. <b>The enforcement is over <em>which workflows</em> are watched,
-and the hole here is <em>which conclusions</em> are</b> &mdash; <code>ci</code> is on the list
-and still said nothing.
-
-<b>Why a timeout is not an exotic case.</b> It is the designed behaviour of every
-<code>timeout-minutes</code> in the repo, and <code>mutation-shard</code>'s is reached by an
-ordinary slow runner rather than by a bug: across 169 measured shard jobs the worst was 72.5
-minutes against a 75-minute cap. A job can also be cancelled by the concurrency group or by a
-human pressing the button &mdash; and only the last of those is one anybody already knows about.
-
-<b>A runner eviction is the neighbouring case, and it concludes differently.</b> An earlier
-draft of this card listed eviction among the routes to <code>cancelled</code>; measured on
-2026-10-02, it is not. <code>mutation-shard (0)</code> on main took
-<code>The runner has received a shutdown signal</code> and exit 143 at mutant 3095 of 28084,
-the job concluded <b>failure</b>, and the alerting fired correctly &mdash; issue #1024 opened
-and auto-closed when a rerun of the failed jobs went green. That is the point of widening on
-the <em>green</em> set rather than enumerating bad conclusions: the two most common ways a
-shard dies land on different sides of an <code>== 'failure'</code> test, and a gate that has
-to know which one it was is a gate that will be wrong again.
-
-<b>Shape of the work.</b> Widen the alert's condition from <code>== 'failure'</code> to the set
-of conclusions that mean "main is not green", which is every one except <code>success</code>,
-<code>skipped</code> and <code>neutral</code> &mdash; naming what is <em>excluded</em> rather
-than what is included, so the next conclusion GitHub adds defaults to loud. The issue body
-should say which conclusion it was, because <em>cancelled</em> and <em>failure</em> want
-different first moves. Then pin it: the sibling test already enforces the workflow list, so the
-conclusion set wants the same treatment rather than a comment. Worth checking at the same time
-whether <code>publish.yml</code> should distinguish "CI did not pass" from "CI did not finish"
-&mdash; today both are a silent no-op, and a release that was skipped because a runner was slow
-is recoverable by a rerun that nobody currently knows to start.
-
-<b>Shipped.</b> The opener now gates on the green set <em>negated</em> &mdash;
-<code>!contains(fromJSON('["success", "skipped", "neutral"]'), conclusion)</code> &mdash; so a
-conclusion GitHub adds later defaults to loud. <code>skipped</code> and <code>neutral</code>
-are in it deliberately: <code>release</code> skips on every run it does not publish from, so
-without that exclusion each non-green <code>ci</code> would open two issues. The closer keeps
-<code>== 'success'</code>, because a <code>cancelled</code> run says nothing about whether the
-tracked failure is fixed and must not stand the issue down. The body now names the conclusion
-and, for <code>ci</code>, says no release was cut and that a rerun is what publishes it.
-
-<b>publish.yml was left alone, deliberately.</b> Its
-<code>conclusion == 'success' &amp;&amp; event == 'push'</code> guard is the fork-PR boundary
-that stops an outsider cutting a real PyPI release; widening it to tell "did not pass" from
-"did not finish" would trade a silent no-op for a security hole. The recoverable case &mdash; a
-release skipped because a runner was slow &mdash; is recovered by the issue telling somebody to
-rerun, which is what the new body does.
-
-<b>Found on the way, and fixed in the same change.</b> An empty GitHub expression written
-inside a <code>run:</code> or <code>script:</code> body makes zizmor emit
-<code>couldn't parse expression</code> from six audits &mdash; template_injection,
-overprovisioned_secrets, unredacted_secrets, obfuscation, secrets_outside_env and
-unsound_ternary. A comment explaining why the script avoids interpolation was enough to cause
-it. Measured three ways: in a YAML <code>#</code> comment it is harmless (zizmor does not read
-those), in a <code>script:</code> body it costs six, and in a <code>run:</code> body it costs
-six even behind a shell <code>#</code>.
-
-<b>An earlier draft of this section said that blinded the audits for the whole file. It does
-not, and the review that asked caught it.</b> Planting a real finding &mdash; a
-<code>head_commit.message</code> interpolated into a <code>run:</code> &mdash; in two copies of
-the file, one clean and one carrying an empty expression, zizmor reported the
-template-injection in <b>both</b>. What is actually lost is the unparseable span itself, which
-no audit inspects, plus six warning lines above a run that still ends in "No findings to
-report". Worth preventing on those terms rather than the dramatic ones: a span that silently
-opts out of SAST is a bad place for a mistake to hide. A parametrised test now walks every
-workflow's parsed run/script bodies.
-
-<b>One more hole the widening opened, and the review found it.</b>
-<code>head_branch == 'main'</code> is not a provenance check. <code>ci.yml</code> runs on
-<code>pull_request</code>, so a fork PR opened from a branch named <code>main</code> produces a
-<code>ci</code> run whose <code>head_branch</code> is <code>main</code> &mdash; and
-<code>cancel-in-progress</code> concludes it <code>cancelled</code> on every superseded push.
-Under the old <code>== 'failure'</code> gate that was rare; under the new one it is routine PR
-iteration, and the issue would have claimed a release was skipped for a run that was never
-release-eligible. <code>publish.yml</code>, <code>sbom.yml</code> and
-<code>mutation-weights-refresh.yml</code> all carry the event+repository pair and this file was
-the only <code>workflow_run</code> consumer without it, so the fix is the house guard on
-<em>both</em> jobs &mdash; the closer needed it just as much, since a <em>green</em> fork PR
-could otherwise close a tracker for a failure still live on main. It is
-<code>event != 'pull_request'</code> rather than <code>== 'push'</code> because three watched
-workflows are themselves <code>workflow_run</code>-triggered.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/cancelled-ci-on-main-is-silent-and-skips-the-release.md">Write-up &middot; cancelled-ci-on-main-is-silent-and-skips-the-release.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>

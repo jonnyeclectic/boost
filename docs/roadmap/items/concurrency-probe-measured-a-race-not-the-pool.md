@@ -2,7 +2,7 @@
 id: concurrency-probe-measured-a-race-not-the-pool
 board: code
 section: trust
-status: inflight
+status: shipped
 category: Tests · Flake
 complexity: S
 impact: Med
