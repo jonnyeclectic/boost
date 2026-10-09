@@ -3185,7 +3185,7 @@ def _rule_materialization_ok(name: str, m: dict) -> bool:
             return False
     # ``os.path``: ``Path.is_file`` raises under a dotdir with no search bit on
     # Python 3.12 and 3.13, and `boost sync` exited 70 on a rule there.
-    return os.path.isfile(p)
+    return os.path.isfile(p)  # noqa: FURB146
 
 
 def prune_out_of_scope_links(plan: dict[str, list]) -> list[str]:
