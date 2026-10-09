@@ -190,8 +190,11 @@ RUNNER_EFFICIENCY = 0.98
 #: rewritten copy, where ``store.py`` alone is 16 MB of mutant variants against
 #: 164 KB of source. Measured locally on that copy, the file takes **246 s**,
 #: 245 of them in its five real-tree tests, where the whole file takes 8 s on
-#: the checkout -- and 1 s in ``mutants/`` once they skip. Splitting wider
-#: parses more of those files, which is why it grew with the width. Those tests read ``scripts/`` only, which is never
+#: the checkout -- and 1 s in ``mutants/`` once they skip. Why it grew
+#: from eight shards to twelve is not measured: the fifth real-tree test
+#: arrived in the same commit as the twelve-shard change (58ace415) and alone
+#: took 99 s there, so width and that test are confounded. Those tests read
+#: ``scripts/`` only, which is never
 #: mutated, so they kill nothing in the gate. They now skip inside
 #: ``mutants/`` exactly as ``test_mutation_subfile_shards.py``'s already did.
 #:
