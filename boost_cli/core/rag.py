@@ -22,6 +22,7 @@ import contextlib
 import hashlib
 import json
 import math
+import operator
 import os
 import re
 import sqlite3
@@ -933,7 +934,7 @@ def export_shard(tap: str) -> dict:
         raise BoostError("cannot tell which commit %s is at" % tap)
     entries = [e for e in catalog.load_tap(t) if e.get("tap") == tap]
     docs = _make_docs(entries, {tap: t.path})
-    docs.sort(key=lambda d: (d["f"], d["n"]))
+    docs.sort(key=operator.itemgetter("f", "n"))
     return {"format": SHARD_FORMAT, "engine": ENGINE,
             "index_version": INDEX_VERSION, "tap": tap, "commit": commit,
             "docs": [{k: v for k, v in d.items() if k != "c"} for d in docs]}
