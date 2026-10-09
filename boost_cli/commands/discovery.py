@@ -28,6 +28,7 @@ from ..core import (
     catalog,
     config,
     gitutil,
+    integrity,
     journal,
     lockfile,
     paths,
@@ -2199,7 +2200,10 @@ def cmd_stats(argv):
         # was sorted and a skill's printed raw lock/install order, which read
         # like two commands disagreeing about the same fact rather than one
         # command describing two kinds of item.
-        out.kv("agents", ", ".join(lockfile.agent_names(kind, lock)) or "none")
+        # Written agents only: a row boost no longer writes is kept so an
+        # uninstall can reverse it, not because the item reaches that agent.
+        out.kv("agents",
+               ", ".join(integrity.written_agent_names(kind, lock)) or "none")
         out.kv("pinned", "yes" if lock.get("pinned") else "no")
         if lock.get("quarantined"):
             out.kv("quarantined", "yes")
