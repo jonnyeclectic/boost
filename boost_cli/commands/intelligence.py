@@ -1215,7 +1215,7 @@ def cmd_impact(argv: list[str]) -> int:
             if args.json:
                 print(json.dumps({"note": note, "git": git.has_git, "skills": []}))
             else:
-                print(out.empty_state("no skills installed — nothing to measure",
+                print(out.empty_state("no skills installed",
                                       hint="boost install <skill> to start",
                                       wrap=True))
             return 0

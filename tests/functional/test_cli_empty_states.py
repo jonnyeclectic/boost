@@ -10,6 +10,8 @@ Several of the old lines ran past a 60-column pane (`boost trending` at 70,
 below renders at 60 and asserts every line fits, that the screen uses the
 standard marker, and that any command in the hint survives whole.
 """
+import sys
+
 import pytest
 
 COLS = 60
@@ -70,6 +72,8 @@ def test_tapped_empty_screen_fits(boost, tapped, tmp_path, monkeypatch,
 
 def test_schedule_status_hint_wraps_under_its_margin(boost, sandbox,
                                                      monkeypatch):
+    # The launchd branch, as TestScheduleDarwin does: CI also runs on Linux.
+    monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setenv("COLUMNS", str(COLS))
     r = boost("schedule", "status")
     _fits(r.out)

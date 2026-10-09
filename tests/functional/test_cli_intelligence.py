@@ -964,7 +964,8 @@ class TestImpact:
     def test_no_skills_installed(self, boost, sandbox, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)  # not a git repo
         r = boost("impact")
-        assert "no skills installed — nothing to measure" in r.out
+        assert "○ no skills installed" in r.out
+        assert "→ boost install <skill> to start" in r.out
         r = boost("impact", "--json")
         assert json.loads(r.out) == {
             "note": "not inside a git repository — commit counts unavailable",
