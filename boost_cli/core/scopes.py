@@ -459,15 +459,54 @@ def contains(base, path) -> bool:
     with no common root — on Windows that is any two different drives, so a repo
     on ``C:`` weighed against a record pointing at ``D:`` would otherwise crash
     out of the delete guard rather than answer "outside".
+
+    **A spelling mismatch is settled by the disk, not by folding case.**
+    ``resolve()`` does not canonicalize case on macOS's case-insensitive APFS:
+    ``/users/jonny/.claude`` comes back as spelled, and against a ``$HOME`` of
+    ``/Users/jonny`` the string test says "outside" for a directory that is
+    inside. ``os.path.normcase`` cannot fix that — it is the identity on posix
+    — and folding by hand would be wrong on a case-sensitive disk, where
+    ``/home/A`` and ``/home/a`` are two directories. So when, and only when,
+    the string test answers "outside", each existing ancestor of ``path`` is
+    asked whether it *is* ``base`` (same ``st_dev`` and ``st_ino``). That
+    answer comes from the filesystem, so it folds case exactly where the disk
+    does. ``path`` itself is not asked, so ``base`` still does not contain
+    itself; a ``ValueError`` from ``commonpath`` still answers "outside"
+    without consulting it (two drives cannot be case variants of one
+    directory); and an inode of 0 — what a filesystem with no stable inode
+    reports — matches nothing.
     """
     try:
         base_r = Path(base).resolve()
         path_r = Path(path).resolve()
         if base_r == path_r:
             return False
-        return os.path.commonpath([str(base_r), str(path_r)]) == str(base_r)
+        if os.path.commonpath([str(base_r), str(path_r)]) == str(base_r):
+            return True
+        return _ancestor_is(path_r, base_r)
     except (OSError, ValueError):
         return False
+
+
+def _ancestor_is(path_r: Path, base_r: Path) -> bool:
+    """True when some proper ancestor of ``path_r`` is the directory ``base_r``.
+
+    Identity is ``(st_dev, st_ino)``, never the spelling — see :func:`contains`.
+    An ancestor that does not exist (the tail of a file not yet written) is
+    skipped; a ``base`` that cannot be stat'ed, or reports no inode, matches
+    nothing.
+    """
+    base_st = os.stat(base_r)
+    if not base_st.st_ino:
+        return False
+    for anc in path_r.parents:
+        try:
+            st = os.stat(anc)
+        except OSError:
+            continue
+        if os.path.samestat(st, base_st):
+            return True
+    return False
 
 
 def ensure_in_base(base, path):

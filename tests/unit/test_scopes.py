@@ -3,6 +3,7 @@
 """Unit tests for core/scopes.py — user vs project install scope."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -519,6 +520,221 @@ def test_contains_fails_closed_when_resolution_errors(tmp_path, monkeypatch):
 
     monkeypatch.setattr(scopes, "Path", ExplodingPath)
     assert scopes.contains(tmp_path, tmp_path / "x") is False
+
+
+# ── contains: a spelling that differs only in case ─────────────────────
+#
+# ``resolve()`` keeps the caller's case on a case-insensitive disk, so the
+# string test alone called ``<tmp>/repo/x`` outside ``<tmp>/Repo`` on macOS's
+# default APFS. The fix asks the disk (``st_dev``/``st_ino``), so each
+# direction is proved on the disk that can produce it — probed, never guessed
+# from ``sys.platform`` — and the other is simulated by stat identity.
+
+def _folds_case(d: Path) -> bool:
+    """True when the filesystem holding ``d`` treats ``X`` and ``x`` as one."""
+    probe = d / "CaseProbe"
+    probe.mkdir()
+    try:
+        twin = d / "caseprobe"
+        return twin.exists() and os.path.samefile(probe, twin)
+    finally:
+        probe.rmdir()
+
+
+def _restat(st, ino):
+    """``st`` with its inode replaced — a stand-in for another directory."""
+    fields = list(st)
+    fields[1] = ino
+    return os.stat_result(fields)
+
+
+def test_contains_true_for_a_case_variant_on_a_folding_disk(tmp_path):
+    if not _folds_case(tmp_path):
+        pytest.skip("this filesystem is case-sensitive")
+    (tmp_path / "Repo" / "x").mkdir(parents=True)
+    assert scopes.contains(tmp_path / "Repo", tmp_path / "repo" / "x") is True
+    # Either side may carry the odd spelling.
+    assert scopes.contains(tmp_path / "repo", tmp_path / "Repo" / "x") is True
+
+
+def test_contains_true_for_a_case_variant_whose_tail_is_unwritten(tmp_path):
+    # The callers judge files not yet written (a config about to be created),
+    # so the ancestor walk has to step over components that do not exist.
+    if not _folds_case(tmp_path):
+        pytest.skip("this filesystem is case-sensitive")
+    (tmp_path / "Repo").mkdir()
+    assert scopes.contains(
+        tmp_path / "Repo", tmp_path / "repo" / "a" / "b.json") is True
+
+
+def test_a_case_variant_of_the_base_is_still_not_inside_it(tmp_path):
+    # ``base`` never contains itself, however it is spelled — removing it
+    # would delete the whole repo.
+    if not _folds_case(tmp_path):
+        pytest.skip("this filesystem is case-sensitive")
+    (tmp_path / "Repo").mkdir()
+    assert scopes.contains(tmp_path / "Repo", tmp_path / "repo") is False
+
+
+def test_contains_false_for_a_case_variant_on_a_case_sensitive_disk(tmp_path):
+    # Real on Linux CI: ``A`` and ``a`` are two directories, and folding case
+    # would hand the delete guard the wrong one.
+    if _folds_case(tmp_path):
+        pytest.skip("this filesystem folds case")
+    (tmp_path / "Repo").mkdir()
+    (tmp_path / "repo" / "x").mkdir(parents=True)
+    assert scopes.contains(tmp_path / "Repo", tmp_path / "repo" / "x") is False
+
+
+def test_a_case_variant_that_is_another_directory_is_outside(tmp_path,
+                                                             monkeypatch):
+    """The case-sensitive answer, simulated on any disk.
+
+    Only the spelling's identity is changed: the ancestor ``repo`` reports a
+    different inode from ``Repo``, which is what a case-sensitive disk says
+    about two directories differing in case. ``Path.resolve`` reads ``lstat``,
+    not ``stat``, so the patch reaches only the identity test.
+    """
+    base = tmp_path / "Repo"
+    base.mkdir()
+    real_stat = os.stat
+    other = tmp_path / "repo"
+
+    def stat(p, *a, **kw):
+        st = real_stat(p, *a, **kw)
+        return _restat(st, st.st_ino + 1) if Path(p) == other else st
+
+    if not _folds_case(tmp_path):
+        other.mkdir()
+    if (other / "x").resolve() == (base / "x").resolve():
+        # Windows' realpath returns on-disk casing, so the string test is
+        # right and the identity walk is never consulted.
+        pytest.skip("resolve() canonicalizes case here")
+    monkeypatch.setattr(scopes.os, "stat", stat)
+    assert scopes.contains(base, other / "x") is False
+
+
+def _alias(monkeypatch, alias: Path, base: Path, blocked: Path | None = None):
+    """Make ``alias`` stat as ``base`` — the disk saying "one directory".
+
+    Platform-independent: it needs no case-folding disk, so the True half of
+    the identity walk is exercised on Linux and Windows CI as well.
+    """
+    real_stat = os.stat
+
+    def stat(p, *a, **kw):
+        if blocked is not None and Path(p) == blocked:
+            raise PermissionError("denied")
+        return real_stat(base if Path(p) == alias else p, *a, **kw)
+
+    monkeypatch.setattr(scopes.os, "stat", stat)
+
+
+def test_an_ancestor_the_disk_calls_the_base_is_inside(tmp_path, monkeypatch):
+    base, other = tmp_path / "Repo", tmp_path / "other"
+    base.mkdir()
+    other.mkdir()
+    _alias(monkeypatch, other, base)
+    assert scopes.contains(base, other / "a" / "b.json") is True
+    # ...but never the alias itself: that is the base.
+    assert scopes.contains(base, other) is False
+
+
+def test_the_walk_steps_over_an_unstatable_ancestor_anywhere(tmp_path,
+                                                            monkeypatch):
+    base, other = tmp_path / "Repo", tmp_path / "other"
+    base.mkdir()
+    (other / "mid").mkdir(parents=True)
+    _alias(monkeypatch, other, base, blocked=other / "mid")
+    assert scopes.contains(base, other / "mid" / "x") is True
+
+
+def test_a_base_with_no_inode_matches_nothing(tmp_path, monkeypatch):
+    # A filesystem with no stable inode reports 0 for every file; trusting it
+    # would call every path "inside" — the one loosening this must not ship.
+    real_stat = os.stat
+
+    def stat(p, *a, **kw):
+        return _restat(real_stat(p, *a, **kw), 0)
+
+    (tmp_path / "Repo").mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    monkeypatch.setattr(scopes.os, "stat", stat)
+    assert scopes.contains(tmp_path / "Repo", tmp_path / "elsewhere" / "x") \
+        is False
+
+
+def test_a_base_that_cannot_be_stated_is_outside(tmp_path, monkeypatch):
+    base = tmp_path / "gone"
+
+    def stat(p, *a, **kw):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(scopes.os, "stat", stat)
+    assert scopes.contains(base, tmp_path / "x") is False
+
+
+def test_an_unstatable_ancestor_does_not_stop_the_walk(tmp_path, monkeypatch):
+    # The nearest ancestor erroring must not end the search: the base can
+    # still sit further up.
+    if not _folds_case(tmp_path):
+        pytest.skip("this filesystem is case-sensitive")
+    (tmp_path / "Repo" / "mid").mkdir(parents=True)
+    real_stat = os.stat
+    blocked = tmp_path / "repo" / "mid"
+
+    def stat(p, *a, **kw):
+        if Path(p) == blocked:
+            raise PermissionError("denied")
+        return real_stat(p, *a, **kw)
+
+    monkeypatch.setattr(scopes.os, "stat", stat)
+    assert scopes.contains(tmp_path / "Repo", blocked / "x") is True
+
+
+def test_the_identity_walk_never_rescues_a_sibling(tmp_path):
+    # The fallback runs on every "outside" answer, so it must still say
+    # outside for the cases the string test was already right about.
+    (tmp_path / "repo").mkdir()
+    (tmp_path / "repo-backup" / "x").mkdir(parents=True)
+    assert scopes.contains(tmp_path / "repo",
+                           tmp_path / "repo-backup" / "x") is False
+    assert scopes.contains(tmp_path / "repo", tmp_path) is False
+
+
+def test_a_case_variant_still_cannot_climb_out(tmp_path):
+    if not _folds_case(tmp_path):
+        pytest.skip("this filesystem is case-sensitive")
+    (tmp_path / "Repo").mkdir()
+    (tmp_path / "outside").mkdir()
+    assert scopes.contains(
+        tmp_path / "Repo", tmp_path / "repo" / ".." / "outside") is False
+
+
+def test_resolve_in_base_accepts_a_case_variant_base(tmp_path):
+    if not _folds_case(tmp_path):
+        pytest.skip("this filesystem is case-sensitive")
+    (tmp_path / "Repo").mkdir()
+    lower = tmp_path / "repo"
+    assert scopes.resolve_in_base(lower, ".claude/skills/x") == \
+        lower / ".claude" / "skills" / "x"
+    assert scopes.resolve_in_base(lower, "../outside") is None
+
+
+def test_ensure_in_base_still_refuses_a_symlink_out_of_a_case_variant(
+        tmp_path):
+    if not _folds_case(tmp_path):
+        pytest.skip("this filesystem is case-sensitive")
+    repo = tmp_path / "Repo"
+    (repo / ".claude").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (repo / ".claude" / "skills").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(BoostError):
+        scopes.ensure_in_base(tmp_path / "repo",
+                              repo / ".claude" / "skills" / "authorized_keys")
+    assert scopes.ensure_in_base(tmp_path / "repo", repo / ".claude" / "x") \
+        == repo / ".claude" / "x"
 
 
 # ── ensure_in_base: the write guard ──────────────────────────────────────

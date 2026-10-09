@@ -7179,22 +7179,9 @@ before picking one.</p>
       </article>
 
       <article class="cap rcard" id="scopes-contains-is-case-sensitive-on-a-case-insensitive-disk">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Core · Bug</span></div>
         <h3><code>scopes.contains</code> calls the same directory two different trees when only the case differs</h3>
-        <p><code>scopes.contains</code> compares <code>Path.resolve()</code> output with
-<code>os.path.commonpath</code>. On macOS's default case-insensitive APFS, <code>resolve()</code> does
-not canonicalize case. Measured: <code>Path('/users/jonny/code').resolve()</code> returns
-<code>/users/jonny/code</code>, not <code>/Users/jonny/Code</code>.
-
-Its callers include <code>mcphost.escapes_home</code> and <code>claude_settings.escaping_path</code>. So
-<code>CLAUDE_CONFIG_DIR=/users/jonny/.claude</code> with <code>HOME=/Users/jonny</code> counts as escaping
-home, and boost refuses an MCP registration or a hooks write into a directory that is inside home.
-
-The error fails closed, so it is safe, but it is false. The fix has to keep failing closed. Compare
-with <code>os.path.normcase</code> only where the filesystem actually folds case, or compare
-<code>os.stat</code> identity (<code>st_dev</code>, <code>st_ino</code>) for paths that exist. Don't
-case-fold blindly: on a case-sensitive Linux disk, <code>/home/A</code> and <code>/home/a</code> really
-are different directories.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/scopes-contains-is-case-sensitive-on-a-case-insensitive-disk.md">Write-up &middot; scopes-contains-is-case-sensitive-on-a-case-insensitive-disk.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>

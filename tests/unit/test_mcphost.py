@@ -770,6 +770,30 @@ class TestEscapesHome:
         env = {"CLAUDE_CONFIG_DIR": str(home / ".claude-personal")}
         assert mcphost.escapes_home(mcphost.CLAUDE, env, home) is None
 
+    def test_a_config_home_spelled_in_another_case_is_contained(
+            self, tmp_path):
+        # macOS's default disk folds case and ``resolve()`` keeps the
+        # caller's spelling, so ``CLAUDE_CONFIG_DIR=/users/x/.claude`` under
+        # ``HOME=/Users/x`` was refused as an escape. Probed, not assumed.
+        home = tmp_path / "Home"
+        home.mkdir()
+        if not (tmp_path / "home").exists():
+            pytest.skip("this filesystem is case-sensitive")
+        env = {"CLAUDE_CONFIG_DIR": str(tmp_path / "home" / ".claude")}
+        assert mcphost.escapes_home(mcphost.CLAUDE, env, home) is None
+
+    def test_a_case_variant_that_is_another_directory_still_escapes(
+            self, tmp_path):
+        # The case-sensitive half: two directories, so a real escape.
+        home = tmp_path / "Home"
+        home.mkdir()
+        if (tmp_path / "home").exists():
+            pytest.skip("this filesystem folds case")
+        (tmp_path / "home").mkdir()
+        env = {"CLAUDE_CONFIG_DIR": str(tmp_path / "home" / ".claude")}
+        assert mcphost.escapes_home(mcphost.CLAUDE, env, home) == \
+            str(tmp_path / "home" / ".claude" / ".claude.json")
+
     def test_an_unset_variable_is_contained(self, tmp_path):
         home = tmp_path / "home"
         home.mkdir()
