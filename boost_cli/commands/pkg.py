@@ -157,7 +157,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
             out.warn("could not write %s — %s not registered"
                      % (mcpdecl.SIDECAR, ", ".join(wanted)))
             out.dim("  the skill is installed; fix the file's permissions and "
-                    "reinstall to record them")
+                    "reinstall to record them", wrap=True)
         return
     out.info("")
     out.warn("%s needs %s to work:" % (res.name, _plural(len(rows), "MCP server")))
@@ -169,7 +169,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     wirable = mcpdecl.registrable(rows)
     if not wirable:
         # Name-only declarations: boost will not invent a command line.
-        out.dim("  install these yourself, then `boost mcp register`")
+        out.dim("  install these yourself, then `boost mcp register`", wrap=True)
         return
     from ..core import mcphost
     # Offer the CLIs that are actually here. With none installed we still fall
@@ -183,7 +183,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     if not out.confirm(
             "  register %s with %s, for every project on this machine?"
             % (_plural(len(wirable), "server"), where), default=False):
-        out.dim("  skipped — run these yourself when you're ready:")
+        out.dim("  skipped — run these yourself when you're ready:", wrap=True)
         for row in wirable:
             # One line per host, not `targets[0]` — the prompt named every
             # host and a yes would have registered with every one, so a no
@@ -279,7 +279,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         out.ok("project lock updated (%s/%s)"
                % (projectlock.LOCK_DIRNAME, projectlock.LOCK_FILENAME))
         out.dim("  commit %s/ to share these with the team"
-                % projectlock.LOCK_DIRNAME)
+                % projectlock.LOCK_DIRNAME, wrap=True)
         _warn_injection(res)
         _warn_secrets(res)
         _offer_mcp(res, no_mcp=no_mcp)
@@ -1458,7 +1458,9 @@ def cmd_update(argv: list[str]) -> int:
         return _ingest_shards(args)
     results, failures = registry.update(args.tap or None, force=args.force)
     if not results and not failures:
-        out.info("no taps configured — start with `boost tap --defaults`")
+        print(out.empty_state("no taps configured",
+                              hint="start with `boost tap --defaults`",
+                              wrap=True))
         return 0
     moved = []
     pinned_skips = 0
@@ -2095,7 +2097,7 @@ def cmd_pin(argv: list[str]) -> int:
         commit = integrity.set_commit_pin(args.name, entry, kind=kind)
         journal.log("pin-commit", args.name, commit=commit)
         out.ok("commit-pinned %s at %s" % (args.name, commit[:12]))
-        out.dim("  `boost verify` fails if the recorded commit ever moves off it")
+        out.dim("  `boost verify` fails if the recorded commit ever moves off it", wrap=True)
     return rc
 
 
@@ -2116,7 +2118,7 @@ def cmd_unpin(argv: list[str]) -> int:
         found and integrity.clear_commit_pin(args.name, found[1], kind=found[0]))
     rc = _set_pin(args.name, False)
     if cleared_commit_pin:
-        out.dim("  released the commit pin too")
+        out.dim("  released the commit pin too", wrap=True)
     return rc
 
 
@@ -2233,7 +2235,9 @@ def _snapshot_list(as_json: bool) -> int:
         print(json.dumps(snaps, indent=2))
         return 0
     if not snaps:
-        out.info("no snapshots yet — create one with `boost snapshot save`")
+        print(out.empty_state("no snapshots yet",
+                              hint="create one with `boost snapshot save`",
+                              wrap=True))
         return 0
     out.table([(s["id"], util.rel_time(s["created"]) if s["created"] else "?",
                 s["label"] or "—",

@@ -2648,6 +2648,74 @@ class TestKvWrap:
             "  key           42"]
 
 
+class TestDimMargin:
+    """`dim` keeps a left margin on every line and pays for it when wrapping.
+
+    Forty call sites write ``dim("  hint")`` because `dim` prints flush left;
+    before the margin was a real parameter, ``wrap=True`` on one of them
+    dropped the two spaces from line one and budgeted the full pane for lines
+    printed two columns in.
+    """
+
+    def _lines(self, capsys, monkeypatch, msg, cols=20, **kw):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width",
+                            lambda default=80, stream=None: cols)
+        output.dim(msg, **kw)
+        return capsys.readouterr().out.rstrip("\n").split("\n")
+
+    def test_an_unwrapped_line_is_byte_identical(self, capsys, monkeypatch):
+        assert self._lines(capsys, monkeypatch, "  one two") == ["  one two"]
+
+    def test_indent_draws_the_margin_without_wrap(self, capsys, monkeypatch):
+        assert self._lines(capsys, monkeypatch, "one two", indent=3) == [
+            "   one two"]
+
+    def test_an_inline_margin_survives_the_first_wrapped_line(
+            self, capsys, monkeypatch):
+        lines = self._lines(capsys, monkeypatch,
+                            "  aaaa bbbb cccc dddd eeee", wrap=True)
+        assert lines == ["  aaaa bbbb cccc", "  dddd eeee"]
+
+    def test_the_wrap_budget_pays_for_the_margin(self, capsys, monkeypatch):
+        # 19 columns of text fit a 20-column pane flush left (next test), but
+        # behind a 2-column margin only 18 remain, so the last word folds.
+        lines = self._lines(capsys, monkeypatch, "aaaa bbbb cccc dddd",
+                            wrap=True, indent=2)
+        assert lines == ["  aaaa bbbb cccc", "  dddd"]
+        assert all(len(ln) <= 20 for ln in lines)
+
+    def test_a_flush_line_still_spends_the_whole_pane(self, capsys,
+                                                      monkeypatch):
+        lines = self._lines(capsys, monkeypatch, "aaaa bbbb cccc dddd",
+                            wrap=True)
+        assert lines == ["aaaa bbbb cccc dddd"]
+
+    def test_inline_and_explicit_margins_add(self, capsys, monkeypatch):
+        lines = self._lines(capsys, monkeypatch, "  aaaa bbbb cccc",
+                            wrap=True, indent=2)
+        assert lines == ["    aaaa bbbb cccc"]
+
+    def test_a_code_span_moves_whole_under_the_margin(self, capsys,
+                                                      monkeypatch):
+        # The `boost schedule status` hint, which ran 61 columns at 60.
+        msg = "  enable with `boost schedule enable --interval 6h|12h|daily`"
+        lines = self._lines(capsys, monkeypatch, msg, cols=60, wrap=True)
+        assert lines == ["  enable with",
+                         "  `boost schedule enable --interval 6h|12h|daily`"]
+        wide = self._lines(capsys, monkeypatch, msg, cols=120, wrap=True)
+        assert wide == [msg]
+
+    def test_the_margin_is_inside_the_muted_span(self, capsys, monkeypatch):
+        monkeypatch.setattr(output, "use_color", lambda stream=None: True)
+        monkeypatch.setattr(output, "term_width",
+                            lambda default=80, stream=None: 20)
+        output.dim("  aaaa bbbb cccc dddd", wrap=True)
+        out = capsys.readouterr().out
+        assert out == (output.role("  aaaa bbbb cccc", "muted") + "\n"
+                       + output.role("  dddd", "muted") + "\n")
+
+
 class TestWrapBoundaries:
     """The two distinctions the shape of `wrap()` turns on."""
 

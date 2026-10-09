@@ -1019,8 +1019,10 @@ def _context_status(state: dict, as_json: bool) -> int:
         out.kv("branch", branch or "(not in a git repository)")
     rules = state.get("rules", [])
     if not rules:
-        out.info("no rules — add one with `boost context map 'feature/*' "
-                "skill1,skill2`", wrap=True)
+        print(out.empty_state(
+            "no rules",
+            hint="add one with `boost context map 'feature/*' skill1,skill2`",
+            wrap=True))
         return 0
     rows = [(r.get("pattern", "?"), ", ".join(r.get("skills", [])),
              "*" if branch and fnmatch.fnmatch(branch, r.get("pattern", "")) else "")
@@ -1138,7 +1140,9 @@ def cmd_focus(argv: list[str]) -> int:
                         out.role("(since %s)" % util.rel_time(state.get("since", "")), "muted")))
             out.info(out.role("end it with `boost focus --clear`", "muted"))
         else:
-            out.info("no focus session — start one with `boost focus SKILL...`")
+            print(out.empty_state("no focus session",
+                                  hint="start one with `boost focus SKILL...`",
+                                  wrap=True))
         return 0
 
     names = list(dict.fromkeys(args.skills))
@@ -1211,7 +1215,9 @@ def cmd_impact(argv: list[str]) -> int:
             if args.json:
                 print(json.dumps({"note": note, "git": git.has_git, "skills": []}))
             else:
-                out.info("no skills installed — nothing to measure")
+                print(out.empty_state("no skills installed — nothing to measure",
+                                      hint="boost install <skill> to start",
+                                      wrap=True))
             return 0
 
     rows, data = [], []
@@ -1248,7 +1254,7 @@ def cmd_impact(argv: list[str]) -> int:
                 _note_fallback()
         else:
             _note_fallback()
-    out.dim("  " + note)
+    out.dim("  " + note, wrap=True)
     return 0
 
 
@@ -1375,8 +1381,7 @@ def _chat_session(args) -> int:
         # an unexplained reason.
         note = ("no AI configured — answers are the grounded matches "
                 "themselves (%s)" % ai.fallback_note())
-        for line in out.wrap(note, max(out.term_width() - 2, 20)):
-            out.info(out.role(line, "muted"))
+        out.dim(note, wrap=True, indent=2)
     # With stdin piped nobody is typing, so the prompt and the typing hint are
     # only chrome in the answers a script captures — the same rule
     # output.confirm applies. A terminal is unchanged.

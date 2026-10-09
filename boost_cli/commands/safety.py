@@ -531,7 +531,7 @@ def cmd_quarantine(argv):
             print(json.dumps({"quarantined": items}, indent=2))
             return 0
         if not rows:
-            out.info("nothing in quarantine")
+            print(out.empty_state("nothing in quarantine"))
             return 0
         # NAME is what `quarantine --release` takes.
         out.table(rows, headers=("NAME", "KIND", "VERSION", "TAP", "SINCE"),
@@ -667,7 +667,8 @@ def cmd_attest(argv):
         print(json.dumps({"skills": records, "failed": failures}))
         return 1 if (args.verify and failures) else 0
     if not records:
-        out.info("no skills installed")
+        print(out.empty_state("no skills installed",
+                              hint="boost install <skill> to start"))
         return 0
     # Kind folds into the name cell only when it is not a skill, so the
     # everyday all-skills table keeps its width and nothing truncates.

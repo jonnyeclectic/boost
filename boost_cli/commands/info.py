@@ -1009,7 +1009,9 @@ def _show_crashes(limit, as_json=False):
             for r in reports[:limit]]}, indent=2))
         return 0
     if not reports:
-        out.info("no crash reports — nothing has blown up (that boost noticed)")
+        print(out.empty_state(
+            "no crash reports — nothing has blown up (that boost noticed)",
+            wrap=True))
         return 0
     out.heading("crash reports in %s" % ldir)
     for r in reports[:limit]:
@@ -1088,7 +1090,7 @@ def cmd_log(argv):
         print(json.dumps({"kind": "activity", "events": events}, indent=2))
         return 0
     if not events:
-        out.info("no activity yet")
+        print(out.empty_state("no activity yet"))
         return 0
     out.heading("activity")
     action_roles = {"install": "success", "uninstall": "danger"}
@@ -1326,8 +1328,8 @@ def cmd_tag(argv):
             print(json.dumps(mapping, indent=2, sort_keys=True))
             return 0
         if not mapping:
-            out.info("no tags yet")
-            out.info(out.role("hint: boost tag <skill> +mytag", "muted"))
+            print(out.empty_state("no tags yet",
+                                  hint="boost tag <skill> +mytag"))
             return 0
         out.table([("#" + t, ", ".join(mapping[t])) for t in sorted(mapping)],
                   headers=("TAG", "SKILLS"), whole=("TAG",))  # `list --tag`

@@ -776,7 +776,8 @@ class TestContext:
     def test_status_empty_hint_fits_a_narrow_pane(self, boost, sandbox,
                                                    monkeypatch):
         # "no rules — add one with `boost context map 'feature/*'
-        # skill1,skill2`" ran 71 columns unwrapped; 60 is well inside the
+        # skill1,skill2`" ran 71 columns unwrapped (it is now an
+        # empty_state whose hint carries the command); 60 is well inside the
         # narrow-terminal range this CLI is audited at.
         monkeypatch.setenv("COLUMNS", "60")
         r = boost("context", "status")
@@ -924,7 +925,8 @@ class TestFocus:
         assert "sidelined_by" not in lockfile.get_skill("jira-integration")
         assert not (paths.state_dir() / "focus.json").exists()
         r = boost("focus")
-        assert "no focus session — start one with `boost focus SKILL...`" in r.out
+        assert "○ no focus session" in r.out
+        assert "→ start one with `boost focus SKILL...`" in r.out
 
     def test_clear_with_no_session_reports_no_session(self, boost, installed):
         # Verified live: `focus --clear` with nothing focused used to say

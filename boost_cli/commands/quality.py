@@ -1294,7 +1294,8 @@ def cmd_test(argv):
                           "ok": not failed_count}, indent=2))
         return 1 if failed_count else 0
     if not rows:
-        out.info("no skills installed")
+        print(out.empty_state("no skills installed",
+                              hint="boost install <skill> to start"))
         return 0
     out.table(rows, headers=("SKILL", "RESULT", "FAILED CHECKS"),
               whole=("SKILL",))
@@ -1343,7 +1344,8 @@ def cmd_decay(argv):
         print(json.dumps({"skills": rows}))
         return 0
     if not rows:
-        out.info("no skills installed")
+        print(out.empty_state("no skills installed",
+                              hint="boost install <skill> to start"))
         return 0
     rel_role = {"none": "danger", "low": "warn", "ok": "success"}
     verdicts = {"decay": out.role("decay candidate", "danger"),
@@ -1961,7 +1963,7 @@ def cmd_trust(argv) -> int:
                   # fingerprint it is dropped rather than clipped.
                   whole=("NAME",))
     else:
-        out.dim("  none — add one with `boost trust add <name> <key>`")
+        out.dim("  none — add one with `boost trust add <name> <key>`", wrap=True)
     print()
     _print_provenance(taps)
     return 0

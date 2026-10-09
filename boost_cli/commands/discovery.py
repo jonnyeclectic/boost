@@ -1190,7 +1190,8 @@ def cmd_recommend(argv):
         line += " · also: " + ", ".join(extra_kw)
     out.info(out.role("%s  (%s)" % (line, _tilde(target)), "muted"))
     if not shown:
-        out.info("no recommendations for this stack — try `boost search <keyword>`")
+        print(out.empty_state("no recommendations for this stack",
+                              hint="try `boost search <keyword>`", wrap=True))
         return 0
     if used_curated_fallback:
         out.info("no stack-specific matches — curated picks instead:")
@@ -2103,7 +2104,9 @@ def cmd_trending(argv):
             return 0
         out.heading("curated picks (no local install data yet)")
         if not curated:
-            out.info("no curated skills available — add taps with `boost tap --defaults`")
+            print(out.empty_state("no curated skills available",
+                                  hint="add taps with `boost tap --defaults`",
+                                  wrap=True))
             return 0
         # reserve name/version/kind columns
         descw = max(out.term_width() - 34, 24)

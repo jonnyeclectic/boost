@@ -2,14 +2,14 @@
 id: BOOST-D27
 board: design
 track: layout
-status: proposed
+status: done
 impact: med
 complexity: M
 wow: 2
 category: layout
-ref: "core/output.py · dim()/empty_state() call sites; truncate()/search_layout()"
+ref: "core/output.py · dim(indent=) + empty_state() call sites"
 order: 8
-owner: loop/aesthetics
+owner: loop/wrap-law-rollout
 pr:
 title: Finish the wrap-law rollout across the CLI's remaining hand-rolled spots
 ---
@@ -20,3 +20,5 @@ A narrow-pane audit across all 80 commands fixed the concrete overflow bugs it f
 <b>2. <code>empty_state()</code> adoption is 7 of ~35 "nothing to show" screens.</b> This pass converted cohort/replay/pulse/who's overflowing messages to the standard helper; roughly 28 more (<code>hooks</code>, <code>hallmarks of "no taps configured"</code>, <code>no skills installed</code> across five modules, …) still print via ad hoc <code>out.info("no X")</code>. None of them currently overflow, so converting all 28 in one shot would be a same-behavior refactor risking 28 screens' worth of rendered-text drift for no measured bug — better done a few at a time, verified against real content.
 
 <b>3. Wide-character width stopped at <code>visible_len()</code>/<code>_clip_visible()</code>.</b> <code>truncate()</code> (plain-text clipping before coloring) and <code>search_layout()</code>'s column-budget math still count with <code>len()</code>, not display width — so a skill description containing an emoji would still truncate mid-character or throw off a search row's column budget. Not observed in real catalog data (skill names/taps are near-universal ASCII slugs), and widening it touches layout-budget code, not just measurement, so it stayed out of the audit's contained fix.
+
+<b>Shipped, with each gap measured at 60 and 120 columns before and after.</b> <b>1.</b> <code>dim()</code> takes an <code>indent</code> margin, and a leading run of spaces in the message counts as the same margin, so every <code>dim("  hint")</code> site can opt into wrapping unchanged: the margin is kept on the first and every continuation line, and the wrap budget pays for it. 24 prose hints now pass <code>wrap=True</code> (<code>bmad</code>, <code>compact</code>, <code>create</code>, <code>policy</code>, <code>completions</code>, <code>schedule status</code>, <code>mcp</code>, <code>impact</code>'s caveat, <code>install</code>'s MCP offer, <code>pin</code>/<code>unpin</code>, <code>trust</code>), plus <code>chat</code>'s hand-rolled muted wrap, which became <code>dim(note, wrap=True, indent=2)</code>. Lines that carry a path, an arrow to a path, or an unquoted command stay unwrapped as data. <code>schedule status</code> went from 61 columns to 49 at 60 and is byte-identical at 120. Non-wrapping output is byte-identical everywhere. <b>2.</b> 17 more "nothing to show" screens use <code>empty_state()</code>, with each em-dash remedy split into its <code>→</code> hint: <code>taps</code>, <code>update</code>, <code>snapshot list</code>, <code>profile list</code>, <code>focus</code>, <code>context status</code>, <code>log</code>, <code>log --crashes</code>, <code>tag --list</code>, <code>quarantine --list</code>, <code>hooks list</code>, <code>attest</code>, <code>test</code>, <code>decay</code>, <code>impact</code>, <code>recommend</code> and <code>trending</code>. That brings adoption to 24. At 60 columns they measured <code>trending</code> 70, <code>recommend</code> 68, <code>log --crashes</code> 64, and <code>taps</code>/<code>focus</code>/<code>snapshot list</code> 60 before. All now fit, and <code>tests/functional/test_cli_empty_states.py</code> pins each of them. Action outcomes such as "nothing to change" and "nothing registered" are not empty listings and were left as they are. <b>3.</b> This gap was already fixed before this card was picked up: 74c4aac9 made <code>truncate()</code> delegate to <code>_clip_visible()</code> and sized <code>search_layout()</code> with <code>visible_len()</code>, and <code>test_output.py</code>'s CJK clipping tests pin it. A search row with a CJK name and an emoji description measures 59 columns at 60.
