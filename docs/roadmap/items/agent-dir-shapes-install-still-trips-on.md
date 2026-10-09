@@ -117,8 +117,8 @@ sits at its path), which matches what the run reports. Doctor and heal now name 
 <code>~/.agents/skills</code>; doctor went from 0 to 1. Heal and sync printed "rule house was not re-materialized" under a green
 check mark (also on <code>origin/main</code>); that line is now a warning.
 
-<code>tests/functional/test_agent_dir_shapes.py</code> has 54 tests, and 45 of them fail on
+<code>tests/functional/test_agent_dir_shapes.py</code> had 54 tests when this shipped, and 45 of them fail on
 <code>11dbbc77</code>. The other nine guard the opposite direction. The 3.12/3.13 crashes are reproduced on any interpreter by a
-fixture that makes pathlib raise where those versions do. Found while measuring and not fixed:
+fixture that makes pathlib raise where those versions do. Found while measuring and left out of this change:
 <code>boost quarantine</code> under a <code>0o600</code> dotdir reports its links removed, but it cannot see the
-cursor link to remove it.
+cursor link to remove it. Fixed since, in #1063 (<code>quarantine-reports-a-link-removed-that-it-could-not-see</code>).
