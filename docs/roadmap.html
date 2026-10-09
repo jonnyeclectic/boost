@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>527</b><span>Loop finds</span></div>
+      <div class="stat"><b>528</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -6848,6 +6848,29 @@ exactly why plausible similarity was not accepted as evidence.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
           <span class="m">Path.resolve keeps the caller's spelling on macOS, so /users/x and /Users/x compare as different trees</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="quarantine-reports-a-link-removed-that-it-could-not-see">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3><code>boost quarantine</code> reports links removed that it could not see</h3>
+        <p>Found while measuring <code>agent-dir-shapes-install-still-trips-on</code>, and left out of that change.
+Make <code>~/.cursor</code> mode <code>0o600</code> and quarantine an installed skill.
+<code>unlink_agents</code> skips the cursor link because <code>os.path.islink</code> answers
+<code>False</code> when it may not look. Quarantine then reports the skill's links as removed, but
+the cursor link is still on disk and the agent keeps loading the skill boost meant to withhold.
+
+Uninstall no longer strands that link. It refuses while a recorded or unseen agent's dir can't be
+searched, and names <code>chmod u+wx</code>. Quarantine needs the same treatment. It should look at
+each link with <code>os.lstat</code>, so that <code>PermissionError</code> means "could not look", not
+"no link". Then it should either refuse with the same hint, or quarantine and say which agent may
+still load the skill. Refusing matches uninstall. Quarantining with a warning matches what a user
+reaching for quarantine wants. Measure both before choosing.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">under a 0o600 agent dotdir, quarantine says it unlinked a skill whose link there it cannot see</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
