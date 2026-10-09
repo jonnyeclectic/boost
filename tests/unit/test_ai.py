@@ -227,6 +227,8 @@ class TestAskCli:
         monkeypatch.setattr("boost_cli.core.ai.subprocess.run", boom)
         assert ai.ask("hi") is None
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows runs no #! stand-in found on PATH")
     def test_a_sandboxed_home_writes_no_session_into_the_real_config_home(
             self, ai_on, monkeypatch, tmp_path):
         """A one-shot call must not leave a transcript in an outside config home.
@@ -259,6 +261,8 @@ class TestAskCli:
         assert ai.ask("hi") == "answer"
         assert list(real.iterdir()) == []
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows runs no #! stand-in found on PATH")
     def test_a_cli_older_than_the_flag_still_answers(self, ai_on, monkeypatch,
                                                      tmp_path):
         """Claude Code < 2.0.63 rejects ``--no-session-persistence`` and exits 1.
