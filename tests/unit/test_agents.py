@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from boost_cli.core import agents, config
+from boost_cli.errors import BoostError
 
 
 class TestKnownAgents:
@@ -318,3 +319,63 @@ class TestCodexTarget:
         cfg["agents"]["codex"]["enabled"] = False
         config.save(cfg)
         assert agents.dedupes_by_path() == set()
+
+
+class TestCheck:
+    """`agents.check` names every unresolvable agent dir without raising.
+
+    `known_agents` raises on the first one, which is what stops an install
+    landing in `./skills`; doctor needs the list instead, keyed by agent so it
+    can name the `agents.<name>.dir` key to edit.
+    """
+
+    def _set_dir(self, agent, value):
+        cfg = config.load()
+        cfg["agents"].setdefault(agent, {})["dir"] = value
+        config.save(cfg)
+
+    def test_defaults_resolve(self, sandbox, monkeypatch):
+        # Codex's default is `${CODEX_HOME:-~/.codex}/skills`: a fallback is
+        # present, so an unset CODEX_HOME must not count as broken.
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        assert agents.check() == []
+
+    def test_unset_var_without_fallback_is_named_by_agent(self, sandbox,
+                                                          monkeypatch):
+        monkeypatch.delenv("BOOST_TEST_NOPE", raising=False)
+        self._set_dir("cursor", "${BOOST_TEST_NOPE}/skills")
+        bad = agents.check()
+        assert [n for n, _e in bad] == ["cursor"]
+        err = bad[0][1]
+        assert "BOOST_TEST_NOPE is not set" in err.message
+        assert err.hint and "${BOOST_TEST_NOPE:-" in err.hint
+        # ...and it is the same row known_agents refuses on.
+        with pytest.raises(BoostError):
+            agents.known_agents()
+
+    def test_a_set_var_or_a_fallback_resolves(self, sandbox, monkeypatch):
+        monkeypatch.setenv("BOOST_TEST_SET", str(sandbox / "x"))
+        monkeypatch.delenv("BOOST_TEST_NOPE", raising=False)
+        self._set_dir("cursor", "${BOOST_TEST_SET}/skills")
+        self._set_dir("windsurf", "${BOOST_TEST_NOPE:-~/.windsurf}/skills")
+        assert agents.check() == []
+
+    def test_every_bad_row_in_config_order(self, sandbox, monkeypatch):
+        monkeypatch.delenv("BOOST_TEST_A", raising=False)
+        monkeypatch.delenv("BOOST_TEST_B", raising=False)
+        self._set_dir("windsurf", "${BOOST_TEST_A}/skills")
+        self._set_dir("aider", "${BOOST_TEST_B}/skills")
+        bad = agents.check()
+        assert [n for n, _e in bad] == ["windsurf", "aider"]
+        assert "BOOST_TEST_A" in bad[0][1].message
+        assert "BOOST_TEST_B" in bad[1][1].message
+
+    def test_a_disabled_agent_still_counts(self, sandbox, monkeypatch):
+        # known_agents expands every row, enabled or not, so a disabled one
+        # blocks commands just the same and must be named just the same.
+        monkeypatch.delenv("BOOST_TEST_NOPE", raising=False)
+        cfg = config.load()
+        cfg["agents"]["cursor"].update(dir="${BOOST_TEST_NOPE}/skills",
+                                       enabled=False)
+        config.save(cfg)
+        assert [n for n, _e in agents.check()] == ["cursor"]

@@ -493,6 +493,23 @@ def cmd_doctor(argv):
                     "is" if len(clones) == 1 else "are"))
                 if clones else "no taps or settings are read"), wrap=True)
 
+    # One agent whose `dir` names an unset `${VAR}` makes `known_agents` raise,
+    # and a dozen checks below reach it — the link loop, the materialization
+    # checks, the broken-link sweep, duplicate discovery, the agent-dir checks.
+    # Left alone, the first of them ended the run: exit 1, one error line, no
+    # verdict, and not a byte of `--json`. So the question is asked once, here,
+    # and a bad answer turns those sections off rather than the report: each
+    # is skipped with `agents_ok`, and the row says that it was, because a
+    # skipped check that printed nothing would read as a passed one.
+    agent_errs = agents.check()
+    agents_ok = not agent_errs
+    for aname, err in agent_errs:
+        key = "agents.%s.dir" % aname
+        bad("agent-config", "%s: %s — %s, or set a path with `boost config set "
+            "%s <dir>`; until then commands that resolve agents refuse, and "
+            "doctor skipped its link, materialization and agent-dir checks"
+            % (key, err.message, err.hint or "fix the value", key), wrap=True)
+
     # A cache dir boost cannot write leaves every command rescanning its taps
     # and warning that it could not keep the result (catalog.rebuild_tap), so
     # "cloned & cached" below would be the one line on the screen claiming
@@ -586,7 +603,7 @@ def cmd_doctor(argv):
     # codex arrived after). Looking it up in the enabled set finds a real
     # directory holding no symlink and reports "not linked — run `boost sync`",
     # which sync then declines to act on. Doctor and sync have to agree.
-    enabled = agents.linking_agents()
+    enabled = agents.linking_agents() if agents_ok else {}
     skill_issues = 0
     quarantined_skills = 0
     for name, entry in sorted(skills.items()):
@@ -647,7 +664,8 @@ def cmd_doctor(argv):
                 % (name, ", ".join(stray), ", ".join(scope)))
             skill_issues += 1
     active_skills = len(skills) - quarantined_skills
-    if skills and not skill_issues:
+    # "with agent links" is a claim the loop above only checked with agents_ok.
+    if skills and not skill_issues and agents_ok:
         # A quarantined skill has no agent links — unlink_agents already
         # removed them — so it must not inflate this count into a false
         # "healthy, N skills with agent links" the way it used to.
@@ -694,6 +712,10 @@ def cmd_doctor(argv):
     quarantined_rules = len(all_rules) - len(rules)
     quarantined_workflows = len(all_workflows) - len(workflows)
     mat_issues = 0
+    # Every materialization check asks which agents boost writes, so with an
+    # unresolvable agent there is nothing to check them against.
+    if not agents_ok:
+        rules, workflows = {}, {}
     for kind, section in (("rule", rules), ("workflow", workflows)):
         for name, entry in sorted(section.items()):
             for m in entry.get("materializations") or []:
@@ -748,7 +770,7 @@ def cmd_doctor(argv):
     # remedy could not run -- see `agents.materialization_is_written`. It
     # names the items and the per-agent reason, because "disabled" is only
     # one of them: an agent can be enabled and still take no workflow.
-    off = store.unwritten_materializations()
+    off = store.unwritten_materializations() if agents_ok else []
     if off:
         shown = ["%s %s → %s (%s)" % (k, n, a, why)
                  for k, n, a, why in off[:_MAT_NOTE_SHOWN]]
@@ -786,7 +808,7 @@ def cmd_doctor(argv):
                     "it is" if len(nowhere) == 1 else "they are",
                     ", ".join("%s %s" % (k, n) for k, n in nowhere)),
                  wrap=True)
-    if (all_rules or all_workflows) and not mat_issues:
+    if (all_rules or all_workflows) and not mat_issues and agents_ok:
         # Quarantined rules/workflows are excluded above so their stashed-but-
         # removed materializations don't read as rot — but excluding them from
         # `rules`/`workflows` entirely used to make this line vanish outright
@@ -828,7 +850,7 @@ def cmd_doctor(argv):
         bad("orphans", "%d orphaned store dir%s (%s) — run `boost sync`"
             % (len(orphans), _s(len(orphans)), ", ".join(orphans[:5])))
 
-    broken, foreign = _broken_links()
+    broken, foreign = _broken_links() if agents_ok else ([], [])
     if broken:
         bad("broken-links", "%d broken symlink%s in agent dirs — run `boost heal`"
             % (len(broken), _s(len(broken))))
@@ -886,7 +908,7 @@ def cmd_doctor(argv):
                     ", …" if len(missing) > 5 else "",
                     prereq.install_hint(prereq_rows)), wrap=True)
 
-    for dup in store.duplicate_discovery():
+    for dup in (store.duplicate_discovery() if agents_ok else ()):
         # An agent that reads the canonical store natively, holding its own
         # entry for a skill that store already carries. Boost did not put it
         # there — it never links into a native-store agent — but the agent
@@ -903,14 +925,14 @@ def cmd_doctor(argv):
     # rules/ and commands/ dirs rules and workflows materialize into. Not a
     # native-store agent's skills dir (Gemini's): boost never writes it, and
     # `boost sync` could not act on it.
-    skills_dirs = set(agents.linking_agents().values())
-    for adir, block in store.blocked_agent_dirs():
+    skills_dirs = set(agents.linking_agents().values()) if agents_ok else set()
+    for adir, block in (store.blocked_agent_dirs() if agents_ok else ()):
         # A file or a dangling link where the dir belongs. Heal names it,
         # install skips the agent, and doctor said nothing and exited 0.
         bad("agent-dir", "%s — %s, then `boost sync` %s what it missed"
             % (paths.not_writable(adir, block), paths.write_remedy(block),
                "relinks" if adir in skills_dirs else "writes"), wrap=True)
-    for adir in store.unwritable_agent_dirs():
+    for adir in (store.unwritable_agent_dirs() if agents_ok else ()):
         # A next action, like the log line below it: without one this was
         # the only issue doctor names that nothing can act on.
         bad("agent-dir", "agent dir %s is not writable — `chmod u+w %s`, "
@@ -967,11 +989,15 @@ def cmd_doctor(argv):
     # row that had just counted them. Name the second number rather than fold
     # it into the first: they live in different places and `boost uninstall`
     # treats them differently, so one total would be a different claim.
-    line1 = ("%d skill%s installed%s · %d tap%s synced · %d broken link%s"
+    line1 = ("%d skill%s installed%s · %d tap%s synced · %s"
              % (len(skills), _s(len(skills)),
                 " (+%d in this project)" % len(pskills) if pskills else "",
-                tap_ok, _s(tap_ok), len(broken), _s(len(broken))))
-    (rep.ok if not broken else rep.warn)("summary", line1)
+                tap_ok, _s(tap_ok),
+                "%d broken link%s" % (len(broken), _s(len(broken)))
+                if agents_ok else "links not checked"))
+    # A warn, not an ok, when the links went unchecked: a ✓ beside "links
+    # not checked" reads as passed. Restates the agent-config issue above.
+    (rep.ok if not broken and agents_ok else rep.warn)("summary", line1)
     if lock_ok and rotation:
         rep.ok("integrity", "lock file integrity OK · log rotation healthy")
     else:
