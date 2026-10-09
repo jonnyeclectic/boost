@@ -5,8 +5,9 @@
 BOOST-D27 moved these screens from hand-rolled ``out.info("no X — do Y")``
 lines onto ``out.empty_state``, the one affordance the rest of the CLI already
 used, and gave ``out.dim`` a real margin so its indented hints could wrap.
-Several of the old lines ran past a 60-column pane (`boost trending` at 70,
-`recommend` at 68, `log --crashes` at 64, `schedule status` at 61); each case
+Several of the old lines ran past a 60-column pane, measured in display
+columns (`boost trending` at 68, `recommend` at 66, `log --crashes` at 62,
+`schedule status` at 61); each case
 below renders at 60 and asserts every line fits, that the screen uses the
 standard marker, and that any command in the hint survives whole.
 """
