@@ -10,7 +10,7 @@ wow: 1
 note: fixed — quarantine unlinks every agent it can, names each one it could not with its chmod, and a re-run finishes
 order: 371
 owner: loop/quarantine-unseen-link
-pr:
+pr: 1063
 title: "<code>boost quarantine</code> reports links removed that it could not see"
 ---
 Found while measuring <code>agent-dir-shapes-install-still-trips-on</code>, and left out of that change.
