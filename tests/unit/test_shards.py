@@ -555,6 +555,41 @@ class TestPlan:
                           "detail": "tap is at 2222222, shard is for 1111111",
                           "row": _ROW}]
 
+    def test_a_movable_tap_past_its_row_is_planned_as_a_move(self):
+        # `ingest` will fetch the row and then move the tap to it, so the
+        # step carries the row like a download does — and no refusal.
+        steps = shards.plan(["a/b"], {"a/b": "2" * 40}, {"shards": [_ROW]},
+                            movable={"a/b"})
+        assert steps == [{"tap": "a/b", "status": "move", "row": _ROW}]
+
+    def test_only_the_taps_named_movable_are_moved(self):
+        # Both directions of the predicate in one plan: c/d is past its row
+        # too, and not named, so it keeps the refusal.
+        manifest = {"shards": [_ROW, {**_ROW, "tap": "c/d"}]}
+        steps = shards.plan(["a/b", "c/d"],
+                            {"a/b": "2" * 40, "c/d": "2" * 40}, manifest,
+                            movable={"a/b"})
+        assert [s["status"] for s in steps] == ["move", "refused"]
+        assert steps[1]["commit_moved"] is True
+
+    @pytest.mark.parametrize("commits,built,want", [
+        ({"a/b": "1" * 40}, {"a/b": "1" * 40}, "current"),
+        ({"a/b": "1" * 40}, {}, "download"),
+        ({}, {}, "download"),
+    ])
+    def test_movable_never_turns_a_tap_at_its_row_into_a_move(
+            self, commits, built, want):
+        # Being allowed to move is not a reason to: a tap already at the row,
+        # or with no commit known, plans exactly as it did.
+        steps = shards.plan(["a/b"], commits, {"shards": [_ROW]}, built,
+                            movable={"a/b"})
+        assert steps[0]["status"] == want
+
+    def test_a_movable_tap_with_no_row_is_still_unpublished(self):
+        assert shards.plan(["z/z"], {"z/z": "2" * 40}, {"shards": [_ROW]},
+                           movable={"z/z"}) == [
+            {"tap": "z/z", "status": "unpublished"}]
+
     def test_a_tap_with_no_known_commit_is_downloaded(self):
         # `sync` has always fetched here and left the verdict to
         # `import_shard`; the plan must not quietly start refusing.
@@ -604,6 +639,15 @@ class TestDownloadBytes:
                  {"tap": "d", "status": "unpublished"},
                  {"tap": "e", "status": "download", "row": {"bytes": 5}}]
         assert shards.download_bytes(steps) == (15, 0)
+
+    def test_a_move_downloads_and_is_priced_like_one(self):
+        # `ingest` fetches the shard before it moves the tap, so a preview
+        # that left moves out would under-promise what the run downloads.
+        steps = [{"tap": "a", "status": "move", "row": {"bytes": 10}},
+                 {"tap": "b", "status": "move", "row": {}},
+                 {"tap": "c", "status": "download", "row": {"bytes": 5}}]
+        assert shards.download_bytes(steps) == (15, 1)
+        assert shards.DOWNLOADS == ("download", "move")
 
     @pytest.mark.parametrize("size", [None, 0, -3, "big", 1.5])
     def test_a_row_without_a_usable_size_is_counted_not_summed(self, size):
