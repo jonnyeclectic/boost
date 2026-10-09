@@ -42,7 +42,16 @@ from ..core import (
 from ..core import output as out
 from ..errors import BoostError
 from ._common import _s
-from .pkg import _warn_unwritable
+
+
+def _warn_unwritable(res, stream=None) -> None:
+    """``pkg._warn_unwritable``, imported on first use.
+
+    ``pkg`` costs ~100 ms to import, and only the relinking paths need it.
+    """
+    from .pkg import _warn_unwritable as warn
+    warn(res, stream=stream)
+
 
 # ---------------------------------------------------------------- helpers
 
