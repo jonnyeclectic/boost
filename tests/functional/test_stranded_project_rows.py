@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from boost_cli.cli import COMMANDS
-from boost_cli.core import complete, lockfile, paths
+from boost_cli.core import complete, config, lockfile, paths
 
 
 def _commit(tap, rel, text, msg):
@@ -233,6 +233,26 @@ def test_doctor_still_names_a_quarantined_stranded_row(boost, alive,
     from boost_cli.commands import configuration
     text, _ = configuration._tool_doctor({})
     assert "rule house-style: installed --local into a directory" in text
+
+
+def test_doctor_names_it_even_when_an_agent_dir_does_not_resolve(
+        boost, stranded, monkeypatch):
+    """A stranded row reads only its recorded base, never the agents, so an
+    unresolvable agent dir -- which turns off every agent-dependent check --
+    must not take this report down with them. Both surfaces, both faults."""
+    monkeypatch.delenv("BOOST_TEST_NOPE", raising=False)
+    cfg = config.load()
+    cfg["agents"]["cursor"]["dir"] = "${BOOST_TEST_NOPE}/skills"
+    config.save(cfg)
+    out = _flat(boost("doctor", expect=1).out)
+    assert ("rule house-style was installed --local into %s, which no longer "
+            "exists" % paths.tilde(stranded)) in out
+    assert "agents.cursor.dir" in out
+    from boost_cli.commands import configuration
+    text, _ = configuration._tool_doctor({})
+    assert "rule house-style: installed --local into a directory" in text
+    assert "workflow ship-it: installed --local into a directory" in text
+    assert "agents.cursor.dir" in text
 
 
 def test_list_marks_the_row_gone(boost, stranded):
