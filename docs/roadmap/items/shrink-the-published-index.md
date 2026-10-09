@@ -10,7 +10,7 @@ wow: 3
 note: 563.7 MB of postings is 59.3 MB as one delta+varint blob per term, and 23.8 MB under zstd -19
 order: 100
 owner: loop/shrink-keyword-index
-pr:
+pr: 1051
 title: shrink the keyword index before publishing it — structure first, then compression
 ---
 <a href="#publish-the-keyword-index">publish-the-keyword-index</a> is worth doing only if the

@@ -10,7 +10,7 @@ wow: 4
 note: 462 measured shards (75.7 MB gzip, one refused) import in ~20–23 s into a 59.3 MB store at 100% body text, where a bundle-only machine indexed 0%
 order: 99
 owner: loop/publish-keyword-index
-pr:
+pr: 1052
 title: publish the keyword index the way vectors are published
 ---
 Dense vectors are built once in CI and downloaded. The BM25 index is not:

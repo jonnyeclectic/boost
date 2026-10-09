@@ -10,7 +10,7 @@ category: layout
 ref: "core/output.py · dim(indent=) + empty_state() call sites"
 order: 8
 owner: loop/wrap-law-rollout
-pr:
+pr: 1058
 title: Finish the wrap-law rollout across the CLI's remaining hand-rolled spots
 ---
 A narrow-pane audit across all 80 commands fixed the concrete overflow bugs it found — a hardcoded <code>textwrap</code> width in <code>info</code>/<code>preview</code>/<code>explain</code>, two argparse usage lines with no <code>metavar</code>, help text that split a backtick-quoted command across lines, five "nothing here" screens that overflowed unwrapped, and a <code>print_help</code> command column painted in raw 16-color <code>CYAN</code> instead of the Aurora <code>accent</code> role — and added wide-character measurement (<code>unicodedata.east_asian_width</code>) to <code>visible_len()</code>/<code>_clip_visible()</code> so <code>table()</code> stays aligned when a cell holds CJK or an emoji. Three related gaps remain, deliberately left rather than folded into that pass because each is a wider, riskier sweep on its own:

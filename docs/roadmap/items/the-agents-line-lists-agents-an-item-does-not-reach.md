@@ -10,7 +10,7 @@ wow: 2
 note: a rule written for 1 of 5 recorded agents still advertises all five in list, info and stats
 order: 368
 owner: loop/written-agent-names
-pr:
+pr: 1047
 title: "The agents line lists every recorded agent, including the ones boost no longer writes"
 ---
 #1040 made an item whose materialization rows are <b>all</b> unwritten read as

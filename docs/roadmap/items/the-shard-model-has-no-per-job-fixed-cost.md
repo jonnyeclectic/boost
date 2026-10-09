@@ -10,7 +10,7 @@ wow: 3
 note: the plan divides by every shard added, so it flatters every width above the one it was fitted at
 order: 367
 owner: loop/shard-fixed-cost
-pr:
+pr: 1054
 title: "The shard model runs through the origin, so <code>plan</code> gets more optimistic with every shard added"
 ---
 <b>The cleanest statement of it needs no weights at all.</b> Going from eight shards to twelve,

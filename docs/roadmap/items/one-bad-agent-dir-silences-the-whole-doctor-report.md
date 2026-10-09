@@ -10,6 +10,7 @@ wow: 2
 note: A single agent whose `dir` names an unset variable makes `boost doctor` exit 1 with one line instead of reporting it as an issue…
 order: 346
 owner: loop/doctor-bad-agent-dir
+pr: 1049
 title: One unresolvable agent dir silences the whole `boost doctor` report
 ---
 <b>Found by the review of <code>loop/codex-agent-target</code>.</b>

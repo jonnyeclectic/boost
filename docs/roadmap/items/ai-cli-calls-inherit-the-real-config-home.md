@@ -10,7 +10,7 @@ wow: 1
 note: explain / search --smart run the claude CLI with the parent environment, so a sandboxed HOME still writes into the real config home
 order: 369
 owner: loop/ai-cli-env
-pr:
+pr: 1057
 title: "AI-assisted commands reach the real config home from a sandboxed <code>HOME</code>"
 ---
 <code>ai._ask_cli</code> runs <code>subprocess.run(cmd, …)</code> with no <code>env=</code>. When a user

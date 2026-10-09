@@ -10,7 +10,7 @@ wow: 2
 note: "fixed: a 0o600 dotdir no longer crashes install, doctor, heal, sync or uninstall on Python 3.12/3.13 (70 → 0/1) and is named \"not searchable\" with chmod u+wx; a missing skills dir under a read-only dotdir is named by its dotdir everywhere, and doctor (0 → 1) and sync now report it; a refused agent, or one whose link boost cannot look at, is recorded as refused_agents, retried by install --force, and blocks uninstall rather than being stranded; focus, context, profile and quarantine --release say what they skipped; a directory at a rule's file path is a conflict (70 → 0); heal --dry-run no longer previews a refused re-materialize; doctor names a read-only store (0 → 1)"
 order: 332
 owner: loop/agent-dir-shapes
-pr:
+pr: 1059
 title: Agent-dir shapes boost still trips on: a parent with no search bit, a missing dir under a read-only parent, a dir at a rule's file path, a blocked agent dropped from the lock's scope
 ---
 <b>Found by the third review of <code>read-only-boost-home-with-no-cache-dir</code>.</b> None is a regression.

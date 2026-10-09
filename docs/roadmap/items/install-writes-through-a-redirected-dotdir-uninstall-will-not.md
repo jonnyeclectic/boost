@@ -10,7 +10,7 @@ wow: 2
 note: install now refuses a target uninstall would refuse — same predicate both sides; doctor names rows a later symlink redirected
 order: 357
 owner: loop/install-redirected-dotdir
-pr:
+pr: 1056
 title: "<code>install --local</code> writes through a redirected dotdir that <code>uninstall --local</code> will not remove"
 ---
 A repo that commits <code>&lt;repo&gt;/.cursor &rarr; config/cursor</code> &mdash; an ordinary

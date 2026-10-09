@@ -10,7 +10,7 @@ wow: 2
 note: a --local rule whose repo was deleted read as missing, and every remedy recreated the repo
 order: 236
 owner: loop/rule-scope-readers
-pr:
+pr: 1050
 title: "A rule or workflow installed <code>--local</code> into a since-deleted repo reads as missing, and every remedy recreates the repo"
 ---
 Rules and workflows installed with <code>--local</code> materialize into the repo but are recorded

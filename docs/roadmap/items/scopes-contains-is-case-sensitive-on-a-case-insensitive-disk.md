@@ -10,7 +10,7 @@ wow: 1
 note: Path.resolve keeps the caller's spelling on macOS, so /users/x and /Users/x compare as different trees
 order: 370
 owner: loop/scopes-case
-pr:
+pr: 1048
 title: "<code>scopes.contains</code> calls the same directory two different trees when only the case differs"
 ---
 <code>scopes.contains</code> compares <code>Path.resolve()</code> output with
