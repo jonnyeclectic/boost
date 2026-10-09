@@ -230,12 +230,13 @@ def _materialized_agents(kind, entry):
                     for a in integrity.written_agent_names(kind, entry))
 
 
-def _kind_table(heading, items, extra=None):
+def _kind_table(heading, kind, items, extra=None):
     """Render an installed rule/workflow table. ``extra`` is an optional
     ``(column, key)`` pair for a per-kind column (e.g. a workflow's slot); the
-    count line reuses the heading's trailing noun (`installed rules` -> `rule`)."""
+    count line names ``kind``, which also decides which agents count as
+    written — passed explicitly, so renaming a heading can't change it."""
     out.heading(heading)
-    noun = heading.split()[-1][:-1]  # "installed rules" -> "rule"
+    noun = kind
     # FLAGS mirrors the skills table so a quarantined or pinned rule/workflow
     # doesn't render byte-identical to a healthy one — `update`/`cat` treat
     # them differently and a reader needs to see that here, not just in --json.
@@ -244,7 +245,8 @@ def _kind_table(heading, items, extra=None):
     for name in sorted(items):
         e = items[name]
         quarantined = bool(e.get("quarantined"))
-        agents_cell = "—" if quarantined else _materialized_agents(noun, e)
+        agents_cell = ("—" if quarantined
+                       else _materialized_agents(noun, e) or "none")
         flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
                 ([out.aurora("quarantined", "pink")] if quarantined else [])
         row = [name, e.get("version", "?"), e.get("tap", "?"),
@@ -371,9 +373,10 @@ def cmd_list(argv):
                               % (projectlock.LOCK_DIRNAME,
                                  projectlock.LOCK_FILENAME), "muted"))
     if rules:
-        _kind_table("installed rules", rules)
+        _kind_table("installed rules", "rule", rules)
     if workflows:
-        _kind_table("installed workflows", workflows, extra=("SLOT", "slot"))
+        _kind_table("installed workflows", "workflow", workflows,
+                    extra=("SLOT", "slot"))
     return 0
 
 

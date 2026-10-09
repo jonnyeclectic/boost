@@ -1518,13 +1518,10 @@ def _tool_info(args: dict):
     if src.get("description"):
         lines.append("description: %s" % src["description"])
     if entry:
-        if kind == "skill":
-            agents_s = ", ".join(entry.get("agents") or []) or "none"
-        else:
-            # Materialized kinds record their reach per materialization.
-            agents_s = ", ".join(sorted(
-                {m.get("agent", "?")
-                 for m in entry.get("materializations") or []})) or "none"
+        # Only the agents boost still writes for: a recorded row whose agent
+        # was disabled is kept for uninstall, not reached (same as `info`).
+        agents_s = ", ".join(
+            integrity.written_agent_names(kind, entry)) or "none"
         lines.extend(("installed: yes (%s)" % entry.get("installed_at", "?"),
                       "agents: %s" % agents_s))
         if entry.get("pinned"):

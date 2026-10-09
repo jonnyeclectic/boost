@@ -3150,6 +3150,32 @@ class TestAnItemMaterializedNowhere:
         self._seed_unreachable()
         assert re.search(r"agents\s+none\n", boost("stats", "house").out)
 
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_the_mcp_info_tool_names_only_the_written_agent(self, sandbox,
+                                                             kind):
+        """`boost_info` built its own agents line from the raw rows, so an AI
+        agent asking it got all five while `boost info` said cursor."""
+        from boost_cli.commands import configuration
+        self._seed_partial(kind)
+        text, err = configuration._tool_info({"name": "team-conventions"})
+        assert not err
+        assert "\nagents: cursor\n" in text + "\n", text
+
+    def test_the_mcp_info_tool_says_none_for_an_unreachable_item(self,
+                                                                 sandbox):
+        from boost_cli.commands import configuration
+        self._seed_unreachable()
+        text, err = configuration._tool_info({"name": "house"})
+        assert not err
+        assert "\nagents: none\n" in text + "\n", text
+
+    def test_an_unreachable_items_list_cell_says_none(self, boost, sandbox):
+        """A blank AGENTS cell reads like a rendering gap; say it."""
+        self._seed_unreachable()
+        row = next(line for line in boost("list", "--kind", "rule").out
+                   .splitlines() if line.startswith("house"))
+        assert re.search(r"\snone\s", row + " "), row
+
     def test_an_item_with_no_rows_at_all_stays_ok(self, boost, sandbox):
         """The control case, and the dangerous direction: keying on "no row
         was written" rather than "rows existed and none was written" turns

@@ -39,11 +39,14 @@ as they are.
 <code>reaches_no_agent</code> and filters rows through the same
 <code>agents.materialization_is_written</code> call, so when one answers <code>True</code> the other
 answers <code>[]</code>. <code>boost list</code>'s <code>AGENTS</code> column, <code>boost info</code>'s
-<code>materialized</code> line and <code>boost stats</code>' <code>agents</code> line all read it now.
+<code>materialized</code> line, <code>boost stats</code>' <code>agents</code> line and the MCP
+<code>boost_info</code> tool's <code>agents:</code> line all read it now. The MCP tool had its own
+inline copy of the raw read, so an AI agent asking it got all five names.
 <code>lockfile.agent_names</code> stays the raw record, which uninstall still needs. Measured on
 the card's fixture (five rows, only <code>cursor</code> enabled): before, all three printed
 <code>claude-code, codex, cursor, gemini, windsurf</code> (list abbreviated it to
 <code>claude·codex·cursor·gemini·windsurf</code>). After, all three print <code>cursor</code>, and an item
-whose every row is unwritten reads <code>agents none</code> in <code>stats</code>. Fifteen new tests,
-twelve unit and three functional, cover rule and workflow, kind fallback, row scope, a row with
-no agent, and skill passthrough. All fifteen fail on the old code.
+whose every row is unwritten reads <code>none</code> in <code>stats</code>, in <code>boost_info</code> and
+in the <code>list</code> cell. Before, the list cell was blank. Nineteen new tests,
+twelve unit and seven functional, cover rule and workflow, kind fallback, row scope, a row with
+no agent, and skill passthrough. All nineteen fail on the old code.

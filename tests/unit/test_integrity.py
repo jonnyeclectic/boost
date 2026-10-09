@@ -629,7 +629,6 @@ class TestAnItemMaterializedNowhere:
         assert statuses <= set(integrity._VERIFY_ROLE_BY_STATUS)
 
 
-
 class TestWrittenAgentNames:
     """`written_agent_names` is what every agents line reads.
 
