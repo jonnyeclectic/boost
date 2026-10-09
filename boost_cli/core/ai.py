@@ -154,6 +154,12 @@ def _ask_cli(backend: str, prompt: str, system: str | None, model: str,
     try:
         proc = subprocess.run(cmd, input=body, capture_output=True,
                               text=True, timeout=timeout)
+        if proc.returncode != 0 and aihost.rejected_headless(backend, proc.stderr):
+            # A CLI older than the flag (Claude Code < 2.0.63): retry once
+            # without it rather than lose the CLI route on every call.
+            cmd = aihost.argv(backend, model, system, headless=False)
+            proc = subprocess.run(cmd, input=body, capture_output=True,
+                                  text=True, timeout=timeout)
     except (subprocess.TimeoutExpired, OSError) as e:
         # The exception TYPE only, never str(e): TimeoutExpired stringifies the
         # whole argv, which carries the system-prompt text with it.

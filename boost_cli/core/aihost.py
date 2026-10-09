@@ -36,6 +36,11 @@ child its credentials and turn every call into a heuristic fallback; refusing
 like `mcphost.escapes_home` would do the same to a user who set it on purpose.
 What the flag does not stop is the CLI's own `.claude.json` bookkeeping —
 the same bookkeeping every run of the user's CLI performs, not boost's config.
+A CLI older than 2.0.63 rejects the flag (`error: unknown option
+'--no-session-persistence'`, exit 1, measured on 2.0.62's `cli.js`), so
+`ai._ask_cli` retries once without it when `rejected_headless` says that is
+what happened: on an old CLI the call keeps working and keeps the transcript
+it always wrote, rather than every AI command silently going heuristic.
 
 The direct-API path in `ai.py` stays Anthropic-only. A user of Gemini CLI has
 the `gemini` binary by definition, so the CLI route is the one that matters
@@ -157,19 +162,34 @@ def fold_system(name: str, system: str | None, prompt: str) -> str:
     return "%s\n\n%s" % (system, prompt)
 
 
-def argv(name: str, model: str | None, system: str | None) -> list[str]:
+def rejected_headless(name: str, stderr: str | None) -> bool:
+    """Whether ``stderr`` says the CLI refused one of ``name``'s headless flags.
+
+    True only for an "unknown option" error that names one of those flags, so
+    an auth failure or a bad model id is never retried as a version problem.
+    """
+    text = stderr or ""
+    if "unknown option" not in text.lower():
+        return False
+    return any(str(flag) in text for flag in spec(name)["headless_flags"])
+
+
+def argv(name: str, model: str | None, system: str | None,
+         headless: bool = True) -> list[str]:
     """The command line for ``name``, minus the prompt (which goes on stdin).
 
     ``model`` is passed unless another backend plainly owns the id (see
     `accepts_model`), and ``system`` only when this backend has a flag for one
-    — `fold_system` handles the other case.
+    — `fold_system` handles the other case. ``headless=False`` drops the
+    headless flags, for a CLI too old to know them (see `rejected_headless`).
     """
     row = spec(name)
     cmd = [str(row["cli"]), str(row["prompt_flag"])]
     if accepts_model(name, model):
         cmd += [str(row["model_flag"]), str(model)]
     cmd += [str(x) for x in row["output_flags"]]
-    cmd += [str(x) for x in row["headless_flags"]]
+    if headless:
+        cmd += [str(x) for x in row["headless_flags"]]
     if system and row["system_flag"]:
         cmd += [str(row["system_flag"]), system]
     return cmd

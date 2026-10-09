@@ -259,6 +259,61 @@ class TestAskCli:
         assert ai.ask("hi") == "answer"
         assert list(real.iterdir()) == []
 
+    def test_a_cli_older_than_the_flag_still_answers(self, ai_on, monkeypatch,
+                                                     tmp_path):
+        """Claude Code < 2.0.63 rejects ``--no-session-persistence`` and exits 1.
+
+        The stand-in prints 2.0.62's own error (measured from its ``cli.js``).
+        Without the retry every AI command on that CLI goes heuristic.
+        """
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        fake = bindir / "claude"
+        fake.write_text(
+            "#!%s\n"
+            "import sys\n"
+            "sys.stdin.read()\n"
+            "if '--no-session-persistence' in sys.argv:\n"
+            "    sys.stderr.write(\"error: unknown option "
+            "'--no-session-persistence'\\n\")\n"
+            "    sys.exit(1)\n"
+            "print('old answer ' + ' '.join(sys.argv[1:]))\n"
+            % sys.executable, encoding="utf-8")
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", str(bindir))
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", _boom)
+        reply = ai.ask("hi", system="SYS")
+        assert reply == ("old answer -p --model %s --output-format text "
+                         "--append-system-prompt SYS" % DEFAULT_MODEL)
+
+    def test_an_unrelated_failure_is_not_retried(self, ai_on, monkeypatch):
+        calls = _with_cli(monkeypatch, rc=1, stderr="error: unknown option '--bogus'")
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", _boom)
+        assert ai.ask("hi") is None
+        assert len(calls) == 1
+        assert "--bogus" in ai.unavailable_reason()
+
+    def test_a_failed_retry_reports_the_retry(self, ai_on, monkeypatch):
+        """Both attempts fail: the logged reason is the second one's."""
+        outcomes = iter([
+            subprocess.CompletedProcess(
+                [], 1, "", "error: unknown option '--no-session-persistence'"),
+            subprocess.CompletedProcess([], 1, "", "Invalid API key"),
+        ])
+        seen = []
+
+        def run(cmd, **kw):
+            seen.append(cmd)
+            return next(outcomes)
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which",
+                            lambda n: "/fake/bin/claude")
+        monkeypatch.setattr("boost_cli.core.ai.subprocess.run", run)
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", _boom)
+        assert ai.ask("hi") is None
+        assert "--no-session-persistence" in seen[0]
+        assert "--no-session-persistence" not in seen[1]
+        assert "Invalid API key" in ai.unavailable_reason()
+
     def test_no_cli_no_key_returns_none(self, ai_on, monkeypatch):
         _without_cli(monkeypatch)
         monkeypatch.setattr("boost_cli.core.nethttp.urlopen", _boom)

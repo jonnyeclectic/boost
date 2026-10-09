@@ -43,3 +43,11 @@ the old argv because the transcript lands there. What the flag does not cover is
 <code>.claude.json</code> bookkeeping, which every run of the user's CLI already does. Redirecting
 it would cost the credentials. Gemini needs nothing: it has no config-home variable, so a
 sandboxed <code>HOME</code> already contains it.
+
+An older CLI rejects the flag. Run against the published 2.0.62 <code>cli.js</code> under a sandboxed
+<code>HOME</code>, it prints <code>error: unknown option '--no-session-persistence'</code> and exits 1,
+which would have sent every AI command on that version to the heuristic. <code>ai._ask_cli</code> now
+retries once without the flag, but only when stderr is an "unknown option" error that names it
+(<code>aihost.rejected_headless</code>), so an auth failure is never retried. Measured through
+<code>ai.ask</code> on 2.0.62: the first call fails on the option and the retry gets past option
+parsing to the login check. On a CLI that old the transcript is still written, as it always was.
