@@ -328,7 +328,7 @@ def stranded(entry: dict) -> bool:
     """
     base = entry.get("base")
     return (entry.get("scope") == SCOPE_PROJECT and names_a_directory(base)
-            and not os.path.isdir(cast(str, base)))
+            and not os.path.isdir(cast(str, base)))  # noqa: FURB146
 
 
 def check_scope(scope: str) -> str:
