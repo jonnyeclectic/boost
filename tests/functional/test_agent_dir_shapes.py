@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Agent-dir shapes install, doctor, heal and sync used to mishandle.
 
 Each class is one shape from the card agent-dir-shapes-install-still-trips-on:
