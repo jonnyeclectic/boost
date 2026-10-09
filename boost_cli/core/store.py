@@ -517,12 +517,16 @@ def preserved_agent_scope(only_agents: list[str] | None,
     if recorded is None:
         recorded = [m.get("agent")
                     for m in existing.get("materializations") or ()]
-    else:
+    elif recorded:
         # A skill's `agents` is what is linked, so an agent whose dir refused
         # the link was not in it, and replaying it never retried that agent:
         # after the dir was fixed, `install --force` linked everywhere else
         # and said nothing. `refused_agents` is the skill-side twin of a
         # rule's ``unwritable`` row, which keeps the agent in scope the same way.
+        #
+        # Only beside links. An empty `agents` still means every agent (below):
+        # a sideline empties it and leaves the refusals, and narrowing the next
+        # `update` to the refused agents alone would strand the skill there.
         recorded = [*recorded, *(existing.get("refused_agents") or ())]
     return list(dict.fromkeys(a for a in recorded if a)) or None
 
@@ -2127,10 +2131,16 @@ def _install_rule(entry: dict, force: bool = False,
 
 
 def _removal_refused(name: str, path: Path) -> BoostError:
-    """The named refusal for a removal under ``path`` that its dir forbids."""
-    where = paths.tilde(str(refusing_dir(path.parent)))
-    return BoostError("cannot uninstall %s: %s is not writable" % (name, where),
-                      hint="`chmod u+w %s`, then uninstall again" % where)
+    """The named refusal for a removal under ``path`` that its dir forbids.
+
+    Worded like every other refusal: a dotdir with no search bit is "not
+    searchable" and needs ``u+wx``, where ``u+w`` changed nothing.
+    """
+    block = refusing_dir(path.parent)
+    return BoostError("cannot uninstall %s: %s"
+                      % (name, paths.not_writable(block, block)),
+                      hint="`%s`, then uninstall again"
+                      % paths.chmod_command(block))
 
 
 @contextlib.contextmanager

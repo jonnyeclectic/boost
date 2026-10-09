@@ -319,11 +319,22 @@ class TestARefusedAgentStaysInScope:
         assert store.preserved_agent_scope(
             None, {"agents": ["claude-code"], "refused_agents": ["cursor"]}
         ) == ["claude-code", "cursor"]
+        # An empty `agents` still means every agent, refusals or not.
         assert store.preserved_agent_scope(
-            None, {"agents": [], "refused_agents": ["cursor"]}) == ["cursor"]
+            None, {"agents": [], "refused_agents": ["cursor"]}) is None
         assert store.preserved_agent_scope(
             None, {"agents": ["cursor"], "refused_agents": ["cursor"]}
         ) == ["cursor"]
+
+    def test_a_sidelined_skill_reinstalls_everywhere(self, entry, cursor):
+        # sideline() empties `agents` and keeps the refusals; replaying those
+        # alone made the next forced reinstall link cursor and nothing else.
+        cursor.chmod(0o500)
+        store.install(entry)
+        cursor.chmod(0o700)
+        store.sideline("brainstorming", "focus")
+        res = store.install(entry, force=True)
+        assert {"claude-code", "windsurf", "cursor"} <= set(res.linked)
 
     def test_a_declaration_still_outranks_the_refusals(self):
         assert store.preserved_agent_scope(

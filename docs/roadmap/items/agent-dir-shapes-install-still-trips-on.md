@@ -58,6 +58,8 @@ named <code>~/.cursor/skills</code> with <code>chmod u+w</code>, doctor said hea
 "everything in sync". All four now name <code>~/.cursor</code> as "not searchable" and give
 <code>chmod u+wx</code>: <code>paths.write_remedy</code> adds the <code>x</code> when <code>X_OK</code>
 is what fails, and "cannot be created" becomes "cannot be reached", because the dir below may exist.
+Uninstall's named refusal for a rule or workflow there now uses the same wording, where it still said
+<code>chmod u+w</code>.
 
 <b>A missing skills dir under a read-only parent.</b> <code>link_agents</code> records
 <code>refuses_writes(adir)</code>, as <code>_refused_target</code> already did for rules, so the install names
@@ -69,7 +71,9 @@ share one wording, <code>store.unwritable_refusal</code>. <code>heal --dry-run</
 <b>A refused agent stays in scope.</b> A skill's lock entry records the agents whose dir refused as
 <code>refused_agents</code>. <code>preserved_agent_scope</code> replays them with <code>agents</code>, so after
 the <code>chmod</code>, <code>install --force</code> links cursor, where before it linked three agents and said
-nothing. The field is absent when nothing refused, so other entries are unchanged.
+nothing. The field is absent when nothing refused, so other entries are unchanged. An empty
+<code>agents</code> still replays as every agent. A sideline empties it and leaves the refusals, and
+replaying those alone would have narrowed the next <code>update</code> to the refused agents.
 
 <b>Callers.</b> <code>focus</code>, <code>focus --clear</code>, <code>context</code> apply and disable,
 <code>profile use</code> and <code>quarantine --release</code> now print the skip, on stderr under
@@ -82,8 +86,8 @@ went from 70 to 0 for rules and workflows, and doctor, heal and sync name it wit
 sits at its path), which matches what the run reports. Doctor and heal now name a read-only
 <code>~/.agents/skills</code>; doctor went from 0 to 1.
 
-<code>tests/functional/test_agent_dir_shapes.py</code> has 33 tests, and 28 of them fail on the old code.
-The other five guard the opposite direction. The 3.12/3.13 crashes are reproduced on any interpreter by a
+<code>tests/functional/test_agent_dir_shapes.py</code> has 34 tests, and 28 of them fail on the old code.
+The other six guard the opposite direction. The 3.12/3.13 crashes are reproduced on any interpreter by a
 fixture that makes pathlib raise where those versions do. Found while measuring and not fixed:
 <code>boost quarantine</code> under a <code>0o600</code> dotdir reports its links removed, but it cannot see the
 cursor link to remove it.
