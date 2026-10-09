@@ -527,9 +527,9 @@ def _ancestor_is(path_r: Path, base_r: Path) -> bool:
     base_st = os.stat(base_r)
     if not base_st.st_ino:
         return False
-    for anc in path_r.parents:
+    for parent in path_r.parents:
         try:
-            st = os.stat(anc)
+            st = os.stat(parent)
         except OSError:
             continue
         if os.path.samestat(st, base_st):
