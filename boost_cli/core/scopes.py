@@ -527,8 +527,8 @@ def ensure_spelled(base, path):
             # Relative to the real base: `ensure_in_base` runs first, so the
             # far side is inside the repo, and that is the spelling a user
             # recognises from their own tree.
-            % (rel, os.path.relpath(os.path.realpath(path),
-                                    os.path.realpath(base)).replace(os.sep, "/")),
+            % (rel, os.path.relpath(os.path.realpath(str(path)),
+                                    os.path.realpath(str(base))).replace(os.sep, "/")),
             hint="replace the symlinked directory with a real one, or leave "
                  "that agent out with `--agent`")
     return Path(path)
