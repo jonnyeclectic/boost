@@ -100,6 +100,32 @@ def reaches_no_agent(kind: str | None, entry: dict) -> bool:
         for m in rows)
 
 
+def written_agent_names(kind: str | None, entry: dict | None) -> list[str]:
+    """The agents an installed item actually reaches, sorted and deduplicated.
+
+    :func:`lockfile.agent_names` lists every *recorded* row, and a row is kept
+    on purpose after boost stops writing its agent (so an uninstall can still
+    reverse it). Every surface that names agents read it raw, so a rule
+    written for one of five recorded agents still advertised all five in
+    `boost list`, `boost info` and `boost stats` while `boost doctor`, on the
+    same machine, said four of them were no longer written.
+
+    The filter is :func:`reaches_no_agent`'s own predicate, row for row, so
+    the two can't disagree: when that answers ``True`` this answers ``[]``.
+    A row with no ``agent`` counts as written, as it does there. A skill
+    records a flat ``agents`` list of links, not rows, and passes through.
+    """
+    if not entry:
+        return []
+    kind = str(kind or entry.get("kind") or "rule")
+    if kind == "skill":
+        return lockfile.agent_names(kind, entry)
+    written = [m for m in entry.get("materializations") or []
+               if agents.materialization_is_written(kind, entry.get("base"),
+                                                    m.get("agent"))]
+    return lockfile.agent_names(kind, {"materializations": written})
+
+
 def materialized_status(name: str, entry: dict,
                         kind: str | None = None) -> str:
     """Classify a rule/workflow's integrity against its lock entry.

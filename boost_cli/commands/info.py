@@ -223,17 +223,20 @@ def _print_wrapped(text: str) -> None:
 
 # ---------------------------------------------------------------- commands
 
-def _materialized_agents(entry):
-    """Abbreviated agent column for a rule/workflow, from its materializations."""
-    agent_names = [m.get("agent", "") for m in entry.get("materializations") or []]
-    return "·".join(a.split("-")[0] for a in agent_names)
+def _materialized_agents(kind, entry):
+    """Abbreviated agent column for a rule/workflow: the agents boost still
+    writes for it, not every recorded row (`integrity.written_agent_names`)."""
+    return "·".join(a.split("-")[0]
+                    for a in integrity.written_agent_names(kind, entry))
 
 
-def _kind_table(heading, items, extra=None):
+def _kind_table(heading, kind, items, extra=None):
     """Render an installed rule/workflow table. ``extra`` is an optional
     ``(column, key)`` pair for a per-kind column (e.g. a workflow's slot); the
-    count line reuses the heading's trailing noun (`installed rules` -> `rule`)."""
+    count line names ``kind``, which also decides which agents count as
+    written — passed explicitly, so renaming a heading can't change it."""
     out.heading(heading)
+    noun = kind
     # FLAGS mirrors the skills table so a quarantined or pinned rule/workflow
     # doesn't render byte-identical to a healthy one — `update`/`cat` treat
     # them differently and a reader needs to see that here, not just in --json.
@@ -242,7 +245,8 @@ def _kind_table(heading, items, extra=None):
     for name in sorted(items):
         e = items[name]
         quarantined = bool(e.get("quarantined"))
-        agents_cell = "—" if quarantined else _materialized_agents(e)
+        agents_cell = ("—" if quarantined
+                       else _materialized_agents(noun, e) or "none")
         flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
                 ([out.aurora("quarantined", "pink")] if quarantined else [])
         row = [name, e.get("version", "?"), e.get("tap", "?"),
@@ -256,7 +260,6 @@ def _kind_table(heading, items, extra=None):
                    headers[4])
     # NAME is what `uninstall`/`update`/`cat` take: shown whole or dropped.
     out.table(rows, headers=headers, whole=("NAME",))
-    noun = heading.split()[-1][:-1]  # "installed rules" -> "rule"
     print("  " + out.aurora("%d %s%s installed"
                             % (len(rows), noun, "" if len(rows) == 1 else "s"),
                             "cyan"))
@@ -370,9 +373,10 @@ def cmd_list(argv):
                               % (projectlock.LOCK_DIRNAME,
                                  projectlock.LOCK_FILENAME), "muted"))
     if rules:
-        _kind_table("installed rules", rules)
+        _kind_table("installed rules", "rule", rules)
     if workflows:
-        _kind_table("installed workflows", workflows, extra=("SLOT", "slot"))
+        _kind_table("installed workflows", "workflow", workflows,
+                    extra=("SLOT", "slot"))
     return 0
 
 
@@ -438,10 +442,9 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         # files that were just removed.
         out.kv("materialized", "(removed — quarantined)")
     elif integrity.reaches_no_agent(kind, entry):
-        # `agent_names` lists every recorded row, so the dangerous case
-        # advertised the five agents the rule does not reach while the
-        # harmless no-rows case showed none — the two read backwards from
-        # how a user judges risk.
+        # Every recorded row is unwritten, so the line below would print
+        # "(none)" -- the same words as the harmless no-rows case. Say why
+        # instead, because the two read opposite ways to a user judging risk.
         # Both halves inflect. One row is the commonest shape by far -- most
         # items record exactly one -- so a noun-only plural put the ungrammar
         # on the usual path and hid it on the rare one.
@@ -452,7 +455,8 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
                             "s" if rows == 1 else ""))
     else:
         out.kv("materialized",
-               ", ".join(lockfile.agent_names(kind, entry)) or "(none)")
+               ", ".join(integrity.written_agent_names(kind, entry))
+               or "(none)")
     out.kv("pinned", "yes" if entry.get("pinned") else "no")
     out.kv("quarantined", "yes" if entry.get("quarantined") else "no")
     return 0

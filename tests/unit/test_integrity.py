@@ -628,3 +628,97 @@ class TestAnItemMaterializedNowhere:
                     if k.startswith("STATUS_") and isinstance(v, str)}
         assert statuses <= set(integrity._VERIFY_ROLE_BY_STATUS)
 
+
+class TestWrittenAgentNames:
+    """`written_agent_names` is what every agents line reads.
+
+    `lockfile.agent_names` lists every *recorded* row, so a rule written for
+    one of five recorded agents advertised all five in `list`, `info` and
+    `stats` while `doctor` said four were no longer written. This filters
+    through `reaches_no_agent`'s own predicate, so the two cannot drift.
+    """
+
+    @staticmethod
+    def _row(agent):
+        r = {"mode": "file", "sha256": "x" * 64,
+             "path": str(paths.home() / "x.md")}
+        if agent is not None:
+            r["agent"] = agent
+        return r
+
+    @staticmethod
+    def _disable(*names):
+        cfg = config.load()
+        for n in names:
+            cfg["agents"][n]["enabled"] = False
+        config.save(cfg)
+
+    def _entry(self, kind, *names):
+        return {"kind": kind,
+                "materializations": [self._row(n) for n in names]}
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_partial_item_names_only_the_agent_it_reaches(self, sandbox,
+                                                            kind):
+        """The card's fixture: five recorded rows, only cursor enabled."""
+        e = self._entry(kind, "windsurf", "cursor", "claude-code", "gemini",
+                        "codex")
+        self._disable("claude-code", "codex", "gemini", "windsurf")
+        assert integrity.written_agent_names(kind, e) == ["cursor"]
+        # the raw reader still lists the record -- uninstall needs it
+        assert len(lockfile.agent_names(kind, e)) == 5
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_an_unreachable_item_names_none(self, sandbox, kind):
+        """Agrees with `reaches_no_agent` in its True direction."""
+        e = self._entry(kind, "cursor", "windsurf")
+        self._disable("cursor", "windsurf")
+        assert integrity.reaches_no_agent(kind, e) is True
+        assert integrity.written_agent_names(kind, e) == []
+
+    def test_the_kind_decides_the_write_set(self, sandbox):
+        """codex takes rules and has no command format: one row, two answers."""
+        e = self._entry("rule", "codex", "cursor")
+        assert integrity.written_agent_names("rule", e) == ["codex", "cursor"]
+        assert integrity.written_agent_names("workflow", e) == ["cursor"]
+
+    def test_the_entrys_kind_is_the_fallback_and_rule_the_default(self,
+                                                                  sandbox):
+        e = self._entry("workflow", "codex", "cursor")
+        assert integrity.written_agent_names(None, e) == ["cursor"]
+        del e["kind"]
+        assert integrity.written_agent_names(None, e) == ["codex", "cursor"]
+
+    def test_the_rows_own_scope_decides_the_write_set(self, sandbox):
+        cfg = config.load()
+        cfg["agents"]["cursor"]["project_scope"] = False
+        config.save(cfg)
+        e = self._entry("rule", "cursor", "claude-code")
+        assert integrity.written_agent_names("rule", e) == \
+            ["claude-code", "cursor"]
+        e["base"] = "/repo"
+        assert integrity.written_agent_names("rule", e) == ["claude-code"]
+
+    def test_a_row_with_no_agent_counts_as_written(self, sandbox):
+        """As in `reaches_no_agent`: a reported gap beats a dropped one."""
+        e = self._entry("rule", None, "windsurf")
+        self._disable("windsurf")
+        assert integrity.written_agent_names("rule", e) == ["?"]
+
+    def test_names_are_sorted_and_deduplicated(self, sandbox):
+        e = self._entry("rule", "windsurf", "cursor", "windsurf")
+        assert integrity.written_agent_names("rule", e) == \
+            ["cursor", "windsurf"]
+
+    def test_a_skill_passes_through_unfiltered(self, sandbox):
+        """A skill records links, not rows -- and no materializations to
+        filter, so treating it as a rule would answer [] for every skill."""
+        self._disable("windsurf")
+        e = {"agents": ["windsurf", "claude-code"]}
+        assert integrity.written_agent_names("skill", e) == \
+            ["claude-code", "windsurf"]
+
+    @pytest.mark.parametrize("entry", [None, {}])
+    def test_no_entry_names_none(self, sandbox, entry):
+        assert integrity.written_agent_names("rule", entry) == []
+        assert integrity.written_agent_names("skill", entry) == []
