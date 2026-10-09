@@ -329,7 +329,7 @@ def not_searchable(d: Path) -> bool:
     at, and ``chmod u+w`` leaves it exactly as stuck. A path that is not there
     is not unsearchable, so the remedy for one stays the plain ``u+w``.
     """
-    return os.path.isdir(d) and not os.access(d, os.X_OK)
+    return os.path.isdir(d) and not os.access(d, os.X_OK)  # noqa: FURB146
 
 
 def write_remedy(block: Path) -> str:

@@ -628,7 +628,7 @@ def unlink_agents(name: str) -> list[str]:
     removed = []
     for agent, adir in agents.linking_agents().items():
         link = adir / name
-        if os.path.islink(link):
+        if os.path.islink(link):  # noqa: FURB146
             link.unlink()
             removed.append(agent)
     return removed
@@ -708,7 +708,7 @@ def linked_agents(name: str) -> list[str]:
     may not even look at is not one it can count.
     """
     return [agent for agent, adir in agents.linking_agents().items()
-            if os.path.islink(adir / name)]
+            if os.path.islink(adir / name)]  # noqa: FURB146
 
 
 def refusing_dir(path: Path) -> Path:
@@ -909,7 +909,7 @@ def occupied(path: Path) -> bool:
     directory stops it. ``os.path``, which answers False for a path it may not
     look at rather than raising.
     """
-    return os.path.isdir(path) and not os.path.islink(path)
+    return os.path.isdir(path) and not os.path.islink(path)  # noqa: FURB146
 
 
 def materialization_refused(kind: str, name: str) -> bool:
@@ -2783,7 +2783,7 @@ def _check_links_removable(name: str, entry: dict) -> None:
             continue
         except OSError:
             continue
-        if os.path.islink(link) and not os.access(adir, os.W_OK | os.X_OK):
+        if os.path.islink(link) and not os.access(adir, os.W_OK | os.X_OK):  # noqa: FURB146
             raise _removal_refused(name, link)
 
 
@@ -3159,7 +3159,7 @@ def sync_plan() -> dict[str, list]:
             # raises on Python 3.12 and 3.13, and `boost sync`, `heal` and
             # `doctor` all exited 70 on it.
             if os.path.islink(link):
-                if not os.path.exists(link) and not missing_store:
+                if not os.path.exists(link) and not missing_store:  # noqa: FURB141
                     plan["missing_links"].append((name, agent))
             elif os.path.lexists(link):
                 plan["blocked_links"].append((name, agent, str(link)))
@@ -3191,7 +3191,7 @@ def sync_plan() -> dict[str, list]:
     # typed. Same "topology, not ownership" line as duplicate_discovery, which
     # reports those entries and removes nothing.
     for adir in agents.linking_agents().values():
-        if not os.path.isdir(adir):
+        if not os.path.isdir(adir):  # noqa: FURB146
             continue
         for link in adir.iterdir():
             # Ownership first, for broken links too: the old test short-circuited
