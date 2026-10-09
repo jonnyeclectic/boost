@@ -376,8 +376,10 @@ def cmd_taps(argv) -> int:
         print(json.dumps(taps, indent=2))
         return 0
     if not taps:
-        out.info("no taps configured")
-        out.info(out.role("add the recommended registries with `boost tap --defaults`", "muted"))
+        print(out.empty_state(
+            "no taps configured",
+            hint="add the recommended registries with `boost tap --defaults`",
+            wrap=True))
         return 0
     # A pinned tap reads as its commit rather than its date: the date of a
     # clone held still is not what the user needs to know about it, and a tap

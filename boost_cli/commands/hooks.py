@@ -92,8 +92,9 @@ def _list(scope, host, event=None, as_json=False) -> int:
             for r in rows]}, indent=2))
         return 0
     if not rows:
-        out.info("no boost-managed hooks" + (" in %s scope" % scope if scope else "")
-                 + (" for event '%s'" % event if event else ""))
+        print(out.empty_state(
+            "no boost-managed hooks" + (" in %s scope" % scope if scope else "")
+            + (" for event '%s'" % event if event else ""), wrap=True))
         return 0
     out.table(
         [(r["name"], r["host"], r["scope"], r["event"], r["matcher"] or "-",

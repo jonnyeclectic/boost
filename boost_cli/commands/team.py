@@ -340,8 +340,10 @@ def cmd_profile(argv) -> int:
             print(json.dumps(profiles, indent=2))
             return 0
         if not profiles:
-            out.info("no profiles saved")
-            out.info(out.role("snapshot the current setup: `boost profile save daily`", "muted"))
+            print(out.empty_state(
+                "no profiles saved",
+                hint="snapshot the current setup: `boost profile save daily`",
+                wrap=True))
             return 0
         rows = [(pr["name"],
                 str(pr["skills"]) if not pr["unreadable"] else "?",

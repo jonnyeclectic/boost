@@ -269,7 +269,11 @@ class TestCreate:
         for section in ("## When to use", "## Instructions", "## Rules",
                         "## Examples"):
             assert section in body
-        assert "next: edit it, then `boost import" in r.out
+        # The hint wraps, and the backticked command is atomic: under a long
+        # sandbox path it moves whole onto its own line, so assert the two
+        # halves rather than their adjacency.
+        assert "next: edit it, then" in r.out
+        assert "`boost import " in r.out
         assert journal.events(action="create")[0]["subject"] == "my-skill"
 
     @pytest.mark.skipif(sys.platform == "win32",

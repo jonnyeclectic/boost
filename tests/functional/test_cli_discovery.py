@@ -1354,7 +1354,8 @@ class TestRecommend:
         proj = tmp_path / "empty-proj"
         proj.mkdir()
         r = boost("recommend", "--path", proj)
-        assert "no recommendations for this stack — try `boost search <keyword>`" in r.out
+        assert "○ no recommendations for this stack" in r.out
+        assert "→ try `boost search <keyword>`" in r.out
 
     def test_bad_path(self, boost, tapped):
         r = boost("recommend", "--path", "/definitely/not/here", expect=1)
@@ -1911,7 +1912,8 @@ class TestTrending:
     def test_no_installs_no_curated(self, boost, tapped):
         r = boost("trending")
         assert "curated picks (no local install data yet)" in r.out
-        assert "no curated skills available — add taps with `boost tap --defaults`" in r.out
+        assert "○ no curated skills available" in r.out
+        assert "→ add taps with `boost tap --defaults`" in r.out
 
     def test_no_installs_curated_picks(self, boost, fixture_tap_src):
         boost("tap", fixture_tap_src, "--curated")

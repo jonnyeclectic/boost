@@ -477,7 +477,7 @@ def cmd_compact(argv) -> int:
     out.ok("compacted %d tap(s) · %s freed" % (changed, util.human_size(freed)))
     if not args.reclone:
         out.dim("  `boost compact --reclone` also drops already-downloaded "
-                "git objects")
+                "git objects", wrap=True)
     return rc
 
 
@@ -557,7 +557,7 @@ def cmd_create(argv) -> int:
         if owner and not out.confirm(
                 "%s is already installed from %s — replace it?" % (name, owner)):
             out.warn("not installed: %s is already installed from %s" % (name, owner))
-            out.dim("  next: edit it, then `boost import %s`" % _tilde(target))
+            out.dim("  next: edit it, then `boost import %s`" % _tilde(target), wrap=True)
             return 0
         res = store.install_from_path(target, name=name)
         out.ok("%s %s → %s" % ("replaced" if owner else "installed", name, _tilde(res.dest)))
@@ -566,7 +566,7 @@ def cmd_create(argv) -> int:
         from .pkg import _warn_unwritable
         _warn_unwritable(res)
     else:
-        out.dim("  next: edit it, then `boost import %s`" % _tilde(target))
+        out.dim("  next: edit it, then `boost import %s`" % _tilde(target), wrap=True)
     return 0
 
 
@@ -596,7 +596,7 @@ def _warn_invalid_policy_values() -> None:
         out.warn("ignoring %s = %s in policy.json — expects %s"
                  % (key, json.dumps(value), expected))
         out.dim("  using the default; fix it with `boost policy set %s <%s>`"
-                % (key, policy.spec_for(key)))
+                % (key, policy.spec_for(key)), wrap=True)
 
 
 def cmd_policy(argv) -> int:
@@ -767,7 +767,7 @@ def cmd_policy(argv) -> int:
                  + (" (%d unpinned item(s): %s)"
                     % (len(unpinned), ", ".join(unpinned)) if unpinned else ""))
     for note in sorted(not_checked):
-        out.dim("  not checked: %s" % note)
+        out.dim("  not checked: %s" % note, wrap=True)
     if violations:
         out.table([(label, v) for _n, _k, label, v in violations],
                   headers=("ITEM", "VIOLATION"), whole=("ITEM",))  # `uninstall`
@@ -1013,7 +1013,7 @@ def _report_rc_plan(plan, install: bool, shell: str) -> None:
     out.info(verb % _tilde(plan.path))
     for line in _rc_plan_diff(plan):
         out.dim("  " + line)
-    out.dim("  re-run without --dry-run to apply")
+    out.dim("  re-run without --dry-run to apply", wrap=True)
 
 
 def _rc_plan_diff(plan) -> list[str]:
@@ -1087,7 +1087,7 @@ def cmd_completions(argv) -> int:
                   "into" if args.install else "from", _tilde(plan.path)))
         if args.install:
             out.dim("  restart your shell (or run `exec %s`) to pick it up"
-                    % detected)
+                    % detected, wrap=True)
         return 0
 
     shell = detected if detected in ("bash", "zsh", "fish") else "bash"
@@ -1262,7 +1262,7 @@ def cmd_schedule(argv) -> int:
             out.kv("next run", next_run.strftime("%Y-%m-%d %H:%M (approx)")
                    if next_run else "unknown")
         else:
-            out.dim("  enable with `boost schedule enable --interval 6h|12h|daily`")
+            out.dim("  enable with `boost schedule enable --interval 6h|12h|daily`", wrap=True)
         return 0
 
     if args.action == "enable":
@@ -2211,7 +2211,7 @@ def cmd_mcp(argv) -> int:
             note = "  — outside this $HOME, refused without --force" \
                 if escape else ""
             out.dim("  writes %s%s" % (cfg, note))
-        out.dim("  dry run — nothing was %sed, nothing tapped" % verb)
+        out.dim("  dry run — nothing was %sed, nothing tapped" % verb, wrap=True)
         return 0
 
     # After the host name is validated and before anything is registered. The
