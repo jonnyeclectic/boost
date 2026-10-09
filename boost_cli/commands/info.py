@@ -122,6 +122,15 @@ def _materialized_text(name: str, kind: str, entry: dict):
                 hint="inspect with `boost verify %s`, then `boost reinstall "
                      "%s` to restore the locked copy" % (name, name),
                 wrap=True)
+        if st == integrity.STATUS_STRANDED:
+            # Not MISSING's `boost sync` / `reinstall`: both would recreate
+            # the deleted repo. And not a silent fall-through to the tap
+            # copy, which is what an unhandled status here amounted to.
+            raise BoostError(
+                "%s %s was installed --local into %s, which no longer exists"
+                % (kind, name, paths.tilde(Path(entry["base"]))),
+                hint="`boost uninstall %s` drops the record" % name,
+                wrap=True)
         if st == integrity.STATUS_MISSING:
             raise BoostError(
                 "%s %s is in the lock file but its materialized artifacts "
@@ -417,9 +426,10 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
     directory, which these kinds do not have.
     """
     desc = _catalog_description(name, entry.get("tap"))
+    stranded = scopes.stranded(entry)
     if as_json:
         print(json.dumps({"name": name, "kind": kind, "description": desc,
-                         "installed": entry}, indent=2))
+                         "stranded": stranded, "installed": entry}, indent=2))
         return 0
     out.heading(name)
     badges = [out.badge("installed %s" % kind, "green")]
@@ -439,6 +449,12 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         out.kv("slot", str(entry["slot"]))
     if entry.get("scope"):
         out.kv("scope", str(entry["scope"]))
+    if (entry.get("scope") == scopes.SCOPE_PROJECT
+            and scopes.names_a_directory(entry.get("base"))):
+        # "scope project" alone does not say which checkout -- or that it is
+        # gone, which is the one fact here that changes what to do next.
+        out.kv("base", paths.tilde(Path(entry["base"]))
+               + (" (gone)" if stranded else ""))
     if entry.get("source_file"):
         out.kv("source", str(entry["source_file"]))
     if entry.get("commit"):
@@ -456,6 +472,11 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         # nothing. Printing the stale agent list here reads as a lie about
         # files that were just removed.
         out.kv("materialized", "(removed — quarantined)")
+    elif stranded:
+        # Every recorded row pointed into the deleted repo, so listing the
+        # agents would describe files that went with it.
+        out.kv("materialized", "(none — its repo no longer exists; "
+               "`boost uninstall %s` drops the record)" % name, wrap=True)
     elif integrity.reaches_no_agent(kind, entry):
         # `agent_names` lists every recorded row, so the dangerous case
         # advertised the five agents the rule does not reach while the

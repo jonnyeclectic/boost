@@ -1251,7 +1251,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
             continue
         if scopes.stranded(lk):
             # Its repo is gone, and refreshing it would recreate that
-            # directory (`store._require_project_base` refuses the write).
+            # directory (`store._refuse_stranded_base` refuses the write).
             # Said here, before the risky-diff prompt, so nobody is asked to
             # review a change that cannot be applied -- and only when there
             # is a change, since a stranded row with nothing new is not this
@@ -1703,8 +1703,11 @@ def cmd_reinstall(argv: list[str]) -> int:
         done += 1
         done_kinds.add("skill")
     # Name the kind when only one was touched; a mixed run says "items".
-    noun = next(iter(done_kinds)) if len(done_kinds) == 1 else (
-        "item" if done_kinds else "skill")
+    # With nothing done, name what was *attempted*: a refused rule used to
+    # tally as "Reinstalled 0 skills".
+    tried = done_kinds or {k for k, _, _ in items}
+    noun = next(iter(tried)) if len(tried) == 1 else (
+        "item" if tried else "skill")
     out.info("Reinstalled %s" % _plural(done, noun))
     return 1 if failed else 0
 

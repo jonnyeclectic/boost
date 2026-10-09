@@ -712,12 +712,17 @@ def cmd_doctor(argv):
     # into the recorded base and recreates the directory (`scopes.stranded`).
     # Named once with the command that drops the record, and kept out of the
     # per-row checks below so they cannot prescribe the resurrecting one.
-    for kind, section in (("rule", rules), ("workflow", workflows)):
+    # Quarantined rows included: `quarantine --release` refuses a stranded
+    # row, so quarantining one must not be the way to make doctor go quiet.
+    for kind, section in (("rule", all_rules), ("workflow", all_workflows)):
         for name, entry in sorted(section.items()):
             if scopes.stranded(entry):
                 bad(kind, "%s %s was installed --local into %s, which no "
                     "longer exists — run `boost uninstall %s` to drop the "
-                    "record" % (kind, name, _tilde(Path(entry["base"])), name),
+                    "record%s" % (kind, name, _tilde(Path(entry["base"])), name,
+                                  " (it is quarantined; release cannot "
+                                  "restore it)" if entry.get("quarantined")
+                                  else ""),
                     wrap=True)
                 mat_issues += 1
     rules = {n: e for n, e in rules.items() if not scopes.stranded(e)}

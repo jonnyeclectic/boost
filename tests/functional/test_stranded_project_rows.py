@@ -149,6 +149,8 @@ def test_reinstall_refuses_and_names_uninstall(boost, stranded):
     flat = _flat(res.out + res.err)
     assert "which no longer exists" in flat
     assert "`boost uninstall house-style` drops the record" in flat
+    # The tally names what was attempted, not "skills".
+    assert "Reinstalled 0 rules" in flat
 
 
 def test_update_skips_a_stranded_row_with_a_reason(boost, trio, stranded):
@@ -191,6 +193,47 @@ def test_the_mcp_doctor_tool_counts_it(boost, stranded):
             "longer exists") in text
 
 
+def test_info_names_the_gone_base_and_lists_no_agents(boost, stranded):
+    out = _flat(boost("info", "house-style").out)
+    assert "base %s (gone)" % paths.tilde(stranded) in out
+    assert ("materialized (none — its repo no longer exists; "
+            "`boost uninstall house-style` drops the record)") in out
+    assert "claude-code" not in out
+    data = json.loads(boost("info", "house-style", "--json").out)
+    assert data["stranded"] is True
+
+
+def test_cat_under_enforcement_refuses_rather_than_serving_the_tap_copy(
+        boost, stranded):
+    boost("config", "set", "security.enforce_digest", "true")
+    res = boost("cat", "house-style", expect=1)
+    flat = _flat(res.out + res.err)
+    assert ("rule house-style was installed --local into %s, which no longer "
+            "exists" % paths.tilde(stranded)) in flat
+    assert "`boost uninstall house-style` drops the record" in flat
+    assert "Always write tests." not in res.out
+
+
+def test_doctor_still_names_a_quarantined_stranded_row(boost, alive,
+                                                       monkeypatch):
+    """Quarantining it must not be the way to make doctor go quiet: release
+    refuses a stranded row, so uninstall is still its only remedy."""
+    monkeypatch.chdir(alive)
+    boost("quarantine", "house-style")
+    monkeypatch.chdir(alive.parent)
+    shutil.rmtree(alive)
+    out = _flat(boost("doctor", expect=1).out)
+    assert ("rule house-style was installed --local into %s, which no longer "
+            "exists — run `boost uninstall house-style` to drop the record "
+            "(it is quarantined; release cannot restore it)"
+            % paths.tilde(alive)) in out
+    # The workflow is stranded but not quarantined: no quarantine note.
+    assert "ship-it to drop the record (it is quarantined" not in out
+    from boost_cli.commands import configuration
+    text, _ = configuration._tool_doctor({})
+    assert "rule house-style: installed --local into a directory" in text
+
+
 def test_list_marks_the_row_gone(boost, stranded):
     line = next(ln for ln in boost("list").out.splitlines()
                 if ln.startswith("house-style"))
@@ -225,6 +268,11 @@ def test_a_live_row_is_still_graded_from_another_directory(boost, alive):
 
 
 def test_a_live_row_is_not_stranded_anywhere(boost, alive):
+    info = _flat(boost("info", "house-style").out)
+    assert "base %s" % paths.tilde(alive) in info
+    assert "(gone)" not in info and "no longer exists" not in info
+    assert json.loads(boost("info", "house-style", "--json").out)[
+        "stranded"] is False
     assert "stranded" not in boost("drift").out
     assert "stranded" not in boost("verify").out
     assert "no longer exists" not in boost("doctor", expect=None).out

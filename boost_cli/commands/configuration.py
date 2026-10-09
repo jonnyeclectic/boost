@@ -39,6 +39,7 @@ from ..core import (
     rag,
     registry,
     rules,
+    scopes,
     selfupdate,
     serve,
     store,
@@ -1669,7 +1670,12 @@ def _tool_doctor(args: dict):
         "%s %s: %s" % (kind, n, _MAT_ISSUE_LABEL[st])
         for kind in ("rule", "workflow")
         for n, e in sorted(everything[kind].items())
-        if (st := integrity.materialized_status(n, e, kind)) in _MAT_ISSUE_LABEL]
+        # Stranded is asked first: materialized_status answers "quarantined"
+        # for a quarantined row, and a quarantined row whose repo is gone
+        # cannot be released either -- uninstall is still its one remedy.
+        if (st := integrity.STATUS_STRANDED if scopes.stranded(e)
+                else integrity.materialized_status(n, e, kind))
+        in _MAT_ISSUE_LABEL]
     lines.extend(mat_issues)
     total = issues + len(mat_issues)
     # A machine with no taps has nothing to disagree about, so every check

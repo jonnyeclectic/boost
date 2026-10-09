@@ -7,11 +7,11 @@ category: CLI · Bug
 complexity: S
 impact: Low
 wow: 2
-note: a project-scoped rule reads as a user one in doctor, verify, drift, health and update
+a --local rule whose repo was deleted read as missing, and every remedy recreated the repo
 order: 236
 owner: loop/rule-scope-readers
 pr:
-title: "A rule or workflow installed <code>--local</code> reads as a user one everywhere but <code>list --local</code>"
+title: "A rule or workflow installed <code>--local</code> into a since-deleted repo reads as missing, and every remedy recreates the repo"
 ---
 Rules and workflows installed with <code>--local</code> materialize into the repo but are recorded
 in the <em>user</em> lock, tagged <code>scope: project</code> and <code>base: &lt;repo&gt;</code>,
@@ -67,8 +67,13 @@ it instead.
 prompt); silent when there is nothing new. <b>reinstall</b> and <b>quarantine --release</b>
 refuse (release restores its stash to absolute paths, so it recreated the repo too). All three
 rest on <code>store._refuse_stranded_base</code>, which refuses any lock-driven write of a rule or
-workflow into a base that is gone. A quarantined row still reads <code>quarantined</code> rather
-than <code>stranded</code>; <code>boost uninstall</code> clears either.
+workflow into a base that is gone. A quarantined row still reads <code>quarantined</code> in verify and drift;
+<code>boost uninstall</code> clears either.
+&middot; <b>info</b> / <b>cat</b> &mdash; <code>info</code> prints the <code>base</code>, marked
+<code>(gone)</code>, and no agent list for a stranded row (its JSON carries
+<code>stranded</code>); <code>cat</code> under digest enforcement refuses with the uninstall hint
+instead of falling through to the tap copy. <b>doctor</b> and the MCP doctor tool still name a
+stranded row after it is quarantined, since release refuses it.
 &middot; <b>completion</b> &mdash; unchanged on purpose: <code>uninstall &lt;name&gt;</code> is the
 remedy, so TAB keeps offering every row.
 &middot; <b>list</b> &mdash; FLAGS carries <code>project:&lt;base&gt;</code>, and
@@ -76,5 +81,5 @@ remedy, so TAB keeps offering every row.
 as one in <code>~/.claude</code>.
 Pinned by <code>tests/unit/test_stranded.py</code> (the predicate in both directions, the status,
 the write guard and the sync plan) and <code>tests/functional/test_stranded_project_rows.py</code>
-(each surface, end to end, with the checkout deleted and with it present); 36 of their 45 fail on
-<code>main</code>, and the other nine pin behaviour that was right already and is kept.
+(each surface, end to end, with the checkout deleted and with it present); 40 of their 48 fail on
+<code>main</code>, and the other eight pin behaviour that was right already and is kept.
