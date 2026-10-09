@@ -295,6 +295,37 @@ class TestProjectScope:
         entry["materializations"] = [{"agent": "claude-code", "path": "../../etc"}]
         assert integrity.project_status(entry, repo) == integrity.STATUS_MISSING
 
+    def test_project_redirected_is_empty_for_an_honest_install(
+            self, sandbox, fixture_tap_src, tmp_path):
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        assert integrity.project_redirected(entry, repo) == []
+
+    def test_project_redirected_names_a_row_behind_a_committed_symlink(
+            self, sandbox, fixture_tap_src, tmp_path):
+        """A dotdir symlinked *after* install still hashes as intact.
+
+        `project_status` follows the link and says OK, while uninstall will
+        refuse this row and leave the copy behind — so it is its own check.
+        """
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        (repo / "config").mkdir()
+        (repo / ".claude").rename(repo / "config" / "claude")
+        (repo / ".claude").symlink_to(repo / "config" / "claude",
+                                      target_is_directory=True)
+        assert integrity.project_status(entry, repo) == integrity.STATUS_OK
+        assert integrity.project_redirected(entry, repo) == [
+            ".claude/skills/brainstorming"]
+
+    def test_project_redirected_skips_rows_containment_refuses(
+            self, sandbox, fixture_tap_src, tmp_path):
+        # `../x` is not redirected, it is out of the repo — a different
+        # problem with a different message, and not this function's to name.
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        entry = dict(entry)
+        entry["materializations"] = [{"agent": "claude-code", "path": "../x"},
+                                     {"agent": "cursor"}]
+        assert integrity.project_redirected(entry, repo) == []
+
     def test_project_skills_none_outside_a_repo(self, sandbox, monkeypatch):
         # Patch the resolver rather than chdir'ing — a unit test that chdirs
         # breaks mutmut's instrumentation (it resolves boost_cli off the cwd).

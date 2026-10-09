@@ -195,6 +195,28 @@ def project_status(entry: dict, base) -> str:
     return STATUS_OK if util.sha256_dir(present) == recorded else STATUS_MODIFIED
 
 
+def project_redirected(entry: dict, base) -> list[str]:
+    """The rows of a project skill whose walk a symlink inside ``base`` bends.
+
+    ``boost uninstall --local`` will not delete through such a row
+    (:func:`scopes.parent_matches_spelling`), so its copy outlives the
+    uninstall while the lock entry goes. ``install --local`` refuses to write
+    one now, but a lock written before that still carries them, and a symlink
+    committed *after* an install makes one out of a row that was honest — and
+    :func:`project_status` cannot see either, because ``is_dir()`` follows the
+    link and reports the skill intact. Rows containment already refuses
+    (:func:`scopes.resolve_in_base` is ``None``) are not this question.
+    """
+    rows = []
+    for m in entry.get("materializations") or []:
+        rel = m.get("path")
+        if scopes.resolve_in_base(base, rel) is None:
+            continue
+        if not scopes.parent_matches_spelling(base, rel):
+            rows.append(rel)
+    return rows
+
+
 def project_skills():
     """(base, {name: entry}) for the current repo's project-scoped skills.
 
