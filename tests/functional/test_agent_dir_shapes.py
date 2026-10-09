@@ -797,3 +797,141 @@ class TestAReadOnlyStore:
 
     def test_a_writable_store_is_not_named(self, boost, installed):
         assert "~/.agents/skills is not writable" not in boost("doctor").out
+
+
+class TestQuarantineSaysWhatItCouldNotUnlink:
+    """Quarantine under a dotdir it may not search, or a skills dir it may
+    not write. It said "links removed" over a cursor link still on disk, and
+    under a read-only skills dir it exited 70 with some links gone and the
+    lock still saying linked and not quarantined."""
+
+    def _links(self, name="brainstorming"):
+        return {a: os.path.islink(d / name)
+                for a, d in store.agents.linking_agents().items()}
+
+    def test_an_unsearchable_dotdir_is_named_and_recorded(
+            self, boost, entry, cursor, strict_stat):
+        store.install(entry)
+        cursor.chmod(0o600)
+        res = boost("quarantine", "brainstorming")
+        cursor.chmod(0o700)
+        said = " ".join((res.out + res.err).split())
+        assert "cursor may still load brainstorming" in said
+        assert "~/.cursor is not searchable" in said
+        assert "`chmod u+wx ~/.cursor`" in said
+        assert "except: cursor" in said
+        rec = lockfile.get_skill("brainstorming")
+        assert rec["quarantined"] is True
+        assert rec["agents"] == []
+        assert rec["refused_agents"] == ["cursor"]
+        # Every other agent was withheld; refusing would have kept all four.
+        assert self._links() == {"claude-code": False, "windsurf": False,
+                                 "cursor": True, "antigravity": False}
+
+    def test_running_it_again_after_the_chmod_finishes(self, boost, entry,
+                                                       cursor, strict_stat):
+        store.install(entry)
+        cursor.chmod(0o600)
+        boost("quarantine", "brainstorming")
+        still = boost("quarantine", "brainstorming")
+        assert "cursor may still load brainstorming" in " ".join(
+            (still.out + still.err).split())
+        cursor.chmod(0o700)
+        res = boost("quarantine", "brainstorming")
+        assert ("finished an interrupted quarantine of brainstorming "
+                "(unlinked: cursor)") in res.out
+        assert "may still load" not in res.out + res.err
+        assert not any(self._links().values())
+        rec = lockfile.get_skill("brainstorming")
+        assert "refused_agents" not in rec
+        assert rec["quarantined"] is True
+        again = boost("quarantine", "brainstorming")
+        assert "already quarantined" in again.out + again.err
+        # One quarantine, however many runs it took: --list's SINCE reads it.
+        assert len(store.journal.events(action="quarantine",
+                                        subject="brainstorming")) == 1
+
+    def test_a_read_only_skills_dir_is_named_not_a_crash(self, boost, entry,
+                                                         cursor):
+        store.install(entry)
+        skills = cursor / "skills"
+        skills.chmod(0o500)
+        try:
+            res = boost("quarantine", "brainstorming")
+        finally:
+            skills.chmod(0o700)
+        said = " ".join((res.out + res.err).split())
+        assert "unexpected error" not in said
+        assert "`chmod u+w ~/.cursor/skills`" in said
+        rec = lockfile.get_skill("brainstorming")
+        assert rec["quarantined"] is True
+        assert rec["refused_agents"] == ["cursor"]
+        assert self._links() == {"claude-code": False, "windsurf": False,
+                                 "cursor": True, "antigravity": False}
+
+    def test_a_searchable_dotdir_says_nothing_more(self, boost, entry,
+                                                   cursor):
+        store.install(entry)
+        rec = lockfile.get_skill("brainstorming")
+        rec["refused_agents"] = ["cursor"]
+        lockfile.set_skill("brainstorming", rec)
+        res = boost("quarantine", "brainstorming")
+        assert "quarantined brainstorming (store intact, links removed)" \
+            in res.out
+        assert "may still load" not in res.out + res.err
+        assert not any(self._links().values())
+        # A stale refusal is dropped once nothing blocks.
+        assert "refused_agents" not in lockfile.get_skill("brainstorming")
+
+    def test_store_reports_removed_and_blocked(self, entry, cursor,
+                                              strict_stat):
+        store.install(entry)
+        cursor.chmod(0o600)
+        try:
+            removed, blocked = store.quarantine_skill(
+                "brainstorming", lockfile.get_skill("brainstorming"))
+        finally:
+            cursor.chmod(0o700)
+        assert removed == ["claude-code", "windsurf", "antigravity"]
+        assert blocked == {"cursor": cursor}
+
+    def test_a_real_directory_at_the_link_path_is_left_alone(self, entry,
+                                                             cursor):
+        store.install(entry)
+        link = cursor / "skills" / "brainstorming"
+        link.unlink()
+        link.mkdir()
+        removed, blocked = store.quarantine_skill(
+            "brainstorming", lockfile.get_skill("brainstorming"))
+        assert "cursor" not in removed
+        assert blocked == {}
+        assert link.is_dir() and not link.is_symlink()
+
+    def test_doctor_names_a_link_quarantine_could_not_remove(
+            self, boost, entry, cursor, strict_stat):
+        store.install(entry)
+        cursor.chmod(0o600)
+        boost("quarantine", "brainstorming")
+        cursor.chmod(0o700)
+        doc = boost("doctor", expect=1).out
+        assert ("quarantined skill brainstorming may still be linked for "
+                "cursor — run `boost quarantine brainstorming` again") in doc
+        assert "none active" not in doc
+
+    def test_doctor_names_a_link_on_disk_the_lock_does_not_record(
+            self, boost, entry, cursor):
+        store.install(entry)
+        boost("quarantine", "brainstorming")
+        link = cursor / "skills" / "brainstorming"
+        link.symlink_to(store.skill_store_dir("brainstorming"))
+        doc = boost("doctor", expect=1).out
+        assert ("quarantined skill brainstorming may still be linked for "
+                "cursor") in doc
+
+    def test_doctor_is_quiet_over_a_clean_quarantine(self, boost, entry,
+                                                     cursor):
+        store.install(entry)
+        boost("quarantine", "brainstorming")
+        doc = boost("doctor", expect=None).out
+        assert "may still be linked" not in doc
+        assert "1 skill quarantined, none active" in doc

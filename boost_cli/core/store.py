@@ -2328,6 +2328,57 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
     return _materialized_result(name, removed, rule, "rule", gone)
 
 
+def quarantine_skill(name: str, entry: dict) -> tuple[list[str], dict[str, Path]]:
+    """Withhold skill ``name`` from every agent that links it; keep the store.
+
+    Returns ``(removed, blocked)``: the agents unlinked, and each agent whose
+    link is, or may be, still there, mapped to the dir that has to change.
+    :func:`unlink_agents` cannot say the second half. ``os.path.islink``
+    answers False under a dotdir with no search bit, so quarantine reported
+    "links removed" while the cursor link stayed on disk; and a link in a
+    read-only skills dir raised mid-loop, exit 70, with some links gone and
+    the lock still saying linked and not quarantined.
+
+    Every agent is tried, and a blocked one does not stop the rest: refusing
+    the whole quarantine, as uninstall refuses, would leave every agent
+    loading the skill instead of one. The lock records the skill quarantined
+    with the blocked agents in ``refused_agents``, so the uninstall guard
+    keeps refusing over them and running quarantine again after the `chmod`
+    finishes the job. Persists ``entry``; logs only a new quarantine, so a
+    re-run does not reset ``quarantine --list``'s SINCE.
+    """
+    removed: list[str] = []
+    blocked: dict[str, Path] = {}
+    for agent, adir in agents.linking_agents().items():
+        link = adir / name
+        try:
+            st = os.lstat(link)
+        except PermissionError:
+            blocked[agent] = refusing_dir(link.parent)
+            continue
+        except OSError:
+            continue
+        if not stat.S_ISLNK(st.st_mode):
+            continue
+        try:
+            link.unlink()
+        except PermissionError:
+            blocked[agent] = refusing_dir(link.parent)
+            continue
+        removed.append(agent)
+    fresh = not entry.get("quarantined")
+    entry["quarantined"] = True
+    entry["agents"] = []
+    if blocked:
+        entry["refused_agents"] = list(blocked)
+    else:
+        entry.pop("refused_agents", None)
+    lockfile.set_skill(name, entry)
+    if fresh:
+        journal.log("quarantine", name)
+    return removed, blocked
+
+
 def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
     """Remove every recorded materialization of a rule/workflow, stashing it.
 

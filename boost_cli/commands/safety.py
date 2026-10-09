@@ -506,6 +506,15 @@ def cmd_verify(argv):
     return 0
 
 
+def _warn_still_linked(name: str, blocked: dict) -> None:
+    """Name each agent quarantine could not unlink, and the one step that
+    lets the next `boost quarantine NAME` finish."""
+    for agent, block in blocked.items():
+        out.warn("%s may still load %s: %s — run `%s`, then `boost quarantine "
+                 "%s` again" % (agent, name, paths.not_writable(block, block),
+                                paths.chmod_command(block), name), wrap=True)
+
+
 def cmd_quarantine(argv):
     ap = cliparse.parser(
         prog="boost quarantine",
@@ -607,18 +616,28 @@ def cmd_quarantine(argv):
             out.ok("finished an interrupted quarantine of %s %s"
                    % (kind, name))
             return 0
+        if kind == "skill":
+            # A link the last run could not remove may be removable now: the
+            # `chmod` its warning named, or one done before quarantine said
+            # anything about it. Unlinking what is already gone is a no-op.
+            removed, blocked = store.quarantine_skill(name, entry)
+            if removed:
+                out.ok("finished an interrupted quarantine of %s (unlinked: %s)"
+                       % (name, ", ".join(removed)))
+            elif not blocked:
+                out.warn("%s is already quarantined" % name)
+            _warn_still_linked(name, blocked)
+            return 0
         out.warn("%s is already quarantined" % name)
         return 0
     if kind == "skill":
-        store.unlink_agents(name)
-        entry["quarantined"] = True
-        # unlink_agents just removed every linking-agent symlink, so the
-        # recorded agents are gone too — leaving the old list would have
-        # `list`/`info`/`doctor` keep reporting links that no longer exist.
-        entry["agents"] = []
-        lockfile.set_skill(name, entry)
-        journal.log("quarantine", name)
-        out.ok("quarantined %s (store intact, links removed)" % name)
+        _, blocked = store.quarantine_skill(name, entry)
+        if blocked:
+            out.ok("quarantined %s (store intact, links removed except: %s)"
+                   % (name, ", ".join(blocked)))
+        else:
+            out.ok("quarantined %s (store intact, links removed)" % name)
+        _warn_still_linked(name, blocked)
     else:
         # A rule/workflow has no store copy to keep — the artifact is stashed
         # on the lock entry and `--release` restores it byte-for-byte.

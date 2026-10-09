@@ -640,6 +640,20 @@ def cmd_doctor(argv):
             continue
         if entry.get("quarantined"):
             quarantined_skills += 1
+            # Quarantine skips a link it may not look at or remove, and
+            # records that agent in `refused_agents`. A link on disk is the
+            # same failure seen after the `chmod`, or one written by a
+            # quarantine from before it recorded anything. Either way an
+            # agent may still load the skill, which "none active" denied.
+            unsure = entry.get("refused_agents") or []
+            still = [*unsure, *(a for a, d in enabled.items()
+                                if a not in unsure
+                                and os.path.islink(d / name))]
+            if still:
+                bad("skill-quarantine", "quarantined skill %s may still be "
+                    "linked for %s — run `boost quarantine %s` again"
+                    % (name, ", ".join(still), name))
+                skill_issues += 1
             continue
         # tamper detection: the lock file records a sha256 at install time, but
         # only `boost verify` ever re-checked it — surface content drift here too.
@@ -696,8 +710,8 @@ def cmd_doctor(argv):
     active_skills = len(skills) - quarantined_skills
     # "with agent links" is a claim the loop above only checked with agents_ok.
     if skills and not skill_issues and agents_ok:
-        # A quarantined skill has no agent links — unlink_agents already
-        # removed them — so it must not inflate this count into a false
+        # A quarantined skill has no agent links — the check above counts
+        # any it could not remove as an issue — so it must not inflate this count into a false
         # "healthy, N skills with agent links" the way it used to.
         if active_skills:
             rep.ok("skills", "%d skill%s present in store with agent links%s"
