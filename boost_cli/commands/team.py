@@ -9,6 +9,7 @@ import operator
 import platform
 import shutil
 import stat
+import sys
 import urllib.parse
 from typing import Any
 
@@ -484,7 +485,8 @@ def cmd_profile(argv) -> int:
             # been sidelined by an earlier `profile use` (or by `focus` /
             # `context`), and relinking without clearing `sidelined_by` left
             # `list`/`doctor` still calling it set aside.
-            store.unsideline(n)
+            _warn_unwritable(store.unsideline(n),
+                             stream=sys.stderr if args.json else None)
     uninstalled, sidelined, kept_extras = [], [], False
     if extras:
         # A declined --prune confirm used to leave extras fully installed

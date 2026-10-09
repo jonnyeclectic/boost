@@ -301,19 +301,22 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
     _offer_mcp(res, no_mcp=no_mcp)
 
 
-def _warn_unwritable(res) -> None:
+def _warn_unwritable(res, stream=None) -> None:
     """Name what an install skipped, and the remedy — every path that
     installs, reinstall and update included, so none reports success over an
     agent it silently left out.
 
     A conflict is a real file squatting a skill's link path. An unwritable dir
     refused a link, or a rule or workflow file; the refused agent is still
-    recorded, so `boost sync` writes it once the dir allows it."""
+    recorded, so `boost sync` writes it once the dir allows it.
+
+    ``stream`` for a caller speaking JSON on stdout: relinking under
+    `focus --json` must still say what it skipped, on stderr."""
     conflicts, refused = _skipped_agent_lines(res)
     for line in conflicts:
-        out.warn(line)
+        out.warn(line, stream=stream)
     for line in refused:
-        out.warn(line, wrap=True)
+        out.warn(line, stream=stream, wrap=True)
 
 
 def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
@@ -326,18 +329,26 @@ def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
     caller's own ``install`` callable, whose result need not carry every
     field of an ``InstallResult``.
     """
-    conflicts = ["not linked: %s exists and is not managed by boost" % _tilde(path)
-                 for path in getattr(res, "conflicts", None) or ()]
     what = ("not linked", "adds the link") \
         if getattr(res, "kind", "skill") == "skill" else ("not written", "writes it")
-    refused = ["%s: %s is not writable — `chmod u+w %s`, then `boost sync` %s"
-               % (what[0], _tilde(adir), _tilde(adir), what[1])
+    conflicts = ["not linked: %s exists and is not managed by boost" % _tilde(path)
+                 for path in getattr(res, "conflicts", None) or ()
+                 if what[0] == "not linked"]
+    refused = ["%s: %s — %s, then `boost sync` %s"
+               % (what[0], *store.unwritable_refusal(adir), what[1])
                for adir in getattr(res, "unwritable", None) or ()]
     # Something in the way of the dir: no chmod clears a file or a dangling
     # link, so the remedy is the move `store.link_refusal` names.
     refused += ["%s: %s — %s, then `boost sync` %s"
                 % (what[0], *store.link_refusal(adir, block), what[1])
                 for adir, block in getattr(res, "blocked", None) or ()]
+    # A rule's or workflow's conflict is a directory where its file goes
+    # (`store.occupied`): "not linked" named an action that kind never takes,
+    # and its remedy is a move, worded the way sync, heal and doctor word it.
+    if what[0] != "not linked":
+        refused += ["not written: %s, then `boost sync` writes it"
+                    % store.occupied_refusal(path)
+                    for path in getattr(res, "conflicts", None) or ()]
     return conflicts, refused
 
 
@@ -1110,8 +1121,8 @@ def cmd_sync(argv: list[str]) -> int:
     # what it could not, rather than "everything in sync" over it.
     stuck = store.unwritable_agent_dirs()
     for adir in stuck:
-        out.warn("agent dir %s is not writable — `chmod u+w %s`, then re-run "
-                 "`boost sync`" % (_tilde(adir), _tilde(adir)), wrap=True)
+        out.warn("agent dir %s — %s, then re-run `boost sync`"
+                 % store.unwritable_refusal(str(adir)), wrap=True)
     # A file or a dangling link where a rules/ or commands/ dir belongs. A
     # block the line above already names for a skill link is not named twice.
     named = {Path(p) for _n, _a, p in blocked}
@@ -1119,8 +1130,14 @@ def cmd_sync(argv: list[str]) -> int:
     for adir, block in in_way:
         out.warn("%s — %s, then re-run `boost sync`"
                  % store.link_refusal(str(adir), str(block)), wrap=True)
+    # A directory where a rule's or workflow's file goes: no dir refuses, so
+    # neither line above sees it, and sync said "everything in sync" over it.
+    occupied = store.occupied_targets()
+    for path in occupied:
+        out.warn("%s, then re-run `boost sync`" % store.occupied_refusal(path),
+                 wrap=True)
     if (not actions and not pruned and not left and not oos and not blocked
-            and not stuck and not in_way):
+            and not stuck and not in_way and not occupied):
         out.ok("everything in sync")
     return 0
 

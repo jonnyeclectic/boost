@@ -2,14 +2,14 @@
 id: agent-dir-shapes-install-still-trips-on
 board: code
 section: planned
-status: planned
+status: shipped
 category: Robustness · Bug
 complexity: S
 impact: Low
 wow: 2
-note: Agent-dir shapes install, doctor, heal and sync still mishandle after the read-only-home fix; each behaves the same on c7dca95c…
+note: "fixed: a 0o600 dotdir no longer crashes install, doctor, heal or sync on Python 3.12/3.13 (70 → 0/1) and is named \"not searchable\" with chmod u+wx; a missing skills dir under a read-only dotdir is named by its dotdir everywhere, and doctor (0 → 1) and sync now report it; a refused agent is recorded as refused_agents and retried by install --force; focus, context, profile and quarantine --release say what they skipped; a directory at a rule's file path is a conflict (70 → 0); heal --dry-run no longer previews a refused re-materialize; doctor names a read-only store (0 → 1)"
 order: 332
-owner:
+owner: loop/agent-dir-shapes
 pr:
 title: Agent-dir shapes boost still trips on: a parent with no search bit, a missing dir under a read-only parent, a dir at a rule's file path, a blocked agent dropped from the lock's scope
 ---
@@ -46,4 +46,44 @@ shape is fixed on #933's branch: <code>_refused_target</code> names the dir thro
 the other agents' copies, with no lock entry.<br><br><code>heal --dry-run</code> previews "would re-materialize" a rule whose target dir is still locked or
 blocked. The real run then re-materializes nothing, correctly. The exit codes agree (1 and 1), but the
 wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every install exits 1, naming it, while
-<code>doctor</code> says healthy. <code>doctor</code> could ask <code>paths.refuses_writes(paths.store_dir())</code>.
+<code>doctor</code> says healthy. <code>doctor</code> could ask <code>paths.refuses_writes(paths.store_dir())</code>.<br><br><b>Shipped.</b> Every shape reproduced on <code>11dbbc77</code>, on Python 3.13 and 3.14, and each is closed.
+
+<b>No search bit.</b> With <code>~/.cursor</code> at <code>0o600</code>, 3.13 crashed in more places than the
+one the card named: <code>linked_agents</code>, <code>sync_plan</code>, <code>_broken_links</code>,
+<code>cmd_heal</code>'s missing-dir scan, doctor's per-link and per-rule-file checks, and
+<code>boost health</code>'s link count. Each now asks
+<code>os.path</code>, which answers False where 3.12 and 3.13's pathlib raises. Measured on 3.13: install
+70 &rarr; 0, doctor 70 &rarr; 1, heal 70 &rarr; 1, sync 70 &rarr; 0. On 3.14, where nothing crashed, install
+named <code>~/.cursor/skills</code> with <code>chmod u+w</code>, doctor said healthy and sync said
+"everything in sync". All four now name <code>~/.cursor</code> as "not searchable" and give
+<code>chmod u+wx</code>: <code>paths.write_remedy</code> adds the <code>x</code> when <code>X_OK</code>
+is what fails, and "cannot be created" becomes "cannot be reached", because the dir below may exist.
+
+<b>A missing skills dir under a read-only parent.</b> <code>link_agents</code> records
+<code>refuses_writes(adir)</code>, as <code>_refused_target</code> already did for rules, so the install names
+<code>~/.cursor</code>. <code>unwritable_agent_dirs</code> asks <code>refuses_writes</code> too, so doctor
+(0 &rarr; 1), heal and sync name the same dir once. The four inline <code>chmod u+w</code> strings now
+share one wording, <code>store.unwritable_refusal</code>. <code>heal --dry-run</code> no longer says
+"would link" for a dir the run will skip.
+
+<b>A refused agent stays in scope.</b> A skill's lock entry records the agents whose dir refused as
+<code>refused_agents</code>. <code>preserved_agent_scope</code> replays them with <code>agents</code>, so after
+the <code>chmod</code>, <code>install --force</code> links cursor, where before it linked three agents and said
+nothing. The field is absent when nothing refused, so other entries are unchanged.
+
+<b>Callers.</b> <code>focus</code>, <code>focus --clear</code>, <code>context</code> apply and disable,
+<code>profile use</code> and <code>quarantine --release</code> now print the skip, on stderr under
+<code>--json</code>. <code>boost import</code> already did, through <code>_report_result</code>, so that part of
+the card was stale.
+
+<b>A directory at a rule's file path</b> is filed as a conflict with an <code>unwritable</code> row. Install
+went from 70 to 0 for rules and workflows, and doctor, heal and sync name it with the move.
+<code>heal --dry-run</code> stops previewing a re-materialize while a row's dir still refuses (or a directory
+sits at its path), which matches what the run reports. Doctor and heal now name a read-only
+<code>~/.agents/skills</code>; doctor went from 0 to 1.
+
+<code>tests/functional/test_agent_dir_shapes.py</code> has 31 tests, and 26 of them fail on the old code.
+The other five guard the opposite direction. The 3.12/3.13 crashes are reproduced on any interpreter by a
+fixture that makes pathlib raise where those versions do. Found while measuring and not fixed:
+<code>boost quarantine</code> under a <code>0o600</code> dotdir reports its links removed, but it cannot see the
+cursor link to remove it.

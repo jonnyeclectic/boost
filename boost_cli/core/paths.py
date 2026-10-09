@@ -309,11 +309,27 @@ def not_writable(d: Path, block: Path) -> str:
     and a directory that refuses or something that is not a directory at all.
     Doctor, heal and install share the wording.
     """
+    unsearchable = not in_the_way(block) and not_searchable(block)
     why = "%s is %s" % (tilde(block), "not a directory" if in_the_way(block)
+                        else "not searchable" if unsearchable
                         else "not writable")
     if block == d:
         return why
-    return "%s cannot be created: %s" % (tilde(d), why)
+    # Under a dir with no search bit `d` may well exist; nothing can tell, so
+    # "cannot be created" would be a guess, and on a real `~/.cursor/skills`
+    # a wrong one.
+    return "%s cannot be %s: %s" % (tilde(d), "reached" if unsearchable
+                                    else "created", why)
+
+
+def not_searchable(d: Path) -> bool:
+    """A directory that is there and may not be searched: ``0o600``, say.
+
+    Writable or not, nothing under it can be created, opened or even looked
+    at, and ``chmod u+w`` leaves it exactly as stuck. A path that is not there
+    is not unsearchable, so the remedy for one stays the plain ``u+w``.
+    """
+    return os.path.isdir(d) and not os.access(d, os.X_OK)
 
 
 def write_remedy(block: Path) -> str:
@@ -325,4 +341,14 @@ def write_remedy(block: Path) -> str:
     """
     if in_the_way(block):
         return "move %s aside" % tilde(block)
-    return "run `chmod u+w %s`" % tilde(block)
+    return "run `%s`" % chmod_command(block)
+
+
+def chmod_command(block: Path) -> str:
+    """The ``chmod`` that makes `block` writable *and* enterable.
+
+    ``u+w`` alone was the advice for every refusing dir, and on a dir at
+    ``0o600`` it changes nothing: the missing bit is search, not write.
+    """
+    return "chmod u+%s %s" % ("wx" if not_searchable(block) else "w",
+                              tilde(block))
