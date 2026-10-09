@@ -233,6 +233,65 @@ class TestADotdirWithNoSearchBit:
         assert "cursor" not in removed
         assert "claude-code" in removed
 
+    def test_uninstall_refuses_and_keeps_everything(self, boost, entry,
+                                                   cursor):
+        # unlink_agents skips the cursor link it cannot see; uninstall used to
+        # then delete the store and the lock entry anyway, exit 0, and leave
+        # ~/.cursor/skills/brainstorming dangling into a deleted store.
+        store.install(entry)
+        cursor.chmod(0o600)
+        res = boost("uninstall", "brainstorming", expect=1)
+        cursor.chmod(0o700)
+        said = " ".join((res.out + res.err).split())
+        assert "chmod u+wx ~/.cursor" in said
+        assert "unexpected error" not in said
+        assert lockfile.get_skill("brainstorming") is not None
+        assert store.skill_store_dir("brainstorming").is_dir()
+        link = cursor / "skills" / "brainstorming"
+        assert link.is_symlink() and link.exists()
+        # Nothing was unlinked either, so the retry finds the same state.
+        assert (paths.home() / ".claude" / "skills" / "brainstorming"
+                ).is_symlink()
+        boost("uninstall", "brainstorming")
+        assert not os.path.lexists(link)
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_a_visible_link_in_a_read_only_dir_is_refused_first(
+            self, entry, cursor):
+        store.install(entry)
+        skills = cursor / "skills"
+        skills.chmod(0o500)
+        try:
+            with pytest.raises(store.BoostError) as exc:
+                store.uninstall("brainstorming")
+        finally:
+            skills.chmod(0o700)
+        assert "chmod u+w ~/.cursor/skills" in exc.value.hint
+        assert lockfile.get_skill("brainstorming") is not None
+        assert (paths.home() / ".claude" / "skills" / "brainstorming"
+                ).is_symlink()
+
+    def test_a_recorded_link_already_gone_does_not_block(self, entry,
+                                                         cursor):
+        store.install(entry)
+        (cursor / "skills" / "brainstorming").unlink()
+        res = store.uninstall("brainstorming")
+        assert "cursor" not in res["unlinked"]
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_a_locked_dir_the_skill_never_linked_into_does_not_block(
+            self, boost, entry, cursor):
+        store.install(entry)
+        rec = lockfile.get_skill("brainstorming")
+        rec["agents"] = [a for a in rec["agents"] if a != "cursor"]
+        lockfile.set_skill("brainstorming", rec)
+        (cursor / "skills" / "brainstorming").unlink()
+        cursor.chmod(0o600)
+        boost("uninstall", "brainstorming")
+        cursor.chmod(0o700)
+        assert lockfile.get_skill("brainstorming") is None
+        assert not store.skill_store_dir("brainstorming").exists()
+
 
 class TestAMissingSkillsDirUnderAReadOnlyDotdir:
     """The install told the user to ``chmod`` a ``~/.cursor/skills`` that did

@@ -2645,6 +2645,33 @@ def existing_skill_owner(name: str) -> str | None:
     return existing.get("tap") if existing else None
 
 
+def _check_links_removable(name: str, entry: dict) -> None:
+    """Refuse a skill uninstall that would leave one of its links behind.
+
+    :func:`unlink_agents` skips a link it cannot see, which is right for
+    ``sideline``. Uninstall is different: it deletes the store dir next, so a
+    link it skipped is left dangling into a deleted store. Under a dotdir with
+    no search bit that is exactly what happened, while uninstall reported
+    success and exited 0. Checking first, before anything is removed, keeps
+    the store and the lock entry, so uninstalling again after the `chmod`
+    finishes the job. Only agents the lock records as linked are checked: an
+    unrelated locked-down dir must not block every uninstall.
+    """
+    recorded = set(entry.get("agents") or ())
+    for agent, adir in agents.linking_agents().items():
+        if agent not in recorded:
+            continue
+        link = adir / name
+        try:
+            os.lstat(link)
+        except PermissionError:
+            raise _removal_refused(name, link) from None
+        except OSError:
+            continue
+        if os.path.islink(link) and not os.access(adir, os.W_OK | os.X_OK):
+            raise _removal_refused(name, link)
+
+
 def uninstall(name: str) -> dict:
     """Uninstall ``name`` whatever its kind (skill, rule, workflow).
 
@@ -2675,6 +2702,7 @@ def uninstall(name: str) -> dict:
             return uninstall_project(name, base=pbase)
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
+    _check_links_removable(name, entry)
     removed_links = unlink_agents(name)
     util.remove_path(skill_store_dir(name))
     lockfile.remove_skill(name)

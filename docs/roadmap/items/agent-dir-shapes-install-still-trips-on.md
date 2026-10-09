@@ -7,7 +7,7 @@ category: Robustness · Bug
 complexity: S
 impact: Low
 wow: 2
-note: "fixed: a 0o600 dotdir no longer crashes install, doctor, heal or sync on Python 3.12/3.13 (70 → 0/1) and is named \"not searchable\" with chmod u+wx; a missing skills dir under a read-only dotdir is named by its dotdir everywhere, and doctor (0 → 1) and sync now report it; a refused agent is recorded as refused_agents and retried by install --force; focus, context, profile and quarantine --release say what they skipped; a directory at a rule's file path is a conflict (70 → 0); heal --dry-run no longer previews a refused re-materialize; doctor names a read-only store (0 → 1)"
+note: "fixed: a 0o600 dotdir no longer crashes install, doctor, heal, sync or uninstall on Python 3.12/3.13 (70 → 0/1) and is named \"not searchable\" with chmod u+wx; a missing skills dir under a read-only dotdir is named by its dotdir everywhere, and doctor (0 → 1) and sync now report it; a refused agent is recorded as refused_agents and retried by install --force; focus, context, profile and quarantine --release say what they skipped; a directory at a rule's file path is a conflict (70 → 0); heal --dry-run no longer previews a refused re-materialize; doctor names a read-only store (0 → 1)"
 order: 332
 owner: loop/agent-dir-shapes
 pr:
@@ -59,7 +59,12 @@ named <code>~/.cursor/skills</code> with <code>chmod u+w</code>, doctor said hea
 <code>chmod u+wx</code>: <code>paths.write_remedy</code> adds the <code>x</code> when <code>X_OK</code>
 is what fails, and "cannot be created" becomes "cannot be reached", because the dir below may exist.
 Uninstall's named refusal for a rule or workflow there now uses the same wording, where it still said
-<code>chmod u+w</code>.
+<code>chmod u+w</code>. A skill uninstall there went from 70 on 3.13 to a <em>silent</em> 0 on the
+first draft of this fix: <code>unlink_agents</code> skipped the cursor link it could not see, and the
+store dir and lock entry were deleted anyway, which left <code>~/.cursor/skills/brainstorming</code>
+dangling into a deleted store. It now checks every link the lock records before it removes anything,
+exits 1 with <code>chmod u+wx ~/.cursor</code>, and keeps the store, the lock and every link, so
+uninstalling again after the <code>chmod</code> finishes it.
 
 <b>A missing skills dir under a read-only parent.</b> <code>link_agents</code> records
 <code>refuses_writes(adir)</code>, as <code>_refused_target</code> already did for rules, so the install names
@@ -86,8 +91,8 @@ went from 70 to 0 for rules and workflows, and doctor, heal and sync name it wit
 sits at its path), which matches what the run reports. Doctor and heal now name a read-only
 <code>~/.agents/skills</code>; doctor went from 0 to 1.
 
-<code>tests/functional/test_agent_dir_shapes.py</code> has 34 tests, and 28 of them fail on the old code.
-The other six guard the opposite direction. The 3.12/3.13 crashes are reproduced on any interpreter by a
+<code>tests/functional/test_agent_dir_shapes.py</code> has 38 tests, and 30 of them fail on the old code.
+The other eight guard the opposite direction. The 3.12/3.13 crashes are reproduced on any interpreter by a
 fixture that makes pathlib raise where those versions do. Found while measuring and not fixed:
 <code>boost quarantine</code> under a <code>0o600</code> dotdir reports its links removed, but it cannot see the
 cursor link to remove it.
