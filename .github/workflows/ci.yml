@@ -618,10 +618,11 @@ jobs:
     # scripts/mutation_shards.py now converts, and the conversion is measured
     # rather than guessed: a shard's weight is work laid end to end, the runner
     # executes it 4-way parallel (mutmut's `max_children` defaults to
-    # `os.cpu_count()`; ubuntu-latest is 4 vCPU) at a measured 81.4%
-    # efficiency, and the worst run of a shard is 1.91x its own median. Both
-    # constants are fitted over 169 successful shard jobs and carry their
-    # provenance where they are defined.
+    # `os.cpu_count()`; ubuntu-latest is 4 vCPU), and the worst run of a
+    # shard is 1.91x its own median. (The efficiency was 81.4% over 169 whole
+    # jobs when this was written; it is now fitted on the mutation phase
+    # alone, beside a fixed per-job preamble -- see the dated paragraph
+    # below.) Every constant carries its provenance where it is defined.
     #
     # Held against this line the old six-shard pack scored 37.8 median minutes
     # x 1.91 = a 72.3-minute tail: 96% of the cap, which is the cancellation,
@@ -647,11 +648,10 @@ jobs:
     # Score the committed
     # TAIL_MULTIPLIER against the OBSERVED median and the pack is 34.6 x 1.91
     # = 66.0 min, 88% of the cap: past the 80% gate `plan` reports it clearing
-    # with 36 points in hand. The model has no per-job fixed cost (14-27 min,
-    # bounded five ways), so it flatters every width above the one it was
-    # fitted at. See RUNNER_EFFICIENCY in scripts/mutation_shards.py before
-    # widening — and note a unit test now refuses a width nothing has run at,
-    # because `plan` will approve every one of them.
+    # with 36 points in hand. The model had no per-job fixed cost, so it
+    # flattered every width above the one it was fitted at; see the dated
+    # paragraph below for the fixed term it now has. A unit test still
+    # refuses a width nothing has run at.
     #
     # THE WIDTHS IN BETWEEN WERE MEASURED, AND EVERY RE-TIMING MOVES THEM.
     # On #1032's weights `plan --explain --timeout-minutes 75` printed eight
@@ -686,6 +686,18 @@ jobs:
     # they go stale on the next weights refresh: run `plan --shards 12
     # --explain --timeout-minutes 75` for the live ones rather than trusting
     # these, and read them next to the observed 34.6 / 55.8 rather than alone.
+    #
+    # THE FIXED COST WAS MEASURED, AND MOST OF IT WAS A TEST (2026-10-09).
+    # Every shard job's log timestamps its phases, and over 861 successful
+    # jobs the preamble before `Running mutation testing` was a median 5.1
+    # min at six, 10.0 at eight and 12.9 at twelve -- mutmut's baseline run
+    # of tests/unit, where test_mutation_shard_count.py packed mutmut's
+    # 16 MB-per-file rewritten tree (245 s locally). Those tests now skip
+    # inside mutants/, and the model is FIXED_MINUTES (5.5) plus the
+    # mutation phase at 0.98 of four workers -- a fit that agrees at eight
+    # and twelve to 1%. Re-measure FIXED_MINUTES from the first runs after
+    # that lands. The per-width figures above were computed before it and
+    # are kept as the record of what `plan` said then.
     #
     # tests/unit/test_mutation_shard_count.py pins all of it: that this number
     # and the matrix below and every `--shards` in this repo agree, and that

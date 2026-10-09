@@ -2,14 +2,14 @@
 id: the-shard-model-has-no-per-job-fixed-cost
 board: code
 section: trust
-status: planned
+status: shipped
 category: CI · Model
 complexity: M
 impact: Med
 wow: 3
 note: the plan divides by every shard added, so it flatters every width above the one it was fitted at
 order: 367
-owner:
+owner: loop/shard-fixed-cost
 pr:
 title: "The shard model runs through the origin, so <code>plan</code> gets more optimistic with every shard added"
 ---
@@ -80,3 +80,22 @@ fitted one, and the answer gets more optimistic the further you go. Until C is f
 <code>test_the_committed_width_has_actually_run</code> refuses a <code>SHARDS</code> nothing has
 been observed at, and <code>test_todays_pack_under_predicts_the_worst_twelve_shard_job</code>
 pins the 7.8-minute shortfall so it cannot drift unnoticed.
+
+<b>Shipped.</b> The fixed cost was measured rather than bounded, and most of it was a test. Every
+shard job's log timestamps mutmut's phases, so over 861 successful jobs the preamble before
+<code>Running mutation testing</code> is a median <b>5.1 min at six, 10.0 at eight, 12.9 at
+twelve</b> &mdash; nearly all of the growth in <code>Running stats</code>, which jumped 2.6 &rarr;
+7.1 min on the first eight-shard commit. That commit added
+<code>test_mutation_shard_count.py</code>, whose real-tree tests pack <code>ROOT</code>; inside
+<code>mutants/</code> that is mutmut's rewritten tree (<code>store.py</code> is 16 MB there against
+164 KB), and the file took <b>246 s</b> there locally against 8 s on the checkout. Those five tests read
+only unmutated <code>scripts/</code>, so they now skip inside <code>mutants/</code> (1 s), as
+<code>test_mutation_subfile_shards.py</code>'s already did. With the preamble taken out, the mutation
+phase is linear through the origin: graded on each run's own measured weights, 216 jobs give
+<b>0.2528</b> phase-minutes per weight-minute at eight and <b>0.2555</b> at twelve (intercept 0.19
+min, r&sup2; 0.93), so <code>RUNNER_EFFICIENCY</code> is <b>0.98</b> and the 0.814 was the preamble
+folded into a ratio. The model is now <code>FIXED_MINUTES</code> (5.5, the last six-shard preamble
+before the planner tests reached the baseline) plus that phase; with each width's own preamble it
+reproduces six's 37.5 and twelve's 34.55 medians within a minute, and its twelve-shard tail clears the
+55.8-minute worst job that the old pack missed by 7.8. <code>FIXED_MINUTES</code> describes a tree
+no run has executed yet, so re-measure it from the first runs after this lands.
