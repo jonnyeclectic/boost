@@ -3236,6 +3236,15 @@ class StoreRepair:
     base: str | None = None
 
 
+_NOT_REMATERIALIZED = " was not re-materialized: "
+
+
+def is_unrepaired(action: str) -> bool:
+    """True for a :func:`sync_apply` line that reports a repair it did *not*
+    make, so callers print it as a warning rather than under a check mark."""
+    return _NOT_REMATERIALIZED in action
+
+
 _DROPPED = "dropped %s from lock (store dir missing, source gone)"
 _GONE = ("%s %s has a missing materialization but its source is gone — "
          "run `boost update` or reinstall")
@@ -3491,9 +3500,9 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
             # The source is there; the install said why it stopped (a store
             # that refuses the lock, say). Reporting `_GONE` here sent the
             # user to `boost update` for a problem in ~/.agents/skills.
-            actions.append("%s %s was not re-materialized: %s%s"
-                           % (kind, name, err.message,
-                              " — %s" % err.hint if err.hint else ""))
+            why = err.message + (" — %s" % err.hint if err.hint else "")
+            actions.append("%s %s%s%s"
+                           % (kind, name, _NOT_REMATERIALIZED, why))
             continue
         # A directory still refusing the write is not a repair, so it is not
         # reported as one; the caller names the dir itself

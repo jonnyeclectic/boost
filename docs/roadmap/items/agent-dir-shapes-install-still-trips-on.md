@@ -89,10 +89,11 @@ the card was stale.
 went from 70 to 0 for rules and workflows, and doctor, heal and sync name it with the move.
 <code>heal --dry-run</code> stops previewing a re-materialize while a row's dir still refuses (or a directory
 sits at its path), which matches what the run reports. Doctor and heal now name a read-only
-<code>~/.agents/skills</code>; doctor went from 0 to 1.
+<code>~/.agents/skills</code>; doctor went from 0 to 1. Heal and sync printed "rule house was not re-materialized" under a green
+check mark (also on <code>origin/main</code>); that line is now a warning.
 
-<code>tests/functional/test_agent_dir_shapes.py</code> has 38 tests, and 30 of them fail on the old code.
-The other eight guard the opposite direction. The 3.12/3.13 crashes are reproduced on any interpreter by a
+<code>tests/functional/test_agent_dir_shapes.py</code> has 40 tests, and 31 of them fail on the old code.
+The other nine guard the opposite direction. The 3.12/3.13 crashes are reproduced on any interpreter by a
 fixture that makes pathlib raise where those versions do. Found while measuring and not fixed:
 <code>boost quarantine</code> under a <code>0o600</code> dotdir reports its links removed, but it cannot see the
 cursor link to remove it.

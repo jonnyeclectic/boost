@@ -1472,7 +1472,8 @@ def cmd_heal(argv):
             actions.append(msg)
     else:
         for msg in store.sync_apply(plan):
-            out.ok(msg.replace(str(paths.home()), "~"))
+            (out.warn if store.is_unrepaired(msg) else out.ok)(
+                msg.replace(str(paths.home()), "~"))
             actions.append(msg)
 
     # Opt-in, unlike everything above it. The rest of `heal` repairs what boost

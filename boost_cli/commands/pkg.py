@@ -1079,7 +1079,7 @@ def cmd_sync(argv: list[str]) -> int:
                           "blocked_links": blocked}, indent=2))
         return 0
     for a in actions:
-        out.ok(a)
+        (out.warn if store.is_unrepaired(a) else out.ok)(a)
     if unrecorded:
         out.warn("%s the lock file cannot record, left as they are: %s — "
                  "restore the lock with `boost replay`"

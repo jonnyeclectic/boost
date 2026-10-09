@@ -580,5 +580,29 @@ class TestAReadOnlyStore:
         assert ("~/.agents/skills is not writable — heal does not change "
                 "permissions") in dry
 
+    def test_heal_does_not_tick_a_repair_it_did_not_make(self, boost, tap,
+                                                         installed, cursor):
+        store.install(_rule(tap))
+        (cursor / "rules" / "house.mdc").unlink()
+        store_dir = paths.store_dir()
+        store_dir.chmod(0o500)
+        try:
+            healed = boost("heal", expect=1).out
+            synced = boost("sync").out
+        finally:
+            store_dir.chmod(0o700)
+        for said in (healed, synced):
+            line = next(ln for ln in said.splitlines()
+                        if "was not re-materialized" in ln)
+            assert "✓" not in line and "!" in line
+
+    def test_a_real_repair_is_still_ticked(self, boost, tap, installed,
+                                           cursor):
+        store.install(_rule(tap))
+        (cursor / "rules" / "house.mdc").unlink()
+        line = next(ln for ln in boost("heal").out.splitlines()
+                    if "house" in ln)
+        assert "✓" in line
+
     def test_a_writable_store_is_not_named(self, boost, installed):
         assert "~/.agents/skills is not writable" not in boost("doctor").out
