@@ -524,12 +524,12 @@ def _ancestor_is(path_r: Path, base_r: Path) -> bool:
     skipped; a ``base`` that cannot be stat'ed, or reports no inode, matches
     nothing.
     """
-    base_st = os.stat(base_r)
+    base_st = base_r.stat()
     if not base_st.st_ino:
         return False
     for parent in path_r.parents:
         try:
-            st = os.stat(parent)
+            st = parent.stat()
         except OSError:
             continue
         if os.path.samestat(st, base_st):
