@@ -82,7 +82,7 @@ went from 70 to 0 for rules and workflows, and doctor, heal and sync name it wit
 sits at its path), which matches what the run reports. Doctor and heal now name a read-only
 <code>~/.agents/skills</code>; doctor went from 0 to 1.
 
-<code>tests/functional/test_agent_dir_shapes.py</code> has 31 tests, and 26 of them fail on the old code.
+<code>tests/functional/test_agent_dir_shapes.py</code> has 33 tests, and 28 of them fail on the old code.
 The other five guard the opposite direction. The 3.12/3.13 crashes are reproduced on any interpreter by a
 fixture that makes pathlib raise where those versions do. Found while measuring and not fixed:
 <code>boost quarantine</code> under a <code>0o600</code> dotdir reports its links removed, but it cannot see the

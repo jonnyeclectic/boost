@@ -287,6 +287,30 @@ class TestARefusedAgentStaysInScope:
         assert "cursor" in locked["agents"]
         assert "refused_agents" not in locked
 
+    def test_an_import_records_its_refusals_too(self, sandbox, cursor,
+                                                tmp_path):
+        src = tmp_path / "mine"
+        src.mkdir()
+        (src / "SKILL.md").write_text("---\nname: mine\ndescription: d\n---\n"
+                                      "\nbody\n", encoding="utf-8")
+        cursor.chmod(0o500)
+        res = store.install_from_path(src)
+        cursor.chmod(0o700)
+        assert res.refused == ["cursor"]
+        assert lockfile.get_skill("mine")["refused_agents"] == ["cursor"]
+        store.install_from_path(src, force=True)
+        assert "refused_agents" not in lockfile.get_skill("mine")
+        assert "cursor" in lockfile.get_skill("mine")["agents"]
+
+    def test_an_agent_with_something_in_the_way_is_refused_too(self, entry,
+                                                               cursor):
+        (cursor / "skills").symlink_to(cursor / "nowhere")
+        res = store.install(entry)
+        assert res.blocked == [(str(cursor / "skills"), str(cursor / "skills"))]
+        assert res.refused == ["cursor"]
+        assert lockfile.get_skill("brainstorming")["refused_agents"] == [
+            "cursor"]
+
     def test_an_entry_that_never_met_a_refusal_records_none(self, entry):
         store.install(entry)
         assert "refused_agents" not in lockfile.get_skill("brainstorming")
