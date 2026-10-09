@@ -62,7 +62,14 @@ from . import (
 # reach the entries spelling it that way. `build` reuses a tap only when
 # `_load_raw` returned an index, and a version mismatch returns None — so the
 # bump re-indexes every tap rather than half of them.
-INDEX_VERSION = 9
+# v10: each term's posting list is ONE delta+varint blob
+# (`postings(term_id INTEGER PRIMARY KEY, plist BLOB)`) instead of one row per
+# posting — see `_encode_plist`. Measured on a real store (20,108,624 postings
+# over 251,864 terms): 563.7 MB -> 59.3 MB on disk, and the golden queries'
+# postings read in 1.17 s instead of 3.31 s; `scripts/measure_keyword_index.py`
+# re-derives the table. A v9 file read by the v10 reader would decode row
+# integers as blobs, so the bump is what keeps the two from ever meeting.
+INDEX_VERSION = 10
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
@@ -534,6 +541,57 @@ def postings_path() -> Path:
     return paths.cache_dir() / "rag_postings.sqlite"
 
 
+def _encode_plist(plist: Sequence[Sequence[int]]) -> bytes:
+    """One term's ``[[doc, tf], ...]`` as delta+varint bytes.
+
+    Doc ids within a term ascend (`_save` appends them in doc order), so each
+    is stored as its gap from the previous one — the first as itself — and
+    every gap and tf as an LEB128 varint: seven bits per byte, high bit set on
+    every byte but the last. Over a real 20.1M-posting store 90% of gaps and
+    99.99% of tfs are under 128, so a posting is ~2 bytes of payload where a
+    SQLite row-plus-index-entry was ~28.
+    A descending doc id would need a negative gap, which a varint cannot carry,
+    so it is refused rather than silently corrupting every later doc id.
+    """
+    out = bytearray()
+    prev = 0
+    for doc, tf in plist:
+        if doc < prev:
+            raise ValueError("posting doc ids must ascend: %d after %d"
+                             % (doc, prev))
+        for v in (doc - prev, tf):
+            while v >= 0x80:
+                out.append((v & 0x7F) | 0x80)
+                v >>= 7
+            out.append(v)
+        prev = doc
+    return bytes(out)
+
+
+def _decode_plist(blob: bytes) -> list[list[int]]:
+    """Inverse of :func:`_encode_plist`: bytes back to ``[[doc, tf], ...]``."""
+    vals: list[int] = []
+    v = shift = 0
+    for byte in blob:
+        v |= (byte & 0x7F) << shift
+        if byte & 0x80:
+            shift += 7
+        else:
+            vals.append(v)
+            v = shift = 0
+    if shift:
+        # A continuation bit on the last byte: the blob stops inside a varint.
+        # Dropping it would hand back a short list that looks whole.
+        raise ValueError("posting blob ends inside a varint")
+    out: list[list[int]] = []
+    doc = 0
+    it = iter(vals)
+    for gap, tf in zip(it, it, strict=True):
+        doc += gap
+        out.append([doc, tf])
+    return out
+
+
 def _write_postings(postings: dict[str, list[list[int]]]) -> None:
     """Persist the term -> [(doc, tf)] map to SQLite, replacing any existing one.
 
@@ -554,6 +612,13 @@ def _write_postings(postings: dict[str, list[list[int]]]) -> None:
     carries an integer `term_id`, and `terms` also carries each term's document
     frequency (`df`, the length of its posting list) so `stem_expansions` can
     read it directly instead of re-deriving it with `GROUP BY` on every lookup.
+
+    Each term's posting list is then stored as ONE blob (`_encode_plist`)
+    rather than one row per posting. Interning removed the repeated string but
+    left ~20M rows, each paying SQLite's row header, rowid and a secondary
+    index entry for three small integers; one row per term pays that 250k times
+    instead. A query still reads one row per query term and decodes only
+    those, which is the property `read_postings` exists for.
     """
     paths.ensure_dirs()
     final = postings_path()
@@ -577,27 +642,7 @@ def _write_postings(postings: dict[str, list[list[int]]]) -> None:
     tmp = Path(tmp_name)
     con = sqlite3.connect(str(tmp))
     try:
-        # No durability needed: this file is a derived cache, and a crash
-        # mid-build leaves the .tmp behind rather than a torn index.
-        con.execute("PRAGMA journal_mode=OFF")
-        con.execute("PRAGMA synchronous=OFF")
-        con.execute("CREATE TABLE terms (id INTEGER PRIMARY KEY, "
-                    "term TEXT NOT NULL, df INTEGER NOT NULL)")
-        con.execute("CREATE TABLE postings (term_id INTEGER, doc INTEGER, "
-                    "tf INTEGER)")
-        items = list(postings.items())
-        con.executemany(
-            "INSERT INTO terms (id, term, df) VALUES (?, ?, ?)",
-            ((term_id, term, len(plist))
-             for term_id, (term, plist) in enumerate(items)))
-        con.executemany(
-            "INSERT INTO postings (term_id, doc, tf) VALUES (?, ?, ?)",
-            ((term_id, doc, tf) for term_id, (_term, plist) in enumerate(items)
-             for doc, tf in plist))
-        # Built after the insert: maintaining it per-row is far slower.
-        con.execute("CREATE UNIQUE INDEX terms_term ON terms(term)")
-        con.execute("CREATE INDEX postings_term_id ON postings(term_id)")
-        con.commit()
+        _fill_postings(con, postings)
     except BaseException:
         # Never leave a temp behind, and never mask the original error —
         # `util.atomic_write_text`'s rule, for the same reason.
@@ -608,6 +653,37 @@ def _write_postings(postings: dict[str, list[list[int]]]) -> None:
     else:
         con.close()
     tmp.replace(final)          # atomic swap, same as the JSON half
+
+
+def _fill_postings(con: sqlite3.Connection,
+                   postings: dict[str, list[list[int]]]) -> None:
+    """Create and fill the postings schema on an empty connection.
+
+    Split from :func:`_write_postings` so `scripts/measure_keyword_index.py`
+    measures the layout boost ships rather than a re-typed copy of it.
+    """
+    # No durability needed: this file is a derived cache, and a crash
+    # mid-build leaves the .tmp behind rather than a torn index.
+    con.execute("PRAGMA journal_mode=OFF")
+    con.execute("PRAGMA synchronous=OFF")
+    con.execute("CREATE TABLE terms (id INTEGER PRIMARY KEY, "
+                "term TEXT NOT NULL, df INTEGER NOT NULL)")
+    # `term_id` IS the rowid, so a term's blob is one B-tree lookup and there
+    # is no secondary index on postings at all.
+    con.execute("CREATE TABLE postings (term_id INTEGER PRIMARY KEY, "
+                "plist BLOB NOT NULL)")
+    items = list(postings.items())
+    con.executemany(
+        "INSERT INTO terms (id, term, df) VALUES (?, ?, ?)",
+        ((term_id, term, len(plist))
+         for term_id, (term, plist) in enumerate(items)))
+    con.executemany(
+        "INSERT INTO postings (term_id, plist) VALUES (?, ?)",
+        ((term_id, _encode_plist(plist))
+         for term_id, (_term, plist) in enumerate(items)))
+    # Built after the insert: maintaining it per-row is far slower.
+    con.execute("CREATE UNIQUE INDEX terms_term ON terms(term)")
+    con.commit()
 
 
 def read_postings(terms: Sequence[str]) -> dict[str, list[list[int]]]:
@@ -623,22 +699,24 @@ def read_postings(terms: Sequence[str]) -> dict[str, list[list[int]]]:
         con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
     except sqlite3.Error:
         return {}
-    out: dict[str, list[list[int]]] = defaultdict(list)
+    out: dict[str, list[list[int]]] = {}
     try:
         # Chunked: SQLite caps host parameters (999 on older builds), and a
         # long query can exceed it.
         for i in range(0, len(uniq), 500):
             batch = uniq[i:i + 500]
-            q = ("SELECT t.term, p.doc, p.tf FROM postings p "  # noqa: S608  interpolates only `?` placeholders; terms are bound params
+            q = ("SELECT t.term, p.plist FROM postings p "  # noqa: S608  interpolates only `?` placeholders; terms are bound params
                  "JOIN terms t ON p.term_id = t.id "
                  "WHERE t.term IN (%s)" % ",".join("?" * len(batch)))
-            for term, doc, tf in con.execute(q, batch):
-                out[term].append([doc, tf])
-    except sqlite3.Error:
+            for term, blob in con.execute(q, batch):
+                out[term] = _decode_plist(blob)
+    except (sqlite3.Error, ValueError):
+        # ValueError: a corrupt blob (`_decode_plist`) degrades like any
+        # other store fault rather than crashing the search.
         return {}
     finally:
         con.close()
-    return dict(out)  # noqa: FURB123  out is a defaultdict; .copy() would keep the factory
+    return out
 
 
 # A query term shorter than this expands to noise: `cal` prefixes `calendar`,
@@ -708,17 +786,17 @@ def _all_postings() -> dict[str, list[list[int]]]:
         con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
     except sqlite3.Error:
         return {}
-    out: dict[str, list[list[int]]] = defaultdict(list)
+    out: dict[str, list[list[int]]] = {}
     try:
-        for term, doc, tf in con.execute(
-                "SELECT t.term, p.doc, p.tf FROM postings p "
+        for term, blob in con.execute(
+                "SELECT t.term, p.plist FROM postings p "
                 "JOIN terms t ON p.term_id = t.id"):
-            out[term].append([doc, tf])
-    except sqlite3.Error:
+            out[term] = _decode_plist(blob)
+    except (sqlite3.Error, ValueError):
         return {}
     finally:
         con.close()
-    return dict(out)  # noqa: FURB123  out is a defaultdict; .copy() would keep the factory
+    return out
 
 
 def _save(docs: list[dict], commits: dict[str, str]) -> dict:
