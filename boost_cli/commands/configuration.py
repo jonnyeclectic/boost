@@ -1658,6 +1658,12 @@ def _tool_doctor(args: dict):
     _MAT_ISSUE_LABEL = {
         integrity.STATUS_MODIFIED: "modified since install",
         integrity.STATUS_UNREACHABLE: "reaches no agent boost writes",
+        # sync_plan skips these (a repair would recreate the deleted repo),
+        # so without a label here this surface would be the one calling it
+        # healthy.
+        integrity.STATUS_STRANDED: "installed --local into a directory that "
+                                   "no longer exists (`boost uninstall` "
+                                   "drops the record)",
     }
     mat_issues = [
         "%s %s: %s" % (kind, n, _MAT_ISSUE_LABEL[st])

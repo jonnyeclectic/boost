@@ -1249,6 +1249,18 @@ def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
             changed = bool(cur and cur != lk.get("sha256"))
         if not changed:
             continue
+        if scopes.stranded(lk):
+            # Its repo is gone, and refreshing it would recreate that
+            # directory (`store._require_project_base` refuses the write).
+            # Said here, before the risky-diff prompt, so nobody is asked to
+            # review a change that cannot be applied -- and only when there
+            # is a change, since a stranded row with nothing new is not this
+            # command's to report; `boost doctor` names it either way.
+            out.warn("%s %s: update skipped — it was installed --local into "
+                     "%s, which no longer exists; `boost uninstall %s` drops "
+                     "the record" % (kind, name, _tilde(Path(lk["base"])),
+                                     name), wrap=True)
+            continue
         try:
             new_raw = (registry.get(tapname).path
                        / entry.get("skill_md", "")).read_text(
@@ -1622,7 +1634,11 @@ def cmd_reinstall(argv: list[str]) -> int:
                                     scope=lk.get("scope", "user"),
                                     base=lk.get("base"))
             except BoostError as err:
-                out.warn("%s: %s" % (name, err.message))
+                # The hint too: a refusal to recreate a deleted repo is only
+                # useful with the `boost uninstall` that clears it.
+                out.warn("%s: %s%s" % (name, err.message,
+                                       " — %s" % err.hint if err.hint else ""),
+                         wrap=True)
                 failed += 1
                 continue
             # Success first, then what it skipped: the same order as every

@@ -229,6 +229,24 @@ def _materialized_agents(entry):
     return "·".join(a.split("-")[0] for a in agent_names)
 
 
+def _scope_flag(entry: dict) -> list[str]:
+    """The FLAGS cell's word for a rule/workflow installed ``--local``.
+
+    Those rows live in the user lock beside the user-scope ones, so without
+    this a rule written into another checkout -- or into one since deleted --
+    printed byte-identical to one in ``~/.claude``. ``project:<base>`` names
+    the checkout; ``(gone)`` says the directory no longer exists, which is
+    the case every other surface now reports as ``stranded``.
+    """
+    if (entry.get("scope") != scopes.SCOPE_PROJECT
+            or not scopes.names_a_directory(entry.get("base"))):
+        return []
+    where = "project:" + paths.tilde(Path(entry["base"]))
+    if scopes.stranded(entry):
+        return [out.role(where + " (gone)", "danger")]
+    return [out.role(where, "muted")]
+
+
 def _kind_table(heading, items, extra=None):
     """Render an installed rule/workflow table. ``extra`` is an optional
     ``(column, key)`` pair for a per-kind column (e.g. a workflow's slot); the
@@ -244,7 +262,8 @@ def _kind_table(heading, items, extra=None):
         quarantined = bool(e.get("quarantined"))
         agents_cell = "—" if quarantined else _materialized_agents(e)
         flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
-                ([out.aurora("quarantined", "pink")] if quarantined else [])
+                ([out.aurora("quarantined", "pink")] if quarantined else []) + \
+                _scope_flag(e)
         row = [name, e.get("version", "?"), e.get("tap", "?"),
                agents_cell]
         if extra:

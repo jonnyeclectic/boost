@@ -41,6 +41,7 @@ from ..core import (
     provenance,
     registry,
     report,
+    scopes,
     staleness,
     store,
     util,
@@ -254,6 +255,13 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
     if entry.get("quarantined"):
         return "quarantined"
     st = integrity.materialized_status(name, entry, kind)
+    if st == integrity.STATUS_STRANDED:
+        # Not "store-missing": that row's hint is `boost heal`, which
+        # re-materializes into the recorded base and recreates the repo the
+        # user deleted. Before the tap comparison for the same reason as
+        # `unreachable` -- a source matching its hash says nothing about an
+        # install whose every artifact went with its repo.
+        return "stranded"
     if st == integrity.STATUS_MISSING:
         return "store-missing"
     if st == integrity.STATUS_MODIFIED:
@@ -283,7 +291,8 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
 _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
                "upstream-moved": "accent", "source-missing": "danger",
                "store-missing": "danger", "n/a": "muted",
-               "quarantined": "muted", "unreachable": "warn"}
+               "quarantined": "muted", "unreachable": "warn",
+               "stranded": "danger"}
 
 
 def _drift_hint(name: str, status: str, tap: str = "") -> str:
@@ -300,6 +309,10 @@ def _drift_hint(name: str, status: str, tap: str = "") -> str:
         return "boost update" if registry.is_tapped(tap) else "boost tap %s" % tap
     if status == "store-missing":
         return "boost heal"
+    if status == "stranded":
+        # The record is the fault: uninstall drives off its rows and creates
+        # nothing, where heal/sync/reinstall would recreate the deleted repo.
+        return "boost uninstall %s" % name
     if status == "unreachable":
         # Not `boost sync`: it filters these rows out by design, so it is a
         # guaranteed no-op. Not "re-enable the agent" either -- that is wrong
@@ -694,6 +707,21 @@ def cmd_doctor(argv):
     quarantined_rules = len(all_rules) - len(rules)
     quarantined_workflows = len(all_workflows) - len(workflows)
     mat_issues = 0
+    # A `--local` row whose repo has been deleted is one fault, not one per
+    # agent, and its remedy is not `boost reinstall`: that re-materializes
+    # into the recorded base and recreates the directory (`scopes.stranded`).
+    # Named once with the command that drops the record, and kept out of the
+    # per-row checks below so they cannot prescribe the resurrecting one.
+    for kind, section in (("rule", rules), ("workflow", workflows)):
+        for name, entry in sorted(section.items()):
+            if scopes.stranded(entry):
+                bad(kind, "%s %s was installed --local into %s, which no "
+                    "longer exists — run `boost uninstall %s` to drop the "
+                    "record" % (kind, name, _tilde(Path(entry["base"])), name),
+                    wrap=True)
+                mat_issues += 1
+    rules = {n: e for n, e in rules.items() if not scopes.stranded(e)}
+    workflows = {n: e for n, e in workflows.items() if not scopes.stranded(e)}
     for kind, section in (("rule", rules), ("workflow", workflows)):
         for name, entry in sorted(section.items()):
             for m in entry.get("materializations") or []:
@@ -1814,14 +1842,15 @@ def cmd_health(argv):
 
     # The membership rule is "is there anything there", not "has it drifted":
     # `local-edits` and `upstream-moved` are expected states of a *live*
-    # install, while these three each mean the install reaches nothing --
-    # the store dir is gone, the source is gone, or no agent was ever
-    # written. Leaving `unreachable` out would be the bug this status was
+    # install, while these four each mean the install reaches nothing --
+    # the store dir is gone, the source is gone, no agent was ever written,
+    # or the repo a `--local` row was installed into has been deleted. Leaving `unreachable` out would be the bug this status was
     # added for, wearing a new word.
     attention = (bool(broken) or not coverage_ok
                  or drift_counts.get("store-missing", 0) > 0
                  or drift_counts.get("source-missing", 0) > 0
                  or drift_counts.get("unreachable", 0) > 0
+                 or drift_counts.get("stranded", 0) > 0
                  or not journal.rotation_healthy())
     if args.json:
         print(json.dumps(data | {"ok": not attention,
