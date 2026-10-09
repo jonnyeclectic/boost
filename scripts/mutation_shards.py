@@ -181,7 +181,7 @@ RUNNER_EFFICIENCY = 0.98
 #: Over 861 successful jobs since 2026-09-26 the preamble's median was **5.1
 #: min at six shards** (552 jobs), **10.0 at eight** (80) and **12.9 at
 #: twelve** (229), and the step to eight happened within the hour the width
-#: changed, with stats going 2.6 -> 6.9 min across consecutive main commits
+#: changed, with stats going 2.6 -> 6.9 min (medians) across consecutive main commits
 #: ``8995f246`` (six shards) and ``e9718617`` (eight).
 #:
 #: **That growth was a bug in the suite, not a cost of width.** #1023 (the
@@ -218,13 +218,18 @@ FIXED_MINUTES = 5.5
 #: ordinary run. The cap is reached by that tail, so the headroom check is
 #: scored against it and not against the median.
 #:
-#: It is a *measured* multiplier and it reproduces the observed worst case:
-#: under the fixed-cost model six shards' median is 5.1 + 31.4 = 36.5 min
-#: (the preamble six-shard jobs measured, plus the divided phase), and x 1.91
-#: is 69.8, against a real worst job of 72.5 — which is 97% of
-#: ``timeout-minutes: 75``. That is the cancellation this constant exists to
-#: predict, and at the time it was observed nothing printed a number anyone
-#: could have compared to the cap.
+#: It is a *measured* multiplier, and under the fixed-cost model it comes
+#: **2.7 min short** of the observed worst case, on the unsafe side: six
+#: shards' median is 5.1 + 31.4 = 36.5 min (the preamble six-shard jobs
+#: measured, plus the divided phase; observed 37.5), and x 1.91 is 69.8,
+#: against a real worst job of 72.5 — which is 97% of
+#: ``timeout-minutes: 75``. The through-origin model this replaced predicted
+#: 72.2 there, because its ratio had been fitted at six. The miss is the 1.0
+#: min the median comes in low, carried by the multiplier; what absorbs it is
+#: :data:`HEADROOM`, not this constant — 69.8 is still far over the 60-minute
+#: budget, so that pack is called TOO TIGHT either way. That is the
+#: cancellation this constant exists to predict, and at the time it was
+#: observed nothing printed a number anyone could have compared to the cap.
 #:
 #: It multiplies the whole job, preamble included, and that is measured too:
 #: the preamble is not steadier than the phase it precedes. Within a run its
@@ -253,7 +258,8 @@ FIXED_MINUTES = 5.5
 #: twelve-shard data is that twelve is where the tail estimate first broke,
 #: and it is not — the figures are only striking at twelve because that is
 #: the width someone went and looked at. (Six was beaten too, 72.2 against
-#: 72.5, by 0.3 min at its own fit point.) Two separate things are going on and they
+#: 72.5, by 0.3 min at its own fit point under the old model, and by 2.7
+#: under this one -- see above.) Two separate things are going on and they
 #: must not be run together: every run in that table was scored on weights
 #: measured at the *previous* width, which is a lag, and the median under the
 #: multiplier did not divide the way a model through the origin said, which

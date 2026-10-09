@@ -365,9 +365,11 @@ TWELVE_SHARD_WORST_MIN = 55.8
 #: matrix runs; this one is the divisor in twelve's two frozen assertions and
 #: must never move. Sharing one constant made the ceiling test's own
 #: remediation instruction ("raise SHARDS_OBSERVED") red
-#: `test_todays_pack_under_predicts_the_worst_twelve_shard_job` -- at
-#: sixteen it grades a sixteen-shard prediction against a twelve-shard
-#: observation and reports a 19.8-minute shortfall -- while quietly loosening
+#: twelve's frozen tail assertion (then
+#: `test_todays_pack_under_predicts_the_worst_twelve_shard_job`, now
+#: `test_the_tail_covers_the_worst_twelve_shard_job`) -- at sixteen it grades
+#: a sixteen-shard prediction against a twelve-shard observation -- while
+#: quietly loosening
 #: the ratio test from 1.40 to 1.87.
 TWELVE_SHARDS = 12
 
@@ -467,10 +469,13 @@ class TestConversion:
         # 169 successful shard jobs, 26 complete six-shard runs, 2026-09-30 to
         # 2026-10-01: observed p50 was 37.5 min per shard over the six-shard
         # pack of LEGACY_SIX_SHARD_TOTAL_MS, with the preamble six paid.
+        # Predicted 36.5: LOW by 0.97 min, which is the edge of "within a
+        # minute", so the direction and the size are both pinned -- a refit
+        # that pushed it further under would carry straight into the tail.
         predicted = ms.runner_minutes(LEGACY_SIX_SHARD_TOTAL_MS / 6,
                                       SIX_SHARD_FIXED_MIN)
-        assert abs(predicted - 37.5) < 1.0, (
-            "predicted %.1f min against a measured p50 of 37.5" % predicted)
+        assert 0.5 < 37.5 - predicted < 1.0, (
+            "predicted %.2f min against a measured p50 of 37.5" % predicted)
 
     def test_twelve_reproduces_its_median(self):
         # What the through-origin model could not do: 34.55 observed against
@@ -479,11 +484,25 @@ class TestConversion:
         # from the ones graded -- re-timing the same mutants has moved totals
         # by 12%, and that, not the model, is the 3.7 min it misses eight by.
         # The phase test above grades eight on its own runs' weights instead.
+        # Predicted 33.8: low by 0.75.
         predicted = ms.runner_minutes(TWELVE_PLANNED_TOTAL_MS / TWELVE_SHARDS,
                                       TWELVE_SHARD_FIXED_MIN)
-        assert abs(predicted - TWELVE_SHARD_P50_MIN) < 1.0, (
-            "predicted %.1f min against a measured p50 of %.2f"
+        assert 0.0 < TWELVE_SHARD_P50_MIN - predicted < 1.0, (
+            "predicted %.2f min against a measured p50 of %.2f"
             % (predicted, TWELVE_SHARD_P50_MIN))
+
+    def test_eight_over_predicts_its_whole_job_median(self):
+        # The known miss, pinned so it cannot be left out of a summary again:
+        # PLANNED_TOTAL_MS / 8 with eight's own preamble predicts 45.5 min
+        # against the 41.8 observed -- HIGH by 3.7, the safe direction. Not
+        # the model's shape (the phase test grades eight to 1% on its own
+        # runs' weights): PLANNED_TOTAL_MS was timed on a different run from
+        # the three graded, and re-timing the same mutants moves totals ~12%.
+        predicted = ms.runner_minutes(PLANNED_TOTAL_MS / 8,
+                                      EIGHT_SHARD_FIXED_MIN)
+        assert 3.0 < predicted - EIGHT_SHARD_P50_MIN < 4.5, (
+            "predicted %.2f min against a measured p50 of %.1f"
+            % (predicted, EIGHT_SHARD_P50_MIN))
 
     def test_the_tail_covers_the_worst_twelve_shard_job(self):
         # Through the origin the same pack predicted a 48.0-minute tail and
@@ -565,14 +584,23 @@ class TestConversion:
                 "planner must impute them and total more than the timed sum"
                 % (len(untimed), ", ".join(sorted(untimed))))
 
-    def test_the_tail_reproduces_the_job_that_was_cancelled(self):
+    def test_the_tail_under_predicts_the_job_that_was_cancelled(self):
         # Observed worst successful job: 72.5 min (shard 2). Same six-shard
-        # total, the preamble six paid -- so the model is checked against the
-        # single data point the whole change is about, not only the middle.
-        # 69.8 predicted: the median lands 1 min under the 37.5 above, and
-        # x 1.91 carries that to 2.7.
+        # total, the preamble six paid. The model does NOT reproduce it: it
+        # predicts 69.8, 2.7 min LOW -- the unsafe side. The median lands 1.0
+        # under the 37.5 above and x 1.91 carries that to 2.7. The old
+        # through-origin model gave 72.2 here only because it was fitted at
+        # six. Pinned one-sided so the shortfall is a number, not a tolerance.
         tail = ms.tail_minutes(LEGACY_SIX_SHARD_TOTAL_MS / 6, SIX_SHARD_FIXED_MIN)
-        assert abs(tail - 72.5) < 3.0
+        assert 2.0 < 72.5 - tail < 3.0, "tail %.2f vs 72.5 observed" % tail
+
+    def test_the_gate_still_refuses_the_pack_that_was_cancelled(self):
+        # What makes that shortfall tolerable: HEADROOM, not the multiplier.
+        # 69.8 is far over 0.80 x 75 = 60, so the cancelled pack is still
+        # called TOO TIGHT. The tail would have to come in 9.8 min low, not
+        # 2.7, before this verdict flipped.
+        tail = ms.tail_minutes(LEGACY_SIX_SHARD_TOTAL_MS / 6, SIX_SHARD_FIXED_MIN)
+        assert tail > 75 * ms.HEADROOM
 
     def test_the_fitted_total_is_still_close_to_the_committed_weights(self):
         # Not a gate on the weights -- a staleness check on the *fit*. The
