@@ -2654,18 +2654,34 @@ def _check_links_removable(name: str, entry: dict) -> None:
     no search bit that is exactly what happened, while uninstall reported
     success and exited 0. Checking first, before anything is removed, keeps
     the store and the lock entry, so uninstalling again after the `chmod`
-    finishes the job. Only agents the lock records as linked are checked: an
-    unrelated locked-down dir must not block every uninstall.
+    finishes the job.
+
+    A link it *can* see is checked whatever the lock says, because
+    :func:`unlink_agents` removes every visible link and would otherwise stop
+    on a read-only dir halfway through. A link it cannot see is checked for
+    every agent the lock records as linked *or refused*: a forced relink run
+    while the dotdir was unsearchable moves that agent into
+    ``refused_agents`` and leaves the first install's link on disk, unseen.
+    An empty ``agents`` means every agent, as in
+    :func:`preserved_agent_scope`: ``sideline`` and ``quarantine`` empty it
+    after an :func:`unlink_agents` that skipped the unseen link, which is
+    still on disk. The cost is conservative: an agent refused at its first
+    install, and so never linked, still blocks uninstall until its dotdir is
+    searchable, and so does any unsearchable dotdir for a sidelined or
+    quarantined skill. An agent a non-empty lock entry does not name never
+    blocks, so an unrelated locked-down dir cannot stop every uninstall.
     """
-    recorded = set(entry.get("agents") or ())
+    linked = entry.get("agents") or ()
+    recorded = ({*linked, *(entry.get("refused_agents") or ())} if linked
+                else set(agents.linking_agents()))
     for agent, adir in agents.linking_agents().items():
-        if agent not in recorded:
-            continue
         link = adir / name
         try:
             os.lstat(link)
         except PermissionError:
-            raise _removal_refused(name, link) from None
+            if agent in recorded:
+                raise _removal_refused(name, link) from None
+            continue
         except OSError:
             continue
         if os.path.islink(link) and not os.access(adir, os.W_OK | os.X_OK):

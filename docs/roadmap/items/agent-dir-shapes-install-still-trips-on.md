@@ -62,9 +62,20 @@ Uninstall's named refusal for a rule or workflow there now uses the same wording
 <code>chmod u+w</code>. A skill uninstall there went from 70 on 3.13 to a <em>silent</em> 0 on the
 first draft of this fix: <code>unlink_agents</code> skipped the cursor link it could not see, and the
 store dir and lock entry were deleted anyway, which left <code>~/.cursor/skills/brainstorming</code>
-dangling into a deleted store. It now checks every link the lock records before it removes anything,
-exits 1 with <code>chmod u+wx ~/.cursor</code>, and keeps the store, the lock and every link, so
-uninstalling again after the <code>chmod</code> finishes it.
+dangling into a deleted store. It now checks before it removes anything, exits 1 with
+<code>chmod u+wx ~/.cursor</code>, and keeps the store, the lock and every link, so uninstalling again
+after the <code>chmod</code> finishes it. A link it can see is checked whatever the lock says, since
+<code>unlink_agents</code> removes every visible link. A link it cannot see is checked for every agent
+the lock records in <code>agents</code> <em>or</em> <code>refused_agents</code>: the second draft read
+<code>agents</code> alone, and an <code>install --force</code> or <code>reinstall</code> run under the
+<code>600</code> dotdir moves cursor into <code>refused_agents</code> while the first install's link is
+still on disk, so uninstall again exited 0 and stranded it (measured: exit 0 before, exit 1 and the link
+kept after, for both). A sideline (focus, profile, context) and <code>quarantine</code> empty
+<code>agents</code> after an unlink that skipped the unseen link, which stranded it the same way, so an
+empty <code>agents</code> now means every agent to the guard, as it already did to
+<code>preserved_agent_scope</code>. The cost is conservative and tested: an agent refused at its first
+install, never linked, also blocks uninstall until its dotdir is searchable, as does any unsearchable
+dotdir for a sidelined or quarantined skill. An agent a non-empty lock entry does not name never blocks.
 
 <b>A missing skills dir under a read-only parent.</b> <code>link_agents</code> records
 <code>refuses_writes(adir)</code>, as <code>_refused_target</code> already did for rules, so the install names

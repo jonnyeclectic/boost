@@ -292,6 +292,94 @@ class TestADotdirWithNoSearchBit:
         assert lockfile.get_skill("brainstorming") is None
         assert not store.skill_store_dir("brainstorming").exists()
 
+    @pytest.mark.parametrize("relink", [("install", "--force"),
+                                        ("reinstall",)])
+    def test_a_link_the_relink_could_not_see_still_blocks(
+            self, boost, entry, cursor, relink):
+        # A forced relink under the unsearchable dotdir moves cursor from
+        # `agents` to `refused_agents` while the first install's link is still
+        # there, unseen. Checking `agents` alone let uninstall exit 0 and
+        # leave that link dangling into a deleted store.
+        store.install(entry)
+        cursor.chmod(0o600)
+        boost(*relink, "brainstorming")
+        rec = lockfile.get_skill("brainstorming")
+        assert "cursor" not in rec["agents"]
+        assert "cursor" in rec["refused_agents"]
+        res = boost("uninstall", "brainstorming", expect=1)
+        cursor.chmod(0o700)
+        assert "chmod u+wx ~/.cursor" in " ".join((res.out + res.err).split())
+        assert lockfile.get_skill("brainstorming") is not None
+        assert store.skill_store_dir("brainstorming").is_dir()
+        link = cursor / "skills" / "brainstorming"
+        assert link.is_symlink() and link.exists()
+        boost("uninstall", "brainstorming")
+        assert not os.path.lexists(link)
+
+    def test_a_link_a_sideline_could_not_see_still_blocks(self, boost, entry,
+                                                          cursor):
+        # sideline empties `agents`; under the unsearchable dotdir it skipped
+        # the cursor link, which stayed on disk with nothing recording it.
+        # An empty `agents` therefore has to mean every agent to the guard.
+        store.install(entry)
+        cursor.chmod(0o600)
+        store.sideline("brainstorming", "focus")
+        boost("uninstall", "brainstorming", expect=1)
+        cursor.chmod(0o700)
+        link = cursor / "skills" / "brainstorming"
+        assert link.is_symlink() and link.exists()
+        boost("uninstall", "brainstorming")
+        assert not os.path.lexists(link)
+
+    def test_a_link_a_quarantine_could_not_see_still_blocks(
+            self, boost, entry, cursor):
+        store.install(entry)
+        cursor.chmod(0o600)
+        boost("quarantine", "brainstorming")
+        assert lockfile.get_skill("brainstorming")["agents"] == []
+        boost("uninstall", "brainstorming", expect=1)
+        cursor.chmod(0o700)
+        link = cursor / "skills" / "brainstorming"
+        assert link.is_symlink() and link.exists()
+        boost("uninstall", "brainstorming")
+        assert not os.path.lexists(link)
+
+    def test_an_agent_refused_at_first_install_blocks_conservatively(
+            self, entry, cursor):
+        # The documented cost: nothing was ever linked there, but a link the
+        # guard cannot see and the lock calls refused is not assumed absent.
+        cursor.chmod(0o600)
+        store.install(entry)
+        assert lockfile.get_skill("brainstorming")["refused_agents"] == [
+            "cursor"]
+        with pytest.raises(store.BoostError) as exc:
+            store.uninstall("brainstorming")
+        assert "chmod u+wx ~/.cursor" in exc.value.hint
+        cursor.chmod(0o700)
+        assert not os.path.lexists(cursor / "skills" / "brainstorming")
+        store.uninstall("brainstorming")
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_a_visible_link_the_lock_does_not_record_still_blocks(
+            self, entry, cursor):
+        # unlink_agents removes every visible link, recorded or not, so a
+        # read-only dir holding one has to be refused before anything goes.
+        store.install(entry)
+        rec = lockfile.get_skill("brainstorming")
+        rec["agents"] = [a for a in rec["agents"] if a != "cursor"]
+        lockfile.set_skill("brainstorming", rec)
+        skills = cursor / "skills"
+        skills.chmod(0o500)
+        try:
+            with pytest.raises(store.BoostError) as exc:
+                store.uninstall("brainstorming")
+        finally:
+            skills.chmod(0o700)
+        assert "chmod u+w ~/.cursor/skills" in exc.value.hint
+        assert lockfile.get_skill("brainstorming") is not None
+        assert (paths.home() / ".claude" / "skills" / "brainstorming"
+                ).is_symlink()
+
 
 class TestAMissingSkillsDirUnderAReadOnlyDotdir:
     """The install told the user to ``chmod`` a ``~/.cursor/skills`` that did
