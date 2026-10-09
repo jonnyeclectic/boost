@@ -534,17 +534,52 @@ def preserved_agent_scope(only_agents: list[str] | None,
 def record_links(entry: dict, res: InstallResult) -> dict:
     """Write a skill's link outcome into its lock `entry`, and return it.
 
-    ``agents`` is what `res` linked; ``refused_agents`` the agents whose dir
-    refused, kept so :func:`preserved_agent_scope` retries them. Absent, not
-    empty, when nothing refused, so an entry that never met a refusal is
+    ``agents`` is what `res` linked; ``refused_agents`` is
+    :func:`unrecorded_agents`: the agents whose dir refused, and those whose
+    link boost may not look at. Kept so :func:`preserved_agent_scope` retries
+    them and so uninstall does not take "not seen" for "not there". Absent,
+    not empty, when there are none, so an entry that never met a refusal is
     unchanged.
     """
     entry["agents"] = res.linked
-    if res.refused:
-        entry["refused_agents"] = list(res.refused)
+    refused = unrecorded_agents(res.name, res)
+    if refused:
+        entry["refused_agents"] = refused
     else:
         entry.pop("refused_agents", None)
     return entry
+
+
+def unseen_agents(name: str) -> list[str]:
+    """The linking agents whose ``name`` link boost may not even look at.
+
+    :func:`linked_agents` answers False for these, which is "could not look",
+    not "no link": under a dotdir with no search bit the first install's link
+    is still there. ``os.lstat`` raises PermissionError there on every Python
+    this supports, where ``os.path.islink`` swallows it.
+    """
+    unseen = []
+    for agent, adir in agents.linking_agents().items():
+        try:
+            os.lstat(adir / name)
+        except PermissionError:
+            unseen.append(agent)
+        except OSError:
+            continue
+    return unseen
+
+
+def unrecorded_agents(name: str, res: InstallResult) -> list[str]:
+    """What a lock entry's ``refused_agents`` records for ``name``.
+
+    The agents whose dir refused the link this run, and every agent whose link
+    boost could not look at, whether or not this run tried it. A narrowed
+    relink (``install --force --agent claude-code``) never tries cursor, so
+    nothing is refused, and :func:`linked_agents` cannot see cursor's link:
+    recording only those two forgot a link still on disk, and uninstall then
+    exited 0 and left it dangling into a deleted store.
+    """
+    return list(dict.fromkeys([*res.refused, *unseen_agents(name)]))
 
 
 def declared_agent_scope(only_agents: list[str] | None,
@@ -1326,8 +1361,10 @@ def install(entry: dict, force: bool = False,
         "only_agents": declared_agent_scope(only_agents, existing),
         "tags": (existing or {}).get("tags", []),
         # The agents whose dir refused the link, so `install --force` retries
-        # them once the dir is fixed (preserved_agent_scope).
-        **({"refused_agents": res.refused} if res.refused else {}),
+        # them once the dir is fixed (preserved_agent_scope), and those whose
+        # link could not be looked at, so uninstall does not forget it.
+        **({"refused_agents": refused} if (refused := unrecorded_agents(name, res))
+           else {}),
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
     return res
@@ -2622,7 +2659,8 @@ def install_from_path(src_dir: Path, name: str | None = None,
         # but sync sees no scope and widens them right back.
         "only_agents": declared,
         "tags": (existing or {}).get("tags", []),
-        **({"refused_agents": res.refused} if res.refused else {}),
+        **({"refused_agents": refused} if (refused := unrecorded_agents(name, res))
+           else {}),
     })
     journal.log("import", name, source=remote.url if remote else str(src_dir))
     return res
@@ -2662,6 +2700,9 @@ def _check_links_removable(name: str, entry: dict) -> None:
     every agent the lock records as linked *or refused*: a forced relink run
     while the dotdir was unsearchable moves that agent into
     ``refused_agents`` and leaves the first install's link on disk, unseen.
+    Every lock write that rewrites ``agents`` records such an agent there,
+    tried or not (:func:`unrecorded_agents`), so a narrowed relink that never
+    tries it cannot drop it from both fields.
     An empty ``agents`` means every agent, as in
     :func:`preserved_agent_scope`: ``sideline`` and ``quarantine`` empty it
     after an :func:`unlink_agents` that skipped the unseen link, which is
@@ -3422,11 +3463,14 @@ def recover_unrecorded(name: str) -> str | None:
                if e.get("kind", "skill") == "skill"
                and _skill_source_sha(e) == have]
     linked = linked_agents(name)
+    unseen = unseen_agents(name)
     linking = list(agents.linking_agents())
     # Record what is on disk: a skill linked into fewer agents than are enabled
     # was narrowed, and recording no narrowing would have the next sync link it
-    # everywhere behind the user's back.
-    narrowed = sorted(linked) if linked and set(linked) != set(linking) else None
+    # everywhere behind the user's back. An agent whose link could not be
+    # looked at is not evidence of a narrowing, so it counts as in scope.
+    seen = {*linked, *unseen}
+    narrowed = sorted(seen) if linked and seen != set(linking) else None
     now = util.now_iso()
     record: dict[str, object]
     if len(matches) == 1:
@@ -3446,6 +3490,9 @@ def recover_unrecorded(name: str) -> str | None:
     record.update({"sha256": have, "installed_at": now, "updated_at": now,
                    "pinned": False, "quarantined": False, "agents": linked,
                    "only_agents": narrowed, "tags": []})
+    if unseen:
+        # Recorded so uninstall refuses rather than strands a link it cannot see.
+        record["refused_agents"] = unseen
     lockfile.set_skill(name, record)
     journal.log("recover", name, how=record["tap"])
     return "re-recorded %s %s" % (name, how)

@@ -381,6 +381,109 @@ class TestADotdirWithNoSearchBit:
                 ).is_symlink()
 
 
+class TestALinkNoRewriteCanSeeIsNotForgotten:
+    """Every path that rewrites a skill's ``agents`` measured links off disk,
+    and :func:`store.linked_agents` cannot tell "no link" from "could not
+    look". A path that never tried the unsearchable agent therefore dropped
+    it from the lock while its link stayed on disk, and uninstall then exited
+    0 and left that link dangling into a deleted store."""
+
+    LINK = ("skills", "brainstorming")
+
+    def _narrowed(self, entry, cursor):
+        """Linked everywhere, then declared ``claude-code`` only; cursor's link
+        stays, as a narrowing re-install does not unlink. Then lock cursor."""
+        store.install(entry)
+        store.install(entry, force=True, only_agents=["claude-code"])
+        assert "cursor" in lockfile.get_skill("brainstorming")["agents"]
+        cursor.chmod(0o600)
+
+    def _uninstall_refuses_then_finishes(self, boost, cursor):
+        res = boost("uninstall", "brainstorming", expect=1)
+        assert "chmod u+wx ~/.cursor" in " ".join((res.out + res.err).split())
+        assert lockfile.get_skill("brainstorming") is not None
+        cursor.chmod(0o700)
+        link = cursor.joinpath(*self.LINK)
+        assert link.is_symlink() and link.exists()
+        boost("uninstall", "brainstorming")
+        assert not os.path.lexists(link)
+
+    def _recorded(self):
+        rec = lockfile.get_skill("brainstorming")
+        assert "cursor" not in rec["agents"]
+        assert "cursor" in rec["refused_agents"]
+
+    def test_install_force_narrowed_to_another_agent(self, boost, entry,
+                                                     cursor):
+        # The reviewer's row: cursor is never tried, so nothing is refused.
+        store.install(entry)
+        cursor.chmod(0o600)
+        boost("install", "--force", "--agent", "claude-code", "brainstorming")
+        self._recorded()
+        self._uninstall_refuses_then_finishes(boost, cursor)
+
+    def test_update_replaying_a_declared_scope(self, boost, entry, cursor):
+        # `boost update` re-installs with `store.install(entry, force=True)`,
+        # which replays the declared `only_agents`.
+        self._narrowed(entry, cursor)
+        store.install(entry, force=True)
+        self._recorded()
+        self._uninstall_refuses_then_finishes(boost, cursor)
+
+    def test_reinstall_replaying_a_declared_scope(self, boost, entry, cursor):
+        self._narrowed(entry, cursor)
+        boost("reinstall", "brainstorming")
+        self._recorded()
+        self._uninstall_refuses_then_finishes(boost, cursor)
+
+    def test_an_import_narrowed_to_another_agent(self, boost, entry, cursor):
+        store.install(entry)
+        cursor.chmod(0o600)
+        store.install_from_path(store.source_dir_for(entry),
+                                name="brainstorming", force=True,
+                                only_agents=["claude-code"])
+        self._recorded()
+        self._uninstall_refuses_then_finishes(boost, cursor)
+
+    def test_a_narrowed_quarantine_release(self, boost, entry, cursor):
+        # quarantine skips the unseen link and empties `agents`; the release
+        # relinks only the declared scope and rewrote the list from that.
+        self._narrowed(entry, cursor)
+        boost("quarantine", "brainstorming")
+        boost("quarantine", "--release", "brainstorming")
+        self._recorded()
+        self._uninstall_refuses_then_finishes(boost, cursor)
+
+    def test_an_unsideline(self, boost, entry, cursor):
+        # Relinks every agent, so cursor is tried and refused: covered before
+        # this fix too, pinned so it stays covered.
+        store.install(entry)
+        cursor.chmod(0o600)
+        store.sideline("brainstorming", "focus")
+        store.unsideline("brainstorming")
+        self._recorded()
+        self._uninstall_refuses_then_finishes(boost, cursor)
+
+    def test_a_lock_recovered_from_the_store(self, boost, entry, cursor):
+        # `sync` re-records a store dir when the lock file is missing, reading
+        # the links off disk; cursor's could not be read.
+        store.install(entry)
+        cursor.chmod(0o600)
+        paths.lockfile_path().unlink()
+        assert store.recover_unrecorded("brainstorming")
+        rec = lockfile.get_skill("brainstorming")
+        self._recorded()
+        # An unseen agent is not evidence of a narrowing.
+        assert rec["only_agents"] is None
+        self._uninstall_refuses_then_finishes(boost, cursor)
+
+    def test_a_searchable_dotdir_records_no_refusal(self, entry, cursor):
+        store.install(entry)
+        store.install(entry, force=True, only_agents=["claude-code"])
+        assert "refused_agents" not in lockfile.get_skill("brainstorming")
+        assert store.unseen_agents("brainstorming") == []
+
+
 class TestAMissingSkillsDirUnderAReadOnlyDotdir:
     """The install told the user to ``chmod`` a ``~/.cursor/skills`` that did
     not exist, doctor said healthy, and sync said everything in sync."""

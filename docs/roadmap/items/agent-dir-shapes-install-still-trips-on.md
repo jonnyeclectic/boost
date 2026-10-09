@@ -7,7 +7,7 @@ category: Robustness · Bug
 complexity: S
 impact: Low
 wow: 2
-note: "fixed: a 0o600 dotdir no longer crashes install, doctor, heal, sync or uninstall on Python 3.12/3.13 (70 → 0/1) and is named \"not searchable\" with chmod u+wx; a missing skills dir under a read-only dotdir is named by its dotdir everywhere, and doctor (0 → 1) and sync now report it; a refused agent is recorded as refused_agents and retried by install --force; focus, context, profile and quarantine --release say what they skipped; a directory at a rule's file path is a conflict (70 → 0); heal --dry-run no longer previews a refused re-materialize; doctor names a read-only store (0 → 1)"
+note: "fixed: a 0o600 dotdir no longer crashes install, doctor, heal, sync or uninstall on Python 3.12/3.13 (70 → 0/1) and is named \"not searchable\" with chmod u+wx; a missing skills dir under a read-only dotdir is named by its dotdir everywhere, and doctor (0 → 1) and sync now report it; a refused agent, or one whose link boost cannot look at, is recorded as refused_agents, retried by install --force, and blocks uninstall rather than being stranded; focus, context, profile and quarantine --release say what they skipped; a directory at a rule's file path is a conflict (70 → 0); heal --dry-run no longer previews a refused re-materialize; doctor names a read-only store (0 → 1)"
 order: 332
 owner: loop/agent-dir-shapes
 pr:
@@ -70,7 +70,17 @@ the lock records in <code>agents</code> <em>or</em> <code>refused_agents</code>:
 <code>agents</code> alone, and an <code>install --force</code> or <code>reinstall</code> run under the
 <code>600</code> dotdir moves cursor into <code>refused_agents</code> while the first install's link is
 still on disk, so uninstall again exited 0 and stranded it (measured: exit 0 before, exit 1 and the link
-kept after, for both). A sideline (focus, profile, context) and <code>quarantine</code> empty
+kept after, for both). The third draft still stranded it through a relink that never tried cursor:
+<code>install --force --agent claude-code</code> under the <code>600</code> dotdir refused nothing, and
+<code>linked_agents</code> cannot tell "no link" from "could not look", so the lock dropped cursor from both
+fields and uninstall exited 0. Every path that rewrites <code>agents</code> now also records, in
+<code>refused_agents</code>, each agent whose link <code>os.lstat</code> may not look at
+(<code>store.unrecorded_agents</code>): <code>install</code> (and so <code>update</code> and
+<code>reinstall</code>), <code>import</code>, <code>quarantine --release</code> and the unsideline paths
+through <code>record_links</code>, and the lock <code>sync</code> recovers from the store, which also stops
+counting an unseen agent as a narrowing. Measured on the reviewer's row: lock <code>refused_agents</code>
+<code>None</code> and uninstall exit 0 before, <code>['cursor']</code> and exit 1 with the link kept after.
+A sideline (focus, profile, context) and <code>quarantine</code> empty
 <code>agents</code> after an unlink that skipped the unseen link, which stranded it the same way, so an
 empty <code>agents</code> now means every agent to the guard, as it already did to
 <code>preserved_agent_scope</code>. The cost is conservative and tested: an agent refused at its first
@@ -103,8 +113,8 @@ sits at its path), which matches what the run reports. Doctor and heal now name 
 <code>~/.agents/skills</code>; doctor went from 0 to 1. Heal and sync printed "rule house was not re-materialized" under a green
 check mark (also on <code>origin/main</code>); that line is now a warning.
 
-<code>tests/functional/test_agent_dir_shapes.py</code> has 40 tests, and 31 of them fail on the old code.
-The other nine guard the opposite direction. The 3.12/3.13 crashes are reproduced on any interpreter by a
+<code>tests/functional/test_agent_dir_shapes.py</code> has 54 tests, and 45 of them fail on
+<code>11dbbc77</code>. The other nine guard the opposite direction. The 3.12/3.13 crashes are reproduced on any interpreter by a
 fixture that makes pathlib raise where those versions do. Found while measuring and not fixed:
 <code>boost quarantine</code> under a <code>0o600</code> dotdir reports its links removed, but it cannot see the
 cursor link to remove it.
