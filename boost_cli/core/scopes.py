@@ -531,3 +531,43 @@ def ensure_in_base(base, path):
             hint="a directory such as .claude/skills in this repo is a symlink "
                  "pointing outside it — remove or replace it, then reinstall")
     return Path(path)
+
+
+def ensure_spelled(base, path):
+    """Raise if the walk to ``path`` is bent by a symlink inside ``base``.
+
+    The write-side twin of the check ``store.uninstall_project`` makes before
+    every delete, and the same predicate (:func:`parent_matches_spelling`) on
+    purpose, so install and uninstall cannot disagree about one row again.
+    They did: :func:`ensure_in_base` is containment only, so a committed
+    ``<repo>/.cursor -> config/cursor`` let ``install --local`` write
+    ``config/cursor/skills/<name>`` and record ``.cursor/skills/<name>`` —
+    a row uninstall then refuses, because that layout is byte-identical to
+    the attack ``.claude/skills -> ../src``. The copy was orphaned and the
+    lock entry went anyway.
+
+    The other two ways to make them agree both loosen the delete guard.
+    Recording the *resolved* path puts a row outside the derived set
+    uninstall accepts, so it would have to start resolving — the hole its
+    docstring names — and the row is meaningless on a teammate's clone whose
+    link points elsewhere. Recording both widens it further. So the install
+    refuses, before anything is written, and the hint names the two ways out.
+
+    A symlink *above* ``base`` is not a redirect: the predicate anchors on the
+    real base, so a checkout under ``/tmp`` on macOS still installs. Returns
+    ``path`` so a caller can wrap the target inline.
+    """
+    rel = relative_to_base(base, path)
+    if not parent_matches_spelling(base, rel):
+        raise BoostError(
+            "refusing to install into %s: a symlink inside this project "
+            "redirects it to %s, and `boost uninstall --local` will not delete "
+            "through a symlink it did not create"
+            # Relative to the real base: `ensure_in_base` runs first, so the
+            # far side is inside the repo, and that is the spelling a user
+            # recognises from their own tree.
+            % (rel, os.path.relpath(os.path.realpath(path),
+                                    os.path.realpath(base)).replace(os.sep, "/")),
+            hint="replace the symlinked directory with a real one, or leave "
+                 "that agent out with `--agent`")
+    return Path(path)

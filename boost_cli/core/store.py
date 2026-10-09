@@ -1256,8 +1256,17 @@ def _install_project_skill(entry: dict, force: bool = False,
     # Checked for every target up front — before existence, force, or any write
     # — so a single escaping dir aborts the whole install rather than writing
     # part of it outside the project first.
+    #
+    # And refuse to write through a symlink that stays *inside* it. A committed
+    # ``<repo>/.cursor -> config/cursor`` is an ordinary layout, not an attack,
+    # but it is byte-identical on disk to ``.claude/skills -> ../src``, so
+    # ``uninstall_project`` will not delete through it — and writing a copy
+    # that uninstall cannot reach orphaned it and dropped the lock row anyway.
+    # ``scopes.ensure_spelled`` asks the same question uninstall asks, so the
+    # two halves cannot disagree about a row; see it for the options weighed.
     for _agent, dest in targets:
         scopes.ensure_in_base(resolved_base, dest)
+        scopes.ensure_spelled(resolved_base, dest)
 
     # Refuse to clobber a directory boost did not put there. In user scope the
     # store is boost's alone, but here the destination is inside someone's repo
@@ -1485,18 +1494,18 @@ def uninstall_project(name: str, base=None) -> dict:
     one used to be reported as ``refused``, which printed "not a path boost
     removes here" directly above a list containing that exact string.
 
-    A ``redirected`` row is also where install and uninstall disagree, and the
-    disagreement is deliberate. ``_install_project_skill`` gates on
-    :func:`scopes.ensure_in_base`, which is containment only, so
-    ``boost install --local`` writes straight through an in-repo
-    ``<repo>/.cursor -> config/cursor`` and records the row it spelled.
+    A ``redirected`` row is one install no longer writes. It used to: install
+    gated on :func:`scopes.ensure_in_base` alone, which is containment only,
+    so ``boost install --local`` wrote straight through an in-repo
+    ``<repo>/.cursor -> config/cursor`` and recorded the row it spelled.
     Uninstall will not delete through that redirect, because a committed
     symlink is input: the benign layout and the attack
     (``.claude/skills -> ../src``) are byte-identical on disk, and no test
-    distinguishes the intent behind them. Creating through a redirect is safe
-    and destroying through one is not, so the asymmetry is the right way
-    round — but it does leave boost's own copy behind, which the message says
-    by path. Making install refuse too is its own card.
+    distinguishes the intent behind them. Install now refuses the same rows
+    (:func:`scopes.ensure_spelled`, the same predicate), so one reaches here
+    only from a lock written before that, or a symlink committed after the
+    install — ``boost doctor`` names both. The copy is left behind and the
+    message says so by path.
 
     The lock entry goes in all four cases (see the ``refused`` note in the
     body), so the command still exits 0 on an all-refused run. That is also

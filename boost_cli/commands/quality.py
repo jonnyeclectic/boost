@@ -694,6 +694,16 @@ def cmd_doctor(argv):
             bad("project-skill", "project skill %s modified since install — "
                 "run `boost verify`" % name)
             proj_issues += 1
+        # Independent of the status above: a redirected row reads intact,
+        # because the hash follows the symlink, and is still one uninstall
+        # will leave on disk.
+        for row in integrity.project_redirected(entry, pbase):
+            bad("project-skill", "project skill %s: %s is reached through a "
+                "symlink inside the repo, so `boost uninstall --local` will "
+                "not remove that copy — it names the row and prints the "
+                "`rm -rf` that does"
+                % (name, row), wrap=True)
+            proj_issues += 1
     if pskills and not proj_issues:
         rep.ok("project-skills", "%d project skill%s intact in %s"
                % (len(pskills), _s(len(pskills)), paths.tilde(pbase)))

@@ -1070,3 +1070,49 @@ def test_parent_matches_spelling_fails_closed_when_the_walk_itself_raises(
 
     monkeypatch.setattr(scopes.os.path, "realpath", boom)
     assert not scopes.parent_matches_spelling(tmp_path, ".claude/skills/x")
+
+
+# ── ensure_spelled: the write-side twin of the redirect guard ────────────
+#
+# `ensure_in_base` is containment only, so an in-repo `<repo>/.cursor ->
+# config/cursor` passed it and `install --local` wrote a copy that
+# `uninstall --local` then refused to delete — the uninstall walk
+# (`parent_matches_spelling`) saw the redirect, and the lock row went anyway.
+
+def test_ensure_spelled_returns_the_path_in_a_fresh_repo(tmp_path):
+    """No dotdirs yet is the common case and must pass: `realpath` of a
+    path that does not exist is the nominal path, so the walk agrees."""
+    dest = tmp_path / ".cursor" / "skills" / "x"
+    assert scopes.ensure_spelled(tmp_path, dest) == Path(dest)
+
+
+def test_ensure_spelled_returns_the_path_through_real_dirs(tmp_path):
+    (tmp_path / ".cursor" / "skills").mkdir(parents=True)
+    dest = tmp_path / ".cursor" / "skills" / "x"
+    assert scopes.ensure_spelled(tmp_path, dest) == Path(dest)
+
+
+def test_ensure_spelled_raises_on_an_in_repo_redirected_dotdir(tmp_path):
+    """The card's layout: contained, so `ensure_in_base` lets it through."""
+    (tmp_path / "config" / "cursor").mkdir(parents=True)
+    (tmp_path / ".cursor").symlink_to(tmp_path / "config" / "cursor",
+                                       target_is_directory=True)
+    dest = tmp_path / ".cursor" / "skills" / "x"
+    assert scopes.ensure_in_base(tmp_path, dest) == Path(dest)
+    with pytest.raises(BoostError) as err:
+        scopes.ensure_spelled(tmp_path, dest)
+    # Names the row as spelled and where it really lands, both repo-relative.
+    assert ".cursor/skills/x" in err.value.message
+    assert "redirects it to config/cursor/skills/x," in err.value.message
+    assert "uninstall --local" in err.value.message
+    assert "--agent" in err.value.hint
+
+
+def test_ensure_spelled_holds_through_a_symlinked_base(tmp_path):
+    """A link *above* the base is not a redirect inside the project."""
+    real = tmp_path / "real"
+    (real / ".claude" / "skills").mkdir(parents=True)
+    link = tmp_path / "via-link"
+    link.symlink_to(real, target_is_directory=True)
+    dest = link / ".claude" / "skills" / "x"
+    assert scopes.ensure_spelled(link, dest) == Path(dest)

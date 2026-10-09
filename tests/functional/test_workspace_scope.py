@@ -14,7 +14,6 @@ import json
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -340,31 +339,29 @@ def test_uninstall_local_reports_a_removal_a_row_did_not_attribute(
     assert "nothing removed from" not in flat
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="install cannot stage a copy through a relative directory "
-                           "symlink on Windows; the guard itself is covered "
-                           "there by the two ancestor tests, which symlink "
-                           "after the install")
 def test_uninstall_local_does_not_contradict_itself_on_a_redirect(
         boost, tapped, repo):
     """A redirected row is in the remedy list, so it cannot borrow the words.
 
     `<repo>/.cursor -> config/cursor` is an ordinary in-repo dotfile layout.
-    Install writes through it — `ensure_in_base` is containment only — and
-    uninstall will not delete through it, because a committed symlink is
+    Uninstall will not delete through it, because a committed symlink is
     input and this is byte-identical to `.claude/skills -> ../src`.
 
     That trade is deliberate. What is not acceptable is how it read: the row
     is in the derived set by construction, so reporting it as `refused`
     printed "not a path boost removes here" three lines above a list
     containing that exact string.
+
+    Install now refuses that layout, so the symlink is committed *after* the
+    install here — the other way such a row reaches uninstall.
     """
-    (Path(repo) / "config" / "cursor").mkdir(parents=True)
-    (Path(repo) / ".cursor").symlink_to("config/cursor",
-                                        target_is_directory=True)
     boost("install", "brainstorming", "--local")
+    (Path(repo) / "config").mkdir()
+    (Path(repo) / ".cursor").rename(Path(repo) / "config" / "cursor")
+    (Path(repo) / ".cursor").symlink_to(Path(repo) / "config" / "cursor",
+                                        target_is_directory=True)
     landed = Path(repo) / "config" / "cursor" / "skills" / "brainstorming"
-    assert landed.is_dir(), "install did not write through the symlink"
+    assert landed.is_dir()
 
     res = boost("uninstall", "brainstorming", "--local", expect=0)
 
@@ -386,6 +383,44 @@ def test_uninstall_local_does_not_contradict_itself_on_a_redirect(
     # run is not a "nothing removed" run.
     assert not (Path(repo) / ".claude" / "skills" / "brainstorming").exists()
     assert "nothing removed from" not in flat
+
+
+def test_install_local_refuses_a_dotdir_uninstall_could_not_reach(
+        boost, tapped, repo):
+    """The other half: install must not write where uninstall will not go.
+
+    It used to write `config/cursor/skills/<name>` through the symlink and
+    record `.cursor/skills/<name>`; uninstall then refused that row, left
+    the copy, and dropped the lock entry, so a second uninstall said "not
+    installed in this project" with the directory still on disk.
+    """
+    (Path(repo) / "config" / "cursor").mkdir(parents=True)
+    (Path(repo) / ".cursor").symlink_to(Path(repo) / "config" / "cursor",
+                                        target_is_directory=True)
+    res = boost("install", "brainstorming", "--local", expect=1)
+    flat = " ".join((res.out + res.err).split())
+    assert ".cursor/skills/brainstorming" in flat
+    assert "--agent" in flat
+    assert not (Path(repo) / "config" / "cursor" / "skills").exists()
+    assert not (Path(repo) / ".claude").exists()
+    assert projectlock.get_skill(repo, "brainstorming") is None
+
+
+def test_doctor_flags_a_project_row_behind_a_committed_symlink(
+        boost, tapped, repo):
+    """Nothing noticed until an uninstall left a directory behind."""
+    boost("install", "brainstorming", "--local")
+    clean = boost("doctor")
+    assert "reached through a symlink" not in " ".join(clean.out.split())
+    (Path(repo) / "config").mkdir()
+    (Path(repo) / ".cursor").rename(Path(repo) / "config" / "cursor")
+    (Path(repo) / ".cursor").symlink_to(Path(repo) / "config" / "cursor",
+                                        target_is_directory=True)
+    res = boost("doctor", expect=1)
+    flat = " ".join(res.out.split())
+    assert ("project skill brainstorming: .cursor/skills/brainstorming is "
+            "reached through a symlink") in flat
+    assert "intact" not in flat
 
 
 def test_uninstall_local_reports_a_row_that_escapes_the_repo(
