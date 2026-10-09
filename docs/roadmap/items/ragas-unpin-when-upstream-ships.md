@@ -7,7 +7,7 @@ category: Tech-debt
 complexity: S
 impact: Low
 wow: 1
-note: still blocked — re-checked 2026-08-30, PyPI's newest ragas is still 0.4.3
+note: still blocked — re-checked 2026-10-09, PyPI's newest ragas is still 0.4.3
 order: 97
 title: unpin the <code>[eval]</code> langchain stack when ragas ships its fix
 ---
@@ -35,3 +35,6 @@ gives a reader no way to tell a check that came back negative from a check nobod
 <b>Why it stays its own card.</b> The shipped integration card documents the block but will not be
 re-read; an unpin nobody remembers is how a workaround pin outlives its reason by years. This card
 is the reminder, and it is deliberately not claimable until the upstream release exists.
+
+<b>Re-checked 2026-10-09.</b> The PyPI simple index still lists <code>0.4.3</code> as the newest
+ragas, so this card stays blocked.
