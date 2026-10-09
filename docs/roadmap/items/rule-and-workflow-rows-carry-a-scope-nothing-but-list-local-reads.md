@@ -64,9 +64,11 @@ attention, beside store-missing, source-missing and unreachable.
 &middot; <b>sync</b> / <b>heal</b> &mdash; leave it out of the repair plan; the MCP doctor tool counts
 it instead.
 &middot; <b>update</b> &mdash; when the tap moved, skip it with the reason (before the risky-diff
-prompt); silent when there is nothing new. <b>reinstall</b> refuses. Both rest on
-<code>store._refuse_stranded_base</code>, which refuses any lock-driven write of a rule or
-workflow into a base that is gone.
+prompt); silent when there is nothing new. <b>reinstall</b> and <b>quarantine --release</b>
+refuse (release restores its stash to absolute paths, so it recreated the repo too). All three
+rest on <code>store._refuse_stranded_base</code>, which refuses any lock-driven write of a rule or
+workflow into a base that is gone. A quarantined row still reads <code>quarantined</code> rather
+than <code>stranded</code>; <code>boost uninstall</code> clears either.
 &middot; <b>completion</b> &mdash; unchanged on purpose: <code>uninstall &lt;name&gt;</code> is the
 remedy, so TAB keeps offering every row.
 &middot; <b>list</b> &mdash; FLAGS carries <code>project:&lt;base&gt;</code>, and
@@ -74,5 +76,5 @@ remedy, so TAB keeps offering every row.
 as one in <code>~/.claude</code>.
 Pinned by <code>tests/unit/test_stranded.py</code> (the predicate in both directions, the status,
 the write guard and the sync plan) and <code>tests/functional/test_stranded_project_rows.py</code>
-(each surface, end to end, with the checkout deleted and with it present); 35 of their 44 fail on
+(each surface, end to end, with the checkout deleted and with it present); 36 of their 45 fail on
 <code>main</code>, and the other nine pin behaviour that was right already and is kept.

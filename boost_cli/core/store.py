@@ -2220,6 +2220,11 @@ def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
     Persists the entry and returns the agents restored.
     """
     from . import rules
+    # The stash names absolute paths under the row's base, so releasing a
+    # `--local` row whose repo was deleted would recreate that repo exactly
+    # the way `reinstall` did.
+    _refuse_stranded_base(entry.get("scope", scopes.SCOPE_USER),
+                          entry.get("base"), kind, name)
     restored: list[str] = []
     for m in entry.get("quarantine_stash") or []:
         content = m.get("content")

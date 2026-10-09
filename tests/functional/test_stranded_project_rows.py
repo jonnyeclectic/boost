@@ -166,6 +166,18 @@ def test_update_is_silent_about_a_stranded_row_with_nothing_new(boost,
     assert "house-style" not in boost("update", expect=None).out
 
 
+def test_quarantine_release_does_not_recreate_the_deleted_repo(
+        boost, alive, monkeypatch):
+    monkeypatch.chdir(alive)
+    boost("quarantine", "house-style")
+    monkeypatch.chdir(alive.parent)
+    shutil.rmtree(alive)
+    res = boost("quarantine", "--release", "house-style", expect=1)
+    assert not alive.exists(), "release recreated %s" % alive
+    assert "which no longer exists" in _flat(res.out + res.err)
+    assert lockfile.get_rule("house-style")["quarantined"] is True
+
+
 def test_attest_names_the_reason(boost, stranded):
     out = _flat(boost("attest", "--verify", expect=1).out)
     assert ("house-style: installed --local into a directory that no longer "
