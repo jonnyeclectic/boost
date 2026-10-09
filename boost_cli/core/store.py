@@ -2342,9 +2342,10 @@ def quarantine_skill(name: str, entry: dict) -> tuple[list[str], dict[str, Path]
     Every agent is tried, and a blocked one does not stop the rest: refusing
     the whole quarantine, as uninstall refuses, would leave every agent
     loading the skill instead of one. The lock records the skill quarantined
-    with the blocked agents in ``refused_agents``, so the uninstall guard
-    keeps refusing over them and running quarantine again after the `chmod`
-    finishes the job. Persists ``entry``; logs only a new quarantine, so a
+    with the blocked agents in ``refused_agents``, which ``boost doctor``
+    reads to keep naming them (the uninstall guard already reads the empty
+    ``agents`` as every agent), and running quarantine again after the
+    `chmod` finishes the job. Persists ``entry``; logs only a new quarantine, so a
     re-run does not reset ``quarantine --list``'s SINCE.
     """
     removed: list[str] = []

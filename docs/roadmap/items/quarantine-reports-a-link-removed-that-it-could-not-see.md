@@ -37,7 +37,9 @@ running as the same user, cannot read it either. The two commands differ for a r
 uninstall that skips a link strands it pointing into a deleted store, while a quarantine that
 refused would leave the link live in every agent. The new <code>store.quarantine_skill</code> looks
 at each link with <code>os.lstat</code> and records each agent it could not unlink in
-<code>refused_agents</code>, so the uninstall guard keeps refusing over that agent. Running
+<code>refused_agents</code>, which is what <code>boost doctor</code> reads to keep naming it. The
+uninstall guard needs no help: a quarantined entry has an empty <code>agents</code>, which it already
+reads as every agent. Running
 <code>boost quarantine</code> again on a quarantined skill now retries those links. It used to answer
 "already quarantined". The same change fixes a shape the card did not name: a link in a read-only
 <code>~/.cursor/skills</code> made quarantine exit 70 after it had unlinked two agents, with the lock
