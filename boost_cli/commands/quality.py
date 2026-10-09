@@ -205,7 +205,7 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
     for adir in agents.linking_agents().values():
         # ``os.path``: ``Path.is_dir`` raises under a dotdir with no search
         # bit on Python 3.12 and 3.13, and doctor and heal exited 70 there.
-        if not os.path.isdir(adir):
+        if not os.path.isdir(adir):  # noqa: FURB146
             continue
         for link in sorted(adir.iterdir()):
             if link.is_symlink() and not link.exists():
@@ -638,13 +638,13 @@ def cmd_doctor(argv):
             # repeats itself. Name the thing in the way instead.
             # ``os.path``: under a dotdir with no search bit ``Path.is_symlink``
             # raises on Python 3.12 and 3.13, and doctor exited 70 on it.
-            if os.path.islink(link) and os.path.exists(link):
+            if os.path.islink(link) and os.path.exists(link):  # noqa: FURB141
                 continue
             if not os.path.lexists(link) and paths.refuses_writes(adir):
                 # Not one `boost sync` can make until the dir allows it: the
                 # agent-dir line below names the dir and its `chmod`.
                 continue
-            if not os.path.islink(link) and os.path.exists(link):
+            if not os.path.islink(link) and os.path.exists(link):  # noqa: FURB141
                 bad("skill-link", "skill %s not linked for %s — %s exists and is not a boost "
                     "link; move or delete it, then run `boost sync`"
                     % (name, agent, paths.tilde(link)))
@@ -750,7 +750,7 @@ def cmd_doctor(argv):
             else:
                 # ``os.path``: ``Path.is_file`` raises under a dotdir with no
                 # search bit on Python 3.12 and 3.13.
-                present = os.path.isfile(p)
+                present = os.path.isfile(p)  # noqa: FURB146
             if not present:
                 bad("rule", "rule %s missing its %s materialization — run "
                     "`boost reinstall %s`" % (name, m.get("agent", "?"), name))
@@ -1405,7 +1405,7 @@ def cmd_heal(argv):
     # ``os.path.isdir``: ``Path.is_dir`` raises under a dir with no search bit
     # on Python 3.12 and 3.13, where this exited 70. Such a dir is "missing"
     # here, and `refuses_writes` below names the parent that hides it.
-    missing = [d for d in wanted if not os.path.isdir(d)]
+    missing = [d for d in wanted if not os.path.isdir(d)]  # noqa: FURB146
     # A missing dir whose parent refuses the mkdir is not one heal can create,
     # so the preview does not promise it: it used to say "would create" and
     # exit 0 for a run that crashed at exit 70. Both name it below instead.
@@ -1797,7 +1797,7 @@ def cmd_health(argv):
     coverage_ok = True
     for agent, adir in agents.linking_agents().items():
         linked = sum(1 for n in expected
-                     if os.path.islink(adir / n) and os.path.exists(adir / n))
+                     if os.path.islink(adir / n) and os.path.exists(adir / n))  # noqa: FURB141, FURB146
         full = linked == len(expected)
         coverage_ok = coverage_ok and full
         kv(agent, "%d/%d %s" % (linked, len(expected),
