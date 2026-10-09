@@ -74,6 +74,11 @@ workflow into a base that is gone. A quarantined row still reads <code>quarantin
 <code>stranded</code>); <code>cat</code> under digest enforcement refuses with the uninstall hint
 instead of falling through to the tap copy. <b>doctor</b> and the MCP doctor tool still name a
 stranded row after it is quarantined, since release refuses it.
+&middot; <b>install</b> &mdash; a fresh <code>install</code> (either scope) over a stranded row
+names the gone base and hints <code>boost uninstall &lt;name&gt;</code>, then re-run; it used to
+say "uninstall it there first" about a directory that no longer exists. The reinstall refusal
+orders its two remedies (uninstall, <em>then</em> <code>install --local</code> in the new
+checkout), since the record is what blocks the second. Tests run each printed command.
 &middot; <b>completion</b> &mdash; unchanged on purpose: <code>uninstall &lt;name&gt;</code> is the
 remedy, so TAB keeps offering every row.
 &middot; <b>list</b> &mdash; FLAGS carries <code>project:&lt;base&gt;</code>, and
@@ -81,5 +86,5 @@ remedy, so TAB keeps offering every row.
 as one in <code>~/.claude</code>.
 Pinned by <code>tests/unit/test_stranded.py</code> (the predicate in both directions, the status,
 the write guard and the sync plan) and <code>tests/functional/test_stranded_project_rows.py</code>
-(each surface, end to end, with the checkout deleted and with it present); 40 of their 48 fail on
-<code>main</code>, and the other eight pin behaviour that was right already and is kept.
+(each surface, end to end, with the checkout deleted and with it present); 46 of their 56 fail on
+<code>main</code>, and the other ten pin behaviour that was right already and is kept.

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import integrity, lockfile, scopes, store
+from boost_cli.core import integrity, lockfile, paths, scopes, store
 from boost_cli.errors import BoostError
 
 
@@ -105,6 +105,47 @@ def test_a_lock_driven_write_into_a_deleted_repo_is_refused(sandbox, tmp_path):
     assert "`boost uninstall r`" in exc.value.hint
     assert "`boost install r --local`" in exc.value.hint
     assert not gone.exists()
+
+
+def test_the_refusal_orders_uninstall_before_the_reinstall(sandbox, tmp_path):
+    with pytest.raises(BoostError) as exc:
+        store._refuse_stranded_base("project", str(tmp_path / "gone"), "rule",
+                                    "r")
+    hint = exc.value.hint
+    assert "; then," in hint
+    assert hint.index("`boost uninstall r`") < hint.index(
+        "`boost install r --local`")
+
+
+@pytest.mark.parametrize("scope,base", [("project", "fresh"), ("user", None)])
+def test_a_stranded_row_blocks_any_install_and_names_uninstall(
+        sandbox, tmp_path, scope, base):
+    gone = tmp_path / "gone"
+    req = None if base is None else tmp_path / base
+    with pytest.raises(BoostError) as exc:
+        store._check_scope_conflict("r", _row(str(gone)), scope, req, True)
+    assert exc.value.message == (
+        "r was installed --local into %s, which no longer exists"
+        % paths.tilde(gone))
+    assert exc.value.hint == ("`boost uninstall r` drops that record, then "
+                              "re-run this install")
+
+
+def test_a_live_project_row_keeps_the_cross_scope_refusal(sandbox, tmp_path):
+    with pytest.raises(BoostError) as exc:
+        store._check_scope_conflict("r", _row(str(tmp_path)), "user", None,
+                                    True)
+    assert "already installed at project scope" in exc.value.message
+    assert "uninstall it there first" in exc.value.hint
+
+
+def test_a_live_same_base_row_is_still_already_installed(sandbox, tmp_path):
+    with pytest.raises(BoostError) as exc:
+        store._check_scope_conflict("r", _row(str(tmp_path)), "project",
+                                    tmp_path, False)
+    assert exc.value.message == "r is already installed"
+    assert store._check_scope_conflict("r", _row(str(tmp_path)), "project",
+                                       tmp_path, True) is None
 
 
 def test_a_lock_driven_write_into_a_live_repo_is_allowed(sandbox, tmp_path):

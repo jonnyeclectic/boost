@@ -1057,8 +1057,11 @@ def _refuse_stranded_base(scope: str, base, kind: str, name: str) -> None:
         raise BoostError(
             "%s %s was installed into %s, which no longer exists"
             % (kind, name, paths.tilde(Path(base))),
-            hint="`boost uninstall %s` drops the record; to have it in a new "
-                 "checkout, run `boost install %s --local` there"
+            # Ordered, not "or": the record is what blocks the reinstall
+            # (`_check_scope_conflict` refuses a second row under the name),
+            # so `install --local` in a new checkout only runs after it goes.
+            hint="`boost uninstall %s` drops the record; then, to have it in "
+                 "a new checkout, run `boost install %s --local` there"
                  % (name, name), wrap=True)
 
 
@@ -1085,6 +1088,17 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
     """
     if not existing:
         return
+    if scopes.stranded(existing):
+        # Checked before the scope comparison: a stranded row can never be
+        # "the same install" (its base is gone, a fresh one resolves the cwd),
+        # and the generic refusal below said "uninstall it there first" about
+        # a directory that no longer exists. The record is the whole
+        # obstacle, and `boost uninstall` drops it from anywhere.
+        raise BoostError(
+            "%s was installed --local into %s, which no longer exists"
+            % (name, paths.tilde(Path(existing["base"]))),
+            hint="`boost uninstall %s` drops that record, then re-run this "
+                 "install" % name, wrap=True)
     requested_base = str(resolved_base) if resolved_base is not None else None
     if existing.get("scope", "user") == scope and existing.get("base") == requested_base:
         if not force:

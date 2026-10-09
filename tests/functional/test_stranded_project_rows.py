@@ -19,6 +19,7 @@ two cases, and they want opposite answers:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -251,6 +252,52 @@ def test_uninstall_clears_it_and_creates_nothing(boost, stranded):
     assert not stranded.exists()
     assert lockfile.get_rule("house-style") is None
     assert "healthy" in boost("doctor").out
+
+
+def _remedies(res):
+    """Every backticked `boost ...` command a refusal printed, in order."""
+    return [c.split()[1:] for c in
+            re.findall(r"`(boost [^`]+)`", _flat(res.out + res.err))]
+
+
+@pytest.fixture()
+def fresh(tmp_path, monkeypatch):
+    """A new checkout of the deleted repo, standing in it."""
+    d = tmp_path / "fresh"
+    (d / ".git").mkdir(parents=True)
+    monkeypatch.chdir(d)
+    return d
+
+
+@pytest.mark.parametrize("scope_flag", [["--local"], []],
+                         ids=["local", "user"])
+def test_install_over_a_stranded_row_names_a_remedy_that_runs(
+        boost, stranded, fresh, scope_flag):
+    """The old refusal said "uninstall it there first" about a deleted dir."""
+    res = boost("install", "house-style", *scope_flag, expect=1)
+    flat = _flat(res.out + res.err)
+    assert ("house-style was installed --local into %s, which no longer "
+            "exists" % paths.tilde(stranded)) in flat
+    assert "uninstall it there first" not in flat
+    assert _remedies(res) == [["uninstall", "house-style"]]
+    boost(*_remedies(res)[0], "-y")
+    boost("install", "house-style", *scope_flag)  # "then re-run this install"
+    assert lockfile.get_rule("house-style")["scope"] == (
+        "project" if scope_flag else "user")
+    assert not stranded.exists()
+
+
+def test_reinstall_refusal_remedies_run_in_the_order_printed(
+        boost, stranded, fresh):
+    """Uninstall first, then `install --local` in the new checkout."""
+    steps = _remedies(boost("reinstall", "house-style", expect=1))
+    assert steps == [["uninstall", "house-style"],
+                     ["install", "house-style", "--local"]]
+    boost(*steps[0], "-y")
+    boost(*steps[1])
+    row = lockfile.get_rule("house-style")
+    assert (row["scope"], row["base"]) == ("project", str(fresh))
+    assert not stranded.exists()
 
 
 # --- the checkout still exists ----------------------------------------------
