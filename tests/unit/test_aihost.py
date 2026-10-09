@@ -47,13 +47,28 @@ class TestTable:
 
 
 class TestArgv:
-    def test_claude_argv_is_byte_for_byte_what_it_always_was(self):
-        """The existing command line is a contract; a refactor must not move it."""
+    def test_claude_argv_keeps_its_contract(self):
+        """The command line is a contract; a refactor must not move it.
+
+        It gained one flag on purpose, ``--no-session-persistence`` — see
+        ``test_only_claude_is_told_not_to_persist_the_session``.
+        """
         argv = aihost.argv(aihost.CLAUDE, model="sonnet", system="SYS")
         assert argv[:2] == ["claude", "-p"]
         assert "--model" in argv and "sonnet" in argv
         assert "--output-format" in argv and "text" in argv
         assert "--append-system-prompt" in argv and "SYS" in argv
+
+    def test_only_claude_is_told_not_to_persist_the_session(self):
+        """A one-shot ``-p`` call is never resumed, so it writes no transcript.
+
+        Gemini gets nothing: its CLI has no such flag (0.61.0 ``--help``), and
+        an unknown flag fails every call rather than degrading.
+        """
+        flag = "--no-session-persistence"
+        assert flag in aihost.argv(aihost.CLAUDE, model=None, system=None)
+        assert flag in aihost.argv(aihost.CLAUDE, model="sonnet", system="S")
+        assert flag not in aihost.argv(aihost.GEMINI, model=None, system=None)
 
     def test_gemini_argv_uses_its_own_flags(self):
         argv = aihost.argv(aihost.GEMINI, model=None, system=None)

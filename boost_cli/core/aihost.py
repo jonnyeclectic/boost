@@ -25,6 +25,18 @@ otherwise be a bug:
   with both CLIs installed had Claude answering before this table existed, and
   reordering would silently change every result they get.
 
+**One-shot calls.** `claude -p` saves a resumable session transcript under
+its configuration home, which it resolves from `CLAUDE_CONFIG_DIR` rather
+than from the `HOME` boost runs under — so `boost explain` from a sandboxed
+`HOME` wrote into the real one. `--no-session-persistence` (Claude Code
+2.0.63+, `-p` only; read from the published `cli.js` of 2.0.61-2.0.64 and the
+2.1.295 `--help`) makes the CLI's `appendEntry` return before it creates any
+file. Stripping or redirecting `CLAUDE_CONFIG_DIR` instead would cost the
+child its credentials and turn every call into a heuristic fallback; refusing
+like `mcphost.escapes_home` would do the same to a user who set it on purpose.
+What the flag does not stop is the CLI's own `.claude.json` bookkeeping —
+the same bookkeeping every run of the user's CLI performs, not boost's config.
+
 The direct-API path in `ai.py` stays Anthropic-only. A user of Gemini CLI has
 the `gemini` binary by definition, so the CLI route is the one that matters
 here; a second HTTP client is a separate, larger change with its own wire
@@ -49,6 +61,11 @@ BACKENDS: dict[str, dict] = {
         # this is what keeps it from being handed to another CLI.
         "model_prefixes": ("claude", "sonnet", "opus", "haiku"),
         "output_flags": ("--output-format", "text"),
+        # A one-shot call is never resumed, so it keeps no transcript. The
+        # child inherits CLAUDE_CONFIG_DIR — that is how it finds the user's
+        # login — so under a sandboxed HOME the transcript landed in the real
+        # config home. See "One-shot calls" in the module docstring.
+        "headless_flags": ("--no-session-persistence",),
         "system_flag": "--append-system-prompt",
         "key_env": "ANTHROPIC_API_KEY",
     },
@@ -59,6 +76,9 @@ BACKENDS: dict[str, dict] = {
         "model_flag": "-m",
         "model_prefixes": ("gemini",),
         "output_flags": ("-o", "text"),
+        # No such flag in 0.61.0, and no config-home variable either, so a
+        # sandboxed HOME already contains whatever it records.
+        "headless_flags": (),
         # No equivalent flag. `fold_system` puts the text in the prompt.
         "system_flag": "",
         "key_env": "GEMINI_API_KEY",
@@ -149,6 +169,7 @@ def argv(name: str, model: str | None, system: str | None) -> list[str]:
     if accepts_model(name, model):
         cmd += [str(row["model_flag"]), str(model)]
     cmd += [str(x) for x in row["output_flags"]]
+    cmd += [str(x) for x in row["headless_flags"]]
     if system and row["system_flag"]:
         cmd += [str(row["system_flag"]), system]
     return cmd

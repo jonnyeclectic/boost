@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
+import sys
 import urllib.error
 
 import pytest
 
-from boost_cli.core import ai, config, logs
+from boost_cli.core import ai, config, logs, mcphost
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 AUTHOR_MODEL = "claude-sonnet-5"
@@ -183,6 +185,7 @@ class TestAskCli:
         assert calls == [{
             "cmd": ["claude", "-p", "--model", DEFAULT_MODEL,
                     "--output-format", "text",
+                    "--no-session-persistence",
                     "--append-system-prompt", "sys prompt"],
             "input": "hi", "timeout": 120}]
 
@@ -223,6 +226,38 @@ class TestAskCli:
             raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
         monkeypatch.setattr("boost_cli.core.ai.subprocess.run", boom)
         assert ai.ask("hi") is None
+
+    def test_a_sandboxed_home_writes_no_session_into_the_real_config_home(
+            self, ai_on, monkeypatch, tmp_path):
+        """A one-shot call must not leave a transcript in an outside config home.
+
+        The child inherits ``CLAUDE_CONFIG_DIR`` on purpose — it is how the
+        CLI finds the user's credentials — so under ``HOME=<tempdir>`` its
+        session record lands outside that HOME. The stand-in below behaves the
+        way Claude Code's ``appendEntry`` does (2.0.63+): it writes a
+        ``projects/<id>.jsonl`` unless ``--no-session-persistence`` is given.
+        """
+        real = tmp_path / "real-config-home"
+        real.mkdir()
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(real))
+        # The premise: this is exactly the escape mcphost refuses for MCP.
+        assert mcphost.escapes_home(mcphost.CLAUDE, os.environ, ai_on)
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        fake = bindir / "claude"
+        fake.write_text(
+            "#!%s\n"
+            "import os, sys\n"
+            "sys.stdin.read()\n"
+            "if '--no-session-persistence' not in sys.argv:\n"
+            "    d = os.path.join(os.environ['CLAUDE_CONFIG_DIR'], 'projects')\n"
+            "    os.makedirs(d, exist_ok=True)\n"
+            "    open(os.path.join(d, 's.jsonl'), 'w', encoding='utf-8').write('{}')\n"
+            "print('answer')\n" % sys.executable, encoding="utf-8")
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", str(bindir))
+        assert ai.ask("hi") == "answer"
+        assert list(real.iterdir()) == []
 
     def test_no_cli_no_key_returns_none(self, ai_on, monkeypatch):
         _without_cli(monkeypatch)

@@ -7172,24 +7172,9 @@ pins the 7.8-minute shortfall so it cannot drift unnoticed.</p>
       </article>
 
       <article class="cap rcard" id="ai-cli-calls-inherit-the-real-config-home">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Core · Bug</span></div>
         <h3>AI-assisted commands reach the real config home from a sandboxed <code>HOME</code></h3>
-        <p><code>ai._ask_cli</code> runs <code>subprocess.run(cmd, …)</code> with no <code>env=</code>. When a user
-or a test sets <code>HOME</code> to a temporary directory but leaves <code>CLAUDE_CONFIG_DIR</code>
-exported, <code>boost explain</code>, <code>search --smart</code> and the other <code>core/ai.py</code>
-paths start a <code>claude</code> child that writes its session record into the real configuration
-home.
-
-MCP registration already handles this. <code>mcphost.escapes_home</code> detects a config home outside
-<code>paths.home()</code> and refuses unless <code>--force</code> is given. The AI path neither detects
-it nor says anything.
-
-Before choosing a fix, settle one thing. A child that keeps the real
-<code>CLAUDE_CONFIG_DIR</code> is also how it finds the user's credentials, so stripping or redirecting
-it may just turn the call into an auth failure that degrades to the heuristic. The options are: warn
-once; skip the CLI backend when <code>escapes_home</code> fires; or decide it is acceptable, because a
-session record is not configuration, and write that down. Measure what the real CLI does in each case
-before picking one.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/ai-cli-calls-inherit-the-real-config-home.md">Write-up &middot; ai-cli-calls-inherit-the-real-config-home.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
