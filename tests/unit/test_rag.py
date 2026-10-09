@@ -1902,11 +1902,12 @@ class TestPostingsInterning:
         self._built()
         con = self._connect()
         try:
-            cols = {row[1]: row[2]
+            cols = {row[1]: (row[2], row[5])
                     for row in con.execute("PRAGMA table_info(postings)")}
         finally:
             con.close()
-        assert cols == {"term_id": "INTEGER", "doc": "INTEGER", "tf": "INTEGER"}
+        # (declared type, primary-key position): term_id IS the rowid.
+        assert cols == {"term_id": ("INTEGER", 1), "plist": ("BLOB", 0)}
 
     def test_every_posting_row_resolves_to_a_term_via_the_terms_table(
             self, sandbox):
@@ -1914,12 +1915,13 @@ class TestPostingsInterning:
         con = self._connect()
         try:
             rows = con.execute(
-                "SELECT t.term, p.doc, p.tf FROM postings p "
+                "SELECT t.term, p.plist FROM postings p "
                 "JOIN terms t ON p.term_id = t.id "
-                "WHERE t.term = 'test' ORDER BY p.doc").fetchall()
+                "WHERE t.term = 'test'").fetchall()
         finally:
             con.close()
-        assert rows == [("test", 0, 1), ("test", 1, 3)]
+        assert len(rows) == 1
+        assert rag._decode_plist(rows[0][1]) == [[0, 1], [1, 3]]
 
     def test_a_term_used_by_two_docs_is_stored_once_in_the_terms_table(
             self, sandbox):
@@ -1955,6 +1957,71 @@ class TestPostingsInterning:
                             "VALUES (999, 'test', 1)")
         finally:
             con.close()
+
+
+class TestPostingsBlobLayout:
+    """One delta+varint blob per term, not one row per posting (v10).
+
+    Measured on a real 458-tap store (`scripts/measure_keyword_index.py`): the
+    row-per-posting layout spent ~28 bytes on each of 20.1M postings whose
+    payload was two small integers. These pin the codec at its byte
+    boundaries and the layout against the file itself, because a codec that
+    round-trips only small numbers would pass every scoring test built on toy
+    fixtures with doc ids under 128.
+    """
+
+    @pytest.mark.parametrize(("plist", "blob"), [
+        ([], b""),
+        ([[0, 1]], b"\x00\x01"),
+        # the first doc id is absolute, every later one is the gap from it
+        ([[5, 1], [7, 2]], b"\x05\x01\x02\x02"),
+        # 127 is the last one-byte value, 128 the first two-byte one
+        ([[127, 127]], b"\x7f\x7f"),
+        ([[128, 128]], b"\x80\x01\x80\x01"),
+        # 16384 = 2**14 is the first three-byte value
+        ([[16384, 1]], b"\x80\x80\x01\x01"),
+        ([[300, 1], [16684, 2]], b"\xac\x02\x01\x80\x80\x01\x02"),
+        # a repeated doc id is a zero gap, not an error
+        ([[3, 1], [3, 1]], b"\x03\x01\x00\x01"),
+    ])
+    def test_codec_bytes_and_round_trip(self, plist, blob):
+        assert rag._encode_plist(plist) == blob
+        assert rag._decode_plist(blob) == plist
+
+    def test_large_doc_ids_and_tfs_round_trip(self):
+        plist = [[0, 1], [127, 128], [128, 129], [70000, 3],
+                 [2**31 + 5, 2**20]]
+        assert rag._decode_plist(rag._encode_plist(plist)) == plist
+
+    def test_descending_doc_ids_are_refused(self):
+        with pytest.raises(ValueError, match="ascend"):
+            rag._encode_plist([[5, 1], [4, 1]])
+
+    def test_encoded_size_is_varint_not_fixed_width(self):
+        # 1000 consecutive docs with tf 1: one byte per gap and one per tf.
+        assert len(rag._encode_plist([[d, 1] for d in range(1000)])) == 2000
+
+    def test_one_postings_row_per_term(self, sandbox):
+        rag._write_postings({"a": [[0, 1], [1, 2], [9, 1]], "b": [[4, 1]]})
+        con = sqlite3.connect("file:%s?mode=ro" % rag.postings_path(),
+                              uri=True)
+        try:
+            n = con.execute("SELECT COUNT(*) FROM postings").fetchone()[0]
+            idx = [r[1] for r in con.execute("PRAGMA index_list(postings)")]
+        finally:
+            con.close()
+        assert n == 2
+        assert idx == [], "term_id is the rowid; no secondary index is needed"
+
+    def test_a_truncated_blob_is_an_error_not_a_short_list(self):
+        # three varints cannot be whole (doc, tf) pairs
+        with pytest.raises(ValueError):
+            rag._decode_plist(b"\x01\x01\x01")
+
+    def test_index_version_moved_with_the_layout(self):
+        # A v9 store's postings rows are not blobs; only the bump keeps the
+        # v10 reader from being handed one.
+        assert rag.INDEX_VERSION >= 10
 
 
 class TestConcurrentPostingsBuildsDoNotDestroyEachOther:
