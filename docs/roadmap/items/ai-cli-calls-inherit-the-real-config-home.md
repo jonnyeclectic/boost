@@ -35,9 +35,11 @@ before picking one.
 child keeps the user's login. The flag exists in Claude Code from 2.0.63 (absent from the published
 <code>cli.js</code> of 2.0.61 and 2.0.62, present in 2.0.63) and is listed in the installed
 2.1.295's <code>--help</code>. In 2.0.63's bundle, the transcript writer's <code>appendEntry</code>
-returns before it creates <code>projects/</code> or any file when the flag is set. No
-<code>claude</code> process was run for this; the evidence is the help text and the shipped
-bundles. A new test runs <code>ai.ask</code> against a stand-in <code>claude</code> under a
+returns before it creates <code>projects/</code> or any file when the flag is set. Measured with
+the published 2.0.63 <code>cli.js</code>, no login, a fresh empty <code>CLAUDE_CONFIG_DIR</code> each
+time: <code>echo hi | claude -p --output-format text</code> fails at the login check and still leaves
+three <code>projects/&lt;cwd&gt;/*.jsonl</code> files, while the same call with the flag leaves no
+<code>projects/</code> directory at all. A new test runs <code>ai.ask</code> against a stand-in <code>claude</code> under a
 sandboxed <code>HOME</code> with <code>CLAUDE_CONFIG_DIR</code> pointing outside it, and fails on
 the old argv because the transcript lands there. What the flag does not cover is the CLI's own
 <code>.claude.json</code> bookkeeping, which every run of the user's CLI already does. Redirecting
