@@ -148,6 +148,17 @@ jobs:
           # latency, so tapping them together is ~6x faster than one at a time
           # (measured: 24 registries, 62.9 s serial vs 11.0 s at the default 8).
           xargs .venv/bin/python -m boost_cli tap < registries.txt || true
+          # The keyword (BM25) index first, while every registry is still
+          # tapped: it costs seconds, needs no embedding backend, and the
+          # dense step below untaps whatever it can skip. Same carry-forward
+          # contract as the vectors — a registry whose keyword row already
+          # names its HEAD (at this boost's index version) is listed, not
+          # re-exported, and the publish job keeps last week's row for it.
+          .venv/bin/python scripts/publish_shards.py unchanged --kind keyword \
+            --manifest-url "https://github.com/$REPO/releases/download/shards-latest/manifest.json" \
+            --out "keyword-unchanged-$JOB.txt"
+          .venv/bin/python scripts/publish_shards.py export-keyword \
+            --out . --skip "keyword-unchanged-$JOB.txt"
           # Ask before embedding. The manifest pins the commit each published
           # shard was built from, so a registry whose HEAD is that commit keeps
           # last week's row instead of buying the same vectors again — every
@@ -227,7 +238,9 @@ jobs:
           name: shard-${{ strategy.job-index }}
           path: |
             *.shard.json
+            *.keyword.json.gz
             unchanged-*.txt
+            keyword-unchanged-*.txt
           if-no-files-found: error
           retention-days: 90
 
@@ -295,7 +308,8 @@ jobs:
           python3 scripts/publish_shards.py manifest \
             --shard-dir shards --repo "$REPO" --tag shards-latest \
             --out shards/manifest.json "${carry[@]}" \
-            --unchanged shards/unchanged-*.txt
+            --unchanged shards/unchanged-*.txt \
+            --keyword-unchanged shards/keyword-unchanged-*.txt
           cat shards/manifest.json
       - name: publish to the rolling release
         env:
@@ -314,4 +328,4 @@ jobs:
           # at last week's file. A quiet week uploads only the manifest.
           shopt -s nullglob
           gh release upload shards-latest --repo "$REPO" --clobber \
-            shards/*.shard.json shards/manifest.json
+            shards/*.shard.json shards/*.keyword.json.gz shards/manifest.json

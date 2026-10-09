@@ -2,14 +2,15 @@
 id: publish-the-keyword-index
 board: code
 section: planned
-status: inflight
+status: shipped
 category: Search · Performance
 complexity: L
 impact: High
 wow: 4
-note: every machine rebuilds 697 MB of index for a corpus that is byte-identical on all of them
+note: 461 published registries import in 17 s into a 59.3 MB store at 100% body text, where a bundle-only machine indexed 0%
 order: 99
-owner: loop/keyword-index-completeness
+owner: loop/publish-keyword-index
+pr:
 title: publish the keyword index the way vectors are published
 ---
 Dense vectors are built once in CI and downloaded. The BM25 index is not:
@@ -91,3 +92,29 @@ ids are positional (<code>_save</code> does <code>enumerate(docs)</code>), so th
 "merge by offsetting <code>doc_id</code>" is sound as written — and the shard format should
 serialize <em>logical</em> postings (digest → term → tf) rather than the SQLite layout, so the
 interning that branch was attempting cannot invalidate a published shard.
+
+<b>Shipped — the publishing half.</b> <code>rag.export_shard</code> builds one registry's
+documents from its clone (and refuses a tap with none, so a bundle-only machine can never publish
+its metadata index); the format is logical — each document's fields plus its own term table — so
+merging is concatenation and no SQLite layout is ever published. <code>rag.import_shards</code>
+verifies every shard before writing (engine, format, <code>INDEX_VERSION</code>, a commit equal to
+the tap's with two absences refused, every document on its own tap with <code>l</code> equal to
+the sum of its <code>tf</code>) and merges the survivors in <b>one</b> write. Rows ride the same
+<code>manifest.json</code> under a <code>keyword</code> section, so <code>MANIFEST_VERSION</code>
+stays 1 and older clients keep their vectors; sha256, same-host URLs and the four-state
+carry-forward are the dense rules, reused rather than copied. <code>shards.yml</code> exports
+them before the dense step untaps anything, and <code>boost reindex --fetch-index</code> imports
+them on any machine, keyless included. "Already current" means the index holds the tap
+<em>with bodies</em> at that commit — a commit-only test would have called the 6% index current
+and never fetched the fix.
+
+<b>Measured</b>, re-deriving every registry's shard read-only from a real 462-tap index (62,362
+docs, 20,108,624 postings): <b>280.8&nbsp;MB</b> of canonical JSON, <b>75.7&nbsp;MB</b> as the
+462 gzip&nbsp;-9 assets actually published (median 42.9&nbsp;KB, largest 14.2&nbsp;MB). Importing
+all of them into an empty sandbox took <b>17.2&nbsp;s</b> and wrote a <b>59.3&nbsp;MB</b> postings
+store — the v10 size — at <code>body_share</code> 1.0. One shard was refused, correctly:
+<code>boost/builtin</code> has no commit, and an unknown commit is never a match. End to end on
+the fixture: a clone-less index scores 0 for a body-only word; after
+<code>--fetch-index</code> it finds the item, and the next <code>boost reindex</code> reuses the
+import instead of regressing to metadata. The weekly CI run itself cannot execute locally; its
+wiring is pinned statically in <code>tests/unit/test_keyword_shards.py</code>.

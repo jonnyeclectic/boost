@@ -119,7 +119,7 @@
     <div class="group" data-group="find">
       <div class="group-h">Find &amp; search</div>
       <a class="cmd-link" href="#cmd-search" data-search="search search skills across tap registries (bm25; --smart reranks with claude)  --smart --category category -k, --limit limit --collapse-near-duplicates --json query">search</a>
-      <a class="cmd-link" href="#cmd-reindex" data-search="reindex build/refresh the full-content search index  --force --dense --export-shard tap --import-shard file --fetch-shards --json">reindex</a>
+      <a class="cmd-link" href="#cmd-reindex" data-search="reindex build/refresh the full-content search index  --force --dense --export-shard tap --import-shard file --fetch-shards --fetch-index --json">reindex</a>
       <a class="cmd-link" href="#cmd-discover" data-search="discover search github for skill repos you have not tapped yet search github for skill repositories you have not tapped yet --limit limit --json --local query">discover</a>
       <a class="cmd-link" href="#cmd-recommend" data-search="recommend suggest skills based on your project&#x27;s tech stack  --path path --category category --limit limit --json">recommend</a>
       <a class="cmd-link" href="#cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category">browse</a>
@@ -422,10 +422,10 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-reindex" data-search="reindex build/refresh the full-content search index  --force --dense --export-shard tap --import-shard file --fetch-shards --json">
+      <section class="cmd" id="cmd-reindex" data-search="reindex build/refresh the full-content search index  --force --dense --export-shard tap --import-shard file --fetch-shards --fetch-index --json">
         <h3><span class="cname">reindex</span><span class="gtag">find</span></h3>
         <p class="summary">Build/refresh the full-content search index</p>
-        <pre class="syn">boost reindex [--force] [--dense] [--export-shard TAP] [--import-shard FILE] [--fetch-shards] [--json]</pre>
+        <pre class="syn">boost reindex [--force] [--dense] [--export-shard TAP] [--import-shard FILE] [--fetch-shards] [--fetch-index] [--json]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--force</code><span>reindex every tap, ignoring cached commits</span></div>
@@ -433,6 +433,7 @@
           <div class="arg"><code>--export-shard TAP</code><span>write TAP&#x27;s prebuilt vectors to stdout as JSON, for publishing so others need not re-embed them</span></div>
           <div class="arg"><code>--import-shard FILE</code><span>merge a prebuilt vector shard, skipping the embed cost; refused unless it matches this store&#x27;s backend and the tap&#x27;s current commit</span></div>
           <div class="arg"><code>--fetch-shards</code><span>download and import published vectors for every tap that has them, instead of embedding locally</span></div>
+          <div class="arg"><code>--fetch-index</code><span>download and import the published keyword index for every tap at its published commit, instead of building it locally (no key or extra needed)</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
