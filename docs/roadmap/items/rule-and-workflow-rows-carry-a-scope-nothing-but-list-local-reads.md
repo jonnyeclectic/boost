@@ -7,7 +7,7 @@ category: CLI · Bug
 complexity: S
 impact: Low
 wow: 2
-a --local rule whose repo was deleted read as missing, and every remedy recreated the repo
+note: a --local rule whose repo was deleted read as missing, and every remedy recreated the repo
 order: 236
 owner: loop/rule-scope-readers
 pr:
