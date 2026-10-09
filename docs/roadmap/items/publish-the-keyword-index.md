@@ -2,14 +2,15 @@
 id: publish-the-keyword-index
 board: code
 section: planned
-status: inflight
+status: shipped
 category: Search · Performance
 complexity: L
 impact: High
 wow: 4
-note: every machine rebuilds 697 MB of index for a corpus that is byte-identical on all of them
+note: 462 measured shards (75.7 MB gzip, one refused) import in ~20–23 s into a 59.3 MB store at 100% body text, where a bundle-only machine indexed 0%
 order: 99
-owner: loop/keyword-index-completeness
+owner: loop/publish-keyword-index
+pr:
 title: publish the keyword index the way vectors are published
 ---
 Dense vectors are built once in CI and downloaded. The BM25 index is not:
@@ -91,3 +92,41 @@ ids are positional (<code>_save</code> does <code>enumerate(docs)</code>), so th
 "merge by offsetting <code>doc_id</code>" is sound as written — and the shard format should
 serialize <em>logical</em> postings (digest → term → tf) rather than the SQLite layout, so the
 interning that branch was attempting cannot invalidate a published shard.
+
+<b>Shipped — the publishing half.</b> <code>rag.export_shard</code> builds one registry's
+documents from its clone (and refuses a tap with none, so a bundle-only machine can never publish
+its metadata index); the format is logical — each document's fields plus its own term table — so
+merging is concatenation and no SQLite layout is ever published. <code>rag.import_shards</code>
+verifies every shard before writing (engine, format, <code>INDEX_VERSION</code>, a commit equal to
+the tap's with two absences refused, every document on its own tap with <code>l</code> equal to
+the sum of its <code>tf</code>) and merges the survivors in <b>one</b> write. Rows ride the same
+<code>manifest.json</code> under a <code>keyword</code> section, so <code>MANIFEST_VERSION</code>
+stays 1 and older clients keep their vectors; sha256, same-host URLs and the four-state
+carry-forward are the dense rules, reused rather than copied. <code>shards.yml</code> exports
+them before the dense step untaps anything, writing each one to a temp file and renaming it
+into place so a killed job never leaves a partial <code>.keyword.json.gz</code>; a file the
+publish job still cannot inflate is logged, deleted (so <code>--clobber</code> cannot replace the
+good asset of that name) and treated as unreported, carrying its previous row instead of
+aborting the manifest step and the dense rows with it. <code>boost reindex --fetch-index</code>
+imports them on any machine, keyless included. "Already current" means the index holds the tap
+<em>with bodies</em> at that commit — a commit-only test would have called the 6% index current
+and never fetched the fix.
+
+<b>Measured</b>, re-deriving every registry's shard read-only from a real 462-tap index (62,362
+docs, 20,108,624 postings): <b>280.8&nbsp;MB</b> of canonical JSON, <b>75.7&nbsp;MB</b> as 462
+gzip&nbsp;-9 files (median 42.9&nbsp;KB, largest 14.2&nbsp;MB). Those were derived from the index,
+not from <code>export_shard</code>, and nothing is on the release yet: CI can publish at most 461,
+because <code>export_shard</code> refuses <code>boost/builtin</code> (no clone, no commit), whose
+file is counted in the 75.7&nbsp;MB. Importing all of them into an empty sandbox wrote a
+<b>59.3&nbsp;MB</b> postings store — the v10 size — at <code>body_share</code> 1.0, in
+<b>17–20&nbsp;s</b> for the import plus <b>~3&nbsp;s</b> to inflate the gzip on an idle machine
+(a reviewer measured 54&nbsp;s under load). One shard was refused, correctly:
+<code>boost/builtin</code> has no commit, and an unknown commit is never a match.
+<b>The cost is memory:</b> the import is one batch, so every inflated shard, the old index's
+documents and the merged postings are held at once — <b>~2.86&nbsp;GB peak RSS</b> for the whole
+catalogue (measured twice). That is the price of one write instead of 461; a machine that cannot
+afford it can fetch a subset by tapping fewer registries first. End to end on
+the fixture: a clone-less index scores 0 for a body-only word; after
+<code>--fetch-index</code> it finds the item, and the next <code>boost reindex</code> reuses the
+import instead of regressing to metadata. The weekly CI run itself cannot execute locally; its
+wiring is pinned statically in <code>tests/unit/test_keyword_shards.py</code>.
