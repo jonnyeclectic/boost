@@ -43,6 +43,16 @@ from ..core import output as out
 from ..errors import BoostError
 from ._common import _s
 
+
+def _warn_unwritable(res, stream=None) -> None:
+    """``pkg._warn_unwritable``, imported on first use.
+
+    ``pkg`` costs ~100 ms to import, and only the relinking paths need it.
+    """
+    from .pkg import _warn_unwritable as warn
+    warn(res, stream=stream)
+
+
 # ---------------------------------------------------------------- helpers
 
 _warned_fallback = False
@@ -169,7 +179,6 @@ def _install_generated(name: str, text: str, yes: bool = False) -> None:
     out.ok("%s %s → %s" % ("replaced" if owner else "installed", name, _tilde(res.dest)))
     if res.linked:
         out.info(out.role("linked into: %s" % ", ".join(res.linked), "muted"))
-    from .pkg import _warn_unwritable
     _warn_unwritable(res)
 
 
@@ -985,7 +994,7 @@ def cmd_context(argv: list[str]) -> int:
         for name in sorted(_mentioned_skills(state)):
             entry = inst.get(name)
             if entry and entry.get("sidelined_by") == "context":
-                store.unsideline(name)
+                _warn_unwritable(store.unsideline(name))
                 restored += 1
         state["enabled"] = False
         _save_state(_CONTEXT_STATE, state)
@@ -1019,8 +1028,10 @@ def _context_status(state: dict, as_json: bool) -> int:
         out.kv("branch", branch or "(not in a git repository)")
     rules = state.get("rules", [])
     if not rules:
-        out.info("no rules — add one with `boost context map 'feature/*' "
-                "skill1,skill2`", wrap=True)
+        print(out.empty_state(
+            "no rules",
+            hint="add one with `boost context map 'feature/*' skill1,skill2`",
+            wrap=True))
         return 0
     rows = [(r.get("pattern", "?"), ", ".join(r.get("skills", [])),
              "*" if branch and fnmatch.fnmatch(branch, r.get("pattern", "")) else "")
@@ -1057,7 +1068,9 @@ def _context_apply(state: dict) -> int:
         if entry.get("quarantined"):
             continue
         if name in active:
-            if store.unsideline(name).linked:
+            res = store.unsideline(name)
+            _warn_unwritable(res)
+            if res.linked:
                 linked.append(name)
         elif store.sideline(name, "context"):
             unlinked.append(name)
@@ -1111,7 +1124,8 @@ def cmd_focus(argv: list[str]) -> int:
         for name, entry in sorted(lockfile.installed().items()):
             if entry.get("sidelined_by") != "focus":
                 continue
-            store.unsideline(name)
+            _warn_unwritable(store.unsideline(name),
+                             stream=sys.stderr if args.json else None)
             restored += 1
         if had_session:
             state_path.unlink()
@@ -1138,7 +1152,9 @@ def cmd_focus(argv: list[str]) -> int:
                         out.role("(since %s)" % util.rel_time(state.get("since", "")), "muted")))
             out.info(out.role("end it with `boost focus --clear`", "muted"))
         else:
-            out.info("no focus session — start one with `boost focus SKILL...`")
+            print(out.empty_state("no focus session",
+                                  hint="start one with `boost focus SKILL...`",
+                                  wrap=True))
         return 0
 
     names = list(dict.fromkeys(args.skills))
@@ -1165,7 +1181,8 @@ def cmd_focus(argv: list[str]) -> int:
         if store.sideline(name, "focus"):
             sidelined += 1
     for name in names:
-        store.unsideline(name)
+        _warn_unwritable(store.unsideline(name),
+                         stream=sys.stderr if args.json else None)
     _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso()})
     journal.log("focus", ",".join(names))
     if args.json:
@@ -1211,7 +1228,9 @@ def cmd_impact(argv: list[str]) -> int:
             if args.json:
                 print(json.dumps({"note": note, "git": git.has_git, "skills": []}))
             else:
-                out.info("no skills installed — nothing to measure")
+                print(out.empty_state("no skills installed",
+                                      hint="boost install <skill> to start",
+                                      wrap=True))
             return 0
 
     rows, data = [], []
@@ -1248,7 +1267,7 @@ def cmd_impact(argv: list[str]) -> int:
                 _note_fallback()
         else:
             _note_fallback()
-    out.dim("  " + note)
+    out.dim("  " + note, wrap=True)
     return 0
 
 
@@ -1375,8 +1394,7 @@ def _chat_session(args) -> int:
         # an unexplained reason.
         note = ("no AI configured — answers are the grounded matches "
                 "themselves (%s)" % ai.fallback_note())
-        for line in out.wrap(note, max(out.term_width() - 2, 20)):
-            out.info(out.role(line, "muted"))
+        out.dim(note, wrap=True, indent=2)
     # With stdin piped nobody is typing, so the prompt and the typing hint are
     # only chrome in the answers a script captures — the same rule
     # output.confirm applies. A terminal is unchanged.

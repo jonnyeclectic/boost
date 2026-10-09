@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>524</b><span>Loop finds</span></div>
+      <div class="stat"><b>528</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -659,12 +659,15 @@ gives a reader no way to tell a check that came back negative from a check nobod
 
 <b>Why it stays its own card.</b> The shipped integration card documents the block but will not be
 re-read; an unpin nobody remembers is how a workaround pin outlives its reason by years. This card
-is the reminder, and it is deliberately not claimable until the upstream release exists.</p>
+is the reminder, and it is deliberately not claimable until the upstream release exists.
+
+<b>Re-checked 2026-10-09.</b> The PyPI simple index still lists <code>0.4.3</code> as the newest
+ragas, so this card stays blocked.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">still blocked — re-checked 2026-08-30, PyPI's newest ragas is still 0.4.3</span>
+          <span class="m">still blocked — re-checked 2026-10-09, PyPI's newest ragas is still 0.4.3</span>
         </div>
       </article>
 
@@ -709,180 +712,26 @@ published version works against PyPI as it stands today.</p>
       </article>
 
       <article class="cap rcard" id="publish-the-keyword-index">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Search · Performance</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Search · Performance</span></div>
         <h3>publish the keyword index the way vectors are published</h3>
-        <p>Dense vectors are built once in CI and downloaded. The BM25 index is not:
-<code>core/rag.py</code> has <b>no export or import function at all</b>, and
-<code>shards.yml</code> / <code>scripts/publish_shards.py</code> are dense-only end to end. Every
-install rebuilds the same index from the same registries, at the same pinned commits, to produce
-the same bytes.
-
-<b>Measured, on a real 458-tap machine.</b> The on-disk index is
-<code>rag_index.json</code> <b>43.7&nbsp;MB</b> plus <code>rag_postings.sqlite</code>
-<b>653.0&nbsp;MB</b> — <b>696.7&nbsp;MB</b> for 18,619,658 postings. Build cost, timed over a
-9,306-entry / 69-tap slice: <b>4.54&nbsp;s</b> reading bodies and tokenizing, <b>3.83&nbsp;s</b>
-writing postings, <b>8.4&nbsp;s</b> total — about 0.9&nbsp;ms per entry, so roughly
-<b>65&nbsp;s</b> and <b>~900&nbsp;MB</b> extrapolated to the full 71,700-entry catalogue.
-
-<b>Which user actually pays it.</b> Not the default one: <code>boost quickstart</code> taps the
-<b>7 starter registries</b> and indexes them in about a second. The cost lands on
-<code>boost quickstart --catalog</code> — 463 registries, 2&nbsp;min 10&nbsp;s of parallel cloning
-and then a minute of indexing on top — and on anyone who taps their way there gradually.
-
-<b>The bug that makes this worth doing is not speed.</b> <code>boost catalog --import</code>
-already exists and already looks like the answer: <i>shareable-catalogue-bundle</i> advertises
-10.9&nbsp;MB replacing a 12&nbsp;GB clone and "59,972 searchable items in 4 seconds". That 4
-seconds is fast for a reason the card does not state. <code>rag.read_body</code> degrades
-<b>silently</b> to name + description when the item's clone is absent
-(<code>rag.py</code>: "Missing files degrade to just the catalog metadata"), and a bundle import
-restores catalogues with <i>zero repositories cloned</i>. So the index it builds is not the
-full-content index the <code>evals</code> gate floors — it is a frontmatter index wearing the same
-file name.
-
-<b>Measured directly</b> over 3,015 real entries, indexing them with and then without their
-clones: <b>3,041,326 tokens versus 182,507</b>. A bundle-only index carries <b>6.0%</b> of the
-searchable text, and nothing in the output says so. That is the same failure shape as an
-unpinned eval corpus — a number that still renders confidently while measuring something else.
-
-<b>Why this is easier than the dense shards, not harder.</b> BM25 looks like it needs global
-statistics, and it does — but none of them are frozen at build time. <code>_bm25</code> derives
-<code>n = len(docs)</code> and <code>df = len(plist)</code> on <i>every query</i>, so IDF is
-computed from whatever corpus is loaded. A per-registry shard therefore merges by offsetting
-<code>doc_id</code>, unioning the postings, and recomputing <code>avg_len</code> from per-shard
-totals — arithmetic, not re-derivation. And unlike vectors there is no embedding space to match
-and no API key to hold, so <code>shards.incompatible()</code> has no analogue here: a published
-keyword index is importable by everyone, including the keyless user who cannot use vectors at all.
-
-<b>Shape.</b> <code>rag.export_shard</code> / <code>rag.import_shard</code> mirroring
-<code>dense</code>'s pair, per-registry assets on the existing <code>shards-latest</code> release,
-rows carried in the same <code>manifest.json</code> with the same commit pin and sha256 — the
-carry-forward machinery in <code>publish_shards.py manifest --carry-forward</code> applies
-unchanged, because a registry whose commit did not move has an index that did not change either.
-Three invariants transfer verbatim from the dense side and each is load-bearing: verify before
-replacing, refuse a shard whose commit is not the tap's commit, and never treat a missing digest
-as a match.
-
-<b>The open question is payload size</b>, and it is large enough to be its own decision — see
-<a href="#shrink-the-published-index">shrink-the-published-index</a>. This card should not ship
-until that one has an answer, because publishing 697&nbsp;MB per refresh to save 65&nbsp;s of CPU
-is not obviously the right trade, and at the compressed sizes measured there it clearly is.
-
-<b>Partly landed, and deliberately still <code>inflight</code> — 2026-09-10.</b> What shipped is
-the half that needed no size decision: <b>the index now records what it is</b>.
-<code>read_body_full</code> returns the text and whether it contains the item's body,
-<code>build()</code> reports <code>metadata_only</code> over every document written (reused ones
-included, or an incremental build reports zero on the run after a bundle import),
-<code>index_completeness()</code> reads the share back off disk, and <code>boost reindex</code>
-says it out loud instead of reporting the same confident count for a 6% index. The share is of
-<b>tokens</b>, not documents: a bodyless entry still produces a document, so a document share sits
-at 1.0 until it drops to 0.0. <code>INDEX_VERSION</code> moved to <b>9</b>, because the flag is
-written only when a body is missing and absence may only be read as "complete" once no older
-document can survive.
-
-<b>What did NOT land:</b> <code>rag.export_shard</code> / <code>rag.import_shard</code>, the
-per-registry assets, and the <code>manifest.json</code> rows — the publishing pipeline itself.
-That half is what the payload-size question governs, and
-<a href="#shrink-the-published-index">shrink-the-published-index</a> still has no answer: its claim
-is <b>stale</b>, not active — branch <code>loop/shrink-postings-index</code> was last touched
-2026-09-02, carries one commit, has no pull request, and is 394 commits behind
-<code>main</code>. Someone should un-claim it. One structural finding for whoever takes it: doc
-ids are positional (<code>_save</code> does <code>enumerate(docs)</code>), so the card's
-"merge by offsetting <code>doc_id</code>" is sound as written — and the shard format should
-serialize <em>logical</em> postings (digest → term → tf) rather than the SQLite layout, so the
-interning that branch was attempting cannot invalidate a published shard.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/publish-the-keyword-index.md">Write-up &middot; publish-the-keyword-index.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-          <span class="m">every machine rebuilds 697 MB of index for a corpus that is byte-identical on all of them</span>
+          <span class="m">462 measured shards (75.7 MB gzip, one refused) import in ~20–23 s into a 59.3 MB store at 100% body text, where a bundle-only machine indexed 0%</span>
         </div>
       </article>
 
       <article class="cap rcard" id="shrink-the-published-index">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Performance · Storage</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Performance · Storage</span></div>
         <h3>shrink the keyword index before publishing it — structure first, then compression</h3>
-        <p><a href="#publish-the-keyword-index">publish-the-keyword-index</a> is worth doing only if the
-artifact is small enough to ship weekly. This card is the measurement that decides it, and the
-first answer is that <b>compression is the second lever, not the first</b>.
-
-<b>What the format actually stores.</b> <code>_write_postings</code> creates
-<code>postings (term TEXT, doc INTEGER, tf INTEGER)</code> and inserts one row per posting, so the
-<i>term string is repeated in every row</i>. Measured on the real 458-tap store:
-<b>18,619,658</b> rows over <b>210,422</b> distinct terms averaging <b>6.6</b> characters. That is
-<b>~123&nbsp;MB of term text to carry 1.4&nbsp;MB of distinct term text — 88&times; redundancy</b>,
-before the per-row and B-tree overhead that turns it into a 653&nbsp;MB file (page_size 4096,
-167,174 pages, freelist 0, so it is not slack space).
-
-<b>Compression measured on that file, as it stands:</b>
-
-<b><code>rag_index.json</code></b> 43.7&nbsp;MB raw &middot; gzip&nbsp;-6 <b>10.6&nbsp;MB</b> (4.12&times;).<br>
-<b><code>rag_postings.sqlite</code></b> 653.0&nbsp;MB raw &middot; gzip&nbsp;-6 201.7&nbsp;MB (3.23&times;) &middot; zstd&nbsp;-3 169.9&nbsp;MB (3.84&times;) &middot; <b>zstd&nbsp;-19 106.7&nbsp;MB (6.11&times;)</b>.
-
-So even with no format change, <b>zstd -19 puts the whole index near 117&nbsp;MB</b> — under half
-the ~300&nbsp;MB of dense vectors already published weekly. The trade is already good; the point
-of this card is that it can be much better, and that the two levers compose.
-
-<b>Structure first, and it is the bigger win.</b> Interning terms into
-<code>terms(id, term)</code> with <code>postings(term_id, doc, tf)</code> removes ~123&nbsp;MB of
-duplicated strings <i>and</i> shrinks the <code>postings_term</code> index from a text key to an
-integer one. Beyond that, the classic inverted-index encodings apply directly because doc ids
-within a term are ascending: delta-encode them, varint or bitpack the deltas, and store one blob
-per term rather than one row per posting. Both shrink the file <b>on disk</b>, not just in
-transit, which is the half a compressed download never gives back — the user still ends up with
-653&nbsp;MB resident after import.
-
-<b>What must not regress.</b> <code>read_postings</code> exists precisely so a query touches a
-handful of terms instead of materialising the whole map — the change that took cold search from
-8-13&nbsp;s and multiple GB resident to 31-70&nbsp;ms of scoring. A blob-per-term layout keeps
-that property (one row read per query term, decoded on the spot); a scheme that requires decoding
-neighbouring terms to find one does not. <code>_bm25</code> must stay byte-identical, as it did
-through the SQLite move, and <code>TestBm25Math</code> is what says so.
-
-<b>Decompression cost is the thing to measure, not assume.</b> zstd -19 is slow to compress and
-fast to decompress, which is the right asymmetry for a weekly build feeding many imports — but
-"fast" needs a number on the import path before it is a claim, next to the 0.12&nbsp;s that
-importing dense rows costs today. A zstd dictionary trained across shards is the obvious follow-on
-for the many-small-registries case, where per-shard compression has little context to work with.
-
-<b>Deliverable.</b> A measured comparison — raw, interned, delta+varint, each &times; none/gzip/zstd
-— on the real store, with import-side decode time beside each. That table is what tells
-<a href="#publish-the-keyword-index">publish-the-keyword-index</a> what to ship, and it is worth
-having even if publishing is declined: the on-disk win applies to every install today.
-
-<b>Progress — PR 688, merged as <code>f003fa03</code> in train 691.</b> The structural half shipped: <code>_write_postings</code> now
-interns terms into their own <code>terms(id, term, df)</code> table, with <code>postings</code>
-carrying an integer <code>term_id</code> instead of repeating the term string on every row —
-exactly the "structure first" change this card calls the bigger win, and it bumps
-<code>INDEX_VERSION</code> so every store picks it up on its next rebuild.
-<code>stem_expansions</code> now reads the precomputed <code>df</code> column directly instead of
-a <code>GROUP BY COUNT(*)</code> over <code>postings</code> on every prefix lookup. Not done: the
-delta/varint doc-id encoding, and the full raw/interned/delta+varint &times;
-none/gzip/zstd comparison table with import-side decode times on a real multi-hundred-MB store —
-this sandbox has no such store to measure against, only a small synthetic one (interning alone cut
-a 1.8M-posting/20k-term synthetic store from 63.6&nbsp;MB to 47.9&nbsp;MB, directionally consistent
-with the real-store estimate above but not a substitute for it). Left as follow-on work before this
-card can be called shipped.
-
-<b>Partly landed, and un-claimed — 2026-10-06.</b> The <b>interning</b> half shipped:
-<code>terms(id, term, df)</code> with <code>postings(term_id, doc, tf)</code> is on
-<code>main</code> (<code>rag.py</code> <code>_write_postings</code>), and
-<code>stem_expansions</code> reads the precomputed <code>df</code> column instead of
-<code>GROUP BY</code>-ing the whole postings table. It arrived as <b>#691</b>
-(<code>64ac398d</code>), not as this card's <code>pr: 688</code> — that PR's head moved after
-the train was cut, so GitHub never labelled it merged even though the diff against
-<code>main</code> is empty.
-
-<b>What did NOT land is this card's actual deliverable:</b> the measured comparison — raw vs
-interned vs delta+varint, each &times; none/gzip/zstd, with import-side decode time beside each.
-Without that table <a href="#publish-the-keyword-index">publish-the-keyword-index</a> still has
-no size answer, which is why it is held. Claim dropped because branch
-<code>loop/shrink-postings-index</code> no longer exists; take it by setting
-<code>owner</code> again.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/shrink-the-published-index.md">Write-up &middot; shrink-the-published-index.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
-          <span class="m">653 MB of postings holds 1.4 MB of distinct terms — the term string is stored 88 times over</span>
+          <span class="m">563.7 MB of postings is 59.3 MB as one delta+varint blob per term, and 23.8 MB under zstd -19</span>
         </div>
       </article>
 
@@ -971,9 +820,11 @@ no size answer, which is why it is held. Claim dropped because branch
       </article>
 
       <article class="cap rcard" id="eval-corpus-duplication-is-intra-tap-not-mirrors">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Retrieval eval</span></div>
+        <div class="head"><span class="pill declined">Declined</span><span class="cat">Quality · Retrieval eval</span></div>
         <h3>The corpus's 65.6% duplication is 99.93% inside a single tap, so the required gate never once exercises the cross-tap trust ordering dedup exists for — 0 swaps in 264,735 comparisons</h3>
-        <p><b>Measured.</b> Over the 91 required golden queries on the current pins, 264,544 of 264,735 collapse comparisons inside <code>rag.dedupe_by_content</code> (99.93%) were between two copies in the SAME tap and the source-preference branch executed 0 times; and forcing it to fire — marking one tap curated produces 191 swaps — leaves recall@k / hit@1 / MRR / nDCG@k at 0.8407 / 0.4835 / 0.6065 / 0.6552 both before and after, with all 91 graded ranked-key lists identical.
+        <p><b>Declined, and re-measured first on origin/main's pins.</b> Same instrumentation over the 91-query <code>golden.jsonl</code> on the current 10,731-entry corpus: 264,737 collapse comparisons, 264,546 same-tap (99.93%), 191 cross-tap, <b>0 swaps</b>. Marking <code>composio-community/awesome-codex-skills</code> curated fires 191 swaps and leaves BM25 at 0.846154 / 0.483516 / 0.606517 / 0.659484 (recall@k / hit@1 / MRR / nDCG@k) both ways — exactly the committed <code>baseline.json</code> — with all 91 graded top-k lists byte-identical. Nothing ships, for the reason this card already found: <code>grade_key</code> is invariant under a swap by construction, because a swap only replaces the entry inside one content cluster. Source preference is not a relevance metric, and the retrieval gate is right not to grade it. Where it is graded already: <code>tests/unit/test_rag_fastpath.py::test_curated_copy_promoted_but_rank_and_score_kept</code> runs a real cross-tap curated duplicate through <code>rag.retrieve</code> and asserts the cluster collapses to one hit, that the hit is the curated tap's copy, and that the fast path matches the <code>entries=</code> path; <code>test_dedup_trust.py::test_the_cluster_keeps_its_best_score</code> pins the kept score directly, and <code>test_dedup_trust.py</code> / <code>test_content_dedupe.py</code> pin the <code>source_rank</code> ordering in both directions — all inside <code>make check</code>'s test and mutation gates. Making the eval gate non-vacuous here would mean curating a tap in the pinned corpus (all five cross-tap clusters are high/high, so <code>source_rank</code> ties), which changes a gate input, forces a baseline regeneration and adds no coverage the unit tier lacks. The taps.txt header "doc trap" is gone too: origin/main generates the size block from the rows and <code>tests/unit/test_corpus_prose.py</code> checks the quoted figures, and the remaining 10,152 mentions are figures measured on the earlier #410 pins. Three of them say so (<code>taps.txt</code>, <code>scripts/eval_corpus.py</code>, <code>docs/rag-architecture.md</code>); the rest quote the size as it was then.
+
+<b>Measured</b> (the original finding, measured at the card's original pins in 52b5adcd, before #992 and the golden-row pinning moved these figures; the title and this paragraph keep its figures, and the paragraph above supersedes them). Over the 91 required golden queries on the current pins, 264,544 of 264,735 collapse comparisons inside <code>rag.dedupe_by_content</code> (99.93%) were between two copies in the SAME tap and the source-preference branch executed 0 times; and forcing it to fire — marking one tap curated produces 191 swaps — leaves recall@k / hit@1 / MRR / nDCG@k at 0.8407 / 0.4835 / 0.6065 / 0.6552 both before and after, with all 91 graded ranked-key lists identical.
 
 <b>Reproduce it.</b>
 
@@ -1499,47 +1350,14 @@ NOT ALREADY CARDED, but read the existing card first.
       </article>
 
       <article class="cap rcard" id="agent-dir-shapes-install-still-trips-on">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
         <h3>Agent-dir shapes boost still trips on: a parent with no search bit, a missing dir under a read-only parent, a dir at a rule's file path, a blocked agent dropped from the lock's scope</h3>
-        <p><b>Found by the third review of <code>read-only-boost-home-with-no-cache-dir</code>.</b> None is a regression.
-Each was measured behaving the same on <code>c7dca95c</code>.
-
-<b>A parent with no search bit.</b> With an agent dir's parent at mode <code>0o600</code>,
-<code>store.install</code> copies the skill into the store. It then crashes at exit 70 in
-<code>linked_agents</code>, where <code>(adir / name).is_symlink()</code> raises
-<code>PermissionError</code> outside <code>link_agents</code>' guard. The store dir is left
-unrecorded. Treating an <code>OSError</code> there as "not linked" would close it.
-
-<b>A missing skills dir under a read-only parent.</b> The install names a <code>chmod</code>
-target that does not exist, and <code>doctor</code> and <code>heal</code> disagree about it.
-<code>link_agents</code>' <code>PermissionError</code> branch should record the block from
-<code>paths.refuses_writes(adir)</code> and word it through <code>link_refusal</code>. doctor's
-agent-dir check should use the same function, so that it agrees with heal.
-
-<b>A blocked agent drops out of the scope.</b> After an install skips an agent as blocked, the lock's
-<code>agents</code> list leaves it out. <code>preserved_agent_scope</code> replays that list, so a
-later <code>install --force</code> never retries the agent and never says so. Only
-<code>boost sync</code> reports and repairs it.
-
-<b>Callers that drop the result.</b> <code>boost import</code> (<code>install_from_path</code>),
-<code>quarantine --release</code> and the unsideline paths (focus, profile, context, team) drop
-<code>res.blocked</code> without a word, as they already drop <code>res.unwritable</code>.
-<code>pkg._warn_unwritable(res)</code> is the existing reporter.
-
-<b>Also found by the reconcile review of #933 with #931</b>, and also measured on both parents: With any agent dotdir at mode <code>600</code>, on Python 3.12 and 3.13 (3.14's <code>Path.exists</code> answers False where they raise), <code>doctor</code>, <code>heal</code> and <code>sync</code>
-exit 70 (<code>PermissionError</code> on <code>~/.cursor/skills</code>). A rule or workflow install in that
-shape is fixed on #933's branch: <code>_refused_target</code> names the dir through
-<code>paths.refuses_writes</code>, which asks <code>lexists</code>. So is uninstall of a rule or workflow there, through <code>store.refusing_dir</code>, which now treats a path it may not look at as not there. The skill install and these three are not fixed. And the remedy is wrong for this shape: <code>chmod u+w</code> leaves a <code>600</code> dir at <code>600</code>, because the missing bit is search, so the wording should say <code>chmod u+wx</code> when <code>X_OK</code> is what fails.<br><br>A <em>directory</em> at a rule's target file path (<code>~/.cursor/rules/house.mdc/</code>) raises
-<code>IsADirectoryError</code>. That is not one of the refusal shapes, so install exits 70 after writing
-the other agents' copies, with no lock entry.<br><br><code>heal --dry-run</code> previews "would re-materialize" a rule whose target dir is still locked or
-blocked. The real run then re-materializes nothing, correctly. The exit codes agree (1 and 1), but the
-wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every install exits 1, naming it, while
-<code>doctor</code> says healthy. <code>doctor</code> could ask <code>paths.refuses_writes(paths.store_dir())</code>.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/agent-dir-shapes-install-still-trips-on.md">Write-up &middot; agent-dir-shapes-install-still-trips-on.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">Agent-dir shapes install, doctor, heal and sync still mishandle after the read-only-home fix; each behaves the same on c7dca95c…</span>
+          <span class="m">fixed: a 0o600 dotdir no longer crashes install, doctor, heal, sync or uninstall on Python 3.12/3.13 (70 → 0/1) and is named "not searchable" with chmod u+wx; a missing skills dir under a read-only dotdir is named by its dotdir everywhere, and doctor (0 → 1) and sync now report it; a refused agent, or one whose link boost cannot look at, is recorded as refused_agents, retried by install --force, and blocks uninstall rather than being stranded; focus, context, profile and quarantine --release say what they skipped; a directory at a rule's file path is a conflict (70 → 0); heal --dry-run no longer previews a refused re-materialize; doctor names a read-only store (0 → 1)</span>
         </div>
       </article>
 
@@ -3395,26 +3213,9 @@ wording does not.<br><br>With <code>~/.agents/skills</code> read-only, every ins
       </article>
 
       <article class="cap rcard" id="one-bad-agent-dir-silences-the-whole-doctor-report">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
         <h3>One unresolvable agent dir silences the whole `boost doctor` report</h3>
-        <p><b>Found by the review of <code>loop/codex-agent-target</code>.</b>
-<code>paths.expand</code> now raises a <code>BoostError</code> for a <code>${VAR}</code> with no fallback
-and nothing in the environment, rather than resolving it to an empty or literal path — the change that
-stopped a mistyped <code>agents.&lt;name&gt;.dir</code> silently installing into
-<code>./skills</code>. <code>agents.known_agents</code> calls it for every configured agent, so one bad
-row now aborts every command that asks who the agents are: <code>doctor</code>,
-<code>heal</code>, <code>clean</code>, <code>install</code>, <code>sync</code>.
-
-For most of those, refusing is the right answer. For <code>doctor</code> it is not: its whole job is to
-surface a misconfiguration, and it exits 1 having reported nothing else — no lock check, no store check,
-no duplicate-discovery check. The remedy is reachable (<code>boost config set</code> never calls
-<code>known_agents</code>, verified in a sandbox), so this is a bad report rather than a lockout.
-
-<b>Fix direction.</b> Catch <code>BoostError</code> around the agent lookups in <code>cmd_doctor</code>
-and render it as an issue row, then continue with an empty agent set. The catch has to cover the
-indirect callers too — <code>store.duplicate_discovery</code>, <code>store.sync_plan</code> and the
-per-agent coverage counts all reach <code>known_agents</code> — so the natural shape is one resolution
-step at the top of the command whose failure degrades the agent-dependent sections rather than the run.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/one-bad-agent-dir-silences-the-whole-doctor-report.md">Write-up &middot; one-bad-agent-dir-silences-the-whole-doctor-report.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Medium</b></span>
@@ -5121,38 +4922,14 @@ exactly why plausible similarity was not accepted as evidence.</p>
       </article>
 
       <article class="cap rcard" id="rule-and-workflow-rows-carry-a-scope-nothing-but-list-local-reads">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
-        <h3>A rule or workflow installed <code>--local</code> reads as a user one everywhere but <code>list --local</code></h3>
-        <p>Rules and workflows installed with <code>--local</code> materialize into the repo but are recorded
-in the <em>user</em> lock, tagged <code>scope: project</code> and <code>base: &lt;repo&gt;</code>,
-because a project lock holds skills and nothing else
-(<code>store._check_scope_conflict</code>). <code>boost list --local</code> now filters them with
-<code>scopes.owned_by</code>, and it is the only reader that does.
-
-<code>lockfile.installed_rules()</code> and <code>installed_workflows()</code> have a dozen other
-consumers &mdash; <code>store</code>, <code>complete</code>, <code>taps</code>,
-<code>team</code>, <code>safety</code>, <code>quality</code>, <code>pkg</code> &mdash; and none of
-them ask whose repo a row belongs to. So <code>boost doctor</code> and <code>boost verify</code>
-count another checkout's rule as this machine's, <code>drift</code> and <code>health</code> grade
-it, tab-completion offers it, and plain <code>boost list</code> prints it under
-&ldquo;installed rules&rdquo; with nothing saying it belongs to a directory the user may not be
-standing in. The failure is quiet in both directions: a row for a repo that has since been
-deleted never goes away, and a row for the repo you <em>are</em> in looks identical to one for a
-repo you are not.
-
-Worth settling the design before the sweep, because the honest answer differs per command. A
-<code>scope</code> column on plain <code>list</code>'s rule and workflow tables is cheap and makes
-the ambiguity visible (<code>boost info</code> already prints <code>scope project</code>).
-Whether <code>verify</code> and <code>doctor</code> should <em>grade</em> a rule belonging to
-another repo is a separate question &mdash; they cannot read its materializations from here, so
-counting it is arguably the bug and skipping it with a note the honest fix. Split out of
-<code>audit-project-scope-seams-uninstall-verify-list-info-reinstall-dis</code>, where the
-evidence was gathered.</p>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
+        <h3>A rule or workflow installed <code>--local</code> into a since-deleted repo reads as missing, and every remedy recreates the repo</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/rule-and-workflow-rows-carry-a-scope-nothing-but-list-local-reads.md">Write-up &middot; rule-and-workflow-rows-carry-a-scope-nothing-but-list-local-reads.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">a project-scoped rule reads as a user one in doctor, verify, drift, health and update</span>
+          <span class="m">a --local rule whose repo was deleted read as missing, and every remedy recreated the repo</span>
         </div>
       </article>
 
@@ -5925,9 +5702,9 @@ evidence was gathered.</p>
       </article>
 
       <article class="cap rcard" id="quickstart-rerun-retargets-tapped-registries">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>boost quickstart: a rerun could move already-tapped registries to their vectors</h3>
-        <p><b>A rerun of quickstart still leaves an already-tapped registry at the commit it was tapped at.</b> <code>registry.add_many</code> skips a configured tap (<code>already tapped</code>), so a registry first tapped before quickstart pinned anything, or overtaken by a weekly republish, stays where it is, and <code>shards.sync</code> then refuses its shard (<code>tap is at X, shard is for Y</code>). The <code>audit-quickstart-findings</code> fix flags that refusal and names <code>boost update --shards</code>, which already moves such taps through <code>shards.ingest</code> (download and verify first, then move the tap). That was the smaller half of the card; its other half was to have quickstart do the move itself. Fix: on a rerun, hand the configured taps the manifest publishes to <code>shards.ingest</code> instead of <code>shards.sync</code>, so the vectors land in one command. Decide first whether quickstart may move a tap the user tapped on purpose at another commit: <code>boost update</code> treats a pin as a promise, and a tap pinned with <code>boost tap --at</code> should keep it. Pin that choice in <code>tests/functional/test_cli_quickstart.py</code> beside the <code>commit_moved</code> tests.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/quickstart-rerun-retargets-tapped-registries.md">Write-up &middot; quickstart-rerun-retargets-tapped-registries.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -5945,6 +5722,18 @@ evidence was gathered.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">shipped — the fall-through, plus a refusal that names where the item really is</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="the-agents-line-lists-agents-an-item-does-not-reach">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
+        <h3>The agents line lists every recorded agent, including the ones boost no longer writes</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/the-agents-line-lists-agents-an-item-does-not-reach.md">Write-up &middot; the-agents-line-lists-agents-an-item-does-not-reach.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">a rule written for 1 of 5 recorded agents still advertises all five in list, info and stats</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -6943,46 +6732,14 @@ evidence was gathered.</p>
       </article>
 
       <article class="cap rcard" id="install-writes-through-a-redirected-dotdir-uninstall-will-not">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Security</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Core · Security</span></div>
         <h3><code>install --local</code> writes through a redirected dotdir that <code>uninstall --local</code> will not remove</h3>
-        <p>A repo that commits <code>&lt;repo&gt;/.cursor &rarr; config/cursor</code> &mdash; an ordinary
-dotfile layout, not an attack &mdash; gets two different answers from the two halves of the same
-command. <code>_install_project_skill</code> gates its target with
-<code>scopes.ensure_in_base</code>, which is containment only, so <code>boost install --local</code>
-writes <code>config/cursor/skills/&lt;name&gt;</code> and records the row it spelled,
-<code>.cursor/skills/&lt;name&gt;</code>. <code>boost uninstall --local</code> then refuses that row,
-because <code>scopes.parent_matches_spelling</code> walks the parent for real and finds the
-redirect. Boost's own copy is left on disk and the lock entry goes anyway, so a second uninstall
-answers <em>not installed in this project</em>.
-
-Reproduced on the commit that introduced the guard: install wrote through the symlink, uninstall
-reported the row as <code>redirected</code>, and the directory survived.
-
-<b>The uninstall side is right and is not the thing to change.</b> The benign layout and the attack
-are byte-identical on disk: <code>.claude/skills &rarr; ../src</code> with a legally-spelled lock row
-is the same two objects in the same two places, and nothing in the filesystem carries the intent
-behind them. Creating through a redirect is safe; destroying through one hands an attacker with
-merge rights an <code>rmtree</code> aimed wherever the symlink points. So the asymmetry stays, and
-<code>uninstall</code> now names the row, says a symlink redirects it, and prints an
-<code>rm -rf</code> that works &mdash; because <code>rm</code> follows the ancestor exactly as the
-install did (shipped in #1016).
-
-What is left is the other half: <b>install should not write somewhere uninstall cannot reach.</b>
-The options are not equivalent and the choice needs measuring rather than guessing &mdash; refuse
-the install outright (safe, breaks a layout that works today); record the <em>resolved</em> path in
-the lock so uninstall's walk agrees (keeps the layout, but the lock then carries a path the repo
-never spells, and a teammate whose clone resolves differently gets a row that matches nothing); or
-record both and match on either (most forgiving, widest attack surface to re-audit). Whichever
-lands, <code>boost doctor</code> should report a project whose lock rows no longer resolve to where
-the install put them, since today nothing notices until an uninstall leaves a directory behind.
-
-Related: <code>project-uninstall-deletes-any-in-repo-directory-the-lock-names</code>, which added
-the walk and the <code>redirected</code> reporting this card inherits.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/install-writes-through-a-redirected-dotdir-uninstall-will-not.md">Write-up &middot; install-writes-through-a-redirected-dotdir-uninstall-will-not.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">install gates on containment and writes through an in-repo symlinked dotdir; uninstall refuses to delete through one, so the copy is orphaned</span>
+          <span class="m">install now refuses a target uninstall would refuse — same predicate both sides; doctor names rows a later symlink redirected</span>
         </div>
       </article>
 
@@ -7059,80 +6816,61 @@ the walk and the <code>redirected</code> reporting this card inherits.</p>
       </article>
 
       <article class="cap rcard" id="the-shard-model-has-no-per-job-fixed-cost">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI · Model</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Model</span></div>
         <h3>The shard model runs through the origin, so <code>plan</code> gets more optimistic with every shard added</h3>
-        <p><b>The cleanest statement of it needs no weights at all.</b> Going from eight shards to twelve,
-a model that divides work by the shard count predicts the median job falls to <b>0.667</b> of
-itself. It fell to <b>0.83</b> &mdash; 41.8 min over the 24 jobs of the three eight-shard runs to
-34.6 over the 24 jobs of the two twelve-shard runs. Correcting for the one thing the weights
-do say &mdash; #1032 re-timed the same mutants 0.884&times; cheaper &mdash; moves the prediction
-to <b>0.589</b> and widens the gap, so the uncorrected figure is the conservative one. No value
-of <code>RUNNER_EFFICIENCY</code> produces either, because the error is in the shape and not in the
-constant: <code>runner_minutes</code> is <code>weight / (RUNNER_WORKERS &times;
-RUNNER_EFFICIENCY)</code>, linear through the origin, and what is missing is a per-job
-<em>fixed</em> cost.
-
-<b>Graded like for like, the two widths disagree by 40%.</b> Each width has to be scored against
-weights measured at that width: #1029's 66,708,651 ms total was measured on an eight-shard run,
-and #1032's 58,969,820 was re-timed from CI run 37200431822 &mdash; which is
-<code>58ace415</code>, one of the two twelve-shard runs being graded. On that footing eight
-implies an efficiency of <b>0.832</b> and twelve implies <b>0.593</b>. Reading both against one
-frozen total hides this, and understates the gap as 24%.
-
-<b>C is large and five routes do not agree on how large.</b> They differ in whether they use
-medians or machine-minute sums, and in whether #1032's 0.884x re-timing is read as the work
-really getting cheaper between the two widths: <b>20.2</b> and <b>24.2</b> min a job from the two
-p50s, <b>14.4</b> and <b>19.8</b> from the matrix totals (347.6 machine-minutes at eight over
-four runs, 404.9 at twelve over two), and <b>26.9</b> from the six-to-eight step of 2026-10-02
-&mdash; 287.2 &rarr; 341.0 machine-minutes two hours apart with the width the only change. So
-<b>C is 14 to 27 min a job</b>. A two-point solve is exactly determined and therefore not
-falsifiable; fitting C needs a third width, not more runs at twelve.
-
-<b>And C cannot be bolted on beside the efficiency, which is the part that makes this a card
-rather than a one-line patch.</b> Subtract any C in that range from the matrix total and the
-parallel work left over implies a speedup above four on a four-vCPU runner: C = 14.4 leaves 232.4
-min against 1,111.8 weight-minutes, which is <b>4.78</b> effective workers, and C = 24.2 leaves
-154.0, which is <b>7.22</b>. An efficiency over 1.0 is a contradiction, not a tight fit, so the
-weights overstate real serial work by roughly the same factor and
-<code>PLANNED_TOTAL_MS</code> cannot serve as the fixed reference a re-fit is measured against.
-A hypothesis, named as one because it has not been measured: mutmut times each mutant while four
-of them run at once, so a per-mutant duration may already carry the contention
-<code>RUNNER_EFFICIENCY</code> exists to apply.
-
-<b>The naive remedy is worse than the status quo, so it is worth writing down as refuted.</b>
-Adding C to the existing conversion with the committed efficiency &mdash; <code>C +
-runner_minutes(w)</code> at C = 20, each width on its own weights as this card requires &mdash;
-predicts <b>62.7 min at eight</b> against an observed 41.8 and <b>45.2 at twelve</b> against an
-observed 34.6: over-predicting by <b>50%</b> and <b>31%</b>. The bias is not even, which is the
-point &mdash; a fixed term added to an unchanged efficiency does not just shift the answer, it
-gets the width dependence wrong in the other direction. The tail it produces at twelve is
-<b>86.2 min, 115% of the cap</b>: the planner would refuse the width CI
-runs green today. C and <code>RUNNER_EFFICIENCY</code> have to move together, and whatever they
-do to the predicted median then has to be reconciled with
-<code>TAIL_MULTIPLIER</code>, whose over-estimate is currently covering for the median being low.
-
-<b>It is not CI setup, and that is the cheap half to check.</b> Stepping all 24 twelve-shard jobs
-through the Actions job API, everything that is not the <code>mutate shard</code> step is a
-median <b>0.5 min</b> &mdash; the 1.7% the constant's docstring already measured at six, still
-true. So the fixed cost is inside mutmut: a baseline test run (the <code>tests</code> job on
-those two runs took 7.8 and 8.6 min) and per-job mutant collection are the candidates, and
-neither has been measured. Measuring them would turn the 14-27 range into a mechanism.
-
-<b>Why it matters even though nothing is red.</b> Twelve sits at 74% of the cap empirically and
-the gate passes. But <code>plan</code> reported 64% on #1032's pack against that same
-measured 74%, and goes on reporting around half the cap at sixteen &mdash; 48% on #1032's weights, 50% on
-#1038's &mdash; where the real floor is <code>C &times;
-TAIL_MULTIPLIER</code> however many shards are added. So the one question the planner exists to
-answer &mdash; "is this width safe?" &mdash; is answered optimistically for every width above the
-fitted one, and the answer gets more optimistic the further you go. Until C is fitted,
-<code>test_the_committed_width_has_actually_run</code> refuses a <code>SHARDS</code> nothing has
-been observed at, and <code>test_todays_pack_under_predicts_the_worst_twelve_shard_job</code>
-pins the 7.8-minute shortfall so it cannot drift unnoticed.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/the-shard-model-has-no-per-job-fixed-cost.md">Write-up &middot; the-shard-model-has-no-per-job-fixed-cost.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">the plan divides by every shard added, so it flatters every width above the one it was fitted at</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="ai-cli-calls-inherit-the-real-config-home">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Core · Bug</span></div>
+        <h3>AI-assisted commands reach the real config home from a sandboxed <code>HOME</code></h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/ai-cli-calls-inherit-the-real-config-home.md">Write-up &middot; ai-cli-calls-inherit-the-real-config-home.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">explain / search --smart run the claude CLI with the parent environment, so a sandboxed HOME still writes into the real config home</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="scopes-contains-is-case-sensitive-on-a-case-insensitive-disk">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Core · Bug</span></div>
+        <h3><code>scopes.contains</code> calls the same directory two different trees when only the case differs</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/scopes-contains-is-case-sensitive-on-a-case-insensitive-disk.md">Write-up &middot; scopes-contains-is-case-sensitive-on-a-case-insensitive-disk.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">Path.resolve keeps the caller's spelling on macOS, so /users/x and /Users/x compare as different trees</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="quarantine-reports-a-link-removed-that-it-could-not-see">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3><code>boost quarantine</code> reports links removed that it could not see</h3>
+        <p>Found while measuring <code>agent-dir-shapes-install-still-trips-on</code>, and left out of that change.
+Make <code>~/.cursor</code> mode <code>0o600</code> and quarantine an installed skill.
+<code>unlink_agents</code> skips the cursor link because <code>os.path.islink</code> answers
+<code>False</code> when it may not look. Quarantine then reports the skill's links as removed, but
+the cursor link is still on disk and the agent keeps loading the skill boost meant to withhold.
+
+Uninstall no longer strands that link. It refuses while a recorded or unseen agent's dir can't be
+searched, and names <code>chmod u+wx</code>. Quarantine needs the same treatment. It should look at
+each link with <code>os.lstat</code>, so that <code>PermissionError</code> means "could not look", not
+"no link". Then it should either refuse with the same hint, or quarantine and say which agent may
+still load the skill. Refusing matches uninstall. Quarantining with a warning matches what a user
+reaching for quarantine wants. Measure both before choosing.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">under a 0o600 agent dotdir, quarantine says it unlinked a skill whose link there it cannot see</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

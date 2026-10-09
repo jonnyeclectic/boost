@@ -2294,14 +2294,16 @@ class TestCheckScopeConflict:
         store._check_scope_conflict(
             "x", {"scope": "user", "base": None}, "user", None, force=True)
 
-    def test_same_project_base_with_force_does_not_raise(self):
+    def test_same_project_base_with_force_does_not_raise(self, tmp_path):
         # The literal is built through Path, not typed as "/repo", because
         # that is how the value under test is produced: every writer of this
         # field stores `str(resolved_base)` (store.py's three lock writes), so
         # a POSIX-shaped literal compares against "\\repo" on Windows and the
         # guard refuses a same-scope force that a real install never hits.
-        # Green on macOS and Linux, red on windows-latest only.
-        base = Path("/repo")
+        # Green on macOS and Linux, red on windows-latest only. A directory
+        # that exists, because a project row whose base is gone is stranded
+        # and refused before the scope comparison (`scopes.stranded`).
+        base = tmp_path
         store._check_scope_conflict(
             "x", {"scope": "project", "base": str(base)}, "project", base,
             force=True)
@@ -2313,17 +2315,20 @@ class TestCheckScopeConflict:
                 store._check_scope_conflict(
                     "x", existing, "project", Path("/repo"), force=force)
 
-    def test_project_existing_vs_user_requested_raises_regardless_of_force(self):
-        existing = {"scope": "project", "base": "/repo"}
+    def test_project_existing_vs_user_requested_raises_regardless_of_force(
+            self, tmp_path):
+        existing = {"scope": "project", "base": str(tmp_path)}
         for force in (False, True):
             with pytest.raises(BoostError, match="already installed at project scope"):
                 store._check_scope_conflict("x", existing, "user", None, force=force)
 
-    def test_different_project_bases_conflict(self):
-        existing = {"scope": "project", "base": "/repo1"}
-        with pytest.raises(BoostError, match=r"project scope \(/repo1\)"):
+    def test_different_project_bases_conflict(self, tmp_path):
+        existing = {"scope": "project", "base": str(tmp_path)}
+        with pytest.raises(BoostError) as ei:
             store._check_scope_conflict(
                 "x", existing, "project", Path("/repo2"), force=True)
+        assert ei.value.message == (
+            "x is already installed at project scope (%s)" % tmp_path)
 
     def test_cross_scope_hint_points_at_uninstalling_the_other_location(self):
         existing = {"scope": "user", "base": None}
@@ -3004,20 +3009,16 @@ class TestProjectSkills:
         for rel in info["expected"]:
             assert not rel.startswith("/") and "\\" not in rel
 
-    @pytest.mark.skipif(sys.platform == "win32",
-                        reason="install cannot stage a copy through a relative directory "
-                               "symlink on Windows; the guard itself is covered "
-                               "there by the two ancestor tests, which symlink "
-                               "after the install")
     def test_an_in_repo_symlinked_dotdir_is_reported_as_redirected(
             self, entry, tmp_path):
-        """A legitimate `<repo>/.cursor -> config/cursor` is its own class.
+        """A `<repo>/.cursor -> config/cursor` committed *after* an install.
 
-        Install gates on `ensure_in_base`, which is containment only, so it
-        writes straight through the symlink and records the row it spelled.
-        Uninstall will not delete through it, because a committed symlink is
-        input and this layout is byte-identical to the attack
-        (`.claude/skills -> ../src`) — so the copy is left behind on purpose.
+        Install now refuses to write through that layout (see
+        `test_install_refuses_an_in_repo_symlinked_dotdir`), so the row
+        reaches uninstall only from an older lock or a symlink committed
+        later — staged here as the second. Uninstall still will not delete
+        through it, because a committed symlink is input and this layout is
+        byte-identical to the attack (`.claude/skills -> ../src`).
 
         What the first revision of that guard got wrong is the *reporting*: a
         redirected row is in `expected` by construction, so folding it into
@@ -3026,11 +3027,13 @@ class TestProjectSkills:
         """
         from boost_cli.core import projectlock
         repo = self._repo(tmp_path)
-        (repo / "config" / "cursor").mkdir(parents=True)
-        (repo / ".cursor").symlink_to("config/cursor", target_is_directory=True)
         store.install(entry, scope="project", base=str(repo))
+        (repo / "config").mkdir()
+        (repo / ".cursor").rename(repo / "config" / "cursor")
+        (repo / ".cursor").symlink_to(repo / "config" / "cursor",
+                                       target_is_directory=True)
         landed = repo / "config" / "cursor" / "skills" / "brainstorming"
-        assert landed.is_dir(), "install did not write through the symlink"
+        assert landed.is_dir()
         info = store.uninstall_project("brainstorming", base=str(repo))
         assert info["redirected"] == [".cursor/skills/brainstorming"]
         assert info["refused"] == []
@@ -3041,6 +3044,70 @@ class TestProjectSkills:
         # Every other agent's copy still goes; one redirect is not a veto.
         assert not (repo / ".claude" / "skills" / "brainstorming").exists()
         assert projectlock.get_skill(str(repo), "brainstorming") is None
+
+    def test_install_refuses_an_in_repo_symlinked_dotdir(self, entry, tmp_path):
+        """Install must not write where uninstall will not reach.
+
+        `ensure_in_base` is containment only, so this layout used to pass it:
+        the copy landed in `config/cursor/skills/<name>`, the lock recorded
+        `.cursor/skills/<name>`, and `uninstall --local` refused that row and
+        dropped the entry — an orphan nothing recorded. Refused up front, so
+        not one agent's copy is written first and no lock row appears.
+        """
+        from boost_cli.core import projectlock
+        repo = self._repo(tmp_path)
+        (repo / "config" / "cursor").mkdir(parents=True)
+        (repo / ".cursor").symlink_to(repo / "config" / "cursor",
+                                       target_is_directory=True)
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(repo))
+        assert ".cursor/skills/brainstorming" in err.value.message
+        assert not (repo / "config" / "cursor" / "skills").exists()
+        for dotdir in PROJECT_AGENT_DIRS.values():
+            assert not (repo / dotdir).exists() or dotdir == ".cursor"
+        assert projectlock.get_skill(str(repo), "brainstorming") is None
+
+    def test_install_refuses_a_redirect_named_alone_by_agent(
+            self, entry, tmp_path):
+        repo = self._repo(tmp_path)
+        (repo / "config" / "cursor").mkdir(parents=True)
+        (repo / ".cursor").symlink_to(repo / "config" / "cursor",
+                                       target_is_directory=True)
+        with pytest.raises(BoostError):
+            store.install(entry, scope="project", base=str(repo),
+                          only_agents=["cursor"])
+        assert not (repo / "config" / "cursor" / "skills").exists()
+
+    def test_install_leaving_the_redirected_agent_out_succeeds(
+            self, entry, tmp_path):
+        """The hint's escape hatch: `--agent` without the redirected one."""
+        from boost_cli.core import projectlock
+        repo = self._repo(tmp_path)
+        (repo / "config" / "cursor").mkdir(parents=True)
+        (repo / ".cursor").symlink_to(repo / "config" / "cursor",
+                                       target_is_directory=True)
+        store.install(entry, scope="project", base=str(repo),
+                      only_agents=["claude-code"])
+        assert (repo / ".claude" / "skills" / "brainstorming").is_dir()
+        assert not (repo / "config" / "cursor" / "skills").exists()
+        rows = [m["path"] for m in projectlock.get_skill(
+            str(repo), "brainstorming")["materializations"]]
+        assert rows == [".claude/skills/brainstorming"]
+
+    def test_force_reinstall_refuses_a_redirect_committed_after_install(
+            self, entry, tmp_path):
+        """`--force` waives the squatter check, never this one."""
+        from boost_cli.core import projectlock
+        repo = self._repo(tmp_path)
+        store.install(entry, scope="project", base=str(repo))
+        before = projectlock.get_skill(str(repo), "brainstorming")
+        (repo / "config").mkdir()
+        (repo / ".cursor").rename(repo / "config" / "cursor")
+        (repo / ".cursor").symlink_to(repo / "config" / "cursor",
+                                       target_is_directory=True)
+        with pytest.raises(BoostError):
+            store.install(entry, scope="project", base=str(repo), force=True)
+        assert projectlock.get_skill(str(repo), "brainstorming") == before
 
     def test_a_row_without_an_agent_still_counts_as_removed(
             self, entry, tmp_path):
@@ -5316,6 +5383,7 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
         finally:
             cursor.chmod(0o700)
         assert "%s is not writable" % paths.tilde(cursor) in ei.value.message
+        assert "`chmod u+w %s`" % paths.tilde(cursor) in ei.value.hint
         assert lockfile.get_rule("team-conventions") is not None
         store.uninstall("team-conventions")        # after the chmod, it may
         assert not (cursor / "team-conventions.mdc").exists()
@@ -5360,7 +5428,9 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
                 store.uninstall(entry["name"])
         finally:
             cursor.chmod(0o700)
-        assert "%s is not writable" % paths.tilde(cursor) in ei.value.message
+        # The missing bit is search, so `u+w` would change nothing.
+        assert "%s is not searchable" % paths.tilde(cursor) in ei.value.message
+        assert "`chmod u+wx %s`" % paths.tilde(cursor) in ei.value.hint
         assert self._locked(kind, entry["name"]) is not None
 
     def test_uninstall_does_not_rewrite_a_context_file_it_never_wrote(self, tap):

@@ -41,6 +41,7 @@ from ..core import (
     provenance,
     registry,
     report,
+    scopes,
     staleness,
     store,
     util,
@@ -203,7 +204,9 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
     ours: list[Path] = []
     theirs: list[Path] = []
     for adir in agents.linking_agents().values():
-        if not adir.is_dir():
+        # ``os.path``: ``Path.is_dir`` raises under a dotdir with no search
+        # bit on Python 3.12 and 3.13, and doctor and heal exited 70 there.
+        if not os.path.isdir(adir):  # noqa: FURB146
             continue
         for link in sorted(adir.iterdir()):
             if link.is_symlink() and not link.exists():
@@ -254,6 +257,13 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
     if entry.get("quarantined"):
         return "quarantined"
     st = integrity.materialized_status(name, entry, kind)
+    if st == integrity.STATUS_STRANDED:
+        # Not "store-missing": that row's hint is `boost heal`, which
+        # re-materializes into the recorded base and recreates the repo the
+        # user deleted. Before the tap comparison for the same reason as
+        # `unreachable` -- a source matching its hash says nothing about an
+        # install whose every artifact went with its repo.
+        return "stranded"
     if st == integrity.STATUS_MISSING:
         return "store-missing"
     if st == integrity.STATUS_MODIFIED:
@@ -283,7 +293,8 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
 _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
                "upstream-moved": "accent", "source-missing": "danger",
                "store-missing": "danger", "n/a": "muted",
-               "quarantined": "muted", "unreachable": "warn"}
+               "quarantined": "muted", "unreachable": "warn",
+               "stranded": "danger"}
 
 
 def _drift_hint(name: str, status: str, tap: str = "") -> str:
@@ -300,6 +311,10 @@ def _drift_hint(name: str, status: str, tap: str = "") -> str:
         return "boost update" if registry.is_tapped(tap) else "boost tap %s" % tap
     if status == "store-missing":
         return "boost heal"
+    if status == "stranded":
+        # The record is the fault: uninstall drives off its rows and creates
+        # nothing, where heal/sync/reinstall would recreate the deleted repo.
+        return "boost uninstall %s" % name
     if status == "unreachable":
         # Not `boost sync`: it filters these rows out by design, so it is a
         # guaranteed no-op. Not "re-enable the agent" either -- that is wrong
@@ -493,6 +508,23 @@ def cmd_doctor(argv):
                     "is" if len(clones) == 1 else "are"))
                 if clones else "no taps or settings are read"), wrap=True)
 
+    # One agent whose `dir` names an unset `${VAR}` makes `known_agents` raise,
+    # and a dozen checks below reach it — the link loop, the materialization
+    # checks, the broken-link sweep, duplicate discovery, the agent-dir checks.
+    # Left alone, the first of them ended the run: exit 1, one error line, no
+    # verdict, and not a byte of `--json`. So the question is asked once, here,
+    # and a bad answer turns those sections off rather than the report: each
+    # is skipped with `agents_ok`, and the row says that it was, because a
+    # skipped check that printed nothing would read as a passed one.
+    agent_errs = agents.check()
+    agents_ok = not agent_errs
+    for aname, err in agent_errs:
+        key = "agents.%s.dir" % aname
+        bad("agent-config", "%s: %s — %s, or set a path with `boost config set "
+            "%s <dir>`; until then commands that resolve agents refuse, and "
+            "doctor skipped its link, materialization and agent-dir checks"
+            % (key, err.message, err.hint or "fix the value", key), wrap=True)
+
     # A cache dir boost cannot write leaves every command rescanning its taps
     # and warning that it could not keep the result (catalog.rebuild_tap), so
     # "cloned & cached" below would be the one line on the screen claiming
@@ -537,6 +569,15 @@ def cmd_doctor(argv):
         if d != cache_dir or not taps:
             bad("dirs", paths.not_writable(d, paths.refuses_writes(d) or d),
                 wrap=True)
+    # An existing store that refuses writes: the mkdir above succeeds, so
+    # `refused` never holds it, and doctor said healthy while every install
+    # exited 1 naming it (`store._require_writable`).
+    store_dir = paths.store_dir()
+    store_block = paths.refuses_writes(store_dir)
+    if store_block is not None and store_dir not in refused:
+        bad("store", "%s — every install is refused until it is fixed; %s"
+            % (paths.not_writable(store_dir, store_block),
+               paths.write_remedy(store_block)), wrap=True)
     if configured and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
                                               "" if cache_block
@@ -586,7 +627,7 @@ def cmd_doctor(argv):
     # codex arrived after). Looking it up in the enabled set finds a real
     # directory holding no symlink and reports "not linked — run `boost sync`",
     # which sync then declines to act on. Doctor and sync have to agree.
-    enabled = agents.linking_agents()
+    enabled = agents.linking_agents() if agents_ok else {}
     skill_issues = 0
     quarantined_skills = 0
     for name, entry in sorted(skills.items()):
@@ -625,9 +666,15 @@ def cmd_doctor(argv):
             # another installer put there, so prescribing it for that case sent
             # the reader in a circle: sync answers "everything in sync", doctor
             # repeats itself. Name the thing in the way instead.
-            if link.is_symlink() and link.exists():
+            # ``os.path``: under a dotdir with no search bit ``Path.is_symlink``
+            # raises on Python 3.12 and 3.13, and doctor exited 70 on it.
+            if os.path.islink(link) and os.path.exists(link):  # noqa: FURB141
                 continue
-            if not link.is_symlink() and link.exists():
+            if not os.path.lexists(link) and paths.refuses_writes(adir):
+                # Not one `boost sync` can make until the dir allows it: the
+                # agent-dir line below names the dir and its `chmod`.
+                continue
+            if not os.path.islink(link) and os.path.exists(link):  # noqa: FURB141
                 bad("skill-link", "skill %s not linked for %s — %s exists and is not a boost "
                     "link; move or delete it, then run `boost sync`"
                     % (name, agent, paths.tilde(link)))
@@ -647,7 +694,8 @@ def cmd_doctor(argv):
                 % (name, ", ".join(stray), ", ".join(scope)))
             skill_issues += 1
     active_skills = len(skills) - quarantined_skills
-    if skills and not skill_issues:
+    # "with agent links" is a claim the loop above only checked with agents_ok.
+    if skills and not skill_issues and agents_ok:
         # A quarantined skill has no agent links — unlink_agents already
         # removed them — so it must not inflate this count into a false
         # "healthy, N skills with agent links" the way it used to.
@@ -676,6 +724,16 @@ def cmd_doctor(argv):
             bad("project-skill", "project skill %s modified since install — "
                 "run `boost verify`" % name)
             proj_issues += 1
+        # Independent of the status above: a redirected row reads intact,
+        # because the hash follows the symlink, and is still one uninstall
+        # will leave on disk.
+        for row in integrity.project_redirected(entry, pbase):
+            bad("project-skill", "project skill %s: %s is reached through a "
+                "symlink inside the repo, so `boost uninstall --local` will "
+                "not remove that copy — it names the row and prints the "
+                "`rm -rf` that does"
+                % (name, row), wrap=True)
+            proj_issues += 1
     if pskills and not proj_issues:
         rep.ok("project-skills", "%d project skill%s intact in %s"
                % (len(pskills), _s(len(pskills)), paths.tilde(pbase)))
@@ -694,6 +752,30 @@ def cmd_doctor(argv):
     quarantined_rules = len(all_rules) - len(rules)
     quarantined_workflows = len(all_workflows) - len(workflows)
     mat_issues = 0
+    # A `--local` row whose repo has been deleted is one fault, not one per
+    # agent, and its remedy is not `boost reinstall`: that re-materializes
+    # into the recorded base and recreates the directory (`scopes.stranded`).
+    # Named once with the command that drops the record, and kept out of the
+    # per-row checks below so they cannot prescribe the resurrecting one.
+    # Quarantined rows included: `quarantine --release` refuses a stranded
+    # row, so quarantining one must not be the way to make doctor go quiet.
+    for kind, section in (("rule", all_rules), ("workflow", all_workflows)):
+        for name, entry in sorted(section.items()):
+            if scopes.stranded(entry):
+                bad(kind, "%s %s was installed --local into %s, which no "
+                    "longer exists — run `boost uninstall %s` to drop the "
+                    "record%s" % (kind, name, _tilde(Path(entry["base"])), name,
+                                  " (it is quarantined; release cannot "
+                                  "restore it)" if entry.get("quarantined")
+                                  else ""),
+                    wrap=True)
+                mat_issues += 1
+    rules = {n: e for n, e in rules.items() if not scopes.stranded(e)}
+    workflows = {n: e for n, e in workflows.items() if not scopes.stranded(e)}
+    # Every materialization check asks which agents boost writes, so with an
+    # unresolvable agent there is nothing to check them against.
+    if not agents_ok:
+        rules, workflows = {}, {}
     for kind, section in (("rule", rules), ("workflow", workflows)):
         for name, entry in sorted(section.items()):
             for m in entry.get("materializations") or []:
@@ -705,7 +787,10 @@ def cmd_doctor(argv):
                     # names the `chmod`, or the move when a file or a dangling
                     # link is in the way. Any file there predates the refusal.
                     block = paths.refuses_writes(Path(m.get("path", "")).parent)
-                    if block is not None and paths.in_the_way(block):
+                    if store.occupied(Path(m.get("path", ""))):
+                        why = ("%s, then `boost sync` writes it"
+                               % store.occupied_refusal(m["path"]))
+                    elif block is not None and paths.in_the_way(block):
                         why = ("%s is in the way — `boost sync` writes it once "
                                "it is moved" % _tilde(block))
                     else:
@@ -728,7 +813,9 @@ def cmd_doctor(argv):
                 except OSError:
                     present = False
             else:
-                present = p.is_file()
+                # ``os.path``: ``Path.is_file`` raises under a dotdir with no
+                # search bit on Python 3.12 and 3.13.
+                present = os.path.isfile(p)  # noqa: FURB146
             if not present:
                 bad("rule", "rule %s missing its %s materialization — run "
                     "`boost reinstall %s`" % (name, m.get("agent", "?"), name))
@@ -737,7 +824,7 @@ def cmd_doctor(argv):
         for m in entry.get("materializations") or []:
             if not store.materialization_is_written("workflow", entry, m):
                 continue
-            if not m.get("unwritable") and not Path(m.get("path", "")).is_file():
+            if not m.get("unwritable") and not os.path.isfile(m.get("path", "")):
                 bad("workflow", "workflow %s missing its %s file — run `boost reinstall %s`"
                     % (name, m.get("agent", "?"), name))
                 mat_issues += 1
@@ -748,7 +835,7 @@ def cmd_doctor(argv):
     # remedy could not run -- see `agents.materialization_is_written`. It
     # names the items and the per-agent reason, because "disabled" is only
     # one of them: an agent can be enabled and still take no workflow.
-    off = store.unwritten_materializations()
+    off = store.unwritten_materializations() if agents_ok else []
     if off:
         shown = ["%s %s → %s (%s)" % (k, n, a, why)
                  for k, n, a, why in off[:_MAT_NOTE_SHOWN]]
@@ -786,7 +873,7 @@ def cmd_doctor(argv):
                     "it is" if len(nowhere) == 1 else "they are",
                     ", ".join("%s %s" % (k, n) for k, n in nowhere)),
                  wrap=True)
-    if (all_rules or all_workflows) and not mat_issues:
+    if (all_rules or all_workflows) and not mat_issues and agents_ok:
         # Quarantined rules/workflows are excluded above so their stashed-but-
         # removed materializations don't read as rot — but excluding them from
         # `rules`/`workflows` entirely used to make this line vanish outright
@@ -828,7 +915,7 @@ def cmd_doctor(argv):
         bad("orphans", "%d orphaned store dir%s (%s) — run `boost sync`"
             % (len(orphans), _s(len(orphans)), ", ".join(orphans[:5])))
 
-    broken, foreign = _broken_links()
+    broken, foreign = _broken_links() if agents_ok else ([], [])
     if broken:
         bad("broken-links", "%d broken symlink%s in agent dirs — run `boost heal`"
             % (len(broken), _s(len(broken))))
@@ -886,7 +973,7 @@ def cmd_doctor(argv):
                     ", …" if len(missing) > 5 else "",
                     prereq.install_hint(prereq_rows)), wrap=True)
 
-    for dup in store.duplicate_discovery():
+    for dup in (store.duplicate_discovery() if agents_ok else ()):
         # An agent that reads the canonical store natively, holding its own
         # entry for a skill that store already carries. Boost did not put it
         # there — it never links into a native-store agent — but the agent
@@ -903,19 +990,18 @@ def cmd_doctor(argv):
     # rules/ and commands/ dirs rules and workflows materialize into. Not a
     # native-store agent's skills dir (Gemini's): boost never writes it, and
     # `boost sync` could not act on it.
-    skills_dirs = set(agents.linking_agents().values())
-    for adir, block in store.blocked_agent_dirs():
+    skills_dirs = set(agents.linking_agents().values()) if agents_ok else set()
+    for adir, block in (store.blocked_agent_dirs() if agents_ok else ()):
         # A file or a dangling link where the dir belongs. Heal names it,
         # install skips the agent, and doctor said nothing and exited 0.
         bad("agent-dir", "%s — %s, then `boost sync` %s what it missed"
             % (paths.not_writable(adir, block), paths.write_remedy(block),
                "relinks" if adir in skills_dirs else "writes"), wrap=True)
-    for adir in store.unwritable_agent_dirs():
+    for adir in (store.unwritable_agent_dirs() if agents_ok else ()):
         # A next action, like the log line below it: without one this was
         # the only issue doctor names that nothing can act on.
-        bad("agent-dir", "agent dir %s is not writable — `chmod u+w %s`, "
-            "then `boost sync` writes what it missed"
-            % (_tilde(adir), _tilde(adir)), wrap=True)
+        bad("agent-dir", "agent dir %s — %s, then `boost sync` writes what "
+            "it missed" % store.unwritable_refusal(str(adir)), wrap=True)
 
     rotation = journal.rotation_healthy()
     if not rotation:
@@ -967,11 +1053,15 @@ def cmd_doctor(argv):
     # row that had just counted them. Name the second number rather than fold
     # it into the first: they live in different places and `boost uninstall`
     # treats them differently, so one total would be a different claim.
-    line1 = ("%d skill%s installed%s · %d tap%s synced · %d broken link%s"
+    line1 = ("%d skill%s installed%s · %d tap%s synced · %s"
              % (len(skills), _s(len(skills)),
                 " (+%d in this project)" % len(pskills) if pskills else "",
-                tap_ok, _s(tap_ok), len(broken), _s(len(broken))))
-    (rep.ok if not broken else rep.warn)("summary", line1)
+                tap_ok, _s(tap_ok),
+                "%d broken link%s" % (len(broken), _s(len(broken)))
+                if agents_ok else "links not checked"))
+    # A warn, not an ok, when the links went unchecked: a ✓ beside "links
+    # not checked" reads as passed. Restates the agent-config issue above.
+    (rep.ok if not broken and agents_ok else rep.warn)("summary", line1)
     if lock_ok and rotation:
         rep.ok("integrity", "lock file integrity OK · log rotation healthy")
     else:
@@ -1294,7 +1384,8 @@ def cmd_test(argv):
                           "ok": not failed_count}, indent=2))
         return 1 if failed_count else 0
     if not rows:
-        out.info("no skills installed")
+        print(out.empty_state("no skills installed",
+                              hint="boost install <skill> to start"))
         return 0
     out.table(rows, headers=("SKILL", "RESULT", "FAILED CHECKS"),
               whole=("SKILL",))
@@ -1343,7 +1434,8 @@ def cmd_decay(argv):
         print(json.dumps({"skills": rows}))
         return 0
     if not rows:
-        out.info("no skills installed")
+        print(out.empty_state("no skills installed",
+                              hint="boost install <skill> to start"))
         return 0
     rel_role = {"none": "danger", "low": "warn", "ok": "success"}
     verdicts = {"decay": out.role("decay candidate", "danger"),
@@ -1381,7 +1473,10 @@ def cmd_heal(argv):
     # linking_agents, not enabled_agents: a native-store agent's skills dir is
     # never written to, so it is not a missing directory.
     wanted = [*paths.boost_dirs(), *agents.linking_agents().values()]
-    missing = [d for d in wanted if not d.is_dir()]
+    # ``os.path.isdir``: ``Path.is_dir`` raises under a dir with no search bit
+    # on Python 3.12 and 3.13, where this exited 70. Such a dir is "missing"
+    # here, and `refuses_writes` below names the parent that hides it.
+    missing = [d for d in wanted if not os.path.isdir(d)]  # noqa: FURB146
     # A missing dir whose parent refuses the mkdir is not one heal can create,
     # so the preview does not promise it: it used to say "would create" and
     # exit 0 for a run that crashed at exit 70. Both name it below instead.
@@ -1425,7 +1520,13 @@ def cmd_heal(argv):
         # them so a preview doesn't report the same path twice under two
         # different actions.
         already_reported = {str(link) for link in ours}
+        linking = agents.linking_agents()
         for name, agent in plan["missing_links"]:
+            # A dir that refuses writes is skipped by the run, which names it
+            # below; promising the link here was a preview the run broke.
+            adir = linking.get(agent)
+            if adir is not None and paths.refuses_writes(adir) is not None:
+                continue
             out.info("would link %s → %s" % (name, agent))
             actions.append("link %s" % name)
         for p in plan["stale_links"]:
@@ -1442,7 +1543,8 @@ def cmd_heal(argv):
             actions.append(msg)
     else:
         for msg in store.sync_apply(plan):
-            out.ok(msg.replace(str(paths.home()), "~"))
+            (out.warn if store.is_unrepaired(msg) else out.ok)(
+                msg.replace(str(paths.home()), "~"))
             actions.append(msg)
 
     # Opt-in, unlike everything above it. The rest of `heal` repairs what boost
@@ -1513,11 +1615,14 @@ def cmd_heal(argv):
                  % cfg_err, wrap=True)
     # Permissions are the user's to change, not heal's; but a dir heal saw and
     # cannot fix must not sit under an all-clear.
-    stuck = store.unwritable_agent_dirs()
+    # A block `blocked` already names for a missing dir is not named twice:
+    # both now come from `refuses_writes`.
+    stuck = [d for d in store.unwritable_agent_dirs()
+             if d not in blocked.values()]
     for adir in stuck:
-        out.warn("agent dir %s is not writable — heal does not change "
-                 "permissions; run `chmod u+w %s`, then `boost sync`"
-                 % (_tilde(adir), _tilde(adir)), wrap=True)
+        out.warn("agent dir %s — heal does not change permissions; run %s, "
+                 "then `boost sync`" % store.unwritable_refusal(str(adir)),
+                 wrap=True)
     # The same rule for the cache dir doctor flags, and for any directory a
     # refused mkdir left missing: heal cannot make the parent writable, so it
     # must not answer "nothing to heal" beneath the problem. The preview and
@@ -1526,11 +1631,19 @@ def cmd_heal(argv):
     if registry.list_taps() and cache_stuck:
         blocked.setdefault(cache_dir,
                            paths.refuses_writes(cache_dir) or cache_dir)
+    # The store doctor flags: it exists, so it is never `missing` above.
+    store_block = paths.refuses_writes(paths.store_dir())
+    if store_block is not None and store_block not in blocked.values():
+        blocked.setdefault(paths.store_dir(), store_block)
     # A file or a dangling link where a recorded rule's or workflow's dir
     # belongs. A block already named for a skills dir is named once.
     for d, block in store.blocked_agent_dirs():
         if block not in blocked.values():
             blocked.setdefault(d, block)
+    for path in store.occupied_targets():
+        stuck.append(path)
+        out.warn("%s, then `boost sync` (heal does not move files)"
+                 % store.occupied_refusal(path), wrap=True)
     for d, block in blocked.items():
         stuck.append(d)
         out.warn("%s — heal does not %s; %s"
@@ -1755,7 +1868,7 @@ def cmd_health(argv):
     coverage_ok = True
     for agent, adir in agents.linking_agents().items():
         linked = sum(1 for n in expected
-                     if (adir / n).is_symlink() and (adir / n).exists())
+                     if os.path.islink(adir / n) and os.path.exists(adir / n))  # noqa: FURB141, FURB146
         full = linked == len(expected)
         coverage_ok = coverage_ok and full
         kv(agent, "%d/%d %s" % (linked, len(expected),
@@ -1814,14 +1927,15 @@ def cmd_health(argv):
 
     # The membership rule is "is there anything there", not "has it drifted":
     # `local-edits` and `upstream-moved` are expected states of a *live*
-    # install, while these three each mean the install reaches nothing --
-    # the store dir is gone, the source is gone, or no agent was ever
-    # written. Leaving `unreachable` out would be the bug this status was
+    # install, while these four each mean the install reaches nothing --
+    # the store dir is gone, the source is gone, no agent was ever written,
+    # or the repo a `--local` row was installed into has been deleted. Leaving `unreachable` out would be the bug this status was
     # added for, wearing a new word.
     attention = (bool(broken) or not coverage_ok
                  or drift_counts.get("store-missing", 0) > 0
                  or drift_counts.get("source-missing", 0) > 0
                  or drift_counts.get("unreachable", 0) > 0
+                 or drift_counts.get("stranded", 0) > 0
                  or not journal.rotation_healthy())
     if args.json:
         print(json.dumps(data | {"ok": not attention,
@@ -1961,7 +2075,7 @@ def cmd_trust(argv) -> int:
                   # fingerprint it is dropped rather than clipped.
                   whole=("NAME",))
     else:
-        out.dim("  none — add one with `boost trust add <name> <key>`")
+        out.dim("  none — add one with `boost trust add <name> <key>`", wrap=True)
     print()
     _print_provenance(taps)
     return 0

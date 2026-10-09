@@ -157,7 +157,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
             out.warn("could not write %s — %s not registered"
                      % (mcpdecl.SIDECAR, ", ".join(wanted)))
             out.dim("  the skill is installed; fix the file's permissions and "
-                    "reinstall to record them")
+                    "reinstall to record them", wrap=True)
         return
     out.info("")
     out.warn("%s needs %s to work:" % (res.name, _plural(len(rows), "MCP server")))
@@ -169,7 +169,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     wirable = mcpdecl.registrable(rows)
     if not wirable:
         # Name-only declarations: boost will not invent a command line.
-        out.dim("  install these yourself, then `boost mcp register`")
+        out.dim("  install these yourself, then `boost mcp register`", wrap=True)
         return
     from ..core import mcphost
     # Offer the CLIs that are actually here. With none installed we still fall
@@ -183,7 +183,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     if not out.confirm(
             "  register %s with %s, for every project on this machine?"
             % (_plural(len(wirable), "server"), where), default=False):
-        out.dim("  skipped — run these yourself when you're ready:")
+        out.dim("  skipped — run these yourself when you're ready:", wrap=True)
         for row in wirable:
             # One line per host, not `targets[0]` — the prompt named every
             # host and a yes would have registered with every one, so a no
@@ -279,7 +279,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         out.ok("project lock updated (%s/%s)"
                % (projectlock.LOCK_DIRNAME, projectlock.LOCK_FILENAME))
         out.dim("  commit %s/ to share these with the team"
-                % projectlock.LOCK_DIRNAME)
+                % projectlock.LOCK_DIRNAME, wrap=True)
         _warn_injection(res)
         _warn_secrets(res)
         _offer_mcp(res, no_mcp=no_mcp)
@@ -301,19 +301,22 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
     _offer_mcp(res, no_mcp=no_mcp)
 
 
-def _warn_unwritable(res) -> None:
+def _warn_unwritable(res, stream=None) -> None:
     """Name what an install skipped, and the remedy — every path that
     installs, reinstall and update included, so none reports success over an
     agent it silently left out.
 
     A conflict is a real file squatting a skill's link path. An unwritable dir
     refused a link, or a rule or workflow file; the refused agent is still
-    recorded, so `boost sync` writes it once the dir allows it."""
+    recorded, so `boost sync` writes it once the dir allows it.
+
+    ``stream`` for a caller speaking JSON on stdout: relinking under
+    `focus --json` must still say what it skipped, on stderr."""
     conflicts, refused = _skipped_agent_lines(res)
     for line in conflicts:
-        out.warn(line)
+        out.warn(line, stream=stream)
     for line in refused:
-        out.warn(line, wrap=True)
+        out.warn(line, stream=stream, wrap=True)
 
 
 def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
@@ -326,18 +329,26 @@ def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
     caller's own ``install`` callable, whose result need not carry every
     field of an ``InstallResult``.
     """
-    conflicts = ["not linked: %s exists and is not managed by boost" % _tilde(path)
-                 for path in getattr(res, "conflicts", None) or ()]
     what = ("not linked", "adds the link") \
         if getattr(res, "kind", "skill") == "skill" else ("not written", "writes it")
-    refused = ["%s: %s is not writable — `chmod u+w %s`, then `boost sync` %s"
-               % (what[0], _tilde(adir), _tilde(adir), what[1])
+    conflicts = ["not linked: %s exists and is not managed by boost" % _tilde(path)
+                 for path in getattr(res, "conflicts", None) or ()
+                 if what[0] == "not linked"]
+    refused = ["%s: %s — %s, then `boost sync` %s"
+               % (what[0], *store.unwritable_refusal(adir), what[1])
                for adir in getattr(res, "unwritable", None) or ()]
     # Something in the way of the dir: no chmod clears a file or a dangling
     # link, so the remedy is the move `store.link_refusal` names.
     refused += ["%s: %s — %s, then `boost sync` %s"
                 % (what[0], *store.link_refusal(adir, block), what[1])
                 for adir, block in getattr(res, "blocked", None) or ()]
+    # A rule's or workflow's conflict is a directory where its file goes
+    # (`store.occupied`): "not linked" named an action that kind never takes,
+    # and its remedy is a move, worded the way sync, heal and doctor word it.
+    if what[0] != "not linked":
+        refused += ["not written: %s, then `boost sync` writes it"
+                    % store.occupied_refusal(path)
+                    for path in getattr(res, "conflicts", None) or ()]
     return conflicts, refused
 
 
@@ -1068,7 +1079,7 @@ def cmd_sync(argv: list[str]) -> int:
                           "blocked_links": blocked}, indent=2))
         return 0
     for a in actions:
-        out.ok(a)
+        (out.warn if store.is_unrepaired(a) else out.ok)(a)
     if unrecorded:
         out.warn("%s the lock file cannot record, left as they are: %s — "
                  "restore the lock with `boost replay`"
@@ -1110,8 +1121,8 @@ def cmd_sync(argv: list[str]) -> int:
     # what it could not, rather than "everything in sync" over it.
     stuck = store.unwritable_agent_dirs()
     for adir in stuck:
-        out.warn("agent dir %s is not writable — `chmod u+w %s`, then re-run "
-                 "`boost sync`" % (_tilde(adir), _tilde(adir)), wrap=True)
+        out.warn("agent dir %s — %s, then re-run `boost sync`"
+                 % store.unwritable_refusal(str(adir)), wrap=True)
     # A file or a dangling link where a rules/ or commands/ dir belongs. A
     # block the line above already names for a skill link is not named twice.
     named = {Path(p) for _n, _a, p in blocked}
@@ -1119,8 +1130,14 @@ def cmd_sync(argv: list[str]) -> int:
     for adir, block in in_way:
         out.warn("%s — %s, then re-run `boost sync`"
                  % store.link_refusal(str(adir), str(block)), wrap=True)
+    # A directory where a rule's or workflow's file goes: no dir refuses, so
+    # neither line above sees it, and sync said "everything in sync" over it.
+    occupied = store.occupied_targets()
+    for path in occupied:
+        out.warn("%s, then re-run `boost sync`" % store.occupied_refusal(path),
+                 wrap=True)
     if (not actions and not pruned and not left and not oos and not blocked
-            and not stuck and not in_way):
+            and not stuck and not in_way and not occupied):
         out.ok("everything in sync")
     return 0
 
@@ -1248,6 +1265,18 @@ def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
                 cur = None
             changed = bool(cur and cur != lk.get("sha256"))
         if not changed:
+            continue
+        if scopes.stranded(lk):
+            # Its repo is gone, and refreshing it would recreate that
+            # directory (`store._refuse_stranded_base` refuses the write).
+            # Said here, before the risky-diff prompt, so nobody is asked to
+            # review a change that cannot be applied -- and only when there
+            # is a change, since a stranded row with nothing new is not this
+            # command's to report; `boost doctor` names it either way.
+            out.warn("%s %s: update skipped — it was installed --local into "
+                     "%s, which no longer exists; `boost uninstall %s` drops "
+                     "the record" % (kind, name, _tilde(Path(lk["base"])),
+                                     name), wrap=True)
             continue
         try:
             new_raw = (registry.get(tapname).path
@@ -1458,7 +1487,9 @@ def cmd_update(argv: list[str]) -> int:
         return _ingest_shards(args)
     results, failures = registry.update(args.tap or None, force=args.force)
     if not results and not failures:
-        out.info("no taps configured — start with `boost tap --defaults`")
+        print(out.empty_state("no taps configured",
+                              hint="start with `boost tap --defaults`",
+                              wrap=True))
         return 0
     moved = []
     pinned_skips = 0
@@ -1622,7 +1653,11 @@ def cmd_reinstall(argv: list[str]) -> int:
                                     scope=lk.get("scope", "user"),
                                     base=lk.get("base"))
             except BoostError as err:
-                out.warn("%s: %s" % (name, err.message))
+                # The hint too: a refusal to recreate a deleted repo is only
+                # useful with the `boost uninstall` that clears it.
+                out.warn("%s: %s%s" % (name, err.message,
+                                       " — %s" % err.hint if err.hint else ""),
+                         wrap=True)
                 failed += 1
                 continue
             # Success first, then what it skipped: the same order as every
@@ -1687,8 +1722,11 @@ def cmd_reinstall(argv: list[str]) -> int:
         done += 1
         done_kinds.add("skill")
     # Name the kind when only one was touched; a mixed run says "items".
-    noun = next(iter(done_kinds)) if len(done_kinds) == 1 else (
-        "item" if done_kinds else "skill")
+    # With nothing done, name what was *attempted*: a refused rule used to
+    # tally as "Reinstalled 0 skills".
+    tried = done_kinds or {k for k, _, _ in items}
+    noun = next(iter(tried)) if len(tried) == 1 else (
+        "item" if tried else "skill")
     out.info("Reinstalled %s" % _plural(done, noun))
     return 1 if failed else 0
 
@@ -2095,7 +2133,7 @@ def cmd_pin(argv: list[str]) -> int:
         commit = integrity.set_commit_pin(args.name, entry, kind=kind)
         journal.log("pin-commit", args.name, commit=commit)
         out.ok("commit-pinned %s at %s" % (args.name, commit[:12]))
-        out.dim("  `boost verify` fails if the recorded commit ever moves off it")
+        out.dim("  `boost verify` fails if the recorded commit ever moves off it", wrap=True)
     return rc
 
 
@@ -2116,7 +2154,7 @@ def cmd_unpin(argv: list[str]) -> int:
         found and integrity.clear_commit_pin(args.name, found[1], kind=found[0]))
     rc = _set_pin(args.name, False)
     if cleared_commit_pin:
-        out.dim("  released the commit pin too")
+        out.dim("  released the commit pin too", wrap=True)
     return rc
 
 
@@ -2233,7 +2271,9 @@ def _snapshot_list(as_json: bool) -> int:
         print(json.dumps(snaps, indent=2))
         return 0
     if not snaps:
-        out.info("no snapshots yet — create one with `boost snapshot save`")
+        print(out.empty_state("no snapshots yet",
+                              hint="create one with `boost snapshot save`",
+                              wrap=True))
         return 0
     out.table([(s["id"], util.rel_time(s["created"]) if s["created"] else "?",
                 s["label"] or "—",

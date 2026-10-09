@@ -39,6 +39,7 @@ from ..core import (
     rag,
     registry,
     rules,
+    scopes,
     selfupdate,
     serve,
     store,
@@ -477,7 +478,7 @@ def cmd_compact(argv) -> int:
     out.ok("compacted %d tap(s) · %s freed" % (changed, util.human_size(freed)))
     if not args.reclone:
         out.dim("  `boost compact --reclone` also drops already-downloaded "
-                "git objects")
+                "git objects", wrap=True)
     return rc
 
 
@@ -557,7 +558,7 @@ def cmd_create(argv) -> int:
         if owner and not out.confirm(
                 "%s is already installed from %s — replace it?" % (name, owner)):
             out.warn("not installed: %s is already installed from %s" % (name, owner))
-            out.dim("  next: edit it, then `boost import %s`" % _tilde(target))
+            out.dim("  next: edit it, then `boost import %s`" % _tilde(target), wrap=True)
             return 0
         res = store.install_from_path(target, name=name)
         out.ok("%s %s → %s" % ("replaced" if owner else "installed", name, _tilde(res.dest)))
@@ -566,7 +567,7 @@ def cmd_create(argv) -> int:
         from .pkg import _warn_unwritable
         _warn_unwritable(res)
     else:
-        out.dim("  next: edit it, then `boost import %s`" % _tilde(target))
+        out.dim("  next: edit it, then `boost import %s`" % _tilde(target), wrap=True)
     return 0
 
 
@@ -596,7 +597,7 @@ def _warn_invalid_policy_values() -> None:
         out.warn("ignoring %s = %s in policy.json — expects %s"
                  % (key, json.dumps(value), expected))
         out.dim("  using the default; fix it with `boost policy set %s <%s>`"
-                % (key, policy.spec_for(key)))
+                % (key, policy.spec_for(key)), wrap=True)
 
 
 def cmd_policy(argv) -> int:
@@ -767,7 +768,7 @@ def cmd_policy(argv) -> int:
                  + (" (%d unpinned item(s): %s)"
                     % (len(unpinned), ", ".join(unpinned)) if unpinned else ""))
     for note in sorted(not_checked):
-        out.dim("  not checked: %s" % note)
+        out.dim("  not checked: %s" % note, wrap=True)
     if violations:
         out.table([(label, v) for _n, _k, label, v in violations],
                   headers=("ITEM", "VIOLATION"), whole=("ITEM",))  # `uninstall`
@@ -1013,7 +1014,7 @@ def _report_rc_plan(plan, install: bool, shell: str) -> None:
     out.info(verb % _tilde(plan.path))
     for line in _rc_plan_diff(plan):
         out.dim("  " + line)
-    out.dim("  re-run without --dry-run to apply")
+    out.dim("  re-run without --dry-run to apply", wrap=True)
 
 
 def _rc_plan_diff(plan) -> list[str]:
@@ -1087,7 +1088,7 @@ def cmd_completions(argv) -> int:
                   "into" if args.install else "from", _tilde(plan.path)))
         if args.install:
             out.dim("  restart your shell (or run `exec %s`) to pick it up"
-                    % detected)
+                    % detected, wrap=True)
         return 0
 
     shell = detected if detected in ("bash", "zsh", "fish") else "bash"
@@ -1262,7 +1263,7 @@ def cmd_schedule(argv) -> int:
             out.kv("next run", next_run.strftime("%Y-%m-%d %H:%M (approx)")
                    if next_run else "unknown")
         else:
-            out.dim("  enable with `boost schedule enable --interval 6h|12h|daily`")
+            out.dim("  enable with `boost schedule enable --interval 6h|12h|daily`", wrap=True)
         return 0
 
     if args.action == "enable":
@@ -1518,13 +1519,10 @@ def _tool_info(args: dict):
     if src.get("description"):
         lines.append("description: %s" % src["description"])
     if entry:
-        if kind == "skill":
-            agents_s = ", ".join(entry.get("agents") or []) or "none"
-        else:
-            # Materialized kinds record their reach per materialization.
-            agents_s = ", ".join(sorted(
-                {m.get("agent", "?")
-                 for m in entry.get("materializations") or []})) or "none"
+        # Only the agents boost still writes for: a recorded row whose agent
+        # was disabled is kept for uninstall, not reached (same as `info`).
+        agents_s = ", ".join(
+            integrity.written_agent_names(kind, entry)) or "none"
         lines.extend(("installed: yes (%s)" % entry.get("installed_at", "?"),
                       "agents: %s" % agents_s))
         if entry.get("pinned"):
@@ -1596,11 +1594,10 @@ def _tool_install(args: dict):
     lines.append("quality score: %d/100" % res.score)
     if res.conflicts:
         lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
-    if res.unwritable:
-        lines.append("not %s, directory not writable: %s — ask the user to "
-                     "`chmod u+w` it, then `boost sync`"
-                     % ("linked" if res.kind == "skill" else "written",
-                        ", ".join(res.unwritable)))
+    lines.extend("not %s: %s — ask the user to run %s, then `boost sync`"
+                 % ("linked" if res.kind == "skill" else "written",
+                    *store.unwritable_refusal(adir))
+                 for adir in res.unwritable)
     for adir, block in res.blocked:
         lines.append("not %s: %s — ask the user to %s, then `boost sync`"
                      % ("linked" if res.kind == "skill" else "written",
@@ -1621,7 +1618,13 @@ def _tool_install(args: dict):
 
 
 def _tool_doctor(args: dict):
-    plan = store.sync_plan()
+    # Same rule as CLI `boost doctor`: one agent whose `dir` cannot resolve
+    # makes `known_agents` raise, and both `sync_plan` and the materialization
+    # digest below reach it. Name the key and skip those two, rather than let
+    # the whole reply become the bare `expand` error, which names a variable
+    # but not the config key the user has to change.
+    agent_errs = agents.check()
+    plan = store.sync_plan() if not agent_errs else {}
     issues = sum(len(v) for v in plan.values())
     # Two different questions, and answering the second with the first is what
     # made this tool disagree with every other one. `taps` is the literal clone
@@ -1658,14 +1661,33 @@ def _tool_doctor(args: dict):
     _MAT_ISSUE_LABEL = {
         integrity.STATUS_MODIFIED: "modified since install",
         integrity.STATUS_UNREACHABLE: "reaches no agent boost writes",
+        # sync_plan skips these (a repair would recreate the deleted repo),
+        # so without a label here this surface would be the one calling it
+        # healthy.
+        integrity.STATUS_STRANDED: "installed --local into a directory that "
+                                   "no longer exists (`boost uninstall` "
+                                   "drops the record)",
     }
     mat_issues = [
         "%s %s: %s" % (kind, n, _MAT_ISSUE_LABEL[st])
         for kind in ("rule", "workflow")
         for n, e in sorted(everything[kind].items())
-        if (st := integrity.materialized_status(n, e, kind)) in _MAT_ISSUE_LABEL]
+        # Stranded is asked first: materialized_status answers "quarantined"
+        # for a quarantined row, and a quarantined row whose repo is gone
+        # cannot be released either -- uninstall is still its one remedy. It
+        # reads only the recorded base, so it stays answerable when an agent
+        # dir does not resolve; every other status needs the agents.
+        if (st := integrity.STATUS_STRANDED if scopes.stranded(e)
+                else None if agent_errs
+                else integrity.materialized_status(n, e, kind))
+        in _MAT_ISSUE_LABEL]
     lines.extend(mat_issues)
-    total = issues + len(mat_issues)
+    agent_lines = ["agents.%s.dir: %s — ask the user to fix it with `boost "
+                   "config set agents.%s.dir <dir>`; link and materialization "
+                   "checks were skipped" % (n, e.message, n)
+                   for n, e in agent_errs]
+    lines.extend(agent_lines)
+    total = issues + len(mat_issues) + len(agent_lines)
     # A machine with no taps has nothing to disagree about, so every check
     # above passes and the old reply called it "healthy" — directly under the
     # line saying `taps: 0 (0 items available)`. That is the one state where
@@ -1695,7 +1717,8 @@ def _tool_doctor(args: dict):
     if total == 0:
         if tapped:
             lines.append("healthy — no issues found")
-    elif mat_issues or cfg_err:
+    elif mat_issues or cfg_err or agent_lines:
+        # Not `boost sync`: an unresolvable agent dir makes sync refuse too.
         lines.append("%d issue(s) — run `boost doctor` for details" % total)
     else:
         lines.append("%d issue(s) — run `boost sync` to fix" % issues)
@@ -2201,7 +2224,7 @@ def cmd_mcp(argv) -> int:
             note = "  — outside this $HOME, refused without --force" \
                 if escape else ""
             out.dim("  writes %s%s" % (cfg, note))
-        out.dim("  dry run — nothing was %sed, nothing tapped" % verb)
+        out.dim("  dry run — nothing was %sed, nothing tapped" % verb, wrap=True)
         return 0
 
     # After the host name is validated and before anything is registered. The

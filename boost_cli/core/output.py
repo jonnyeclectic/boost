@@ -371,14 +371,27 @@ def plain(text: object) -> str:
     return _CONTROL_RE.sub("", str(text))
 
 
-def dim(msg: str, wrap: bool = False) -> None:
+def dim(msg: str, wrap: bool = False, indent: int = 0) -> None:
     """Print msg in the muted role (dim when color is on).
 
-    ``wrap`` as in :func:`warn`. `dim` prints flush left, so the wrapped
-    continuations are flush left too — there is no marker to align under.
+    ``wrap`` as in :func:`warn`. ``indent`` is a left margin, in columns, that
+    every line keeps — the first and each wrapped continuation alike — and
+    that the wrap budget pays for, the way :func:`kv` pays for its key column.
+
+    A leading run of spaces in ``msg`` is the same margin spelled inline, and
+    is counted as one: forty call sites write ``dim("  hint")`` because `dim`
+    otherwise prints flush left. Without that, ``wrap=True`` on such a line
+    lost the margin from its first line (the tokenizer drops leading
+    whitespace) and budgeted the full pane width for a line printed two
+    columns in, overflowing by exactly the margin it then failed to draw.
     """
-    for line in (_wrap_lines(msg, 0) if wrap else [msg]):
-        print(role(line, "muted"))
+    body = msg.lstrip(" ")
+    margin = " " * (indent + len(msg) - len(body))
+    if not wrap:
+        print(role(margin + body, "muted"))
+        return
+    for line in _wrap_lines(body, len(margin)):
+        print(role(margin + line, "muted"))
 
 
 def heading(msg: str, stream=None) -> None:

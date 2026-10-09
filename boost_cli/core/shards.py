@@ -442,14 +442,24 @@ def download(row: dict, dest: Path, manifest: dict,
 
 
 def plan(taps: list[str], commits: dict[str, str], manifest: dict,
-         built: dict[str, str] | None = None) -> list[dict]:
+         built: dict[str, str] | None = None,
+         movable: Collection[str] = ()) -> list[dict]:
     """What :func:`sync` will do with each of `taps`, decided before a byte moves.
 
     One step per tap, in order: ``{"tap", "status", ...}`` where `status` is
     "unpublished" (no row), "current" (the store already holds this exact
     commit's vectors), "refused" (the tap moved past its row — `commit_moved`
-    and `detail` say so) or "download" (the row `sync` will fetch). Every step
-    with a row carries it as ``row``.
+    and `detail` say so), "move" (the same mismatch on a tap named in
+    `movable`: :func:`ingest` will download the row and then move the tap to
+    it) or "download" (the row `sync` will fetch). Every step with a row
+    carries it as ``row``.
+
+    `movable` is the caller's answer to "which taps may this run move?", and
+    the default is none, so `sync` and every caller that never asked keep the
+    refusal. `boost quickstart` passes its unpinned taps: one that tracks its
+    branch HEAD is moved by every `boost update` anyway, while a pin — its own
+    or one set with `boost tap --at`, which config.json cannot tell apart — is
+    a promise `update` keeps, and so does quickstart.
 
     Its own function so a preview and the run it previews give one answer.
     `boost quickstart --dry-run` counted every tap with a row, so a rerun over
@@ -472,6 +482,9 @@ def plan(taps: list[str], commits: dict[str, str], manifest: dict,
         if want and local == want == built.get(tap, ""):
             steps.append({"tap": tap, "status": "current", "row": row})
             continue
+        if local and want != local and tap in movable:
+            steps.append({"tap": tap, "status": "move", "row": row})
+            continue
         if local and want != local:
             # Caught before the download rather than paid for and then thrown
             # away by `import_shard`. `commit_moved` names the refusal
@@ -487,8 +500,15 @@ def plan(taps: list[str], commits: dict[str, str], manifest: dict,
     return steps
 
 
+#: The :func:`plan` statuses that fetch a shard.
+DOWNLOADS = ("download", "move")
+
+
 def download_bytes(steps: list[dict]) -> tuple[int, int]:
-    """(bytes, unsized) for the "download" steps of a :func:`plan`.
+    """(bytes, unsized) for the steps of a :func:`plan` that download.
+
+    A "move" downloads too — :func:`ingest` fetches and verifies the shard
+    before it moves the tap — so it is priced like a "download".
 
     `bytes` sums the manifest's own sizes; `unsized` counts rows that carry
     none, so a caller can say "at least" rather than present a partial sum as
@@ -496,7 +516,7 @@ def download_bytes(steps: list[dict]) -> tuple[int, int]:
     """
     total = unsized = 0
     for step in steps:
-        if step["status"] != "download":
+        if step["status"] not in DOWNLOADS:
             continue
         size = step["row"].get("bytes")
         if isinstance(size, int) and size > 0:
@@ -726,4 +746,161 @@ def ingest(taps: list[str], commits: dict[str, str],
         # weekly case, and leaving the marker cold would make search nag about
         # vectors refreshed this morning.
         mark_synced()
+    return results
+
+
+# ------------------------------------------------------------ keyword index
+#
+# The BM25 index is published beside the vectors, in the same manifest, under
+# a top-level ``keyword`` section:
+#
+#     "keyword": {"format": 1, "index_version": 10,
+#                 "shards": [{"tap", "commit", "docs", "bytes", "sha256",
+#                             "url"}, ...]}
+#
+# A section rather than a manifest version bump, because the dense contract is
+# unchanged and every boost already in the field ignores keys it does not read
+# — bumping MANIFEST_VERSION would have cut them all off their vectors to add
+# something they cannot use. The rows obey the dense rules verbatim: a sha256
+# checked over the bytes written, a URL on the manifest's own host, and a
+# commit that must equal the tap's (``rag.shard_problem`` refuses on any
+# mismatch, two absences included). What it does NOT need is an embedding
+# space: a keyword shard is importable by every machine, keyless included, so
+# its one compatibility key is the index version the tokens were made under.
+
+#: Manifest key holding the keyword-index rows.
+KEYWORD_SECTION = "keyword"
+
+#: Refuse a keyword shard that inflates past this. The asset is gzip, and its
+#: digest only proves it is the file the manifest named — not that it is small
+#: once opened; an unbounded decompress is how a 1 MB download fills memory.
+MAX_KEYWORD_INFLATED = 512 * 1024 * 1024
+
+
+def keyword_section(manifest: dict) -> dict:
+    """The manifest's keyword section, or ``{}`` when it publishes none."""
+    sec = manifest.get(KEYWORD_SECTION)
+    return sec if isinstance(sec, dict) else {}
+
+
+def keyword_rows(manifest: dict) -> dict[str, dict]:
+    """Keyword rows keyed by tap — :func:`rows`' rules, over the section."""
+    return rows({"shards": keyword_section(manifest).get("shards")})
+
+
+def keyword_incompatible(manifest: dict) -> str | None:
+    """Why this manifest's keyword shards cannot serve this boost, or None.
+
+    The analogue of :func:`incompatible`, answered before any download. The
+    only key is the index version: the tokenizer and document fields move with
+    ``rag.INDEX_VERSION``, so a shard from another version is refused here
+    rather than downloaded and refused again by ``rag.shard_problem``.
+    """
+    from . import rag
+    sec = keyword_section(manifest)
+    if not sec:
+        return "the published manifest carries no keyword index"
+    if sec.get("index_version") != rag.INDEX_VERSION:
+        return ("published keyword index is version %r, this boost builds %d"
+                % (sec.get("index_version"), rag.INDEX_VERSION))
+    if sec.get("format") != rag.SHARD_FORMAT:
+        return ("published keyword index is format %r, this boost reads %d"
+                % (sec.get("format"), rag.SHARD_FORMAT))
+    return None
+
+
+def _inflate(path: Path) -> dict:
+    """Read one downloaded ``.keyword.json.gz``, bounded, as JSON."""
+    import gzip
+    import zlib
+    try:
+        with gzip.open(path, "rb") as fh:
+            raw = fh.read(MAX_KEYWORD_INFLATED + 1)
+    except (OSError, EOFError, zlib.error) as exc:
+        raise BoostError("keyword shard is not valid gzip: %s" % exc) from exc
+    if len(raw) > MAX_KEYWORD_INFLATED:
+        raise BoostError("keyword shard inflates past %d bytes"
+                         % MAX_KEYWORD_INFLATED)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BoostError("keyword shard is not valid JSON: %s" % exc) from exc
+    if not isinstance(data, dict):
+        raise BoostError("keyword shard is not an object")
+    return data
+
+
+def sync_keyword(taps: list[str], commits: dict[str, str],
+                 manifest: dict | None = None, cache_dir: Path | None = None,
+                 on_event=None, built: dict[str, str] | None = None
+                 ) -> list[dict]:
+    """Download and import the published keyword index for each of `taps`.
+
+    Same statuses as :func:`sync`. `built` is ``rag.complete_tap_commits()``
+    — taps the index already holds *with bodies* at a commit — so a machine
+    whose index came from metadata alone is never told it is current.
+
+    Every shard is downloaded and verified first and the survivors are merged
+    in one ``rag.import_shards`` call: merging rewrites the whole index, so
+    one write for the batch rather than one per tap. Never raises for one
+    tap's failure, for the reason :func:`sync` gives.
+    """
+    from . import rag
+    manifest = manifest if manifest is not None else fetch_manifest()
+    why = keyword_incompatible(manifest)
+    if why:
+        return [{"tap": t, "status": "incompatible", "detail": why}
+                for t in taps]
+    cache_dir = cache_dir or (paths.cache_dir() / "shards")
+    results: list[dict] = []
+    pending: list[tuple[int, dict, str]] = []
+    # `.get`, not `[...]`: keyword_incompatible passes a section carrying
+    # only format + index_version, and that must degrade to "unpublished".
+    steps = plan(taps, commits,
+                 {"shards": keyword_section(manifest).get("shards")}, built)
+    for step in steps:
+        tap = step["tap"]
+        if step["status"] != "download":
+            results.append({k: v for k, v in step.items() if k != "row"})
+            _emit(on_event, tap, step["status"],
+                  "commit moved" if step.get("commit_moved") else "")
+            continue
+        row = step["row"]
+        dest = cache_dir / (tap.replace("/", "__") + ".keyword.json.gz")
+        try:
+            _emit(on_event, tap, "downloading", _size_label(row))
+            download(row, dest, manifest)
+            shard = _inflate(dest)
+        except BoostError as exc:
+            results.append({"tap": tap, "status": "failed",
+                            "detail": exc.message})
+            _emit(on_event, tap, "failed", exc.message)
+            continue
+        except OSError as exc:
+            results.append({"tap": tap, "status": "failed",
+                            "detail": str(exc)})
+            _emit(on_event, tap, "failed", str(exc))
+            continue
+        finally:
+            # A transfer format, not a cache. Suppressed, because this runs on
+            # the failure path too: when the cache dir itself is unusable the
+            # unlink raises the same error again and escapes the per-tap catch
+            # — one bad path aborting every other tap's import.
+            with suppress(OSError):
+                dest.unlink(missing_ok=True)
+        results.append({"tap": tap, "status": "pending"})
+        pending.append((len(results) - 1, shard, commits.get(tap, "")))
+    if pending:
+        try:
+            outcome = rag.import_shards([(s, c) for _i, s, c in pending])
+        except BoostError as exc:
+            outcome = [("", False, exc.message)] * len(pending)
+        for (i, _s, _c), (_tap, ok, reason) in zip(pending, outcome,
+                                                    strict=True):
+            tap = results[i]["tap"]
+            status = "imported" if ok else "refused"
+            results[i] = {"tap": tap, "status": status, "detail": reason,
+                          "docs": int(keyword_rows(manifest)[tap].get("docs")
+                                      or 0)}
+            _emit(on_event, tap, status, reason)
     return results

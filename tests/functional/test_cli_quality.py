@@ -3111,6 +3111,71 @@ class TestAnItemMaterializedNowhere:
         assert doc["ok"] is False
         assert doc["status"] == "needs attention"
 
+    def _seed_partial(self, kind="rule", name="team-conventions"):
+        """The #1040 control fixture: five recorded rows, only cursor written."""
+        from boost_cli.core import config, lockfile
+        rows = [{"agent": a, "mode": "file",
+                 "path": str(paths.home() / ("." + a) / ("%s.md" % name)),
+                 "sha256": "b" * 64}
+                for a in ("claude-code", "codex", "cursor", "gemini",
+                          "windsurf")]
+        entry = {"kind": kind, "tap": "local", "version": "1.0.0",
+                 "sha256": "a" * 64, "installed_at": "2026-01-01T00:00:00Z",
+                 "materializations": rows}
+        (lockfile.set_rule if kind == "rule"
+         else lockfile.set_workflow)(name, entry)
+        cfg = config.load()
+        for a in ("claude-code", "codex", "gemini", "windsurf"):
+            cfg["agents"][a]["enabled"] = False
+        config.save(cfg)
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_every_agents_line_names_only_the_written_agent(self, boost,
+                                                            sandbox, kind):
+        """`doctor` says four rows are no longer written; `info`, `list` and
+        `stats` used to name all five agents as reached, on the same machine.
+        """
+        self._seed_partial(kind)
+        assert "materialized  cursor\n" in boost("info",
+                                                  "team-conventions").out
+        stats = boost("stats", "team-conventions").out
+        assert re.search(r"agents\s+cursor\n", stats), stats
+        row = next(line for line in boost("list", "--kind", kind).out
+                   .splitlines() if line.startswith("team-conventions"))
+        assert " cursor " in row + " "
+        for gone in ("claude", "codex", "gemini", "windsurf"):
+            assert gone not in row
+
+    def test_an_unreachable_items_stats_line_says_none(self, boost, sandbox):
+        self._seed_unreachable()
+        assert re.search(r"agents\s+none\n", boost("stats", "house").out)
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_the_mcp_info_tool_names_only_the_written_agent(self, sandbox,
+                                                             kind):
+        """`boost_info` built its own agents line from the raw rows, so an AI
+        agent asking it got all five while `boost info` said cursor."""
+        from boost_cli.commands import configuration
+        self._seed_partial(kind)
+        text, err = configuration._tool_info({"name": "team-conventions"})
+        assert not err
+        assert "\nagents: cursor\n" in text + "\n", text
+
+    def test_the_mcp_info_tool_says_none_for_an_unreachable_item(self,
+                                                                 sandbox):
+        from boost_cli.commands import configuration
+        self._seed_unreachable()
+        text, err = configuration._tool_info({"name": "house"})
+        assert not err
+        assert "\nagents: none\n" in text + "\n", text
+
+    def test_an_unreachable_items_list_cell_says_none(self, boost, sandbox):
+        """A blank AGENTS cell reads like a rendering gap; say it."""
+        self._seed_unreachable()
+        row = next(line for line in boost("list", "--kind", "rule").out
+                   .splitlines() if line.startswith("house"))
+        assert re.search(r"\snone\s", row + " "), row
+
     def test_an_item_with_no_rows_at_all_stays_ok(self, boost, sandbox):
         """The control case, and the dangerous direction: keying on "no row
         was written" rather than "rows existed and none was written" turns

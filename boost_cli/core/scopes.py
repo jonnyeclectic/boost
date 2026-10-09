@@ -23,6 +23,7 @@ import os
 import re
 from contextlib import suppress
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import cast
 
 from ..errors import BoostError
 from . import paths, projectlock
@@ -303,6 +304,33 @@ def names_a_directory(recorded) -> bool:
             and os.path.isabs(recorded))
 
 
+def stranded(entry: dict) -> bool:
+    """Is a user-lock row a ``--local`` install whose repo no longer exists?
+
+    Rules and workflows installed with ``--local`` are recorded in the *user*
+    lock against an absolute ``base`` (see :func:`owned_by`), and the
+    materialization rows under it are absolute too — so a reader standing in
+    any other directory can still grade a sibling checkout's rule, and does so
+    correctly. What it cannot do is grade one whose checkout has been
+    deleted: every artifact reads as missing, and every remedy that answers
+    "missing" (`boost reinstall`, `boost sync`, `boost heal`, `boost update`)
+    re-materializes into the recorded ``base`` and so *recreates the deleted
+    directory* with a ``.cursor/`` and a ``CLAUDE.local.md`` in it. The record
+    is the fault, and ``boost uninstall <name>`` — which drives off the rows
+    and never creates anything — is its one remedy.
+
+    Both halves are the same as :func:`owns`'s, for the same reason: a row
+    with a ``base`` and no ``scope`` is user scope, and a ``base`` that names
+    no directory (missing, relative, not a string) is not a claim on one, so
+    neither can be stranded. ``isdir`` on the *recorded* path, not
+    ``realpath``: the question is whether the directory is there, not which
+    one it is.
+    """
+    base = entry.get("base")
+    return (entry.get("scope") == SCOPE_PROJECT and names_a_directory(base)
+            and not os.path.isdir(cast(str, base)))  # noqa: FURB146
+
+
 def check_scope(scope: str) -> str:
     """Return ``scope`` if it is one boost knows, else raise BoostError."""
     if scope not in SCOPES:
@@ -459,15 +487,54 @@ def contains(base, path) -> bool:
     with no common root — on Windows that is any two different drives, so a repo
     on ``C:`` weighed against a record pointing at ``D:`` would otherwise crash
     out of the delete guard rather than answer "outside".
+
+    **A spelling mismatch is settled by the disk, not by folding case.**
+    ``resolve()`` does not canonicalize case on macOS's case-insensitive APFS:
+    ``/users/jonny/.claude`` comes back as spelled, and against a ``$HOME`` of
+    ``/Users/jonny`` the string test says "outside" for a directory that is
+    inside. ``os.path.normcase`` cannot fix that — it is the identity on posix
+    — and folding by hand would be wrong on a case-sensitive disk, where
+    ``/home/A`` and ``/home/a`` are two directories. So when, and only when,
+    the string test answers "outside", each existing ancestor of ``path`` is
+    asked whether it *is* ``base`` (same ``st_dev`` and ``st_ino``). That
+    answer comes from the filesystem, so it folds case exactly where the disk
+    does. ``path`` itself is not asked, so ``base`` still does not contain
+    itself; a ``ValueError`` from ``commonpath`` still answers "outside"
+    without consulting it (two drives cannot be case variants of one
+    directory); and an inode of 0 — what a filesystem with no stable inode
+    reports — matches nothing.
     """
     try:
         base_r = Path(base).resolve()
         path_r = Path(path).resolve()
         if base_r == path_r:
             return False
-        return os.path.commonpath([str(base_r), str(path_r)]) == str(base_r)
+        if os.path.commonpath([str(base_r), str(path_r)]) == str(base_r):
+            return True
+        return _ancestor_is(path_r, base_r)
     except (OSError, ValueError):
         return False
+
+
+def _ancestor_is(path_r: Path, base_r: Path) -> bool:
+    """True when some proper ancestor of ``path_r`` is the directory ``base_r``.
+
+    Identity is ``(st_dev, st_ino)``, never the spelling — see :func:`contains`.
+    An ancestor that does not exist (the tail of a file not yet written) is
+    skipped; a ``base`` that cannot be stat'ed, or reports no inode, matches
+    nothing.
+    """
+    base_st = base_r.stat()
+    if not base_st.st_ino:
+        return False
+    for parent in path_r.parents:
+        try:
+            st = parent.stat()
+        except OSError:
+            continue
+        if os.path.samestat(st, base_st):
+            return True
+    return False
 
 
 def ensure_in_base(base, path):
@@ -491,4 +558,44 @@ def ensure_in_base(base, path):
             "refusing to install %s: it resolves outside this project" % path,
             hint="a directory such as .claude/skills in this repo is a symlink "
                  "pointing outside it — remove or replace it, then reinstall")
+    return Path(path)
+
+
+def ensure_spelled(base, path):
+    """Raise if the walk to ``path`` is bent by a symlink inside ``base``.
+
+    The write-side twin of the check ``store.uninstall_project`` makes before
+    every delete, and the same predicate (:func:`parent_matches_spelling`) on
+    purpose, so install and uninstall cannot disagree about one row again.
+    They did: :func:`ensure_in_base` is containment only, so a committed
+    ``<repo>/.cursor -> config/cursor`` let ``install --local`` write
+    ``config/cursor/skills/<name>`` and record ``.cursor/skills/<name>`` —
+    a row uninstall then refuses, because that layout is byte-identical to
+    the attack ``.claude/skills -> ../src``. The copy was orphaned and the
+    lock entry went anyway.
+
+    The other two ways to make them agree both loosen the delete guard.
+    Recording the *resolved* path puts a row outside the derived set
+    uninstall accepts, so it would have to start resolving — the hole its
+    docstring names — and the row is meaningless on a teammate's clone whose
+    link points elsewhere. Recording both widens it further. So the install
+    refuses, before anything is written, and the hint names the two ways out.
+
+    A symlink *above* ``base`` is not a redirect: the predicate anchors on the
+    real base, so a checkout under ``/tmp`` on macOS still installs. Returns
+    ``path`` so a caller can wrap the target inline.
+    """
+    rel = relative_to_base(base, path)
+    if not parent_matches_spelling(base, rel):
+        raise BoostError(
+            "refusing to install into %s: a symlink inside this project "
+            "redirects it to %s, and `boost uninstall --local` will not delete "
+            "through a symlink it did not create"
+            # Relative to the real base: `ensure_in_base` runs first, so the
+            # far side is inside the repo, and that is the spelling a user
+            # recognises from their own tree.
+            % (rel, os.path.relpath(os.path.realpath(str(path)),
+                                    os.path.realpath(str(base))).replace(os.sep, "/")),
+            hint="replace the symlinked directory with a real one, or leave "
+                 "that agent out with `--agent`")
     return Path(path)

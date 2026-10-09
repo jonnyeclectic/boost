@@ -35,6 +35,7 @@ STATUS_UNLOCKED = "unlocked"     # present on disk but no lock digest to check
 STATUS_QUARANTINED = "quarantined"  # artifacts removed on purpose; stash holds them
 STATUS_UNREACHABLE = "unreachable"  # rows exist and boost writes none of the
                                     # agents they name: the item reached nothing
+STATUS_STRANDED = "stranded"  # installed --local into a repo that is gone
 
 ENFORCE_KEY = "security.enforce_digest"
 COMMIT_KEY = "security.enforce_commit"
@@ -100,6 +101,32 @@ def reaches_no_agent(kind: str | None, entry: dict) -> bool:
         for m in rows)
 
 
+def written_agent_names(kind: str | None, entry: dict | None) -> list[str]:
+    """The agents an installed item actually reaches, sorted and deduplicated.
+
+    :func:`lockfile.agent_names` lists every *recorded* row, and a row is kept
+    on purpose after boost stops writing its agent (so an uninstall can still
+    reverse it). Every surface that names agents read it raw, so a rule
+    written for one of five recorded agents still advertised all five in
+    `boost list`, `boost info` and `boost stats` while `boost doctor`, on the
+    same machine, said four of them were no longer written.
+
+    The filter is :func:`reaches_no_agent`'s own predicate, row for row, so
+    the two can't disagree: when that answers ``True`` this answers ``[]``.
+    A row with no ``agent`` counts as written, as it does there. A skill
+    records a flat ``agents`` list of links, not rows, and passes through.
+    """
+    if not entry:
+        return []
+    kind = str(kind or entry.get("kind") or "rule")
+    if kind == "skill":
+        return lockfile.agent_names(kind, entry)
+    written = [m for m in entry.get("materializations") or []
+               if agents.materialization_is_written(kind, entry.get("base"),
+                                                    m.get("agent"))]
+    return lockfile.agent_names(kind, {"materializations": written})
+
+
 def materialized_status(name: str, entry: dict,
                         kind: str | None = None) -> str:
     """Classify a rule/workflow's integrity against its lock entry.
@@ -128,6 +155,14 @@ def materialized_status(name: str, entry: dict,
     if entry.get("quarantined"):
         return STATUS_QUARANTINED
     kind = str(kind or entry.get("kind") or "rule")
+    # The repo a `--local` row was installed into is gone, so every artifact
+    # reads as missing -- and MISSING's remedies (`reinstall`, `sync`, `heal`)
+    # re-materialize into the recorded base, recreating the directory the
+    # user deleted. A fact about the row rather than any one artifact, so it
+    # is asked before the loop; and before UNREACHABLE, because which agents a
+    # base takes is not a question a base that is gone can answer.
+    if scopes.stranded(entry):
+        return STATUS_STRANDED
     # Every row skipped means the item reached nothing. Asked before the loop
     # rather than after it because each of the three in-loop outcomes needs a
     # *written* row -- MISSING and MODIFIED return from inside the body and
@@ -195,6 +230,28 @@ def project_status(entry: dict, base) -> str:
     return STATUS_OK if util.sha256_dir(present) == recorded else STATUS_MODIFIED
 
 
+def project_redirected(entry: dict, base) -> list[str]:
+    """The rows of a project skill whose walk a symlink inside ``base`` bends.
+
+    ``boost uninstall --local`` will not delete through such a row
+    (:func:`scopes.parent_matches_spelling`), so its copy outlives the
+    uninstall while the lock entry goes. ``install --local`` refuses to write
+    one now, but a lock written before that still carries them, and a symlink
+    committed *after* an install makes one out of a row that was honest — and
+    :func:`project_status` cannot see either, because ``is_dir()`` follows the
+    link and reports the skill intact. Rows containment already refuses
+    (:func:`scopes.resolve_in_base` is ``None``) are not this question.
+    """
+    rows = []
+    for m in entry.get("materializations") or []:
+        rel = m.get("path")
+        if scopes.resolve_in_base(base, rel) is None:
+            continue
+        if not scopes.parent_matches_spelling(base, rel):
+            rows.append(rel)
+    return rows
+
+
 def project_skills():
     """(base, {name: entry}) for the current repo's project-scoped skills.
 
@@ -247,7 +304,7 @@ def verification_passed(status: str, missing_fields: list, commit_pin: str | Non
 _VERIFY_ROLE_BY_STATUS = {
     STATUS_OK: "success", STATUS_MODIFIED: "warn", STATUS_MISSING: "danger",
     STATUS_UNLOCKED: "warn", STATUS_QUARANTINED: "muted",
-    STATUS_UNREACHABLE: "warn",
+    STATUS_UNREACHABLE: "warn", STATUS_STRANDED: "warn",
 }
 
 

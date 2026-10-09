@@ -357,6 +357,27 @@ class TestRefuseEscapeIsPublic:
         assert cs.refuse_escape("global", hh.CLAUDE) is None
         assert cs.refuse_escape("global", hh.GEMINI) is None
 
+    def test_a_root_spelled_in_another_case_is_not_an_escape(
+            self, sandbox, monkeypatch):
+        # `sandbox` is `<tmp>/home`; `<tmp>/HOME` is the same directory on a
+        # case-folding disk, and refusing it was the bug.
+        variant = sandbox.parent / sandbox.name.swapcase()
+        if not variant.exists():
+            pytest.skip("this filesystem is case-sensitive")
+        monkeypatch.setenv("CODEX_HOME", str(variant / ".codex"))
+        assert cs.escaping_path("global", hh.CODEX) is None
+        assert cs.refuse_escape("global", hh.CODEX) is None
+
+    def test_a_case_variant_that_is_another_directory_is_refused(
+            self, sandbox, monkeypatch):
+        variant = sandbox.parent / sandbox.name.swapcase()
+        if variant.exists():
+            pytest.skip("this filesystem folds case")
+        variant.mkdir()
+        monkeypatch.setenv("CODEX_HOME", str(variant / ".codex"))
+        with pytest.raises(BoostError):
+            cs.refuse_escape("global", hh.CODEX)
+
     def test_it_names_the_variable_that_moved_the_root(self, sandbox,
                                                        monkeypatch, tmp_path):
         monkeypatch.setenv("CODEX_HOME", str(tmp_path / "outside"))

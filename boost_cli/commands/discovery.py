@@ -28,6 +28,7 @@ from ..core import (
     catalog,
     config,
     gitutil,
+    integrity,
     journal,
     lockfile,
     paths,
@@ -525,6 +526,55 @@ def _fetch_shards(args) -> int:
     return 0
 
 
+def _fetch_index(args) -> int:
+    """`--fetch-index`: download the published keyword index for every tap.
+
+    The keyword twin of `--fetch-shards`, and the one every machine can use:
+    a keyword shard needs no embedding backend and no key. It is also the only
+    way a machine restored with `boost catalog --import` — catalogues, no
+    clones — gets an index of item *bodies* rather than of their labels.
+    """
+    from ..core import shards
+    if not registry.list_taps():
+        raise BoostError("no taps configured — nothing to fetch",
+                        hint="add registries with `boost tap --defaults`")
+    manifest = shards.fetch_manifest()
+    why = shards.keyword_incompatible(manifest)
+    if why:
+        raise BoostError("the published keyword index cannot serve this "
+                        "machine — %s" % why,
+                        hint="`boost reindex` builds it locally instead",
+                        wrap=True)
+    commits = rag._tap_commits()
+    by_name = {t.name: commits.get(t.safe_name, "") for t in registry.list_taps()}
+    results = shards.sync_keyword(
+        list(by_name), by_name, manifest=manifest,
+        built=rag.complete_tap_commits(),
+        on_event=None if args.as_json else _shard_event)
+    if args.as_json:
+        print(json.dumps({"keyword": results}, indent=2))
+        return 0
+    got = [r for r in results if r["status"] == "imported"]
+    current = [r for r in results if r["status"] == "current"]
+    if got:
+        out.ok("imported the keyword index for %d tap(s), %s items"
+               % (len(got), format(sum(int(r.get("docs") or 0) for r in got),
+                                   ",")))
+    if current:
+        out.info(out.role("%d tap(s) already indexed at the published commit"
+                          % len(current), "muted"))
+    if not got and not current:
+        out.warn("no published keyword index matched your taps")
+    missing = [r["tap"] for r in results
+               if r["status"] not in ("imported", "current")]
+    if missing:
+        out.info(out.role("%d tap(s) without a usable published index: %s"
+                          % (len(missing), ", ".join(missing[:5])
+                             + (" …" if len(missing) > 5 else "")), "muted"))
+        out.info("`boost reindex` indexes those locally")
+    return 0
+
+
 def _shard_event(tap: str, status: str, detail: str) -> None:
     """Progress for one shard, quiet enough to run over forty taps."""
     if status == "downloading":
@@ -555,6 +605,10 @@ def cmd_reindex(argv):
     p.add_argument("--fetch-shards", action="store_true",
                    help="download and import published vectors for every tap "
                         "that has them, instead of embedding locally")
+    p.add_argument("--fetch-index", action="store_true",
+                   help="download and import the published keyword index for "
+                        "every tap at its published commit, instead of "
+                        "building it locally (no key or extra needed)")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
@@ -562,6 +616,8 @@ def cmd_reindex(argv):
         return _shard_io(args)
     if args.fetch_shards:
         return _fetch_shards(args)
+    if args.fetch_index:
+        return _fetch_index(args)
     if not registry.list_taps():
         raise BoostError("no taps configured — nothing to index",
                         hint="add the recommended registries with `boost tap --defaults`")
@@ -613,8 +669,9 @@ def cmd_reindex(argv):
         out.warn("%d of %d indexed items have no body text — their registries "
                  "are not cloned here, so only their catalog metadata was "
                  "indexed, and that metadata is %.1f%% of everything this "
-                 "index holds. Clone them with `boost update`, then re-run "
-                 "`boost reindex --force` to index their bodies."
+                 "index holds. `boost reindex --fetch-index` downloads "
+                 "their published index; or clone them with `boost update` "
+                 "and re-run `boost reindex --force`."
                  % (stats["metadata_only"], stats["docs"], meta_pct),
                  wrap=True)
     if args.dense:
@@ -1190,7 +1247,8 @@ def cmd_recommend(argv):
         line += " · also: " + ", ".join(extra_kw)
     out.info(out.role("%s  (%s)" % (line, _tilde(target)), "muted"))
     if not shown:
-        out.info("no recommendations for this stack — try `boost search <keyword>`")
+        print(out.empty_state("no recommendations for this stack",
+                              hint="try `boost search <keyword>`", wrap=True))
         return 0
     if used_curated_fallback:
         out.info("no stack-specific matches — curated picks instead:")
@@ -2056,9 +2114,9 @@ def cmd_browse(argv):
         for conflict in res.conflicts:
             out.warn("conflict: %s exists and is not a symlink" % _tilde(conflict))
         for adir in res.unwritable:
-            out.warn("not %s: %s is not writable — `chmod u+w %s`, then "
-                     "`boost sync`" % ("linked" if res.kind == "skill" else "written",
-                                       _tilde(adir), _tilde(adir)))
+            out.warn("not %s: %s — %s, then `boost sync`"
+                     % ("linked" if res.kind == "skill" else "written",
+                        *store.unwritable_refusal(adir)), wrap=True)
         for adir, block in res.blocked:
             out.warn("not %s: %s — %s, then `boost sync`"
                      % ("linked" if res.kind == "skill" else "written",
@@ -2103,7 +2161,9 @@ def cmd_trending(argv):
             return 0
         out.heading("curated picks (no local install data yet)")
         if not curated:
-            out.info("no curated skills available — add taps with `boost tap --defaults`")
+            print(out.empty_state("no curated skills available",
+                                  hint="add taps with `boost tap --defaults`",
+                                  wrap=True))
             return 0
         # reserve name/version/kind columns
         descw = max(out.term_width() - 34, 24)
@@ -2199,7 +2259,10 @@ def cmd_stats(argv):
         # was sorted and a skill's printed raw lock/install order, which read
         # like two commands disagreeing about the same fact rather than one
         # command describing two kinds of item.
-        out.kv("agents", ", ".join(lockfile.agent_names(kind, lock)) or "none")
+        # Written agents only: a row boost no longer writes is kept so an
+        # uninstall can reverse it, not because the item reaches that agent.
+        out.kv("agents",
+               ", ".join(integrity.written_agent_names(kind, lock)) or "none")
         out.kv("pinned", "yes" if lock.get("pinned") else "no")
         if lock.get("quarantined"):
             out.kv("quarantined", "yes")

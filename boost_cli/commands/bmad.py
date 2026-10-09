@@ -370,7 +370,7 @@ def _autopilot_on(scope, requested_host=None, force: bool = False) -> int:
     if skipped:
         out.warn("kept your edits to %d persona(s): %s"
                  % (len(skipped), ", ".join(skipped)))
-        out.dim("  delete the file to let `boost bmad on` restore the stock version")
+        out.dim("  delete the file to let `boost bmad on` restore the stock version", wrap=True)
     out.dim("  personas → %s" % paths.tilde(agents))
     for host in hosts:
         out.dim("  hooks    → %s (%s + %s)"
@@ -378,7 +378,7 @@ def _autopilot_on(scope, requested_host=None, force: bool = False) -> int:
                    hookhost.translate(host, "SessionStart"),
                    hookhost.translate(host, "UserPromptSubmit")))
     out.dim("  every substantive prompt now names its lead persona and its "
-            "definition of done; trivial asks are left alone")
+            "definition of done; trivial asks are left alone", wrap=True)
     # Hook edits reach open sessions through the settings watcher, but Claude
     # Code only watches an agents dir that existed when the session started. So
     # a run that creates the dir starts banners before their personas can load;
@@ -399,7 +399,7 @@ def _autopilot_off(scope, force: bool = False) -> int:
     journal.log("bmad-autopilot", "off", scope=scope, personas=len(removed))
     out.ok("BMAD autopilot OFF (%s) — removed %d persona(s) and %d hook(s)"
            % (scope, len(removed), hooks_removed))
-    out.dim("  hand-edited personas were left in place")
+    out.dim("  hand-edited personas were left in place", wrap=True)
     return 0
 
 
@@ -542,7 +542,7 @@ def _personas_scope(scope) -> None:
                % (p.character, p.title, p.module, mark), width=16)
     out.dim("  → %s" % paths.tilde(agents))
     if all(state == "absent" for state in states.values()):
-        out.dim("  install them with `boost bmad on`")
+        out.dim("  install them with `boost bmad on`", wrap=True)
 
 
 # ------------------------------------------------------------------- provisioning
@@ -605,7 +605,7 @@ def _install(scope, modules, do_startup) -> int:
                      "`boost bmad init` in each repo that uses them"
                      % " and ".join(needs_runtime))
         else:
-            out.dim("  run `boost bmad init` in a project for its _bmad/ workflow runtime")
+            out.dim("  run `boost bmad init` in a project for its _bmad/ workflow runtime", wrap=True)
     else:
         ver, n = _install_project_runtime(modules)
         out.ok("installed BMAD in %s (%d skills, v%s)" % (Path.cwd(), n, ver))
@@ -794,7 +794,7 @@ def _disable(scope, force: bool = False) -> int:
     _set_scope_state(scope, startup=False, disabled=True)
     journal.log("bmad-disable", scope, count=moved)
     out.ok("quarantined %d BMAD skill(s) (%s)" % (moved, scope))
-    out.dim("  restore with `boost bmad enable --scope %s`" % scope)
+    out.dim("  restore with `boost bmad enable --scope %s`" % scope, wrap=True)
     return 0
 
 
@@ -847,7 +847,7 @@ def _doctor() -> int:
                % (_count_skills(_skills_dir(scope)), _on_off(st.get("installed"))))
     out.dim("  project = %s" % Path.cwd())
     if not any(_get_scope_state(s).get("autopilot") for s in ("global", "project")):
-        out.dim("  turn it on with `boost bmad on`")
+        out.dim("  turn it on with `boost bmad on`", wrap=True)
     return 0
 
 

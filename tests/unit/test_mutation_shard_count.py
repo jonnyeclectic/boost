@@ -49,6 +49,31 @@ assert _spec.loader is not None
 _spec.loader.exec_module(ms)
 
 
+def _tree_is_mutated(root: Path = ROOT) -> bool:
+    """True when this suite is running inside mutmut's rewritten copy.
+
+    mutmut's ``Running stats`` phase runs ``tests/unit`` from ``mutants/``,
+    where every file under ``boost_cli/core`` is the rewritten copy --
+    ``store.py`` alone is 16 MB of mutant variants against 164 KB of source.
+    The tests marked :data:`real_tree_only` pack ``ROOT``, which there means
+    parsing that copy: measured locally they take 245 s in ``mutants/``
+    against a few on the checkout, and on CI they were most of the per-job
+    preamble ``FIXED_MINUTES`` describes, every shard paying it again. They
+    read ``scripts/`` only, which is never mutated, so skipping them there
+    kills no fewer mutants. Same rule as ``test_mutation_subfile_shards.py``.
+    """
+    store = root / "boost_cli" / "core" / "store.py"
+    try:
+        return "__mutmut_" in store.read_text(encoding="utf-8")
+    except OSError:
+        return True        # can't tell -- don't pack it
+
+
+real_tree_only = pytest.mark.skipif(
+    _tree_is_mutated(), reason="tree rewritten by mutmut; packing it is the "
+                               "per-shard cost FIXED_MINUTES measures")
+
+
 def _ci() -> str:
     return CI.read_text(encoding="utf-8")
 
@@ -114,6 +139,7 @@ def timeout_minutes() -> int:
 class TestHeadroom:
     """The committed pack, scored against the committed cap."""
 
+    @real_tree_only
     def test_the_real_pack_fits_with_margin(self):
         # The end-to-end assertion, over the real tree and the real weights:
         # whatever `SHARDS` is today, packing the repo that way must leave the
@@ -152,8 +178,8 @@ class TestHeadroom:
         # stale packs on line counts and spreads much wider.
         cap = 75
         ms_per_min = 60000.0 * ms.RUNNER_WORKERS * ms.RUNNER_EFFICIENCY
-        light = int(0.05 * cap * ms_per_min)
-        heavy = int(0.60 * cap * ms_per_min)
+        light = 0
+        heavy = int((0.60 * cap - ms.FIXED_MINUTES) * ms_per_min)
         safe, lines = ms.headroom_report([light, light, heavy], cap)
         assert not safe, (
             "scored on the lightest shard — a pack is as slow as its slowest\n"
@@ -168,7 +194,7 @@ class TestHeadroom:
         cap = 75
         # Weight whose median lands at 60% of cap, so tail = 1.91 x that.
         ms_per_min = 60000.0 * ms.RUNNER_WORKERS * ms.RUNNER_EFFICIENCY
-        load = int(0.60 * cap * ms_per_min)
+        load = int((0.60 * cap - ms.FIXED_MINUTES) * ms_per_min)
         assert ms.runner_minutes(load) < cap, "median must look safe"
         safe, lines = ms.headroom_report([load], cap)
         assert not safe, "\n".join(lines)
@@ -185,6 +211,7 @@ class TestPlanCliContract:
         base.update(kw)
         return type("A", (), base)()
 
+    @real_tree_only
     def test_it_is_refused_without_explain(self):
         # ci.yml does PATTERNS="$(plan --shards N --index $SHARD)". Anything
         # this prints on that path becomes an argv word for `mutmut run`, and
@@ -195,6 +222,7 @@ class TestPlanCliContract:
             ms.cmd_plan(self._args(index=0, timeout_minutes=75))
         assert "--explain" in str(ei.value)
 
+    @real_tree_only
     def test_the_index_path_prints_patterns_and_only_patterns(self, capsys):
         assert ms.cmd_plan(self._args(index=0)) == 0
         out = capsys.readouterr().out
@@ -213,6 +241,7 @@ class TestPlanCliContract:
             assert word.startswith("boost_cli."), \
                 "%r is not a mutant pattern, and would become one" % word
 
+    @real_tree_only
     def test_a_pack_that_fits_exits_zero_and_one_that_does_not_exits_one(self,
                                                                         capsys):
         assert ms.cmd_plan(self._args(explain=True, timeout_minutes=75)) == 0
@@ -336,9 +365,11 @@ TWELVE_SHARD_WORST_MIN = 55.8
 #: matrix runs; this one is the divisor in twelve's two frozen assertions and
 #: must never move. Sharing one constant made the ceiling test's own
 #: remediation instruction ("raise SHARDS_OBSERVED") red
-#: `test_todays_pack_under_predicts_the_worst_twelve_shard_job` -- at
-#: sixteen it grades a sixteen-shard prediction against a twelve-shard
-#: observation and reports a 19.8-minute shortfall -- while quietly loosening
+#: twelve's frozen tail assertion (then
+#: `test_todays_pack_under_predicts_the_worst_twelve_shard_job`, now
+#: `test_the_tail_covers_the_worst_twelve_shard_job`) -- at sixteen it grades
+#: a sixteen-shard prediction against a twelve-shard observation -- while
+#: quietly loosening
 #: the ratio test from 1.40 to 1.87.
 TWELVE_SHARDS = 12
 
@@ -392,111 +423,123 @@ def fit_drift(live_total_ms: float) -> float:
     return abs(live_total_ms - FITTED_TOTAL_MS) / FITTED_TOTAL_MS
 
 
+#: The per-job preamble each width actually paid: job duration minus its
+#: ``Running mutation testing`` phase, read off the job-log timestamps of every
+#: successful ``mutation-shard`` job from 2026-09-26 to 10-06 -- 552 jobs at
+#: six, 80 at eight, 229 at twelve. Frozen: they describe those runs. They
+#: differ because the suite's planner tests packed mutmut's rewritten tree in
+#: every shard's baseline run from eight onward (see `_tree_is_mutated`); a
+#: replay of a past width therefore passes that width's own preamble.
+SIX_SHARD_FIXED_MIN = 5.11
+EIGHT_SHARD_FIXED_MIN = 10.02
+TWELVE_SHARD_FIXED_MIN = 12.91
+
+#: The preamble without those tests: the 124 six-shard jobs of 2026-10-01/02,
+#: the last before they reached the baseline. `ms.FIXED_MINUTES` is this.
+PREAMBLE_WITHOUT_PLANNER_TESTS_MIN = 5.49
+
+#: Mutation-phase minutes per weight-minute, each job graded on its own
+#: run's measured durations (the `mutation-weights` artifact) summed over the
+#: units that commit's pack gave it: 24 jobs at eight, 192 at twelve, medians.
+EIGHT_SHARD_PHASE_RATIO = 0.2528
+TWELVE_SHARD_PHASE_RATIO = 0.2555
+
+
 class TestConversion:
     """`runner_minutes` reproduces what the runners were measured doing.
 
-    Against :data:`FITTED_TOTAL_MS`, never against the live weights file --
-    see its comment. What the live file must still satisfy is
+    Against frozen totals, never against the live weights file -- see
+    :data:`FITTED_TOTAL_MS`. What the live file must still satisfy is
     :class:`TestHeadroom`, which is a *relative* question (does the pack fit?)
     and so stays true across a refresh, and is supposed to go red when a
     refresh genuinely makes the gate too slow.
     """
 
+    @pytest.mark.parametrize("ratio", [EIGHT_SHARD_PHASE_RATIO,
+                                       TWELVE_SHARD_PHASE_RATIO],
+                             ids=["eight", "twelve"])
+    def test_the_mutation_phase_divides_the_same_at_both_widths(self, ratio):
+        # The calibration the fixed term made possible. Through the origin,
+        # whole jobs implied an efficiency of 0.832 at eight and 0.593 at
+        # twelve; the mutation phase alone implies the same one at both, to
+        # 1%. One weight-minute of work is that many minutes of phase.
+        assert ms.parallel_minutes(60000.0) == pytest.approx(ratio, rel=0.03)
+
     def test_it_matches_the_observed_median(self):
         # 169 successful shard jobs, 26 complete six-shard runs, 2026-09-30 to
         # 2026-10-01: observed p50 was 37.5 min per shard over the six-shard
-        # pack of FITTED_TOTAL_MS. Asserting the model reproduces that to
-        # within a minute is what makes it a calibration rather than a fudge
-        # factor -- a constant chosen to make the arithmetic come out would
-        # pass the headroom tests above and fail this one.
-        predicted = ms.runner_minutes(LEGACY_SIX_SHARD_TOTAL_MS / 6)
-        assert abs(predicted - 37.5) < 1.0, (
-            "predicted %.1f min against a measured p50 of 37.5" % predicted)
+        # pack of LEGACY_SIX_SHARD_TOTAL_MS, with the preamble six paid.
+        # Predicted 36.5: LOW by 0.97 min, which is the edge of "within a
+        # minute", so the direction and the size are both pinned -- a refit
+        # that pushed it further under would carry straight into the tail.
+        predicted = ms.runner_minutes(LEGACY_SIX_SHARD_TOTAL_MS / 6,
+                                      SIX_SHARD_FIXED_MIN)
+        assert 0.5 < 37.5 - predicted < 1.0, (
+            "predicted %.2f min against a measured p50 of 37.5" % predicted)
 
-    def test_it_matches_the_observed_median_at_the_current_fit(self):
-        # The same check one weights generation later: 24 successful jobs over
-        # the three eight-shard runs on main, observed p50 41.8 min. Two
-        # different widths, across a 1.50x change in the weights, both landing
-        # inside a minute on one unchanged pair of constants, is what says the
-        # model is a calibration and not a curve bent through a single point.
-        # It is `PLANNED_TOTAL_MS` and not `FITTED_TOTAL_MS` because a real job
-        # runs the untimed files too; see those two definitions.
-        predicted = ms.runner_minutes(PLANNED_TOTAL_MS / SHARDS_FOR_FIT)
-        assert abs(predicted - EIGHT_SHARD_P50_MIN) < 1.0, (
-            "predicted %.1f min against a measured p50 of %.1f"
+    def test_twelve_reproduces_its_median(self):
+        # What the through-origin model could not do: 34.55 observed against
+        # weights timed on one of the two runs graded. Eight is not pinned
+        # the same way because PLANNED_TOTAL_MS was timed on a different run
+        # from the ones graded -- re-timing the same mutants has moved totals
+        # by 12%, and that, not the model, is the 3.7 min it misses eight by.
+        # The phase test above grades eight on its own runs' weights instead.
+        # Predicted 33.8: low by 0.75.
+        predicted = ms.runner_minutes(TWELVE_PLANNED_TOTAL_MS / TWELVE_SHARDS,
+                                      TWELVE_SHARD_FIXED_MIN)
+        assert 0.0 < TWELVE_SHARD_P50_MIN - predicted < 1.0, (
+            "predicted %.2f min against a measured p50 of %.2f"
+            % (predicted, TWELVE_SHARD_P50_MIN))
+
+    def test_eight_over_predicts_its_whole_job_median(self):
+        # The known miss, pinned so it cannot be left out of a summary again:
+        # PLANNED_TOTAL_MS / 8 with eight's own preamble predicts 45.5 min
+        # against the 41.8 observed -- HIGH by 3.7, the safe direction. Not
+        # the model's shape (the phase test grades eight to 1% on its own
+        # runs' weights): PLANNED_TOTAL_MS was timed on a different run from
+        # the three graded, and re-timing the same mutants moves totals ~12%.
+        predicted = ms.runner_minutes(PLANNED_TOTAL_MS / 8,
+                                      EIGHT_SHARD_FIXED_MIN)
+        assert 3.0 < predicted - EIGHT_SHARD_P50_MIN < 4.5, (
+            "predicted %.2f min against a measured p50 of %.1f"
             % (predicted, EIGHT_SHARD_P50_MIN))
 
-    def test_the_fit_does_not_extrapolate_to_twelve(self):
-        # The counterpart of the two tests above, and the one that says the
-        # model has a shape problem rather than a tuning problem. Each width
-        # is graded against weights measured AT THAT WIDTH, which is what
-        # makes the eight-shard check above like for like -- so twelve is
-        # graded on TWELVE_PLANNED_TOTAL_MS, not on eight's. Eight implies a
-        # RUNNER_EFFICIENCY of 0.832 and twelve implies 0.593. There is no
-        # value of that one constant at which both widths are reproduced,
-        # and re-fitting it to twelve would move a 40% error onto eight.
-        #
-        # Written as a ratio on purpose: both implied efficiencies are
-        # independent of the committed one: `runner_minutes` is inversely
-        # proportional to RUNNER_EFFICIENCY and each term multiplies it back
-        # in, so the constant cancels INSIDE each term -- not across the
-        # ratio. Either way this is a statement about two measurements rather
-        # than about a constant somebody may re-fit, and it can only change
-        # if the recorded observations change, which is what frozen means
-        # here.
-        #
-        # What is missing is a per-job fixed cost -- see RUNNER_EFFICIENCY in
-        # `scripts/mutation_shards.py` for the five routes that bound it to
-        # 14-27 min a job, and for why no C in that range can be bolted on
-        # beside the efficiency without re-fitting it too.
-        implied_eight = (ms.RUNNER_EFFICIENCY
-                         * ms.runner_minutes(PLANNED_TOTAL_MS / SHARDS_FOR_FIT)
-                         / EIGHT_SHARD_P50_MIN)
-        implied_twelve = (ms.RUNNER_EFFICIENCY
-                          * ms.runner_minutes(TWELVE_PLANNED_TOTAL_MS / TWELVE_SHARDS)
-                          / TWELVE_SHARD_P50_MIN)
-        assert implied_eight / implied_twelve > 1.15, (
-            "eight and twelve now imply the same efficiency to within 15%% "
-            "(%.3f vs %.3f) -- if the model has gained a fixed term, replace "
-            "this with the ordinary median check at twelve"
-            % (implied_eight, implied_twelve))
+    def test_the_tail_covers_the_worst_twelve_shard_job(self):
+        # Through the origin the same pack predicted a 48.0-minute tail and
+        # the worst job ran 55.8 -- a 7.8-minute shortfall this file used to
+        # pin as a known miss. With the preamble twelve actually paid, the
+        # tail clears the worst job; with none, it still would not.
+        weight = TWELVE_PLANNED_TOTAL_MS / TWELVE_SHARDS
+        assert ms.tail_minutes(weight, TWELVE_SHARD_FIXED_MIN) \
+            > TWELVE_SHARD_WORST_MIN
+        assert ms.tail_minutes(weight, 0.0) < TWELVE_SHARD_WORST_MIN
 
-    def test_todays_pack_under_predicts_the_worst_twelve_shard_job(self):
-        # The operational number, and the one the other two do not reach:
-        # what the pack CI actually runs scores against what twelve actually
-        # did. On TWELVE_PLANNED_TOTAL_MS the tail is 48.0 min; the worst of
-        # the 24 observed jobs was 55.8, a 7.8-minute shortfall.
-        #
-        # PROSPECTIVE BASIS, and the name says so because the other basis
-        # gives a different answer: this is today's pack asked about a run
-        # its own weights were timed from, which is what `plan` will say
-        # before the NEXT run. It is not what the gate printed at the time --
-        # `58ace415`'s own gate said 54.4 and was beaten by 1.4 min. On that
-        # replay basis the record is four exceedances in six runs and the
-        # largest is 8.9 min at EIGHT shards, so nothing here is twelve being
-        # the first; see TAIL_MULTIPLIER's docstring for the table.
-        #
-        # Asserted as a band rather than a point because it is a miss and not
-        # a calibration: the lower bound says the gap is real and not
-        # rounding, the upper says the model has not come apart further than
-        # it had on 2026-10-05. Either edge means re-reading
-        # RUNNER_EFFICIENCY's docstring and re-fitting from the job API --
-        # which, per that docstring, also means re-fitting TAIL_MULTIPLIER
-        # and not treating PLANNED_TOTAL_MS as a fixed reference.
-        predicted = ms.tail_minutes(TWELVE_PLANNED_TOTAL_MS / TWELVE_SHARDS)
-        shortfall = TWELVE_SHARD_WORST_MIN - predicted
-        assert 5.0 < shortfall < 11.0, (
-            "predicted tail %.1f min against a measured worst job of %.1f, a "
-            "shortfall of %.1f min where 7.8 was recorded"
-            % (predicted, TWELVE_SHARD_WORST_MIN, shortfall))
+    def test_the_committed_preamble_is_the_one_without_planner_tests(self):
+        # FIXED_MINUTES describes the tree after `real_tree_only` keeps the
+        # planner tests out of mutmut's baseline run, so it is pinned to the
+        # last preamble measured without them -- and below what twelve paid
+        # with them, which is what this change removes.
+        assert abs(ms.FIXED_MINUTES - PREAMBLE_WITHOUT_PLANNER_TESTS_MIN) < 0.1
+        assert ms.FIXED_MINUTES < EIGHT_SHARD_FIXED_MIN < TWELVE_SHARD_FIXED_MIN
+
+    def test_widening_cannot_go_below_the_preamble(self):
+        # The property the card was about: adding shards divides only the
+        # part that divides. Through the origin a wide enough matrix
+        # predicted any tail at all.
+        weight = TWELVE_PLANNED_TOTAL_MS
+        assert ms.runner_minutes(weight / 1000) > ms.FIXED_MINUTES
+        assert ms.tail_minutes(weight / 1000) \
+            > ms.FIXED_MINUTES * ms.TAIL_MULTIPLIER
+        assert ms.runner_minutes(weight / 12) - ms.runner_minutes(weight / 24) \
+            == pytest.approx(ms.parallel_minutes(weight / 24))
 
     def test_the_committed_width_has_actually_run(self):
         # The one executable form of "do not use `plan` to justify a width
         # above twelve", which otherwise exists only as prose in three files.
-        # It is needed because the model cannot object for itself: the tail
-        # scales 1/n, so every width above the committed one looks SAFER to
-        # every other assertion here -- raising ms.SHARDS to 16 reds nothing,
-        # and `plan` cheerfully reports around half the cap.
+        # Kept now the model has a fixed term, because that term
+        # (FIXED_MINUTES) is the one figure no run has measured yet -- it is
+        # the preamble without the planner tests -- and below it every added
+        # shard still looks safer to every other assertion here.
         #
         # Widening is still allowed; it just cannot be done on the planner's
         # word alone. Run the wider matrix once, record its p50 and worst
@@ -507,12 +550,13 @@ class TestConversion:
         # prediction against a twelve-shard measurement.
         assert ms.SHARDS <= SHARDS_OBSERVED, (
             "SHARDS is %d but the widest matrix anyone has observed is %d. "
-            "The model has no per-job fixed cost, so it flatters every width "
-            "above the one it was fitted at -- see "
-            "the-shard-model-has-no-per-job-fixed-cost. Run it, record the "
+            "FIXED_MINUTES has not been re-measured since the planner tests "
+            "left mutmut's baseline -- see FIXED_MINUTES in "
+            "scripts/mutation_shards.py. Run it, record the "
             "p50 and the worst job, then raise SHARDS_OBSERVED."
             % (ms.SHARDS, SHARDS_OBSERVED))
 
+    @real_tree_only
     def test_the_planner_counts_more_than_the_files_a_run_has_timed(self):
         # The invariant `PLANNED_TOTAL_MS` rests on, asserted against the LIVE
         # weights because -- unlike the constant -- it is true of any weights
@@ -540,11 +584,23 @@ class TestConversion:
                 "planner must impute them and total more than the timed sum"
                 % (len(untimed), ", ".join(sorted(untimed))))
 
-    def test_the_tail_reproduces_the_job_that_was_cancelled(self):
+    def test_the_tail_under_predicts_the_job_that_was_cancelled(self):
         # Observed worst successful job: 72.5 min (shard 2). Same six-shard
-        # total, same constants -- so the model is checked against the single
-        # data point the whole change is about, not only against the middle.
-        assert abs(ms.tail_minutes(LEGACY_SIX_SHARD_TOTAL_MS / 6) - 72.5) < 1.5
+        # total, the preamble six paid. The model does NOT reproduce it: it
+        # predicts 69.8, 2.7 min LOW -- the unsafe side. The median lands 1.0
+        # under the 37.5 above and x 1.91 carries that to 2.7. The old
+        # through-origin model gave 72.2 here only because it was fitted at
+        # six. Pinned one-sided so the shortfall is a number, not a tolerance.
+        tail = ms.tail_minutes(LEGACY_SIX_SHARD_TOTAL_MS / 6, SIX_SHARD_FIXED_MIN)
+        assert 2.0 < 72.5 - tail < 3.0, "tail %.2f vs 72.5 observed" % tail
+
+    def test_the_gate_still_refuses_the_pack_that_was_cancelled(self):
+        # What makes that shortfall tolerable: HEADROOM, not the multiplier.
+        # 69.8 is far over 0.80 x 75 = 60, so the cancelled pack is still
+        # called TOO TIGHT. The tail would have to come in 9.8 min low, not
+        # 2.7, before this verdict flipped.
+        tail = ms.tail_minutes(LEGACY_SIX_SHARD_TOTAL_MS / 6, SIX_SHARD_FIXED_MIN)
+        assert tail > 75 * ms.HEADROOM
 
     def test_the_fitted_total_is_still_close_to_the_committed_weights(self):
         # Not a gate on the weights -- a staleness check on the *fit*. The
@@ -577,15 +633,79 @@ class TestConversion:
         # a number nobody can change wrongly.
         assert (fit_drift(FITTED_TOTAL_MS * factor) < FIT_DRIFT_LIMIT) is within
 
-    def test_zero_weight_is_zero_minutes(self):
-        assert ms.runner_minutes(0) == 0.0
-        assert ms.tail_minutes(0) == 0.0
+    def test_zero_weight_still_pays_the_preamble(self):
+        # An empty shard is still a job: checkout, install, mutant
+        # generation and mutmut's baseline run all happen before the first
+        # mutant. Through the origin it cost nothing.
+        assert ms.parallel_minutes(0) == 0.0
+        assert ms.runner_minutes(0) == ms.FIXED_MINUTES
+        assert ms.runner_minutes(0, 0.0) == 0.0
+        assert ms.tail_minutes(0) == ms.FIXED_MINUTES * ms.TAIL_MULTIPLIER
 
     def test_minutes_scale_with_the_parallelism_they_divide_by(self):
         # Pinned as a relationship, not a number: doubling the workers halves
         # the wall clock. A refactor that dropped the division would leave
         # every absolute assertion above intact only by also moving the
         # constants, and this one catches it on its own.
-        before = ms.runner_minutes(10_000_000)
+        before = ms.parallel_minutes(10_000_000)
         assert ms.RUNNER_WORKERS * ms.RUNNER_EFFICIENCY * before * 60000.0 \
             == pytest.approx(10_000_000)
+
+
+class TestMutatedTreeGuard:
+    """`real_tree_only` must fire inside `mutants/` and nowhere else."""
+
+    @staticmethod
+    def _store(tmp_path, text):
+        core = tmp_path / "boost_cli" / "core"
+        core.mkdir(parents=True)
+        (core / "store.py").write_text(text, encoding="utf-8")
+        return tmp_path
+
+    def test_mutmuts_rewritten_copy_is_recognised(self, tmp_path):
+        root = self._store(tmp_path, "def x_install__mutmut_1():\n    pass\n")
+        assert _tree_is_mutated(root)
+
+    def test_an_ordinary_checkout_is_not(self, tmp_path):
+        root = self._store(tmp_path, "def install():\n    pass\n")
+        assert not _tree_is_mutated(root)
+
+    def test_an_unreadable_tree_is_treated_as_mutated(self, tmp_path):
+        assert _tree_is_mutated(tmp_path)
+
+    def test_this_checkout_runs_the_real_tree_tests(self):
+        # The guard must not quietly skip them in the ordinary `test` job,
+        # where they are the headroom gate. Keyed on the directory mutmut
+        # runs from rather than on the guard itself, which would be circular.
+        assert _tree_is_mutated() == (ROOT.name == "mutants")
+
+
+#: The tests that pack the real tree, by (class, name). Each must carry
+#: `real_tree_only`: dropping the mark from one brings its share of the
+#: ~8-minute per-shard preamble back, and nothing else would notice.
+_REAL_TREE_TESTS = [
+    ("TestHeadroom", "test_the_real_pack_fits_with_margin"),
+    ("TestPlanCliContract", "test_it_is_refused_without_explain"),
+    ("TestPlanCliContract", "test_the_index_path_prints_patterns_and_only_patterns"),
+    ("TestPlanCliContract",
+     "test_a_pack_that_fits_exits_zero_and_one_that_does_not_exits_one"),
+    ("TestConversion", "test_the_planner_counts_more_than_the_files_a_run_has_timed"),
+]
+
+
+def _skipif_marks(fn) -> list:
+    return [m for m in getattr(fn, "pytestmark", []) if m.name == "skipif"]
+
+
+@pytest.mark.parametrize("cls, name", _REAL_TREE_TESTS,
+                         ids=[n for _, n in _REAL_TREE_TESTS])
+def test_every_real_tree_test_skips_inside_mutants(cls, name):
+    fn = getattr(globals()[cls], name)
+    assert _skipif_marks(fn), "%s.%s packs ROOT without real_tree_only" % (cls, name)
+
+
+def test_a_tmp_tree_test_is_not_marked():
+    # The other direction: the mark is opt-in, not something every test
+    # here carries -- this one builds its own tree and runs in mutants/ too.
+    fn = TestPlanCliContract.test_minutes_are_printed_only_where_the_weights_are_time
+    assert not _skipif_marks(fn)

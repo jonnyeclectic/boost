@@ -2,15 +2,15 @@
 id: the-shard-model-has-no-per-job-fixed-cost
 board: code
 section: trust
-status: planned
+status: shipped
 category: CI · Model
 complexity: M
 impact: Med
 wow: 3
 note: the plan divides by every shard added, so it flatters every width above the one it was fitted at
 order: 367
-owner:
-pr:
+owner: loop/shard-fixed-cost
+pr: 1054
 title: "The shard model runs through the origin, so <code>plan</code> gets more optimistic with every shard added"
 ---
 <b>The cleanest statement of it needs no weights at all.</b> Going from eight shards to twelve,
@@ -79,4 +79,31 @@ answer &mdash; "is this width safe?" &mdash; is answered optimistically for ever
 fitted one, and the answer gets more optimistic the further you go. Until C is fitted,
 <code>test_the_committed_width_has_actually_run</code> refuses a <code>SHARDS</code> nothing has
 been observed at, and <code>test_todays_pack_under_predicts_the_worst_twelve_shard_job</code>
-pins the 7.8-minute shortfall so it cannot drift unnoticed.
+pinned the 7.8-minute shortfall so it could not drift unnoticed (replaced on shipping by
+<code>test_the_tail_covers_the_worst_twelve_shard_job</code>, below).
+
+<b>Shipped.</b> The fixed cost was measured rather than bounded, and most of it was a test. Every
+shard job's log timestamps mutmut's phases, so over 861 successful jobs the preamble before
+<code>Running mutation testing</code> is a median <b>5.1 min at six, 10.0 at eight, 12.9 at
+twelve</b> &mdash; nearly all of the growth in <code>Running stats</code>, which jumped 2.6 &rarr;
+6.9 min between consecutive main commits <code>8995f246</code> (six) and <code>e9718617</code>
+(eight); 7.2 is the median over all 80 eight-shard jobs. That commit added
+<code>test_mutation_shard_count.py</code>, whose real-tree tests pack <code>ROOT</code>; inside
+<code>mutants/</code> that is mutmut's rewritten tree (<code>store.py</code> is 16 MB there against
+164 KB), and the file took <b>246 s</b> there locally against 8 s on the checkout. Those five tests read
+only unmutated <code>scripts/</code>, so they now skip inside <code>mutants/</code> (1 s), as
+<code>test_mutation_subfile_shards.py</code>'s already did. With the preamble taken out, the mutation
+phase is linear through the origin: graded on each run's own measured weights, 216 jobs give
+<b>0.2528</b> phase-minutes per weight-minute at eight and <b>0.2555</b> at twelve (intercept 0.19
+min, r&sup2; 0.93), so <code>RUNNER_EFFICIENCY</code> is <b>0.98</b> and the 0.814 was the preamble
+folded into a ratio. The model is now <code>FIXED_MINUTES</code> (5.5, the last six-shard preamble
+before the planner tests reached the baseline) plus that phase; with each width's own preamble it
+predicts six's 37.5 median as 36.5 and twelve's 34.55 as 33.8 (both low, by 1.0 and 0.75), and its
+twelve-shard tail (64.6) clears the 55.8-minute worst job that the old pack missed by 7.8. Two misses
+are pinned rather than hidden: eight's whole-job median comes out <b>45.5 against 41.8</b> (high by
+3.7, because <code>PLANNED_TOTAL_MS</code> was timed on a different run from the ones graded; the
+phase ratio, graded on eight's own weights, agrees to 1%), and six's cancelled-job tail comes out
+<b>69.8 against 72.5</b> &mdash; 2.7 low, the unsafe side, where the old model's 72.2 had the
+advantage of being fitted there. <code>HEADROOM</code> is what absorbs that: 69.8 is still far over
+the 60-minute budget, so the cancelled pack is refused either way, and a test pins both facts. <code>FIXED_MINUTES</code> describes a tree
+no run has executed yet, so re-measure it from the first runs after this lands.

@@ -529,7 +529,8 @@ class TestSync:
 class TestUpdate:
     def test_no_taps(self, boost, sandbox):
         r = boost("update")
-        assert "no taps configured — start with `boost tap --defaults`" in r.out
+        assert "○ no taps configured" in r.out
+        assert "→ start with `boost tap --defaults`" in r.out
 
     def test_up_to_date(self, boost, installed):
         r = boost("update")
@@ -2664,7 +2665,8 @@ class TestSnapshotEdges:
 
     def test_list_empty(self, boost, sandbox):
         r = boost("snapshot", "list")
-        assert "no snapshots yet — create one with `boost snapshot save`" in r.out
+        assert "○ no snapshots yet" in r.out
+        assert "→ create one with `boost snapshot save`" in r.out
 
     def test_list_with_stray_positional_is_a_usage_error(self, boost, sandbox):
         # `snapshot list extra-arg` used to silently ignore the extra word.

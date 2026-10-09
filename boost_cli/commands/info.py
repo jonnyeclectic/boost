@@ -122,6 +122,15 @@ def _materialized_text(name: str, kind: str, entry: dict):
                 hint="inspect with `boost verify %s`, then `boost reinstall "
                      "%s` to restore the locked copy" % (name, name),
                 wrap=True)
+        if st == integrity.STATUS_STRANDED:
+            # Not MISSING's `boost sync` / `reinstall`: both would recreate
+            # the deleted repo. And not a silent fall-through to the tap
+            # copy, which is what an unhandled status here amounted to.
+            raise BoostError(
+                "%s %s was installed --local into %s, which no longer exists"
+                % (kind, name, paths.tilde(Path(entry["base"]))),
+                hint="`boost uninstall %s` drops the record" % name,
+                wrap=True)
         if st == integrity.STATUS_MISSING:
             raise BoostError(
                 "%s %s is in the lock file but its materialized artifacts "
@@ -223,17 +232,38 @@ def _print_wrapped(text: str) -> None:
 
 # ---------------------------------------------------------------- commands
 
-def _materialized_agents(entry):
-    """Abbreviated agent column for a rule/workflow, from its materializations."""
-    agent_names = [m.get("agent", "") for m in entry.get("materializations") or []]
-    return "·".join(a.split("-")[0] for a in agent_names)
+def _materialized_agents(kind, entry):
+    """Abbreviated agent column for a rule/workflow: the agents boost still
+    writes for it, not every recorded row (`integrity.written_agent_names`)."""
+    return "·".join(a.split("-")[0]
+                    for a in integrity.written_agent_names(kind, entry))
 
 
-def _kind_table(heading, items, extra=None):
+def _scope_flag(entry: dict) -> list[str]:
+    """The FLAGS cell's word for a rule/workflow installed ``--local``.
+
+    Those rows live in the user lock beside the user-scope ones, so without
+    this a rule written into another checkout -- or into one since deleted --
+    printed byte-identical to one in ``~/.claude``. ``project:<base>`` names
+    the checkout; ``(gone)`` says the directory no longer exists, which is
+    the case every other surface now reports as ``stranded``.
+    """
+    if (entry.get("scope") != scopes.SCOPE_PROJECT
+            or not scopes.names_a_directory(entry.get("base"))):
+        return []
+    where = "project:" + paths.tilde(Path(entry["base"]))
+    if scopes.stranded(entry):
+        return [out.role(where + " (gone)", "danger")]
+    return [out.role(where, "muted")]
+
+
+def _kind_table(heading, kind, items, extra=None):
     """Render an installed rule/workflow table. ``extra`` is an optional
     ``(column, key)`` pair for a per-kind column (e.g. a workflow's slot); the
-    count line reuses the heading's trailing noun (`installed rules` -> `rule`)."""
+    count line names ``kind``, which also decides which agents count as
+    written — passed explicitly, so renaming a heading can't change it."""
     out.heading(heading)
+    noun = kind
     # FLAGS mirrors the skills table so a quarantined or pinned rule/workflow
     # doesn't render byte-identical to a healthy one — `update`/`cat` treat
     # them differently and a reader needs to see that here, not just in --json.
@@ -242,9 +272,11 @@ def _kind_table(heading, items, extra=None):
     for name in sorted(items):
         e = items[name]
         quarantined = bool(e.get("quarantined"))
-        agents_cell = "—" if quarantined else _materialized_agents(e)
+        agents_cell = ("—" if quarantined
+                       else _materialized_agents(noun, e) or "none")
         flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
-                ([out.aurora("quarantined", "pink")] if quarantined else [])
+                ([out.aurora("quarantined", "pink")] if quarantined else []) + \
+                _scope_flag(e)
         row = [name, e.get("version", "?"), e.get("tap", "?"),
                agents_cell]
         if extra:
@@ -256,7 +288,6 @@ def _kind_table(heading, items, extra=None):
                    headers[4])
     # NAME is what `uninstall`/`update`/`cat` take: shown whole or dropped.
     out.table(rows, headers=headers, whole=("NAME",))
-    noun = heading.split()[-1][:-1]  # "installed rules" -> "rule"
     print("  " + out.aurora("%d %s%s installed"
                             % (len(rows), noun, "" if len(rows) == 1 else "s"),
                             "cyan"))
@@ -370,9 +401,10 @@ def cmd_list(argv):
                               % (projectlock.LOCK_DIRNAME,
                                  projectlock.LOCK_FILENAME), "muted"))
     if rules:
-        _kind_table("installed rules", rules)
+        _kind_table("installed rules", "rule", rules)
     if workflows:
-        _kind_table("installed workflows", workflows, extra=("SLOT", "slot"))
+        _kind_table("installed workflows", "workflow", workflows,
+                    extra=("SLOT", "slot"))
     return 0
 
 
@@ -398,9 +430,10 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
     directory, which these kinds do not have.
     """
     desc = _catalog_description(name, entry.get("tap"))
+    stranded = scopes.stranded(entry)
     if as_json:
         print(json.dumps({"name": name, "kind": kind, "description": desc,
-                         "installed": entry}, indent=2))
+                         "stranded": stranded, "installed": entry}, indent=2))
         return 0
     out.heading(name)
     badges = [out.badge("installed %s" % kind, "green")]
@@ -420,6 +453,12 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         out.kv("slot", str(entry["slot"]))
     if entry.get("scope"):
         out.kv("scope", str(entry["scope"]))
+    if (entry.get("scope") == scopes.SCOPE_PROJECT
+            and scopes.names_a_directory(entry.get("base"))):
+        # "scope project" alone does not say which checkout -- or that it is
+        # gone, which is the one fact here that changes what to do next.
+        out.kv("base", paths.tilde(Path(entry["base"]))
+               + (" (gone)" if stranded else ""))
     if entry.get("source_file"):
         out.kv("source", str(entry["source_file"]))
     if entry.get("commit"):
@@ -437,11 +476,15 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         # nothing. Printing the stale agent list here reads as a lie about
         # files that were just removed.
         out.kv("materialized", "(removed — quarantined)")
+    elif stranded:
+        # Every recorded row pointed into the deleted repo, so listing the
+        # agents would describe files that went with it.
+        out.kv("materialized", "(none — its repo no longer exists; "
+               "`boost uninstall %s` drops the record)" % name, wrap=True)
     elif integrity.reaches_no_agent(kind, entry):
-        # `agent_names` lists every recorded row, so the dangerous case
-        # advertised the five agents the rule does not reach while the
-        # harmless no-rows case showed none — the two read backwards from
-        # how a user judges risk.
+        # Every recorded row is unwritten, so the line below would print
+        # "(none)" -- the same words as the harmless no-rows case. Say why
+        # instead, because the two read opposite ways to a user judging risk.
         # Both halves inflect. One row is the commonest shape by far -- most
         # items record exactly one -- so a noun-only plural put the ungrammar
         # on the usual path and hid it on the rare one.
@@ -452,7 +495,8 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
                             "s" if rows == 1 else ""))
     else:
         out.kv("materialized",
-               ", ".join(lockfile.agent_names(kind, entry)) or "(none)")
+               ", ".join(integrity.written_agent_names(kind, entry))
+               or "(none)")
     out.kv("pinned", "yes" if entry.get("pinned") else "no")
     out.kv("quarantined", "yes" if entry.get("quarantined") else "no")
     return 0
@@ -1009,7 +1053,9 @@ def _show_crashes(limit, as_json=False):
             for r in reports[:limit]]}, indent=2))
         return 0
     if not reports:
-        out.info("no crash reports — nothing has blown up (that boost noticed)")
+        print(out.empty_state(
+            "no crash reports — nothing has blown up (that boost noticed)",
+            wrap=True))
         return 0
     out.heading("crash reports in %s" % ldir)
     for r in reports[:limit]:
@@ -1088,7 +1134,7 @@ def cmd_log(argv):
         print(json.dumps({"kind": "activity", "events": events}, indent=2))
         return 0
     if not events:
-        out.info("no activity yet")
+        print(out.empty_state("no activity yet"))
         return 0
     out.heading("activity")
     action_roles = {"install": "success", "uninstall": "danger"}
@@ -1326,8 +1372,8 @@ def cmd_tag(argv):
             print(json.dumps(mapping, indent=2, sort_keys=True))
             return 0
         if not mapping:
-            out.info("no tags yet")
-            out.info(out.role("hint: boost tag <skill> +mytag", "muted"))
+            print(out.empty_state("no tags yet",
+                                  hint="boost tag <skill> +mytag"))
             return 0
         out.table([("#" + t, ", ".join(mapping[t])) for t in sorted(mapping)],
                   headers=("TAG", "SKILLS"), whole=("TAG",))  # `list --tag`

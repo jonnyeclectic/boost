@@ -2,14 +2,15 @@
 id: shrink-the-published-index
 board: code
 section: planned
-status: planned
+status: shipped
 category: Performance · Storage
 complexity: M
 impact: Med
 wow: 3
-note: 653 MB of postings holds 1.4 MB of distinct terms — the term string is stored 88 times over
+note: 563.7 MB of postings is 59.3 MB as one delta+varint blob per term, and 23.8 MB under zstd -19
 order: 100
-pr: 688
+owner: loop/shrink-keyword-index
+pr: 1051
 title: shrink the keyword index before publishing it — structure first, then compression
 ---
 <a href="#publish-the-keyword-index">publish-the-keyword-index</a> is worth doing only if the
@@ -89,3 +90,36 @@ Without that table <a href="#publish-the-keyword-index">publish-the-keyword-inde
 no size answer, which is why it is held. Claim dropped because branch
 <code>loop/shrink-postings-index</code> no longer exists; take it by setting
 <code>owner</code> again.
+
+<b>Shipped — the table, and the layout it justified.</b> <code>scripts/measure_keyword_index.py</code>
+rebuilds one real store (a copy of a real 462-tap machine's index: <b>20,108,624</b> postings over
+<b>251,864</b> terms, 62,362 docs — a larger corpus than the 18.6M-posting one above) in all three
+layouts, checks every layout reads back identical postings for the 141 golden queries, and times
+each. The rebuilt <code>rows-interned</code> file is exactly the size of the store it was read
+from (563,728,384), so the comparison is like for like. Import decode in brackets:
+
+<b><code>rows-text</code></b> (v1-v6) 740.9&nbsp;MB &middot; gzip&nbsp;-6 228.1&nbsp;MB (0.93&nbsp;s) &middot; zstd&nbsp;-3 191.6&nbsp;MB (0.66&nbsp;s) &middot; zstd&nbsp;-19 120.0&nbsp;MB (0.84&nbsp;s) &middot; golden reads 3.76&nbsp;s total, p50 24.3&nbsp;ms.<br>
+<b><code>rows-interned</code></b> (v7-v9) 563.7&nbsp;MB &middot; gzip&nbsp;-6 210.4&nbsp;MB (0.56&nbsp;s) &middot; zstd&nbsp;-3 183.8&nbsp;MB (0.65&nbsp;s) &middot; zstd&nbsp;-19 114.4&nbsp;MB (0.71&nbsp;s) &middot; reads 3.31&nbsp;s, p50 20.7&nbsp;ms, max 72.9&nbsp;ms.<br>
+<b><code>blob-delta-varint</code></b> (v10) <b>59.3&nbsp;MB</b> &middot; gzip&nbsp;-6 27.2&nbsp;MB (0.08&nbsp;s) &middot; zstd&nbsp;-3 27.1&nbsp;MB (0.06&nbsp;s) &middot; <b>zstd&nbsp;-19 23.8&nbsp;MB (0.06&nbsp;s)</b> &middot; reads <b>1.17&nbsp;s, p50 7.9&nbsp;ms, max 24.4&nbsp;ms</b>.<br>
+<b><code>rag_index.json</code></b> (any layout) 47.3&nbsp;MB &middot; gzip&nbsp;-6 11.5&nbsp;MB &middot; zstd&nbsp;-19 6.3&nbsp;MB.
+
+Structure won by an order of magnitude more than compression did: blob-per-term is <b>9.5&times;</b>
+smaller on disk than the interned rows, while zstd -19 of the interned rows is only 4.9&times; and
+gives none of it back after import. Compression still composes, but it has far less left to find
+(2.5&times;), and the decode it costs drops to 0.06&nbsp;s. Reads got faster, not slower — one rowid
+lookup and one blob per query term instead of thousands of rows — and the slowest golden query
+went from 72.9&nbsp;ms to 24.4&nbsp;ms. Writing the postings took 2-5&nbsp;s against 12-24&nbsp;s over three runs (build timing was the noisy column; sizes and read totals were stable).
+So <code>_write_postings</code> now stores <code>postings(term_id INTEGER PRIMARY KEY, plist BLOB)</code>
+(<code>rag._encode_plist</code>: first doc absolute, then gaps, LEB128 varints), the
+<code>postings_term_id</code> index is gone, <code>terms(id, term, df)</code> and
+<code>stem_expansions</code> are unchanged, <code>_bm25</code> is untouched, and
+<code>INDEX_VERSION</code> is 10 so every store rebuilds once into it.
+
+<b>What <a href="#publish-the-keyword-index">publish-the-keyword-index</a> needs from this.</b>
+The whole keyword index is <b>~30&nbsp;MB under zstd -19</b> (23.8 postings + 6.3 docs) for the
+full 462-tap catalogue, against ~300&nbsp;MB of dense vectors — size is no longer a reason to hold
+it. A published shard is this v10 blob format, so it must be pinned to <code>INDEX_VERSION</code>
+the way dense shards pin their space. Not measured here: per-registry shard sizes (where per-shard
+zstd has little context and a trained dictionary is the obvious follow-on), and the merge cost of
+re-basing doc ids, which with delta encoding means rewriting only each blob's first varint.
+

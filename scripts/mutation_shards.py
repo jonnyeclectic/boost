@@ -97,9 +97,10 @@ happened on the merge of #1015, with ``plan --explain`` reporting ``7391040``
 against a ceiling written in minutes and nothing anywhere converting between
 them.
 
-:func:`runner_minutes` converts, by dividing the serial weight by the
-parallelism the runner actually delivers — see :data:`RUNNER_EFFICIENCY` and
-:data:`TAIL_MULTIPLIER`, both fitted over the job API rather than assumed.
+:func:`runner_minutes` converts: a fixed preamble every shard job pays, plus
+the serial weight divided by the parallelism the runner actually delivers —
+see :data:`FIXED_MINUTES`, :data:`RUNNER_EFFICIENCY` and
+:data:`TAIL_MULTIPLIER`, all fitted from real job timings rather than assumed.
 ``plan --explain --timeout-minutes N`` then answers the question directly and
 exits non-zero when the answer is no;
 ``tests/unit/test_mutation_shard_count.py`` asks it of the committed pack on
@@ -144,150 +145,73 @@ SHARDS = 12
 #: — the mutant set runs four at a time.
 RUNNER_WORKERS = 4
 
-#: The fraction of those four workers the runner actually delivers.
+#: The fraction of those four workers the mutation phase actually keeps busy.
 #:
-#: **This is the number that made the plan predictive, and it is measured, not
-#: assumed.** The weights are summed per-mutant durations, so a shard's weight
-#: is the work it holds *serially* while the job runs it four-way parallel: a
-#: plan in weight-milliseconds was predicting 123 minutes a shard against 27-76
-#: observed, and nothing in the repo could answer "will a shard exceed the
-#: cap?".
+#: **Fitted on the mutation phase alone, which is what made it a constant.**
+#: A shard job is two things laid end to end: a fixed preamble every shard
+#: pays whatever it was given (:data:`FIXED_MINUTES`), and ``Running mutation
+#: testing``, which is the part that divides. The job log timestamps both, so
+#: on 2026-10-09 every one of the 216 successful ``mutation-shard`` jobs whose
+#: run still had its ``mutation-weights`` artifact (19 runs, 2026-10-02 to
+#: 10-06) was graded on *its own run's* measured durations, summed over the
+#: units that commit's pack gave it. Mutation-phase minutes over weight-minutes
+#: has a median of **0.2550** -- **0.2528** over the 24 eight-shard jobs and
+#: **0.2555** over the 192 twelve-shard ones, a 1% difference across a 1.5x
+#: change of width. A free intercept comes back at 0.19 min (r^2 0.93), so the
+#: phase really is linear through the origin. 0.2550 inverts to 3.92 busy
+#: workers of 4, hence 0.98: mutmut's per-mutant durations are wall time
+#: measured four at a time, so they already carry the contention, and the
+#: phase has almost nothing left to lose.
 #:
-#: Fitted over the GitHub Actions job API on 2026-10-01: **169 successful
-#: `mutation-shard` jobs**, of which **26 runs completed all six shards**, from
-#: 2026-09-30 to 2026-10-01. Per *run* (the sum over its six shards, which is
-#: pack-invariant and so isolates runner speed from packing) the ratio of
-#: observed minutes to committed weight-minutes was min 0.265, **median
-#: 0.307**, p90 0.347, max 0.355 — a 1.34x spread. The median inverts to 3.26
-#: effective workers of 4, hence 81.4%.
+#: **The 0.814 this replaced was the fixed cost, folded into a ratio.** It was
+#: fitted on whole jobs, so it charged the preamble to the weight, and a
+#: preamble charged per weight-minute shrinks when a width spreads the weight
+#: thinner -- which is exactly the error the twelve-shard re-check found
+#: (eight implied 0.832, twelve 0.593). With the preamble taken out, both
+#: widths agree to 1%.
+RUNNER_EFFICIENCY = 0.98
+
+#: Minutes every shard job pays before its first mutant, however few it holds.
 #:
-#: **Two days, and the window is the weakest part of the fit.** The sample is
-#: large (169 jobs) but short, because the weights it is a ratio *against* were
-#: themselves re-measured on 2026-09-30 — before that the denominator is a
-#: different number and the ratio is not comparable. So 1.34x is how much
-#: runners varied over two days, not over a quarter, and a seasonal effect
-#: would not be in it. That is an argument for re-fitting when the weights
-#: move, which is the same event that already opens a PR
-#: (``mutation-weights-refresh.yml``), not for widening the constant on a
-#: guess.
+#: Measured, from the same job logs: the job's duration minus its ``Running
+#: mutation testing`` phase -- checkout, setup, ``pip install``, ``Generating
+#: mutants`` (~0.9 min, every shard mutates all 67 files), ``Running stats``,
+#: the clean and forced-fail runs. ``Running stats`` is mutmut's own run of
+#: ``tests/unit`` under its tracing trampolines, and it is the term that moves.
+#: Over 861 successful jobs since 2026-09-26 the preamble's median was **5.1
+#: min at six shards** (552 jobs), **10.0 at eight** (80) and **12.9 at
+#: twelve** (229), and the step to eight happened within the hour the width
+#: changed, with stats going 2.6 -> 6.9 min (medians) across consecutive main commits
+#: ``8995f246`` (six shards) and ``e9718617`` (eight).
 #:
-#: Expressed as efficiency rather than as the 0.307 itself so that the two
-#: things that could move it stay separable: a runner with more vCPUs changes
-#: ``RUNNER_WORKERS`` and leaves this alone, where contention changes this and
-#: leaves that alone. A single fitted constant would hide which had happened.
+#: **That growth was a bug in the suite, not a cost of width.** #1023 (the
+#: eight-shard change) added ``tests/unit/test_mutation_shard_count.py``, whose
+#: real-tree tests pack ``ROOT`` -- and inside ``mutants/`` ``ROOT`` is mutmut's
+#: rewritten copy, where ``store.py`` alone is 16 MB of mutant variants against
+#: 164 KB of source. Measured locally on that copy, the file takes **246 s**,
+#: 245 of them in its five real-tree tests, where the whole file takes 8 s on
+#: the checkout -- and 1 s in ``mutants/`` once they skip. Why it grew
+#: from eight shards to twelve is not measured: the fifth real-tree test
+#: arrived in the same commit as the twelve-shard change (58ace415) and alone
+#: took 99 s there, so width and that test are confounded. Those tests read
+#: ``scripts/`` only, which is never
+#: mutated, so they kill nothing in the gate. They now skip inside
+#: ``mutants/`` exactly as ``test_mutation_subfile_shards.py``'s already did.
 #:
-#: **The model is linear in the weight because the fixed cost is negligible,
-#: and that was measured too, not assumed.** Extrapolating a constant fitted
-#: at six shards to eight is only sound if per-job overhead — checkout, Python
-#: setup, the pip install, the cache restore — does not survive the split, and
-#: it does: over 41 shard jobs the ``mutate shard`` step is a median 35.6
-#: minutes inside a 36.2-minute job, so everything else is **0.6 min, 1.7%**.
-#: Predicting eight shards by the step alone (35.6 x 6/8 + 0.6 = 27.3 min)
-#: lands 4% under what this model gives (28.4), i.e. the model errs toward
-#: *more* time and therefore toward refusing a pack rather than passing one.
-#: If the cache ever stops hitting, that 0.6 is what grows — re-measure before
-#: trusting the extrapolation again.
+#: **So the committed value is the preamble without them**: 5.5 min, the
+#: median over the 124 six-shard jobs of 2026-10-01/02, the last runs before
+#: those tests reached the baseline (all 552 six-shard jobs: 5.1). It is the
+#: one figure here that describes a tree no CI run has executed yet -- the
+#: suite has grown a little since -- so re-measure it from the first runs after
+#: this lands (job minus ``Running mutation testing``, from the log
+#: timestamps) and raise it if the preamble came back above it.
 #:
-#: **Re-checked at eight shards on 2026-10-02 and left unchanged.** The above
-#: is a six-shard fit extrapolated; eight shards have since actually run, 24
-#: of them over three pushes to main, at an observed median of 41.8 min
-#: against this constant's predicted 42.7 — an implied 0.832 where 0.814 is
-#: committed, so the extrapolation held and still errs toward refusing a pack.
-#:
-#: **Re-checked at twelve on 2026-10-05, and this time it did not hold.**
-#: Grade each width against weights measured *at that width*, which is what
-#: made the eight-shard check like for like: #1029's 66,708,651 ms total was
-#: measured on an eight-shard run, and #1032's 58,969,820 was measured on run
-#: 37200431822 — which is ``58ace415``, one of the two twelve-shard runs
-#: being graded. On that footing eight implies 0.832 and twelve implies
-#: **0.593**, a factor of 1.40 apart. No single multiplicative constant is
-#: both.
-#:
-#: **The shape is wrong, and the cleanest form of that needs no weights at
-#: all.** Eight shards to twelve, division through the origin predicts the
-#: median falls to 0.667 of itself. It fell to 0.83 — 41.8 min (the p50 of
-#: the 24 jobs of the three eight-shard runs this file already pins; 42.0
-#: over the four runs that have since happened, which changes nothing) to
-#: 34.6 over the 24 jobs of the two twelve-shard runs. A model with no
-#: per-job fixed cost cannot produce that, whatever the weights say — and
-#: the one thing the weights do say moves it the conservative way: #1032
-#: re-timed the same mutants 0.884x cheaper, so correcting for that predicts
-#: a fall to 0.589 against the same observed 0.83, a wider gap than the
-#: uncorrected 0.667.
-#:
-#: **The fixed cost is large, and this is not enough data to fit it.** Five
-#: routes, differing in whether they use medians or machine-minute sums and
-#: in whether #1032's 0.884x re-measurement is read as the work really
-#: getting cheaper: 20.2 and 24.2 min a job from the two p50s; 14.4 and 19.8
-#: from the matrix totals (347.6 machine-minutes at eight over four runs,
-#: 404.9 at twelve over two); and 26.9 from the six-to-eight step of
-#: 2026-10-02, 287.2 -> 341.0 machine-minutes two hours apart with the width
-#: the only change. So **C is 14 to 27 min a job** — large, not a value.
-#: Fitting it needs a third width, not more runs at twelve.
-#:
-#: **And a fixed term cannot just be added beside this constant.** Subtract
-#: any C in that range from the matrix total and the parallel work left over
-#: implies a speedup above four on a four-vCPU runner: C = 14.4 leaves 232.4
-#: min against 1,111.8 weight-minutes, which is 4.78 effective workers, and
-#: C = 24.2 leaves 154.0, which is 7.22. An efficiency over 1.0 is not a
-#: tight fit, it is a contradiction — so the weights overstate real serial
-#: work by roughly the same factor. The mechanism is not measured and this
-#: file does not record guesses, so it is named as one: mutmut times each
-#: mutant while four of them run at once, and a per-mutant duration may
-#: therefore already carry the contention this constant exists to apply.
-#: Whatever the cause, C and this constant have to be re-fitted together,
-#: and :data:`PLANNED_TOTAL_MS` cannot be the fixed reference they are fitted
-#: against.
-#:
-#: **What the gate is actually running on, which is the operational part.**
-#: Every **planner** figure in this paragraph is measured on **#1032's
-#: weights** (the observed ones -- 34.6, 55.8, 66.0, 88%, 74% and the 12
-#: points -- are job durations, and do not move when the weights do), the
-#: pack as committed when it was written, and is dated rather than live for
-#: the reason the paragraph itself ends on: a refresh moves the printed
-#: number without moving the real one, so a live reading here would go
-#: quietly wrong the next time one lands. On that pack ``plan --shards 12``
-#: printed a 25.2-minute median and a 48.0-minute tail, 64% of the cap.
-#: Observed: a 34.6-minute median, 37% higher, and a worst job of 55.8 — so
-#: that pack, asked about the run its own weights were timed from,
-#: under-predicted that job by **7.8 minutes**.
-#: That is the prospective basis — what ``plan`` will say before the next
-#: run — and it is not the same question as what the gate printed at the
-#: time, which is answered under :data:`TAIL_MULTIPLIER`. Score the committed
-#: :data:`TAIL_MULTIPLIER` against the observed median instead and the
-#: committed pack is 34.6 x 1.91 = **66.0 min, 88% of the cap**, past the
-#: 80% :data:`HEADROOM` gate ``plan`` reported it clearing with 36 points in
-#: hand. Twelve still stands on measurement — 55.8 is 74% of 75 — but the
-#: margin is nearer 12 points than 36, and a weights refresh moves the
-#: printed number without moving the real one.
-#:
-#: **That refresh has since landed, which is why the above is dated.** #1038
-#: re-timed the weights from the twelve-shard ``ci`` run on ``6fd38785``, and
-#: ``plan --shards 12`` now prints a 26.2-minute median and a 50.1-minute
-#: tail, 67% of the cap. The shortfall for *that* era has to be scored
-#: against that run's own observed jobs, which this file does not record
-#: yet — so do not subtract the new tail from the 55.8 above. That number
-#: belongs to ``58ace415``/``d7027cf8``, and pairing it with a tail timed on
-#: a different run is the two-bases conflation this docstring already warns
-#: about one paragraph up.
-#:
-#: **It is not CI setup, and the 0.6 min above is still true.** Stepping all
-#: 24 twelve-shard jobs through the job API, everything that is not ``mutate
-#: shard`` is a median 0.5 min. So the fixed cost is inside mutmut, where
-#: this file cannot see it: a baseline test run (the ``tests`` job on those
-#: two runs took 7.8 and 8.6 min) and per-job mutant collection are the
-#: candidates, and neither has been measured.
-#:
-#: **Until it is, do not use ``plan`` to justify a width above twelve.**
-#: Through the origin the model divides the time by every shard added, and
-#: goes on saying so past the point where the fixed cost dominates — sixteen
-#: reports around half the cap (48% on #1032's weights, 50% on #1038's),
-#: where the real floor is ``C x TAIL_MULTIPLIER``
-#: however many shards are thrown at it. That is no longer only a comment:
-#: ``test_the_committed_width_has_actually_run`` fails the build if
-#: :data:`SHARDS` is raised past a width that has been observed.
+#: **A fixed term is what makes widening honest.** Through the origin, every
+#: added shard divided the whole job; now it divides only the part that
+#: divides, so the predicted tail approaches ``FIXED_MINUTES x
+#: TAIL_MULTIPLIER`` instead of zero however many shards are added.
 #: ``tests/unit/test_mutation_shard_count.py`` carries the figures.
-RUNNER_EFFICIENCY = 0.814
+FIXED_MINUTES = 5.5
 
 #: How much worse the *worst* run of a shard is than that shard's median.
 #:
@@ -297,15 +221,28 @@ RUNNER_EFFICIENCY = 0.814
 #: ordinary run. The cap is reached by that tail, so the headroom check is
 #: scored against it and not against the median.
 #:
-#: It is a *measured* multiplier and it reproduces the observed worst case:
-#: 37.8 predicted median minutes at six shards x 1.91 = 72.2, against a real
-#: worst job of 72.5 — which is 97% of ``timeout-minutes: 75``. That is the
+#: It is a *measured* multiplier, and under the fixed-cost model it comes
+#: **2.7 min short** of the observed worst case, on the unsafe side: six
+#: shards' median is 5.1 + 31.4 = 36.5 min (the preamble six-shard jobs
+#: measured, plus the divided phase; observed 37.5), and x 1.91 is 69.8,
+#: against a real worst job of 72.5 — which is 97% of
+#: ``timeout-minutes: 75``. The through-origin model this replaced predicted
+#: 72.2 there, because its ratio had been fitted at six. The miss is the 1.0
+#: min the median comes in low, carried by the multiplier; what absorbs it is
+#: :data:`HEADROOM`, not this constant — 69.8 is still far over the 60-minute
+#: budget, so that pack is called TOO TIGHT either way. That is the
 #: cancellation this constant exists to predict, and at the time it was
 #: observed nothing printed a number anyone could have compared to the cap.
 #:
+#: It multiplies the whole job, preamble included, and that is measured too:
+#: the preamble is not steadier than the phase it precedes. Within a run its
+#: worst/median is a median 1.34 at six and 1.82 at twelve, against 1.26 and
+#: 1.33 for the mutation phase.
+#:
 #: **Still conservative at twelve, and that is now load-bearing.** The
-#: worst-in-run ratio is 1.63 and 1.60 over the two twelve-shard runs,
-#: against 1.49 at eight and the 1.91 committed.
+#: worst-in-run ratio of whole jobs is a median 1.51 and at most 1.64 over
+#: the sixteen complete twelve-shard runs on record, against 1.49 at eight
+#: and the 1.91 committed.
 #:
 #: **Exceedance is routine, and it is not this multiplier's doing.** Replay
 #: each run's gate as it actually stood — that commit's own script and its
@@ -324,12 +261,13 @@ RUNNER_EFFICIENCY = 0.814
 #: twelve-shard data is that twelve is where the tail estimate first broke,
 #: and it is not — the figures are only striking at twelve because that is
 #: the width someone went and looked at. (Six was beaten too, 72.2 against
-#: 72.5, by 0.3 min at its own fit point.) Two separate things are going on and they
+#: 72.5, by 0.3 min at its own fit point under the old model, and by 2.7
+#: under this one -- see above.) Two separate things are going on and they
 #: must not be run together: every run in that table was scored on weights
 #: measured at the *previous* width, which is a lag, and the median under the
-#: multiplier does not divide the way the model says, which is a shape
-#: problem — see :data:`RUNNER_EFFICIENCY` for the second. Neither is this
-#: constant. Being over-estimated is what kept the gate as honest as it
+#: multiplier did not divide the way a model through the origin said, which
+#: was a shape problem — :data:`FIXED_MINUTES` is the fix for the second.
+#: Neither is this constant. Being over-estimated is what kept the gate as honest as it
 #: stayed while the median came apart, so do not re-fit it downward on the
 #: 1.60-1.63 evidence: two runs is not the 28 samples a shard it was fitted
 #: over, and the margin is currently doing real work.
@@ -879,13 +817,26 @@ def pattern_for(root: Path, path: Path):
     return "%s.x_%s__mutmut_*" % (dotted, unit.symbol)
 
 
-def runner_minutes(weight_ms: float) -> float:
-    """Weight-milliseconds as wall-clock minutes on a CI runner.
+def parallel_minutes(weight_ms: float) -> float:
+    """The part of a shard job that divides: its mutation phase, in minutes.
 
-    The two units are not the same quantity and the gap is not a fudge: a
-    shard's weight is summed per-mutant durations — the work it holds laid end
-    to end — and the runner executes that work ``RUNNER_WORKERS``-way parallel
-    at ``RUNNER_EFFICIENCY``. Dividing is the whole of the model.
+    A shard's weight is summed per-mutant durations — the work it holds laid
+    end to end — and mutmut runs that work ``RUNNER_WORKERS``-way parallel at
+    ``RUNNER_EFFICIENCY``. Fitted against the ``Running mutation testing``
+    phase alone, where it holds through the origin; see
+    :data:`RUNNER_EFFICIENCY`.
+    """
+    return weight_ms / 60000.0 / (RUNNER_WORKERS * RUNNER_EFFICIENCY)
+
+
+def runner_minutes(weight_ms: float, fixed: float = FIXED_MINUTES) -> float:
+    """Weight-milliseconds as the median wall-clock minutes of a CI shard job.
+
+    The preamble every job pays (``fixed``, :data:`FIXED_MINUTES` unless a
+    caller is replaying an era that paid a different one) plus the phase that
+    divides (:func:`parallel_minutes`). A model without the first term
+    divided the whole job by every shard added and so approved every width
+    above the one it was fitted at; with it, widening buys only the second.
 
     It is the *only* thing that lets the plan be compared to anything. Weights
     are self-consistent ratios, which is all the packer needs, so the packer
@@ -893,10 +844,10 @@ def runner_minutes(weight_ms: float) -> float:
     ``timeout-minutes``, and the question "will this shard be cancelled?" is
     asked in minutes or not at all.
     """
-    return weight_ms / 60000.0 / (RUNNER_WORKERS * RUNNER_EFFICIENCY)
+    return fixed + parallel_minutes(weight_ms)
 
 
-def tail_minutes(weight_ms: float) -> float:
+def tail_minutes(weight_ms: float, fixed: float = FIXED_MINUTES) -> float:
     """The slow-runner case for a shard of this weight — what the cap must clear.
 
     :func:`runner_minutes` gives the median run. Scoring the cap against that
@@ -904,7 +855,7 @@ def tail_minutes(weight_ms: float) -> float:
     minutes against a 75-minute cap, a comfortable-looking 50%, while the job
     that actually died ran 72.5. See :data:`TAIL_MULTIPLIER`.
     """
-    return runner_minutes(weight_ms) * TAIL_MULTIPLIER
+    return runner_minutes(weight_ms, fixed) * TAIL_MULTIPLIER
 
 
 def headroom_report(loads: list[int], cap: int) -> tuple[bool, list[str]]:
@@ -931,8 +882,10 @@ def headroom_report(loads: list[int], cap: int) -> tuple[bool, list[str]]:
     lines = [
         "timeout     : %d min (ci.yml), budget %.1f min at %.0f%% headroom"
         % (cap, budget, HEADROOM * 100),
-        "slowest tail: %.1f min  (%.1f min median x %.2f slow-runner)"
-        % (tail, runner_minutes(worst), TAIL_MULTIPLIER),
+        "slowest tail: %.1f min  (%.1f min median = %.1f fixed + %.1f"
+        " mutating, x %.2f slow-runner)"
+        % (tail, runner_minutes(worst), FIXED_MINUTES,
+           parallel_minutes(worst), TAIL_MULTIPLIER),
         "headroom    : %s — slowest shard reaches %.0f%% of the cap"
         % ("OK" if safe else "TOO TIGHT", 100.0 * tail / cap),
     ]

@@ -22,6 +22,7 @@ import contextlib
 import hashlib
 import json
 import math
+import operator
 import os
 import re
 import sqlite3
@@ -62,7 +63,14 @@ from . import (
 # reach the entries spelling it that way. `build` reuses a tap only when
 # `_load_raw` returned an index, and a version mismatch returns None — so the
 # bump re-indexes every tap rather than half of them.
-INDEX_VERSION = 9
+# v10: each term's posting list is ONE delta+varint blob
+# (`postings(term_id INTEGER PRIMARY KEY, plist BLOB)`) instead of one row per
+# posting — see `_encode_plist`. Measured on a real store (20,108,624 postings
+# over 251,864 terms): 563.7 MB -> 59.3 MB on disk, and the golden queries'
+# postings read in 1.17 s instead of 3.31 s; `scripts/measure_keyword_index.py`
+# re-derives the table. A v9 file read by the v10 reader would decode row
+# integers as blobs, so the bump is what keeps the two from ever meeting.
+INDEX_VERSION = 10
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
@@ -534,6 +542,57 @@ def postings_path() -> Path:
     return paths.cache_dir() / "rag_postings.sqlite"
 
 
+def _encode_plist(plist: Sequence[Sequence[int]]) -> bytes:
+    """One term's ``[[doc, tf], ...]`` as delta+varint bytes.
+
+    Doc ids within a term ascend (`_save` appends them in doc order), so each
+    is stored as its gap from the previous one — the first as itself — and
+    every gap and tf as an LEB128 varint: seven bits per byte, high bit set on
+    every byte but the last. Over a real 20.1M-posting store 90% of gaps and
+    99.99% of tfs are under 128, so a posting is ~2 bytes of payload where a
+    SQLite row-plus-index-entry was ~28.
+    A descending doc id would need a negative gap, which a varint cannot carry,
+    so it is refused rather than silently corrupting every later doc id.
+    """
+    out = bytearray()
+    prev = 0
+    for doc, tf in plist:
+        if doc < prev:
+            raise ValueError("posting doc ids must ascend: %d after %d"
+                             % (doc, prev))
+        for v in (doc - prev, tf):
+            while v >= 0x80:
+                out.append((v & 0x7F) | 0x80)
+                v >>= 7
+            out.append(v)
+        prev = doc
+    return bytes(out)
+
+
+def _decode_plist(blob: bytes) -> list[list[int]]:
+    """Inverse of :func:`_encode_plist`: bytes back to ``[[doc, tf], ...]``."""
+    vals: list[int] = []
+    v = shift = 0
+    for byte in blob:
+        v |= (byte & 0x7F) << shift
+        if byte & 0x80:
+            shift += 7
+        else:
+            vals.append(v)
+            v = shift = 0
+    if shift:
+        # A continuation bit on the last byte: the blob stops inside a varint.
+        # Dropping it would hand back a short list that looks whole.
+        raise ValueError("posting blob ends inside a varint")
+    out: list[list[int]] = []
+    doc = 0
+    it = iter(vals)
+    for gap, tf in zip(it, it, strict=True):
+        doc += gap
+        out.append([doc, tf])
+    return out
+
+
 def _write_postings(postings: dict[str, list[list[int]]]) -> None:
     """Persist the term -> [(doc, tf)] map to SQLite, replacing any existing one.
 
@@ -554,6 +613,13 @@ def _write_postings(postings: dict[str, list[list[int]]]) -> None:
     carries an integer `term_id`, and `terms` also carries each term's document
     frequency (`df`, the length of its posting list) so `stem_expansions` can
     read it directly instead of re-deriving it with `GROUP BY` on every lookup.
+
+    Each term's posting list is then stored as ONE blob (`_encode_plist`)
+    rather than one row per posting. Interning removed the repeated string but
+    left ~20M rows, each paying SQLite's row header, rowid and a secondary
+    index entry for three small integers; one row per term pays that 250k times
+    instead. A query still reads one row per query term and decodes only
+    those, which is the property `read_postings` exists for.
     """
     paths.ensure_dirs()
     final = postings_path()
@@ -577,27 +643,7 @@ def _write_postings(postings: dict[str, list[list[int]]]) -> None:
     tmp = Path(tmp_name)
     con = sqlite3.connect(str(tmp))
     try:
-        # No durability needed: this file is a derived cache, and a crash
-        # mid-build leaves the .tmp behind rather than a torn index.
-        con.execute("PRAGMA journal_mode=OFF")
-        con.execute("PRAGMA synchronous=OFF")
-        con.execute("CREATE TABLE terms (id INTEGER PRIMARY KEY, "
-                    "term TEXT NOT NULL, df INTEGER NOT NULL)")
-        con.execute("CREATE TABLE postings (term_id INTEGER, doc INTEGER, "
-                    "tf INTEGER)")
-        items = list(postings.items())
-        con.executemany(
-            "INSERT INTO terms (id, term, df) VALUES (?, ?, ?)",
-            ((term_id, term, len(plist))
-             for term_id, (term, plist) in enumerate(items)))
-        con.executemany(
-            "INSERT INTO postings (term_id, doc, tf) VALUES (?, ?, ?)",
-            ((term_id, doc, tf) for term_id, (_term, plist) in enumerate(items)
-             for doc, tf in plist))
-        # Built after the insert: maintaining it per-row is far slower.
-        con.execute("CREATE UNIQUE INDEX terms_term ON terms(term)")
-        con.execute("CREATE INDEX postings_term_id ON postings(term_id)")
-        con.commit()
+        _fill_postings(con, postings)
     except BaseException:
         # Never leave a temp behind, and never mask the original error —
         # `util.atomic_write_text`'s rule, for the same reason.
@@ -608,6 +654,37 @@ def _write_postings(postings: dict[str, list[list[int]]]) -> None:
     else:
         con.close()
     tmp.replace(final)          # atomic swap, same as the JSON half
+
+
+def _fill_postings(con: sqlite3.Connection,
+                   postings: dict[str, list[list[int]]]) -> None:
+    """Create and fill the postings schema on an empty connection.
+
+    Split from :func:`_write_postings` so `scripts/measure_keyword_index.py`
+    measures the layout boost ships rather than a re-typed copy of it.
+    """
+    # No durability needed: this file is a derived cache, and a crash
+    # mid-build leaves the .tmp behind rather than a torn index.
+    con.execute("PRAGMA journal_mode=OFF")
+    con.execute("PRAGMA synchronous=OFF")
+    con.execute("CREATE TABLE terms (id INTEGER PRIMARY KEY, "
+                "term TEXT NOT NULL, df INTEGER NOT NULL)")
+    # `term_id` IS the rowid, so a term's blob is one B-tree lookup and there
+    # is no secondary index on postings at all.
+    con.execute("CREATE TABLE postings (term_id INTEGER PRIMARY KEY, "
+                "plist BLOB NOT NULL)")
+    items = list(postings.items())
+    con.executemany(
+        "INSERT INTO terms (id, term, df) VALUES (?, ?, ?)",
+        ((term_id, term, len(plist))
+         for term_id, (term, plist) in enumerate(items)))
+    con.executemany(
+        "INSERT INTO postings (term_id, plist) VALUES (?, ?)",
+        ((term_id, _encode_plist(plist))
+         for term_id, (_term, plist) in enumerate(items)))
+    # Built after the insert: maintaining it per-row is far slower.
+    con.execute("CREATE UNIQUE INDEX terms_term ON terms(term)")
+    con.commit()
 
 
 def read_postings(terms: Sequence[str]) -> dict[str, list[list[int]]]:
@@ -623,22 +700,24 @@ def read_postings(terms: Sequence[str]) -> dict[str, list[list[int]]]:
         con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
     except sqlite3.Error:
         return {}
-    out: dict[str, list[list[int]]] = defaultdict(list)
+    out: dict[str, list[list[int]]] = {}
     try:
         # Chunked: SQLite caps host parameters (999 on older builds), and a
         # long query can exceed it.
         for i in range(0, len(uniq), 500):
             batch = uniq[i:i + 500]
-            q = ("SELECT t.term, p.doc, p.tf FROM postings p "  # noqa: S608  interpolates only `?` placeholders; terms are bound params
+            q = ("SELECT t.term, p.plist FROM postings p "  # noqa: S608  interpolates only `?` placeholders; terms are bound params
                  "JOIN terms t ON p.term_id = t.id "
                  "WHERE t.term IN (%s)" % ",".join("?" * len(batch)))
-            for term, doc, tf in con.execute(q, batch):
-                out[term].append([doc, tf])
-    except sqlite3.Error:
+            for term, blob in con.execute(q, batch):
+                out[term] = _decode_plist(blob)
+    except (sqlite3.Error, ValueError):
+        # ValueError: a corrupt blob (`_decode_plist`) degrades like any
+        # other store fault rather than crashing the search.
         return {}
     finally:
         con.close()
-    return dict(out)  # noqa: FURB123  out is a defaultdict; .copy() would keep the factory
+    return out
 
 
 # A query term shorter than this expands to noise: `cal` prefixes `calendar`,
@@ -708,17 +787,17 @@ def _all_postings() -> dict[str, list[list[int]]]:
         con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
     except sqlite3.Error:
         return {}
-    out: dict[str, list[list[int]]] = defaultdict(list)
+    out: dict[str, list[list[int]]] = {}
     try:
-        for term, doc, tf in con.execute(
-                "SELECT t.term, p.doc, p.tf FROM postings p "
+        for term, blob in con.execute(
+                "SELECT t.term, p.plist FROM postings p "
                 "JOIN terms t ON p.term_id = t.id"):
-            out[term].append([doc, tf])
-    except sqlite3.Error:
+            out[term] = _decode_plist(blob)
+    except (sqlite3.Error, ValueError):
         return {}
     finally:
         con.close()
-    return dict(out)  # noqa: FURB123  out is a defaultdict; .copy() would keep the factory
+    return out
 
 
 def _save(docs: list[dict], commits: dict[str, str]) -> dict:
@@ -797,6 +876,212 @@ def _unsaved(e: OSError) -> BoostError:
                       % (where, e.strerror or e),
                       hint=("run `chmod u+w %s`" % where
                             if isinstance(e, PermissionError) else None))
+
+
+# ---------------------------------------------------------- published shards
+#
+# The keyword index is rebuilt on every machine from the same registries at
+# the same pinned commits, and on one kind of machine it cannot be rebuilt
+# properly at all: `boost catalog --import` restores catalogues with no clone
+# behind them, so `read_body_full` degrades every entry to its metadata — 6.0%
+# of the searchable text, measured. A shard carries one registry's documents as
+# CI built them from a real clone, so importing it gives that machine the body
+# index it could not make.
+#
+# THE FORMAT IS LOGICAL, NOT THE STORE. A shard holds each document's metadata
+# and its own term frequencies — exactly what `_make_docs` produces — and never
+# the SQLite layout. Doc ids are positional (`_save` enumerates), so merging is
+# concatenation; and the on-disk layout can change again (v7 interned terms,
+# v10 blobbed postings) without the merge logic caring.
+#
+# BM25 has no frozen global statistics to reconcile: `_bm25` derives `n` and
+# every `df` from whatever is loaded, and `_save` recomputes `avg_len` from the
+# documents it writes. That is why there is no analogue of
+# `shards.incompatible` beyond the version check in `shard_problem`.
+
+#: Shard schema this build reads and writes.
+SHARD_FORMAT = 1
+
+#: The per-document keys a shard must carry, with the type each must have.
+_SHARD_DOC_FIELDS: dict[str, type] = {
+    "n": str, "t": str, "f": str, "k": str, "l": int, "snip": str, "tf": dict}
+
+
+def export_shard(tap: str) -> dict:
+    """One registry's keyword documents plus the provenance to validate them.
+
+    Built from the clone, not read back out of the index: an index on this
+    machine may hold a stale or metadata-only copy of the tap, and a shard is
+    published to *everyone*. For the same reason a tap with no clone is refused
+    outright rather than exported — that is the bundle-import machine, whose
+    documents are labels standing in for bodies, and publishing them would
+    hand the 6% index to every machine that imports it.
+
+    Deterministic for one (tap, commit, INDEX_VERSION): documents are sorted by
+    path, so an unchanged registry exports identical bytes.
+    """
+    found = [t for t in registry.list_taps() if t.name == tap]
+    if not found:
+        raise BoostError("%r is not tapped here" % tap)
+    t = found[0]
+    if not t.is_cloned:
+        raise BoostError(
+            "%s has no clone here, so its index would hold catalog metadata "
+            "instead of item bodies — refusing to export it" % tap,
+            hint="`boost update` clones it")
+    commit = _tap_commits().get(t.safe_name, "")
+    if not commit:
+        raise BoostError("cannot tell which commit %s is at" % tap)
+    entries = [e for e in catalog.load_tap(t) if e.get("tap") == tap]
+    docs = _make_docs(entries, {tap: t.path})
+    docs.sort(key=operator.itemgetter("f", "n"))
+    return {"format": SHARD_FORMAT, "engine": ENGINE,
+            "index_version": INDEX_VERSION, "tap": tap, "commit": commit,
+            "docs": [{k: v for k, v in d.items() if k != "c"} for d in docs]}
+
+
+def _int(v: object) -> bool:
+    """A real int — `bool` is an int subclass, and True is not a length."""
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def shard_problem(shard: object, commit: str) -> str | None:
+    """Why `shard` must not be merged for a tap at `commit`, or None.
+
+    Every check runs before anything is written, and each is a refusal rather
+    than a repair:
+
+    * the engine, format and ``index_version`` must be this build's — the
+      tokenizer and the document fields move with INDEX_VERSION, and a shard
+      tokenized by another version would score against this index without
+      raising;
+    * the commit must be the tap's commit, and **two absences are not a
+      match**: an empty commit on either side is refused. Accepting a stale
+      shard would let :func:`build` mark that tap reused and serve it forever;
+    * every document must belong to the shard's own tap and carry a whole,
+      self-consistent term table (``l`` is the sum of ``tf``) — a truncated or
+      edited document fails here instead of as a wrong ranking later.
+    """
+    if not isinstance(shard, dict):
+        return "shard is not an object"
+    if shard.get("engine") != ENGINE:
+        return "shard is for engine %r, not %r" % (shard.get("engine"), ENGINE)
+    if shard.get("format") != SHARD_FORMAT:
+        return "shard format %r, this boost reads %d" % (
+            shard.get("format"), SHARD_FORMAT)
+    if shard.get("index_version") != INDEX_VERSION:
+        return "shard is index version %r, this boost builds %d" % (
+            shard.get("index_version"), INDEX_VERSION)
+    tap = shard.get("tap")
+    if not isinstance(tap, str) or not tap:
+        return "shard names no tap"
+    have = str(shard.get("commit") or "")
+    if not have or not commit:
+        return "commit unknown: shard %r, tap %r" % (have, commit)
+    if have != commit:
+        return "commit mismatch: shard %s, tap %s" % (have[:12], commit[:12])
+    docs = shard.get("docs")
+    if not isinstance(docs, list) or not docs:
+        return "shard has no documents"
+    for i, d in enumerate(docs):
+        if not isinstance(d, dict):
+            return "document %d is not an object" % i
+        for key, typ in _SHARD_DOC_FIELDS.items():
+            val = d.get(key)
+            if not isinstance(val, typ) or (typ is int and not _int(val)):
+                return "document %d has no valid %r" % (i, key)
+        if not d["n"] or not d["f"]:
+            return "document %d has an empty name or path" % i
+        if not isinstance(d.get("h", ""), str):
+            return "document %d has no valid 'h'" % i
+        if d.get("m", 1) != 1 or isinstance(d.get("m"), bool):
+            return "document %d has no valid 'm'" % i
+        if d["t"] != tap:
+            return "document %d belongs to %r, not %r" % (i, d["t"], tap)
+        tf = d["tf"]
+        if not tf or not all(isinstance(term, str) and term and _int(n)
+                             and n > 0 for term, n in tf.items()):
+            return "document %d has a malformed term table" % i
+        if sum(tf.values()) != d["l"]:
+            return "document %d length %d disagrees with its terms (%d)" % (
+                i, d["l"], sum(tf.values()))
+    return None
+
+
+def import_shards(batch: Sequence[tuple[dict, str]]
+                  ) -> list[tuple[str, bool, str]]:
+    """Merge several shards, each against its tap's commit, in ONE write.
+
+    Returns ``(tap, ok, reason)`` per input, in order. One write rather than
+    one per shard because merging re-reads every posting already in the index:
+    a catalogue of 460 shards imported one at a time would decode and
+    re-encode the whole store 460 times.
+
+    Verify before replacing: every shard is checked by :func:`shard_problem`
+    first, and only the ones that pass touch the index. A refused shard leaves
+    whatever this machine already had for that tap in place, and if none pass
+    nothing is written at all.
+    """
+    results: list[tuple[str, bool, str]] = []
+    accepted: dict[str, dict] = {}
+    for shard, commit in batch:
+        tap = str(shard.get("tap") or "") if isinstance(shard, dict) else ""
+        why = shard_problem(shard, commit)
+        if why is None and tap in accepted:
+            why = "a second shard for %s in one import" % tap
+        if why:
+            results.append((tap, False, why))
+            continue
+        accepted[tap] = shard
+        results.append((tap, True, "%d documents" % len(shard["docs"])))
+    if not accepted:
+        return results
+    old = _load_raw()
+    new_safe = {tap.replace("/", "__") for tap in accepted}
+    commits: dict[str, str] = {}
+    docs: list[dict] = []
+    if old is not None:
+        commits = {k: v for k, v in (old.get("commits") or {}).items()
+                   if k not in new_safe}
+        keep = {d["t"].replace("/", "__") for d in old.get("docs", [])}
+        docs = _kept_docs(old, keep - new_safe)
+    for tap, shard in accepted.items():
+        commits[tap.replace("/", "__")] = str(shard["commit"])
+        docs.extend({**d, "c": 0} for d in shard["docs"])
+    _save(docs, commits)
+    return results
+
+
+def import_shard(shard: dict, commit: str) -> tuple[bool, str]:
+    """:func:`import_shards` for one shard: ``(ok, reason)``."""
+    _tap, ok, reason = import_shards([(shard, commit)])[0]
+    return ok, reason
+
+
+def complete_tap_commits() -> dict[str, str]:
+    """Tap name -> commit, for taps this index holds WITH their bodies.
+
+    The "already current, skip the download" question for keyword shards, and
+    it cannot be the recorded commit alone. A bundle-import machine indexed
+    every tap at exactly the commit the manifest publishes — from metadata —
+    so a commit-only test would call its 6% index current and never fetch the
+    shard that fixes it. A tap with any metadata-only document is left out.
+    """
+    raw = _load_raw()
+    if raw is None:
+        return {}
+    partial: set[str] = set()
+    names: dict[str, str] = {}
+    for d in raw.get("docs", []):
+        safe = d["t"].replace("/", "__")
+        names[safe] = d["t"]
+        if d.get("m"):
+            partial.add(safe)
+    out: dict[str, str] = {}
+    for safe, commit in (raw.get("commits") or {}).items():
+        if safe in names and safe not in partial and commit:
+            out[names[safe]] = str(commit)
+    return out
 
 
 def _now() -> str:

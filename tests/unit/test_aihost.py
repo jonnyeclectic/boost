@@ -47,13 +47,50 @@ class TestTable:
 
 
 class TestArgv:
-    def test_claude_argv_is_byte_for_byte_what_it_always_was(self):
-        """The existing command line is a contract; a refactor must not move it."""
+    def test_claude_argv_keeps_its_contract(self):
+        """The command line is a contract; a refactor must not move it.
+
+        It gained one flag on purpose, ``--no-session-persistence`` — see
+        ``test_only_claude_is_told_not_to_persist_the_session``.
+        """
         argv = aihost.argv(aihost.CLAUDE, model="sonnet", system="SYS")
-        assert argv[:2] == ["claude", "-p"]
-        assert "--model" in argv and "sonnet" in argv
-        assert "--output-format" in argv and "text" in argv
-        assert "--append-system-prompt" in argv and "SYS" in argv
+        assert argv == ["claude", "-p", "--model", "sonnet",
+                        "--output-format", "text", "--no-session-persistence",
+                        "--append-system-prompt", "SYS"]
+
+    def test_only_claude_is_told_not_to_persist_the_session(self):
+        """A one-shot ``-p`` call is never resumed, so it writes no transcript.
+
+        Gemini gets nothing: its CLI has no such flag (0.61.0 ``--help``), and
+        an unknown flag fails every call rather than degrading.
+        """
+        flag = "--no-session-persistence"
+        assert flag in aihost.argv(aihost.CLAUDE, model=None, system=None)
+        assert flag in aihost.argv(aihost.CLAUDE, model="sonnet", system="S")
+        assert flag not in aihost.argv(aihost.GEMINI, model=None, system=None)
+
+    def test_headless_false_drops_only_the_headless_flag(self):
+        with_flag = aihost.argv(aihost.CLAUDE, model="sonnet", system="S")
+        without = aihost.argv(aihost.CLAUDE, model="sonnet", system="S",
+                              headless=False)
+        assert [x for x in with_flag if x != "--no-session-persistence"] == without
+        assert len(with_flag) == len(without) + 1
+
+    @pytest.mark.parametrize("stderr, expected", [
+        ("error: unknown option '--no-session-persistence'\n", True),
+        ("Error: Unknown Option '--no-session-persistence'", True),
+        ("error: unknown option '--bogus'", False),
+        ("--no-session-persistence: Invalid API key", False),
+        ("", False),
+        (None, False),
+    ])
+    def test_rejected_headless_reads_only_a_refused_flag(self, stderr, expected):
+        assert aihost.rejected_headless(aihost.CLAUDE, stderr) is expected
+
+    def test_gemini_never_reads_as_a_rejected_headless_flag(self):
+        """Gemini has no headless flags, so no stderr makes it retry."""
+        assert not aihost.rejected_headless(
+            aihost.GEMINI, "Unknown option: --no-session-persistence")
 
     def test_gemini_argv_uses_its_own_flags(self):
         argv = aihost.argv(aihost.GEMINI, model=None, system=None)

@@ -2,13 +2,15 @@
 id: install-writes-through-a-redirected-dotdir-uninstall-will-not
 board: code
 section: trust
-status: planned
+status: shipped
 category: Core · Security
 complexity: M
 impact: Low
 wow: 2
-note: install gates on containment and writes through an in-repo symlinked dotdir; uninstall refuses to delete through one, so the copy is orphaned
+note: install now refuses a target uninstall would refuse — same predicate both sides; doctor names rows a later symlink redirected
 order: 357
+owner: loop/install-redirected-dotdir
+pr: 1056
 title: "<code>install --local</code> writes through a redirected dotdir that <code>uninstall --local</code> will not remove"
 ---
 A repo that commits <code>&lt;repo&gt;/.cursor &rarr; config/cursor</code> &mdash; an ordinary
@@ -44,3 +46,24 @@ the install put them, since today nothing notices until an uninstall leaves a di
 
 Related: <code>project-uninstall-deletes-any-in-repo-directory-the-lock-names</code>, which added
 the walk and the <code>redirected</code> reporting this card inherits.
+
+<b>Shipped: install refuses.</b> Of the three options, two loosen the delete guard: a resolved
+row (<code>config/cursor/skills/&lt;name&gt;</code>) is outside the set
+<code>project_skill_targets</code> derives, so uninstall would report it <code>refused</code> unless
+it started resolving &mdash; the hole its docstring names &mdash; and recording both widens that
+further. Refusing is the only option that leaves uninstall untouched, and it makes the two halves ask
+one question: <code>scopes.ensure_spelled</code> calls the same
+<code>parent_matches_spelling</code> uninstall does, in the up-front loop beside
+<code>ensure_in_base</code>, so a redirected agent aborts the install before any copy or lock row is
+written. The hint names the two ways out: replace the symlink with a real directory, or leave that
+agent out with <code>--agent</code>. A symlink <em>above</em> the repo is still fine &mdash; the
+walk anchors on the real base.
+
+Measured on the card's layout (<code>.cursor &rarr; config/cursor</code>, cursor enabled): before,
+<code>install --local</code> wrote <code>config/cursor/skills/brainstorming</code>, uninstall left it
+and dropped the row, and a second uninstall answered <em>not installed in this project</em>; after,
+install exits 1 naming <code>.cursor/skills/brainstorming</code> and its real target, and nothing is
+written under the repo. <code>boost doctor</code> now flags a project row whose walk is redirected
+(<code>integrity.project_redirected</code>) &mdash; a lock written before this, or a symlink committed
+after an install &mdash; which <code>project_status</code> reported intact because the hash follows
+the link.

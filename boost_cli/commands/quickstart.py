@@ -123,11 +123,18 @@ def _report(results: list[dict]) -> None:
     """Say what each shard did, and name the remedy for what it did not do."""
     imported = [r for r in results if r["status"] == "imported"]
     current = [r for r in results if r["status"] == "current"]
+    moved = [r for r in results if r.get("moved")]
     if imported:
         total = sum(int(r.get("chunks") or 0) for r in imported)
         out.ok("imported %d prebuilt shard%s (%s chunks) — no embedding needed"
                % (len(imported), "" if len(imported) == 1 else "s",
                   format(total, ",")))
+    if moved:
+        # Said once more after the per-tap "moving" lines, because it changed
+        # config.json: each of these is now pinned, so `boost update` holds it
+        # still until `boost update --force` lets it go.
+        _muted("moved %d tap(s) to the commit their vectors describe, and "
+               "pinned them there" % len(moved))
     if current:
         # Nothing downloaded: the store already holds vectors for exactly the
         # commit the manifest publishes, which is the common case on a rerun.
@@ -146,12 +153,14 @@ def _report(results: list[dict]) -> None:
                                             " (%s)" % detail if detail else ""),
                               "muted"))
     if any(r.get("commit_moved") for r in results):
-        # A tap that moved past its vectors has a cheaper fix than embedding:
-        # the manifest names the commit they describe, and `update --shards`
-        # moves the tap there. A registry first tapped before quickstart
-        # pinned anything lands here, and so does any tap once a week's
-        # republish moves the manifest past it.
-        out.info("taps that moved past their vectors: `boost update --shards`")
+        # Only a pinned tap is left here now — an unpinned one was moved (see
+        # `_movable`). A pin is a promise `boost update` keeps, and config.json
+        # cannot say whether quickstart set it or the user did with `boost tap
+        # --at`, so quickstart keeps it too. `update --shards` is the command
+        # that moves a pinned tap to its vectors, and asking for it is the
+        # deliberate step a pin deserves.
+        out.info("pinned taps stay where they are; `boost update --shards` "
+                 "moves them to their vectors", wrap=True)
     left = [r["tap"] for r in results
             if r["status"] not in ("imported", "current")]
     if left:
@@ -185,8 +194,13 @@ def _vectors_refused(outcome: bootstrap.SetupOutcome,
 
 
 def _sync_inputs(names: list[str], pins: dict[str, dict] | None = None
-                 ) -> tuple[list[str], dict[str, str], dict[str, str]]:
-    """The (taps, commits, built) `shards.sync` is called with, for `names`.
+                 ) -> tuple[list[str], dict[str, str], dict[str, str],
+                            set[str]]:
+    """The (taps, commits, built, movable) the shard step runs on, for `names`.
+
+    `movable` is the configured taps with no pin — see `_movable`. A registry
+    the dry run has not tapped yet is never in it: it will be tapped at its
+    row's commit, so there is nothing to move.
 
     `_tap_commits`/`dense.tap_commits` are keyed by safe name; `sync` speaks
     tap names. The live run passes no `pins`: every tap is configured and at
@@ -194,7 +208,9 @@ def _sync_inputs(names: list[str], pins: dict[str, dict] | None = None
     has not tapped yet will be tapped at exactly that commit (`add_many`'s
     `pins=`), and that is the commit `sync` will then compare against.
     """
-    safe = {t.name: t.safe_name for t in registry.list_taps()}
+    configured = registry.list_taps()
+    safe = {t.name: t.safe_name for t in configured}
+    movable = _movable(configured)
     have, stored = rag._tap_commits(), dense.tap_commits()
     commits = {n: have.get(s, "") for n, s in safe.items()}
     for name in names:
@@ -202,7 +218,20 @@ def _sync_inputs(names: list[str], pins: dict[str, dict] | None = None
             safe[name] = registry.Tap(name=name, url="").safe_name
             commits[name] = str(pins[name].get("commit") or "")
     built = {n: stored.get(s, "") for n, s in safe.items()}
-    return [n for n in names if n in safe], commits, built
+    return [n for n in names if n in safe], commits, built, movable
+
+
+def _movable(taps: list[registry.Tap]) -> set[str]:
+    """The taps a rerun may move to the commit their published vectors describe.
+
+    The unpinned ones. A tap that tracks its branch HEAD has no commit anyone
+    promised to keep — every `boost update` moves it — and quickstart pins a
+    fresh tap to its row on the first run, so a rerun that moves one is doing
+    what the first run would have done had it tapped it. A pinned tap is held
+    still by `boost update` and is held still here; `_report` names
+    `boost update --shards` for it.
+    """
+    return {t.name for t in taps if not t.pin}
 
 
 def _fetch_phrase(steps: list[dict]) -> str:
@@ -213,7 +242,7 @@ def _fetch_phrase(steps: list[dict]) -> str:
     manifest's own `bytes`; a row without one makes the sum a floor, and it
     is called one.
     """
-    count = sum(1 for s in steps if s["status"] == "download")
+    count = sum(1 for s in steps if s["status"] in shards.DOWNLOADS)
     size, unsized = shards.download_bytes(steps)
     if not size:
         return "%d shard(s)" % count
@@ -230,14 +259,19 @@ def _planned_rest(steps: list[dict]) -> bool:
     `_report` gives them, so the preview does not blame the manifest.
     """
     current = sum(1 for s in steps if s["status"] == "current")
+    moves = sum(1 for s in steps if s["status"] == "move")
     moved = sum(1 for s in steps if s.get("commit_moved"))
+    if moves:
+        _muted("would move %d tap(s) to the commit their vectors describe, "
+               "and pin them there" % moves)
     if current:
         _muted("%d shard%s already up to date — nothing to fetch"
                % (current, "" if current == 1 else "s"))
     if moved:
-        _muted("%d tap(s) moved past their vectors, so their shards would be "
-               "refused: `boost update --shards`" % moved)
-    return bool(current or moved)
+        _muted("%d pinned tap(s) are at another commit than their vectors, so "
+               "their shards would be refused: `boost update --shards`"
+               % moved)
+    return bool(current or moves or moved)
 
 
 def _progress(total: int):
@@ -250,6 +284,10 @@ def _progress(total: int):
     done = [0]
 
     def event(tap: str, status: str, detail: str) -> None:
+        if status == "moving":
+            # The one step here that changes a tap, so it gets its own line.
+            out.info(out.role("moving %s to %s" % (tap, detail), "muted"))
+            return
         if status != "downloading":
             return
         done[0] += 1
@@ -257,6 +295,48 @@ def _progress(total: int):
                           % (tap, " %s" % detail if detail else "",
                              done[0], total), "muted"))
     return event
+
+
+def _fetch(steps: list[dict], commits: dict[str, str], built: dict[str, str],
+           manifest: dict, on_event) -> list[dict]:
+    """Run a `shards.plan`: "move" steps through `ingest`, the rest `sync`.
+
+    Split at the plan, not re-decided here, so the run does exactly what the
+    dry run previewed. `ingest` is what may move a tap, and it downloads and
+    verifies the shard before it does — a failed download leaves the tap
+    where it was. Results come back in the plan's order.
+    """
+    move = [s["tap"] for s in steps if s["status"] == "move"]
+    rest = [s["tap"] for s in steps if s["status"] != "move"]
+    by_tap: dict[str, dict] = {}
+    if move:
+        for r in shards.ingest(move, commits, built=built, manifest=manifest,
+                               on_event=on_event):
+            by_tap[r["tap"]] = r
+    if rest:
+        for r in shards.sync(rest, commits, manifest=manifest, built=built,
+                             on_event=on_event):
+            by_tap[r["tap"]] = r
+    return [by_tap[s["tap"]] for s in steps if s["tap"] in by_tap]
+
+
+def _reindex_moved(moved: list[str]) -> int:
+    """Re-read each moved tap and rebuild the keyword index; its entry count.
+
+    A tap that moved describes another tree, so its catalog cache and the
+    keyword index built a moment ago both name the old one — the same repair
+    `boost update --shards` makes, and owed even when the import then failed,
+    because the move itself already happened. The index rebuild reuses every
+    tap that did not move.
+    """
+    for name in moved:
+        catalog.rebuild_tap(registry.get(name))
+    with spin.Spinner("rebuilding the keyword index"):
+        stats = rag.build()
+    entries = int(stats.get("entries", 0))
+    _muted("re-indexed %s items for keyword search after the move"
+           % format(entries, ","))
+    return entries
 
 
 def cmd_quickstart(argv) -> int:
@@ -279,10 +359,11 @@ def cmd_quickstart(argv) -> int:
     # Fetched first because it decides how the taps are pinned — and fetched
     # without the extra too. Pinning is config, not embedding, and the line a
     # machine without the extra ends on promises that installing it and
-    # rerunning brings the vectors. A rerun cannot keep that promise alone:
-    # `add_many` skips a tap already configured, so a registry first tapped at
-    # HEAD stays at HEAD, and `sync` refuses every shard built for a commit it
-    # is not at. Only `--no-vectors` opts out, and it leaves the taps
+    # rerunning brings the vectors. `add_many` skips a tap already
+    # configured, so the rerun keeps that promise in the shard step instead:
+    # an unpinned tap at another commit is moved to its row (`_movable`), and
+    # a pinned one is left where it is and named. Only `--no-vectors` opts
+    # out, and it leaves the taps
     # unpinned, so `boost update` keeps moving them. A failure here is not
     # fatal: keyword search is the documented default and works without a
     # single vector.
@@ -321,9 +402,9 @@ def cmd_quickstart(argv) -> int:
     if args.dry_run:
         steps: list[dict] = []
         if usable and manifest is not None:
-            taps, commits, built = _sync_inputs(names, pins)
-            steps = shards.plan(taps, commits, manifest, built)
-        planned = [s for s in steps if s["status"] == "download"]
+            taps, commits, built, movable = _sync_inputs(names, pins)
+            steps = shards.plan(taps, commits, manifest, built, movable)
+        planned = [s for s in steps if s["status"] in shards.DOWNLOADS]
         # `wrap=True` because the size made this line long: "then import 7
         # shard(s) (at least 71.5MB)" overflows a 60-column pane, and every
         # line printed under it (`_planned_rest`, `_vectors_refused`) already
@@ -366,17 +447,19 @@ def cmd_quickstart(argv) -> int:
         "indexed %s items for keyword search" % format(outcome.entries, ","))
 
     if usable and manifest is not None:
-        taps, commits, built = _sync_inputs(names)
+        taps, commits, built, movable = _sync_inputs(names)
         # Said before the first byte moves, in the words the dry run used:
         # the download is the one step here that can take minutes, and it
         # used to run without a line until it was over.
-        steps = shards.plan(taps, commits, manifest, built)
-        fetch = sum(1 for s in steps if s["status"] == "download")
+        steps = shards.plan(taps, commits, manifest, built, movable)
+        fetch = sum(1 for s in steps if s["status"] in shards.DOWNLOADS)
         if fetch:
             _muted("fetching %s" % _fetch_phrase(steps))
-        results = shards.sync(taps, commits, manifest=manifest, built=built,
-                              on_event=_progress(fetch))
+        results = _fetch(steps, commits, built, manifest, _progress(fetch))
         _report(results)
+        moved = [r["tap"] for r in results if r.get("moved")]
+        if moved:
+            outcome.entries = _reindex_moved(moved)
     elif outcome.vectors_refused:
         _vectors_refused(outcome)
     elif args.no_vectors:
