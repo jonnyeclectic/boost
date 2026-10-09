@@ -442,14 +442,24 @@ def download(row: dict, dest: Path, manifest: dict,
 
 
 def plan(taps: list[str], commits: dict[str, str], manifest: dict,
-         built: dict[str, str] | None = None) -> list[dict]:
+         built: dict[str, str] | None = None,
+         movable: Collection[str] = ()) -> list[dict]:
     """What :func:`sync` will do with each of `taps`, decided before a byte moves.
 
     One step per tap, in order: ``{"tap", "status", ...}`` where `status` is
     "unpublished" (no row), "current" (the store already holds this exact
     commit's vectors), "refused" (the tap moved past its row — `commit_moved`
-    and `detail` say so) or "download" (the row `sync` will fetch). Every step
-    with a row carries it as ``row``.
+    and `detail` say so), "move" (the same mismatch on a tap named in
+    `movable`: :func:`ingest` will download the row and then move the tap to
+    it) or "download" (the row `sync` will fetch). Every step with a row
+    carries it as ``row``.
+
+    `movable` is the caller's answer to "which taps may this run move?", and
+    the default is none, so `sync` and every caller that never asked keep the
+    refusal. `boost quickstart` passes its unpinned taps: one that tracks its
+    branch HEAD is moved by every `boost update` anyway, while a pin — its own
+    or one set with `boost tap --at`, which config.json cannot tell apart — is
+    a promise `update` keeps, and so does quickstart.
 
     Its own function so a preview and the run it previews give one answer.
     `boost quickstart --dry-run` counted every tap with a row, so a rerun over
@@ -472,6 +482,9 @@ def plan(taps: list[str], commits: dict[str, str], manifest: dict,
         if want and local == want == built.get(tap, ""):
             steps.append({"tap": tap, "status": "current", "row": row})
             continue
+        if local and want != local and tap in movable:
+            steps.append({"tap": tap, "status": "move", "row": row})
+            continue
         if local and want != local:
             # Caught before the download rather than paid for and then thrown
             # away by `import_shard`. `commit_moved` names the refusal
@@ -487,8 +500,15 @@ def plan(taps: list[str], commits: dict[str, str], manifest: dict,
     return steps
 
 
+#: The :func:`plan` statuses that fetch a shard.
+DOWNLOADS = ("download", "move")
+
+
 def download_bytes(steps: list[dict]) -> tuple[int, int]:
-    """(bytes, unsized) for the "download" steps of a :func:`plan`.
+    """(bytes, unsized) for the steps of a :func:`plan` that download.
+
+    A "move" downloads too — :func:`ingest` fetches and verifies the shard
+    before it moves the tap — so it is priced like a "download".
 
     `bytes` sums the manifest's own sizes; `unsized` counts rows that carry
     none, so a caller can say "at least" rather than present a partial sum as
@@ -496,7 +516,7 @@ def download_bytes(steps: list[dict]) -> tuple[int, int]:
     """
     total = unsized = 0
     for step in steps:
-        if step["status"] != "download":
+        if step["status"] not in DOWNLOADS:
             continue
         size = step["row"].get("bytes")
         if isinstance(size, int) and size > 0:

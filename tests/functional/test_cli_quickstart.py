@@ -303,9 +303,12 @@ class TestATapThatMovedPastItsVectors:
         from boost_cli.core import shards
         quickstart._report(shards.sync(["a/b"], {"a/b": "2" * 40},
                                        manifest=shards.fetch_manifest()))
-        out = capsys.readouterr().out
+        out = _flat(capsys.readouterr().out)
         assert "a/b: shard refused (tap is at 2222222" in out
-        assert "moved past their vectors: `boost update --shards`" in out
+        # Only a pinned tap is refused this way now, so the line says why
+        # quickstart left it and which command moves it.
+        assert ("pinned taps stay where they are; `boost update --shards` "
+                "moves them to their vectors") in out
 
     def test_other_refusals_do_not_send_the_user_to_move_taps(self, capsys):
         # A refused space or an import that said no is not fixed by moving.
@@ -315,6 +318,140 @@ class TestATapThatMovedPastItsVectors:
                             {"tap": "c/d", "status": "failed",
                              "detail": "sha256 mismatch"}])
         assert "update --shards" not in capsys.readouterr().out
+
+
+class TestARerunMovesAnUnpinnedTapToItsVectors:
+    """A rerun over a real clone that sits at another commit than its row.
+
+    `add_many` skips a configured tap, so the rerun the extra's install line
+    promises ("then `boost quickstart` again") refused every shard of a
+    registry first tapped at HEAD. Now the shard step moves an *unpinned*
+    tap to its row — after the download, never before — and pins it there,
+    as a first run would have. A pinned tap is a promise `boost update`
+    keeps, and config.json cannot say whether quickstart set it or `boost
+    tap --at` did, so it stays put and `update --shards` is named for it.
+    """
+
+    @pytest.fixture()
+    def rerun(self, tmp_path, monkeypatch):
+        """A two-commit registry, its manifest row at the FIRST commit."""
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        from boost_cli.core import config, dense, embed, shards
+        src = tmp_path / "reg"
+        subprocess.run([sys.executable, str(Path(__file__).resolve()
+                                            .parents[1] / "make_fixture.py"),
+                        str(src)], check=True, capture_output=True)
+
+        def sha():
+            return subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"],
+                                  check=True, capture_output=True,
+                                  text=True).stdout.strip()
+
+        first = sha()
+        (src / "extra.md").write_text("more\n", encoding="utf-8")
+        for cmd in (["add", "extra.md"],
+                    ["-c", "user.email=t@t", "-c", "user.name=t",
+                     "commit", "-qm", "second"]):
+            subprocess.run(["git", "-C", str(src), *cmd], check=True,
+                           capture_output=True)
+        second = sha()
+        monkeypatch.setattr(config, "DEFAULT_TAPS",
+                            [{"name": "reg", "url": str(src)}])
+        path = tmp_path / "manifest.json"
+        path.write_text(json.dumps({"version": 1, **SPACE, "shards": [
+            {"tap": "reg", "commit": first, "chunks": 3, "bytes": 4,
+             "sha256": "0" * 64,
+             "url": (tmp_path / "never.json").as_uri()}]}), encoding="utf-8")
+        monkeypatch.setenv("BOOST_SHARD_MANIFEST", path.as_uri())
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        monkeypatch.setattr(embed, "provider", lambda: "local")
+        monkeypatch.setattr(embed, "model", lambda: SPACE["model"])
+        monkeypatch.setattr(embed, "dimension", lambda: 384)
+        monkeypatch.setattr(dense, "tap_commits", lambda: {})
+        log: dict = {"fetched": [], "imported": []}
+
+        def download(row, dest, manifest, timeout=300.0):
+            log["fetched"].append(row["tap"])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("{}", encoding="utf-8")
+            return dest
+
+        def import_shard(shard, commit=""):
+            log["imported"].append(commit)
+            return True, ""
+
+        monkeypatch.setattr(shards, "download", download)
+        monkeypatch.setattr(dense, "import_shard", import_shard)
+        return src, first, second, log
+
+    @staticmethod
+    def _tap():
+        from boost_cli.core import gitutil, registry
+        tap = registry.get("reg")
+        return gitutil.head_commit(tap.path), tap.pin
+
+    def test_an_unpinned_tap_is_moved_to_its_row_and_pinned(self, boost,
+                                                             rerun):
+        src, first, second, log = rerun
+        boost("tap", str(src))
+        assert self._tap() == (second, "")
+        out = _flat(boost("quickstart").out)
+        assert self._tap() == (first, first)
+        assert log == {"fetched": ["reg"], "imported": [first]}
+        assert "moving reg to %s" % first[:7] in out
+        assert "imported 1 prebuilt shard" in out
+        assert "moved 1 tap(s) to the commit their vectors describe" in out
+        assert "shard refused" not in out and "update --shards" not in out
+
+    def test_the_moved_tap_is_re_read_and_re_indexed(self, boost, rerun):
+        # A moved tap describes another tree: its catalog cache and the
+        # keyword index built earlier in the same run both named the old one.
+        from boost_cli.core import rag
+        src, first, _second, _log = rerun
+        boost("tap", str(src))
+        out = _flat(boost("quickstart").out)
+        assert rag._tap_commits()["reg"] == first
+        assert rag._load_raw()["commits"]["reg"] == first
+        assert "re-indexed" in out
+
+    def test_a_pinned_tap_is_left_at_its_pin_and_named(self, boost, rerun):
+        src, _first, second, log = rerun
+        boost("tap", str(src), "--at", second)
+        out = _flat(boost("quickstart").out)
+        assert self._tap() == (second, second)
+        assert log == {"fetched": [], "imported": []}
+        assert "reg: shard refused (tap is at %s" % second[:7] in out
+        assert "`boost update --shards` moves them to their vectors" in out
+        assert "moving" not in out and "re-indexed" not in out
+
+    def test_a_failed_download_leaves_the_tap_where_it_was(self, boost, rerun,
+                                                           monkeypatch):
+        # Download first, move second: a tap moved and then left without its
+        # vectors is the failure that looks like nothing at all.
+        from boost_cli.core import shards
+        from boost_cli.errors import BoostError
+        src, _first, second, _log = rerun
+
+        def boom(*_a, **_k):
+            raise BoostError("connection reset")
+
+        monkeypatch.setattr(shards, "download", boom)
+        boost("tap", str(src))
+        out = _flat(boost("quickstart").out)
+        assert self._tap() == (second, "")
+        assert "reg: shard failed (connection reset)" in out
+        assert "moving" not in out
+
+    def test_the_dry_run_moves_nothing(self, boost, rerun):
+        src, _first, second, log = rerun
+        boost("tap", str(src))
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "would move 1 tap(s)" in out
+        assert self._tap() == (second, "")
+        assert log == {"fetched": [], "imported": []}
 
 
 def _flat(text: str) -> str:
@@ -1060,11 +1197,16 @@ class TestTheShardDownloadIsNamed:
         monkeypatch.setattr(embed, "dimension", lambda: 384)
 
     @staticmethod
-    def _configured(monkeypatch, at, built=None):
-        """Taps already configured: name -> commit, and the store's commits."""
+    def _configured(monkeypatch, at, built=None, pinned=False):
+        """Taps already configured: name -> commit, and the store's commits.
+
+        `pinned` holds each tap at the commit it is at, as `boost tap --at`
+        would; unpinned taps track HEAD and a rerun may move them.
+        """
         from boost_cli.core import dense, rag, registry
         monkeypatch.setattr(registry, "list_taps", lambda: [
-            registry.Tap(name=n, url="file:///x") for n in at])
+            registry.Tap(name=n, url="file:///x", pin=c if pinned else "")
+            for n, c in at.items()])
         monkeypatch.setattr(rag, "_tap_commits", lambda: {
             n.replace("/", "__"): c for n, c in at.items()})
         monkeypatch.setattr(dense, "tap_commits", lambda: {
@@ -1116,13 +1258,27 @@ class TestTheShardDownloadIsNamed:
         assert "then import 6 shard(s) (24B)" in out
         assert "1 shard already up to date — nothing to fetch" in out
 
-    def test_a_tap_that_moved_past_its_row_is_not_counted(
+    def test_a_pinned_tap_past_its_row_is_not_counted(
             self, boost, defaults_manifest, keyless, monkeypatch):
-        self._configured(monkeypatch, {"anthropics/skills": "2" * 40})
+        self._configured(monkeypatch, {"anthropics/skills": "2" * 40},
+                         pinned=True)
         out = _flat(boost("quickstart", "--dry-run").out)
         assert "then import 6 shard(s) (24B)" in out
-        assert "1 tap(s) moved past their vectors" in out
+        assert "1 pinned tap(s) are at another commit than their vectors" in out
         assert "`boost update --shards`" in out
+        assert "would move" not in out
+
+    def test_an_unpinned_tap_past_its_row_is_previewed_as_a_move(
+            self, boost, defaults_manifest, keyless, monkeypatch):
+        # The rerun the card is about: a registry tapped at HEAD before
+        # quickstart pinned anything. Its shard is fetched, and the preview
+        # says the tap will move — and be pinned — before anything does.
+        self._configured(monkeypatch, {"anthropics/skills": "2" * 40})
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "then import 7 shard(s) (28B)" in out
+        assert ("would move 1 tap(s) to the commit their vectors describe, "
+                "and pin them there") in out
+        assert "update --shards" not in out
 
     def test_a_rerun_over_current_vectors_plans_nothing_and_says_why(
             self, boost, defaults_manifest, keyless, monkeypatch):
@@ -1136,14 +1292,15 @@ class TestTheShardDownloadIsNamed:
         # Every tap has a row: the zero is not the manifest's.
         assert "none of these registries have a published shard" not in out
 
-    def test_every_tap_moved_is_a_zero_the_manifest_is_not_blamed_for(
+    def test_every_tap_pinned_elsewhere_is_a_zero_the_manifest_is_not_blamed_for(
             self, boost, defaults_manifest, keyless, monkeypatch):
         from boost_cli.core import config
         self._configured(monkeypatch, {str(d["name"]): "2" * 40
-                                       for d in config.DEFAULT_TAPS})
+                                       for d in config.DEFAULT_TAPS},
+                         pinned=True)
         out = _flat(boost("quickstart", "--dry-run").out)
         assert "then import 0 shard(s)" in out
-        assert "7 tap(s) moved past their vectors" in out
+        assert "7 pinned tap(s) are at another commit" in out
         assert "none of these registries have a published shard" not in out
 
     def test_a_registry_not_tapped_yet_is_judged_at_its_pin(
@@ -1217,9 +1374,12 @@ class TestTheShardDownloadIsNamed:
             event("a/b", status, "detail")
         assert capsys.readouterr().out == ""
         event("a/b", "downloading", "")
+        event("a/b", "moving", "1111111")
         event("c/d", "downloading", "1.0KB")
+        # A move is announced, and not counted as a download.
         assert [ln.strip() for ln in capsys.readouterr().out.splitlines()] == [
-            "fetching a/b (1/3)", "fetching c/d 1.0KB (2/3)"]
+            "fetching a/b (1/3)", "moving a/b to 1111111",
+            "fetching c/d 1.0KB (2/3)"]
 
 
 class TestThePreviewHeadlineFitsThePane:
