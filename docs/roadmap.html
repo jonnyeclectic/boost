@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>524</b><span>Loop finds</span></div>
+      <div class="stat"><b>527</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -5947,6 +5947,38 @@ evidence was gathered.</p>
           <span class="m">shipped — the fall-through, plus a refusal that names where the item really is</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="the-agents-line-lists-agents-an-item-does-not-reach">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3>The agents line lists every recorded agent, including the ones boost no longer writes</h3>
+        <p>#1040 made an item whose materialization rows are <b>all</b> unwritten read as
+<code>unreachable</code>, through <code>integrity.reaches_no_agent</code>. It deliberately left the
+partial case, and every surface that names agents still ignores it.
+
+Three readers list each recorded row as an agent the item reaches:
+
+- <code>lockfile.agent_names</code>, which feeds <code>boost stats NAME</code>'s <code>agents</code> line
+  (<code>commands/discovery.py</code>) and <code>boost info</code>'s <code>materialized</code> line.
+- <code>info._materialized_agents</code>, the <code>AGENTS</code> column of <code>boost list</code>.
+
+None of them asks <code>agents.materialization_is_written</code>. Measured on the #1040 control fixture
+(five recorded rows, only <code>cursor</code> enabled): <code>boost doctor</code> says
+<em>4 recorded materializations name an agent boost no longer writes</em>, and on the same machine
+<code>boost info team-conventions</code> prints
+<code>materialized  claude-code, codex, cursor, gemini, windsurf</code>.
+
+<b>Fix:</b> add one helper next to <code>reaches_no_agent</code>, for example
+<code>written_agent_names(kind, entry)</code>, that filters rows through the same predicate. Point all
+three readers at it so they can't drift apart. A row with no <code>agent</code> key still counts as
+written, matching <code>reaches_no_agent</code>. Skills record a flat <code>agents</code> list and stay
+as they are.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">a rule written for 1 of 5 recorded agents still advertises all five in list, info and stats</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -7133,6 +7165,58 @@ pins the 7.8-minute shortfall so it cannot drift unnoticed.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">the plan divides by every shard added, so it flatters every width above the one it was fitted at</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="ai-cli-calls-inherit-the-real-config-home">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Bug</span></div>
+        <h3>AI-assisted commands reach the real config home from a sandboxed <code>HOME</code></h3>
+        <p><code>ai._ask_cli</code> runs <code>subprocess.run(cmd, …)</code> with no <code>env=</code>. When a user
+or a test sets <code>HOME</code> to a temporary directory but leaves <code>CLAUDE_CONFIG_DIR</code>
+exported, <code>boost explain</code>, <code>search --smart</code> and the other <code>core/ai.py</code>
+paths start a <code>claude</code> child that writes its session record into the real configuration
+home.
+
+MCP registration already handles this. <code>mcphost.escapes_home</code> detects a config home outside
+<code>paths.home()</code> and refuses unless <code>--force</code> is given. The AI path neither detects
+it nor says anything.
+
+Before choosing a fix, settle one thing. A child that keeps the real
+<code>CLAUDE_CONFIG_DIR</code> is also how it finds the user's credentials, so stripping or redirecting
+it may just turn the call into an auth failure that degrades to the heuristic. The options are: warn
+once; skip the CLI backend when <code>escapes_home</code> fires; or decide it is acceptable, because a
+session record is not configuration, and write that down. Measure what the real CLI does in each case
+before picking one.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">explain / search --smart run the claude CLI with the parent environment, so a sandboxed HOME still writes into the real config home</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="scopes-contains-is-case-sensitive-on-a-case-insensitive-disk">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Core · Bug</span></div>
+        <h3><code>scopes.contains</code> calls the same directory two different trees when only the case differs</h3>
+        <p><code>scopes.contains</code> compares <code>Path.resolve()</code> output with
+<code>os.path.commonpath</code>. On macOS's default case-insensitive APFS, <code>resolve()</code> does
+not canonicalize case. Measured: <code>Path('/users/jonny/code').resolve()</code> returns
+<code>/users/jonny/code</code>, not <code>/Users/jonny/Code</code>.
+
+Its callers include <code>mcphost.escapes_home</code> and <code>claude_settings.escaping_path</code>. So
+<code>CLAUDE_CONFIG_DIR=/users/jonny/.claude</code> with <code>HOME=/Users/jonny</code> counts as escaping
+home, and boost refuses an MCP registration or a hooks write into a directory that is inside home.
+
+The error fails closed, so it is safe, but it is false. The fix has to keep failing closed. Compare
+with <code>os.path.normcase</code> only where the filesystem actually folds case, or compare
+<code>os.stat</code> identity (<code>st_dev</code>, <code>st_ino</code>) for paths that exist. Don't
+case-fold blindly: on a case-sensitive Linux disk, <code>/home/A</code> and <code>/home/a</code> really
+are different directories.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">Path.resolve keeps the caller's spelling on macOS, so /users/x and /Users/x compare as different trees</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
