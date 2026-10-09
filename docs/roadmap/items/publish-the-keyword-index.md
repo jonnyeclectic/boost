@@ -7,7 +7,7 @@ category: Search · Performance
 complexity: L
 impact: High
 wow: 4
-note: 461 registries' shards (75.7 MB gzip) import in ~22 s into a 59.3 MB store at 100% body text, where a bundle-only machine indexed 0%
+note: 462 measured shards (75.7 MB gzip, one refused) import in ~20–23 s into a 59.3 MB store at 100% body text, where a bundle-only machine indexed 0%
 order: 99
 owner: loop/publish-keyword-index
 pr:
@@ -103,8 +103,12 @@ the sum of its <code>tf</code>) and merges the survivors in <b>one</b> write. Ro
 <code>manifest.json</code> under a <code>keyword</code> section, so <code>MANIFEST_VERSION</code>
 stays 1 and older clients keep their vectors; sha256, same-host URLs and the four-state
 carry-forward are the dense rules, reused rather than copied. <code>shards.yml</code> exports
-them before the dense step untaps anything, and <code>boost reindex --fetch-index</code> imports
-them on any machine, keyless included. "Already current" means the index holds the tap
+them before the dense step untaps anything, writing each one to a temp file and renaming it
+into place so a killed job never leaves a partial <code>.keyword.json.gz</code>; a file the
+publish job still cannot inflate is logged, deleted (so <code>--clobber</code> cannot replace the
+good asset of that name) and treated as unreported, carrying its previous row instead of
+aborting the manifest step and the dense rows with it. <code>boost reindex --fetch-index</code>
+imports them on any machine, keyless included. "Already current" means the index holds the tap
 <em>with bodies</em> at that commit — a commit-only test would have called the 6% index current
 and never fetched the fix.
 

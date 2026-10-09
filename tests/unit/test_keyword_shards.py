@@ -568,6 +568,24 @@ class TestPublishScript:
         assert list(out.iterdir()) == []
         assert "no documents" in capsys.readouterr().err
 
+    def test_export_keyword_never_leaves_a_partial_file(
+            self, sandbox, fixture_tap_src, tmp_path, monkeypatch):
+        # A write that dies before completing (an OOM kill, a full disk)
+        # must leave the previous file intact and no stray bytes behind.
+        tap, _c = _tap_cloned(fixture_tap_src)
+        out = tmp_path / "out"
+        out.mkdir()
+        asset = out / (tap.safe_name + publish_shards.KEYWORD_SUFFIX)
+        asset.write_bytes(b"previous")
+
+        def die(fd):
+            raise OSError("killed mid-write")
+        monkeypatch.setattr(publish_shards.os, "fsync", die)
+        with pytest.raises(OSError, match="killed mid-write"):
+            publish_shards.main(["export-keyword", "--out", str(out)])
+        assert asset.read_bytes() == b"previous"
+        assert [p.name for p in out.iterdir()] == [asset.name]
+
     @pytest.mark.parametrize("version, listed", [
         (None, True), (rag.INDEX_VERSION - 1, False)])
     def test_unchanged_kind_keyword(self, sandbox, fixture_tap_src, tmp_path,
@@ -674,6 +692,36 @@ class TestManifestKeywordSection:
         _kw_file(d, "o/a", commit="")
         with pytest.raises(SystemExit, match="missing commit"):
             self._run(tmp_path)
+
+    @pytest.mark.parametrize("bad", [
+        "truncated", b"not gzip at all", gzip.compress(b"{not json"),
+        gzip.compress(b"[1, 2]")], ids=["truncated", "not-gzip", "not-json",
+                                        "not-an-object"])
+    def test_an_unreadable_keyword_shard_is_unreported_not_fatal(
+            self, tmp_path, bad):
+        d = tmp_path / "s"
+        d.mkdir()
+        _dense_file(d, "o/a")
+        _dense_file(d, "o/b")
+        _kw_file(d, "o/a", B)
+        _kw_file(d, "o/b", B)
+        broken = d / ("o__b" + publish_shards.KEYWORD_SUFFIX)
+        good = broken.read_bytes()
+        broken.write_bytes(good[:len(good) // 2] if bad == "truncated"
+                           else bad)
+        prev = self._prev(tmp_path, [_kw_row("o/b", A)])
+        known = tmp_path / "known.txt"
+        known.write_text("o/a\no/b\n", encoding="utf-8")
+        rc, m = self._run(tmp_path, "--carry-forward", str(prev),
+                          "--known", str(known))
+        assert rc == 0
+        # The dense rows survive, and o/b keeps last week's keyword row.
+        assert sorted(r["tap"] for r in m["shards"]) == ["o/a", "o/b"]
+        got = {r["tap"]: r["commit"] for r in m["keyword"]["shards"]}
+        assert got == {"o/a": B, "o/b": A}
+        # Removed, so `--clobber` cannot overwrite the asset o/b's carried
+        # row still points at.
+        assert not broken.exists()
 
     def test_carry_forward_four_states(self, tmp_path):
         d = tmp_path / "s"

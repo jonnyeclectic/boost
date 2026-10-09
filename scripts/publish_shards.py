@@ -76,7 +76,10 @@ import argparse
 import gzip
 import hashlib
 import json
+import os
 import sys
+import tempfile
+import zlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -147,6 +150,27 @@ def keyword_bytes(shard: dict) -> bytes:
     return gzip.compress(raw.encode("utf-8"), compresslevel=9, mtime=0)
 
 
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Write `data` to `path` so the path never holds a partial file.
+
+    A job killed mid-write (OOM, timeout) used to leave a truncated
+    `.keyword.json.gz` that the publish job then globbed and choked on. The
+    temp name ends `.tmp`, so neither the artifact upload nor the manifest
+    glob (`*.keyword.json.gz`) ever matches a half-written one.
+    """
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent),
+                               prefix="." + path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(path))
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 def cmd_export_keyword(args: argparse.Namespace) -> int:
     """Write one `<tap>.keyword.json.gz` per tap into `--out`."""
     taps = args.tap or [t.name for t in registry.list_taps()]
@@ -168,7 +192,7 @@ def cmd_export_keyword(args: argparse.Namespace) -> int:
             print("skip %s: no documents" % tap, file=sys.stderr)
             continue
         data = keyword_bytes(shard)
-        (out_dir / (_safe(tap) + KEYWORD_SUFFIX)).write_bytes(data)
+        _write_atomic(out_dir / (_safe(tap) + KEYWORD_SUFFIX), data)
         written += 1
         print("%s: %d documents, %d bytes @ %s"
               % (tap, len(shard["docs"]), len(data), shard["commit"][:8]))
@@ -379,10 +403,21 @@ def _carry(index: dict[str, dict], prev: dict, unchanged_files: list[str],
     return out, {"silent": sorted(silent), "gone": gone}
 
 
-def _keyword_row(path: Path, repo: str, tag: str) -> tuple[dict, int]:
-    """One keyword manifest row plus the index version its shard was built at."""
+def _keyword_row(path: Path, repo: str, tag: str) -> tuple[dict, int] | None:
+    """One keyword manifest row plus the index version its shard was built at.
+
+    None for a file that does not inflate to a JSON object — a truncated or
+    corrupt gzip. That tap is then simply unreported, so its previous row
+    carries forward; raising here would abort the whole manifest step and
+    take the dense rows down with it.
+    """
     raw = path.read_bytes()
-    shard = json.loads(gzip.decompress(raw).decode("utf-8"))
+    try:
+        shard = json.loads(gzip.decompress(raw).decode("utf-8"))
+    except (OSError, EOFError, zlib.error, ValueError):
+        shard = None
+    if not isinstance(shard, dict):
+        return None
     missing = [k for k in ("tap", "commit", "index_version", "docs")
                if not shard.get(k)]
     if missing:
@@ -415,7 +450,15 @@ def keyword_section(shard_dir: Path, args: argparse.Namespace,
     fresh: list[dict] = []
     versions: set[int] = set()
     for path in files:
-        row, version = _keyword_row(path, args.repo, args.tag)
+        got = _keyword_row(path, args.repo, args.tag)
+        if got is None:
+            print("::warning::%s is not a readable keyword shard — treating "
+                  "its registry as unreported" % path.name, file=sys.stderr)
+            # Delete it, or the upload step's `--clobber` replaces the good
+            # asset of the same name that the carried row still points at.
+            path.unlink(missing_ok=True)
+            continue
+        row, version = got
         fresh.append(row)
         versions.add(version)
     if len(versions) > 1:
