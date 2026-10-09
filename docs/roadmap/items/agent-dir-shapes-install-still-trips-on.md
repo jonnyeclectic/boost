@@ -85,7 +85,11 @@ A sideline (focus, profile, context) and <code>quarantine</code> empty
 empty <code>agents</code> now means every agent to the guard, as it already did to
 <code>preserved_agent_scope</code>. The cost is conservative and tested: an agent refused at its first
 install, never linked, also blocks uninstall until its dotdir is searchable, as does any unsearchable
-dotdir for a sidelined or quarantined skill. An agent a non-empty lock entry does not name never blocks.
+dotdir for a sidelined or quarantined skill, and, since the third draft, any agent whose dotdir was
+unsearchable at the skill's last install, relink, import or recovery, whether that run tried it or not:
+so a dotdir left at <code>600</code> blocks uninstalling every skill written while it was. An agent a
+non-empty lock entry does not name never blocks, so a dotdir locked down after that write blocks only
+where the lock records a link.
 
 <b>A missing skills dir under a read-only parent.</b> <code>link_agents</code> records
 <code>refuses_writes(adir)</code>, as <code>_refused_target</code> already did for rules, so the install names

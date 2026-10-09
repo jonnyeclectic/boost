@@ -2709,8 +2709,10 @@ def _check_links_removable(name: str, entry: dict) -> None:
     still on disk. The cost is conservative: an agent refused at its first
     install, and so never linked, still blocks uninstall until its dotdir is
     searchable, and so does any unsearchable dotdir for a sidelined or
-    quarantined skill. An agent a non-empty lock entry does not name never
-    blocks, so an unrelated locked-down dir cannot stop every uninstall.
+    quarantined skill, and any agent unsearchable when the entry was last
+    written, which :func:`unrecorded_agents` records whether or not that run
+    tried it. An agent a non-empty lock entry does not name never blocks, so
+    a dir locked down after that write blocks only where a link is recorded.
     """
     linked = entry.get("agents") or ()
     recorded = ({*linked, *(entry.get("refused_agents") or ())} if linked
