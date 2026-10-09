@@ -157,8 +157,12 @@ jobs:
           .venv/bin/python scripts/publish_shards.py unchanged --kind keyword \
             --manifest-url "https://github.com/$REPO/releases/download/shards-latest/manifest.json" \
             --out "keyword-unchanged-$JOB.txt"
+          # A crash here must not cost this chunk its dense work: the step is
+          # `set -e`. A registry with no fresh shard and no unchanged line is
+          # "unreported", so the publish job keeps its previous keyword row.
           .venv/bin/python scripts/publish_shards.py export-keyword \
-            --out . --skip "keyword-unchanged-$JOB.txt"
+            --out . --skip "keyword-unchanged-$JOB.txt" \
+            || echo "::warning::keyword export failed in chunk $JOB; previous keyword rows carry forward"
           # Ask before embedding. The manifest pins the commit each published
           # shard was built from, so a registry whose HEAD is that commit keeps
           # last week's row instead of buying the same vectors again — every

@@ -7,7 +7,7 @@ category: Search · Performance
 complexity: L
 impact: High
 wow: 4
-note: 461 published registries import in 17 s into a 59.3 MB store at 100% body text, where a bundle-only machine indexed 0%
+note: 461 registries' shards (75.7 MB gzip) import in ~22 s into a 59.3 MB store at 100% body text, where a bundle-only machine indexed 0%
 order: 99
 owner: loop/publish-keyword-index
 pr:
@@ -109,11 +109,19 @@ them on any machine, keyless included. "Already current" means the index holds t
 and never fetched the fix.
 
 <b>Measured</b>, re-deriving every registry's shard read-only from a real 462-tap index (62,362
-docs, 20,108,624 postings): <b>280.8&nbsp;MB</b> of canonical JSON, <b>75.7&nbsp;MB</b> as the
-462 gzip&nbsp;-9 assets actually published (median 42.9&nbsp;KB, largest 14.2&nbsp;MB). Importing
-all of them into an empty sandbox took <b>17.2&nbsp;s</b> and wrote a <b>59.3&nbsp;MB</b> postings
-store — the v10 size — at <code>body_share</code> 1.0. One shard was refused, correctly:
-<code>boost/builtin</code> has no commit, and an unknown commit is never a match. End to end on
+docs, 20,108,624 postings): <b>280.8&nbsp;MB</b> of canonical JSON, <b>75.7&nbsp;MB</b> as 462
+gzip&nbsp;-9 files (median 42.9&nbsp;KB, largest 14.2&nbsp;MB). Those were derived from the index,
+not from <code>export_shard</code>, and nothing is on the release yet: CI can publish at most 461,
+because <code>export_shard</code> refuses <code>boost/builtin</code> (no clone, no commit), whose
+file is counted in the 75.7&nbsp;MB. Importing all of them into an empty sandbox wrote a
+<b>59.3&nbsp;MB</b> postings store — the v10 size — at <code>body_share</code> 1.0, in
+<b>17–20&nbsp;s</b> for the import plus <b>~3&nbsp;s</b> to inflate the gzip on an idle machine
+(a reviewer measured 54&nbsp;s under load). One shard was refused, correctly:
+<code>boost/builtin</code> has no commit, and an unknown commit is never a match.
+<b>The cost is memory:</b> the import is one batch, so every inflated shard, the old index's
+documents and the merged postings are held at once — <b>~2.86&nbsp;GB peak RSS</b> for the whole
+catalogue (measured twice). That is the price of one write instead of 461; a machine that cannot
+afford it can fetch a subset by tapping fewer registries first. End to end on
 the fixture: a clone-less index scores 0 for a body-only word; after
 <code>--fetch-index</code> it finds the item, and the next <code>boost reindex</code> reuses the
 import instead of regressing to metadata. The weekly CI run itself cannot execute locally; its

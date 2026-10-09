@@ -834,8 +834,10 @@ def sync_keyword(taps: list[str], commits: dict[str, str],
     cache_dir = cache_dir or (paths.cache_dir() / "shards")
     results: list[dict] = []
     pending: list[tuple[int, dict, str]] = []
-    steps = plan(taps, commits, {"shards": keyword_section(manifest)["shards"]},
-                 built)
+    # `.get`, not `[...]`: keyword_incompatible passes a section carrying
+    # only format + index_version, and that must degrade to "unpublished".
+    steps = plan(taps, commits,
+                 {"shards": keyword_section(manifest).get("shards")}, built)
     for step in steps:
         tap = step["tap"]
         if step["status"] != "download":

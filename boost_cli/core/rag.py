@@ -989,6 +989,12 @@ def shard_problem(shard: object, commit: str) -> str | None:
             val = d.get(key)
             if not isinstance(val, typ) or (typ is int and not _int(val)):
                 return "document %d has no valid %r" % (i, key)
+        if not d["n"] or not d["f"]:
+            return "document %d has an empty name or path" % i
+        if not isinstance(d.get("h", ""), str):
+            return "document %d has no valid 'h'" % i
+        if d.get("m", 1) != 1 or isinstance(d.get("m"), bool):
+            return "document %d has no valid 'm'" % i
         if d["t"] != tap:
             return "document %d belongs to %r, not %r" % (i, d["t"], tap)
         tf = d["tf"]

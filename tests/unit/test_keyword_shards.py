@@ -116,6 +116,11 @@ class TestShardProblem:
     def test_a_whole_shard_at_the_taps_commit_is_accepted(self):
         assert rag.shard_problem(_shard(), A) is None
 
+    def test_the_optional_digest_and_metadata_flag_are_accepted(self):
+        bare = {k: v for k, v in _doc("o/a").items() if k != "h"}
+        assert rag.shard_problem(_shard(docs=[bare]), A) is None
+        assert rag.shard_problem(_shard(docs=[_doc("o/a", m=1)]), A) is None
+
     @pytest.mark.parametrize("shard, commit, fragment", [
         ([], A, "not an object"),
         (_shard(engine="dense"), A, "engine"),
@@ -138,6 +143,12 @@ class TestShardProblem:
         (_shard(docs=[_doc("o/a", tf={"x": True}, l=1)]), A, "malformed"),
         (_shard(docs=[_doc("o/a", tf={"": 1}, l=1)]), A, "malformed"),
         (_shard(docs=[_doc("o/a", l=3)]), A, "disagrees"),
+        (_shard(docs=[_doc("o/a", n="")]), A, "empty name or path"),
+        (_shard(docs=[_doc("o/a", f="")]), A, "empty name or path"),
+        (_shard(docs=[_doc("o/a", h=["x"])]), A, "valid 'h'"),
+        (_shard(docs=[_doc("o/a", m=2)]), A, "valid 'm'"),
+        (_shard(docs=[_doc("o/a", m=0)]), A, "valid 'm'"),
+        (_shard(docs=[_doc("o/a", m=True)]), A, "valid 'm'"),
     ])
     def test_refusals(self, shard, commit, fragment):
         why = rag.shard_problem(shard, commit)
@@ -395,6 +406,21 @@ class TestSyncKeyword:
         res = shards.sync_keyword(["o/a", "o/b"], {"o/a": A},
                                   manifest=self._load(old))
         assert [r["status"] for r in res] == ["incompatible"] * 2
+
+    @pytest.mark.parametrize("section", [
+        {"format": rag.SHARD_FORMAT, "index_version": rag.INDEX_VERSION},
+        {"format": rag.SHARD_FORMAT, "index_version": rag.INDEX_VERSION,
+         "shards": None},
+    ])
+    def test_a_compatible_section_with_no_rows_is_unpublished(
+            self, sandbox, section):
+        # keyword_incompatible accepts a section with no `shards` key; the
+        # sync must degrade to "unpublished", not raise KeyError.
+        m = {"version": shards.MANIFEST_VERSION, "shards": [],
+             "keyword": section}
+        res = shards.sync_keyword(["o/a"], {"o/a": A}, manifest=m)
+        assert res == [{"tap": "o/a", "status": "unpublished"}]
+        assert not rag.index_path().exists()
 
     def test_one_failure_does_not_cost_the_others(self, sandbox, tmp_path):
         mpath = _publish(tmp_path, [
@@ -730,6 +756,13 @@ class TestWorkflowWiring:
         ask = self.text.index("publish_shards.py unchanged --kind keyword")
         untap = self.text.index("boost_cli untap")
         assert ask < export < untap
+
+    def test_a_failed_keyword_export_cannot_cost_the_dense_work(self):
+        # The step runs under `set -e`: an unexpected crash in export-keyword
+        # must warn and carry on to the embed, not end the chunk.
+        line = self.text[self.text.index("publish_shards.py export-keyword"):]
+        line = line[:line.index("\n          #")]
+        assert "|| echo \"::warning::" in line
 
     def test_the_export_skips_what_the_keyword_check_listed(self):
         assert '--out "keyword-unchanged-$JOB.txt"' in self.text
