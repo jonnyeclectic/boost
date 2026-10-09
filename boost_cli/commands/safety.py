@@ -26,9 +26,11 @@ from ..core import (
     integrity,
     journal,
     lockfile,
+    paths,
     policy,
     provenance,
     registry,
+    scopes,
     staleness,
     store,
     trustaudit,
@@ -431,11 +433,20 @@ def cmd_verify(argv):
             if status == integrity.STATUS_UNLOCKED:
                 missing_fields.append("materialization sha256")
         commit_pin = integrity.commit_status(name, entry)
-        results.append({"name": name, "kind": kind, "status": status,
-                        "scope": "user", "missing_fields": missing_fields,
-                        "commit_pin": commit_pin,
-                        "passed": integrity.verification_passed(
-                            status, missing_fields, commit_pin)})
+        row = {"name": name, "kind": kind, "status": status,
+               "scope": "user", "missing_fields": missing_fields,
+               "commit_pin": commit_pin,
+               "passed": integrity.verification_passed(
+                   status, missing_fields, commit_pin)}
+        # A rule or workflow installed `--local` is recorded here, in the
+        # user lock, and graded from wherever verify runs -- its rows are
+        # absolute paths. Saying "user" for it is the one claim about the
+        # row that is false, and the base is what tells a reader which
+        # checkout a failure is in.
+        if kind != "skill" and entry.get("scope") == scopes.SCOPE_PROJECT:
+            row["scope"] = scopes.SCOPE_PROJECT
+            row["base"] = entry.get("base")
+        results.append(row)
 
     # Vendored, project-scoped skills live in the repo's own lock, not the user's
     # — and they are exactly the ones worth verifying, since they arrive by PR
@@ -469,7 +480,12 @@ def cmd_verify(argv):
         if r.get("kind") not in (None, "skill"):
             bits.append(r["kind"])
         if r.get("scope") == "project":
-            bits.append("project")
+            bits.append("project %s" % paths.tilde(Path(r["base"]))
+                        if scopes.names_a_directory(r.get("base"))
+                        else "project")
+        if r["status"] == integrity.STATUS_STRANDED:
+            bits.append("that directory is gone — `boost uninstall %s` drops "
+                        "the record" % r["name"])
         if r["missing_fields"]:
             bits.append("missing lock fields: " + ", ".join(r["missing_fields"]))
         if r["commit_pin"] == integrity.STATUS_OK:
@@ -646,7 +662,8 @@ def cmd_attest(argv):
                 st = integrity.materialized_status(name, entry, kind)
             rec["sha_ok"] = st not in (integrity.STATUS_MODIFIED,
                                        integrity.STATUS_MISSING,
-                                       integrity.STATUS_UNREACHABLE)
+                                       integrity.STATUS_UNREACHABLE,
+                                       integrity.STATUS_STRANDED)
             rec["journal"] = ev is not None
             if not rec["sha_ok"]:
                 # A missing store dir / materialized artifact is not a content
@@ -656,8 +673,10 @@ def cmd_attest(argv):
                 # missing, because no artifact was ever written. Folding it
                 # into "modified" would accuse a user of editing a file whose
                 # only act was turning an agent off.
+                # Stranded is a fourth: the artifacts went with the repo.
                 rec["reason"] = (
-                    "unreachable" if st == integrity.STATUS_UNREACHABLE
+                    "stranded" if st == integrity.STATUS_STRANDED
+                    else "unreachable" if st == integrity.STATUS_UNREACHABLE
                     else "missing" if st == integrity.STATUS_MISSING
                     else "modified")
                 failures += 1
@@ -687,6 +706,10 @@ def cmd_attest(argv):
                     # `_mat_remedy` words the per-agent remedy correctly.
                     msg = ("reaches no agent boost writes — nothing was "
                            "attested (boost doctor names the agents)")
+                elif r["reason"] == "stranded":
+                    # Not `boost heal`: it would recreate the deleted repo.
+                    msg = ("installed --local into a directory that no "
+                           "longer exists (boost uninstall %s)" % r["name"])
                 elif r["reason"] == "missing":
                     msg = ("store directory missing (boost heal)"
                            if r["kind"] == "skill"

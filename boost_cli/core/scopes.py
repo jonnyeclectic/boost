@@ -23,6 +23,7 @@ import os
 import re
 from contextlib import suppress
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import cast
 
 from ..errors import BoostError
 from . import paths, projectlock
@@ -301,6 +302,33 @@ def names_a_directory(recorded) -> bool:
     """
     return (bool(recorded) and isinstance(recorded, str | os.PathLike)
             and os.path.isabs(recorded))
+
+
+def stranded(entry: dict) -> bool:
+    """Is a user-lock row a ``--local`` install whose repo no longer exists?
+
+    Rules and workflows installed with ``--local`` are recorded in the *user*
+    lock against an absolute ``base`` (see :func:`owned_by`), and the
+    materialization rows under it are absolute too — so a reader standing in
+    any other directory can still grade a sibling checkout's rule, and does so
+    correctly. What it cannot do is grade one whose checkout has been
+    deleted: every artifact reads as missing, and every remedy that answers
+    "missing" (`boost reinstall`, `boost sync`, `boost heal`, `boost update`)
+    re-materializes into the recorded ``base`` and so *recreates the deleted
+    directory* with a ``.cursor/`` and a ``CLAUDE.local.md`` in it. The record
+    is the fault, and ``boost uninstall <name>`` — which drives off the rows
+    and never creates anything — is its one remedy.
+
+    Both halves are the same as :func:`owns`'s, for the same reason: a row
+    with a ``base`` and no ``scope`` is user scope, and a ``base`` that names
+    no directory (missing, relative, not a string) is not a claim on one, so
+    neither can be stranded. ``isdir`` on the *recorded* path, not
+    ``realpath``: the question is whether the directory is there, not which
+    one it is.
+    """
+    base = entry.get("base")
+    return (entry.get("scope") == SCOPE_PROJECT and names_a_directory(base)
+            and not os.path.isdir(cast(str, base)))
 
 
 def check_scope(scope: str) -> str:

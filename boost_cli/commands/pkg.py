@@ -1249,6 +1249,18 @@ def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
             changed = bool(cur and cur != lk.get("sha256"))
         if not changed:
             continue
+        if scopes.stranded(lk):
+            # Its repo is gone, and refreshing it would recreate that
+            # directory (`store._refuse_stranded_base` refuses the write).
+            # Said here, before the risky-diff prompt, so nobody is asked to
+            # review a change that cannot be applied -- and only when there
+            # is a change, since a stranded row with nothing new is not this
+            # command's to report; `boost doctor` names it either way.
+            out.warn("%s %s: update skipped — it was installed --local into "
+                     "%s, which no longer exists; `boost uninstall %s` drops "
+                     "the record" % (kind, name, _tilde(Path(lk["base"])),
+                                     name), wrap=True)
+            continue
         try:
             new_raw = (registry.get(tapname).path
                        / entry.get("skill_md", "")).read_text(
@@ -1624,7 +1636,11 @@ def cmd_reinstall(argv: list[str]) -> int:
                                     scope=lk.get("scope", "user"),
                                     base=lk.get("base"))
             except BoostError as err:
-                out.warn("%s: %s" % (name, err.message))
+                # The hint too: a refusal to recreate a deleted repo is only
+                # useful with the `boost uninstall` that clears it.
+                out.warn("%s: %s%s" % (name, err.message,
+                                       " — %s" % err.hint if err.hint else ""),
+                         wrap=True)
                 failed += 1
                 continue
             # Success first, then what it skipped: the same order as every
@@ -1689,8 +1705,11 @@ def cmd_reinstall(argv: list[str]) -> int:
         done += 1
         done_kinds.add("skill")
     # Name the kind when only one was touched; a mixed run says "items".
-    noun = next(iter(done_kinds)) if len(done_kinds) == 1 else (
-        "item" if done_kinds else "skill")
+    # With nothing done, name what was *attempted*: a refused rule used to
+    # tally as "Reinstalled 0 skills".
+    tried = done_kinds or {k for k, _, _ in items}
+    noun = next(iter(tried)) if len(tried) == 1 else (
+        "item" if tried else "skill")
     out.info("Reinstalled %s" % _plural(done, noun))
     return 1 if failed else 0
 

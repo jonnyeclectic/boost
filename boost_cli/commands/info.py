@@ -122,6 +122,15 @@ def _materialized_text(name: str, kind: str, entry: dict):
                 hint="inspect with `boost verify %s`, then `boost reinstall "
                      "%s` to restore the locked copy" % (name, name),
                 wrap=True)
+        if st == integrity.STATUS_STRANDED:
+            # Not MISSING's `boost sync` / `reinstall`: both would recreate
+            # the deleted repo. And not a silent fall-through to the tap
+            # copy, which is what an unhandled status here amounted to.
+            raise BoostError(
+                "%s %s was installed --local into %s, which no longer exists"
+                % (kind, name, paths.tilde(Path(entry["base"]))),
+                hint="`boost uninstall %s` drops the record" % name,
+                wrap=True)
         if st == integrity.STATUS_MISSING:
             raise BoostError(
                 "%s %s is in the lock file but its materialized artifacts "
@@ -230,6 +239,24 @@ def _materialized_agents(kind, entry):
                     for a in integrity.written_agent_names(kind, entry))
 
 
+def _scope_flag(entry: dict) -> list[str]:
+    """The FLAGS cell's word for a rule/workflow installed ``--local``.
+
+    Those rows live in the user lock beside the user-scope ones, so without
+    this a rule written into another checkout -- or into one since deleted --
+    printed byte-identical to one in ``~/.claude``. ``project:<base>`` names
+    the checkout; ``(gone)`` says the directory no longer exists, which is
+    the case every other surface now reports as ``stranded``.
+    """
+    if (entry.get("scope") != scopes.SCOPE_PROJECT
+            or not scopes.names_a_directory(entry.get("base"))):
+        return []
+    where = "project:" + paths.tilde(Path(entry["base"]))
+    if scopes.stranded(entry):
+        return [out.role(where + " (gone)", "danger")]
+    return [out.role(where, "muted")]
+
+
 def _kind_table(heading, kind, items, extra=None):
     """Render an installed rule/workflow table. ``extra`` is an optional
     ``(column, key)`` pair for a per-kind column (e.g. a workflow's slot); the
@@ -248,7 +275,8 @@ def _kind_table(heading, kind, items, extra=None):
         agents_cell = ("—" if quarantined
                        else _materialized_agents(noun, e) or "none")
         flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
-                ([out.aurora("quarantined", "pink")] if quarantined else [])
+                ([out.aurora("quarantined", "pink")] if quarantined else []) + \
+                _scope_flag(e)
         row = [name, e.get("version", "?"), e.get("tap", "?"),
                agents_cell]
         if extra:
@@ -402,9 +430,10 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
     directory, which these kinds do not have.
     """
     desc = _catalog_description(name, entry.get("tap"))
+    stranded = scopes.stranded(entry)
     if as_json:
         print(json.dumps({"name": name, "kind": kind, "description": desc,
-                         "installed": entry}, indent=2))
+                         "stranded": stranded, "installed": entry}, indent=2))
         return 0
     out.heading(name)
     badges = [out.badge("installed %s" % kind, "green")]
@@ -424,6 +453,12 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         out.kv("slot", str(entry["slot"]))
     if entry.get("scope"):
         out.kv("scope", str(entry["scope"]))
+    if (entry.get("scope") == scopes.SCOPE_PROJECT
+            and scopes.names_a_directory(entry.get("base"))):
+        # "scope project" alone does not say which checkout -- or that it is
+        # gone, which is the one fact here that changes what to do next.
+        out.kv("base", paths.tilde(Path(entry["base"]))
+               + (" (gone)" if stranded else ""))
     if entry.get("source_file"):
         out.kv("source", str(entry["source_file"]))
     if entry.get("commit"):
@@ -441,6 +476,11 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         # nothing. Printing the stale agent list here reads as a lie about
         # files that were just removed.
         out.kv("materialized", "(removed — quarantined)")
+    elif stranded:
+        # Every recorded row pointed into the deleted repo, so listing the
+        # agents would describe files that went with it.
+        out.kv("materialized", "(none — its repo no longer exists; "
+               "`boost uninstall %s` drops the record)" % name, wrap=True)
     elif integrity.reaches_no_agent(kind, entry):
         # Every recorded row is unwritten, so the line below would print
         # "(none)" -- the same words as the harmless no-rows case. Say why

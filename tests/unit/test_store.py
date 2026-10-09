@@ -2294,14 +2294,16 @@ class TestCheckScopeConflict:
         store._check_scope_conflict(
             "x", {"scope": "user", "base": None}, "user", None, force=True)
 
-    def test_same_project_base_with_force_does_not_raise(self):
+    def test_same_project_base_with_force_does_not_raise(self, tmp_path):
         # The literal is built through Path, not typed as "/repo", because
         # that is how the value under test is produced: every writer of this
         # field stores `str(resolved_base)` (store.py's three lock writes), so
         # a POSIX-shaped literal compares against "\\repo" on Windows and the
         # guard refuses a same-scope force that a real install never hits.
-        # Green on macOS and Linux, red on windows-latest only.
-        base = Path("/repo")
+        # Green on macOS and Linux, red on windows-latest only. A directory
+        # that exists, because a project row whose base is gone is stranded
+        # and refused before the scope comparison (`scopes.stranded`).
+        base = tmp_path
         store._check_scope_conflict(
             "x", {"scope": "project", "base": str(base)}, "project", base,
             force=True)
@@ -2313,17 +2315,20 @@ class TestCheckScopeConflict:
                 store._check_scope_conflict(
                     "x", existing, "project", Path("/repo"), force=force)
 
-    def test_project_existing_vs_user_requested_raises_regardless_of_force(self):
-        existing = {"scope": "project", "base": "/repo"}
+    def test_project_existing_vs_user_requested_raises_regardless_of_force(
+            self, tmp_path):
+        existing = {"scope": "project", "base": str(tmp_path)}
         for force in (False, True):
             with pytest.raises(BoostError, match="already installed at project scope"):
                 store._check_scope_conflict("x", existing, "user", None, force=force)
 
-    def test_different_project_bases_conflict(self):
-        existing = {"scope": "project", "base": "/repo1"}
-        with pytest.raises(BoostError, match=r"project scope \(/repo1\)"):
+    def test_different_project_bases_conflict(self, tmp_path):
+        existing = {"scope": "project", "base": str(tmp_path)}
+        with pytest.raises(BoostError) as ei:
             store._check_scope_conflict(
                 "x", existing, "project", Path("/repo2"), force=True)
+        assert ei.value.message == (
+            "x is already installed at project scope (%s)" % tmp_path)
 
     def test_cross_scope_hint_points_at_uninstalling_the_other_location(self):
         existing = {"scope": "user", "base": None}

@@ -35,6 +35,7 @@ STATUS_UNLOCKED = "unlocked"     # present on disk but no lock digest to check
 STATUS_QUARANTINED = "quarantined"  # artifacts removed on purpose; stash holds them
 STATUS_UNREACHABLE = "unreachable"  # rows exist and boost writes none of the
                                     # agents they name: the item reached nothing
+STATUS_STRANDED = "stranded"  # installed --local into a repo that is gone
 
 ENFORCE_KEY = "security.enforce_digest"
 COMMIT_KEY = "security.enforce_commit"
@@ -154,6 +155,14 @@ def materialized_status(name: str, entry: dict,
     if entry.get("quarantined"):
         return STATUS_QUARANTINED
     kind = str(kind or entry.get("kind") or "rule")
+    # The repo a `--local` row was installed into is gone, so every artifact
+    # reads as missing -- and MISSING's remedies (`reinstall`, `sync`, `heal`)
+    # re-materialize into the recorded base, recreating the directory the
+    # user deleted. A fact about the row rather than any one artifact, so it
+    # is asked before the loop; and before UNREACHABLE, because which agents a
+    # base takes is not a question a base that is gone can answer.
+    if scopes.stranded(entry):
+        return STATUS_STRANDED
     # Every row skipped means the item reached nothing. Asked before the loop
     # rather than after it because each of the three in-loop outcomes needs a
     # *written* row -- MISSING and MODIFIED return from inside the body and
@@ -295,7 +304,7 @@ def verification_passed(status: str, missing_fields: list, commit_pin: str | Non
 _VERIFY_ROLE_BY_STATUS = {
     STATUS_OK: "success", STATUS_MODIFIED: "warn", STATUS_MISSING: "danger",
     STATUS_UNLOCKED: "warn", STATUS_QUARANTINED: "muted",
-    STATUS_UNREACHABLE: "warn",
+    STATUS_UNREACHABLE: "warn", STATUS_STRANDED: "warn",
 }
 
 

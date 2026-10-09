@@ -39,6 +39,7 @@ from ..core import (
     rag,
     registry,
     rules,
+    scopes,
     selfupdate,
     serve,
     store,
@@ -1661,13 +1662,26 @@ def _tool_doctor(args: dict):
     _MAT_ISSUE_LABEL = {
         integrity.STATUS_MODIFIED: "modified since install",
         integrity.STATUS_UNREACHABLE: "reaches no agent boost writes",
+        # sync_plan skips these (a repair would recreate the deleted repo),
+        # so without a label here this surface would be the one calling it
+        # healthy.
+        integrity.STATUS_STRANDED: "installed --local into a directory that "
+                                   "no longer exists (`boost uninstall` "
+                                   "drops the record)",
     }
     mat_issues = [
         "%s %s: %s" % (kind, n, _MAT_ISSUE_LABEL[st])
         for kind in ("rule", "workflow")
         for n, e in sorted(everything[kind].items())
-        if (st := integrity.materialized_status(n, e, kind)) in _MAT_ISSUE_LABEL
-    ] if not agent_errs else []
+        # Stranded is asked first: materialized_status answers "quarantined"
+        # for a quarantined row, and a quarantined row whose repo is gone
+        # cannot be released either -- uninstall is still its one remedy. It
+        # reads only the recorded base, so it stays answerable when an agent
+        # dir does not resolve; every other status needs the agents.
+        if (st := integrity.STATUS_STRANDED if scopes.stranded(e)
+                else None if agent_errs
+                else integrity.materialized_status(n, e, kind))
+        in _MAT_ISSUE_LABEL]
     lines.extend(mat_issues)
     agent_lines = ["agents.%s.dir: %s — ask the user to fix it with `boost "
                    "config set agents.%s.dir <dir>`; link and materialization "

@@ -690,7 +690,9 @@ def unwritten_materializations() -> list[tuple[str, str, str, str]]:
             for kind, section in (("rule", lockfile.installed_rules()),
                                   ("workflow", lockfile.installed_workflows()))
             for name, entry in sorted(section.items())
-            if not entry.get("quarantined")
+            # Stranded rows too: their repo is gone, so "which agents does
+            # it take" has no answer, and doctor names them on their own.
+            if not entry.get("quarantined") and not scopes.stranded(entry)
             for m in entry.get("materializations") or []
             if not materialization_is_written(kind, entry, m)]
 
@@ -1036,6 +1038,33 @@ def _require_project_base(scope: str, base, what: str) -> Path | None:
     return resolved
 
 
+def _refuse_stranded_base(scope: str, base, kind: str, name: str) -> None:
+    """Refuse to re-materialize a rule or workflow into a repo that is gone.
+
+    An explicit ``base`` reaches ``_install_rule``/``_install_workflow`` from
+    a lock record (``reinstall``, ``update``, ``sync``), never from a fresh
+    ``install --local``, which resolves the cwd. When that directory no
+    longer exists the repo was deleted, and writing into it recreated it --
+    a ``.cursor/`` and a ``CLAUDE.local.md`` in a folder the user removed --
+    while the command reported a repair. :func:`scopes.stranded` is the same
+    question asked of the row; this is its write-side half.
+
+    Rules and workflows only. A project *skill* is recorded in the repo's own
+    lock, so no record of one can outlive the repo it names.
+    """
+    if scope == scopes.SCOPE_PROJECT and scopes.stranded(
+            {"scope": scope, "base": base}):
+        raise BoostError(
+            "%s %s was installed into %s, which no longer exists"
+            % (kind, name, paths.tilde(Path(base))),
+            # Ordered, not "or": the record is what blocks the reinstall
+            # (`_check_scope_conflict` refuses a second row under the name),
+            # so `install --local` in a new checkout only runs after it goes.
+            hint="`boost uninstall %s` drops the record; then, to have it in "
+                 "a new checkout, run `boost install %s --local` there"
+                 % (name, name), wrap=True)
+
+
 def _lock_location(entry: dict) -> str:
     """Describe where a rule/workflow lock ``entry`` lives, for an error message."""
     if entry.get("scope") == scopes.SCOPE_PROJECT:
@@ -1059,6 +1088,17 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
     """
     if not existing:
         return
+    if scopes.stranded(existing):
+        # Checked before the scope comparison: a stranded row can never be
+        # "the same install" (its base is gone, a fresh one resolves the cwd),
+        # and the generic refusal below said "uninstall it there first" about
+        # a directory that no longer exists. The record is the whole
+        # obstacle, and `boost uninstall` drops it from anywhere.
+        raise BoostError(
+            "%s was installed --local into %s, which no longer exists"
+            % (name, paths.tilde(Path(existing["base"]))),
+            hint="`boost uninstall %s` drops that record, then re-run this "
+                 "install" % name, wrap=True)
     requested_base = str(resolved_base) if resolved_base is not None else None
     if existing.get("scope", "user") == scope and existing.get("base") == requested_base:
         if not force:
@@ -1896,6 +1936,7 @@ def _install_rule(entry: dict, force: bool = False,
     # is nowhere to put this, say so immediately. Also needed ahead of the
     # existing-install check below, which compares against this scope/base.
     resolved_base = _require_project_base(scope, base, "rule %s" % name)
+    _refuse_stranded_base(scope, base, "rule", name)
     existing = lockfile.get_rule(name)
     _check_scope_conflict(name, existing, scope, resolved_base, force)
     explicit_agents = only_agents is not None
@@ -2202,6 +2243,11 @@ def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
     Persists the entry and returns the agents restored.
     """
     from . import rules
+    # The stash names absolute paths under the row's base, so releasing a
+    # `--local` row whose repo was deleted would recreate that repo exactly
+    # the way `reinstall` did.
+    _refuse_stranded_base(entry.get("scope", scopes.SCOPE_USER),
+                          entry.get("base"), kind, name)
     restored: list[str] = []
     for m in entry.get("quarantine_stash") or []:
         content = m.get("content")
@@ -2249,6 +2295,7 @@ def _install_workflow(entry: dict, force: bool = False,
     from . import gitutil, workflows
     name = entry["name"]
     resolved_base = _require_project_base(scope, base, "workflow %s" % name)
+    _refuse_stranded_base(scope, base, "workflow", name)
     existing = lockfile.get_workflow(name)
     _check_scope_conflict(name, existing, scope, resolved_base, force)
     explicit_agents = only_agents is not None
@@ -2926,14 +2973,19 @@ def sync_plan() -> dict[str, list]:
         # A quarantined rule's materializations are ABSENT BY DESIGN — the
         # stash holds them. Repairing here would re-arm what quarantine
         # disarmed, making `boost sync` an accidental release.
-        if entry.get("quarantined"):
+        #
+        # A stranded one's are absent because its repo was deleted, and
+        # "repairing" it recreated that repo (`scopes.stranded`). `install`
+        # now refuses the write, so listing it here would only turn every
+        # `boost sync` into a failure line; doctor names it with its remedy.
+        if entry.get("quarantined") or scopes.stranded(entry):
             continue
         if any(m.get("unwritable") or not _rule_materialization_ok(name, m)
                for m in entry.get("materializations") or []
                if materialization_is_written("rule", entry, m)):
             plan["missing_materializations"].append(("rule", name))
     for name, entry in lockfile.installed_workflows().items():
-        if entry.get("quarantined"):
+        if entry.get("quarantined") or scopes.stranded(entry):
             continue
         if any(m.get("unwritable") or not Path(m.get("path", "")).is_file()
                for m in entry.get("materializations") or []

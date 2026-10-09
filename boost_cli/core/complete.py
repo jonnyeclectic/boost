@@ -129,6 +129,12 @@ def _installed_names() -> list[str]:
     # store.installed() is the skills lock section only; the commands this
     # feeds (uninstall, pin, verify, ...) govern rules and workflows too, so
     # TAB must offer those names as well.
+    #
+    # Every row, including a `--local` one for another checkout and one whose
+    # checkout has been deleted (`scopes.stranded`). Filtering by "is it this
+    # repo's" would be wrong for both: `uninstall`, `info` and `verify` take
+    # either from anywhere, and `boost uninstall <name>` is the one remedy
+    # doctor names for a stranded row, so hiding it there hides the fix.
     names = set(store.installed())
     names.update(lockfile.installed_rules())
     names.update(lockfile.installed_workflows())
