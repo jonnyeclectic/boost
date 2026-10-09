@@ -579,6 +579,10 @@ def _decode_plist(blob: bytes) -> list[list[int]]:
         else:
             vals.append(v)
             v = shift = 0
+    if shift:
+        # A continuation bit on the last byte: the blob stops inside a varint.
+        # Dropping it would hand back a short list that looks whole.
+        raise ValueError("posting blob ends inside a varint")
     out: list[list[int]] = []
     doc = 0
     it = iter(vals)
@@ -706,7 +710,9 @@ def read_postings(terms: Sequence[str]) -> dict[str, list[list[int]]]:
                  "WHERE t.term IN (%s)" % ",".join("?" * len(batch)))
             for term, blob in con.execute(q, batch):
                 out[term] = _decode_plist(blob)
-    except sqlite3.Error:
+    except (sqlite3.Error, ValueError):
+        # ValueError: a corrupt blob (`_decode_plist`) degrades like any
+        # other store fault rather than crashing the search.
         return {}
     finally:
         con.close()
@@ -786,7 +792,7 @@ def _all_postings() -> dict[str, list[list[int]]]:
                 "SELECT t.term, p.plist FROM postings p "
                 "JOIN terms t ON p.term_id = t.id"):
             out[term] = _decode_plist(blob)
-    except sqlite3.Error:
+    except (sqlite3.Error, ValueError):
         return {}
     finally:
         con.close()

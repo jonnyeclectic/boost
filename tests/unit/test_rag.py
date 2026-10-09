@@ -1962,7 +1962,7 @@ class TestPostingsInterning:
 class TestPostingsBlobLayout:
     """One delta+varint blob per term, not one row per posting (v10).
 
-    Measured on a real 458-tap store (`scripts/measure_keyword_index.py`): the
+    Measured on a real 462-tap store (`scripts/measure_keyword_index.py`): the
     row-per-posting layout spent ~28 bytes on each of 20.1M postings whose
     payload was two small integers. These pin the codec at its byte
     boundaries and the layout against the file itself, because a codec that
@@ -2017,6 +2017,39 @@ class TestPostingsBlobLayout:
         # three varints cannot be whole (doc, tf) pairs
         with pytest.raises(ValueError):
             rag._decode_plist(b"\x01\x01\x01")
+
+    def test_a_blob_cut_inside_a_varint_is_an_error(self):
+        # [[1,1],[129,1]] -> 01 01 80 01 01; cut after the dangling 0x80 the
+        # first pair is whole, so only the pending varint betrays the cut.
+        blob = rag._encode_plist([[1, 1], [129, 1]])
+        assert blob == b"\x01\x01\x80\x01\x01"
+        with pytest.raises(ValueError, match="inside a varint"):
+            rag._decode_plist(blob[:3])
+        # a cut at a pair boundary is undetectable by construction
+        assert rag._decode_plist(blob[:2]) == [[1, 1]]
+
+    @staticmethod
+    def _corrupt_store(term_blob):
+        rag._write_postings({"good": [[0, 1]], "bad": [[2, 1]]})
+        con = sqlite3.connect(str(rag.postings_path()))
+        try:
+            con.execute("UPDATE postings SET plist = ? WHERE term_id = "
+                        "(SELECT id FROM terms WHERE term = 'bad')",
+                        (term_blob,))
+            con.commit()
+        finally:
+            con.close()
+
+    def test_a_corrupt_blob_degrades_read_postings_to_empty(self, sandbox):
+        self._corrupt_store(b"\x01\x80")
+        assert rag.read_postings(["good", "bad"]) == {}
+        assert rag._all_postings() == {}
+
+    def test_an_intact_store_still_reads(self, sandbox):
+        self._corrupt_store(rag._encode_plist([[2, 1]]))
+        assert rag.read_postings(["good", "bad"]) == {
+            "good": [[0, 1]], "bad": [[2, 1]]}
+        assert rag._all_postings() == {"good": [[0, 1]], "bad": [[2, 1]]}
 
     def test_index_version_moved_with_the_layout(self):
         # A v9 store's postings rows are not blobs; only the bump keeps the
