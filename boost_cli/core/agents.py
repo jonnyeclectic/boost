@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..errors import BoostError
 from . import config, paths
 
 DISPLAY = {"claude-code": "Claude Code", "windsurf": "Windsurf",
@@ -48,6 +49,28 @@ def known_agents() -> dict[str, dict]:
             "project_dir": str(spec.get("project_dir", "")),
         }
     return out
+
+
+def check() -> list[tuple[str, BoostError]]:
+    """Every configured agent whose ``dir`` cannot be resolved, with the error.
+
+    :func:`known_agents` raises on the first such row, which is right for the
+    commands that would write somewhere: :func:`paths.expand` refuses an unset
+    ``${VAR}`` precisely so a mistyped dir cannot install into ``./skills``.
+    It is wrong for ``boost doctor``, whose job is to name a broken config —
+    one bad row made it exit 1 having printed nothing past the lock check. So
+    this asks the same question row by row, without raising, and keys each
+    failure by agent name: the error from ``expand`` names the variable, not
+    the ``agents.<name>.dir`` key the user has to edit. ``config.json`` order,
+    so two runs list them the same way.
+    """
+    bad = []
+    for name, spec in (config.get("agents") or {}).items():
+        try:
+            paths.expand(str(spec.get("dir", "")))
+        except BoostError as e:
+            bad.append((name, e))
+    return bad
 
 
 def project_dotdir(agent: str, skills_dir) -> str:

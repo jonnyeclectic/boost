@@ -1618,7 +1618,13 @@ def _tool_install(args: dict):
 
 
 def _tool_doctor(args: dict):
-    plan = store.sync_plan()
+    # Same rule as CLI `boost doctor`: one agent whose `dir` cannot resolve
+    # makes `known_agents` raise, and both `sync_plan` and the materialization
+    # digest below reach it. Name the key and skip those two, rather than let
+    # the whole reply become the bare `expand` error, which names a variable
+    # but not the config key the user has to change.
+    agent_errs = agents.check()
+    plan = store.sync_plan() if not agent_errs else {}
     issues = sum(len(v) for v in plan.values())
     # Two different questions, and answering the second with the first is what
     # made this tool disagree with every other one. `taps` is the literal clone
@@ -1660,9 +1666,15 @@ def _tool_doctor(args: dict):
         "%s %s: %s" % (kind, n, _MAT_ISSUE_LABEL[st])
         for kind in ("rule", "workflow")
         for n, e in sorted(everything[kind].items())
-        if (st := integrity.materialized_status(n, e, kind)) in _MAT_ISSUE_LABEL]
+        if (st := integrity.materialized_status(n, e, kind)) in _MAT_ISSUE_LABEL
+    ] if not agent_errs else []
     lines.extend(mat_issues)
-    total = issues + len(mat_issues)
+    agent_lines = ["agents.%s.dir: %s — ask the user to fix it with `boost "
+                   "config set agents.%s.dir <dir>`; link and materialization "
+                   "checks were skipped" % (n, e.message, n)
+                   for n, e in agent_errs]
+    lines.extend(agent_lines)
+    total = issues + len(mat_issues) + len(agent_lines)
     # A machine with no taps has nothing to disagree about, so every check
     # above passes and the old reply called it "healthy" — directly under the
     # line saying `taps: 0 (0 items available)`. That is the one state where
@@ -1692,7 +1704,8 @@ def _tool_doctor(args: dict):
     if total == 0:
         if tapped:
             lines.append("healthy — no issues found")
-    elif mat_issues or cfg_err:
+    elif mat_issues or cfg_err or agent_lines:
+        # Not `boost sync`: an unresolvable agent dir makes sync refuse too.
         lines.append("%d issue(s) — run `boost doctor` for details" % total)
     else:
         lines.append("%d issue(s) — run `boost sync` to fix" % issues)
