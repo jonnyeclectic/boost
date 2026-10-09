@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -53,8 +54,12 @@ def strict_stat(monkeypatch):
 
 
 @pytest.fixture()
-def tap(sandbox, fixture_tap_src):
-    t = registry.add(str(fixture_tap_src))
+def tap(sandbox, fixture_tap_src, tmp_path):
+    # A private copy: a local tap reads its source in place, and the rules and
+    # workflows these tests write would otherwise land in the session fixture.
+    src = tmp_path / "fixture-tap"
+    shutil.copytree(fixture_tap_src, src, symlinks=True)
+    t = registry.add(str(src))
     catalog.rebuild_tap(t)
     return t
 
@@ -196,10 +201,9 @@ class TestADotdirWithNoSearchBit:
         assert "everything in sync" not in synced
         assert "chmod u+wx ~/.cursor" in synced
 
-    def test_health_and_the_rule_checks_do_not_crash(self, boost, tapped,
+    def test_health_and_the_rule_checks_do_not_crash(self, boost, tap,
                                                      cursor, strict_stat):
         boost("install", "brainstorming")
-        tap = registry.list_taps()[0]
         store.install(_rule(tap))
         store.install(_workflow(tap))
         cursor.chmod(0o600)
@@ -444,7 +448,13 @@ class TestADirectoryAtARulesFilePath:
         assert not store.occupied(tmp_path / "l")
         assert not store.occupied(tmp_path / "gone")
 
-    def test_every_surface_names_it(self, boost, tapped, cursor):
+    def test_every_surface_names_it(self, boost, fixture_tap_src, tmp_path,
+                                    cursor):
+        # A private copy: this commits a rule, and the session fixture is
+        # shared with every other test.
+        tapped = tmp_path / "fixture-tap"
+        shutil.copytree(fixture_tap_src, tapped, symlinks=True)
+        boost("tap", str(tapped))
         (cursor / "rules" / "house.mdc").mkdir(parents=True)
         src = Path(tapped) / "rules" / "house.mdc"
         src.parent.mkdir(parents=True, exist_ok=True)
