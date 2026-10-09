@@ -576,8 +576,10 @@ def cmd_quarantine(argv):
         if kind == "skill":
             res = store.link_agents(name, only=entry.get("only_agents"))
             entry["quarantined"] = False
-            entry["agents"] = res.linked
+            store.record_links(entry, res)
             lockfile.set_skill(name, entry)
+            from .pkg import _warn_unwritable
+            _warn_unwritable(res)
             journal.log("release", name)
             out.ok("released %s (linked: %s)"
                    % (name, ", ".join(res.linked) or "none"))

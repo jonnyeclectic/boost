@@ -2114,9 +2114,9 @@ def cmd_browse(argv):
         for conflict in res.conflicts:
             out.warn("conflict: %s exists and is not a symlink" % _tilde(conflict))
         for adir in res.unwritable:
-            out.warn("not %s: %s is not writable — `chmod u+w %s`, then "
-                     "`boost sync`" % ("linked" if res.kind == "skill" else "written",
-                                       _tilde(adir), _tilde(adir)))
+            out.warn("not %s: %s — %s, then `boost sync`"
+                     % ("linked" if res.kind == "skill" else "written",
+                        *store.unwritable_refusal(adir)), wrap=True)
         for adir, block in res.blocked:
             out.warn("not %s: %s — %s, then `boost sync`"
                      % ("linked" if res.kind == "skill" else "written",

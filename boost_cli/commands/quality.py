@@ -204,7 +204,9 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
     ours: list[Path] = []
     theirs: list[Path] = []
     for adir in agents.linking_agents().values():
-        if not adir.is_dir():
+        # ``os.path``: ``Path.is_dir`` raises under a dotdir with no search
+        # bit on Python 3.12 and 3.13, and doctor and heal exited 70 there.
+        if not os.path.isdir(adir):
             continue
         for link in sorted(adir.iterdir()):
             if link.is_symlink() and not link.exists():
@@ -567,6 +569,15 @@ def cmd_doctor(argv):
         if d != cache_dir or not taps:
             bad("dirs", paths.not_writable(d, paths.refuses_writes(d) or d),
                 wrap=True)
+    # An existing store that refuses writes: the mkdir above succeeds, so
+    # `refused` never holds it, and doctor said healthy while every install
+    # exited 1 naming it (`store._require_writable`).
+    store_dir = paths.store_dir()
+    store_block = paths.refuses_writes(store_dir)
+    if store_block is not None and store_dir not in refused:
+        bad("store", "%s — every install is refused until it is fixed; %s"
+            % (paths.not_writable(store_dir, store_block),
+               paths.write_remedy(store_block)), wrap=True)
     if configured and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
                                               "" if cache_block
@@ -655,9 +666,15 @@ def cmd_doctor(argv):
             # another installer put there, so prescribing it for that case sent
             # the reader in a circle: sync answers "everything in sync", doctor
             # repeats itself. Name the thing in the way instead.
-            if link.is_symlink() and link.exists():
+            # ``os.path``: under a dotdir with no search bit ``Path.is_symlink``
+            # raises on Python 3.12 and 3.13, and doctor exited 70 on it.
+            if os.path.islink(link) and os.path.exists(link):
                 continue
-            if not link.is_symlink() and link.exists():
+            if not os.path.lexists(link) and paths.refuses_writes(adir):
+                # Not one `boost sync` can make until the dir allows it: the
+                # agent-dir line below names the dir and its `chmod`.
+                continue
+            if not os.path.islink(link) and os.path.exists(link):
                 bad("skill-link", "skill %s not linked for %s — %s exists and is not a boost "
                     "link; move or delete it, then run `boost sync`"
                     % (name, agent, paths.tilde(link)))
@@ -770,7 +787,10 @@ def cmd_doctor(argv):
                     # names the `chmod`, or the move when a file or a dangling
                     # link is in the way. Any file there predates the refusal.
                     block = paths.refuses_writes(Path(m.get("path", "")).parent)
-                    if block is not None and paths.in_the_way(block):
+                    if store.occupied(Path(m.get("path", ""))):
+                        why = ("%s, then `boost sync` writes it"
+                               % store.occupied_refusal(m["path"]))
+                    elif block is not None and paths.in_the_way(block):
                         why = ("%s is in the way — `boost sync` writes it once "
                                "it is moved" % _tilde(block))
                     else:
@@ -793,7 +813,9 @@ def cmd_doctor(argv):
                 except OSError:
                     present = False
             else:
-                present = p.is_file()
+                # ``os.path``: ``Path.is_file`` raises under a dotdir with no
+                # search bit on Python 3.12 and 3.13.
+                present = os.path.isfile(p)
             if not present:
                 bad("rule", "rule %s missing its %s materialization — run "
                     "`boost reinstall %s`" % (name, m.get("agent", "?"), name))
@@ -802,7 +824,7 @@ def cmd_doctor(argv):
         for m in entry.get("materializations") or []:
             if not store.materialization_is_written("workflow", entry, m):
                 continue
-            if not m.get("unwritable") and not Path(m.get("path", "")).is_file():
+            if not m.get("unwritable") and not os.path.isfile(m.get("path", "")):
                 bad("workflow", "workflow %s missing its %s file — run `boost reinstall %s`"
                     % (name, m.get("agent", "?"), name))
                 mat_issues += 1
@@ -978,9 +1000,8 @@ def cmd_doctor(argv):
     for adir in (store.unwritable_agent_dirs() if agents_ok else ()):
         # A next action, like the log line below it: without one this was
         # the only issue doctor names that nothing can act on.
-        bad("agent-dir", "agent dir %s is not writable — `chmod u+w %s`, "
-            "then `boost sync` writes what it missed"
-            % (_tilde(adir), _tilde(adir)), wrap=True)
+        bad("agent-dir", "agent dir %s — %s, then `boost sync` writes what "
+            "it missed" % store.unwritable_refusal(str(adir)), wrap=True)
 
     rotation = journal.rotation_healthy()
     if not rotation:
@@ -1452,7 +1473,10 @@ def cmd_heal(argv):
     # linking_agents, not enabled_agents: a native-store agent's skills dir is
     # never written to, so it is not a missing directory.
     wanted = [*paths.boost_dirs(), *agents.linking_agents().values()]
-    missing = [d for d in wanted if not d.is_dir()]
+    # ``os.path.isdir``: ``Path.is_dir`` raises under a dir with no search bit
+    # on Python 3.12 and 3.13, where this exited 70. Such a dir is "missing"
+    # here, and `refuses_writes` below names the parent that hides it.
+    missing = [d for d in wanted if not os.path.isdir(d)]
     # A missing dir whose parent refuses the mkdir is not one heal can create,
     # so the preview does not promise it: it used to say "would create" and
     # exit 0 for a run that crashed at exit 70. Both name it below instead.
@@ -1496,7 +1520,13 @@ def cmd_heal(argv):
         # them so a preview doesn't report the same path twice under two
         # different actions.
         already_reported = {str(link) for link in ours}
+        linking = agents.linking_agents()
         for name, agent in plan["missing_links"]:
+            # A dir that refuses writes is skipped by the run, which names it
+            # below; promising the link here was a preview the run broke.
+            adir = linking.get(agent)
+            if adir is not None and paths.refuses_writes(adir) is not None:
+                continue
             out.info("would link %s → %s" % (name, agent))
             actions.append("link %s" % name)
         for p in plan["stale_links"]:
@@ -1513,7 +1543,8 @@ def cmd_heal(argv):
             actions.append(msg)
     else:
         for msg in store.sync_apply(plan):
-            out.ok(msg.replace(str(paths.home()), "~"))
+            (out.warn if store.is_unrepaired(msg) else out.ok)(
+                msg.replace(str(paths.home()), "~"))
             actions.append(msg)
 
     # Opt-in, unlike everything above it. The rest of `heal` repairs what boost
@@ -1584,11 +1615,14 @@ def cmd_heal(argv):
                  % cfg_err, wrap=True)
     # Permissions are the user's to change, not heal's; but a dir heal saw and
     # cannot fix must not sit under an all-clear.
-    stuck = store.unwritable_agent_dirs()
+    # A block `blocked` already names for a missing dir is not named twice:
+    # both now come from `refuses_writes`.
+    stuck = [d for d in store.unwritable_agent_dirs()
+             if d not in blocked.values()]
     for adir in stuck:
-        out.warn("agent dir %s is not writable — heal does not change "
-                 "permissions; run `chmod u+w %s`, then `boost sync`"
-                 % (_tilde(adir), _tilde(adir)), wrap=True)
+        out.warn("agent dir %s — heal does not change permissions; run %s, "
+                 "then `boost sync`" % store.unwritable_refusal(str(adir)),
+                 wrap=True)
     # The same rule for the cache dir doctor flags, and for any directory a
     # refused mkdir left missing: heal cannot make the parent writable, so it
     # must not answer "nothing to heal" beneath the problem. The preview and
@@ -1597,11 +1631,19 @@ def cmd_heal(argv):
     if registry.list_taps() and cache_stuck:
         blocked.setdefault(cache_dir,
                            paths.refuses_writes(cache_dir) or cache_dir)
+    # The store doctor flags: it exists, so it is never `missing` above.
+    store_block = paths.refuses_writes(paths.store_dir())
+    if store_block is not None and store_block not in blocked.values():
+        blocked.setdefault(paths.store_dir(), store_block)
     # A file or a dangling link where a recorded rule's or workflow's dir
     # belongs. A block already named for a skills dir is named once.
     for d, block in store.blocked_agent_dirs():
         if block not in blocked.values():
             blocked.setdefault(d, block)
+    for path in store.occupied_targets():
+        stuck.append(path)
+        out.warn("%s, then `boost sync` (heal does not move files)"
+                 % store.occupied_refusal(path), wrap=True)
     for d, block in blocked.items():
         stuck.append(d)
         out.warn("%s — heal does not %s; %s"
@@ -1826,7 +1868,7 @@ def cmd_health(argv):
     coverage_ok = True
     for agent, adir in agents.linking_agents().items():
         linked = sum(1 for n in expected
-                     if (adir / n).is_symlink() and (adir / n).exists())
+                     if os.path.islink(adir / n) and os.path.exists(adir / n))
         full = linked == len(expected)
         coverage_ok = coverage_ok and full
         kv(agent, "%d/%d %s" % (linked, len(expected),

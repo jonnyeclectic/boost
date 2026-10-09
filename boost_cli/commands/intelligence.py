@@ -43,6 +43,16 @@ from ..core import output as out
 from ..errors import BoostError
 from ._common import _s
 
+
+def _warn_unwritable(res, stream=None) -> None:
+    """``pkg._warn_unwritable``, imported on first use.
+
+    ``pkg`` costs ~100 ms to import, and only the relinking paths need it.
+    """
+    from .pkg import _warn_unwritable as warn
+    warn(res, stream=stream)
+
+
 # ---------------------------------------------------------------- helpers
 
 _warned_fallback = False
@@ -169,7 +179,6 @@ def _install_generated(name: str, text: str, yes: bool = False) -> None:
     out.ok("%s %s → %s" % ("replaced" if owner else "installed", name, _tilde(res.dest)))
     if res.linked:
         out.info(out.role("linked into: %s" % ", ".join(res.linked), "muted"))
-    from .pkg import _warn_unwritable
     _warn_unwritable(res)
 
 
@@ -985,7 +994,7 @@ def cmd_context(argv: list[str]) -> int:
         for name in sorted(_mentioned_skills(state)):
             entry = inst.get(name)
             if entry and entry.get("sidelined_by") == "context":
-                store.unsideline(name)
+                _warn_unwritable(store.unsideline(name))
                 restored += 1
         state["enabled"] = False
         _save_state(_CONTEXT_STATE, state)
@@ -1059,7 +1068,9 @@ def _context_apply(state: dict) -> int:
         if entry.get("quarantined"):
             continue
         if name in active:
-            if store.unsideline(name).linked:
+            res = store.unsideline(name)
+            _warn_unwritable(res)
+            if res.linked:
                 linked.append(name)
         elif store.sideline(name, "context"):
             unlinked.append(name)
@@ -1113,7 +1124,8 @@ def cmd_focus(argv: list[str]) -> int:
         for name, entry in sorted(lockfile.installed().items()):
             if entry.get("sidelined_by") != "focus":
                 continue
-            store.unsideline(name)
+            _warn_unwritable(store.unsideline(name),
+                             stream=sys.stderr if args.json else None)
             restored += 1
         if had_session:
             state_path.unlink()
@@ -1169,7 +1181,8 @@ def cmd_focus(argv: list[str]) -> int:
         if store.sideline(name, "focus"):
             sidelined += 1
     for name in names:
-        store.unsideline(name)
+        _warn_unwritable(store.unsideline(name),
+                         stream=sys.stderr if args.json else None)
     _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso()})
     journal.log("focus", ",".join(names))
     if args.json:

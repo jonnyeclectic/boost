@@ -5383,6 +5383,7 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
         finally:
             cursor.chmod(0o700)
         assert "%s is not writable" % paths.tilde(cursor) in ei.value.message
+        assert "`chmod u+w %s`" % paths.tilde(cursor) in ei.value.hint
         assert lockfile.get_rule("team-conventions") is not None
         store.uninstall("team-conventions")        # after the chmod, it may
         assert not (cursor / "team-conventions.mdc").exists()
@@ -5427,7 +5428,9 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
                 store.uninstall(entry["name"])
         finally:
             cursor.chmod(0o700)
-        assert "%s is not writable" % paths.tilde(cursor) in ei.value.message
+        # The missing bit is search, so `u+w` would change nothing.
+        assert "%s is not searchable" % paths.tilde(cursor) in ei.value.message
+        assert "`chmod u+wx %s`" % paths.tilde(cursor) in ei.value.hint
         assert self._locked(kind, entry["name"]) is not None
 
     def test_uninstall_does_not_rewrite_a_context_file_it_never_wrote(self, tap):

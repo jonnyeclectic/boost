@@ -1594,11 +1594,10 @@ def _tool_install(args: dict):
     lines.append("quality score: %d/100" % res.score)
     if res.conflicts:
         lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
-    if res.unwritable:
-        lines.append("not %s, directory not writable: %s — ask the user to "
-                     "`chmod u+w` it, then `boost sync`"
-                     % ("linked" if res.kind == "skill" else "written",
-                        ", ".join(res.unwritable)))
+    lines.extend("not %s: %s — ask the user to run %s, then `boost sync`"
+                 % ("linked" if res.kind == "skill" else "written",
+                    *store.unwritable_refusal(adir))
+                 for adir in res.unwritable)
     for adir, block in res.blocked:
         lines.append("not %s: %s — ask the user to %s, then `boost sync`"
                      % ("linked" if res.kind == "skill" else "written",
