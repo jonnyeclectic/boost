@@ -805,7 +805,7 @@ jobs:
             exit 1
           fi
       - name: upload shard results
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutation-shard-${{ matrix.index }}
           # Only the .meta results are needed downstream: `mutmut
@@ -894,7 +894,7 @@ jobs:
         run: python3 scripts/mutation_shards.py weights --source mutants || true
       - name: upload balance hints
         if: needs.mutation-scope.outputs.relevant == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutation-weights
           path: scripts/mutation_weights.json
