@@ -406,6 +406,9 @@ class TestRegistryCatalog:
         first.append({"name": "mutated/by-caller"})
         monkeypatch.setattr(config.json, "loads",
                             lambda *a, **k: pytest.fail("reparsed an unchanged file"))
+        second = config.load_registry_catalog()        # served from the memo
+        assert second == [{"name": "a/b"}]
+        second.append({"name": "mutated/by-caller"})
         assert config.load_registry_catalog() == [{"name": "a/b"}]
 
     def test_a_non_object_file_reads_as_no_registries(self, monkeypatch, tmp_path):

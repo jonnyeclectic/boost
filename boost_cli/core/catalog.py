@@ -174,7 +174,7 @@ def _entry_category(meta: dict, tap_category: str) -> str:
     (see CLAUDE.md's design-domain note on `awesome-design-skills` vs
     `ai-design-skills`). ``tap_category`` — looked up once per scan from the
     bundled registry catalog, never per item — is everything an un-annotated
-    item has, and is itself often empty for a tap outside the bundled 487.
+    item has, and is itself often empty for a tap outside the bundled registry catalog.
     """
     own = str(meta.get("category") or "").strip()
     if own:
