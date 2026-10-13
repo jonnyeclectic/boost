@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 487,
-  "est_items_total": 34901,
-  "est_items_scannable": 30480,
+  "count": 541,
+  "est_items_total": 36253,
+  "est_items_scannable": 31832,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -687,6 +687,17 @@
       "curated": true
     },
     {
+      "name": "apollographql/skills",
+      "url": "https://github.com/apollographql/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Apollo GraphQL: Apollo Server, Federation, Router config, REST connectors",
+      "est_items": 15,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "appeeky/stripe-skills",
       "url": "https://github.com/appeeky/stripe-skills",
       "type": "skill",
@@ -694,6 +705,17 @@
       "focus": "AI agent skills that make your assistant a full Stripe expert. Covers... (35 skills)",
       "est_items": 35,
       "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "appwrite/skills",
+      "url": "https://github.com/appwrite/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Appwrite: CLI (config, functions, CI) plus server SDKs for ten languages",
+      "est_items": 11,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -753,6 +775,28 @@
       "curated": true
     },
     {
+      "name": "astral-sh/claude-code-plugins",
+      "url": "https://github.com/astral-sh/claude-code-plugins",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Astral Python toolchain: uv projects and dependencies, ruff, ty",
+      "est_items": 3,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "auth0/agent-skills",
+      "url": "https://github.com/auth0/agent-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Auth0: API/JWT protection for Express, Fastify, FastAPI, Django and more",
+      "est_items": 1,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "aws-samples/sample-apex-skills",
       "url": "https://github.com/aws-samples/sample-apex-skills",
       "type": "skill",
@@ -760,6 +804,17 @@
       "focus": "Curated agentic AI skills for AWS platform engineering, delivered... (29 skills, 17 workflows)",
       "est_items": 46,
       "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "aws/agent-toolkit-for-aws",
+      "url": "https://github.com/aws/agent-toolkit-for-aws",
+      "type": "skill",
+      "category": "infra",
+      "focus": "Official AWS: DynamoDB/Aurora, Lambda/API Gateway/Step Functions, SQS/SNS, SDKs, networking",
+      "est_items": 166,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -836,6 +891,17 @@
       "category": "general",
       "focus": "Battle-tested skill library for AI agents. Save 98% of API costs with... (40 skills)",
       "est_items": 40,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "better-auth/skills",
+      "url": "https://github.com/better-auth/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Better Auth: setup, email/password, organisations/RBAC, 2FA, hardening",
+      "est_items": 8,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -1072,6 +1138,28 @@
       "curated": true
     },
     {
+      "name": "clerk/skills",
+      "url": "https://github.com/clerk/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Clerk: backend API, auth setup, webhooks, organisations, framework SDKs",
+      "est_items": 22,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "ClickHouse/agent-skills",
+      "url": "https://github.com/ClickHouse/agent-skills",
+      "type": "skill",
+      "category": "data",
+      "focus": "Official ClickHouse: schema and query best practices, architecture advisor, chDB",
+      "est_items": 11,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "cloudflare/skills",
       "url": "https://github.com/cloudflare/skills",
       "type": "skill",
@@ -1090,6 +1178,17 @@
       "focus": "Personal collection of Agent Skills for AI coding agents (Claude Code... (18 skills)",
       "est_items": 18,
       "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "cockroachlabs/cockroachdb-skills",
+      "url": "https://github.com/cockroachlabs/cockroachdb-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official CockroachDB: SQL and transaction design, multi-region apps, MOLT migration, ops",
+      "est_items": 34,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -1149,6 +1248,17 @@
       "curated": true
     },
     {
+      "name": "confluentinc/agent-skills",
+      "url": "https://github.com/confluentinc/agent-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Confluent: Kafka Java/Python clients, Kafka Streams, Flink SQL, schema registry",
+      "est_items": 17,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "conorluddy/ios-simulator-skill",
       "url": "https://github.com/conorluddy/ios-simulator-skill",
       "type": "skill",
@@ -1189,6 +1299,17 @@
       "focus": "UX and design skills for Claude Code - research, critique... (10 skills)",
       "est_items": 10,
       "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "datadog-labs/agent-skills",
+      "url": "https://github.com/datadog-labs/agent-skills",
+      "type": "skill",
+      "category": "infra",
+      "focus": "Official Datadog: APM onboarding, logs, monitors, data streams, cloud integrations",
+      "est_items": 52,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -1237,6 +1358,17 @@
       "curated": true
     },
     {
+      "name": "dbos-inc/agent-skills",
+      "url": "https://github.com/dbos-inc/agent-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official DBOS: Postgres-backed durable workflows for Python, TypeScript, Go and Java",
+      "est_items": 4,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "deanpeters/Product-Manager-Skills",
       "url": "https://github.com/deanpeters/Product-Manager-Skills",
       "type": "skill",
@@ -1276,6 +1408,28 @@
       "category": "ui",
       "focus": "Senior-level UX and design-system knowledge, packaged so your AI agent... (40 skills)",
       "est_items": 40,
+      "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "denoland/skills",
+      "url": "https://github.com/denoland/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Deno: runtime and toolchain, Deno Deploy (KV, databases), npm interop",
+      "est_items": 5,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "dev-toolings/superpowers-symfony",
+      "url": "https://github.com/dev-toolings/superpowers-symfony",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Symfony 7/8: API Platform, Doctrine ORM 3, Messenger, voters, CQRS",
+      "est_items": 91,
       "confidence": "med",
       "list_only": false,
       "curated": true
@@ -1369,6 +1523,17 @@
       "curated": true
     },
     {
+      "name": "duckdb/duckdb-skills",
+      "url": "https://github.com/duckdb/duckdb-skills",
+      "type": "skill",
+      "category": "data",
+      "focus": "Official DuckDB: SQL, attaching databases, reading/converting CSV/Parquet/JSON",
+      "est_items": 9,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "dylantarre/design-system-skills",
       "url": "https://github.com/dylantarre/design-system-skills",
       "type": "skill",
@@ -1446,6 +1611,17 @@
       "curated": true
     },
     {
+      "name": "encoredev/skills",
+      "url": "https://github.com/encoredev/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Encore.ts and Encore Go: APIs, services, databases and migrations, pub/sub, cron",
+      "est_items": 31,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "ericgandrade/claude-superskills",
       "url": "https://github.com/ericgandrade/claude-superskills",
       "type": "skill",
@@ -1497,6 +1673,17 @@
       "focus": "178 skills",
       "est_items": 178,
       "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "firebase/agent-skills",
+      "url": "https://github.com/firebase/agent-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Firebase: Firestore, Data Connect (Postgres/GraphQL), Auth, security rules",
+      "est_items": 14,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -1667,13 +1854,13 @@
       "curated": true
     },
     {
-      "name": "getsentry/sentry-agent-skills",
-      "url": "https://github.com/getsentry/sentry-agent-skills",
+      "name": "getsentry/sentry-for-ai",
+      "url": "https://github.com/getsentry/sentry-for-ai",
       "type": "skill",
-      "category": "ui",
-      "focus": "15 skills",
-      "est_items": 15,
-      "confidence": "med",
+      "category": "infra",
+      "focus": "Official Sentry: SDK setup across platforms, tracing, logs, fixing issues (replaces sentry-agent-skills)",
+      "est_items": 36,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -1777,6 +1964,17 @@
       "curated": true
     },
     {
+      "name": "hashicorp/agent-skills",
+      "url": "https://github.com/hashicorp/agent-skills",
+      "type": "skill",
+      "category": "infra",
+      "focus": "Official HashiCorp: Terraform provider authoring, testing and style, Vault, Packer",
+      "est_items": 20,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "heandroro/apm-agents-java",
       "url": "https://github.com/heandroro/apm-agents-java",
       "type": "skill",
@@ -1806,6 +2004,28 @@
       "focus": "AI-powered skills for Magento 2. This collection extends AI assistants... (16 skills, 7 workflows)",
       "est_items": 23,
       "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "honeycombio/agent-skill",
+      "url": "https://github.com/honeycombio/agent-skill",
+      "type": "skill",
+      "category": "infra",
+      "focus": "Official Honeycomb: OpenTelemetry SDK setup and migration, SLOs, triggers, queries",
+      "est_items": 14,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "honojs/skills",
+      "url": "https://github.com/honojs/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Hono: routing, middleware, Zod/Valibot validation, streaming, RPC client",
+      "est_items": 2,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -1893,6 +2113,17 @@
       "category": "general",
       "focus": "inference.sh Agent skills for using our API to give your agents access... (86 skills)",
       "est_items": 86,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "inngest/inngest-skills",
+      "url": "https://github.com/inngest/inngest-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Inngest TypeScript SDK: durable functions, steps, events, concurrency and throttling",
+      "est_items": 15,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -2063,6 +2294,17 @@
       "curated": true
     },
     {
+      "name": "jpcaparas/superpowers-laravel",
+      "url": "https://github.com/jpcaparas/superpowers-laravel",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Laravel: Eloquent N+1, queues/Horizon, validation, policies, migrations, HTTP client",
+      "est_items": 102,
+      "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "jthack/ffuf_claude_skill",
       "url": "https://github.com/jthack/ffuf_claude_skill",
       "type": "skill",
@@ -2135,6 +2377,17 @@
       "category": "ecommerce",
       "focus": "Shopify agency playbooks as Claude agent skills: catalog cleanup, SEO... (10 skills)",
       "est_items": 10,
+      "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "Kong/ai-marketplace",
+      "url": "https://github.com/Kong/ai-marketplace",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Kong: decK gateway config, Konnect API catalog/publishing, app auth, AI gateway",
+      "est_items": 22,
       "confidence": "med",
       "list_only": false,
       "curated": true
@@ -2268,6 +2521,17 @@
       "focus": "LangWatch Skills - reusable capabilities for AI agents. Install with... (19 skills)",
       "est_items": 19,
       "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "laravel/agent-skills",
+      "url": "https://github.com/laravel/agent-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Laravel: Cloud deploys, Nightwatch APM, starter-kit upgrades",
+      "est_items": 4,
+      "confidence": "med",
       "list_only": false,
       "curated": true
     },
@@ -2503,6 +2767,28 @@
       "curated": true
     },
     {
+      "name": "marckohlbrugge/37signals-skills",
+      "url": "https://github.com/marckohlbrugge/37signals-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "37signals-style Rails: jobs, migrations, webhooks, multi-tenancy, Minitest",
+      "est_items": 8,
+      "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "MariaDB/skills",
+      "url": "https://github.com/MariaDB/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official MariaDB: query optimisation, replication/HA, temporal tables, vector search",
+      "est_items": 8,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "mattpocock/skills",
       "url": "https://github.com/mattpocock/skills",
       "type": "skill",
@@ -2521,6 +2807,28 @@
       "focus": "A collection of specialized agent skills for Magento 2 development... (30 skills)",
       "est_items": 30,
       "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "mcollina/skills",
+      "url": "https://github.com/mcollina/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Node.js by Fastify's author: Fastify APIs, Node+TypeScript, Node core internals, OAuth",
+      "est_items": 11,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "medusajs/medusa-agent-skills",
+      "url": "https://github.com/medusajs/medusa-agent-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Medusa commerce backend: modules, workflows, API routes, migrations",
+      "est_items": 18,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -2800,6 +3108,17 @@
       "curated": true
     },
     {
+      "name": "neo4j-contrib/neo4j-skills",
+      "url": "https://github.com/neo4j-contrib/neo4j-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Neo4j: Cypher, graph modelling, query tuning, drivers for Go/Java/JS/Python/.NET",
+      "est_items": 29,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "NeoLabHQ/context-engineering-kit",
       "url": "https://github.com/NeoLabHQ/context-engineering-kit",
       "type": "skill",
@@ -2818,6 +3137,28 @@
       "focus": "B2B RevOps: CRM migration, lead routing, deal desk, pipeline visibility, ICP and forecasting",
       "est_items": 38,
       "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "neondatabase/agent-skills",
+      "url": "https://github.com/neondatabase/agent-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Neon: serverless Postgres, branching, connection pooling, auth, egress tuning",
+      "est_items": 9,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "neondatabase/postgres-skills",
+      "url": "https://github.com/neondatabase/postgres-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Neon, vendor-neutral Postgres 14-18: schema, indexing, EXPLAIN, locking",
+      "est_items": 2,
+      "confidence": "med",
       "list_only": false,
       "curated": true
     },
@@ -2998,6 +3339,28 @@
       "curated": true
     },
     {
+      "name": "oliver-kriska/claude-elixir-phoenix",
+      "url": "https://github.com/oliver-kriska/claude-elixir-phoenix",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Elixir/Phoenix: Ecto, N+1, Oban, OTP, LiveView, Ash, deploys, security review",
+      "est_items": 258,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "ollygarden/opentelemetry-agent-skills",
+      "url": "https://github.com/ollygarden/opentelemetry-agent-skills",
+      "type": "skill",
+      "category": "infra",
+      "focus": "Vendor-neutral OpenTelemetry: Collector/OTTL, semantic conventions, SDKs for six languages",
+      "est_items": 20,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "OmidZamani/dspy-skills",
       "url": "https://github.com/OmidZamani/dspy-skills",
       "type": "skill",
@@ -3130,6 +3493,17 @@
       "curated": true
     },
     {
+      "name": "OWASP/secure-agent-playbook",
+      "url": "https://github.com/OWASP/secure-agent-playbook",
+      "type": "skill",
+      "category": "security",
+      "focus": "Official OWASP: API/web Top 10 review, dependency and secrets scanning, ASVS guidance",
+      "est_items": 25,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "Owl-Listener/ai-design-skills",
       "url": "https://github.com/Owl-Listener/ai-design-skills",
       "type": "skill",
@@ -3147,6 +3521,17 @@
       "category": "ui",
       "focus": "Designer Skills Collection: agentic skills, commands, and plugins for... (96 skills, 29 workflows)",
       "est_items": 125,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "palkan/layered-rails-skills",
+      "url": "https://github.com/palkan/layered-rails-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Layered Rails architecture: callbacks, service objects, extraction reviews",
+      "est_items": 11,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -3213,6 +3598,28 @@
       "category": "rag",
       "focus": "Pinecone's official Agent Skills library for building RAG pipelines",
       "est_items": 10,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "planetscale/database-skills",
+      "url": "https://github.com/planetscale/database-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official PlanetScale: MySQL/InnoDB, Postgres, Vitess and sharded-Postgres guidance",
+      "est_items": 4,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "planetscale/skills",
+      "url": "https://github.com/planetscale/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official PlanetScale DB ops: Postgres/Vitess schema-change safety review, Query Insights, schema recommendations",
+      "est_items": 15,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -3324,6 +3731,17 @@
       "focus": "Set of skills for AI agents (3 skills)",
       "est_items": 3,
       "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "prisma/skills",
+      "url": "https://github.com/prisma/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Prisma ORM: client API, CLI and migrations, Postgres setup, v7 and MongoDB upgrades",
+      "est_items": 10,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -3482,6 +3900,17 @@
       "curated": true
     },
     {
+      "name": "render-oss/skills",
+      "url": "https://github.com/render-oss/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Render: web services, workers, cron jobs, Postgres, Key Value, deploys",
+      "est_items": 21,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "renyangY/y-ddd-skills",
       "url": "https://github.com/renyangY/y-ddd-skills",
       "type": "skill",
@@ -3510,6 +3939,17 @@
       "category": "general",
       "focus": "Agent Skills for Solopreneurs (13 skills)",
       "est_items": 13,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "resend/resend-skills",
+      "url": "https://github.com/resend/resend-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Resend: transactional email API/SDK, inbound webhooks, deliverability",
+      "est_items": 5,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -3845,6 +4285,17 @@
       "curated": true
     },
     {
+      "name": "spf13/go-skills",
+      "url": "https://github.com/spf13/go-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Idiomatic Go through 1.25: HTTP servers, slog, concurrency, testing, spec review",
+      "est_items": 7,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "spree/agent-skills",
       "url": "https://github.com/spree/agent-skills",
       "type": "skill",
@@ -3907,6 +4358,28 @@
       "focus": "Comprehensive Ansible automation skills following Red Hat Communities... (11 skills)",
       "est_items": 11,
       "confidence": "low",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "stripe/ai",
+      "url": "https://github.com/stripe/ai",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Stripe: integration best practices, API/SDK/webhook upgrades, Connect, billing",
+      "est_items": 14,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "supabase/agent-skills",
+      "url": "https://github.com/supabase/agent-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Supabase: platform (Auth/RLS, Edge Functions, Storage, Realtime) plus Postgres best practices",
+      "est_items": 2,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -3988,6 +4461,17 @@
       "curated": true
     },
     {
+      "name": "temporalio/skill-temporal-developer",
+      "url": "https://github.com/temporalio/skill-temporal-developer",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Temporal: workflows, activities, workers, determinism and versioning",
+      "est_items": 1,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "thedaviddias/Front-End-Checklist",
       "url": "https://github.com/thedaviddias/Front-End-Checklist",
       "type": "skill",
@@ -4021,6 +4505,17 @@
       "curated": true
     },
     {
+      "name": "ThibautBaissac/rails_ai_agents",
+      "url": "https://github.com/ThibautBaissac/rails_ai_agents",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Rails: API versioning, Solid Queue, Postgres, caching, multi-tenancy, migrations",
+      "est_items": 126,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "thomast1906/github-copilot-skills-terraform",
       "url": "https://github.com/thomast1906/github-copilot-skills-terraform",
       "type": "skill",
@@ -4039,6 +4534,17 @@
       "focus": "The Ultimate AI Agent Skills Collection for the React Ecosystem (18 skills)",
       "est_items": 18,
       "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "timescale/pg-aiguide",
+      "url": "https://github.com/timescale/pg-aiguide",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Timescale: Postgres table design, zero-downtime migrations, schema exploration, hypertables",
+      "est_items": 12,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -4098,6 +4604,17 @@
       "curated": true
     },
     {
+      "name": "triggerdotdev/skills",
+      "url": "https://github.com/triggerdotdev/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Trigger.dev: durable tasks with retries, queues, concurrency, idempotency, cron",
+      "est_items": 6,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "tuanhaviet22/magento-skills",
       "url": "https://github.com/tuanhaviet22/magento-skills",
       "type": "skill",
@@ -4105,6 +4622,28 @@
       "focus": "Magento 2 skills (5 skills)",
       "est_items": 5,
       "confidence": "low",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "tursodatabase/agent-skills",
+      "url": "https://github.com/tursodatabase/agent-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Turso: embedded SQLite-compatible database SDKs, vector/FTS, sync",
+      "est_items": 2,
+      "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "upstash/skills",
+      "url": "https://github.com/upstash/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Upstash: serverless Redis, QStash queues, durable Workflow, rate limiting, vector",
+      "est_items": 14,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -4126,6 +4665,17 @@
       "category": "java",
       "focus": "Agent skills for helping coding agents build, style, test, and secure... (3 skills)",
       "est_items": 3,
+      "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "valkey-io/valkey-skills",
+      "url": "https://github.com/valkey-io/valkey-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Valkey app-dev: caching, sessions, locks, queues, rate limiting, clustering",
+      "est_items": 1,
       "confidence": "med",
       "list_only": false,
       "curated": true
@@ -4164,6 +4714,17 @@
       "curated": true
     },
     {
+      "name": "vercel/workflow",
+      "url": "https://github.com/vercel/workflow",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Vercel Workflow SDK: durable/resumable workflows, porting from Temporal/Inngest",
+      "est_items": 10,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "vibe-motion/skills",
       "url": "https://github.com/vibe-motion/skills",
       "type": "skill",
@@ -4181,6 +4742,17 @@
       "category": "general",
       "focus": "AI software team for Claude Code - 138 agents, 295 skills, 73 hooks... (299 skills, 6 rules, 138 workflows)",
       "est_items": 443,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "vintasoftware/django-ai-plugins",
+      "url": "https://github.com/vintasoftware/django-ai-plugins",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Django: ORM, DRF class-based views, Celery, zero-downtime migrations",
+      "est_items": 6,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -4329,6 +4901,17 @@
       "curated": true
     },
     {
+      "name": "workos/skills",
+      "url": "https://github.com/workos/skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official WorkOS: AuthKit, SSO, Directory Sync, RBAC/FGA, audit logs",
+      "est_items": 2,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "xuzhougeng/wisp-science",
       "url": "https://github.com/xuzhougeng/wisp-science",
       "type": "skill",
@@ -4380,6 +4963,17 @@
       "focus": "GTM field guide: campaign planning, cross-CRM opportunity sync, customer proof, lead stewardship",
       "est_items": 21,
       "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "zeromicro/zero-skills",
+      "url": "https://github.com/zeromicro/zero-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official go-zero: REST/RPC services, goctl, sqlx/Mongo/Redis, resilience patterns",
+      "est_items": 1,
+      "confidence": "med",
       "list_only": false,
       "curated": true
     },

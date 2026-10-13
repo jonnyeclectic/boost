@@ -216,7 +216,7 @@ SKILLS = [
     ("keez97/claude-architecture-skills", "architecture", "7 Claude Code skills for software architecture review (Python, web... (7 skills)", 7, "low"),
     ("renyangY/y-ddd-skills", "architecture", "DDD DDD DDD (6 skills)", 6, "low"),
     ("joeyave/golang-ddd-skills", "architecture", "5 skills", 5, "low"),
-    # ui (53 repos, 1513 measured items)
+    # ui (52 repos, 1498 measured items)
     ("MengTo/Skills", "ui", "Agent skills for designers and builders using Codex, Claude, Cursor... (118 skills)", 118, "high"),
     ("full-stack-skills/t2ui-skills", "ui", "T2UI component skills - 97 TUI components for Pencil MCP (97 skills)", 97, "med"),
     ("ihlamury/design-skills", "ui", "Opinionated UI constraints extracted from the best design systems. Use... (87 skills)", 87, "high"),
@@ -247,7 +247,6 @@ SKILLS = [
     ("southleft/skills-for-figma", "ui", "Open-source agent skills for the native Figma MCP server - design... (18 skills)", 18, "med"),
     ("thongdn-it/react-agent-skills", "ui", "The Ultimate AI Agent Skills Collection for the React Ecosystem (18 skills)", 18, "med"),
     ("BuilderIO/builder-agent-skills", "ui", "Skills for Builder.io (13 skills, 2 workflows)", 15, "high"),
-    ("getsentry/sentry-agent-skills", "ui", "15 skills", 15, "med"),
     ("BuilderIO/skills", "ui", "Skills for coding agents (13 skills)", 13, "high"),
     ("vibe-motion/skills", "ui", "agent skills for vibe motion (13 skills)", 13, "high"),
     ("callstackincubator/agent-skills", "ui", "A collection of agent-optimized React Native skills for AI coding... (10 skills, 2 rules)", 12, "high"),
@@ -491,6 +490,73 @@ SKILLS = [
     # cheap pull.
     ("microsoft/playwright", "devops", "Official Playwright repo - the agent skills it ships (CLI, trace, component testing) plus the test planner/generator/healer agents (7 skills, 11 workflows)", 18, "high"),
     # --- end 2026-08 batch ---
+
+# --- backend (2026-10 sweep) -------------------------------------------------
+# Databases, durable execution, auth, payments, APIs and backend frameworks:
+# the biggest gap the catalogue had once Java/Spring and infra were curated.
+# Official vendor repos first, then community packs for languages that have
+# none (Rails, Elixir, Go, Node, Django, PHP). Counts are
+# `scripts/measure_registry.py` against a fresh sparse clone. Left out on
+# purpose: actionbook/rust-skills (drives the user's logged-in Chrome to
+# scrape social sites), trpc/trpc (two alwaysApply contributor rules would
+# write "always use pnpm" into a user's context file), get-convex/agent-skills
+# (generated stubs, one pipes curl into bash), hookdeck/webhook-skills (175
+# generated near-duplicates), fastapi/fastapi (one skill in a 21 MB clone).
+    ("timescale/pg-aiguide", "backend", "Official Timescale: Postgres table design, zero-downtime migrations, schema exploration, hypertables", 12, "high"),
+    ("planetscale/skills", "backend", "Official PlanetScale DB ops: Postgres/Vitess schema-change safety review, Query Insights, schema recommendations", 15, "high"),
+    ("planetscale/database-skills", "backend", "Official PlanetScale: MySQL/InnoDB, Postgres, Vitess and sharded-Postgres guidance", 4, "high"),
+    ("neondatabase/agent-skills", "backend", "Official Neon: serverless Postgres, branching, connection pooling, auth, egress tuning", 9, "high"),
+    ("neondatabase/postgres-skills", "backend", "Official Neon, vendor-neutral Postgres 14-18: schema, indexing, EXPLAIN, locking", 2, "med"),
+    ("prisma/skills", "backend", "Official Prisma ORM: client API, CLI and migrations, Postgres setup, v7 and MongoDB upgrades", 10, "high"),
+    ("cockroachlabs/cockroachdb-skills", "backend", "Official CockroachDB: SQL and transaction design, multi-region apps, MOLT migration, ops", 34, "high"),
+    ("MariaDB/skills", "backend", "Official MariaDB: query optimisation, replication/HA, temporal tables, vector search", 8, "high"),
+    ("neo4j-contrib/neo4j-skills", "backend", "Neo4j: Cypher, graph modelling, query tuning, drivers for Go/Java/JS/Python/.NET", 29, "high"),
+    ("supabase/agent-skills", "backend", "Official Supabase: platform (Auth/RLS, Edge Functions, Storage, Realtime) plus Postgres best practices", 2, "high"),
+    ("upstash/skills", "backend", "Official Upstash: serverless Redis, QStash queues, durable Workflow, rate limiting, vector", 14, "high"),
+    ("tursodatabase/agent-skills", "backend", "Official Turso: embedded SQLite-compatible database SDKs, vector/FTS, sync", 2, "med"),
+    ("valkey-io/valkey-skills", "backend", "Official Valkey app-dev: caching, sessions, locks, queues, rate limiting, clustering", 1, "med"),
+    ("firebase/agent-skills", "backend", "Official Firebase: Firestore, Data Connect (Postgres/GraphQL), Auth, security rules", 14, "high"),
+    ("appwrite/skills", "backend", "Official Appwrite: CLI (config, functions, CI) plus server SDKs for ten languages", 11, "high"),
+    ("render-oss/skills", "backend", "Official Render: web services, workers, cron jobs, Postgres, Key Value, deploys", 21, "high"),
+    ("denoland/skills", "backend", "Official Deno: runtime and toolchain, Deno Deploy (KV, databases), npm interop", 5, "high"),
+    ("medusajs/medusa-agent-skills", "backend", "Official Medusa commerce backend: modules, workflows, API routes, migrations", 18, "high"),
+    ("encoredev/skills", "backend", "Official Encore.ts and Encore Go: APIs, services, databases and migrations, pub/sub, cron", 31, "high"),
+    ("honojs/skills", "backend", "Official Hono: routing, middleware, Zod/Valibot validation, streaming, RPC client", 2, "high"),
+    ("zeromicro/zero-skills", "backend", "Official go-zero: REST/RPC services, goctl, sqlx/Mongo/Redis, resilience patterns", 1, "med"),
+    ("laravel/agent-skills", "backend", "Official Laravel: Cloud deploys, Nightwatch APM, starter-kit upgrades", 4, "med"),
+    ("astral-sh/claude-code-plugins", "backend", "Official Astral Python toolchain: uv projects and dependencies, ruff, ty", 3, "high"),
+    ("apollographql/skills", "backend", "Official Apollo GraphQL: Apollo Server, Federation, Router config, REST connectors", 15, "high"),
+    ("Kong/ai-marketplace", "backend", "Official Kong: decK gateway config, Konnect API catalog/publishing, app auth, AI gateway", 22, "med"),
+    ("confluentinc/agent-skills", "backend", "Official Confluent: Kafka Java/Python clients, Kafka Streams, Flink SQL, schema registry", 17, "high"),
+    ("inngest/inngest-skills", "backend", "Official Inngest TypeScript SDK: durable functions, steps, events, concurrency and throttling", 15, "high"),
+    ("triggerdotdev/skills", "backend", "Official Trigger.dev: durable tasks with retries, queues, concurrency, idempotency, cron", 6, "high"),
+    ("vercel/workflow", "backend", "Official Vercel Workflow SDK: durable/resumable workflows, porting from Temporal/Inngest", 10, "high"),
+    ("dbos-inc/agent-skills", "backend", "Official DBOS: Postgres-backed durable workflows for Python, TypeScript, Go and Java", 4, "high"),
+    ("temporalio/skill-temporal-developer", "backend", "Official Temporal: workflows, activities, workers, determinism and versioning", 1, "high"),
+    ("stripe/ai", "backend", "Official Stripe: integration best practices, API/SDK/webhook upgrades, Connect, billing", 14, "high"),
+    ("resend/resend-skills", "backend", "Official Resend: transactional email API/SDK, inbound webhooks, deliverability", 5, "high"),
+    ("better-auth/skills", "backend", "Official Better Auth: setup, email/password, organisations/RBAC, 2FA, hardening", 8, "high"),
+    ("auth0/agent-skills", "backend", "Official Auth0: API/JWT protection for Express, Fastify, FastAPI, Django and more", 1, "high"),
+    ("workos/skills", "backend", "Official WorkOS: AuthKit, SSO, Directory Sync, RBAC/FGA, audit logs", 2, "high"),
+    ("clerk/skills", "backend", "Official Clerk: backend API, auth setup, webhooks, organisations, framework SDKs", 22, "high"),
+    ("mcollina/skills", "backend", "Node.js by Fastify's author: Fastify APIs, Node+TypeScript, Node core internals, OAuth", 11, "high"),
+    ("spf13/go-skills", "backend", "Idiomatic Go through 1.25: HTTP servers, slog, concurrency, testing, spec review", 7, "high"),
+    ("oliver-kriska/claude-elixir-phoenix", "backend", "Elixir/Phoenix: Ecto, N+1, Oban, OTP, LiveView, Ash, deploys, security review", 258, "high"),
+    ("ThibautBaissac/rails_ai_agents", "backend", "Rails: API versioning, Solid Queue, Postgres, caching, multi-tenancy, migrations", 126, "high"),
+    ("palkan/layered-rails-skills", "backend", "Layered Rails architecture: callbacks, service objects, extraction reviews", 11, "high"),
+    ("marckohlbrugge/37signals-skills", "backend", "37signals-style Rails: jobs, migrations, webhooks, multi-tenancy, Minitest", 8, "med"),
+    ("dev-toolings/superpowers-symfony", "backend", "Symfony 7/8: API Platform, Doctrine ORM 3, Messenger, voters, CQRS", 91, "med"),
+    ("jpcaparas/superpowers-laravel", "backend", "Laravel: Eloquent N+1, queues/Horizon, validation, policies, migrations, HTTP client", 102, "med"),
+    ("vintasoftware/django-ai-plugins", "backend", "Django: ORM, DRF class-based views, Celery, zero-downtime migrations", 6, "high"),
+    ("duckdb/duckdb-skills", "data", "Official DuckDB: SQL, attaching databases, reading/converting CSV/Parquet/JSON", 9, "high"),
+    ("ClickHouse/agent-skills", "data", "Official ClickHouse: schema and query best practices, architecture advisor, chDB", 11, "high"),
+    ("aws/agent-toolkit-for-aws", "infra", "Official AWS: DynamoDB/Aurora, Lambda/API Gateway/Step Functions, SQS/SNS, SDKs, networking", 166, "high"),
+    ("hashicorp/agent-skills", "infra", "Official HashiCorp: Terraform provider authoring, testing and style, Vault, Packer", 20, "high"),
+    ("datadog-labs/agent-skills", "infra", "Official Datadog: APM onboarding, logs, monitors, data streams, cloud integrations", 52, "high"),
+    ("honeycombio/agent-skill", "infra", "Official Honeycomb: OpenTelemetry SDK setup and migration, SLOs, triggers, queries", 14, "high"),
+    ("ollygarden/opentelemetry-agent-skills", "infra", "Vendor-neutral OpenTelemetry: Collector/OTTL, semantic conventions, SDKs for six languages", 20, "high"),
+    ("getsentry/sentry-for-ai", "infra", "Official Sentry: SDK setup across platforms, tracing, logs, fixing issues (replaces sentry-agent-skills)", 36, "high"),
+    ("OWASP/secure-agent-playbook", "security", "Official OWASP: API/web Top 10 review, dependency and secrets scanning, ASVS guidance", 25, "high"),
 
 # --- marketing / CRM / email / outreach (2026-08 sweep) ----------------------
 # Registries whose *items* are named `cold-email`, `email-sequence`,

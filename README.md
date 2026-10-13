@@ -207,7 +207,7 @@ setup, what it costs, and how to tell which engine is actually serving.
 
 ## The registry catalog
 
-`boost tap --defaults` gives you seven registries. The full catalog is 480+
+`boost tap --defaults` gives you seven registries. The full catalog is 540+
 classified GitHub registries of skills, Cursor/Windsurf rules and Claude Code
 workflows, indexing roughly 30,000 items.
 
@@ -229,8 +229,8 @@ estimated, so `--limit` ranks by real size. Items are counted once however many
 agents a repository renders them for, so a pack shipping a copy in `.claude/`,
 `.cursor/` and twelve other dotdirs is not credited with fourteen skills.
 
-Seven domains are curated end to end and each is tappable on its own: `ai`,
-`architecture`, `ui`, `java`, `ecommerce`, `infra` and `marketing`. Smaller
+Eight domains are curated end to end and each is tappable on its own: `ai`,
+`architecture`, `backend`, `ui`, `java`, `ecommerce`, `infra` and `marketing`. Smaller
 categories fill in around them.
 
 One of those deserves a note. `efficiency` collects packs whose items exist to
