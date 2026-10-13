@@ -36,6 +36,7 @@ FOCUS = {
     "ecommerce": (5, "eCommerce platforms"),
     "infra": (8, "containers, clusters, and networking"),
     "marketing": (14, "marketing, CRM, email campaigns, and customer outreach"),
+    "backend": (30, "backend services, databases, APIs, and durable execution"),
 }
 
 # Repos whose whole reason to exist is visual/UI design work, pinned by name.

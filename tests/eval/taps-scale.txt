@@ -12,9 +12,9 @@
 # fail. It is A scale, not THE scale: hit@1 decays continuously with corpus
 # size and never plateaus, so no size here can be canonical.
 #
-# 129 distractor registries, 20,065 est items (the curated list's own estimate).
+# 123 distractor registries, 20,029 est items (the curated list's own estimate).
 # est_items under-reports by about 2.5x against a real install, so that
-# projects to roughly 50,939 actual entries — a projection, not a measurement.
+# projects to roughly 50,847 actual entries — a projection, not a measurement.
 # The real counts are written in by `eval_corpus.py --refresh`, which is
 # also what pins these rows. Regenerating KEEPS any pin already here, so
 # --check verifies the selection, not the pins.
@@ -82,97 +82,91 @@ wshobson/agents                                   d6837ae274c2cd817acad3fb98f193
 nWave-ai/nWave                                    1d0f13c79e9383c96a01b1a63e9a5bfd616c53d9   406
 jesseoue/cursor-rules                             fb3b82e120a5e4bd358ea807a24ee15ac1832054    45
 zebbern/claude-code-guide                         8428a63d016b2c2f92c54c2c6df3c46a0b9bfaf9    87
-pproenca/dot-skills                               cf93c57cac89d6fc3e4194686000411567f5caf3   211
+oliver-kriska/claude-elixir-phoenix
 ivangrynenko/cursorrules                          8f652d24057ca37feae1c4a7185662f5589b0f5c    90
 Donchitos/Claude-Code-Game-Studios                984023ddac0d5e27624f2baacde6105e45de375f   171
-LeadMagic/gtm-skills
+pproenca/dot-skills                               cf93c57cac89d6fc3e4194686000411567f5caf3   211
 Qwertic/cursorrules                               cd412562041fdd096bd706462c588a4ae1f69a9b   101
 VoltAgent/awesome-claude-code-subagents           c9e51ec0b3d43f5dcdd0b558a6cd28ba6ada97c1   158
-shinpr/claude-code-workflows                      5f2cdc07397a5eef4feba48a144123e42c0d41b3   208
+LeadMagic/gtm-skills
 blefnk/awesome-cursor-rules                       eb2fdbc5ad0ae9aedeae09965e54ea6ad88dc715     0
 Galaxy-Dawn/claude-scholar                        2f7766fd541a723d4ddc6230b3277f948d61b093   115
-indranilbanerjee/digital-marketing-pro            fa4ccd0a4afc1b902ef8de8d297b180aa148d46a   205
+shinpr/claude-code-workflows                      5f2cdc07397a5eef4feba48a144123e42c0d41b3   208
 matank001/cursor-security-rules                   ebbe0abd48ba08cadfaa3723ebfdf4914081e682    16
 agentlas-ai/Agentlas-OS                           e378c0addf67527b4ad3934dd3229b224dbc146e   329
-doccker/cc-use-exp                                448997909221b18dc45b3deced1c4c4f2039aa36   198
+indranilbanerjee/digital-marketing-pro            fa4ccd0a4afc1b902ef8de8d297b180aa148d46a   205
 DVC2/cursor_prompts                               39c160eb7285d825139675f802ec27a5a9102085    11
 secondsky/claude-skills                           84802a4841cb632eee14175f5abe5276f4cb9596   303
-MicrosoftDocs/Agent-Skills                        c579bb4b37e7969ffc8bc071ca0f53048c3bfe41   202
+doccker/cc-use-exp                                448997909221b18dc45b3deced1c4c4f2039aa36   198
 quintonwall/cursorrules                           9c276601bbcc2c9750259bdec511ac04fdc5601a     0
 davepoon/claude-code-subagents-collection         a9fa86d0c6af0b12775211aff4188fdf6c3d9d0d  1125
-wanshuiyin/Auto-claude-code-research-in-sleep     0c65f8b34668c39f391b871ac61479eb64497c37   189
+MicrosoftDocs/Agent-Skills                        c579bb4b37e7969ffc8bc071ca0f53048c3bfe41   202
 pekral/cursor-rules                               158fbfa8dc63c0302c2f21293d97a6e97881ce2b    85
 Yeachan-Heo/oh-my-claudecode                      5aa678c6f7a769df84561d9486d8e9e30b68c3dc   103
-rshankras/claude-code-apple-skills                9ffb83138209057875698dd11c1720c657c47a92   183
+wanshuiyin/Auto-claude-code-research-in-sleep     0c65f8b34668c39f391b871ac61479eb64497c37   189
 BlueBirdBack/godot-cursorrules                    74ef10c6f96ed28a7e789dabdeb183c1086cf6d9     1
 giuseppe-trisciuoglio/developer-kit               306f428f278d83722afdea44a7398dc46dab967f   220
-finsilabs/awesome-ecommerce-skills                30a1fb674e41284e738608c059690c251699eb07   178
+rshankras/claude-code-apple-skills                9ffb83138209057875698dd11c1720c657c47a92   183
 digitalchild/cursor-best-practices                3296fb1ceb280b0fa801a270af1bce9b54dbcd45     5
 chusri/claude-code-agents                         167009899925732840059cdb2eca2c2c5aacd7f7    73
-microsoft/skills                                  e20084b9d230c6f3b46ce36f011e6c3e50f79f8a   220
+finsilabs/awesome-ecommerce-skills                30a1fb674e41284e738608c059690c251699eb07   178
 wandb/agentic-support-bot-demo                    f9d4bb2394d3963eacccb3cdce3f5f4dfdb669aa     2
 nth5693/gemini-kit                                f3db206869f6f98b43c1207836a51f425527b763    73
-kostja94/marketing-skills
+microsoft/skills                                  e20084b9d230c6f3b46ce36f011e6c3e50f79f8a   220
 ddd-crew/ai-ddd-prompts-and-rules                 95201874c6f4db08e84751bdb4a71f2a3aa9bcce     1
 sangrokjung/claude-forge                          1642dc593d01b7af1b61c4aa594c93ba81b2d014    71
-minhnv0807/ai-business-skills
+kostja94/marketing-skills
 Comfy-Org/comfy-claude-prompt-library             c1df6735799222b0362cc1753a0de94e5b9696ba    70
-nexscope-ai/eCommerce-Skills                      56f3288dd1ba3ae7cae43d369115a915229e510b   162
+minhnv0807/ai-business-skills
 composio-community/awesome-claude-plugins         e521f7ada8d89abea888e67b93b4dcfbb977041f    61
-claude-office-skills/skills                       9c4c7d5cd2813a8936bf2c9fdb174ea883b85a11   144
+aws/agent-toolkit-for-aws
 anthropics/claude-plugins-official                7458b5e539d2b1d4bff72a303250cab2f4744ef0    92
-mohitmishra786/low-level-dev-skills               bdc58472fa9f309ed1b3f7d985a0d8e9bd8f4608   142
+nexscope-ai/eCommerce-Skills                      56f3288dd1ba3ae7cae43d369115a915229e510b   162
 hoangsonww/Claude-Code-Agent-Monitor              36ffff7433fe3c1d77ae0b2cbaa50dc87f491b6b   135
-jabrena/plinth                                    042f4ec1609d4aa0efecde21e716f34edbd2f9a3   160
+claude-office-skills/skills                       9c4c7d5cd2813a8936bf2c9fdb174ea883b85a11   144
 dsifry/metaswarm                                  33d39f776f7fe29098dcf048955756a237e8cb40    58
-JetBrains/skills                                  e0f258b5cfed145015cb3e48da9a97947f7c4ed7   129
+mohitmishra786/low-level-dev-skills               bdc58472fa9f309ed1b3f7d985a0d8e9bd8f4608   142
 jezweb/claude-skills                              e875a6bfff809e5d42c584104031e36e1f014f18   121
-aaron-he-zhu/aaron-marketing-skills
+jabrena/plinth                                    042f4ec1609d4aa0efecde21e716f34edbd2f9a3   160
 wshobson/commands                                 27d3e77b1a844223721f6c983ddf261ac4441b89    15
-Owl-Listener/designer-skills                      20e34c4a587e5eb09fcdf8351fa97b3ad761b31e   139
+JetBrains/skills                                  e0f258b5cfed145015cb3e48da9a97947f7c4ed7   129
 glittercowboy/taches-cc-resources                 1757615b99ab789a72ff2d02e9f6112af2a15c04    54
-rampstackco/claude-skills                         0479242522549dfdb389bb9b7807ad4d6016ffb7   225
+aaron-he-zhu/aaron-marketing-skills
 aiwonglab/claude_code_agents                      c1a1a32eff57b5c047f15b4a40905423389b99a1    86
-MengTo/Skills                                     22bacc4c4b5094001462d639df553a49a7642770   127
+ThibautBaissac/rails_ai_agents
 trailofbits/skills                                04b241176fd9c10738a61df53d2c677c53e42990   117
-40RTY-ai/shopify-admin-skills                     6765cb4f436b225360a728e1eb9bd3d9ee674316   117
+Owl-Listener/designer-skills                      20e34c4a587e5eb09fcdf8351fa97b3ad761b31e   139
 cloudflare/agents                                 b2f1bd898fdbccf5c4815a48a7e8b8f8788c1468    47
-guanyang/open-agent-hub                           71637f3d045fb84191322e9ff3134b0f0ff6a5b9   117
+rampstackco/claude-skills                         0479242522549dfdb389bb9b7807ad4d6016ffb7   225
 pluginagentmarketplace/custom-plugin-nextjs       4f73e83c82adc3decdb6d09670867783396e7fe8    42
-phuryn/pm-skills                                  18468a95b427e70e258b51389796367c6f684e7d   110
+MengTo/Skills                                     22bacc4c4b5094001462d639df553a49a7642770   127
 syahiidkamil/Software-Engineer-AI-Agent-Atlas     fc0bf112e01ad4b19834880fdcbf812a22273167    41
-glebis/claude-skills                              46edb03cc915adbd78ee81e3406bc4480aefcaba   109
+40RTY-ai/shopify-admin-skills                     6765cb4f436b225360a728e1eb9bd3d9ee674316   117
 alirezarezvani/claude-code-skill-factory          ba18b31703542d9d7eda5f9ba94f0df65a59dddf    40
-browser-act/skills                                8f287271faa0c1df79a44578cb059102ff004da2   103
+guanyang/open-agent-hub                           71637f3d045fb84191322e9ff3134b0f0ff6a5b9   117
 datopian/portaljs                                 88d0c1f869650b18627465762f5bb84f6700db01    39
-forcedotcom/sf-skills                             8a13a085744a7330397db4aa9fe6d2d1fc2c1867   196
+phuryn/pm-skills                                  18468a95b427e70e258b51389796367c6f684e7d   110
 dl-ezo/claude-code-sub-agents                     532213dba7d4e6e9a15c95a025861c29dee9e459     1
-Orchestra-Research/AI-Research-SKILLs             773a52944ba4747a18bd4ae9ade53fff041adcbc    98
+glebis/claude-skills                              46edb03cc915adbd78ee81e3406bc4480aefcaba   109
 humanlayer/humanlayer                             99abe673498cf8bdcd5f989aebe9406a27185b3b    34
-majiayu000/spellbook                              90095e175202dd3aa0a54ff1751d0a8d2dc52b51   105
+browser-act/skills                                8f287271faa0c1df79a44578cb059102ff004da2   103
 anthropics/claude-code                            354757e5b2d9aa1ebb62e5d05ecd384f0e11c0f7    43
-openakita/openakita                               5d5574dbae7d5cbc694d767208509613e0822449   177
+forcedotcom/sf-skills                             8a13a085744a7330397db4aa9fe6d2d1fc2c1867   196
 lst97/claude-code-sub-agents                      96f5a506793d1c2e4a66c3ec3ce63c2cd2667728    37
-Leooooooow/Awesome-eCommerce-Skills               19a348e4f90fab4930d20364d1ac78252c6fdf4b    97
+jpcaparas/superpowers-laravel
 darrenhinde/OpenAgentsControl                     37ca233fa5597a5abb90cba73165deafffe0344f   115
-elementalsouls/Claude-BugHunter                   60cad9aaefc197f569ba214cdba24b167edd3ae0    98
+Orchestra-Research/AI-Research-SKILLs             773a52944ba4747a18bd4ae9ade53fff041adcbc    98
 dotnet/skills                                     76c8ac0b473a1493c757094a2a7369f1f53ede34   132
-full-stack-skills/t2ui-skills                     f22b8c77017dfc42b26ad35a2c54f9bc722710bb    97
+majiayu000/spellbook                              90095e175202dd3aa0a54ff1751d0a8d2dc52b51   105
 danielrosehill/Claude-Slash-Commands              cf3644b4890ddfab833458055cad926b24b10899   401
-google/skills                                     cdca572d24dbc6fa5b7bfd1af57585209556c849   112
+openakita/openakita                               5d5574dbae7d5cbc694d767208509613e0822449   177
 kasperjunge/agent-resources-legacy                aefe9b22e44579dc0481f9a9b7be87aa3a050a9a    15
-lebsral/DSPy-Programming-not-prompting-LMs-skills ededb2fbcb36b7a4eb8ebd3d20e67963fda418f7    96
+Leooooooow/Awesome-eCommerce-Skills               19a348e4f90fab4930d20364d1ac78252c6fdf4b    97
 centminmod/my-claude-code-setup                   823d721d964c751e54c690f848f776fef9813b2c    34
-SpaceZephyr/myskill                               fa7105abbaf10c52da989990f248316c5e8ab4b7    95
+elementalsouls/Claude-BugHunter                   60cad9aaefc197f569ba214cdba24b167edd3ae0    98
 pluginagentmarketplace/custom-plugin-kotlin       cc703d88715618fef4d7196f3bb68b86a9717873    28
-Cold-IQ/ColdIQ-s-GTM-Skills
+full-stack-skills/t2ui-skills                     f22b8c77017dfc42b26ad35a2c54f9bc722710bb    97
 hnaymyh123-henry/claude-dev-skill                 3e87db0c71ff51ad19c932a6849777e66398f556    26
-nowork-studio/notfair-plugin
+google/skills                                     cdca572d24dbc6fa5b7bfd1af57585209556c849   112
 klovaaxel/web-a11y-agent-skills                   15fa84624b15ec8823f88c176ce11eb9c0f24c29    26
-ihlamury/design-skills                            126714ec5df13a2c97ce1b3975e5a51d2592d967    87
-brennercruvinel/CCPlugins                         b02d67e33091abff7cef3c98465fc1fa5f96ba46    23
-dpearson2699/swift-ios-skills                     8d90fd121a263355a4fb44fd082af1416a5c1c2a    86
-vijaythecoder/awesome-claude-agents               2050f3c60fcfea497f7b6b3ec6566cc316367a7e    33
-inference-sh/skills                               becc25649700d5457772a00e5143e28ccf9e5afa    86
-codenamev/ai-software-architect                   69d5b6962acc4e91a026bd325b44d6174c06824e    20
-product-on-purpose/pm-skills                      e8518d47cd00831b0fc38bd70f83af8566b0186f   100
+lebsral/DSPy-Programming-not-prompting-LMs-skills ededb2fbcb36b7a4eb8ebd3d20e67963fda418f7    96
