@@ -50,6 +50,12 @@ from . import (
 #   1 -- entries carry `content` (see `_content_digest`)
 #   2 -- entries carry `category` (see `_entry_category`)
 CACHE_FORMAT = 2
+# A cache is also stale when the tap's curated category has moved since it was
+# written: `category` falls back to that value at scan time, so recategorising
+# a registry in `registries.json` reached no machine that had already tapped it
+# (127 registries sat in `general` with 16,538 entries stamped from it). The
+# cache records the category it was scanned under as `tap_category`, and
+# `_cached_tap` compares it with today's — no format bump per recategorisation.
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -314,6 +320,7 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
         "format": CACHE_FORMAT,
         "generated": util.now_iso(),
         "commit": gitutil.head_commit(tap.path),
+        "tap_category": config.registry_categories().get(tap.name, ""),
         "skills": entries,
     }, indent=1)
     # Replaced, not rewritten in place: a cache file this process cannot
@@ -363,7 +370,8 @@ def _cached_tap(tap: registry.Tap) -> tuple[list[dict], bool] | None:
     """``(skills, is_current)`` for a tap's cache, or ``None`` to force a
     rebuild (file missing, unreadable, or corrupt JSON).
 
-    ``is_current`` says whether the cache was written by this scanner. It is
+    ``is_current`` says whether the cache was written by this scanner, under
+    the tap category the bundled registry data names today. It is
     reported rather than acted on here because the right response depends on
     something this function cannot see: whether the clone is still on disk to
     rescan. A stale cache is not *wrong* — it is missing fields its consumers
@@ -387,7 +395,11 @@ def _cached_tap(tap: registry.Tap) -> tuple[list[dict], bool] | None:
         _ENTRY_CACHE.pop(key, None)
         return None
     skills = data.get("skills", [])
-    current = data.get("format") == CACHE_FORMAT
+    # A cache predating `tap_category` reads as "", so it is current only for a
+    # tap that has no curated category to have missed.
+    current = (data.get("format") == CACHE_FORMAT
+               and str(data.get("tap_category") or "")
+               == config.registry_categories().get(tap.name, ""))
     _ENTRY_CACHE[key] = (stamp, skills, current)
     return skills, current
 
