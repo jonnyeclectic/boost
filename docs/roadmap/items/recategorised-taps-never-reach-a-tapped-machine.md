@@ -10,7 +10,7 @@ wow: 2
 note: 46 registries out of general, 4 unregistered taps added, caches rescan on a moved category
 order: 306
 owner: loop/backfill-categories
-pr: 0
+pr: 1078
 title: "A registry moved out of <code>general</code> never reached a machine that had already tapped it"
 ---
 An item's <code>category</code> falls back to its tap's curated category, stamped at scan time. On a
