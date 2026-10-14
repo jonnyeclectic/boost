@@ -987,6 +987,17 @@ def cmd_doctor(argv):
                     ", …" if len(missing) > 5 else "",
                     prereq.install_hint(prereq_rows)), wrap=True)
 
+    stars = registry.overstarred()
+    if stars:
+        # One issue, not one per tap: a machine that tapped the catalogue
+        # before the ★ was narrowed holds ~420 of these, and the same remedy.
+        bad("curated", "%d tap%s %s a ★ the catalogue no longer gives (%s%s)"
+            " — `boost heal` clears %s"
+            % (len(stars), _s(len(stars)),
+               "carries" if len(stars) == 1 else "carry", ", ".join(stars[:3]),
+               ", …" if len(stars) > 3 else "",
+               "it" if len(stars) == 1 else "them"), wrap=True)
+
     for dup in (store.duplicate_discovery() if agents_ok else ()):
         # An agent that reads the canonical store natively, holding its own
         # entry for a skill that store already carries. Boost did not put it
@@ -1584,6 +1595,25 @@ def cmd_heal(argv):
             # repointed since the scan lands here rather than being removed.
             out.warn("%s is no longer a symlink into the store — left alone"
                      % _tilde(dup.path))
+
+    # A ★ the catalogue no longer gives. Cleared before the cache loop below,
+    # which rebuilds every cloned tap's cache: the flag is stamped onto each
+    # entry at scan time, so flipping config alone would leave browse and the
+    # curated fallback reading the old star. One line, not one per tap — a
+    # catalogue machine has ~420 of them.
+    stars = registry.overstarred()
+    if stars:
+        shown = ", ".join(stars[:3]) + (", …" if len(stars) > 3 else "")
+        if dry:
+            out.info("would clear the ★ on %d tap%s the catalogue does not "
+                     "curate (%s)" % (len(stars), _s(len(stars)), shown),
+                     wrap=True)
+            actions.append("unstar %d" % len(stars))
+        else:
+            cleared = registry.unstar(stars)
+            out.ok("cleared the ★ on %d tap%s the catalogue does not curate "
+                   "(%s)" % (len(cleared), _s(len(cleared)), shown))
+            actions.append("unstar %d" % len(cleared))
 
     # A dir that refuses writes, or a missing one whose parent refuses the
     # mkdir. A missing one heal CAN create is not stuck: the real run creates
