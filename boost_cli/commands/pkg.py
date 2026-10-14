@@ -1057,9 +1057,9 @@ def cmd_sync(argv: list[str]) -> int:
     actions = store.sync_apply(plan) + store.project_sync_apply(pplan)
     # Links outside a declared `--agent` scope work and are in use, so sync
     # reports them and stops. Removing one changes which agents can run a
-    # skill, which is the same class of decision as deleting an orphaned store
-    # dir — hence the same explicit `--prune`, and its own confirm so the two
-    # are never approved as one.
+    # skill, which is the same class of decision as deleting a store dir that
+    # copies another tool's skill — hence the same explicit `--prune`, and its
+    # own confirm so the two are never approved as one.
     oos = plan["out_of_scope_links"]
     if args.prune and oos:
         go = (args.yes or bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else

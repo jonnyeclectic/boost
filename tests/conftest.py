@@ -623,6 +623,14 @@ def sandbox(tmp_path, monkeypatch):
     # records from here when it is set (core/foreign.py), so an exported one
     # would judge every sync test against the developer's real plugins.
     monkeypatch.delenv("CLAUDE_CODE_PLUGIN_CACHE_DIR", raising=False)
+    # ...and the one input there that no variable moves: managed settings sit
+    # at a system path, so a machine whose organization blocks or forces a
+    # plugin would judge every plugin test against that policy. A dir that
+    # does not exist reads as no policy; a test that means to exercise one
+    # points this at its own.
+    from boost_cli.core import foreign
+    monkeypatch.setattr(foreign, "managed_settings_dir",
+                        lambda: tmp_path / "no-managed-settings")
     monkeypatch.setenv("BOOST_NO_AI", "1")       # deterministic: no AI calls
     # `boost mcp` seeds the default registries on an empty machine. That is
     # seven network clones, which no test may perform as a side effect of

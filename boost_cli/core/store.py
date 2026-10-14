@@ -3454,7 +3454,8 @@ def prune_out_of_scope_links(plan: dict[str, list]) -> list[str]:
     `boost heal` are safe to run blind. These links are neither broken nor
     unowned — they work, and an agent is using them — so deleting one changes
     which agents can run a skill. That is a decision, and it belongs behind the
-    same explicit opt-in as deleting an orphaned store dir (`--prune`).
+    same explicit opt-in as deleting a store dir that copies another tool's
+    skill (`--prune`).
     """
     removed = []
     linking = agents.linking_agents()

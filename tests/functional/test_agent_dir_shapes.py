@@ -381,6 +381,46 @@ class TestADotdirWithNoSearchBit:
                 ).is_symlink()
 
 
+class TestAClaudeDirWithNoSearchBit:
+    """``~/.claude`` or ``~/.claude/plugins`` at 0o600, on Python 3.12/3.13
+    semantics: reading Claude Code's plugin records took sync, heal, doctor
+    and the MCP doctor down at exit 70 — with no plugin enabled at all."""
+
+    @pytest.fixture()
+    def claude(self, sandbox):
+        d = paths.home() / ".claude"
+        (d / "plugins").mkdir(parents=True, exist_ok=True)
+        yield d
+        d.chmod(0o700)
+        (d / "plugins").chmod(0o700)
+
+    def _run(self, boost, *commands):
+        return [boost(*c, expect=None) for c in commands]
+
+    def test_an_unsearchable_plugins_dir(self, boost, tapped, claude, strict_stat):
+        boost("install", "brainstorming")
+        (claude / "plugins").chmod(0o600)
+        runs = self._run(boost, ("sync",), ("heal",), ("doctor",))
+        from boost_cli.commands import configuration
+        text, _ = configuration._tool_doctor({})    # MCP's boost_doctor
+        (claude / "plugins").chmod(0o700)
+        for r in runs:
+            assert r.rc in (0, 1), r.err
+            assert "unexpected error" not in r.err
+        assert "Permission denied" not in text
+
+    def test_an_unsearchable_claude_dir(self, boost, tapped, claude, strict_stat):
+        # doctor's own read of ~/.claude/settings.json crashed here before
+        # this module existed; sync and heal did not, and must not now.
+        boost("install", "brainstorming")
+        claude.chmod(0o600)
+        runs = self._run(boost, ("sync",), ("heal",))
+        claude.chmod(0o700)
+        for r in runs:
+            assert r.rc in (0, 1), r.err
+            assert "unexpected error" not in r.err
+
+
 class TestALinkNoRewriteCanSeeIsNotForgotten:
     """Every path that rewrites a skill's ``agents`` measured links off disk,
     and :func:`store.linked_agents` cannot tell "no link" from "could not
