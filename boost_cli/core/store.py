@@ -21,6 +21,7 @@ from . import (
     agents,
     catalog,
     config,
+    foreign,
     gitutil,
     journal,
     lockfile,
@@ -3111,20 +3112,159 @@ def lock_vouches() -> bool:
     return integ.ok or (integ.problem == "missing" and not has_content())
 
 
+def unrecorded_store_dirs(lock: dict) -> list[str]:
+    """The store dirs ``lock`` does not record, by name.
+
+    Candidates, not verdicts: whose each one is depends on what else is on the
+    machine (:func:`classify_unrecorded`), and whether a lock may be read as
+    "none of these are boost's" at all is :func:`lock_vouches`. A dot entry is
+    boost's own (the lock file, ``.trash``) and is never listed.
+    """
+    root = paths.store_dir()
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return []
+    return [n for n in names if not n.startswith(".") and n not in lock
+            and os.path.isdir(os.path.join(root, n))]
+
+
+def classify_unrecorded(names: list[str]) -> dict[str, list]:
+    """Sort store dirs no lock entry records by whose they are.
+
+    Returns ``{adoptable_store, older_copies, foreign_store, not_skill_store}``:
+
+    * ``adoptable_store`` — a skill nothing else on this machine claims: one
+      written or copied in by hand, or left by another installer. Plain
+      ``boost sync`` records it as a local skill and links it out.
+    * ``older_copies`` — ``(skill, owner, path)``: a copy in another agent's
+      dir that an adoptable skill is newer than. Named, never touched.
+    * ``foreign_store`` — ``(skill, owner, path, "identical" | "differs")``: a
+      copy of another tool's skill. Only ``boost sync --prune`` removes it.
+    * ``not_skill_store`` — a dir with no ``SKILL.md``. Named, never touched.
+
+    These were one bucket, "orphaned store dirs", and ``sync --prune`` deleted
+    every dir in it. On the machine this was written against that was 28
+    dirs: a skill the user wrote, 26 ports of Cursor's built-in skills, and
+    ``synced`` — another tool's sync bucket, a ``manifest.json`` and nine
+    skills it keeps in step with an account. Only the ports were copies, and
+    16 of those had been rewritten for Codex.
+
+    Ownership is decided before content or time, in :func:`foreign.inventory`
+    order. A vendor's built-in or an enabled plugin's skill owns its name: a
+    store dir named like one is a copy or a port of it whatever its bytes or
+    mtime say, and adopting it would link a Codex port of Cursor's skill into
+    Claude Code. A copy in an agent's own dir is the user's, so it owns the
+    name only when it holds the same bytes or is at least as new by file times
+    (:func:`foreign.newest_mtime`). That is a heuristic, since a copy that
+    did not preserve times looks new, which is why it only decides which copy
+    boost records: the other copy is named, never removed.
+    """
+    buckets: dict[str, list] = {"adoptable_store": [], "older_copies": [],
+                                "foreign_store": [], "not_skill_store": []}
+    found = foreign.inventory() if names else {}
+    for name in names:
+        sdir = skill_store_dir(name)
+        # ``os.path``: ``Path.is_file`` raises under a dir with no search bit
+        # on Python 3.12 and 3.13, and doctor runs this.
+        if not os.path.isfile(sdir / "SKILL.md"):  # noqa: FURB146
+            buckets["not_skill_store"].append(name)
+            continue
+        theirs = found.get(name, [])
+        owned = [c for c in theirs if c.kind != foreign.AGENT]
+        if owned:
+            c = owned[0]
+            buckets["foreign_store"].append(
+                (name, c.owner, str(c.path), foreign.compare(sdir, c.path)))
+            continue
+        same = [c for c in theirs if foreign.same_content(sdir, c.path)]
+        if same:
+            buckets["foreign_store"].append(
+                (name, same[0].owner, str(same[0].path), foreign.IDENTICAL))
+            continue
+        mine = foreign.newest_mtime(sdir)
+        times = {c.path: foreign.newest_mtime(c.path) for c in theirs}
+        newer = [c for c in theirs if times[c.path] >= mine]
+        if newer:
+            c = max(newer, key=lambda c: times[c.path])
+            buckets["foreign_store"].append(
+                (name, c.owner, str(c.path), foreign.DIFFERS))
+            continue
+        buckets["older_copies"].extend((name, c.owner, str(c.path)) for c in theirs)
+        buckets["adoptable_store"].append(name)
+    return buckets
+
+
+def plugin_duplicates(lock: dict | None = None) -> list[tuple[str, str, str, str]]:
+    """``(skill, plugin id, plugin's copy, "identical" | "differs")`` for each
+    skill boost links into Claude Code that an enabled plugin also loads.
+
+    Claude Code loads both — the personal skill as ``/<skill>``, the plugin's
+    as ``/<plugin>:<skill>`` (sources in :mod:`foreign`) — so one skill shows
+    twice and the model reads two descriptions of it. Counted for every skill
+    whose scope takes in Claude Code, linked yet or not, since `boost sync`
+    creates a missing link. A quarantined or sidelined skill has no link, and
+    a store copy without its ``SKILL.md`` has nothing to compare.
+    """
+    linking = agents.linking_agents()
+    if foreign.CLAUDE not in linking:
+        return []
+    index = foreign.plugin_index()
+    if not index:
+        return []
+    if lock is None:
+        lock = lockfile.installed()
+    found = []
+    for name in sorted(lock):
+        entry, hit = lock[name], index.get(name)
+        if (hit is None or entry.get("quarantined") or entry.get("sidelined_by")
+                or foreign.CLAUDE not in scoped_agents(entry, linking)):
+            continue
+        sdir = skill_store_dir(name)
+        if not os.path.isfile(sdir / "SKILL.md"):  # noqa: FURB146
+            continue
+        plugin, theirs = hit
+        found.append((name, plugin.id, str(theirs), foreign.compare(sdir, theirs)))
+    return found
+
+
+#: Plan buckets that name something boost leaves alone by design. They are
+#: reported and never counted as issues: counting them would hold every health
+#: surface red on a state no boost command will change.
+INFORMATIONAL = ("older_copies", "not_skill_store")
+
+
+def plan_issues(plan: dict[str, list]) -> int:
+    """How many problems a :func:`sync_plan` holds, as doctor counts them.
+
+    A plugin duplicate is one only when the copies are identical: then boost's
+    link adds nothing and ``sync --prune`` can drop it. Two different skills
+    under one name are both worth keeping, so that one is a note.
+    """
+    return sum(len(v) for k, v in plan.items()
+               if k not in (*INFORMATIONAL, "plugin_duplicates")) + sum(
+        1 for d in plan.get("plugin_duplicates", ()) if d[3] == foreign.IDENTICAL)
+
+
 def sync_plan() -> dict[str, list]:
     """Compare lock file <-> store <-> agent symlinks.
 
-    Returns {missing_store, missing_links, stale_links, orphaned_store}
+    Returns {missing_store, missing_links, blocked_links, stale_links, ...}
       missing_store:  lock entries whose store dir is gone
       missing_links:  (skill, agent) pairs that should be linked but aren't,
                       and that sync *can* create
       blocked_links:  (skill, agent, path) where something that is not a boost
                       symlink occupies the link path — sync will not clobber it
       stale_links:    paths in agent dirs that are broken/unmanaged symlinks
-      orphaned_store: store dirs not present in the lock file
-      unrecorded_store: the same, while the lock cannot vouch for anything
-                      (:func:`lock_vouches`) — never pruned, re-recorded by
-                      :func:`sync_apply` when the lock is merely missing
+      adoptable_store, older_copies, foreign_store, not_skill_store:
+                      store dirs not present in the lock file, sorted by whose
+                      they are (:func:`classify_unrecorded`)
+      plugin_duplicates: skills boost links into Claude Code that an enabled
+                      plugin also loads (:func:`plugin_duplicates`)
+      unrecorded_store: store dirs not in the lock while it cannot vouch for
+                      anything (:func:`lock_vouches`) — never pruned,
+                      re-recorded by :func:`sync_apply` when the lock is
+                      merely missing
       out_of_scope_links: (skill, agent) pairs linked outside a declared
                       ``--agent`` narrowing — reported, never auto-removed
 
@@ -3147,9 +3287,10 @@ def sync_plan() -> dict[str, list]:
                   if (b := paths.refuses_writes(d)) is not None
                   and paths.in_the_way(b)}
     plan: dict[str, list] = {"missing_store": [], "missing_links": [],
-            "blocked_links": [], "stale_links": [], "orphaned_store": [],
-            "unrecorded_store": [], "missing_materializations": [],
-            "out_of_scope_links": []}
+            "blocked_links": [], "stale_links": [], "adoptable_store": [],
+            "older_copies": [], "foreign_store": [], "not_skill_store": [],
+            "plugin_duplicates": [], "unrecorded_store": [],
+            "missing_materializations": [], "out_of_scope_links": []}
     for name, entry in lock.items():
         sdir = skill_store_dir(name)
         # A directory with no SKILL.md counts as missing, not as healthy. The
@@ -3228,13 +3369,16 @@ def sync_plan() -> dict[str, list]:
             for agent, adir in linking.items():
                 if agent not in in_scope and os.path.islink(adir / name):
                     plan["out_of_scope_links"].append((name, agent))
-    store_root = paths.store_dir()
-    if store_root.is_dir():
-        for child in sorted(store_root.iterdir()):
-            if (child.is_dir() and not child.name.startswith(".")
-                    and child.name not in lock):
-                plan["orphaned_store" if vouches else "unrecorded_store"].append(
-                    child.name)
+    unrecorded = unrecorded_store_dirs(lock)
+    if vouches:
+        plan.update(classify_unrecorded(unrecorded))
+        plan["plugin_duplicates"] = plugin_duplicates(lock)
+    else:
+        plan["unrecorded_store"] = unrecorded
+    # A live link to a skill sync is about to record is that skill's link, not
+    # a stale one: sweeping it made the run that adopted a hand-linked skill
+    # delete the link the adoption had just recorded.
+    adopting = set(plan["adoptable_store"])
     # linking_agents, not enabled_agents: boost only ever creates a symlink in
     # an agent it links for, so a link in a native-store agent's skills dir was
     # put there by something else — and the sweep's only ownership test is
@@ -3255,7 +3399,8 @@ def sync_plan() -> dict[str, list]:
             # into an intact store look stale, and sync removed them all.
             if (link.is_symlink() and points_into_store(link)
                     and (not link.exists()
-                         or (vouches and link.name not in lock))):
+                         or (vouches and link.name not in lock
+                             and link.name not in adopting))):
                 plan["stale_links"].append(str(link))
     # Rules/workflows don't live in the store — they materialize into agent dirs.
     # A materialization whose file (or CLAUDE.md block) is gone can be repaired
@@ -3414,7 +3559,7 @@ _NOT_REMATERIALIZED = " was not re-materialized: "
 def is_unrepaired(action: str) -> bool:
     """True for a :func:`sync_apply` line that reports a repair it did *not*
     make, so callers print it as a warning rather than under a check mark."""
-    return _NOT_REMATERIALIZED in action
+    return _NOT_REMATERIALIZED in action or _NOT_LINKED_MARK in action
 
 
 _DROPPED = "dropped %s from lock (store dir missing, source gone)"
@@ -3534,6 +3679,8 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
             else:
                 lines.append("would leave %s unrecorded (no SKILL.md to record)"
                              % name)
+    lines += ["would record %s, which boost did not install, and link it" % name
+              for name in plan.get("adoptable_store", [])]
     repairs = [plan_missing_store(name) for name in plan.get("missing_store", [])]
     for kind, name in plan.get("missing_materializations", []):
         repair = plan_missing_materialization(kind, name)
@@ -3555,11 +3702,10 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
 def recover_unrecorded(name: str) -> str | None:
     """Re-record one store dir the lock has lost; return how, or None.
 
-    Only ever called while the lock file is missing over a populated store, so
-    writing a record cannot overwrite a newer or merely unreadable lock. The
-    store copy is authoritative and is never replaced: re-installing would
-    have been the obvious repair, and it silently discards any edits made to
-    the store copy.
+    Called while the lock file is missing over a populated store, so writing a
+    record cannot overwrite a newer or merely unreadable lock. The store copy
+    is authoritative and is never replaced: re-installing would have been the
+    obvious repair, and it silently discards any edits made to the store copy.
 
     A dir whose content is byte-identical to exactly one tapped source is
     recorded as installed from that tap, the record a fresh install would have
@@ -3569,10 +3715,57 @@ def recover_unrecorded(name: str) -> str | None:
     orphan the moment this pass creates a lock, and the next sync would remove
     its links, the defect this function exists to close.
     """
+    how = _record_unrecorded(name, "recover")
+    return None if how is None else "re-recorded %s %s" % (name, how)
+
+
+def adopt_unrecorded(name: str) -> list[str]:
+    """Record a skill nothing else claims and link it out; return the lines.
+
+    The plain-`sync` answer for a skill put in ``~/.agents/skills`` by hand
+    (:func:`classify_unrecorded`). It used to be an "orphaned store dir" that
+    only ``sync --prune`` acted on, by deleting it — the user's own work, for
+    the price of answering yes. Recorded the way a lost lock's skill is
+    (:func:`recover_unrecorded`), so a copy that matches one tapped source
+    exactly gets that tap's record and every other one is a local skill whose
+    source is its store dir; then linked into the agents its scope takes in.
+
+    A skill the lock has recorded since the plan was made is not recorded
+    again: something installed it in the meantime, and that record wins.
+    """
+    if lockfile.get_skill(name) is not None:
+        return []
+    how = _record_unrecorded(name, "adopt")
+    entry = lockfile.get_skill(name)
+    if how is None or entry is None:
+        return []
+    before = set(entry.get("agents") or ())
+    res = link_agents(name, only=entry.get("only_agents"))
+    lockfile.set_skill(name, record_links(entry, res))
+    lines = ["recorded %s %s" % (name, how)]
+    lines += ["linked %s → %s" % (name, a) for a in res.linked if a not in before]
+    lines += [_NOT_LINKED % (name, paths.tilde(c)) for c in res.conflicts]
+    return lines
+
+
+#: An adoption's link that a real file or directory is in the way of, worded
+#: around a marker ``is_unrepaired`` recognises so it prints as a warning.
+_NOT_LINKED_MARK = " was not linked: "
+_NOT_LINKED = "%s" + _NOT_LINKED_MARK + "%s is in the way and is not boost's to replace"
+
+
+def _record_unrecorded(name: str, why: str) -> str | None:
+    """Write a lock record for one unrecorded store dir; return how, or None.
+
+    ``why`` is ``"recover"`` for a lock that lost the skill and ``"adopt"`` for
+    one that never had it. They differ only in what the local-skill line
+    offers: a lost skill came from some tap, so `boost reinstall` is a way back
+    to that tap's copy; an adopted one may have no tap at all, and suggesting
+    a command that overwrites the user's own skill would be a trap.
+    """
     sdir = skill_store_dir(name)
     if not (sdir / "SKILL.md").is_file():
         return None
-    from . import catalog, gitutil
     have = util.sha256_dir(sdir)
     matches = [e for e in catalog.find(name)
                if e.get("kind", "skill") == "skill"
@@ -3601,7 +3794,8 @@ def recover_unrecorded(name: str) -> str | None:
                   "commit": ""}
         how = ("as a local skill (its content matches %s tapped source; "
                "`boost reinstall %s` replaces it with a tap's copy)"
-               % ("no" if not matches else "more than one", name))
+               % ("no" if not matches else "more than one", name)
+               if why == "recover" else "as a local skill")
     record.update({"sha256": have, "installed_at": now, "updated_at": now,
                    "pinned": False, "quarantined": False, "agents": linked,
                    "only_agents": narrowed, "tags": []})
@@ -3609,8 +3803,153 @@ def recover_unrecorded(name: str) -> str | None:
         # Recorded so uninstall refuses rather than strands a link it cannot see.
         record["refused_agents"] = unseen
     lockfile.set_skill(name, record)
-    journal.log("recover", name, how=record["tap"])
-    return "re-recorded %s %s" % (name, how)
+    journal.log(why, name, how=record["tap"])
+    return how
+
+
+def remove_foreign_copy(row: tuple) -> str | None:
+    """Delete one store dir :func:`classify_unrecorded` called another tool's.
+
+    Returns None once it is gone, or why it was kept. What made it a copy is
+    checked again at the point of deletion, because a confirm can sit
+    unanswered for as long as the user likes, and a wrong answer here deletes
+    the last copy of something:
+
+    * the lock still does not record it — an install in another shell would
+      have made it boost's;
+    * the other copy is still a skill, and does not resolve into the store,
+      where deleting this would delete it too. A vendor that dropped the skill
+      on update leaves this as the only copy;
+    * a copy the confirm called identical still is, so an edit made since is
+      not lost under the word "identical".
+    """
+    name, _owner, other, how = row
+    sdir, theirs = skill_store_dir(name), Path(other)
+    if not os.path.lexists(sdir):
+        return "it is already gone"
+    if lockfile.get_skill(name) is not None:
+        return "boost has recorded it since"
+    if not os.path.isfile(theirs / "SKILL.md"):  # noqa: FURB146
+        return "the copy it duplicates, %s, is gone" % paths.tilde(other)
+    if resolves_into_store(theirs):
+        return ("%s now leads back into the store, so it is not a second copy"
+                % paths.tilde(other))
+    if how == foreign.IDENTICAL and not foreign.same_content(sdir, theirs):
+        return "it has changed since it matched %s" % paths.tilde(other)
+    util.remove_path(sdir)
+    journal.log("prune", name, copy_of=other)
+    return None
+
+
+def drop_plugin_link(row: tuple) -> tuple[bool, str]:
+    """Stop linking a skill into Claude Code, which loads it from a plugin.
+
+    Returns ``(dropped, line)``. The skill stays installed and linked into the
+    other agents in its scope; only Claude Code's link goes, and the lock says
+    it is not coming back by narrowing the scope to the others — what
+    ``install --agent`` would have written. A narrowing to nothing is refused
+    rather than written: an empty ``only_agents`` means every agent
+    (:func:`scoped_agents` fails open), so the next sync would link it
+    everywhere, Claude Code included.
+
+    Only an identical copy is dropped, and that is checked again here: a
+    plugin that has updated since the plan may have changed the skill, and
+    then they are two skills sharing a name. Claude Code's settings are never
+    written, so disabling the plugin stays the user's other way out.
+    """
+    name, plugin_id, theirs, _how = row
+    entry = lockfile.get_skill(name)
+    linking = agents.linking_agents()
+    if entry is None or foreign.CLAUDE not in linking:
+        return False, "kept %s: it is no longer linked into Claude Code" % name
+    if not foreign.same_content(skill_store_dir(name), Path(theirs)):
+        return False, ("kept %s → %s: it no longer matches the copy in plugin %s"
+                       % (name, foreign.CLAUDE, plugin_id))
+    keep = [a for a in scoped_agents(entry, linking) if a != foreign.CLAUDE]
+    if not keep:
+        return False, ("kept %s → %s: it is linked into no other agent, and an "
+                       "empty scope means every agent — `boost uninstall %s` "
+                       "removes boost's copy instead" % (name, foreign.CLAUDE, name))
+    link = linking[foreign.CLAUDE] / name
+    # Only boost's own link goes; whatever else holds the name is not boost's.
+    removed = os.path.islink(link) and resolves_into_store(link)
+    if removed:
+        try:
+            link.unlink()
+        except OSError:
+            return False, ("kept %s → %s: %s refuses the unlink"
+                           % (name, foreign.CLAUDE, paths.tilde(link.parent)))
+    entry["only_agents"] = keep
+    entry["agents"] = [a for a in entry.get("agents") or () if a != foreign.CLAUDE]
+    refused = [a for a in entry.get("refused_agents") or () if a != foreign.CLAUDE]
+    if refused:
+        entry["refused_agents"] = refused
+    else:
+        entry.pop("refused_agents", None)
+    lockfile.set_skill(name, entry)
+    journal.log("sync-prune", name, plugin=plugin_id)
+    return True, ("%s %s → %s (Claude Code loads it from plugin %s)"
+                  % ("unlinked" if removed else "stopped linking", name,
+                     foreign.CLAUDE, plugin_id))
+
+
+def _names(items: list[str], limit: int = 5) -> str:
+    return ", ".join(items[:limit]) + (", …" if len(items) > limit else "")
+
+
+def foreign_store_lines(rows: list) -> list[str]:
+    """One line per owner for `sync` and `heal`: whose copies these are."""
+    by_owner: dict[tuple[str, str], list] = {}
+    for name, owner, other, how in rows:
+        by_owner.setdefault((owner, str(Path(other).parent)), []).append((name, how))
+    lines = []
+    for (owner, where), items in by_owner.items():
+        differ = sum(1 for _n, how in items if how == foreign.DIFFERS)
+        lines.append("%s %s from %s (%s), not boost's%s — remove with "
+                     "`boost sync --prune`"
+                     % (_names([n for n, _h in items], 8),
+                        "copies a skill" if len(items) == 1 else "copy skills",
+                        owner, paths.tilde(where),
+                        "" if not differ else " (%s from the original)"
+                        % ("changed" if len(items) == 1
+                           else "%d of them changed" % differ)))
+    return lines
+
+
+def plugin_duplicate_lines(rows: list) -> list[str]:
+    """One line per plugin for the identical copies among ``rows``."""
+    by_plugin: dict[str, list[str]] = {}
+    for name, plugin_id, _p, how in rows:
+        if how == foreign.IDENTICAL:
+            by_plugin.setdefault(plugin_id, []).append(name)
+    return ["%s %s twice in Claude Code — plugin %s ships the same files; "
+            "`boost sync --prune` drops boost's Claude Code link and keeps "
+            "the other agents'"
+            % (_names(names, 8), "shows" if len(names) == 1 else "show", plugin_id)
+            for plugin_id, names in by_plugin.items()]
+
+
+def plugin_variant_lines(rows: list) -> list[str]:
+    """A line for each of ``rows`` whose plugin ships a different skill."""
+    return ["%s shows twice in Claude Code — plugin %s ships a different skill "
+            "by that name; both left as they are" % (name, plugin_id)
+            for name, plugin_id, _p, how in rows if how != foreign.IDENTICAL]
+
+
+def older_copy_lines(rows: list) -> list[str]:
+    """Lines naming the copies an adopted skill was newer than."""
+    return ["%s: the copy in %s (%s) is older by file times — left alone"
+            % (name, paths.tilde(other), owner) for name, owner, other in rows]
+
+
+def not_skill_line(names: list[str]) -> str:
+    """One line for store dirs that hold no ``SKILL.md``."""
+    if len(names) == 1:
+        return ("%s holds no SKILL.md, so it is not a skill — left alone"
+                % paths.tilde(skill_store_dir(names[0])))
+    return ("%d dirs in %s hold no SKILL.md, so they are not skills (%s) — "
+            "left alone" % (len(names), paths.tilde(paths.store_dir()),
+                            _names(names)))
 
 
 def sync_apply(plan: dict[str, list]) -> list[str]:
@@ -3623,6 +3962,8 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
         for name in plan["unrecorded_store"]:
             how = recover_unrecorded(name)
             actions.append(how or "left %s unrecorded (no SKILL.md to record)" % name)
+    for name in plan.get("adoptable_store", []):
+        actions.extend(adopt_unrecorded(name))
     for name, agent in plan["missing_links"]:
         res = link_agents(name, only=[agent])
         if agent in res.linked:

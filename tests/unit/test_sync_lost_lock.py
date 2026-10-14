@@ -75,11 +75,11 @@ class TestPlanWithoutAVouchingLock:
         assert store.sync_plan()["stale_links"] == []
 
     @pytest.mark.parametrize("lose", [_lose_lock, _corrupt_lock])
-    def test_store_dirs_are_unrecorded_not_orphaned(self, installed, lose):
-        """Orphans are what `--prune` deletes; an unrecorded dir never is."""
+    def test_store_dirs_are_unrecorded_not_classified(self, installed, lose):
+        """`--prune` deletes a foreign copy; an unrecorded dir never is one."""
         lose()
         plan = store.sync_plan()
-        assert plan["orphaned_store"] == []
+        assert plan["foreign_store"] == plan["adoptable_store"] == []
         assert plan["unrecorded_store"] == ["brainstorming"]
 
     def test_a_broken_link_is_still_stale(self, installed):
@@ -90,16 +90,17 @@ class TestPlanWithoutAVouchingLock:
         _lose_lock()
         assert store.sync_plan()["stale_links"] == [str(link)]
 
-    def test_with_a_vouching_lock_an_unrecorded_dir_is_an_orphan(self, installed):
+    def test_with_a_vouching_lock_an_unrecorded_dir_is_classified(self, installed):
         (paths.store_dir() / "rogue").mkdir()
         plan = store.sync_plan()
-        assert plan["orphaned_store"] == ["rogue"]
+        assert plan["not_skill_store"] == ["rogue"]
         assert plan["unrecorded_store"] == []
 
     def test_a_dot_dir_in_the_store_is_neither(self, installed):
         (paths.store_dir() / ".cache").mkdir()
         plan = store.sync_plan()
-        assert ".cache" not in plan["orphaned_store"] + plan["unrecorded_store"]
+        assert ".cache" not in (plan["not_skill_store"] + plan["adoptable_store"]
+                                + plan["unrecorded_store"])
 
 
 class TestSyncApplyRecovers:

@@ -619,6 +619,10 @@ def sandbox(tmp_path, monkeypatch):
     # judged against their real config dir — refused locally, fine in CI.
     # Tests that mean to exercise the escape set it themselves.
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    # The third of the kind: `sync` and `doctor` read Claude Code's plugin
+    # records from here when it is set (core/foreign.py), so an exported one
+    # would judge every sync test against the developer's real plugins.
+    monkeypatch.delenv("CLAUDE_CODE_PLUGIN_CACHE_DIR", raising=False)
     monkeypatch.setenv("BOOST_NO_AI", "1")       # deterministic: no AI calls
     # `boost mcp` seeds the default registries on an empty machine. That is
     # seven network clones, which no test may perform as a side effect of
@@ -856,6 +860,41 @@ def rival_tap(boost, tapped, tmp_path):
     run("git", "commit", "-qm", "rival skills")
     boost("tap", root)
     return "rival-tap"
+
+
+@pytest.fixture()
+def claude_plugin(sandbox):
+    """Make an enabled Claude Code plugin ship a skill: ``claude_plugin(name)``.
+
+    A copy of the store's ``name`` unless ``body`` is given, laid out the way
+    Claude Code installs a user-scope plugin: enabled in ``settings.json``,
+    listed in ``installed_plugins.json`` (v2), and with no ``plugin.json``, so
+    the default ``skills/`` scan applies. Returns the plugin's skill dir.
+    """
+    import json
+    import shutil
+
+    from boost_cli.core import paths
+
+    def make(skill="brainstorming", body=None, pid="eight-backend@eight"):
+        name, market = pid.split("@")
+        claude = paths.home() / ".claude"
+        inst = claude / "plugins" / "cache" / market / name / "abc"
+        where = inst / "skills" / skill
+        if body is None:
+            shutil.copytree(paths.store_dir() / skill, where)
+        else:
+            where.mkdir(parents=True)
+            (where / "SKILL.md").write_text(body, encoding="utf-8")
+        for f, data in (
+                (claude / "settings.json", {"enabledPlugins": {pid: True}}),
+                (claude / "plugins" / "installed_plugins.json",
+                 {"version": 2, "plugins": {pid: [
+                     {"scope": "user", "installPath": str(inst)}]}})):
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps(data), encoding="utf-8")
+        return where
+    return make
 
 
 @pytest.fixture()

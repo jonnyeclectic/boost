@@ -47,6 +47,14 @@ def _lock():
     return json.loads(paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
 
+def _vendor_skill(name, body):
+    """One of Cursor's built-in skills, where Cursor keeps them."""
+    d = paths.home() / ".cursor" / "skills-cursor" / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(body, encoding="utf-8")
+    return d
+
+
 class _FakeTtyStdin(io.StringIO):
     """Scripted stdin that claims to be a terminal, so prompts actually fire."""
 
@@ -471,30 +479,90 @@ class TestSync:
         assert "brainstorming → cursor" in r.out
         assert "in the way" in r.out
 
-    def test_orphan_reported_and_pruned(self, boost, installed):
-        orphan = paths.store_dir() / "orphan-x"
-        orphan.mkdir()
-        (orphan / "SKILL.md").write_text("# orphan\n", encoding="utf-8")
+    def test_a_skill_added_by_hand_is_recorded_and_linked(self, boost, installed):
+        # It was an "orphaned store dir", which plain sync left alone and
+        # `--prune` deleted: the user's own skill, for the price of a yes.
+        mine = paths.store_dir() / "orphan-x"
+        mine.mkdir()
+        (mine / "SKILL.md").write_text("# orphan\n", encoding="utf-8")
         r = boost("sync")
-        assert ("1 orphaned store dir left in place: orphan-x — "
-                "remove with `boost sync --prune`") in r.out
-        assert orphan.is_dir()
+        assert "recorded orphan-x as a local skill" in r.out
+        assert "linked orphan-x → claude-code" in r.out
+        assert (paths.home() / ".claude" / "skills" / "orphan-x").is_symlink()
+        assert _lock()["orphan-x"]["tap"] == "local"
         r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
-        assert "pruned ~/.agents/skills/orphan-x" in r.out
-        assert not orphan.exists()
+        assert mine.is_dir()
+        assert "everything in sync" in r.out
+
+    def test_a_copy_of_a_vendor_skill_is_named_and_pruned_on_request(
+            self, boost, installed):
+        theirs = _vendor_skill("automate", "# automate\n")
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(theirs, copy)
+        r = boost("sync")
+        flat = " ".join(r.out.split())      # the line wraps to the pane
+        assert ("automate copies a skill from Cursor's built-ins "
+                "(~/.cursor/skills-cursor), not boost's — remove with "
+                "`boost sync --prune`") in flat
+        assert "everything in sync" not in r.out
+        assert copy.is_dir() and "automate" not in _lock()
+        r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
+        assert "pruned ~/.agents/skills/automate" in r.out
+        assert not copy.exists()
+        assert (theirs / "SKILL.md").is_file(), "the original is not boost's"
 
     def test_prune_declined_does_not_tell_you_to_rerun_the_flag_you_just_ran(
             self, boost, installed, monkeypatch):
         # Bug: --prune declined told the user to run `boost sync --prune` —
         # the command they had just run and said no to.
-        orphan = paths.store_dir() / "orphan-x"
-        orphan.mkdir()
-        (orphan / "SKILL.md").write_text("# orphan\n", encoding="utf-8")
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(_vendor_skill("automate", "# automate\n"), copy)
         monkeypatch.delenv("BOOST_ASSUME_YES")
         r = boost("sync", "--prune")   # non-tty stdin declines
-        assert "1 orphaned store dir left in place (declined): orphan-x" in r.out
+        assert ("1 store dir copying another tool's skills left in place "
+                "(declined): automate") in " ".join(r.out.split())
         assert "boost sync --prune" not in r.out
-        assert orphan.is_dir()
+        assert copy.is_dir()
+
+    def test_prune_drops_claude_codes_link_to_a_skill_a_plugin_ships(
+            self, boost, installed, claude_plugin):
+        # Case 3: two of one team's plugins, or a plugin and a tap, ship the
+        # same skill, and Claude Code lists it twice.
+        claude_plugin()
+        link = paths.home() / ".claude" / "skills" / "brainstorming"
+        r = boost("sync")
+        assert ("brainstorming shows twice in Claude Code — plugin "
+                "eight-backend@eight ships the same files; `boost sync --prune` "
+                "drops boost's Claude Code link and keeps the other agents'"
+                ) in " ".join(r.out.split())
+        assert "everything in sync" not in r.out
+        assert link.is_symlink()
+        r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
+        assert ("unlinked brainstorming → claude-code (Claude Code loads it "
+                "from plugin eight-backend@eight)") in " ".join(r.out.split())
+        assert not os.path.lexists(link)
+        assert (paths.home() / ".cursor" / "skills" / "brainstorming").is_symlink()
+        assert "claude-code" not in _lock()["brainstorming"]["only_agents"]
+        assert "everything in sync" in boost("sync").out
+
+    def test_a_plugin_skill_that_only_shares_the_name_is_left_alone(
+            self, boost, installed, claude_plugin):
+        claude_plugin(body="# the plugin's own brainstorming\n")
+        r = boost("sync", "--prune")
+        assert ("brainstorming shows twice in Claude Code — plugin "
+                "eight-backend@eight ships a different skill by that name; both "
+                "left as they are") in " ".join(r.out.split())
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
+        assert "everything in sync" in r.out
+
+    def test_a_declined_plugin_prune_keeps_the_link_and_says_so(
+            self, boost, installed, claude_plugin, monkeypatch):
+        claude_plugin()
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("sync", "--prune")   # non-tty stdin declines
+        assert ("1 skill still linked into Claude Code beside a plugin's copy "
+                "(declined): brainstorming") in " ".join(r.out.split())
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
 
     def test_yes_flag_is_accepted_by_the_parser(self, boost, installed):
         # Bug: argparse rejected --yes here ("unrecognized arguments"), so
@@ -1763,11 +1831,15 @@ class TestSyncJson:
         plan = json.loads(boost("sync", "--diff", "--json").out)
         assert plan == {"missing_store": [], "missing_links": [],
                         "blocked_links": [], "stale_links": [],
-                        "orphaned_store": [], "unrecorded_store": [],
+                        "adoptable_store": [], "older_copies": [],
+                        "foreign_store": [], "not_skill_store": [],
+                        "plugin_duplicates": [], "unrecorded_store": [],
                         "missing_materializations": [], "out_of_scope_links": [],
                         "project": {"missing": [], "orphaned": []}}
         data = json.loads(boost("sync", "--json").out)
-        assert data == {"actions": [], "pruned": [], "orphaned_store": [],
+        assert data == {"actions": [], "pruned": [], "kept": [],
+                        "foreign_store": [], "plugin_duplicates": [],
+                        "older_copies": [], "not_skill_store": [],
                         "unrecorded_store": [], "out_of_scope_links": [],
                         "blocked_links": []}
 
@@ -1807,13 +1879,32 @@ class TestSyncJson:
         assert "boost sync --prune" in r.out
         assert "everything in sync" not in r.out
 
-    def test_json_prune_orphan(self, boost, installed):
-        orphan = paths.store_dir() / "orphan-y"
-        orphan.mkdir()
+    def test_json_prune_removes_a_copy_and_never_a_dir_that_is_not_a_skill(
+            self, boost, installed):
+        # The dir with no SKILL.md was the case `--prune` got most wrong: on a
+        # real machine it was another tool's sync bucket of nine skills.
+        bucket = paths.store_dir() / "synced"
+        (bucket / "inner").mkdir(parents=True)
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(_vendor_skill("automate", "# automate\n"), copy)
         data = json.loads(boost("sync", "--json", "--prune").out)
-        assert data["pruned"] == ["orphan-y"]
-        assert data["orphaned_store"] == []
-        assert not orphan.exists()
+        assert data["pruned"] == ["automate"]
+        assert data["foreign_store"] == []
+        assert data["not_skill_store"] == ["synced"]
+        assert bucket.is_dir() and not copy.exists()
+
+    def test_json_reports_a_plugin_duplicate_and_prune_drops_it(
+            self, boost, installed, claude_plugin):
+        theirs = claude_plugin()
+        data = json.loads(boost("sync", "--json").out)
+        assert data["plugin_duplicates"] == [
+            ["brainstorming", "eight-backend@eight", str(theirs), "identical"]]
+        assert data["actions"] == []
+        data = json.loads(boost("sync", "--json", "--prune").out)
+        assert data["actions"] == [
+            "unlinked brainstorming → claude-code (Claude Code loads it from "
+            "plugin eight-backend@eight)"]
+        assert data["plugin_duplicates"] == data["kept"] == []
 
 
 # ── edge coverage: update / reinstall ────────────────────────────────────

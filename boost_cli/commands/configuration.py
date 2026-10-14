@@ -26,6 +26,7 @@ from ..core import (
     catalog,
     complete,
     config,
+    foreign,
     frontmatter,
     gitutil,
     installscan,
@@ -1625,7 +1626,9 @@ def _tool_doctor(args: dict):
     # but not the config key the user has to change.
     agent_errs = agents.check()
     plan = store.sync_plan() if not agent_errs else {}
-    issues = sum(len(v) for v in plan.values())
+    # Counted as `boost doctor` counts them: a bucket naming something boost
+    # leaves alone by design is listed below, not scored as a problem.
+    issues = store.plan_issues(plan)
     # Two different questions, and answering the second with the first is what
     # made this tool disagree with every other one. `taps` is the literal clone
     # list — the rows config.json holds, boost's own among them. `tapped` is
@@ -1647,8 +1650,19 @@ def _tool_doctor(args: dict):
              # same reads without the accumulation.
              mcp.tap_line(tapped=tapped, total=len(taps),
                           items=sum(catalog.kind_counts().values()))]
+    # The buckets of tuples get the sentences `boost sync` prints, so this
+    # surface names whose a copy is and the same remedy rather than a repr.
+    worded = {
+        "foreign_store": store.foreign_store_lines,
+        "plugin_duplicates": lambda rows: (store.plugin_duplicate_lines(rows)
+                                           + store.plugin_variant_lines(rows)),
+        "older_copies": store.older_copy_lines,
+        "not_skill_store": lambda names: [store.not_skill_line(names)],
+    }
     for key, vals in plan.items():
-        if vals:
+        if vals and key in worded:
+            lines.extend(worded[key](vals))
+        elif vals:
             lines.append("%s: %s" % (key, ", ".join(str(v) for v in vals)))
     # sync_plan already reports MISSING rule/workflow materializations; the
     # digest check adds the drift sync cannot see — content edited in place,
@@ -1720,6 +1734,13 @@ def _tool_doctor(args: dict):
     elif mat_issues or cfg_err or agent_lines:
         # Not `boost sync`: an unresolvable agent dir makes sync refuse too.
         lines.append("%d issue(s) — run `boost doctor` for details" % total)
+    elif plan.get("foreign_store") or plan.get("out_of_scope_links") or any(
+            r[3] == foreign.IDENTICAL for r in plan.get("plugin_duplicates", ())):
+        # Plain `boost sync` leaves these, and `--prune` deletes or unlinks,
+        # which is the user's call rather than an agent's.
+        lines.append("%d issue(s) — run `boost sync` to fix the rest; the ones "
+                     "naming `boost sync --prune` delete or unlink, so ask the "
+                     "user before running it" % issues)
     else:
         lines.append("%d issue(s) — run `boost sync` to fix" % issues)
     return "\n".join(lines), total > 0

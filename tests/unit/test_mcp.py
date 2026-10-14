@@ -1637,6 +1637,65 @@ class TestDoctorToolOnAnItemMaterializedNowhere:
         assert integrity.STATUS_UNREACHABLE == "unreachable"
 
 
+class TestDoctorToolOnStoreDirsBoostDidNotInstall:
+    """The MCP doctor counts these as CLI doctor does, and words them as sync.
+
+    It printed every plan bucket as an issue and as a ``repr``; a dir boost
+    leaves alone by design held it red, and a copy read as a Python tuple.
+    """
+
+    @pytest.fixture()
+    def installed(self, sandbox, fixture_tap_src):
+        from boost_cli.core import catalog, registry, store
+        catalog.rebuild_tap(registry.add(str(fixture_tap_src)))
+        store.install(catalog.resolve_one("brainstorming"))
+
+    def test_a_dir_that_is_not_a_skill_is_listed_and_not_counted(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        (paths.store_dir() / "synced").mkdir()
+        text, is_error = configuration._tool_doctor({})
+        assert ("~/.agents/skills/synced holds no SKILL.md, so it is not a skill "
+                "— left alone") in text
+        assert "healthy — no issues found" in text
+        assert is_error is False
+
+    def test_a_copy_is_worded_and_its_prune_left_to_the_user(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        for d in (paths.home() / ".cursor" / "skills-cursor", paths.store_dir()):
+            (d / "automate").mkdir(parents=True, exist_ok=True)
+            (d / "automate" / "SKILL.md").write_text("# a\n", encoding="utf-8")
+        text, is_error = configuration._tool_doctor({})
+        assert ("automate copies a skill from Cursor's built-ins "
+                "(~/.cursor/skills-cursor), not boost's — remove with "
+                "`boost sync --prune`") in text
+        assert "('automate'" not in text
+        assert ("1 issue(s) — run `boost sync` to fix the rest; the ones naming "
+                "`boost sync --prune` delete or unlink, so ask the user before "
+                "running it") in text
+        assert is_error is True
+
+    def test_a_skill_added_by_hand_is_one_issue_sync_fixes(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        (paths.store_dir() / "pr-me").mkdir()
+        (paths.store_dir() / "pr-me" / "SKILL.md").write_text("# m\n",
+                                                              encoding="utf-8")
+        text, _ = configuration._tool_doctor({})
+        assert "adoptable_store: pr-me" in text
+        assert "1 issue(s) — run `boost sync` to fix" in text
+        assert "--prune" not in text
+
+    def test_a_plugin_variant_is_listed_and_not_counted(self, installed,
+                                                        claude_plugin):
+        from boost_cli.commands import configuration
+        claude_plugin(body="# theirs\n")
+        text, is_error = configuration._tool_doctor({})
+        assert "ships a different skill by that name" in text
+        assert is_error is False
+
+
 class TestTheStatedCostIsPricedPerMachine:
     """boost_search quoted "10-15 seconds — an LLM reranks every match" on every
     machine, while `rag.rerank` returns the retrieval order without an LLM call

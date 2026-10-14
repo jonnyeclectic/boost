@@ -1212,9 +1212,10 @@ class TestUninstall:
 
 class TestSyncPlan:
     EMPTY: ClassVar[dict] = {"missing_store": [], "missing_links": [],
-             "blocked_links": [], "stale_links": [], "orphaned_store": [],
-             "unrecorded_store": [], "missing_materializations": [],
-             "out_of_scope_links": []}
+             "blocked_links": [], "stale_links": [], "adoptable_store": [],
+             "older_copies": [], "foreign_store": [], "not_skill_store": [],
+             "plugin_duplicates": [], "unrecorded_store": [],
+             "missing_materializations": [], "out_of_scope_links": []}
 
     def test_clean_state_empty_plan(self, brainstorming):
         assert store.sync_plan() == self.EMPTY
@@ -1251,7 +1252,7 @@ class TestSyncPlan:
         link.symlink_to(orphan_store)
         plan = store.sync_plan()
         assert plan["stale_links"] == [str(link)]
-        assert plan["orphaned_store"] == ["orphan"]
+        assert plan["not_skill_store"] == ["orphan"]
 
     def test_a_native_store_agents_dir_is_never_swept(self, brainstorming):
         # Boost only ever creates a symlink in an agent it links for, so a link
@@ -1269,7 +1270,7 @@ class TestSyncPlan:
             (d / "orphan").symlink_to(orphan)
         plan = store.sync_plan()
         assert plan["stale_links"] == []
-        assert plan["orphaned_store"] == ["orphan"]
+        assert plan["not_skill_store"] == ["orphan"]
 
         theirs = paths.home() / ".cursor" / "skills" / "orphan"
         theirs.symlink_to(orphan)
@@ -1328,12 +1329,12 @@ class TestSyncPlan:
         plain.write_text("x", encoding="utf-8")
         assert store.points_into_store(plain) is False
 
-    def test_orphaned_store_dir(self, brainstorming):
+    def test_a_store_dir_without_a_skill_md_is_not_a_skill(self, brainstorming):
         rogue = paths.store_dir() / "rogue"
         rogue.mkdir()
         (paths.store_dir() / "stray.txt").write_text("not a dir", encoding="utf-8")
         plan = store.sync_plan()
-        assert plan == {**self.EMPTY, "orphaned_store": ["rogue"]}
+        assert plan == {**self.EMPTY, "not_skill_store": ["rogue"]}
 
     def test_missing_agent_dir_reports_missing_links_not_stale(self, tap, entry):
         # only claude-code was linked, so the other agent dirs were never
@@ -1364,7 +1365,7 @@ class TestSyncPlan:
         plan = store.sync_plan()
         assert plan["missing_store"] == ["brainstorming"]
         assert plan["missing_links"] == []          # skipped via continue
-        assert plan["orphaned_store"] == []
+        assert plan["not_skill_store"] == plan["adoptable_store"] == []
         assert sorted(plan["stale_links"]) == sorted(
             str(_link(a)) for a in LINKED_AGENTS)    # links now dangle
 

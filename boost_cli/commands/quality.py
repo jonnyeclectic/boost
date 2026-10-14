@@ -29,6 +29,7 @@ from ..core import (
     claude_settings,
     complete,
     config,
+    foreign,
     frontmatter,
     gitutil,
     imperative,
@@ -55,6 +56,11 @@ from ._common import _iter_installed, _iter_installed_all, _require_lock_integri
 # agent turned off has a row per installed rule and workflow, so an uncapped
 # list is as long as the install.
 _MAT_NOTE_SHOWN = 4
+
+
+def _first(names: list[str], limit: int = 5) -> str:
+    """Up to ``limit`` names for a one-line check, with an ellipsis for more."""
+    return ", ".join(names[:limit]) + (", …" if len(names) > limit else "")
 
 # --- conflict: normative-rule extraction -----------------------------------
 
@@ -918,29 +924,56 @@ def cmd_doctor(argv):
         rep.ok("rules-workflows", "%d rule%s and %d workflow%s fully materialized%s"
                % (n_rules, _s(n_rules), n_flows, _s(n_flows), note))
 
-    root = paths.store_dir()
-    orphans = [c.name for c in sorted(root.iterdir())
-               if c.is_dir() and not c.name.startswith(".") and c.name not in skills
-               ] if root.is_dir() else []
-    # Only while the lock can vouch. Without one every store dir reads as an
-    # orphan, the lock line above already names the state and its remedy, and
-    # a second "run `boost sync`" line counted the same fault twice.
-    if orphans and store.lock_vouches():
-        bad("orphans", "%d orphaned store dir%s (%s) — run `boost sync`"
-            % (len(orphans), _s(len(orphans)), ", ".join(orphans[:5])))
+    # Store dirs the lock does not record, sorted by whose they are: this was
+    # one "orphaned store dir" line, prescribing a `boost sync` that did
+    # nothing with them while `heal` reported nothing to heal. Only while the
+    # lock can vouch: without one every store dir reads as unrecorded, the
+    # lock line above already names the state and its remedy, and a second
+    # line counted the same fault twice.
+    if agents_ok and store.lock_vouches():
+        unrec = store.classify_unrecorded(store.unrecorded_store_dirs(skills))
+        mine = unrec["adoptable_store"]
+        if mine:
+            bad("unrecorded-skills", "%d skill%s added outside boost (%s) — "
+                "`boost sync` records %s" % (len(mine), _s(len(mine)),
+                                             _first(mine),
+                                             "it" if len(mine) == 1 else "them"))
+        copies = [r[0] for r in unrec["foreign_store"]]
+        if copies:
+            bad("foreign-copies", "%d store dir%s cop%s another tool's skills, "
+                "not boost's (%s) — remove with `boost sync --prune`"
+                % (len(copies), _s(len(copies)),
+                   "ies" if len(copies) == 1 else "y", _first(copies)), wrap=True)
+        # Notes, not issues: boost leaves these alone by design, so counting
+        # them would hold doctor red on a state no boost command changes.
+        for line in store.older_copy_lines(unrec["older_copies"]):
+            rep.note("older-copies", line, wrap=True)
+        if unrec["not_skill_store"]:
+            rep.note("not-skills", store.not_skill_line(unrec["not_skill_store"]),
+                     wrap=True)
+    dups = store.plugin_duplicates(skills) if agents_ok else []
+    same = [r[0] for r in dups if r[3] == foreign.IDENTICAL]
+    if same:
+        bad("plugin-duplicates", "%d skill%s show%s twice in Claude Code, which "
+            "also loads %s from an enabled plugin (%s) — `boost sync --prune` "
+            "drops boost's Claude Code link"
+            % (len(same), _s(len(same)), "s" if len(same) == 1 else "",
+               "it" if len(same) == 1 else "them", _first(same)), wrap=True)
+    for line in store.plugin_variant_lines(dups):
+        rep.note("plugin-variants", line, wrap=True)
 
-    broken, foreign = _broken_links() if agents_ok else ([], [])
+    broken, strays = _broken_links() if agents_ok else ([], [])
     if broken:
         bad("broken-links", "%d broken symlink%s in agent dirs — run `boost heal`"
             % (len(broken), _s(len(broken))))
-    if foreign:
+    if strays:
         # `out.info`, not `bad`: this does not raise the issue count, because
         # boost will not fix it and `heal` deliberately leaves it — counting it
         # would leave doctor permanently red on something no boost command can
         # clear, which is how a health check stops being read.
         rep.note("foreign-links", "%d broken symlink%s in agent dirs not created by boost — "
                  "left alone; yours to remove or repair"
-                 % (len(foreign), _s(len(foreign))))
+                 % (len(strays), _s(len(strays))))
 
     others = claude_settings.foreign_hooks("global")
     if others:
@@ -1576,6 +1609,17 @@ def cmd_heal(argv):
     # itself created; these entries boost did not create, so deleting one on a
     # plain `boost heal` would be silently removing another tool's file. Named
     # every run so the flag is discoverable from the command that would use it.
+    # Named, never acted on: deleting another tool's copy, or dropping a link
+    # Claude Code also gets from a plugin, changes what an agent can run. Both
+    # wait for `boost sync --prune`, whose confirm says what each costs.
+    for line in store.older_copy_lines(plan["older_copies"]):
+        out.info(line, wrap=True)
+    for line in (store.foreign_store_lines(plan["foreign_store"])
+                 + store.plugin_duplicate_lines(plan["plugin_duplicates"])):
+        out.info(line, wrap=True)
+    declined_copies = bool(plan["foreign_store"]) or any(
+        r[3] == foreign.IDENTICAL for r in plan["plugin_duplicates"])
+
     duplicates = store.duplicate_discovery()
     declined_duplicates = bool(duplicates) and not args.prune_duplicates
     for dup in duplicates:
@@ -1700,7 +1744,7 @@ def cmd_heal(argv):
         # fix, and deliberately left. A bare "nothing to heal" printed under
         # the line offering the flag contradicts it.
         out.ok("nothing to heal automatically"
-               if declined_duplicates else "nothing to heal")
+               if declined_duplicates or declined_copies else "nothing to heal")
     if actions and not dry:
         journal.log("heal", "%d actions" % len(actions))
     return 1 if cfg_err or stuck else 0
@@ -1948,10 +1992,10 @@ def cmd_health(argv):
     decay_n = sum(1 for r in _decay_rows(Path.cwd()) if r["verdict"] == "decay")
     kv("decay", "%d candidate%s" % (decay_n, _s(decay_n)), decay_n)
 
-    broken, foreign = _broken_links()
+    broken, strays = _broken_links()
     kv("broken links", "%d%s" % (
-        len(broken), " (+%d not ours)" % len(foreign) if foreign else ""),
-       {"ours": len(broken), "foreign": len(foreign)})
+        len(broken), " (+%d not ours)" % len(strays) if strays else ""),
+       {"ours": len(broken), "foreign": len(strays)})
 
     # `registry.last_refresh_at` reads the marker `boost update` stamps, not a
     # tap clone's git log — a clone's newest commit is the *upstream's* clock,
