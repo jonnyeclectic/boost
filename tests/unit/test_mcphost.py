@@ -908,3 +908,25 @@ class TestEscapesHome:
         # wrong answer this function must never give.
         with pytest.raises(KeyError):
             mcphost.escapes_home("copilot", {}, tmp_path)
+
+
+class TestShellLine:
+    """A printed argv is pasted into a shell, so it must survive one."""
+
+    def test_a_glob_in_the_launch_env_is_quoted(self):
+        # The reported failure: zsh rejected the bare `no_proxy=*` with
+        # "no matches found" before codex ever ran.
+        argv = mcphost.register_argv(mcphost.CODEX, "/bin/boost")
+        line = mcphost.shell_line(argv)
+        assert "'no_proxy=*'" in line
+        assert " no_proxy=* " not in line
+
+    def test_round_trips_through_a_posix_split(self):
+        import shlex
+        for host in mcphost.hosts():
+            argv = mcphost.register_argv(host, "/a path/boost")
+            assert shlex.split(mcphost.shell_line(argv)) == argv
+
+    def test_a_plain_argv_is_printed_unchanged(self):
+        assert mcphost.shell_line(["claude", "mcp", "remove", "boost"]) \
+            == "claude mcp remove boost"
