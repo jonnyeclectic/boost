@@ -467,9 +467,10 @@ class TestReclonePredictsTheRecloneItWillDo:
 
 # ── 3. heal previews the branch `sync_apply` will take ───────────────────
 
-def _heal_both(boost):
+def _heal_both(boost, expect=0):
     """`heal --dry-run`, then `heal`, over one state: (preview, applied)."""
-    return boost("heal", "--dry-run").out, boost("heal").out
+    return (boost("heal", "--dry-run", expect=expect).out,
+            boost("heal", expect=expect).out)
 
 
 def _local_skill(tmp_path, name="local-skill"):
@@ -580,10 +581,13 @@ class TestHealPreviewsTheBranchItWillTake:
         run never keeps."""
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
 
-        preview, applied = _heal_both(boost)
+        # Both say why nothing is recorded, and neither calls that healed.
+        preview, applied = _heal_both(boost, expect=1)
 
         assert "re-record" not in preview
         assert "re-record" not in applied
+        assert "the lock file is corrupt" in preview
+        assert "the lock file is corrupt" in applied
 
     def test_a_store_dir_with_nothing_to_record_is_previewed_as_left(
             self, boost, installed):
@@ -592,10 +596,12 @@ class TestHealPreviewsTheBranchItWillTake:
 
         preview, applied = _heal_both(boost)
 
+        left = "~/.agents/skills/husk holds no SKILL.md, so it is not a skill"
         assert "would re-record brainstorming" in preview
-        assert "would leave husk unrecorded (no SKILL.md to record)" in preview
         assert "would re-record husk" not in preview
-        assert "left husk unrecorded (no SKILL.md to record)" in applied
+        assert left in preview
+        assert left in applied
+        assert "re-recorded husk" not in applied
 
     def test_the_preview_and_the_repair_share_one_decision(self, boost,
                                                            installed):

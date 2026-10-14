@@ -74,6 +74,19 @@ def _skill_dir(tmp_path, name, version="0.1.0", body="# Skill\n\nBody text.\n"):
 # ── install ──────────────────────────────────────────────────────────────
 
 class TestInstall:
+    def test_a_skill_a_plugin_ships_is_not_linked_into_claude_code(
+            self, boost, installed, claude_plugin):
+        # A link would list it twice there. The line says why it is missing,
+        # so an empty ~/.claude/skills is not a mystery.
+        claude_plugin()
+        boost("uninstall", "brainstorming")
+        r = boost("install", "brainstorming")
+        assert ("not linked into Claude Code: plugin eight-backend@eight "
+                "already loads the same files") in _flat(r.out)
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "brainstorming")
+        assert (paths.home() / ".cursor" / "skills" / "brainstorming").is_symlink()
+
     def test_rule_install_scans_content_for_injection(self, boost,
                                                       fixture_tap_src, tmp_path):
         # boost installs Markdown the agent executes; a rule's content is now
@@ -334,6 +347,26 @@ class TestUninstall:
         assert "Uninstalled 1 skill" in r.out
         assert _lock() == {}
 
+    def test_the_prompt_says_when_the_store_holds_the_only_copy(
+            self, boost, installed, monkeypatch):
+        # `boost sync` records a skill put in the store by hand where it found
+        # it, so uninstalling it deletes the skill itself.
+        for name in ("pr-me", "pr-too"):
+            d = paths.store_dir() / name
+            d.mkdir()
+            (d / "SKILL.md").write_text("# %s\n" % name, encoding="utf-8")
+        boost("sync")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("uninstall", "pr-me", "brainstorming", expect=1)
+        assert ("uninstall 2 skills: pr-me, brainstorming? The store holds the "
+                "only copy of pr-me, so it is deleted for good. [y/N]") in r.out
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("uninstall", "pr-me", "pr-too", expect=1)
+        assert ("The store holds the only copy of pr-me, pr-too, so they are "
+                "deleted for good. [y/N]") in r.out
+        assert (paths.store_dir() / "pr-me" / "SKILL.md").is_file()
+
     def test_multi_names_are_listed_in_one_prompt(self, boost, tapped,
                                                   monkeypatch):
         boost("install", "brainstorming", "commit-messages")
@@ -533,17 +566,21 @@ class TestSync:
         r = boost("sync")
         assert ("brainstorming shows twice in Claude Code — plugin "
                 "eight-backend@eight ships the same files; `boost sync --prune` "
-                "drops boost's Claude Code link and keeps the other agents'"
-                ) in " ".join(r.out.split())
+                "drops boost's Claude Code link") in " ".join(r.out.split())
         assert "everything in sync" not in r.out
         assert link.is_symlink()
         r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
-        assert ("unlinked brainstorming → claude-code (Claude Code loads it "
-                "from plugin eight-backend@eight)") in " ".join(r.out.split())
+        assert ("unlinked brainstorming → claude-code (Claude Code loads the "
+                "same files from plugin eight-backend@eight)"
+                ) in " ".join(r.out.split())
         assert not os.path.lexists(link)
         assert (paths.home() / ".cursor" / "skills" / "brainstorming").is_symlink()
-        assert "claude-code" not in _lock()["brainstorming"]["only_agents"]
-        assert "everything in sync" in boost("sync").out
+        entry = _lock()["brainstorming"]
+        assert "claude-code" not in entry["agents"]
+        assert entry.get("only_agents") is None, "the scope is left as it was"
+        r = boost("sync")
+        assert "everything in sync" in r.out
+        assert not os.path.lexists(link), "sync does not bring the link back"
 
     def test_a_plugin_skill_that_only_shares_the_name_is_left_alone(
             self, boost, installed, claude_plugin):
@@ -563,6 +600,65 @@ class TestSync:
         assert ("1 skill still linked into Claude Code beside a plugin's copy "
                 "(declined): brainstorming") in " ".join(r.out.split())
         assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
+
+    def test_the_plugin_prune_prompt_says_what_claude_code_keeps(
+            self, boost, installed, claude_plugin, monkeypatch):
+        claude_plugin()
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("sync", "--prune")
+        assert ("Drop boost's Claude Code link for 1 skill an enabled plugin "
+                "ships with the same files (Claude Code goes on loading the "
+                "plugin's copy): brainstorming? [y/N]") in r.out
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
+
+    def test_a_dir_boost_cannot_name_a_skill_by_is_noted_and_left(
+            self, boost, installed):
+        # A Finder duplicate: its name can never be a lock key, and listed with
+        # the other store dirs it made sync exit with an error.
+        dup = paths.store_dir() / "brainstorming copy"
+        shutil.copytree(paths.store_dir() / "brainstorming", dup)
+        r = boost("sync", "--diff")
+        assert ("store dirs boost cannot record a skill by, left alone (1)"
+                in r.out)
+        r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
+        assert ("~/.agents/skills/brainstorming copy: boost cannot record a "
+                "skill by that name (only letters, digits, '.', '_' and '-') — "
+                "left alone") in _flat(r.out)
+        assert "everything in sync" in r.out
+        assert (dup / "SKILL.md").is_file() and "brainstorming copy" not in _lock()
+        assert json.loads(boost("sync", "--json").out)["misnamed_store"] == [
+            "brainstorming copy"]
+
+    def test_over_a_corrupt_lock_the_store_dirs_are_named_not_in_sync(
+            self, boost, installed):
+        paths.lockfile_path().write_text("{oops", encoding="utf-8")
+        r = boost("sync")
+        assert ("1 store dir the lock file cannot record, left as it is: "
+                "brainstorming — restore the lock with `boost replay`"
+                ) in _flat(r.out + r.err)
+        assert "everything in sync" not in r.out
+        assert json.loads(boost("sync", "--json").out)["unrecorded_store"] == [
+            "brainstorming"]
+
+    def test_a_lost_lock_names_an_unreadable_skill_without_blaming_the_lock(
+            self, boost, installed):
+        # The lock was only missing, so `boost replay` is no remedy: the file
+        # is, and the line says which.
+        secret = paths.store_dir() / "brainstorming" / "secret.txt"
+        secret.write_text("x", encoding="utf-8")
+        secret.chmod(0)
+        paths.lockfile_path().unlink()
+        try:
+            r = boost("sync")
+        finally:
+            secret.chmod(0o644)
+        flat = _flat(r.out + r.err)
+        assert ("brainstorming was not recorded: "
+                "~/.agents/skills/brainstorming/secret.txt is unreadable — make "
+                "it readable, then re-run `boost sync`") in flat
+        assert "boost replay" not in flat
+        assert "everything in sync" not in r.out
 
     def test_yes_flag_is_accepted_by_the_parser(self, boost, installed):
         # Bug: argparse rejected --yes here ("unrecognized arguments"), so
@@ -1833,6 +1929,7 @@ class TestSyncJson:
                         "blocked_links": [], "stale_links": [],
                         "adoptable_store": [], "older_copies": [],
                         "foreign_store": [], "not_skill_store": [],
+                        "misnamed_store": [],
                         "plugin_duplicates": [], "unrecorded_store": [],
                         "missing_materializations": [], "out_of_scope_links": [],
                         "project": {"missing": [], "orphaned": []}}
@@ -1840,6 +1937,7 @@ class TestSyncJson:
         assert data == {"actions": [], "pruned": [], "kept": [],
                         "foreign_store": [], "plugin_duplicates": [],
                         "older_copies": [], "not_skill_store": [],
+                        "misnamed_store": [],
                         "unrecorded_store": [], "out_of_scope_links": [],
                         "blocked_links": []}
 
@@ -1902,8 +2000,8 @@ class TestSyncJson:
         assert data["actions"] == []
         data = json.loads(boost("sync", "--json", "--prune").out)
         assert data["actions"] == [
-            "unlinked brainstorming → claude-code (Claude Code loads it from "
-            "plugin eight-backend@eight)"]
+            "unlinked brainstorming → claude-code (Claude Code loads the same "
+            "files from plugin eight-backend@eight)"]
         assert data["plugin_duplicates"] == data["kept"] == []
 
 

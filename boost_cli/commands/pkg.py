@@ -318,6 +318,12 @@ def _warn_unwritable(res, stream=None) -> None:
         out.warn(line, stream=stream)
     for line in refused:
         out.warn(line, stream=stream, wrap=True)
+    # Not a skip to repair: the plugin already puts the skill in front of
+    # Claude Code, and a link would list it twice. Said, so the missing link
+    # is not a mystery.
+    for plugin_id in dict.fromkeys(getattr(res, "covered", None) or ()):
+        out.info("not linked into Claude Code: plugin %s already loads the "
+                 "same files" % plugin_id, stream=stream, wrap=True)
 
 
 def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
@@ -848,6 +854,15 @@ def cmd_uninstall(argv: list[str]) -> int:
             # least likely to expect — so name which ones.
             prompt = "uninstall %s? (%s from %s)" % (
                 what, ", ".join(from_repo), _tilde(where))
+        # A skill `boost sync` recorded where it found it has no copy outside
+        # the store, so this removal is the one that cannot be undone.
+        only = [n for n in args.names if n not in from_repo
+                and (e := lockfile.get_skill(n)) is not None
+                and store.only_copy(n, e)]
+        if only:
+            prompt += (" The store holds the only copy of %s, so %s deleted "
+                       "for good." % (", ".join(only),
+                                      "it is" if len(only) == 1 else "they are"))
         if not out.confirm(prompt):
             out.info("cancelled")
             return 1
@@ -977,6 +992,7 @@ _PLAN_LABELS = [
     ("older_copies", "older copies of those, left alone"),
     ("foreign_store", "store dirs copying another tool's skills (--prune removes)"),
     ("not_skill_store", "store dirs that are not skills, left alone"),
+    ("misnamed_store", "store dirs boost cannot record a skill by, left alone"),
     ("plugin_duplicates", "skills Claude Code also loads from a plugin"),
     ("unrecorded_store", "store dirs the lock file has lost"),
     ("missing_materializations", "missing rule/workflow files"),
@@ -1054,6 +1070,8 @@ def cmd_sync(argv: list[str]) -> int:
                     out.info(_tilde(item))
         return 0
 
+    # Asked before the repair, which writes a lock where there was none.
+    integ = lockfile.check()
     actions = store.sync_apply(plan) + store.project_sync_apply(pplan)
     # Links outside a declared `--agent` scope work and are in use, so sync
     # reports them and stops. Removing one changes which agents can run a
@@ -1078,8 +1096,8 @@ def cmd_sync(argv: list[str]) -> int:
     declined_copies = False
     if args.prune and copies:
         if _go(args, _foreign_prompt(copies)):
-            for row in copies:
-                why = store.remove_foreign_copy(row)
+            for row, why in zip(copies, store.remove_foreign_copies(copies),
+                                strict=True):
                 if why is None:
                     pruned.append(row[0])
                 else:
@@ -1093,9 +1111,10 @@ def cmd_sync(argv: list[str]) -> int:
     declined_dups = False
     if args.prune and same:
         if _go(args, "Drop boost's Claude Code link for %s an enabled plugin "
-                     "already loads (they stay linked for your other agents): "
-                     "%s?" % (_plural(len(same), "skill"),
-                              ", ".join(r[0] for r in same))):
+                     "ships with the same files (Claude Code goes on loading "
+                     "the plugin's copy): %s?"
+                     % (_plural(len(same), "skill"),
+                        ", ".join(r[0] for r in same))):
             for row in same:
                 ok, line = store.drop_plugin_link(row)
                 (actions if ok else kept).append(line)
@@ -1104,10 +1123,12 @@ def cmd_sync(argv: list[str]) -> int:
         else:
             declined_dups = True
     dups = [r for r in plan["plugin_duplicates"] if r[0] not in dropped]
-    # Re-recorded by sync_apply when the lock was merely missing; still here
-    # only when it is corrupt or in another schema, which sync never overwrites.
-    unrecorded = [n for n in plan["unrecorded_store"]
-                  if lockfile.get_skill(n) is None]
+    # Re-recorded by sync_apply when the lock was merely missing, and a dir it
+    # could not record has its own line saying why. Over a lock that is
+    # corrupt or in another schema nothing is written, so all of them are
+    # left as they were, and the remedy is the lock's.
+    unrecorded = (plan["unrecorded_store"]
+                  if not integ.ok and integ.problem != "missing" else [])
     blocked = plan["blocked_links"]
     if args.json:
         # `sync --diff --json` above is indent=2; this printed one unindented
@@ -1117,6 +1138,7 @@ def cmd_sync(argv: list[str]) -> int:
                           "foreign_store": left, "plugin_duplicates": dups,
                           "older_copies": plan["older_copies"],
                           "not_skill_store": plan["not_skill_store"],
+                          "misnamed_store": plan["misnamed_store"],
                           "unrecorded_store": unrecorded,
                           "out_of_scope_links": oos,
                           "blocked_links": blocked}, indent=2))
@@ -1126,9 +1148,11 @@ def cmd_sync(argv: list[str]) -> int:
     for line in kept:
         out.warn(line, wrap=True)
     if unrecorded:
-        out.warn("%s the lock file cannot record, left as they are: %s — "
+        out.warn("%s the lock file cannot record, left as %s: %s — "
                  "restore the lock with `boost replay`"
-                 % (_plural(len(unrecorded), "store dir"), ", ".join(unrecorded)))
+                 % (_plural(len(unrecorded), "store dir"),
+                    "it is" if len(unrecorded) == 1 else "they are",
+                    ", ".join(unrecorded)), wrap=True)
     for name in pruned:
         out.ok("pruned %s" % _tilde(store.skill_store_dir(name)))
     for line in store.older_copy_lines(plan["older_copies"]):
@@ -1143,6 +1167,8 @@ def cmd_sync(argv: list[str]) -> int:
             out.warn(line, wrap=True)
     if plan["not_skill_store"]:
         out.info(store.not_skill_line(plan["not_skill_store"]), wrap=True)
+    if plan["misnamed_store"]:
+        out.info(store.misnamed_line(plan["misnamed_store"]), wrap=True)
     if declined_dups:
         out.warn("%s still linked into Claude Code beside a plugin's copy "
                  "(declined): %s" % (_plural(len(same), "skill"),
@@ -1194,7 +1220,7 @@ def cmd_sync(argv: list[str]) -> int:
                  wrap=True)
     unfixed = left or kept or any(r[3] == foreign.IDENTICAL for r in dups)
     if (not actions and not pruned and not unfixed and not oos and not blocked
-            and not stuck and not in_way and not occupied):
+            and not stuck and not in_way and not occupied and not unrecorded):
         out.ok("everything in sync")
     return 0
 

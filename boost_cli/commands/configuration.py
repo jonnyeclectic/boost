@@ -1650,14 +1650,36 @@ def _tool_doctor(args: dict):
              # same reads without the accumulation.
              mcp.tap_line(tapped=tapped, total=len(taps),
                           items=sum(catalog.kind_counts().values()))]
-    # The buckets of tuples get the sentences `boost sync` prints, so this
-    # surface names whose a copy is and the same remedy rather than a repr.
+    # The buckets of tuples, and the ones whose remedy depends on the lock, get
+    # sentences in `boost sync`'s words, so this surface names whose a thing
+    # is and what to do about it rather than printing a repr.
+    lost = lockfile.check().problem == "missing"
+
+    def unrecorded(names: list[str]) -> list[str]:
+        n = len(names)
+        if lost:
+            return ["%d store dir%s the lock file has lost (%s) — `boost sync` "
+                    "re-records %s" % (n, "" if n == 1 else "s", ", ".join(names),
+                                       "it" if n == 1 else "them")]
+        return ["%d store dir%s the lock file cannot be read about (%s) — ask "
+                "the user to restore the lock with `boost replay`"
+                % (n, "" if n == 1 else "s", ", ".join(names))]
+
     worded = {
         "foreign_store": store.foreign_store_lines,
         "plugin_duplicates": lambda rows: (store.plugin_duplicate_lines(rows)
                                            + store.plugin_variant_lines(rows)),
         "older_copies": store.older_copy_lines,
         "not_skill_store": lambda names: [store.not_skill_line(names)],
+        "misnamed_store": lambda names: [store.misnamed_line(names)],
+        "blocked_links": lambda rows: [
+            "%s not linked for %s: %s is in the way and is not boost's — ask "
+            "the user to move or delete it, then run `boost sync`"
+            % (n, a, paths.tilde(p)) for n, a, p in rows],
+        "out_of_scope_links": lambda rows: [
+            "%s is linked for %s, outside its declared scope — `boost sync "
+            "--prune` removes the link" % (n, a) for n, a in rows],
+        "unrecorded_store": unrecorded,
     }
     for key, vals in plan.items():
         if vals and key in worded:

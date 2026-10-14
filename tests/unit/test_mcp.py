@@ -1687,6 +1687,59 @@ class TestDoctorToolOnStoreDirsBoostDidNotInstall:
         assert "1 issue(s) — run `boost sync` to fix" in text
         assert "--prune" not in text
 
+    def test_a_blocked_link_is_worded_with_who_moves_it(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        link = paths.home() / ".cursor" / "skills" / "brainstorming"
+        link.unlink()
+        link.mkdir()
+        text, is_error = configuration._tool_doctor({})
+        assert ("brainstorming not linked for cursor: ~/.cursor/skills/"
+                "brainstorming is in the way and is not boost's — ask the user "
+                "to move or delete it, then run `boost sync`") in text
+        assert "('brainstorming'" not in text and is_error is True
+
+    def test_a_link_outside_the_scope_is_worded_with_its_prune(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import lockfile
+        e = lockfile.get_skill("brainstorming")
+        e["only_agents"] = ["cursor"]
+        lockfile.set_skill("brainstorming", e)
+        text, _ = configuration._tool_doctor({})
+        assert ("brainstorming is linked for claude-code, outside its declared "
+                "scope — `boost sync --prune` removes the link") in text
+        assert "('brainstorming'" not in text
+
+    def test_a_dir_boost_cannot_name_a_skill_by_is_a_note(self, installed):
+        import shutil
+
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        shutil.copytree(paths.store_dir() / "brainstorming",
+                        paths.store_dir() / "brainstorming copy")
+        text, is_error = configuration._tool_doctor({})
+        assert ("~/.agents/skills/brainstorming copy: boost cannot record a "
+                "skill by that name") in text
+        assert is_error is False
+
+    def test_a_lost_lock_is_one_sync_re_records(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        paths.lockfile_path().unlink()
+        text, _ = configuration._tool_doctor({})
+        assert ("1 store dir the lock file has lost (brainstorming) — `boost "
+                "sync` re-records it") in text
+        assert "boost replay" not in text
+
+    def test_a_corrupt_lock_is_the_users_to_restore(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        paths.lockfile_path().write_text("{oops", encoding="utf-8")
+        text, is_error = configuration._tool_doctor({})
+        assert ("1 store dir the lock file cannot be read about (brainstorming) "
+                "— ask the user to restore the lock with `boost replay`") in text
+        assert "re-records" not in text and is_error is True
+
     def test_a_plugin_variant_is_listed_and_not_counted(self, installed,
                                                         claude_plugin):
         from boost_cli.commands import configuration
