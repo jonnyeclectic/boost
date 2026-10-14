@@ -14,6 +14,7 @@ import itertools
 import json
 import os
 import pathlib
+import shlex
 import socket
 import subprocess
 import sys
@@ -1974,7 +1975,8 @@ class TestMcp:
         })
         r = boost("mcp", "register", "--no-seed")
         assert seen == ["claude", "gemini"], seen
-        assert "already registered with Claude Code" in r.out
+        assert ("already registered with Claude Code (~/.claude.json) — "
+                "nothing to do") in r.out
         assert "registered boost as an MCP server for Gemini CLI" in r.out
 
     def test_a_real_failure_on_one_host_still_reaches_the_next(
@@ -2109,10 +2111,10 @@ class TestMcp:
         assert calls == []                            # nothing was run
         assert ("no agent CLI found (looked for: claude, gemini, agy, codex)"
                 in r.out)
-        assert " ".join(self._claude_add()) in r.out
-        assert " ".join(self._gemini_add()) in r.out
-        assert " ".join(self._agy_add()) in r.out
-        assert " ".join(self._codex_add()) in r.out
+        assert shlex.join(self._claude_add()) in r.out
+        assert shlex.join(self._gemini_add()) in r.out
+        assert shlex.join(self._agy_add()) in r.out
+        assert shlex.join(self._codex_add()) in r.out
         assert journal.events(action="mcp")[0]["hosts"] == ""
 
         r = boost("mcp", "unregister")
@@ -2141,7 +2143,7 @@ class TestMcp:
         r = boost("mcp", "register", "--host", "gemini", expect=1)
         assert calls == []
         assert "`gemini` CLI not found — run this yourself:" in r.out
-        assert " ".join(self._gemini_add()) in r.out
+        assert shlex.join(self._gemini_add()) in r.out
         assert "claude mcp add" not in r.out
         assert "no agent CLI found" not in r.out      # the named host said it
 
@@ -2155,11 +2157,11 @@ class TestMcp:
         assert ("registered boost as an MCP server for Claude Code "
                 "(scope: user)") in r.out
         assert "`gemini` CLI not found — run this yourself:" in r.out
-        assert " ".join(self._gemini_add()) in r.out
+        assert shlex.join(self._gemini_add()) in r.out
         assert "`agy` CLI not found — run this yourself:" in r.out
-        assert " ".join(self._agy_add()) in r.out
+        assert shlex.join(self._agy_add()) in r.out
         assert "`codex` CLI not found — run this yourself:" in r.out
-        assert " ".join(self._codex_add()) in r.out
+        assert shlex.join(self._codex_add()) in r.out
 
     def test_host_all_with_nothing_installed_still_succeeds(
             self, boost, sandbox, monkeypatch):
@@ -2283,11 +2285,19 @@ class TestMcp:
         r = boost("mcp", "register", "--dry-run")
         assert calls == []                             # nothing was run
         assert ("Claude Code (installed): %s"
-                % " ".join(self._claude_add())) in r.out
+                % shlex.join(self._claude_add())) in r.out
         assert ("Gemini CLI (not installed): %s"
-                % " ".join(self._gemini_add())) in r.out
+                % shlex.join(self._gemini_add())) in r.out
         assert "dry run — nothing was registered, nothing tapped" in r.out
         assert "registered boost as an MCP server" not in r.out
+        # The printed line is for pasting: `no_proxy=*` bare is a zsh
+        # "no matches found" error, so it must arrive quoted and split back
+        # into exactly the argv boost would have run.
+        line = next(ln for ln in r.out.splitlines()
+                    if "Claude Code (installed): " in ln)
+        assert "'no_proxy=*'" in line
+        assert shlex.split(line.split("(installed): ", 1)[1]) \
+            == self._claude_add()
 
     def test_dry_run_scopes_to_the_named_host(self, boost, sandbox,
                                               monkeypatch):
@@ -2303,7 +2313,7 @@ class TestMcp:
         r = boost("mcp", "unregister", "--dry-run")
         assert calls == []
         assert ("Claude Code (installed): %s"
-                % " ".join(["claude", "mcp", "remove", "--scope", "user",
+                % shlex.join(["claude", "mcp", "remove", "--scope", "user",
                             "boost"])) in r.out
         assert "dry run — nothing was unregistered, nothing tapped" in r.out
 
@@ -2373,7 +2383,7 @@ class TestMcp:
         assert str(elsewhere / ".claude.json") in blob
         # The refusal has to be actionable: name the way through and the argv.
         assert "--force" in blob
-        assert " ".join(self._claude_add()) in blob
+        assert shlex.join(self._claude_add()) in blob
 
     def test_unregister_is_guarded_too(
             self, boost, sandbox, monkeypatch, tmp_path):
@@ -2455,7 +2465,7 @@ class TestMcp:
         blob = r.out + r.err
         assert "refusing to register" in blob
         assert str(elsewhere / "config.toml") in blob
-        assert " ".join(self._codex_add()) in blob
+        assert shlex.join(self._codex_add()) in blob
 
     def test_codexs_default_subdirectory_is_not_refused(
             self, boost, sandbox, monkeypatch):

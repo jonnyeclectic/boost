@@ -194,7 +194,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
             for host in targets:
                 argv = mcpdecl.register_argv(row["name"], row["spec"],
                                              host=host, scope=res.scope)
-                out.info("    " + " ".join(argv))
+                out.info("    " + mcphost.shell_line(argv))
         return
     for row in wirable:
         for host in targets:
@@ -230,7 +230,7 @@ def _register_mcp_server(name: str, spec: dict, host: str = "claude",
     argv = mcpdecl.register_argv(name, spec, host=host, scope=scope)
     if not shutil.which(mcphost.cli(host)):
         out.warn("`%s` CLI not found — run this yourself:" % mcphost.cli(host))
-        out.info("  " + " ".join(argv))
+        out.info("  " + mcphost.shell_line(argv))
         return
     # The same sandbox guard `boost mcp` applies, for the same reason: the
     # child resolves its config home from the ambient environment, so an
@@ -242,19 +242,19 @@ def _register_mcp_server(name: str, spec: dict, host: str = "claude",
     if cfg:
         out.warn("not registering %s with %s: %s is outside this $HOME (%s)"
                  % (name, mcphost.label(host), cfg, boost_home), wrap=True)
-        out.info("  run it yourself: " + " ".join(argv))
+        out.info("  run it yourself: " + mcphost.shell_line(argv))
         return
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         out.warn("could not register %s: %s" % (name, e))
-        out.info("  run it yourself: " + " ".join(argv))
+        out.info("  run it yourself: " + mcphost.shell_line(argv))
         return
     if proc.returncode != 0:
         tail = (proc.stderr or "").strip().splitlines()
         out.warn("could not register %s: %s"
                  % (name, tail[-1] if tail else "unknown error"))
-        out.info("  run it yourself: " + " ".join(argv))
+        out.info("  run it yourself: " + mcphost.shell_line(argv))
         return
     out.ok("registered MCP server %s with %s" % (name, mcphost.label(host)))
     journal.log("mcp-register", name, host=host)
