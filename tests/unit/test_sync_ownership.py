@@ -379,6 +379,10 @@ class TestClassifyUnrecorded:
         assert _classify("adr") == {**EMPTY, "foreign_store": [
             ("adr", "Claude Code plugin %s" % PLUGIN, str(theirs), "identical")]}
 
+    def test_a_skill_md_name_nothing_else_has_owns_nothing(self, sandbox):
+        _mine("pr-me", "---\nname: pr-me-v2\n---\n# mine\n")
+        assert _classify("pr-me") == {**EMPTY, "adoptable_store": ["pr-me"]}
+
     def test_an_agent_copy_under_the_skill_md_name_is_not_one(self, sandbox):
         # Only a plugin keys its skills by the frontmatter name.
         body = "---\nname: eight-adr\n---\n# same\n"
@@ -776,6 +780,13 @@ class TestLinkAgentsLeavesACoveredSkillToItsPlugin:
 
 
 class TestSyncPlanLeavesACoveredSkillToItsPlugin:
+    def test_the_agents_after_claude_code_are_still_repaired(self, claude_plugin,
+                                                             installed):
+        claude_plugin()
+        _claude_link().unlink()
+        (agents.linking_agents()["windsurf"] / "brainstorming").unlink()
+        assert store.sync_plan()["missing_links"] == [("brainstorming", "windsurf")]
+
     def test_its_missing_claude_code_link_is_no_repair(self, claude_plugin,
                                                        installed):
         claude_plugin()
@@ -1101,6 +1112,15 @@ class TestAdoption:
         assert store.sync_preview(store.sync_plan()) == [
             "would record pr-me, which boost did not install, and link it"]
 
+    def test_the_preview_weighs_only_the_agents_the_run_links(self, installed):
+        # Linked by hand from Cursor alone, it is recorded for Cursor alone,
+        # so what sits in Windsurf's dir is no part of the run.
+        mine = _mine("mine-x")
+        (agents.linking_agents()["cursor"] / "mine-x").symlink_to(mine)
+        (agents.linking_agents()["windsurf"] / "mine-x").mkdir()
+        assert store.sync_preview(store.sync_plan()) == [
+            "would record mine-x, which boost did not install, and link it"]
+
     def test_the_preview_names_what_is_in_the_way(self, installed):
         _mine("pr-me")
         (paths.home() / ".cursor" / "skills" / "pr-me").mkdir()
@@ -1392,6 +1412,15 @@ class TestRemoveForeignCopy:
         theirs = _vendor("automate")
         row = ("automate", "x", str(theirs), "identical")
         assert store.remove_foreign_copy(row) == "it is already gone"
+
+    def test_a_missing_lock_is_no_reason_to_keep_it(self, installed):
+        theirs = _vendor("automate", "# same\n")
+        copy = _mine("automate", "# same\n")
+        row = self._row()
+        paths.lockfile_path().unlink()
+        assert store.remove_foreign_copies([row]) == [None]
+        assert not os.path.lexists(copy)
+        assert (theirs / "SKILL.md").is_file()
 
     def test_kept_while_the_lock_cannot_be_read(self, installed):
         _vendor("automate", "# same\n")

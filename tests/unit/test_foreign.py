@@ -413,7 +413,8 @@ class TestManagedSettings:
         drop = root / "managed-settings.d"
         _write(drop / "20-second.json", {"enabledPlugins": {"c@m": True, "a@m": True}})
         _write(drop / "10-first.json", {"enabledPlugins": {"c@m": False, "b@m": 1}})
-        _write(drop / ".30-hidden.json", {"enabledPlugins": {"a@m": False}})
+        _write(drop / ".30-hidden.json", {"enabledPlugins": {"a@m": False,
+                                                             "h@m": True}})
         _write(drop / "40-notes.txt", {"enabledPlugins": {"b@m": True}})
         _write(drop / "50-other.json", {"enabledPlugins": ["x"]})
         # Every value is kept, for the reader to call anything but true a no.
@@ -662,6 +663,12 @@ class TestSkillName:
     ])
     def test_otherwise_the_fallback(self, sandbox, body):
         assert foreign.skill_name(_skill(paths.home() / "s", body), "fb") == "fb"
+
+    def test_a_file_that_is_not_utf8_still_declares_its_name(self, sandbox):
+        d = paths.home() / "s"
+        d.mkdir()
+        (d / "SKILL.md").write_bytes(b"---\nname: managing-secrets\n---\n# caf\xe9\n")
+        assert foreign.skill_name(d, "fb") == "managing-secrets"
 
     def test_an_unreadable_file_declares_nothing(self, sandbox):
         assert foreign.skill_name(paths.home() / "missing", "fb") == "fb"
