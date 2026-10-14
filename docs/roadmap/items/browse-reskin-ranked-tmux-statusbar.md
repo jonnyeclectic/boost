@@ -10,7 +10,7 @@ wow: 4
 note: boost browse listed fuzzy matches alphabetically, so a typed name landed past the first screen; reskinned with ranked matches, a category scope and a tmux-style status bar
 order: 372
 owner: feat/browse-reskin
-pr:
+pr: 1080
 title: <code>boost browse</code> reskin — ranked matches, <code>#category</code> scope, slate selection and a tmux-style status bar
 ---
 <b>Why.</b> Matching is fuzzy, so over a 2,402-entry corpus <code>code review</code> matched 1,722 rows — in alphabetical order, with <code>0-preflight</code> first and the <code>code-review</code> the user typed somewhere below it. Every row also carried a ★ (a curated catalogue stars everything), a full <code>[owner/repo]</code> badge, and the key hints took a chrome row of their own.
