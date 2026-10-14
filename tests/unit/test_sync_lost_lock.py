@@ -163,10 +163,8 @@ class TestSyncApplyRecovers:
                             encoding="utf-8")
         _lose_lock()
         [action] = store.sync_apply(store.sync_plan())
-        assert action == (
-            "re-recorded brainstorming as a local skill (its content matches no "
-            "tapped source; `boost reinstall brainstorming` replaces it with a "
-            "tap's copy)")
+        # No `boost reinstall` offer: it would re-read the store dir itself.
+        assert action == "re-recorded brainstorming as a local skill"
         assert "# mine" in skill_md.read_text(encoding="utf-8")
         entry = lockfile.get_skill("brainstorming")
         assert {k: entry[k] for k in ("version", "tap", "source_dir", "commit")} == {
@@ -184,7 +182,10 @@ class TestSyncApplyRecovers:
         monkeypatch.setattr(store, "_skill_source_sha", lambda _e: same)
         _lose_lock()
         [action] = store.sync_apply(store.sync_plan())
-        assert "matches more than one tapped source" in action
+        assert action == (
+            "re-recorded brainstorming as a local skill (its content matches "
+            "more than one tapped source; `boost install <tap>:brainstorming "
+            "--force` replaces it with that tap's copy)")
 
     def test_only_skill_entries_can_vouch_for_a_store_dir(
             self, installed, monkeypatch):

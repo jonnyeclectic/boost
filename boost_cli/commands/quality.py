@@ -235,6 +235,9 @@ def _drift_status(name: str, entry: dict) -> str:
     """'in-sync' | 'local-edits' | 'upstream-moved' | 'source-missing'
     | 'store-missing' | 'n/a' (local imports with no tap source)."""
     sdir = store.skill_store_dir(name)
+    if sdir.is_dir() and integrity.self_sourced(name, entry):
+        # Kept in the store itself: an edit there is the skill, not drift.
+        return staleness.NA
     store_sha = util.sha256_dir(sdir) if sdir.is_dir() else None
     is_local = entry.get("tap") == "local"
     lock_sha = entry.get("sha256", "")
@@ -682,7 +685,8 @@ def cmd_doctor(argv):
         # tamper detection: the lock file records a sha256 at install time, but
         # only `boost verify` ever re-checked it — surface content drift here too.
         locked = entry.get("sha256")
-        if locked and util.sha256_dir(sdir) != locked:
+        if (locked and not integrity.self_sourced(name, entry)
+                and util.sha256_dir(sdir) != locked):
             bad("skill", "skill %s modified since install — run `boost verify`" % name)
             skill_issues += 1
         # A deliberate sideline (`focus`, `profile use`, `context apply`)
@@ -1451,7 +1455,8 @@ def cmd_test(argv):
         score, _notes = util.score_skill(sdir)
         if util.lint_failed(sdir, score, min_score=40):
             failed.append("lint")
-        if not sdir.is_dir() or util.sha256_dir(sdir) != entry.get("sha256"):
+        if not sdir.is_dir() or (not integrity.self_sourced(name, entry)
+                                 and util.sha256_dir(sdir) != entry.get("sha256")):
             failed.append("verify")
         if len(body.encode("utf-8")) > 64 * 1024:
             failed.append("size")

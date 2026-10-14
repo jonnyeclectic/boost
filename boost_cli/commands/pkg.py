@@ -1803,6 +1803,12 @@ def cmd_reinstall(argv: list[str]) -> int:
             done_kinds.add(kind)
             continue
         if lk.get("tap") == "local":
+            if integrity.self_sourced(name, lk):
+                # Its source is its own store dir: "reinstalling" would copy
+                # it onto itself, and there is no other copy to restore.
+                out.info("%s is kept in the store itself, so there is nothing "
+                         "to reinstall it from — skipped" % name, wrap=True)
+                continue
             src = store.local_source_dir(lk)
             url = str(lk.get("source_url") or "")
             if src is None and not url:
@@ -2191,7 +2197,22 @@ def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
 def _import_root(root: Path, name: str | None, do_all: bool,
                  only: list[str] | None, display: str,
                  remote: store.RemoteSource | None = None) -> int:
+    def replacing(dirs: list[tuple[Path, str | None]]) -> bool:
+        """Ask before an import overwrites a skill that has no other copy."""
+        only_copies = [n for d, r in dirs
+                       if store.replaces_only_copy(n := store.import_name(d, r), d)]
+        if not only_copies:
+            return True
+        if out.confirm("the store holds the only copy of %s, and importing "
+                       "replaces it for good — continue?"
+                       % ", ".join(only_copies)):
+            return True
+        out.info("cancelled")
+        return False
+
     def one(skill_dir: Path, rename: str | None = None) -> int:
+        if not replacing([(skill_dir, rename)]):
+            return 1
         res = store.install_from_path(skill_dir, name=rename, only_agents=only,
                                       remote=remote)
         _report_result(res)
@@ -2220,6 +2241,8 @@ def _import_root(root: Path, name: str | None, do_all: bool,
         # One refused skill must not abandon the rest: same contract as a
         # multi-skill `boost install`, which warns per item and still reports a
         # summary (test_multi_policy_block_rc1_others_install).
+        if not replacing([(dir_of(e), None) for e in entries]):
+            return 1
         imported, refused = 0, 0
         for e in entries:
             try:

@@ -24,11 +24,13 @@ from boost_cli.core import (
     catalog,
     config,
     foreign,
+    integrity,
     lockfile,
     paths,
     registry,
     store,
 )
+from boost_cli.errors import BoostError
 
 #: chmod cannot take the owner's own read or search access away on Windows,
 #: and root reads through any mode.
@@ -1048,6 +1050,199 @@ class TestOnlyCopy:
         entry = {"tap": "local", "source_url": "https://example.test/r.git",
                  "source_dir": "skills/pr-me"}
         assert not store.only_copy("pr-me", entry)
+
+
+class TestSelfSourced:
+    """A skill recorded where `boost sync` found it is its own source."""
+
+    def test_a_skill_recorded_where_it_was_found(self, sandbox):
+        mine = _mine("pr-me")
+        assert integrity.self_sourced("pr-me", {"tap": "local",
+                                                "source_dir": str(mine)})
+
+    def test_still_one_once_its_store_dir_is_gone(self, sandbox):
+        entry = {"tap": "local", "source_dir": str(paths.store_dir() / "pr-me")}
+        assert integrity.self_sourced("pr-me", entry)
+
+    def test_one_recorded_under_another_name_for_the_dir(self, sandbox):
+        alias = paths.home() / "alias"
+        alias.symlink_to(_mine("pr-me"))
+        assert integrity.self_sourced("pr-me", {"tap": "local",
+                                                "source_dir": str(alias)})
+
+    def test_not_a_local_import_whose_source_is_gone(self, sandbox):
+        # The store holds its only copy, but it was copied from something,
+        # so drifting from that copy still means something.
+        _mine("pr-me")
+        entry = {"tap": "local", "source_dir": str(paths.home() / "gone")}
+        assert store.only_copy("pr-me", entry)
+        assert not integrity.self_sourced("pr-me", entry)
+
+    def test_not_one_whose_source_is_elsewhere(self, sandbox):
+        _mine("pr-me")
+        src = _skill(paths.home() / "dev" / "pr-me")
+        assert not integrity.self_sourced("pr-me", {"tap": "local",
+                                                    "source_dir": str(src)})
+
+    @pytest.mark.parametrize("fields", [
+        {"tap": "a-tap"},
+        {"tap": "local", "source_url": "https://example.test/r.git"},
+    ])
+    def test_not_a_tapped_skill_or_a_url_import(self, sandbox, fields):
+        entry = {"source_dir": str(_mine("pr-me")), **fields}
+        assert not integrity.self_sourced("pr-me", entry)
+
+    @pytest.mark.parametrize("entry", [None, {}, {"tap": "local"},
+                                       {"tap": "local", "source_dir": ""}])
+    def test_not_an_entry_that_names_no_dir(self, sandbox, monkeypatch, entry):
+        # An empty path is the cwd to `Path`, which may well be the store.
+        monkeypatch.chdir(_mine("pr-me"))
+        assert not integrity.self_sourced("pr-me", entry)
+
+
+class TestEditingASkillKeptInTheStore:
+    """Its edits are the skill changing, not drift from a reviewed copy."""
+
+    def test_verify_reads_an_edited_one_as_ok(self, installed):
+        mine = _mine("pr-me")
+        store.adopt_unrecorded("pr-me")
+        (mine / "SKILL.md").write_text("# edited\n", encoding="utf-8")
+        assert integrity.status("pr-me") == integrity.STATUS_OK
+
+    def test_a_missing_one_is_still_missing(self, installed):
+        mine = _mine("pr-me")
+        store.adopt_unrecorded("pr-me")
+        shutil.rmtree(mine)
+        assert integrity.status("pr-me") == integrity.STATUS_MISSING
+
+    def test_an_import_from_elsewhere_still_reads_as_modified(self, installed):
+        store.install_from_path(_skill(paths.home() / "dev" / "pr-me"))
+        (paths.store_dir() / "pr-me" / "SKILL.md").write_text(
+            "# edited\n", encoding="utf-8")
+        assert integrity.status("pr-me") == integrity.STATUS_MODIFIED
+
+
+class TestLocalSourceDir:
+    @posix_modes
+    def test_a_source_under_a_dir_boost_cannot_search_is_none(self, sandbox):
+        # Path.is_file raised there on 3.12, which crashed `boost uninstall`.
+        src = _skill(paths.home() / "locked" / "pr-me")
+        src.parent.chmod(0o600)
+        try:
+            assert store.local_source_dir({"source_dir": str(src)}) is None
+        finally:
+            src.parent.chmod(0o755)
+
+
+class TestInstallingOverAStoreDir:
+    """Nothing that installs may copy over a dir the lock does not vouch for."""
+
+    def test_a_store_dir_is_not_imported_onto_itself(self, installed):
+        # Staging skips `.git`, so the copy swapped in deleted the history.
+        mine = _mine("pr-me")
+        (mine / ".git").mkdir()
+        (mine / ".git" / "HEAD").write_text("ref: refs/heads/main\n",
+                                            encoding="utf-8")
+        with pytest.raises(BoostError) as exc:
+            store.install_from_path(mine)
+        assert exc.value.message == (
+            "~/.agents/skills/pr-me is pr-me's own dir in the store, so there "
+            "is nothing to copy it from")
+        assert exc.value.hint == (
+            "`boost sync` records a skill put in the store by hand")
+        assert (mine / ".git" / "HEAD").is_file()
+        assert lockfile.get_skill("pr-me") is None
+
+    def test_nor_an_installed_skills(self, installed):
+        sdir = store.skill_store_dir("brainstorming")
+        before = lockfile.get_skill("brainstorming")
+        with pytest.raises(BoostError) as exc:
+            store.install_from_path(sdir)
+        assert exc.value.hint == (
+            "it is installed already, and edits there are live")
+        assert lockfile.get_skill("brainstorming") == before
+
+    def test_install_leaves_a_dir_the_lock_does_not_record(self, installed):
+        mine = _mine("tdd-workflow", "# mine\n")
+        with pytest.raises(BoostError) as exc:
+            store.install(catalog.resolve_one("tdd-workflow"))
+        assert exc.value.message == (
+            "tdd-workflow is already in the store at "
+            "~/.agents/skills/tdd-workflow, and the lock file does not "
+            "record it")
+        assert exc.value.hint == (
+            "`boost sync` says whose it is, and records it if it is yours; "
+            "`boost install tdd-workflow --force` replaces it")
+        assert (mine / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
+        assert lockfile.get_skill("tdd-workflow") is None
+
+    def test_force_replaces_it(self, installed):
+        mine = _mine("tdd-workflow", "# mine\n")
+        store.install(catalog.resolve_one("tdd-workflow"), force=True)
+        assert (mine / "SKILL.md").read_text(encoding="utf-8") != "# mine\n"
+        assert lockfile.get_skill("tdd-workflow")["tap"] == installed.name
+
+    def test_a_link_in_the_store_counts_even_dangling(self, installed):
+        # The user's own link to a checkout, moved or not, is not boost's.
+        link = paths.store_dir() / "tdd-workflow"
+        link.symlink_to(paths.home() / "gone")
+        with pytest.raises(BoostError, match="does not record it"):
+            store.install(catalog.resolve_one("tdd-workflow"))
+        assert os.readlink(link) == str(paths.home() / "gone")
+
+    @pytest.mark.parametrize("text", ["{not json", '{"version": 99}'])
+    def test_over_an_unreadable_lock_it_names_replay(self, installed, text):
+        _mine("tdd-workflow")
+        paths.lockfile_path().write_text(text, encoding="utf-8")
+        with pytest.raises(BoostError) as exc:
+            store.install(catalog.resolve_one("tdd-workflow"))
+        assert exc.value.hint == (
+            "the lock file cannot be read — `boost replay` restores the lock "
+            "that knows whose it is")
+
+    def test_import_leaves_one_too(self, installed):
+        mine = _mine("pr-me", "# mine\n")
+        with pytest.raises(BoostError) as exc:
+            store.install_from_path(_skill(paths.home() / "dev" / "pr-me"))
+        assert exc.value.hint == (
+            "`boost sync` says whose it is, and records it if it is yours")
+        assert (mine / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
+
+    def test_a_recorded_skill_is_reimported_as_before(self, installed):
+        src = _skill(paths.home() / "dev" / "pr-me", "# one\n")
+        store.install_from_path(src)
+        (src / "SKILL.md").write_text("# two\n", encoding="utf-8")
+        store.install_from_path(src)
+        assert (paths.store_dir() / "pr-me" / "SKILL.md").read_text(
+            encoding="utf-8") == "# two\n"
+
+
+class TestReplacesOnlyCopy:
+    def test_another_dir_over_a_skill_kept_in_the_store(self, installed):
+        _mine("pr-me")
+        store.adopt_unrecorded("pr-me")
+        assert store.replaces_only_copy(
+            "pr-me", _skill(paths.home() / "dev" / "pr-me"))
+
+    def test_not_the_store_dir_itself(self, installed):
+        mine = _mine("pr-me")
+        store.adopt_unrecorded("pr-me")
+        assert not store.replaces_only_copy("pr-me", mine)
+
+    def test_not_a_tapped_skill(self, installed):
+        assert not store.replaces_only_copy(
+            "brainstorming", _skill(paths.home() / "dev" / "brainstorming"))
+
+    def test_not_a_name_with_no_record(self, sandbox):
+        assert not store.replaces_only_copy(
+            "pr-me", _skill(paths.home() / "dev" / "pr-me"))
+
+    def test_the_name_is_the_one_an_import_would_use(self, sandbox):
+        d = _skill(paths.home() / "dev" / "dir-name",
+                   "---\nname: declared\n---\n# x\n")
+        assert store.import_name(d) == "declared"
+        assert store.import_name(d, "renamed") == "renamed"
+        assert store.import_name(_skill(paths.home() / "dev" / "plain")) == "plain"
 
 
 class TestRemoveForeignCopy:

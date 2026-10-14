@@ -3252,6 +3252,27 @@ class TestStoreDirsBoostDidNotInstall:
     which did nothing with them, and `heal` said there was nothing to heal.
     """
 
+    def test_an_edited_skill_kept_in_the_store_is_not_tampering(self, boost,
+                                                                installed):
+        # It changes by being edited where it is; no one reviewed a copy of it.
+        # A tap skill's edit, beside it, still reads as one.
+        fm = "---\nname: pr-me\ndescription: mine\n---\n"
+        d = _store_skill("pr-me", fm + "# mine\n")
+        boost("sync")
+        (d / "SKILL.md").write_text(fm + "# edited\n", encoding="utf-8")
+        _tamper("brainstorming")
+        out = _flat(boost("doctor", expect=1).out)
+        assert "skill brainstorming modified since install" in out
+        assert "skill pr-me modified" not in out
+        boost("verify", "pr-me")
+        boost("verify", "brainstorming", expect=1)
+        drift = json.loads(boost("drift", "--json").out)["skills"]
+        assert {r["name"]: r["status"] for r in drift} == {
+            "brainstorming": "local-edits", "pr-me": "n/a"}
+        tested = json.loads(boost("test", "--json", expect=1).out)["skills"]
+        assert {r["name"]: "verify" in r["failed"] for r in tested} == {
+            "brainstorming": True, "pr-me": False}
+
     def test_a_skill_added_by_hand_is_an_issue_sync_clears(self, boost, installed):
         _store_skill("pr-me")
         r = boost("doctor", expect=1)

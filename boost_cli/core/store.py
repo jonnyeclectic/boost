@@ -161,7 +161,8 @@ def local_source_dir(entry: dict) -> Path | None:
     if not raw or entry.get("source_url"):
         return None
     src = Path(raw)
-    return src if (src / "SKILL.md").is_file() else None
+    # os.path: under a dir with no search bit, Path.is_file raises on 3.12.
+    return src if os.path.isfile(src / "SKILL.md") else None  # noqa: FURB146
 
 
 def reinstall_from_url(name: str, entry: dict) -> InstallResult:
@@ -1345,6 +1346,34 @@ def _require_writable(name: str) -> None:
                          hint="%s, then re-run" % paths.write_remedy(block))
 
 
+def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
+                       retry: str | None = None) -> None:
+    """Refuse to copy over a store dir the lock file does not record.
+
+    Such a dir is a skill the user put in the store by hand, another tool's
+    copy, or one a lost lock forgot, and :func:`_copy_skill` replaces it
+    whole — for the first, deleting the only copy there is. Nothing that
+    installs knew to look: ``existing`` is ``None`` for every one of them,
+    which reads exactly like a fresh install. ``force`` is the user saying
+    to replace it anyway, and ``retry`` names the command that does.
+    """
+    if existing or force:
+        return
+    dest = skill_store_dir(name)
+    if not os.path.lexists(dest):
+        return
+    if lockfile.check().problem in ("corrupt", "schema"):
+        hint = ("the lock file cannot be read — `boost replay` restores the "
+                "lock that knows whose it is")
+    else:
+        hint = "`boost sync` says whose it is, and records it if it is yours"
+        if retry:
+            hint += "; %s replaces it" % retry
+    raise BoostError("%s is already in the store at %s, and the lock file "
+                     "does not record it" % (name, paths.tilde(dest)),
+                     hint=hint, wrap=True)
+
+
 def _refuse_self_installing(entry: dict) -> None:
     """Refuse to half-copy an item whose repo installs itself.
 
@@ -1408,6 +1437,8 @@ def install(entry: dict, force: bool = False,
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
 
+    _refuse_unrecorded(name, existing, force,
+                       retry="`boost install %s --force`" % name)
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
     dest = skill_store_dir(name)
@@ -2734,6 +2765,33 @@ def _materialized_result(name: str, removed: list[str], entry: dict,
     return res
 
 
+def _import_meta(src_dir: Path) -> dict:
+    """The frontmatter of the SKILL.md a local install reads its name from."""
+    from . import frontmatter
+    meta, _ = frontmatter.parse((Path(src_dir) / "SKILL.md").read_text(
+        encoding="utf-8", errors="replace"))
+    return meta
+
+
+def import_name(src_dir: Path, name: str | None = None) -> str:
+    """The name :func:`install_from_path` installs ``src_dir`` under."""
+    return name or str(_import_meta(src_dir).get("name") or Path(src_dir).name)
+
+
+def replaces_only_copy(name: str, src_dir: Path) -> bool:
+    """Whether installing ``src_dir`` as ``name`` overwrites the only copy of it.
+
+    A skill :func:`only_copy` describes has nowhere to be put back from, so
+    replacing it with another dir — `boost import` under the same name —
+    loses it as surely as uninstalling it does, and gets the same question
+    first. ``src_dir`` being that store dir replaces nothing:
+    :func:`install_from_path` refuses it on its own.
+    """
+    entry = lockfile.get_skill(name)
+    return (entry is not None and only_copy(name, entry)
+            and not foreign.same_dir(Path(src_dir), skill_store_dir(name)))
+
+
 def install_from_path(src_dir: Path, name: str | None = None,
                       tap_label: str = "local",
                       only_agents: list[str] | None = None,
@@ -2759,15 +2817,24 @@ def install_from_path(src_dir: Path, name: str | None = None,
     src_dir = Path(src_dir)
     if not (src_dir / "SKILL.md").exists():
         raise BoostError("%s has no SKILL.md" % src_dir)
-    from . import frontmatter
-    meta, _ = frontmatter.parse((src_dir / "SKILL.md").read_text(
-        encoding="utf-8", errors="replace"))
+    meta = _import_meta(src_dir)
     name = name or str(meta.get("name") or src_dir.name)
     existing = lockfile.get_skill(name)
     # Refuse before `dest` is touched, so a rejected install leaves nothing
     # half-copied over an existing skill.
+    if foreign.same_dir(src_dir, skill_store_dir(name)):
+        # Copying a dir onto itself stages it without `.git` and swaps that in,
+        # so the "copy" deletes the history it was made from. `boost reinstall`
+        # of a skill `boost sync` recorded where it found it is the usual way here.
+        raise BoostError(
+            "%s is %s's own dir in the store, so there is nothing to copy it "
+            "from" % (paths.tilde(src_dir), name),
+            hint=("it is installed already, and edits there are live"
+                  if existing else
+                  "`boost sync` records a skill put in the store by hand"))
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
+    _refuse_unrecorded(name, existing, force)
     violations = policy.check_install(
         {"name": name, "tap": tap_label,
          "version": str(meta.get("version") or "0.0.0"),
@@ -4180,8 +4247,9 @@ def _record_unrecorded(name: str, why: str) -> str | None:
     ``why`` is ``"recover"`` for a lock that lost the skill and ``"adopt"`` for
     one that never had it. A lost skill came from some tap, so a copy that is
     byte-identical to exactly one tapped source gets that tap's record, the
-    one a fresh install would have written, and the local-skill line offers
-    `boost reinstall` as the way back to a tap's copy.
+    one a fresh install would have written. A copy matching several gets
+    the local record, and its line names the `boost install <tap>:` that
+    picks one; one matching none is just a local skill.
 
     An adopted skill is always a local one. Matching it means hashing every
     same-named catalogue entry's source, and each hash materializes that entry
@@ -4214,10 +4282,12 @@ def _record_unrecorded(name: str, why: str) -> str | None:
         # The shape `import_local` writes for a skill with no tap behind it.
         record = {"version": "0.0.0", "tap": "local", "source_dir": str(sdir),
                   "commit": ""}
-        how = ("as a local skill (its content matches %s tapped source; "
-               "`boost reinstall %s` replaces it with a tap's copy)"
-               % ("no" if not matches else "more than one", name)
-               if why == "recover" else "as a local skill")
+        # A reinstall would re-read the store dir itself, so the way back to
+        # a tap's copy is naming the tap.
+        how = ("as a local skill (its content matches more than one tapped "
+               "source; `boost install <tap>:%s --force` replaces it with "
+               "that tap's copy)" % name
+               if why == "recover" and matches else "as a local skill")
     record.update({"sha256": have, "installed_at": now, "updated_at": now,
                    "pinned": False, "quarantined": False, "agents": linked,
                    "only_agents": narrowed, "tags": []})

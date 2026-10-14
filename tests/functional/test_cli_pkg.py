@@ -74,6 +74,19 @@ def _skill_dir(tmp_path, name, version="0.1.0", body="# Skill\n\nBody text.\n"):
 # ── install ──────────────────────────────────────────────────────────────
 
 class TestInstall:
+    def test_a_store_dir_the_lock_does_not_record_is_not_replaced(
+            self, boost, tapped):
+        d = paths.store_dir() / "brainstorming"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        r = boost("install", "brainstorming", expect=1)
+        assert ("brainstorming is already in the store at "
+                "~/.agents/skills/brainstorming, and the lock file does not "
+                "record it") in _flat(r.out + r.err)
+        assert (d / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
+        boost("install", "brainstorming", "--force")
+        assert (d / "SKILL.md").read_text(encoding="utf-8") != "# mine\n"
+
     def test_a_skill_a_plugin_ships_is_not_linked_into_claude_code(
             self, boost, installed, claude_plugin):
         # A link would list it twice there. The line says why it is missing,
@@ -1273,6 +1286,22 @@ class TestMaterializedGovernance:
 # ── reinstall ────────────────────────────────────────────────────────────
 
 class TestReinstall:
+    def test_a_skill_kept_in_the_store_is_skipped_not_copied_onto_itself(
+            self, boost, installed):
+        # The copy is staged without `.git`, so it deleted the repo's history.
+        d = paths.store_dir() / "pr-me"
+        (d / ".git").mkdir(parents=True)
+        (d / ".git" / "HEAD").write_text("ref: refs/heads/main\n",
+                                         encoding="utf-8")
+        (d / "SKILL.md").write_text("# pr-me\n", encoding="utf-8")
+        boost("sync")
+        r = boost("reinstall", "--all")
+        assert ("pr-me is kept in the store itself, so there is nothing to "
+                "reinstall it from — skipped") in _flat(r.out)
+        assert "reinstalled brainstorming v1.4.0" in r.out
+        assert "Reinstalled 1 skill" in r.out
+        assert (d / ".git" / "HEAD").is_file()
+
     def test_by_name(self, boost, installed):
         r = boost("reinstall", "brainstorming")
         assert "reinstalled brainstorming v1.4.0" in r.out
@@ -1441,6 +1470,42 @@ class TestBundle:
 # ── import ───────────────────────────────────────────────────────────────
 
 class TestImport:
+    def test_importing_over_the_only_copy_asks_first(self, boost, installed,
+                                                     tmp_path, monkeypatch):
+        d = paths.store_dir() / "pr-me"
+        d.mkdir()
+        (d / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        boost("sync")
+        src = _skill_dir(tmp_path, "pr-me")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("import", src, expect=1)
+        assert ("the store holds the only copy of pr-me, and importing "
+                "replaces it for good — continue? [y/N]") in _flat(r.out)
+        assert "cancelled" in r.out
+        assert (d / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("y\n"))
+        boost("import", src)
+        assert _lock()["pr-me"]["source_dir"] == str(src)
+
+    def test_import_all_asks_once_and_a_no_imports_nothing(
+            self, boost, installed, tmp_path, monkeypatch):
+        for name in ("pr-me", "pr-too"):
+            d = paths.store_dir() / name
+            d.mkdir()
+            (d / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        boost("sync")
+        root = tmp_path / "many"
+        for name in ("pr-me", "pr-too", "fresh"):
+            _skill_dir(root, name)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("import", root, "--all", expect=1)
+        prompt = _flat(r.out)
+        assert prompt.count("the store holds the only copy of") == 1
+        assert "pr-me" in prompt and "pr-too" in prompt
+        assert "fresh" not in _lock()
+
     def test_dir_with_skill_md(self, boost, sandbox, tmp_path):
         d = _skill_dir(tmp_path, "my-skill")
         r = boost("import", d)
