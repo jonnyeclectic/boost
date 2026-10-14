@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -177,6 +178,43 @@ class TestHomes:
         assert foreign.plugins_root() == paths.home() / ".claude" / "plugins"
 
 
+class TestHiddenVendorSkill:
+    @pytest.fixture
+    def cursor(self, sandbox) -> Path:
+        d = paths.home() / ".cursor" / "skills-cursor"
+        _skill(d / "automate")
+        return d
+
+    def test_none_without_a_vendor_dir(self, sandbox):
+        assert foreign.hidden_vendor_skill("automate") is None
+
+    @pytest.mark.parametrize("name", ["automate", "absent"])
+    def test_none_where_it_can_look(self, cursor, name):
+        assert foreign.hidden_vendor_skill(name) is None
+
+    def test_none_for_what_is_not_a_skill(self, cursor):
+        (cursor / "empty").mkdir()
+        (cursor / "file").write_text("x", encoding="utf-8")
+        assert foreign.hidden_vendor_skill("empty") is None
+        assert foreign.hidden_vendor_skill("file") is None
+
+    def test_the_skill_dir_it_cannot_look_in(self, cursor, locked):
+        locked(cursor / "automate")
+        assert foreign.hidden_vendor_skill("automate") == cursor / "automate"
+        assert foreign.hidden_vendor_skill("absent") is None
+
+    @pytest.mark.parametrize("name", ["automate", "absent"])
+    def test_the_vendor_dir_when_it_cannot_be_searched(self, cursor, locked, name):
+        locked(cursor)
+        assert foreign.hidden_vendor_skill(name) == cursor
+
+    def test_every_vendor_dir_is_asked(self, cursor, locked):
+        codex = paths.home() / ".codex" / "skills" / ".system"
+        _skill(codex / "automate")
+        locked(codex / "automate")
+        assert foreign.hidden_vendor_skill("automate") == codex / "automate"
+
+
 class TestEnabledPlugins:
     def test_none_without_records(self, sandbox):
         assert foreign.enabled_plugins() == []
@@ -206,12 +244,33 @@ class TestEnabledPlugins:
         inst = _plugin(enabled=NO_ROW)
         assert foreign.enabled_plugins() == [foreign.Plugin("eight-backend@eight", inst)]
 
-    @pytest.mark.parametrize("enabled", ["false", 0, None])
-    def test_a_value_that_is_not_a_boolean_is_no_answer(self, sandbox, enabled):
-        _plugin(enabled=enabled, entry={"defaultEnabled": False})
+    @pytest.mark.parametrize("enabled", ["false", "true", 0, 1, None, ["^1.0.0"], {}])
+    def test_any_value_but_true_is_a_no(self, sandbox, enabled):
+        # Claude Code 2.1.300 lists the plugin as disabled for the
+        # version-constraint form, which read here as no answer, and so as
+        # enabled by default.
+        _plugin(enabled=enabled)
         assert foreign.enabled_plugins() == []
-        _plugin("p@m", enabled=enabled)
-        assert [p.id for p in foreign.enabled_plugins()] == ["p@m"]
+
+    @pytest.mark.parametrize("key,value,expected", [
+        ("EIGHT-BACKEND@EIGHT", False, False),
+        ("Eight-Backend@Eight", True, True),
+    ])
+    def test_the_id_matches_whatever_its_case(self, sandbox, key, value, expected):
+        _plugin(enabled=NO_ROW, entry={"defaultEnabled": not expected})
+        settings = paths.home() / ".claude" / "settings.json"
+        _write(settings, {"enabledPlugins": {key: value}})
+        assert bool(foreign.enabled_plugins()) is expected
+
+    def test_two_spellings_say_yes_only_together(self, sandbox):
+        _plugin()
+        settings = paths.home() / ".claude" / "settings.json"
+        _write(settings, {"enabledPlugins": {"eight-backend@eight": True,
+                                             "EIGHT-backend@eight": False}})
+        assert foreign.enabled_plugins() == []
+        _write(settings, {"enabledPlugins": {"eight-backend@eight": True,
+                                             "EIGHT-backend@eight": True}})
+        assert len(foreign.enabled_plugins()) == 1
 
     def test_the_users_row_outranks_default_enabled(self, sandbox):
         _plugin(entry={"defaultEnabled": False})
@@ -239,7 +298,8 @@ class TestEnabledPlugins:
         (False, True, False),
         (True, False, True),
         ("off", False, False),
-        ("off", NO_ROW, True),
+        ("off", True, False),
+        (["^1.0.0"], True, False),
     ])
     def test_managed_settings_outrank_the_users(self, sandbox, monkeypatch, tmp_path,
                                                 managed, user, expected):
@@ -248,6 +308,14 @@ class TestEnabledPlugins:
                {"enabledPlugins": {"eight-backend@eight": managed}})
         _plugin(enabled=user)
         assert bool(foreign.enabled_plugins()) is expected
+
+    def test_a_managed_id_matches_whatever_its_case(self, sandbox, monkeypatch,
+                                                    tmp_path):
+        monkeypatch.setattr(foreign, "managed_settings_dir", lambda: tmp_path / "m")
+        _write(tmp_path / "m" / "managed-settings.json",
+               {"enabledPlugins": {"Eight-Backend@EIGHT": False}})
+        _plugin()
+        assert foreign.enabled_plugins() == []
 
     def test_a_project_scope_install_is_not_counted(self, sandbox):
         _plugin(scope="project")
@@ -288,7 +356,9 @@ class TestEnabledPlugins:
         assert foreign.enabled_plugins() == [foreign.Plugin("eight-backend@eight", inst)]
 
     @pytest.mark.parametrize("records", [{"plugins": ["x"]},
-                                         {"plugins": {"eight-backend@eight": "x"}}])
+                                         {"plugins": {"eight-backend@eight": "x"}},
+                                         {"plugins": {"eight-backend@eight": None}},
+                                         {"plugins": {"eight-backend@eight": [None]}}])
     def test_misshapen_records_yield_nothing(self, sandbox, records):
         _plugin()
         _write(_plugins_root() / "installed_plugins.json", records)
@@ -346,8 +416,9 @@ class TestManagedSettings:
         _write(drop / ".30-hidden.json", {"enabledPlugins": {"a@m": False}})
         _write(drop / "40-notes.txt", {"enabledPlugins": {"b@m": True}})
         _write(drop / "50-other.json", {"enabledPlugins": ["x"]})
-        assert foreign.managed_plugin_states() == {"a@m": True, "b@m": False,
-                                                   "c@m": True}
+        # Every value is kept, for the reader to call anything but true a no.
+        assert foreign.managed_plugin_states() == {"a@m": True, "b@m": 1,
+                                                   "bad@m": "yes", "c@m": True}
 
     def test_an_unreadable_drop_in_dir_leaves_the_file(self, sandbox, monkeypatch,
                                                        tmp_path):
@@ -416,6 +487,98 @@ class TestMarketplaceEntry:
 
     def test_an_id_without_a_marketplace_has_no_entry(self, sandbox):
         assert foreign._marketplace_entry(foreign.Plugin("p", Path("/x"))) is None
+
+
+def _dir_market(source="./plugins/eight-backend", *, kind="directory", entry=None):
+    """Re-home the default plugin's marketplace in a folder of the user's.
+
+    ``claude plugin marketplace add <dir>`` records it as ``{"source":
+    "directory"}`` with that dir as ``installLocation``, and Claude Code then
+    reads a plugin from ``<dir>/<source>``, not from its ``installPath``.
+    The folder's ``eight-adr`` differs from the cached one. Returns
+    ``(cache, folder)``.
+    """
+    inst = _plugin()
+    mdir = paths.home() / "src" / "eight"
+    record = {"source": {"source": kind, "path": str(mdir)},
+              "installLocation": str(mdir)}
+    if kind is None:
+        del record["source"]
+    _write(_plugins_root() / "known_marketplaces.json", {"eight": record})
+    _write(mdir / ".claude-plugin" / "marketplace.json",
+           {"name": "eight", "plugins": [entry or {"name": "eight-backend",
+                                                   "source": source}]})
+    folder = mdir / source
+    _skill(folder / "skills" / "eight-adr", "# edited in the folder\n")
+    return inst, folder
+
+
+class TestDirectoryMarketplace:
+    def test_the_folder_is_read_not_the_cache(self, sandbox):
+        _inst, folder = _dir_market()
+        assert [p.path for p in foreign.enabled_plugins()] == [folder]
+        assert _skills() == {"eight-adr": folder / "skills" / "eight-adr"}
+
+    def test_the_folders_plugin_json_is_read(self, sandbox):
+        inst, folder = _dir_market()
+        _write(inst / ".claude-plugin" / "plugin.json", {"skills": ["./old"]})
+        _skill(inst / "old" / "old")
+        _write(folder / ".claude-plugin" / "plugin.json", {"skills": ["./extra"]})
+        _skill(folder / "extra" / "x")
+        assert sorted(_skills()) == ["eight-adr", "x"]
+
+    @pytest.mark.parametrize("source", ["./", ".", "././"])
+    def test_its_own_root(self, sandbox, source):
+        _dir_market(source)
+        assert [p.path for p in foreign.enabled_plugins()] == [paths.home() / "src" / "eight"]
+
+    def test_a_source_that_leaves_it_loads_nothing(self, sandbox):
+        # Claude Code refuses it and does not fall back to the installPath.
+        _dir_market("../outside")
+        assert foreign.enabled_plugins() == []
+
+    def test_an_absolute_source_loads_nothing(self, sandbox):
+        _dir_market(entry={"name": "eight-backend",
+                           "source": str(paths.home() / "src" / "eight")})
+        assert foreign.enabled_plugins() == []
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges")
+    def test_a_link_that_leaves_it_loads_nothing(self, sandbox):
+        outside = _skill(paths.home() / "outside" / "skills" / "eight-adr").parent.parent
+        mdir = paths.home() / "src" / "eight"
+        _dir_market("./plugins/eight-backend")
+        target = mdir / "plugins" / "linked"
+        target.symlink_to(outside, target_is_directory=True)
+        _write(mdir / ".claude-plugin" / "marketplace.json",
+               {"plugins": [{"name": "eight-backend", "source": "./plugins/linked"}]})
+        assert foreign.enabled_plugins() == []
+
+    def test_a_missing_folder_loads_nothing(self, sandbox):
+        _inst, folder = _dir_market()
+        shutil.rmtree(folder)
+        assert foreign.plugin_index() == {}
+
+    @pytest.mark.parametrize("kind", ["github", "git", "url", "file", None])
+    def test_another_kind_of_marketplace_keeps_the_install_path(self, sandbox, kind):
+        inst, _folder = _dir_market(kind=kind)
+        assert [p.path for p in foreign.enabled_plugins()] == [inst]
+
+    @pytest.mark.parametrize("record", ["directory", {}, [], None])
+    def test_a_record_that_is_not_a_source_object_keeps_it(self, sandbox, record):
+        inst, _folder = _dir_market()
+        mdir = paths.home() / "src" / "eight"
+        _write(_plugins_root() / "known_marketplaces.json",
+               {"eight": {"source": record, "installLocation": str(mdir)}})
+        assert [p.path for p in foreign.enabled_plugins()] == [inst]
+
+    @pytest.mark.parametrize("source", [{"source": "github", "repo": "o/r"}, None, 3])
+    def test_an_entry_source_that_is_not_a_path_keeps_it(self, sandbox, source):
+        inst, _folder = _dir_market(entry={"name": "eight-backend", "source": source})
+        assert [p.path for p in foreign.enabled_plugins()] == [inst]
+
+    def test_no_entry_keeps_it(self, sandbox):
+        inst, _folder = _dir_market(entry={"name": "someone-else", "source": "./x"})
+        assert [p.path for p in foreign.enabled_plugins()] == [inst]
 
 
 class TestListed:
@@ -554,11 +717,16 @@ class TestPluginSkills:
         assert _skills() == {"a": inst / "skills" / "a", "x": inst / "extra" / "x",
                              "m": inst / "more" / "m"}
 
-    def test_a_root_source_list_replaces_the_scan_beside_a_plugin_json_too(self, sandbox):
-        inst = _plugin(skills=("a", "b"), manifest={"skills": ["./extra"]},
+    @pytest.mark.parametrize("own", [["./extra"], "./extra", ["./skills"],
+                                     ["./skills/a"]])
+    def test_a_root_source_list_replaces_a_plugin_jsons_skills_too(self, sandbox, own):
+        # Claude Code 2.1.300 lists only the entry's skills. Counting the
+        # manifest's too called `a` the plugin's, so a store copy of it got no
+        # Claude Code link while Claude Code loaded no `a` from the plugin.
+        inst = _plugin(skills=("a", "b"), manifest={"skills": own},
                        entry={"skills": ["./skills/b"]})
         _skill(inst / "extra" / "x")
-        assert _skills() == {"b": inst / "skills" / "b", "x": inst / "extra" / "x"}
+        assert _skills() == {"b": inst / "skills" / "b"}
 
     def test_a_plugin_json_without_skills_is_the_default_scan(self, sandbox):
         inst = _plugin(skills=("a",), manifest={"name": "eight-backend"})
@@ -663,13 +831,21 @@ class TestPluginSkills:
 
 
 class TestPluginIndex:
-    def test_first_plugin_by_id_wins_a_shared_name(self, sandbox):
+    def test_every_plugin_that_ships_a_name_is_listed_by_id(self, sandbox):
+        b = _plugin("b-plugin@m", skills=("shared",))
         a = _plugin("a-plugin@m", skills=("shared", "only-a"))
-        _plugin("b-plugin@m", skills=("shared",))
         index = foreign.plugin_index()
         assert sorted(index) == ["only-a", "shared"]
-        plugin, where = index["shared"]
-        assert (plugin.id, where) == ("a-plugin@m", a / "skills" / "shared")
+        assert [(p.id, where) for p, where in index["shared"]] == [
+            ("a-plugin@m", a / "skills" / "shared"),
+            ("b-plugin@m", b / "skills" / "shared")]
+        assert [p.id for p, _w in index["only-a"]] == ["a-plugin@m"]
+
+    def test_the_inventory_names_each_of_them(self, sandbox):
+        _plugin("a-plugin@m", skills=("shared",))
+        _plugin("b-plugin@m", skills=("shared",))
+        assert [c.owner for c in foreign.inventory()["shared"]] == [
+            "Claude Code plugin a-plugin@m", "Claude Code plugin b-plugin@m"]
 
 
 class TestInventory:

@@ -93,6 +93,31 @@ def _set(name: str, **fields) -> None:
     lockfile.set_skill(name, e)
 
 
+def _dir_marketplace(body: str | None) -> Path:
+    """Re-home ``claude_plugin``'s marketplace in a folder of the user's.
+
+    One added with ``claude plugin marketplace add <dir>``: Claude Code reads
+    the plugin from the folder every session, not from its ``installPath``.
+    ``body`` is the folder's ``brainstorming``, None for a copy of the
+    store's. Returns that skill's dir.
+    """
+    mdir = paths.home() / "src" / "eight"
+    plugins = paths.home() / ".claude" / "plugins"
+    (plugins / "known_marketplaces.json").write_text(json.dumps({"eight": {
+        "source": {"source": "directory", "path": str(mdir)},
+        "installLocation": str(mdir)}}), encoding="utf-8")
+    (mdir / ".claude-plugin").mkdir(parents=True)
+    (mdir / ".claude-plugin" / "marketplace.json").write_text(json.dumps({
+        "name": "eight", "plugins": [{"name": "eight-backend",
+                                      "source": "./plugins/eight-backend"}]}),
+        encoding="utf-8")
+    where = mdir / "plugins" / "eight-backend" / "skills" / "brainstorming"
+    if body is None:
+        shutil.copytree(paths.store_dir() / "brainstorming", where)
+        return where
+    return _skill(where, body)
+
+
 class TestUnrecordedStoreDirs:
     def test_only_unrecorded_directories(self, installed):
         _mine("a")
@@ -272,6 +297,63 @@ class TestClassifyUnrecorded:
         _mine("automate", "# same\n")
         assert _classify("automate")["foreign_store"] == [
             ("automate", "Cursor's built-ins", str(theirs), "identical")]
+
+    def test_the_identical_owner_is_named_whichever_comes_first(self, claude_plugin,
+                                                                sandbox):
+        # The confirm says what removing the store copy costs, and it costs
+        # nothing while some owner holds the same bytes.
+        _vendor("automate", "# Cursor's\n")
+        theirs = claude_plugin("automate", "# same\n")
+        _mine("automate", "# same\n")
+        assert _classify("automate")["foreign_store"] == [
+            ("automate", "Claude Code plugin %s" % PLUGIN, str(theirs), "identical")]
+
+    def test_of_two_plugins_the_identical_one(self, claude_plugin, sandbox):
+        claude_plugin("eight-adr", "# a\n", pid="a-first@m")
+        theirs = claude_plugin("eight-adr", "# b\n", pid="b-second@m")
+        _mine("eight-adr", "# b\n")
+        assert _classify("eight-adr")["foreign_store"] == [
+            ("eight-adr", "Claude Code plugin b-second@m", str(theirs), "identical")]
+
+    @posix_modes
+    def test_a_vendor_skill_it_cannot_look_in_keeps_the_name_from_adoption(
+            self, sandbox):
+        # Cursor's `automate` at mode 000 is invisible to the inventory, so
+        # the store's copy read as nobody's and was recorded as the user's.
+        theirs = _vendor("automate")
+        _mine("automate")
+        theirs.chmod(0)
+        try:
+            got = _classify("automate")
+        finally:
+            theirs.chmod(0o755)
+        assert got == {**EMPTY, "unreadable_store": [("automate", str(theirs))]}
+
+    @posix_modes
+    def test_a_vendor_dir_it_cannot_search_keeps_every_name_from_adoption(
+            self, sandbox):
+        root = _vendor("automate").parent
+        _mine("pr-me")
+        root.chmod(0o600)
+        try:
+            got = _classify("pr-me")
+        finally:
+            root.chmod(0o755)
+        assert got == {**EMPTY, "unreadable_store": [("pr-me", str(root))]}
+
+    @posix_modes
+    def test_sync_neither_records_nor_links_what_it_cannot_tell(self, installed):
+        theirs = _vendor("automate")
+        _mine("automate")
+        theirs.chmod(0)
+        try:
+            actions = store.sync_apply(store.sync_plan())
+        finally:
+            theirs.chmod(0o755)
+        assert not [a for a in actions if "automate" in a]
+        assert "automate" not in lockfile.installed()
+        assert not [a for a, d in agents.linking_agents().items()
+                    if os.path.lexists(d / "automate")]
 
     def test_a_vendor_outranks_a_plugin(self, claude_plugin, installed):
         claude_plugin("automate", "# plugin\n")
@@ -460,6 +542,27 @@ class TestCoveringPlugin:
         monkeypatch.setattr(foreign, "plugin_index", lambda: pytest.fail("read"))
         assert store.covering_plugin("brainstorming", {}) is None
 
+    def test_the_plugin_with_the_same_files_whichever_comes_first(
+            self, claude_plugin, installed):
+        claude_plugin(body="# a different skill\n", pid="a-first@m")
+        theirs = claude_plugin(pid="b-second@m")
+        plugin, path = store.covering_plugin("brainstorming")
+        assert (plugin.id, path) == ("b-second@m", theirs)
+
+    def test_a_stale_cache_does_not_cover_what_the_folder_now_holds(
+            self, claude_plugin, installed):
+        # The cache matches the store; the folder Claude Code reads was
+        # edited since. Covering it dropped the only `/brainstorming` link.
+        claude_plugin()
+        _dir_marketplace("# edited since the install\n")
+        assert store.covering_plugin("brainstorming") is None
+
+    def test_the_folder_covers_what_it_holds(self, claude_plugin, installed):
+        claude_plugin(body="# the cache, stale\n")
+        theirs = _dir_marketplace(None)
+        plugin, path = store.covering_plugin("brainstorming")
+        assert (plugin.id, path) == (PLUGIN, theirs)
+
 
 class TestPluginCoverage:
     def test_identical_and_different_copies(self, claude_plugin, installed):
@@ -483,6 +586,19 @@ class TestPluginCoverage:
         claude_plugin()
         _set("brainstorming", **fields)
         assert store.plugin_coverage(lockfile.installed()) == {}
+
+    def test_the_identical_plugin_whichever_comes_first(self, claude_plugin,
+                                                        installed):
+        claude_plugin(body="# a different skill\n", pid="a-first@m")
+        theirs = claude_plugin(pid="b-second@m")
+        assert store.plugin_coverage(lockfile.installed()) == {
+            "brainstorming": ("b-second@m", str(theirs), "identical")}
+
+    def test_otherwise_the_first_by_id_differs(self, claude_plugin, installed):
+        first = claude_plugin(body="# one\n", pid="a-first@m")
+        claude_plugin(body="# two\n", pid="b-second@m")
+        assert store.plugin_coverage(lockfile.installed()) == {
+            "brainstorming": ("a-first@m", str(first), "differs")}
 
     def test_a_skipped_skill_does_not_end_the_pass(self, claude_plugin, installed):
         theirs = claude_plugin()
@@ -1617,9 +1733,9 @@ class TestWording:
             "tell whose it is or record it — make it readable, then re-run "
             "`boost sync`")
         assert store.unreadable_line([("a", str(d / "a")), ("b", str(d / "b" / "x"))]) == (
-            "2 store dirs hold something boost cannot read (a: ~/.agents/skills/a, "
-            "b: ~/.agents/skills/b/x) — make them readable, then re-run "
-            "`boost sync`")
+            "2 store dirs cannot be recorded: boost cannot read what says whose "
+            "they are (a: ~/.agents/skills/a, b: ~/.agents/skills/b/x) — make "
+            "those readable, then re-run `boost sync`")
 
     def test_foreign_lines_for_identical_copies_say_nothing_changed(self, sandbox):
         rows = [("a", "o", "/x/a", "identical")]

@@ -3347,9 +3347,11 @@ def classify_unrecorded(names: list[str]) -> dict[str, list]:
       copy of another tool's skill. Only ``boost sync --prune`` removes it.
     * ``not_skill_store`` — a dir with no ``SKILL.md``. Named, never touched.
     * ``unreadable_store`` — ``(skill, path)``: a dir holding ``path``, which
-      boost cannot read (:func:`foreign.unreadable`). Whose it is cannot be
-      told, it cannot be recorded, and its hash would skip what it cannot
-      list, so it is named with that path and never touched.
+      boost cannot read (:func:`foreign.unreadable`), or one that would be
+      adopted while ``path``, a vendor dir that may hold a skill by its name,
+      cannot be looked in (:func:`foreign.hidden_vendor_skill`). Whose it is
+      cannot be told and it is not recorded; its hash would skip what it
+      cannot list, so it is named with that path and never touched.
 
     These were one bucket, "orphaned store dirs", and ``sync --prune`` deleted
     every dir in it. On the machine this was written against that was 28
@@ -3418,10 +3420,14 @@ def classify_unrecorded(names: list[str]) -> dict[str, list]:
         repo = foreign.holds_repo(sdir)
         owned = [c for c in theirs if c.kind != foreign.AGENT]
         if owned:
-            c = owned[0]
+            # The identical one when there is one: removing the store copy
+            # then loses nothing, and the confirm says what it costs.
+            same_owner = None if repo else next(
+                (c for c in owned if foreign.same_content(sdir, c.path)), None)
+            c = same_owner or owned[0]
             buckets["foreign_store"].append(
                 (name, c.owner, str(c.path),
-                 foreign.DIFFERS if repo else foreign.compare(sdir, c.path)))
+                 foreign.IDENTICAL if same_owner else foreign.DIFFERS))
             continue
         same = [] if repo else [c for c in theirs
                                 if foreign.same_content(sdir, c.path)]
@@ -3436,6 +3442,10 @@ def classify_unrecorded(names: list[str]) -> dict[str, list]:
             c = max(newer, key=lambda c: times[c.path])
             buckets["foreign_store"].append(
                 (name, c.owner, str(c.path), foreign.DIFFERS))
+            continue
+        hidden = foreign.hidden_vendor_skill(name)
+        if hidden is not None:
+            buckets["unreadable_store"].append((name, str(hidden)))
             continue
         buckets["older_copies"].extend((name, c.owner, str(c.path)) for c in theirs)
         buckets["adoptable_store"].append(name)
@@ -3452,9 +3462,7 @@ def _plugin_hits(name: str, index: dict) -> list[tuple[foreign.Plugin, Path]]:
     """
     hits: list[tuple[foreign.Plugin, Path]] = []
     for key in dict.fromkeys((name, foreign.skill_name(skill_store_dir(name), name))):
-        hit = index.get(key)
-        if hit is not None and hit not in hits:
-            hits.append(hit)
+        hits.extend(index.get(key, ()))
     return hits
 
 
@@ -4558,8 +4566,8 @@ def unreadable_line(rows: list) -> str:
         return ("%s: %s cannot be read, so boost cannot tell whose it is or "
                 "record it — make it readable, then re-run `boost sync`"
                 % (name, paths.tilde(where)))
-    return ("%d store dirs hold something boost cannot read (%s) — make them "
-            "readable, then re-run `boost sync`"
+    return ("%d store dirs cannot be recorded: boost cannot read what says whose "
+            "they are (%s) — make those readable, then re-run `boost sync`"
             % (len(rows), _names(["%s: %s" % (n, paths.tilde(w)) for n, w in rows])))
 
 

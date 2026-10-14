@@ -878,6 +878,7 @@ def claude_plugin(sandbox):
     Claude Code installs a user-scope plugin: enabled in ``settings.json``,
     listed in ``installed_plugins.json`` (v2), and with no ``plugin.json``, so
     the default ``skills/`` scan applies. Returns the plugin's skill dir.
+    Calls with different plugin ids install the plugins side by side.
     """
     import json
     import shutil
@@ -894,11 +895,12 @@ def claude_plugin(sandbox):
         else:
             where.mkdir(parents=True)
             (where / "SKILL.md").write_text(body, encoding="utf-8")
-        for f, data in (
-                (claude / "settings.json", {"enabledPlugins": {pid: True}}),
-                (claude / "plugins" / "installed_plugins.json",
-                 {"version": 2, "plugins": {pid: [
-                     {"scope": "user", "installPath": str(inst)}]}})):
+        for f, key, value, empty in (
+                (claude / "settings.json", "enabledPlugins", True, {}),
+                (claude / "plugins" / "installed_plugins.json", "plugins",
+                 [{"scope": "user", "installPath": str(inst)}], {"version": 2})):
+            data = json.loads(f.read_text(encoding="utf-8")) if f.exists() else empty
+            data.setdefault(key, {})[pid] = value
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text(json.dumps(data), encoding="utf-8")
         return where

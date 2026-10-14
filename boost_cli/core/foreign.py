@@ -92,7 +92,7 @@ class Counterpart:
 class Plugin:
     """An enabled, installed Claude Code plugin."""
     id: str         #: ``<plugin>@<marketplace>``
-    path: Path      #: its ``installPath``
+    path: Path      #: where Claude Code reads it from (:func:`_read_from`)
 
     @property
     def name(self) -> str:
@@ -136,6 +136,26 @@ def vendor_dirs() -> list[tuple[str, Path]]:
     if "codex" in known:
         found.append(("Codex's built-ins", known["codex"]["dir"] / ".system"))
     return [(owner, d) for owner, d in found if os.path.isdir(d)]
+
+
+def hidden_vendor_skill(name: str) -> Path | None:
+    """A vendor dir that may hold a skill called ``name`` but cannot be looked in.
+
+    :func:`inventory` lists a vendor's skill only when its ``SKILL.md`` can
+    be seen, so with Cursor's ``skills-cursor/automate`` at mode 000 the
+    store's copy of it read as nobody's, and plain ``boost sync`` recorded
+    Cursor's built-in as the user's skill and linked it into every agent.
+    Returns what cannot be looked in: the skill's dir, or the vendor dir when
+    that cannot even be searched — then any name might be in it.
+    """
+    for _owner, d in vendor_dirs():
+        try:
+            (d / name / "SKILL.md").stat()
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            return d / name if os.path.lexists(d / name) else d
+    return None
 
 
 def claude_home() -> Path:
@@ -209,17 +229,17 @@ def managed_settings_dir() -> Path:
     return Path("/etc/claude-code")
 
 
-def managed_plugin_states() -> dict[str, bool]:
-    """``{plugin id: enabled}`` from the managed ``enabledPlugins``.
+def managed_plugin_states() -> dict[str, object]:
+    """``{plugin id: value}`` from the managed ``enabledPlugins``.
 
     ``managed-settings.json`` first, then each ``*.json`` in
     ``managed-settings.d`` in alphabetical order, hidden files skipped, as the
     docs order them. That a later file's answer replaces an earlier one id by
     id is this module's reading: the docs give the file order, not how one
-    object-valued key merges. A value that is not a boolean is no answer, as
-    Claude Code drops an invalid managed entry and keeps the rest. Policy
-    delivered by a server or MDM outranks these files and cannot be read from
-    here, so this is the most a local reader can know.
+    object-valued key merges. Every value is kept, for :func:`_answer` to
+    read the way it reads the user's. Policy delivered by a server or MDM
+    outranks these files and cannot be read from here, so this is the most a
+    local reader can know.
     """
     root = managed_settings_dir()
     drop_in = root / "managed-settings.d"
@@ -228,11 +248,11 @@ def managed_plugin_states() -> dict[str, bool]:
                        if n.endswith(".json") and not n.startswith("."))
     except OSError:
         extra = []
-    states: dict[str, bool] = {}
+    states: dict[str, object] = {}
     for f in (root / "managed-settings.json", *(drop_in / n for n in extra)):
         value = _object(f).get("enabledPlugins")
         if isinstance(value, dict):
-            states.update((k, v) for k, v in value.items() if isinstance(v, bool))
+            states.update(value)
     return states
 
 
@@ -251,19 +271,38 @@ def _user_install(pid: str, rows) -> Plugin | None:
     return None
 
 
-def _enabled(plugin: Plugin, states: list[dict]) -> bool:
-    """Whether Claude Code runs ``plugin``: the first boolean answer wins.
+def _answer(layer: dict, pid: str) -> bool | None:
+    """What one ``enabledPlugins`` layer says of ``pid``: True, False or None.
 
-    ``states`` holds the managed and then the user ``enabledPlugins``; a
-    managed ``true`` cannot be turned off by the user and a managed ``false``
-    blocks the plugin everywhere. A plugin no settings name falls back to
-    ``defaultEnabled``, the marketplace entry's over ``plugin.json``'s, and
-    that defaults to true.
+    The id matches whatever its case, and any value but a literal ``true`` is
+    a no: Claude Code 2.1.300 lists a plugin as disabled for
+    ``{"P@M": false}`` and for the version-constraint form
+    ``{"p@m": ["^1.0.0"]}`` alike, where reading only an exact-case boolean
+    counted both enabled. A layer that spells the id more than once says yes
+    only if every spelling does. Each rule errs towards "not enabled", whose
+    cost is a skill listed twice; counting a plugin enabled that Claude Code
+    does not run hides the skill from it (:func:`plugin_skills`).
+    """
+    want = pid.lower()
+    values = [v for k, v in layer.items() if k.lower() == want]
+    if not values:
+        return None
+    return all(v is True for v in values)
+
+
+def _enabled(plugin: Plugin, states: list[dict]) -> bool:
+    """Whether Claude Code runs ``plugin``: the first layer that names it decides.
+
+    ``states`` holds the managed and then the user ``enabledPlugins``
+    (:func:`_answer` reads each); a managed yes cannot be turned off by the
+    user and a managed no blocks the plugin everywhere. A plugin no settings
+    name falls back to ``defaultEnabled``, the marketplace entry's over
+    ``plugin.json``'s, and that defaults to true.
     """
     for state in states:
-        value = state.get(plugin.id)
-        if isinstance(value, bool):
-            return value
+        answer = _answer(state, plugin.id)
+        if answer is not None:
+            return answer
     _present, manifest = _manifest(plugin.path)
     for source in (_marketplace_entry(plugin) or {}, manifest or {}):
         value = source.get("defaultEnabled")
@@ -288,25 +327,86 @@ def enabled_plugins() -> list[Plugin]:
     found = []
     for pid in sorted(installed):
         plugin = _user_install(pid, installed[pid])
-        if plugin is not None and _enabled(plugin, states):
+        where = None if plugin is None else _read_from(plugin)
+        if where is None:
+            continue
+        plugin = Plugin(pid, where)
+        if _enabled(plugin, states):
             found.append(plugin)
     return found
 
 
-def _marketplace_entry(plugin: Plugin) -> dict | None:
-    """The plugin's entry in its marketplace's ``marketplace.json``, or None."""
+def _marketplace(plugin: Plugin) -> tuple[dict, Path] | None:
+    """``(record, root)`` for the plugin's marketplace, or None for an id without one.
+
+    ``record`` is its row in ``known_marketplaces.json`` (``{}`` without one)
+    and ``root`` the directory it lives in: the row's absolute
+    ``installLocation``, else ``<plugins>/marketplaces/<name>``.
+    """
     market = plugin.id.split("@", 1)[1] if "@" in plugin.id else ""
     if not market:
         return None
     where = _object(plugins_root() / "known_marketplaces.json").get(market)
-    loc = where.get("installLocation") if isinstance(where, dict) else None
+    record = where if isinstance(where, dict) else {}
+    loc = record.get("installLocation")
     root = (Path(loc) if isinstance(loc, str) and os.path.isabs(loc)
             else plugins_root() / "marketplaces" / market)
-    entries = _object(root / ".claude-plugin" / "marketplace.json").get("plugins")
+    return record, root
+
+
+def _marketplace_entry(plugin: Plugin) -> dict | None:
+    """The plugin's entry in its marketplace's ``marketplace.json``, or None."""
+    found = _marketplace(plugin)
+    if found is None:
+        return None
+    entries = _object(found[1] / ".claude-plugin" / "marketplace.json").get("plugins")
     for entry in entries if isinstance(entries, list) else []:
         if isinstance(entry, dict) and entry.get("name") == plugin.name:
             return entry
     return None
+
+
+def _read_from(plugin: Plugin) -> Path | None:
+    """The directory Claude Code loads ``plugin`` from; None when it loads none.
+
+    Its ``installPath`` (``plugin.path``) — except for a marketplace added
+    from a local directory (``claude plugin marketplace add <dir>``) whose
+    entry's ``source`` is a path. Claude Code reads that plugin from
+    ``<marketplace dir>/<source>`` every session and never from the
+    ``installPath``, which is a copy taken at install and goes stale with the
+    first edit, so comparing the store against it called a stale snapshot
+    the plugin's skill both ways: a store copy matching the snapshot lost its
+    Claude Code link while Claude Code ran other bytes, and one matching the
+    folder was linked and listed twice. A source path that is absolute or
+    leaves the marketplace dir is refused there, and the plugin does not load.
+
+    Established from Claude Code 2.1.300's bundle (``ZLe``: an entry source
+    that is a string, in a marketplace whose source is ``file`` or
+    ``directory``; ``FTr`` resolves it) and a real install, whose
+    ``installed_plugins.json`` kept the cache path while ``claude plugin
+    list`` said "Read from" the folder. A ``file`` marketplace takes the same
+    branch there, from a directory boost has not seen recorded, so it keeps
+    its ``installPath`` here.
+    """
+    found = _marketplace(plugin)
+    if found is None:
+        return plugin.path
+    record, root = found
+    kind = record.get("source")
+    entry = _marketplace_entry(plugin)
+    if (not isinstance(kind, dict) or kind.get("source") != "directory"
+            or entry is None or not isinstance(entry.get("source"), str)):
+        return plugin.path
+    rel = entry["source"]
+    if os.path.isabs(rel):
+        return None
+    folder = root / rel
+    base = os.path.realpath(root)
+    try:
+        inside = os.path.commonpath([os.path.realpath(folder), base]) == base
+    except ValueError:
+        inside = False
+    return folder if inside else None
 
 
 def _source_is_root(entry: dict) -> bool:
@@ -377,10 +477,11 @@ def plugin_skills(plugin: Plugin) -> dict[str, Path]:
       — ``plugin.json``'s, and the marketplace entry's, which Claude Code
       appends to a ``plugin.json`` or reads as the manifest when there is none;
     * except that an entry whose ``source`` is the marketplace root and which
-      lists ``skills`` loads only those, with no default scan. That is the
-      layout that prompted this: each plugin's source is the repo root, so
-      each cached copy holds all 29 of the repo's skills and loads the 8 or 14
-      its entry lists;
+      lists ``skills`` loads only those: no default scan, and not
+      ``plugin.json``'s ``skills`` either (Claude Code 2.1.300, ``claude
+      plugin details``). That is the layout that prompted this: each plugin's
+      source is the repo root, so each cached copy holds all 29 of the repo's
+      skills and loads the 8 or 14 its entry lists;
     * a ``plugin.json`` that does not parse, or one beside an entry that sets
       ``strict: false`` and declares a component, loads nothing;
     * a plugin with a root ``SKILL.md``, no ``skills/`` and no ``skills`` key
@@ -400,7 +501,7 @@ def plugin_skills(plugin: Plugin) -> dict[str, Path]:
     own = _listed(manifest.get("skills"))
     added = _listed(entry.get("skills"))
     if added is not None and _source_is_root(entry):
-        dirs = _resolve_listed(root, [*added, *(own or [])])
+        dirs = _resolve_listed(root, added)
     else:
         dirs = [d for _n, d in _skills_in(root / "skills")]
         dirs += _resolve_listed(root, [*(own or []), *(added or [])])
@@ -419,12 +520,18 @@ def plugin_skills(plugin: Plugin) -> dict[str, Path]:
     return found
 
 
-def plugin_index() -> dict[str, tuple[Plugin, Path]]:
-    """``{skill name: (plugin, dir)}`` over every enabled plugin, first by id."""
-    index: dict[str, tuple[Plugin, Path]] = {}
+def plugin_index() -> dict[str, list[tuple[Plugin, Path]]]:
+    """``{skill name: [(plugin, dir), ...]}`` over every enabled plugin, by id.
+
+    Every plugin that ships a name, not only the first: when two enabled
+    plugins both ship ``brainstorming`` and only the second holds the store
+    copy's bytes, keeping the first alone called it "a different skill" and
+    boost linked a duplicate of the second's.
+    """
+    index: dict[str, list[tuple[Plugin, Path]]] = {}
     for plugin in enabled_plugins():
         for name, path in plugin_skills(plugin).items():
-            index.setdefault(name, (plugin, path))
+            index.setdefault(name, []).append((plugin, path))
     return index
 
 
@@ -480,8 +587,9 @@ def inventory(names: Iterable[str] | None = None) -> dict[str, list[Counterpart]
     for owner, d in vendor_dirs():
         for name, p in _skills_in(d):
             add(Counterpart(name, VENDOR, owner, p))
-    for name, (plugin, p) in sorted(plugin_index().items()):
-        add(Counterpart(name, PLUGIN, "Claude Code plugin %s" % plugin.id, p))
+    for name, hits in sorted(plugin_index().items()):
+        for plugin, p in hits:
+            add(Counterpart(name, PLUGIN, "Claude Code plugin %s" % plugin.id, p))
     for agent, spec in agents.known_agents().items():
         if os.path.realpath(spec["dir"]) == store_root:
             continue
