@@ -134,6 +134,15 @@ class TestCheck:
         assert integ.problem == "schema"
         assert integ.version == 2
 
+    def test_the_fault_of_a_corrupt_lock(self):
+        assert lockfile.fault(lockfile.Integrity(False, "corrupt")) == "is corrupt"
+
+    @pytest.mark.parametrize("version", [2, "3", None])
+    def test_the_fault_of_a_lock_in_another_schema(self, version):
+        assert lockfile.fault(lockfile.Integrity(False, "schema", version)) == (
+            "is schema v%s, not v%d" % (version, lockfile.SCHEMA_VERSION))
+        assert lockfile.SCHEMA_VERSION == 3
+
     def test_check_does_not_mutate_or_preserve_corrupt(self, sandbox):
         # check() only reports; it must not trigger the .corrupt sidecar that
         # read() writes as a side effect (that stays read()'s job on the

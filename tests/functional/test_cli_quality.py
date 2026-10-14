@@ -676,7 +676,8 @@ class TestDoctor:
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
         r = boost("sync")
         assert "removed stale link" not in r.out
-        assert "restore the lock with `boost replay`" in r.out + r.err
+        assert ("the lock file is corrupt, so sync records nothing"
+                in " ".join((r.out + r.err).split()))
         assert link.is_symlink() and link.exists()
         r = boost("doctor", expect=1)
         assert "added outside boost" not in r.out

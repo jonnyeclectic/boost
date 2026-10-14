@@ -1661,10 +1661,7 @@ def _tool_doctor(args: dict):
     lock_bad = not integ.ok and not lost
     if lock_bad:
         lines.append("the lock file %s — ask the user to restore it with "
-                     "`boost replay`"
-                     % ("is corrupt" if integ.problem == "corrupt"
-                        else "is schema v%s, not v%d"
-                        % (integ.version, lockfile.SCHEMA_VERSION)))
+                     "`boost replay`" % lockfile.fault(integ))
 
     def unrecorded(names: list[str]) -> list[str]:
         n = len(names)

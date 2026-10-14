@@ -1809,10 +1809,7 @@ def cmd_heal(argv):
     if not integ.ok and integ.problem != "missing":
         stuck.append(paths.lockfile_path())
         out.warn("the lock file %s, so heal cannot tell which store dirs are "
-                 "boost's — restore it with `boost replay`"
-                 % ("is corrupt" if integ.problem == "corrupt"
-                    else "is schema v%s, not v%d" % (integ.version,
-                                                     lockfile.SCHEMA_VERSION)),
+                 "boost's — restore it with `boost replay`" % lockfile.fault(integ),
                  wrap=True)
     for d, block in blocked.items():
         stuck.append(d)

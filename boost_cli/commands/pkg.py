@@ -1003,6 +1003,10 @@ _PLAN_LABELS = [
 #: Plan keys whose items are ``(skill, agent)`` pairs rather than paths.
 _PAIR_KEYS = ("missing_links", "out_of_scope_links")
 
+#: ``unrecorded_store``'s label over a lock that is corrupt or in another
+#: schema: sync re-records what a missing lock lost, and nothing over these.
+_UNREADABLE_LOCK_LABEL = "store dirs the lock file cannot record, left alone"
+
 
 def cmd_sync(argv: list[str]) -> int:
     ap = cliparse.parser(
@@ -1023,13 +1027,27 @@ def cmd_sync(argv: list[str]) -> int:
     # A checkout can be missing skills its project lock records — that is the
     # normal state right after `git clone` — so sync repairs the repo too.
     pplan = store.project_sync_plan()
+    # Asked before the repair, which writes a lock where there was none. A
+    # lock that is corrupt or in another schema is `boost replay`'s to
+    # restore, and it is named whatever the store holds: a schema-v2 lock
+    # still lists every skill, so no store dir looked unrecorded and sync
+    # said "everything in sync" while doctor and heal exited 1. Both
+    # `--json` shapes carry it as ``lock``: None, or the problem
+    # (``missing``, ``corrupt``, ``schema``) sync found.
+    integ = lockfile.check()
+    lock_bad = not integ.ok and integ.problem != "missing"
 
     if args.diff:
         if args.json:
-            print(json.dumps(plan | {"project": pplan}, indent=2))
+            print(json.dumps(plan | {"project": pplan, "lock": integ.problem},
+                             indent=2))
             return 0
+        if lock_bad:
+            out.warn("the lock file %s, so sync will record nothing — restore "
+                     "it with `boost replay`" % lockfile.fault(integ), wrap=True)
         if not any(plan.values()) and not any(pplan.values()):
-            out.ok("everything in sync")
+            if not lock_bad:
+                out.ok("everything in sync")
             return 0
         if pplan["missing"]:
             out.heading("missing from this project (%d)" % len(pplan["missing"]))
@@ -1042,6 +1060,8 @@ def cmd_sync(argv: list[str]) -> int:
         for key, label in _PLAN_LABELS:
             if not plan[key]:
                 continue
+            if key == "unrecorded_store" and lock_bad:
+                label = _UNREADABLE_LOCK_LABEL
             out.heading("%s (%d)" % (label, len(plan[key])))
             for item in plan[key]:
                 if key in _PAIR_KEYS:
@@ -1076,8 +1096,6 @@ def cmd_sync(argv: list[str]) -> int:
                     out.info(_tilde(item))
         return 0
 
-    # Asked before the repair, which writes a lock where there was none.
-    integ = lockfile.check()
     actions = store.sync_apply(plan) + store.project_sync_apply(pplan)
     # Links outside a declared `--agent` scope work and are in use, so sync
     # reports them and stops. Removing one changes which agents can run a
@@ -1140,8 +1158,7 @@ def cmd_sync(argv: list[str]) -> int:
     # could not record has its own line saying why. Over a lock that is
     # corrupt or in another schema nothing is written, so all of them are
     # left as they were, and the remedy is the lock's.
-    unrecorded = (plan["unrecorded_store"]
-                  if not integ.ok and integ.problem != "missing" else [])
+    unrecorded = plan["unrecorded_store"] if lock_bad else []
     blocked = plan["blocked_links"]
     if args.json:
         # `sync --diff --json` above is indent=2; this printed one unindented
@@ -1155,18 +1172,21 @@ def cmd_sync(argv: list[str]) -> int:
                           "misnamed_store": plan["misnamed_store"],
                           "unrecorded_store": unrecorded,
                           "out_of_scope_links": oos,
-                          "blocked_links": blocked}, indent=2))
+                          "blocked_links": blocked,
+                          "lock": integ.problem}, indent=2))
         return 0
     for a in actions:
         (out.warn if store.is_unrepaired(a) else out.ok)(a)
     for line in kept:
         out.warn(line, wrap=True)
-    if unrecorded:
-        out.warn("%s the lock file cannot record, left as %s: %s — "
-                 "restore the lock with `boost replay`"
-                 % (_plural(len(unrecorded), "store dir"),
-                    "it is" if len(unrecorded) == 1 else "they are",
-                    ", ".join(unrecorded)), wrap=True)
+    if lock_bad:
+        out.warn("the lock file %s, so sync records nothing%s — restore it "
+                 "with `boost replay`"
+                 % (lockfile.fault(integ),
+                    " and leaves %s as %s: %s"
+                    % (_plural(len(unrecorded), "store dir"),
+                       "it is" if len(unrecorded) == 1 else "they are",
+                       ", ".join(unrecorded)) if unrecorded else ""), wrap=True)
     for name in pruned:
         out.ok("pruned %s" % _tilde(store.skill_store_dir(name)))
     for line in store.older_copy_lines(plan["older_copies"]):
@@ -1236,7 +1256,7 @@ def cmd_sync(argv: list[str]) -> int:
                  wrap=True)
     unfixed = left or kept or any(r[3] == foreign.IDENTICAL for r in dups)
     if (not actions and not pruned and not unfixed and not oos and not blocked
-            and not stuck and not in_way and not occupied and not unrecorded
+            and not stuck and not in_way and not occupied and not lock_bad
             and not plan["unreadable_store"]):
         out.ok("everything in sync")
     return 0

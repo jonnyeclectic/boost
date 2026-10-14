@@ -666,12 +666,49 @@ class TestSync:
             self, boost, installed):
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
         r = boost("sync")
-        assert ("1 store dir the lock file cannot record, left as it is: "
-                "brainstorming — restore the lock with `boost replay`"
-                ) in _flat(r.out + r.err)
+        assert ("the lock file is corrupt, so sync records nothing and leaves 1 "
+                "store dir as it is: brainstorming — restore it with `boost "
+                "replay`") in _flat(r.out + r.err)
         assert "everything in sync" not in r.out
-        assert json.loads(boost("sync", "--json").out)["unrecorded_store"] == [
-            "brainstorming"]
+        data = json.loads(boost("sync", "--json").out)
+        assert (data["unrecorded_store"], data["lock"]) == (["brainstorming"],
+                                                            "corrupt")
+        # The preview words it the same way, not as a lock that was lost.
+        diff = _flat(boost("sync", "--diff").out)
+        assert ("the lock file is corrupt, so sync will record nothing — "
+                "restore it with `boost replay`") in diff
+        assert "store dirs the lock file cannot record, left alone (1)" in diff
+        assert "has lost" not in diff
+        plan = json.loads(boost("sync", "--diff", "--json").out)
+        assert (plan["unrecorded_store"], plan["lock"]) == (["brainstorming"],
+                                                            "corrupt")
+
+    def test_a_lock_in_another_schema_is_named_while_it_records_everything(
+            self, boost, installed):
+        # It still lists brainstorming, so no store dir looked unrecorded and
+        # sync said "everything in sync" while doctor and heal exited 1.
+        lock = paths.lockfile_path()
+        data = json.loads(lock.read_text(encoding="utf-8"))
+        lock.write_text(json.dumps(data | {"version": 2}), encoding="utf-8")
+        line = ("the lock file is schema v2, not v3, so sync %s nothing — "
+                "restore it with `boost replay`")
+        r = boost("sync")
+        assert line % "records" in _flat(r.out + r.err)
+        diff = boost("sync", "--diff")
+        assert line % "will record" in _flat(diff.out + diff.err)
+        assert "everything in sync" not in r.out + diff.out
+        assert json.loads(boost("sync", "--json").out)["lock"] == "schema"
+        assert json.loads(boost("sync", "--diff", "--json").out)["lock"] == "schema"
+        assert json.loads(lock.read_text(encoding="utf-8"))["version"] == 2
+
+    def test_a_corrupt_lock_over_an_empty_store_is_named_too(self, boost):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text("{oops", encoding="utf-8")
+        for argv in (("sync",), ("sync", "--diff")):
+            r = boost(*argv)
+            assert "the lock file is corrupt" in _flat(r.out + r.err)
+            assert "everything in sync" not in r.out
+            assert r.rc == 0
 
     @pytest.mark.skipif(
             sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
@@ -2094,14 +2131,20 @@ class TestSyncJson:
                         "unreadable_store": [], "misnamed_store": [],
                         "plugin_duplicates": [], "unrecorded_store": [],
                         "missing_materializations": [], "out_of_scope_links": [],
-                        "project": {"missing": [], "orphaned": []}}
+                        "project": {"missing": [], "orphaned": []}, "lock": None}
         data = json.loads(boost("sync", "--json").out)
         assert data == {"actions": [], "pruned": [], "kept": [],
                         "foreign_store": [], "plugin_duplicates": [],
                         "older_copies": [], "not_skill_store": [],
                         "unreadable_store": [], "misnamed_store": [],
                         "unrecorded_store": [], "out_of_scope_links": [],
-                        "blocked_links": []}
+                        "blocked_links": [], "lock": None}
+
+    def test_both_shapes_say_what_the_lock_was(self, boost, installed):
+        paths.lockfile_path().unlink()
+        assert json.loads(boost("sync", "--diff", "--json").out)["lock"] == "missing"
+        assert json.loads(boost("sync", "--json").out)["lock"] == "missing"
+        assert json.loads(boost("sync", "--json").out)["lock"] is None
 
     def test_a_narrowing_reinstall_is_reported_and_pruned_only_on_request(
             self, boost, installed):
