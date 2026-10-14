@@ -210,11 +210,15 @@ class TestSyncApplyRecovers:
         assert store.sync_plan()["missing_links"] == []
 
     def test_a_dir_without_skill_md_is_left_unrecorded(self, installed):
+        # Not a skill, so not queued: the plan names it and the run leaves it.
         gutted = paths.store_dir() / "gutted"
         gutted.mkdir()
         _lose_lock()
-        actions = store.sync_apply(store.sync_plan())
-        assert "left gutted unrecorded (no SKILL.md to record)" in actions
+        plan = store.sync_plan()
+        assert plan["not_skill_store"] == ["gutted"]
+        assert "gutted" not in plan["unrecorded_store"]
+        actions = store.sync_apply(plan)
+        assert not any("gutted" in a for a in actions)
         assert lockfile.get_skill("gutted") is None
 
     def test_a_corrupt_lock_is_never_overwritten(self, installed):

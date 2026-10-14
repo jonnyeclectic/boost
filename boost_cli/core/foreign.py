@@ -428,7 +428,7 @@ def plugin_index() -> dict[str, tuple[Plugin, Path]]:
     return index
 
 
-def _leans_on_store(path: Path) -> bool:
+def leans_on_store(path: Path) -> bool:
     """True when anything inside ``path`` is a symlink that leads into the store.
 
     A real dir of per-file links into a store copy — what GNU Stow or a
@@ -456,7 +456,7 @@ def inventory(names: Iterable[str] | None = None) -> dict[str, list[Counterpart]
     no counterpart, whoever's dir it sits in: in an agent's dir it is boost's
     own link, and anywhere else it is the store copy under a second name, not
     a second copy — deleting "the copy" would delete it. The same goes for a
-    real dir that links into the store file by file (:func:`_leans_on_store`),
+    real dir that links into the store file by file (:func:`leans_on_store`),
     and for a second path to a directory already listed. Every configured
     agent is walked, enabled or not, because turning an agent off in boost
     does not take its skills off the disk.
@@ -471,7 +471,7 @@ def inventory(names: Iterable[str] | None = None) -> dict[str, list[Counterpart]
             return
         real = os.path.realpath(c.path)
         if (real in seen or store.resolves_into_store(c.path)
-                or _leans_on_store(c.path)):
+                or leans_on_store(c.path)):
             return
         seen.add(real)
         found.setdefault(c.name, []).append(c)

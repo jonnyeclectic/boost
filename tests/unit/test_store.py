@@ -1214,7 +1214,7 @@ class TestSyncPlan:
     EMPTY: ClassVar[dict] = {"missing_store": [], "missing_links": [],
              "blocked_links": [], "stale_links": [], "adoptable_store": [],
              "older_copies": [], "foreign_store": [], "not_skill_store": [],
-             "plugin_duplicates": [], "unrecorded_store": [],
+             "misnamed_store": [], "plugin_duplicates": [], "unrecorded_store": [],
              "missing_materializations": [], "out_of_scope_links": []}
 
     def test_clean_state_empty_plan(self, brainstorming):
