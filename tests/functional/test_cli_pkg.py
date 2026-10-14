@@ -660,6 +660,49 @@ class TestSync:
         assert "boost replay" not in flat
         assert "everything in sync" not in r.out
 
+    def test_diff_renders_every_ownership_row_as_a_readable_line(
+            self, boost, installed, claude_plugin):
+        claude_plugin()
+        shutil.copytree(_vendor_skill("automate", "# automate\n"),
+                        paths.store_dir() / "automate")
+        old = paths.home() / ".codex" / "skills" / "pr-me"
+        old.mkdir(parents=True)
+        (old / "SKILL.md").write_text("# old\n", encoding="utf-8")
+        os.utime(old / "SKILL.md", (1e9, 1e9))
+        mine = paths.store_dir() / "pr-me"
+        mine.mkdir()
+        (mine / "SKILL.md").write_text("# new\n", encoding="utf-8")
+        r = boost("sync", "--diff")
+        flat = _flat(r.out)
+        assert "pr-me — ~/.codex/skills/pr-me (Codex)" in flat
+        assert ("automate — Cursor's built-ins, ~/.cursor/skills-cursor/automate "
+                "(identical)") in flat
+        assert "brainstorming — plugin eight-backend@eight (identical)" in flat
+        assert "('" not in r.out, "printed a raw Python tuple"
+
+    def test_a_copy_whose_original_goes_while_the_confirm_waits_is_kept(
+            self, boost, installed, monkeypatch):
+        # The confirm can sit unanswered for as long as the user likes, so the
+        # removal asks again; and a copy that differs says what the yes costs.
+        from boost_cli.core import output
+        theirs = _vendor_skill("automate", "# automate\n")
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(theirs, copy)
+        (copy / "SKILL.md").write_text("# automate, ported\n", encoding="utf-8")
+        asked = []
+
+        def confirm(prompt, default=False, quiet=False):
+            asked.append(prompt)
+            shutil.rmtree(theirs)
+            return True
+        monkeypatch.setattr(output, "confirm", confirm)
+        r = boost("sync", "--prune")
+        assert "it differs from the original, and those changes go too" in _flat(
+            asked[0])
+        assert "kept ~/.agents/skills/automate: " in _flat(r.out)
+        assert "pruned" not in r.out
+        assert (copy / "SKILL.md").is_file()
+
     def test_yes_flag_is_accepted_by_the_parser(self, boost, installed):
         # Bug: argparse rejected --yes here ("unrecognized arguments"), so
         # BOOST_ASSUME_YES/--yes could never both be true for this command's

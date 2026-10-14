@@ -3277,6 +3277,8 @@ class TestStoreDirsBoostDidNotInstall:
         assert ("pr-me: the copy in ~/.codex/skills/pr-me (Codex) is older by "
                 "file times — left alone") in flat
         assert "1 skill added outside boost (pr-me)" in flat
+        assert ("pr-me: the copy in ~/.codex/skills/pr-me (Codex) is older by "
+                "file times — left alone") in _flat(boost("heal").out)
         boost("sync")
         assert (old / "SKILL.md").read_text(encoding="utf-8") == "# old\n"
 
