@@ -393,7 +393,8 @@ def source_dir_for(entry: dict) -> Path:
     return src
 
 
-def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
+def link_agents(name: str, only: list[str] | None = None, *,
+                keep_theirs: bool = False) -> InstallResult:
     """Symlink store/<name> into each linking agent dir. Returns result with
     .linked (agent names), .conflicts (paths that were real files/dirs) and
     .native (agents that read the store directly and needed no link).
@@ -405,7 +406,12 @@ def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
     Claude Code gets no new link while an enabled plugin ships the same files
     (.covered): it already lists the plugin's copy, and a link would list the
     skill a second time. That holds for an explicit ``--agent claude-code``
-    too, since the skill is in front of Claude Code either way."""
+    too, since the skill is in front of Claude Code either way.
+
+    ``keep_theirs`` leaves a symlink that is not boost's (:func:`is_boost_link`)
+    where it is, as a conflict, the way a file is left. :func:`unsideline`
+    passes it: :func:`sideline` leaves the user's own link alone, and
+    relinking replaced it with a link to the store copy."""
     res = InstallResult(name=name, dest=skill_store_dir(name))
     target = skill_store_dir(name)
     # Deliberately NOT filtered by `only`. That list scopes which agents get a
@@ -440,6 +446,9 @@ def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
                     # printed "not linked" over a link still on disk, still
                     # pointing at the store, and still in the lock's `agents`.
                     res.linked.append(agent)
+                    continue
+                if keep_theirs and not points_into_store(link):
+                    res.conflicts.append(str(link))
                     continue
                 link.unlink()
             elif link.exists():
@@ -664,17 +673,21 @@ def scoped_agents(entry: dict, enabled: dict[str, Path]) -> dict[str, Path]:
 
 
 def unlink_agents(name: str) -> list[str]:
-    """Remove the ``name`` symlink from every linking agent dir.
+    """Remove boost's ``name`` link from every linking agent dir.
 
-    Returns the agents unlinked; non-symlink files are left alone. Agents that
-    read the canonical store directly never had a link, so there is nothing
-    here to reverse for them — uninstalling the store dir is what removes the
-    skill from their view.
+    Returns the agents unlinked. Only boost's kind of link goes
+    (:func:`is_boost_link`): a file, or the user's own link to a checkout,
+    is left where it is. Any symlink used to count, so uninstalling a skill
+    `boost sync` had recorded beside the user's link took that link too, and
+    `focus --clear` then put a link to the store copy in its place. Agents
+    that read the canonical store directly never had a link, so there is
+    nothing here to reverse for them — uninstalling the store dir is what
+    removes the skill from their view.
     """
     removed = []
     for agent, adir in agents.linking_agents().items():
         link = adir / name
-        if os.path.islink(link):  # noqa: FURB146
+        if is_boost_link(link):
             link.unlink()
             removed.append(agent)
     return removed
@@ -721,7 +734,7 @@ def unsideline(name: str) -> InstallResult:
     one can be true of a skill at a time, and whichever command relinks it is
     the one ending it.
     """
-    res = link_agents(name)
+    res = link_agents(name, keep_theirs=True)
     entry = lockfile.get_skill(name)
     if entry is not None:
         # Record the links this just made, since sideline() emptied the list,
@@ -742,10 +755,11 @@ def linked_agents(name: str) -> list[str]:
     left three symlinks and a lock claiming one, and every reporting surface
     believed the lock.
 
-    Deliberately the same ``is_symlink()`` test :func:`unlink_agents` uses, so
-    what an install records is exactly what an uninstall will remove. A regular
-    file sitting where a link should be is a conflict, not a link, and is
-    excluded by both.
+    Deliberately the same test :func:`unlink_agents` uses, :func:`is_boost_link`,
+    so what an install records is exactly what an uninstall will remove. A
+    regular file sitting where a link should be is a conflict, not a link, and
+    so is the user's own link to a checkout outside the scope an install
+    wrote: both are excluded by both.
 
     ``os.path.islink``, not ``Path.is_symlink``: under an agent dotdir with no
     search bit the latter raises PermissionError on Python 3.12 and 3.13 (3.14
@@ -754,7 +768,7 @@ def linked_agents(name: str) -> list[str]:
     may not even look at is not one it can count.
     """
     return [agent for agent, adir in agents.linking_agents().items()
-            if os.path.islink(adir / name)]  # noqa: FURB146
+            if is_boost_link(adir / name)]
 
 
 def refusing_dir(path: Path) -> Path:
@@ -2914,8 +2928,8 @@ def _check_links_removable(name: str, entry: dict) -> None:
     the store and the lock entry, so uninstalling again after the `chmod`
     finishes the job.
 
-    A link it *can* see is checked whatever the lock says, because
-    :func:`unlink_agents` removes every visible link and would otherwise stop
+    A link of boost's it *can* see is checked whatever the lock says, because
+    :func:`unlink_agents` removes every visible one and would otherwise stop
     on a read-only dir halfway through. A link it cannot see is checked for
     every agent the lock records as linked *or refused*: a forced relink run
     while the dotdir was unsearchable moves that agent into
@@ -2947,7 +2961,8 @@ def _check_links_removable(name: str, entry: dict) -> None:
             continue
         except OSError:
             continue
-        if os.path.islink(link) and not os.access(adir, os.W_OK | os.X_OK):  # noqa: FURB146
+        # Only a link uninstall will remove can stop it halfway.
+        if is_boost_link(link) and not os.access(adir, os.W_OK | os.X_OK):
             raise _removal_refused(name, link)
 
 
@@ -3046,6 +3061,19 @@ def points_into_store(link: Path) -> bool:
         return os.path.commonpath([target_s, root_s]) == root_s
     except ValueError:
         return False
+
+
+def is_boost_link(link: Path) -> bool:
+    """True if ``link`` is boost's kind of link: a symlink into the store.
+
+    Dangling or not, boost may replace or remove one. Anything else at a link
+    path — a file, a dir, the user's own link to a checkout or a volume —
+    belongs to whoever put it there. One predicate, so adoption, sync, prune,
+    uninstall and sideline agree on what is boost's: they disagreed, and a
+    link adoption had called "not boost's to replace" was re-pointed by the
+    next sync once it dangled, and removed by `--prune` and `uninstall`.
+    """
+    return os.path.islink(link) and points_into_store(link)  # noqa: FURB146
 
 
 def resolves_into_store(path: Path) -> bool:
@@ -3715,15 +3743,17 @@ def sync_plan() -> dict[str, list]:
                 plan["blocked_links"].append(
                     (name, agent, str(in_the_way[agent])))
                 continue
-            # A symlink is boost's to replace even when it dangles; anything
-            # else that exists is someone else's file and stays put.
+            # boost's kind of link is boost's to replace even when it
+            # dangles. A live link leads somewhere, whoever's it is. Anything
+            # else is someone else's and stays put: a dangling link of the
+            # user's — a checkout on an unmounted volume — counted as boost's,
+            # and sync swapped it for a link to the store copy.
             # ``os.path``: under a dotdir with no search bit ``Path.is_symlink``
             # raises on Python 3.12 and 3.13, and `boost sync`, `heal` and
             # `doctor` all exited 70 on it.
-            if os.path.islink(link):
-                if not os.path.exists(link) and not missing_store:  # noqa: FURB141
-                    plan["missing_links"].append((name, agent))
-            elif os.path.lexists(link):
+            if os.path.islink(link) and os.path.exists(link):  # noqa: FURB141
+                continue
+            if os.path.lexists(link) and not is_boost_link(link):
                 plan["blocked_links"].append((name, agent, str(link)))
             elif not missing_store:
                 plan["missing_links"].append((name, agent))
@@ -3734,9 +3764,11 @@ def sync_plan() -> dict[str, list]:
         # narrowing fell between the two and no command could see it. Only
         # meaningful when a narrowing was declared; without one `scoped_agents`
         # fails open and every agent is in scope by definition.
+        # boost's links only: the user's own link where adoption left it is
+        # the user's, and `--prune` removed it as out of scope.
         if entry.get("only_agents"):
             for agent, adir in linking.items():
-                if agent not in in_scope and os.path.islink(adir / name):
+                if agent not in in_scope and is_boost_link(adir / name):
                     plan["out_of_scope_links"].append((name, agent))
     plan.update(sort_unrecorded(lock, integ))
     plan["plugin_duplicates"] = plugin_duplicates(lock, coverage)
@@ -3859,7 +3891,8 @@ def prune_out_of_scope_links(plan: dict[str, list]) -> list[str]:
         if adir is None:      # disabled between plan and prune
             continue
         link = adir / name
-        if link.is_symlink():
+        # Asked again: the confirm before this can wait as long as it likes.
+        if is_boost_link(link):
             link.unlink()
             entry = lockfile.get_skill(name)
             if entry:
@@ -4215,8 +4248,7 @@ def _in_the_way(name: str, scope: dict[str, Path]) -> dict[str, Path]:
     found = {}
     for agent, adir in scope.items():
         link = adir / name
-        if os.path.lexists(link) and not (
-                os.path.islink(link) and points_into_store(link)):  # noqa: FURB146
+        if os.path.lexists(link) and not is_boost_link(link):
             found[agent] = link
     return found
 

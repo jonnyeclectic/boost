@@ -21,11 +21,19 @@ same error."
 """
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 import pytest
 
-from boost_cli.core import agents, catalog, registry, store, util
+from boost_cli.core import agents, catalog, lockfile, paths, registry, store, util
+
+#: chmod cannot take the owner's own write access away on Windows, and root
+#: writes through any mode.
+posix_modes = pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="needs POSIX permission bits, as a user other than root")
 
 
 def _agent_path(agent, name="brainstorming"):
@@ -193,3 +201,142 @@ class TestDoctorNamesAReachableRemedy:
         line = next(x for x in out.splitlines()
                     if "brainstorming" in x and "windsurf" in x)
         assert "boost sync" in line
+
+
+def _users_link(agent: str, target: Path) -> Path:
+    """Put the user's own link where boost's ``agent`` link to brainstorming goes."""
+    link = _agent_path(agent)
+    link.unlink()
+    link.symlink_to(target, target_is_directory=True)
+    return link
+
+
+def _leads_to(link: Path, target: Path) -> bool:
+    return (store.normalize_link_target(link.readlink())
+            == store.normalize_link_target(target))
+
+
+@pytest.fixture()
+def checkout(tmp_path):
+    """The user's own copy of the skill, kept outside the store."""
+    d = tmp_path / "code" / "brainstorming"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: brainstorming\n---\nmine\n",
+                                encoding="utf-8")
+    return d
+
+
+class TestTheUsersOwnLink:
+    """A symlink that does not lead into the store is the user's, dangling or not.
+
+    Adoption said so ("in the way and is not boost's to replace"), and so did
+    heal's broken-link sweep, while sync re-pointed one once it dangled and
+    `--prune`, uninstall and sideline removed one that worked.
+    """
+
+    def test_a_dangling_one_is_blocked_not_repointed(self, brainstorming, tmp_path):
+        # A checkout on a volume that is not mounted right now.
+        gone = tmp_path / "vol" / "brainstorming"
+        link = _users_link("claude-code", gone)
+        plan = store.sync_plan()
+        assert ("brainstorming", "claude-code") not in plan["missing_links"]
+        assert ("brainstorming", "claude-code", str(link)) in plan["blocked_links"]
+        store.sync_apply(plan)
+        assert _leads_to(link, gone)
+
+    def test_a_live_one_is_neither_missing_nor_blocked(self, brainstorming, checkout):
+        link = _users_link("claude-code", checkout)
+        plan = store.sync_plan()
+        assert ("brainstorming", "claude-code") not in plan["missing_links"]
+        assert not any(n == "brainstorming" and a == "claude-code"
+                       for n, a, *_ in plan["blocked_links"])
+        store.sync_apply(plan)
+        assert _leads_to(link, checkout)
+
+    def test_a_dangling_link_into_the_store_is_still_boosts(self, brainstorming):
+        link = _agent_path("windsurf")
+        link.unlink()
+        link.symlink_to(paths.store_dir() / "gone")
+        assert store.is_boost_link(link)
+        assert not store.is_boost_link(_agent_path("cursor").with_name("absent"))
+
+    def test_uninstall_leaves_it(self, brainstorming, checkout):
+        link = _users_link("claude-code", checkout)
+        res = store.uninstall("brainstorming")
+        assert "claude-code" not in res["unlinked"]
+        assert "windsurf" in res["unlinked"]
+        assert _leads_to(link, checkout)
+        assert not os.path.lexists(_agent_path("windsurf"))
+
+    @posix_modes
+    def test_in_a_dir_that_refuses_writes_it_does_not_stop_uninstall(
+            self, brainstorming, checkout):
+        # The pre-check refuses an uninstall that would stop halfway, and only
+        # a link uninstall removes can stop it.
+        link = _users_link("claude-code", checkout)
+        link.parent.chmod(0o555)
+        try:
+            store.uninstall("brainstorming")
+        finally:
+            link.parent.chmod(0o755)
+        assert _leads_to(link, checkout)
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_a_focus_and_its_clear_leave_it(self, brainstorming, checkout):
+        link = _users_link("claude-code", checkout)
+        assert "claude-code" not in store.sideline("brainstorming", "focus")
+        assert _leads_to(link, checkout)
+        assert not os.path.lexists(_agent_path("windsurf"))
+        res = store.unsideline("brainstorming")
+        assert _leads_to(link, checkout), "relinking replaced it with the store copy"
+        assert str(link) in res.conflicts
+        assert "claude-code" not in res.linked
+        assert os.path.samefile(_agent_path("windsurf"),
+                                store.skill_store_dir("brainstorming"))
+        assert "claude-code" not in lockfile.get_skill("brainstorming")["agents"]
+
+    def test_an_install_records_only_boosts_links(self, brainstorming, checkout):
+        # What `agents` records is what uninstall removes.
+        _users_link("claude-code", checkout)
+        linked = store.linked_agents("brainstorming")
+        assert "claude-code" not in linked
+        assert "windsurf" in linked
+
+    def test_outside_a_declared_scope_it_is_neither_reported_nor_pruned(
+            self, brainstorming, checkout):
+        entry = lockfile.get_skill("brainstorming")
+        entry["only_agents"] = ["cursor"]
+        lockfile.set_skill("brainstorming", entry)
+        link = _users_link("claude-code", checkout)
+        plan = store.sync_plan()
+        assert ("brainstorming", "claude-code") not in plan["out_of_scope_links"]
+        assert ("brainstorming", "windsurf") in plan["out_of_scope_links"]
+        # Asked again at the unlink, whatever the plan says.
+        removed = store.prune_out_of_scope_links({"out_of_scope_links": [
+            ("brainstorming", "claude-code"), ("brainstorming", "windsurf")]})
+        assert _leads_to(link, checkout)
+        assert not os.path.lexists(_agent_path("windsurf"))
+        assert not any("claude-code" in r for r in removed)
+
+    def test_doctor_names_a_broken_one_and_what_to_do(self, brainstorming, capsys,
+                                                      tmp_path):
+        from boost_cli.commands import quality
+        link = _users_link("claude-code", tmp_path / "vol" / "brainstorming")
+        quality.cmd_doctor([])
+        # Flattened, so a line folded to the pane still reads as one.
+        text = " ".join(capsys.readouterr().out.split())
+        assert ("skill brainstorming not linked for claude-code — %s is a broken "
+                "link boost did not make; move or delete it" % paths.tilde(link)) in text
+
+    def test_heal_names_a_broken_one_once_and_exits_1(self, brainstorming, capsys,
+                                                      tmp_path):
+        from boost_cli.commands import quality
+        gone = tmp_path / "vol" / "brainstorming"
+        link = _users_link("claude-code", gone)
+        assert quality.cmd_heal([]) == 1
+        cap = capsys.readouterr()
+        text = " ".join((cap.out + cap.err).split())
+        assert text.count(paths.tilde(link)) == 1, text
+        assert "%s is in the way and is not boost's" % paths.tilde(link) in text
+        assert "nothing to heal" not in text
+        assert _leads_to(link, gone)

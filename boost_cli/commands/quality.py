@@ -723,6 +723,12 @@ def cmd_doctor(argv):
                 bad("skill-link", "skill %s not linked for %s — %s exists and is not a boost "
                     "link; move or delete it, then run `boost sync`"
                     % (name, agent, paths.tilde(link)))
+            elif os.path.islink(link) and not store.is_boost_link(link):  # noqa: FURB146
+                # Dangling, and not boost's: sync leaves it, so prescribing
+                # sync alone was a loop.
+                bad("skill-link", "skill %s not linked for %s — %s is a broken "
+                    "link boost did not make; move or delete it, then run "
+                    "`boost sync`" % (name, agent, paths.tilde(link)))
             else:
                 bad("skill-link", "skill %s not linked for %s — run `boost sync`" % (name, agent))
             skill_issues += 1
@@ -1600,13 +1606,17 @@ def cmd_heal(argv):
             link.unlink()
             out.ok("removed broken link %s" % _tilde(link))
         actions.append("unlink %s" % link.name)
+    plan = store.sync_plan()
+    # One where a recorded skill's link goes is named below, as a link it
+    # blocks, with what to do about it; saying it twice read as two problems.
+    blocking = {Path(p) for _n, _a, p in plan["blocked_links"]}
     for link in theirs:
+        if link in blocking:
+            continue
         # Named, never touched: it is in a directory boost writes to, so the
         # user should know it is dangling — but boost did not put it there.
         out.warn("broken link %s does not point into %s — left alone"
                  % (_tilde(link), _tilde(paths.store_dir())))
-
-    plan = store.sync_plan()
     # Asked before `sync_apply`, which writes a lock where there was none.
     integ = lockfile.check()
     if dry:
