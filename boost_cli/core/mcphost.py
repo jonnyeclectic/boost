@@ -107,6 +107,7 @@ a time, which is what the ``--`` bullet above cost.
 from __future__ import annotations
 
 import os.path
+import shlex
 from collections.abc import Mapping
 
 # The MCP server name boost registers itself under. Deliberately free of
@@ -331,6 +332,20 @@ def escapes_home(host: str, env: Mapping[str, str], home,
 #: '-e' as a value, use '-- -e'") is about the command, not the option. So the
 #: spelling is per host rather than one constant.
 ENV_FLAG: dict[str, str] = {CODEX: "--env"}
+
+
+def shell_line(argv: list[str]) -> str:
+    """``argv`` as one line a user can paste into a POSIX shell and have run.
+
+    Every argv this module builds is *printed* as well as run — by
+    ``--dry-run``, and as the "run it yourself" fallback whenever a host is
+    missing, refused or failed — and :data:`LAUNCH_ENV` carries
+    ``no_proxy=*``. Joined with spaces, that printed a line zsh rejects
+    outright (``no matches found: no_proxy=*``: an unmatched glob is an
+    error there, not a literal) and bash would expand against the current
+    directory. Running it was never affected: the subprocess gets the list.
+    """
+    return shlex.join(argv)
 
 
 def _env_flags(env: dict[str, str] | None, flag: str = "-e") -> list[str]:

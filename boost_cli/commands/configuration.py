@@ -2024,6 +2024,19 @@ def _run_mcp_host(host: str, action: str, cmd, *,
                                    proc.stdout, proc.stderr)
 
 
+def _mcp_config(host: str) -> str:
+    """The config file ``host``'s CLI just read or wrote, for the success line.
+
+    "already registered" is the CLI's answer about *its* config home, which it
+    resolves from the ambient environment — so a shell without
+    ``CLAUDE_CONFIG_DIR`` answers for ``~/.claude.json`` while an agent session
+    running under ``~/.claude-personal`` still has no boost. Naming the file is
+    what makes that mismatch visible instead of a contradiction.
+    """
+    return paths.tilde(mcphost.user_config_path(host, os.environ,
+                                                str(paths.home())))
+
+
 def _seed_catalog_for_mcp(force: bool) -> None:
     """Tap the recommended registries so the surface just registered can answer.
 
@@ -2215,7 +2228,7 @@ def cmd_mcp(argv) -> int:
                 mcphost.label(host),
                 out.role("(installed)" if installed else "(not installed)",
                          "muted"),
-                " ".join(cmd)))
+                mcphost.shell_line(cmd)))
             # Which file that argv lands in is the one thing a dry run could
             # not tell you, and it is the thing the sandbox guard turns on.
             cfg = mcphost.user_config_path(host, os.environ, str(paths.home()))
@@ -2267,7 +2280,7 @@ def cmd_mcp(argv) -> int:
             if explicit:
                 out.warn("`%s` CLI not found — run this yourself:"
                          % mcphost.cli(host))
-                out.info(" ".join(cmd))
+                out.info(mcphost.shell_line(cmd))
 
     for host in done:
         # agy and Codex have no scopes — one global file each — so claiming
@@ -2275,25 +2288,25 @@ def cmd_mcp(argv) -> int:
         # do not have, and send anyone looking for a project-scoped entry
         # after something that cannot exist.
         scope_note = " (scope: user)" if mcphost.has_scope(host) else ""
-        out.ok("%sed boost as an MCP server for %s%s"
-               % (verb, mcphost.label(host), scope_note))
+        out.ok("%sed boost as an MCP server for %s%s — %s"
+               % (verb, mcphost.label(host), scope_note, _mcp_config(host)))
     for host in already:
-        out.ok("already registered with %s — nothing to do"
-               % mcphost.label(host))
+        out.ok("already registered with %s (%s) — nothing to do"
+               % (mcphost.label(host), _mcp_config(host)))
     for host in not_registered:
         out.ok("%s: not registered — nothing to do" % mcphost.label(host))
     for host, cfg in refused.items():
         out.warn("%s: refusing to %s — %s is outside this $HOME (%s)"
                  % (mcphost.label(host), verb, cfg, paths.home()), wrap=True)
         out.info(out.role("run it yourself, or pass --force: %s"
-                          % " ".join(mcphost.argv(host, args.action, shim)),
+                          % mcphost.shell_line(mcphost.argv(host, args.action, shim)),
                           "muted"))
     for host, detail in failed.items():
         out.warn("%s: %s mcp %s failed — %s"
                  % (mcphost.label(host), mcphost.cli(host), args.action,
                     detail))
         out.info(out.role("run it yourself: %s"
-                          % " ".join(mcphost.argv(host, args.action, shim)),
+                          % mcphost.shell_line(mcphost.argv(host, args.action, shim)),
                           "muted"))
     settled = done + already + not_registered
     if not settled:
@@ -2309,7 +2322,7 @@ def cmd_mcp(argv) -> int:
             out.warn("no agent CLI found (looked for: %s)"
                      % ", ".join(mcphost.cli(h) for h in missing))
             for host in missing:
-                out.info(" ".join(mcphost.argv(host, args.action, shim)))
+                out.info(mcphost.shell_line(mcphost.argv(host, args.action, shim)))
         journal.log("mcp", args.action, hosts="")
         # A single named host whose CLI is missing is a no-op, not a success:
         # `--host all` and `auto` both tolerate an absent CLI by design (see
