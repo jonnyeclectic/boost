@@ -7,6 +7,7 @@ import difflib
 import os
 import sys
 import time
+from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
@@ -391,7 +392,8 @@ def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
 
 def add_many(specs: list[str], curated: bool = False,
              pins: dict[str, str] | None = None, jobs: int | None = None,
-             on_done=None) -> list[dict]:
+             on_done=None,
+             curated_names: Collection[str] = ()) -> list[dict]:
     """Clone many taps at once and register them in a single config write.
 
     Returns one result dict per spec, in the order given, each with ``ok`` and
@@ -401,6 +403,11 @@ def add_many(specs: list[str], curated: bool = False,
 
     `pins` maps a tap name to the commit to check out, for published vector
     shards (see ``core.shards``).
+
+    `curated` stars every tap in the batch; `curated_names` stars only the
+    named ones. A catalogue tap needs the second: one flag for the whole batch
+    is how all 463 registries of `tap --catalog` came out curated, which made
+    the ★ mark everything and so mean nothing.
     """
     if not specs:
         return []
@@ -428,7 +435,8 @@ def add_many(specs: list[str], curated: bool = False,
 
     def work(spec: str) -> dict:
         name, _url = parse_spec(spec)
-        return _clone_one(spec, curated, pins.get(name))
+        return _clone_one(spec, curated or name in curated_names,
+                          pins.get(name))
 
     with ThreadPoolExecutor(max_workers=tap_jobs(jobs)) as pool:
         for res in pool.map(work, todo):
@@ -443,7 +451,8 @@ def add_many(specs: list[str], curated: bool = False,
         cfg = config.load()
         rows = cfg.setdefault("taps", [])
         for r in fresh:
-            row = {"name": r["name"], "url": r["url"], "curated": curated}
+            row = {"name": r["name"], "url": r["url"],
+                   "curated": r["tap"].curated}
             pin = pins.get(r["name"])
             if pin:
                 row["pin"] = pin

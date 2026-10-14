@@ -254,6 +254,34 @@ class TestTapCatalog:
         assert "tapped " in r.out and "items)" in r.out
         assert len(registry.list_taps()) == 2
 
+    def test_catalog_tap_stars_only_curated_rows(self, boost, sandbox,
+                                                 fixture_tap_src, monkeypatch):
+        # One batch flag starred all 463 registries; the ★ must follow the
+        # catalogue's own column, row by row.
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest: shutil.copytree(fixture_tap_src, dest))
+        boost("tap", "--catalog", "--type", "skill", "--limit", "12")
+        want = {e["name"]: bool(e.get("curated"))
+                for e in config.load_registry_catalog()}
+        got = {t["name"]: t["curated"]
+               for t in json.loads(paths.config_path().read_text(
+                   encoding="utf-8"))["taps"]}
+        assert got == {n: want[n] for n in got}
+        assert set(got.values()) == {True, False}
+
+    def test_catalog_tap_curated_flag_stars_everything(self, boost, sandbox,
+                                                       fixture_tap_src,
+                                                       monkeypatch):
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest: shutil.copytree(fixture_tap_src, dest))
+        boost("tap", "--catalog", "--type", "skill", "--limit", "12",
+              "--curated")
+        taps = json.loads(paths.config_path().read_text(
+            encoding="utf-8"))["taps"]
+        assert len(taps) == 12 and all(t["curated"] for t in taps)
+
 
 # ── untap ────────────────────────────────────────────────────────────────
 

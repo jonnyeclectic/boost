@@ -88,6 +88,42 @@ SELF_INSTALLING = {
         "&& cd ~/.claude/skills/gstack && ./setup",
 }
 
+# The registries that earn the ★. Every row used to carry `curated: true`, so
+# the star marked all 541 and said nothing; it now marks the most popular and
+# most capable, which is what a newcomer reads it as. The rule, measured against
+# GitHub on 2026-10-14: >= 10k stars, >= 5 items, not list-only, not archived,
+# not self-installing — minus repos whose stars belong to a product rather than
+# the skills it ships (an SDK, a gateway, a cookbook) — plus every default tap,
+# so `tap --defaults` and `tap --catalog` agree about the same repo. Hardcoded
+# because the build is offline and `--check` must be byte-for-byte; re-measure
+# with `--verify-live`'s token and edit this set, never the JSON.
+CURATED = frozenset({
+    # default taps (config.DEFAULT_TAPS) that are in the catalogue
+    "anthropics/skills", "obra/superpowers", "trailofbits/skills",
+    "PatrickJS/awesome-cursorrules", "qdhenry/Claude-Command-Suite",
+    # official vendor registries
+    "anthropics/claude-code", "anthropics/claude-plugins-official",
+    "anthropics/financial-services", "microsoft/playwright", "openai/skills",
+    "google/skills", "github/awesome-copilot", "vercel-labs/agent-skills",
+    "huggingface/skills", "greensock/gsap-skills",
+    # community, by stars
+    "mattpocock/skills", "affaan-m/ECC", "DietrichGebert/ponytail",
+    "nextlevelbuilder/ui-ux-pro-max-skill", "JuliusBrussee/caveman",
+    "addyosmani/agent-skills", "Leonxlnx/taste-skill", "pbakaus/impeccable",
+    "coreyhaines31/marketingskills", "zhaoxuya520/reverse-skill",
+    "wshobson/agents", "Yeachan-Heo/oh-my-claudecode",
+    "mukul975/Anthropic-Cybersecurity-Skills", "davila7/claude-code-templates",
+    "alirezarezvani/claude-skills", "OthmanAdi/planning-with-files",
+    "phuryn/pm-skills", "Donchitos/Claude-Code-Game-Studios",
+    "VoltAgent/awesome-claude-code-subagents",
+    "EveryInc/compound-engineering-plugin", "AgriciDaniel/claude-seo",
+    "muratcankoylan/Agent-Skills-for-Context-Engineering",
+    "wanshuiyin/Auto-claude-code-research-in-sleep",
+    "composio-community/awesome-codex-skills",
+    "Orchestra-Research/AI-Research-SKILLs", "jeffallan/claude-skills",
+    "zubair-trabzada/geo-seo-claude",
+})
+
 # --- skills (SKILL.md registries) -------------------------------------------
 SKILLS = [
     ("travisvn/awesome-claude-skills", "meta", "Curated awesome-list of Claude Skills, tools, and resources", 60, "high"),
@@ -734,7 +770,7 @@ def rows(pairs, typ):
             "est_items": est,
             "confidence": conf,
             "list_only": name in LIST_ONLY,
-            "curated": True,
+            "curated": name in CURATED,
             # Only where set: adding a null to every row would rewrite the
             # whole generated file to say nothing about 460 registries.
             **({"self_installing": SELF_INSTALLING[name]}
