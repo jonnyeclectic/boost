@@ -1074,12 +1074,29 @@ class TestRmtreeRetryHook:
         with pytest.raises(OSError):
             util.rmtree(stubborn)
 
-        # Reading the child's mode needs search on the parent, and the hook
-        # took that away on its way past: `scandir` fails too, so the
-        # directory is chmodded to S_IWRITE as well and loses its x bit.
-        stubborn.chmod(0o700)
+        # The listing reported after it is raised, not retried: the dir keeps
+        # its mode rather than losing its search bit to chmod(S_IWRITE).
+        assert stat.S_IMODE(stubborn.stat().st_mode) == 0o500
         assert stat.S_IMODE(target.stat().st_mode) == stat.S_IMODE(
             stat.S_IWRITE)
+
+    def test_a_failed_listing_is_raised_not_retried(self, tmp_path):
+        """Only a removal is retried.
+
+        `shutil.rmtree` reports a dir it could not open or list through the
+        same hook, and calling `os.open(path)` again raised TypeError (it
+        needs flags), which no caller catches: `boost sync --prune` exited 70
+        halfway through a delete.
+        """
+        d = tmp_path / "d"
+        d.mkdir()
+        before = stat.S_IMODE(d.stat().st_mode)
+        planted = PermissionError(13, "planted")
+        for func in (os.open, os.scandir, os.lstat):
+            with pytest.raises(PermissionError) as caught:
+                util._clear_readonly_and_retry(func, str(d), planted)
+            assert caught.value is planted
+        assert stat.S_IMODE(d.stat().st_mode) == before
 
     def test_rmtree_of_a_symlink_refuses_instead_of_reporting_success(
             self, tmp_path):

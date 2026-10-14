@@ -1214,7 +1214,8 @@ class TestSyncPlan:
     EMPTY: ClassVar[dict] = {"missing_store": [], "missing_links": [],
              "blocked_links": [], "stale_links": [], "adoptable_store": [],
              "older_copies": [], "foreign_store": [], "not_skill_store": [],
-             "misnamed_store": [], "plugin_duplicates": [], "unrecorded_store": [],
+             "unreadable_store": [], "misnamed_store": [],
+             "plugin_duplicates": [], "unrecorded_store": [],
              "missing_materializations": [], "out_of_scope_links": []}
 
     def test_clean_state_empty_plan(self, brainstorming):
@@ -1244,15 +1245,21 @@ class TestSyncPlan:
         plan = store.sync_plan()
         assert plan == {**self.EMPTY, "stale_links": [str(ghost)]}
 
-    def test_unmanaged_link_into_store_is_stale(self, brainstorming):
+    def test_a_live_link_into_a_dir_sync_leaves_alone_is_not_stale(
+            self, brainstorming):
+        # Sweeping it removed the link one line above the line saying the
+        # dir it leads to was left alone. Once the dir is gone it dangles,
+        # and then it is stale.
         orphan_store = paths.store_dir() / "orphan"
         orphan_store.mkdir()
         (orphan_store / "f.txt").write_text("x", encoding="utf-8")
         link = paths.home() / ".cursor" / "skills" / "orphan"
         link.symlink_to(orphan_store)
         plan = store.sync_plan()
-        assert plan["stale_links"] == [str(link)]
+        assert plan["stale_links"] == []
         assert plan["not_skill_store"] == ["orphan"]
+        shutil.rmtree(orphan_store)
+        assert store.sync_plan()["stale_links"] == [str(link)]
 
     def test_a_native_store_agents_dir_is_never_swept(self, brainstorming):
         # Boost only ever creates a symlink in an agent it links for, so a link
@@ -1262,18 +1269,16 @@ class TestSyncPlan:
         # `boost sync` delete another tool's files with --prune-duplicates
         # never typed. The identical link in a *linking* agent's dir is still
         # swept, so this is the set, not the check, that changed.
-        orphan = paths.store_dir() / "orphan"
-        orphan.mkdir()
+        # A recorded skill's dir, under a name the lock does not record.
+        recorded = paths.store_dir() / "brainstorming"
         for agent_dir in (".gemini", ".codex"):
             d = paths.home() / agent_dir / "skills"
             d.mkdir(parents=True, exist_ok=True)
-            (d / "orphan").symlink_to(orphan)
-        plan = store.sync_plan()
-        assert plan["stale_links"] == []
-        assert plan["not_skill_store"] == ["orphan"]
+            (d / "other").symlink_to(recorded)
+        assert store.sync_plan()["stale_links"] == []
 
-        theirs = paths.home() / ".cursor" / "skills" / "orphan"
-        theirs.symlink_to(orphan)
+        theirs = paths.home() / ".cursor" / "skills" / "other"
+        theirs.symlink_to(recorded)
         assert store.sync_plan()["stale_links"] == [str(theirs)]
 
     def test_a_dangling_link_in_a_native_store_dir_is_left_alone(

@@ -1671,9 +1671,8 @@ class TestDoctorToolOnStoreDirsBoostDidNotInstall:
                 "(~/.cursor/skills-cursor), not boost's — remove with "
                 "`boost sync --prune`") in text
         assert "('automate'" not in text
-        assert ("1 issue(s) — run `boost sync` to fix the rest; the ones naming "
-                "`boost sync --prune` delete or unlink, so ask the user before "
-                "running it") in text
+        assert ("1 issue(s) — 1 needs `boost sync --prune`, which deletes or "
+                "unlinks, so ask the user first") in text
         assert is_error is True
 
     def test_a_skill_added_by_hand_is_one_issue_sync_fixes(self, installed):
@@ -1683,7 +1682,8 @@ class TestDoctorToolOnStoreDirsBoostDidNotInstall:
         (paths.store_dir() / "pr-me" / "SKILL.md").write_text("# m\n",
                                                               encoding="utf-8")
         text, _ = configuration._tool_doctor({})
-        assert "adoptable_store: pr-me" in text
+        assert ("pr-me was added outside boost — `boost sync` records it as a "
+                "local skill and links it") in text
         assert "1 issue(s) — run `boost sync` to fix" in text
         assert "--prune" not in text
 
@@ -1736,9 +1736,32 @@ class TestDoctorToolOnStoreDirsBoostDidNotInstall:
         from boost_cli.core import paths
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
         text, is_error = configuration._tool_doctor({})
+        assert ("the lock file is corrupt — ask the user to restore it with "
+                "`boost replay`") in text
         assert ("1 store dir the lock file cannot be read about (brainstorming) "
-                "— ask the user to restore the lock with `boost replay`") in text
+                "— `boost replay` restores the lock that knows whose they "
+                "are") in text
+        # Neither is sync's to fix, so the verdict must not prescribe it.
+        assert ("2 issue(s) — 2 are the user's to change, and `boost sync` "
+                "leaves them") in text
         assert "re-records" not in text and is_error is True
+
+    def test_a_schema_lock_that_records_everything_is_not_healthy(self, installed):
+        # It answered "healthy" while CLI `doctor` and `heal` exited 1.
+        import json
+
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        lock = paths.lockfile_path()
+        raw = json.loads(lock.read_text(encoding="utf-8"))
+        raw["version"] = 2
+        lock.write_text(json.dumps(raw), encoding="utf-8")
+        text, is_error = configuration._tool_doctor({})
+        assert ("the lock file is schema v2, not v3 — ask the user to restore "
+                "it with `boost replay`") in text
+        assert ("1 issue(s) — 1 is the user's to change, and `boost sync` "
+                "leaves it") in text
+        assert "healthy" not in text and is_error is True
 
     def test_a_plugin_variant_is_listed_and_not_counted(self, installed,
                                                         claude_plugin):
@@ -1747,6 +1770,55 @@ class TestDoctorToolOnStoreDirsBoostDidNotInstall:
         text, is_error = configuration._tool_doctor({})
         assert "ships a different skill by that name" in text
         assert is_error is False
+
+
+class TestDoctorVerdict:
+    """Which issues `boost sync` fixes, named per kind.
+
+    "Run `boost sync` to fix" over a lock only `boost replay` restores and a
+    file only the user can move sent an agent round a loop: it ran sync, saw
+    nothing change, and was told the same again.
+    """
+
+    @staticmethod
+    def _verdict(total, lock_bad=False, lost=False, **buckets):
+        from boost_cli.commands import configuration
+        return configuration._doctor_verdict(buckets, total, lock_bad, lost)
+
+    def test_only_what_sync_fixes(self, sandbox):
+        assert self._verdict(2, missing_links=[1, 2]) == (
+            "2 issue(s) — run `boost sync` to fix")
+
+    def test_a_lost_lock_is_sync_s_to_re_record(self, sandbox):
+        assert self._verdict(1, lost=True, unrecorded_store=["a"]) == (
+            "1 issue(s) — run `boost sync` to fix")
+
+    def test_each_kind_present_is_named(self, sandbox):
+        got = self._verdict(
+            7, lock_bad=True, missing_links=[1],
+            foreign_store=[("a", "o", "/x/a", "identical")],
+            out_of_scope_links=[("b", "cursor")],
+            plugin_duplicates=[("c", "p@m", "/y", "identical"),
+                               ("d", "p@m", "/z", "differs")],
+            blocked_links=[("e", "cursor", "/w")],
+            unreadable_store=[("f", "/v")])
+        assert got == (
+            "7 issue(s) — `boost sync` fixes 1; 3 need `boost sync --prune`, "
+            "which deletes or unlinks, so ask the user first; 3 are the "
+            "user's to change, and `boost sync` leaves them")
+
+    def test_one_of_each_reads_in_the_singular(self, sandbox):
+        assert self._verdict(2, foreign_store=[("a", "o", "/x/a", "differs")],
+                             unrecorded_store=["b"]) == (
+            "2 issue(s) — 1 needs `boost sync --prune`, which deletes or "
+            "unlinks, so ask the user first; 1 is the user's to change, and "
+            "`boost sync` leaves it")
+
+    def test_a_repository_is_the_users_not_prunes(self, sandbox):
+        from boost_cli.core import paths
+        (paths.store_dir() / "r" / ".git").mkdir(parents=True)
+        assert self._verdict(1, foreign_store=[("r", "Codex", "/x/r", "differs")]) == (
+            "1 issue(s) — 1 is the user's to change, and `boost sync` leaves it")
 
 
 class TestTheStatedCostIsPricedPerMachine:

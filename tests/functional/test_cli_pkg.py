@@ -544,6 +544,25 @@ class TestSync:
         assert not copy.exists()
         assert (theirs / "SKILL.md").is_file(), "the original is not boost's"
 
+    def test_prune_names_a_git_repository_and_never_offers_it(
+            self, boost, installed, monkeypatch):
+        # The hash skips .git, so the user's clone of a Cursor skill was an
+        # "identical" copy, and --prune deleted its history with the dir.
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(_vendor_skill("automate", "# automate\n"), copy)
+        (copy / ".git").mkdir()
+        (copy / ".git" / "HEAD").write_text("ref: refs/heads/main\n",
+                                            encoding="utf-8")
+        monkeypatch.delenv("BOOST_ASSUME_YES")   # any confirm would be declined
+        r = boost("sync", "--prune")
+        flat = _flat(r.out + r.err)
+        assert ("kept ~/.agents/skills/automate: it is a git repository, and its "
+                "history is in no copy — move or delete it yourself") in flat
+        assert "declined" not in flat and "?" not in r.out
+        assert (copy / ".git" / "HEAD").is_file()
+        data = json.loads(boost("sync", "--json", "--prune").out)
+        assert data["pruned"] == [] and copy.is_dir()
+
     def test_prune_declined_does_not_tell_you_to_rerun_the_flag_you_just_ran(
             self, boost, installed, monkeypatch):
         # Bug: --prune declined told the user to run `boost sync --prune` —
@@ -641,6 +660,9 @@ class TestSync:
         assert json.loads(boost("sync", "--json").out)["unrecorded_store"] == [
             "brainstorming"]
 
+    @pytest.mark.skipif(
+            sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+            reason="needs POSIX permission bits, as a user other than root")
     def test_a_lost_lock_names_an_unreadable_skill_without_blaming_the_lock(
             self, boost, installed):
         # The lock was only missing, so `boost replay` is no remedy: the file
@@ -654,11 +676,43 @@ class TestSync:
         finally:
             secret.chmod(0o644)
         flat = _flat(r.out + r.err)
-        assert ("brainstorming was not recorded: "
-                "~/.agents/skills/brainstorming/secret.txt is unreadable — make "
+        assert ("brainstorming: ~/.agents/skills/brainstorming/secret.txt cannot "
+                "be read, so boost cannot tell whose it is or record it — make "
                 "it readable, then re-run `boost sync`") in flat
-        assert "boost replay" not in flat
+        assert "boost replay" not in flat and "recorded" not in r.out
         assert "everything in sync" not in r.out
+
+    @pytest.mark.skipif(
+            sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+            reason="needs POSIX permission bits, as a user other than root")
+    def test_an_unreadable_skill_is_named_at_plan_time_and_left(self, boost,
+                                                                installed):
+        # Asked before any preview: every one promised a record the run then
+        # refused.
+        mine = paths.store_dir() / "pr-me"
+        mine.mkdir()
+        (mine / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        secret = mine / "secret.txt"
+        secret.write_text("x", encoding="utf-8")
+        secret.chmod(0)
+        try:
+            sync = boost("sync")
+            diff = boost("sync", "--diff")
+            plan = json.loads(boost("sync", "--diff", "--json").out)
+            data = json.loads(boost("sync", "--json").out)
+        finally:
+            secret.chmod(0o644)
+        line = ("pr-me: ~/.agents/skills/pr-me/secret.txt cannot be read, so "
+                "boost cannot tell whose it is or record it — make it readable, "
+                "then re-run `boost sync`")
+        assert line in _flat(sync.out + sync.err)
+        assert "everything in sync" not in sync.out + diff.out
+        assert ("pr-me — ~/.agents/skills/pr-me/secret.txt cannot be read"
+                in _flat(diff.out))
+        assert "record" not in _flat(diff.out).replace(line, "")
+        assert plan["unreadable_store"] == [["pr-me", str(secret)]]
+        assert data["unreadable_store"] == [["pr-me", str(secret)]]
+        assert "pr-me" not in _lock()
 
     def test_diff_renders_every_ownership_row_as_a_readable_line(
             self, boost, installed, claude_plugin):
@@ -1972,7 +2026,7 @@ class TestSyncJson:
                         "blocked_links": [], "stale_links": [],
                         "adoptable_store": [], "older_copies": [],
                         "foreign_store": [], "not_skill_store": [],
-                        "misnamed_store": [],
+                        "unreadable_store": [], "misnamed_store": [],
                         "plugin_duplicates": [], "unrecorded_store": [],
                         "missing_materializations": [], "out_of_scope_links": [],
                         "project": {"missing": [], "orphaned": []}}
@@ -1980,7 +2034,7 @@ class TestSyncJson:
         assert data == {"actions": [], "pruned": [], "kept": [],
                         "foreign_store": [], "plugin_duplicates": [],
                         "older_copies": [], "not_skill_store": [],
-                        "misnamed_store": [],
+                        "unreadable_store": [], "misnamed_store": [],
                         "unrecorded_store": [], "out_of_scope_links": [],
                         "blocked_links": []}
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -29,10 +30,16 @@ from boost_cli.core import (
     store,
 )
 
+#: chmod cannot take the owner's own read or search access away on Windows,
+#: and root reads through any mode.
+posix_modes = pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="needs POSIX permission bits, as a user other than root")
+
 LINKED = ["claude-code", "windsurf", "cursor", "antigravity"]
 REST = [a for a in LINKED if a != "claude-code"]
 EMPTY = {"adoptable_store": [], "older_copies": [], "foreign_store": [],
-         "not_skill_store": []}
+         "not_skill_store": [], "unreadable_store": []}
 PLUGIN = "eight-backend@eight"
 
 
@@ -143,6 +150,34 @@ class TestHasContent:
         monkeypatch.setattr(store.os, "listdir", boom)
         assert store.has_content() is False
 
+    def test_a_dir_boost_cannot_look_into_counts(self, sandbox, monkeypatch):
+        # "No SKILL.md" is an answer only when the lookup gives it: a store of
+        # dirs with no search bit read as empty, which over a missing lock
+        # told `verify` and `drift` there was nothing to check.
+        _mine("pr-me")
+        real = os.stat
+
+        def stat(p, *a, **k):
+            if str(p).endswith("SKILL.md"):
+                raise PermissionError(13, "denied", str(p))
+            return real(p, *a, **k)
+        monkeypatch.setattr(store.os, "stat", stat)
+        assert store.has_content() is True
+
+    @posix_modes
+    def test_a_dir_with_no_search_bit_counts(self, sandbox):
+        d = _mine("pr-me")
+        d.chmod(0o600)
+        try:
+            assert store.has_content() is True
+        finally:
+            d.chmod(0o700)
+
+    def test_a_skill_md_that_is_not_a_file_is_none(self, sandbox):
+        (paths.store_dir() / "x" / "SKILL.md").mkdir(parents=True)
+        (paths.store_dir() / "notes").write_text("x", encoding="utf-8")
+        assert store.has_content() is False
+
 
 class TestLockVouches:
     def test_the_check_passed_in_is_the_one_read(self, installed, monkeypatch):
@@ -153,6 +188,61 @@ class TestLockVouches:
 
     def test_a_missing_lock_over_an_empty_store_vouches(self, sandbox):
         assert store.lock_vouches(lockfile.Integrity(False, "missing")) is True
+
+    def test_a_missing_lock_over_no_store_at_all_vouches(self, sandbox):
+        shutil.rmtree(paths.store_dir(), ignore_errors=True)
+        assert store.lock_vouches(lockfile.Integrity(False, "missing")) is True
+
+    def test_a_missing_lock_over_any_dir_does_not(self, sandbox):
+        # Not just a skill: with no lock, a link into another tool's bucket
+        # (``synced/foo``) is not boost's to call stale.
+        (paths.store_dir() / "synced" / "foo").mkdir(parents=True)
+        assert store.lock_vouches(lockfile.Integrity(False, "missing")) is False
+
+    def test_dot_entries_and_files_are_not_dirs(self, sandbox):
+        (paths.store_dir() / ".trash").mkdir(parents=True)
+        (paths.store_dir() / "notes.txt").write_text("x", encoding="utf-8")
+        assert store.lock_vouches(lockfile.Integrity(False, "missing")) is True
+
+    def test_a_store_boost_cannot_list_does_not(self, sandbox, monkeypatch):
+        paths.store_dir().mkdir(parents=True, exist_ok=True)
+
+        def boom(_p):
+            raise PermissionError("no")
+        monkeypatch.setattr(store.os, "listdir", boom)
+        assert store.lock_vouches(lockfile.Integrity(False, "missing")) is False
+
+
+class TestResolvesIntoStoreByInode:
+    """APFS spells one dir several ways (``~/.Agents``, a firmlink), and
+    ``resolve()`` keeps the spelling it was handed. Read as another tool's
+    copy, the store's only copy was a copy of itself, and ``--prune`` deleted
+    it. Simulated by making the strings disagree, so this holds on a
+    case-sensitive volume too."""
+
+    @pytest.fixture
+    def respelled(self, sandbox, monkeypatch):
+        root = str(paths.store_dir().resolve())
+
+        def spell(p):
+            s = str(p)
+            return s if s == root else s.replace(root, root + "-SPELLED", 1)
+        monkeypatch.setattr(store, "normalize_link_target", spell)
+
+    def test_a_path_the_strings_put_outside_is_asked_by_inode(self, respelled):
+        mine = _mine("my-skill")
+        assert store.resolves_into_store(mine) is True
+        assert store.resolves_into_store(_codex("my-skill")) is False
+
+    def test_under(self, sandbox):
+        root = paths.store_dir()
+        mine = _mine("my-skill")
+        assert store._under(mine, root) is True
+        assert store._under(mine / "SKILL.md", root) is True
+        # A path that cannot be looked at is skipped, not the end of the walk.
+        assert store._under(mine / "gone" / "deeper", root) is True
+        assert store._under(_codex("my-skill"), root) is False
+        assert store._under(mine, root / "nowhere") is False
 
 
 class TestClassifyUnrecorded:
@@ -265,6 +355,72 @@ class TestClassifyUnrecorded:
                                             "foreign_store": [
                                                 ("a", "Codex", str(same), "identical"),
                                                 ("b", "Codex", str(newer), "differs")]}
+
+    def test_a_dir_boost_cannot_look_into_is_unreadable(self, sandbox, monkeypatch):
+        # Looked at before anything is read: with no search bit it held "no
+        # SKILL.md" as far as ``isfile`` could tell, and was "not a skill".
+        d = _mine("pr-me")
+        real = os.access
+        monkeypatch.setattr(store.os, "access",
+                            lambda p, m, *a, **k: Path(p) != d and real(p, m, *a, **k))
+        assert _classify("pr-me") == {**EMPTY, "unreadable_store": [("pr-me", str(d))]}
+
+    @posix_modes
+    def test_a_dir_with_no_search_bit_is_unreadable(self, sandbox):
+        d = _mine("pr-me")
+        d.chmod(0o600)
+        try:
+            got = _classify("pr-me")
+        finally:
+            d.chmod(0o700)
+        assert got == {**EMPTY, "unreadable_store": [("pr-me", str(d))]}
+
+    def test_a_skill_holding_something_unreadable_is_named_and_not_compared(
+            self, sandbox, monkeypatch):
+        _vendor("automate")
+        bad = _mine("automate") / "refs"
+        _mine("pr-me")
+        monkeypatch.setattr(foreign, "unreadable",
+                            lambda p: bad if Path(p).parent == paths.store_dir()
+                            and Path(p).name == "automate" else None)
+        assert _classify("automate", "pr-me") == {
+            **EMPTY, "adoptable_store": ["pr-me"],
+            "unreadable_store": [("automate", str(bad))]}
+
+    def test_only_unreadable_dirs_read_no_inventory(self, sandbox, monkeypatch):
+        _mine("pr-me")
+        monkeypatch.setattr(foreign, "unreadable", lambda p: Path(p))
+        monkeypatch.setattr(foreign, "inventory",
+                            lambda *a, **k: pytest.fail("read"))
+        assert _classify("pr-me")["unreadable_store"] == [
+            ("pr-me", str(paths.store_dir() / "pr-me"))]
+
+    def test_a_repo_named_like_a_vendor_skill_differs_whatever_its_bytes(
+            self, sandbox):
+        # The hash skips ``.git``, so the user's clone hashed as identical.
+        theirs = _vendor("automate", "# same\n")
+        (_mine("automate", "# same\n") / ".git").mkdir()
+        assert _classify("automate")["foreign_store"] == [
+            ("automate", "Cursor's built-ins", str(theirs), "differs")]
+
+    def test_a_repo_is_never_an_identical_agent_copy(self, sandbox):
+        older = _codex("pr-me", "# same\n", when=1e9)
+        (_mine("pr-me", "# same\n", when=4e9) / ".git").mkdir()
+        assert _classify("pr-me") == {**EMPTY, "adoptable_store": ["pr-me"],
+                                      "older_copies": [("pr-me", "Codex", str(older))]}
+
+    def test_a_repo_older_than_an_agent_copy_is_still_named(self, sandbox):
+        newer = _codex("pr-me", "# same\n", when=4e9)
+        (_mine("pr-me", "# same\n", when=1e9) / ".git").mkdir()
+        assert _classify("pr-me")["foreign_store"] == [
+            ("pr-me", "Codex", str(newer), "differs")]
+
+    def test_a_second_path_is_decided_by_inode(self, sandbox, monkeypatch):
+        theirs = _codex("pr-me", "# same\n")
+        _mine("pr-me", "# same\n")
+        monkeypatch.setattr(foreign, "same_dir", lambda a, b: True)
+        assert _classify("pr-me") == EMPTY
+        assert theirs.is_dir()
 
     def test_every_name_is_answered_in_order(self, sandbox):
         _vendor("v")
@@ -586,10 +742,10 @@ class TestPlanIssues:
     def test_counts_problems_and_not_notes(self):
         plan = {"missing_links": [("a", "cursor")], "foreign_store": [1, 2],
                 "older_copies": [1, 2, 3], "not_skill_store": ["x"],
-                "misnamed_store": ["x y"],
+                "misnamed_store": ["x y"], "unreadable_store": [("u", "/u")],
                 "plugin_duplicates": [("a", "p", "/x", "identical"),
                                       ("b", "p", "/y", "differs")]}
-        assert store.plan_issues(plan) == 4
+        assert store.plan_issues(plan) == 5
 
     def test_an_empty_plan(self):
         assert store.plan_issues({}) == 0
@@ -603,12 +759,67 @@ class TestSyncPlanKeepsAnAdoptedSkillsLink:
         assert plan["adoptable_store"] == ["pr-me"]
         assert plan["stale_links"] == []
 
-    def test_a_link_to_a_foreign_copy_is_still_stale(self, installed):
+    def test_a_live_link_into_any_unrecorded_dir_is_not_stale(self, installed):
+        # Plain sync removed these one line above the lines saying the dirs
+        # they lead to were left alone: a copy of Cursor's skill, a skill in
+        # another tool's bucket, a dir boost cannot record a name for.
         _vendor("automate")
-        copy = _mine("automate")
-        link = _claude_link("automate")
-        link.symlink_to(copy)
+        _claude_link("automate").symlink_to(_mine("automate"))
+        _claude_link("foo").symlink_to(_skill(paths.store_dir() / "synced" / "foo"))
+        _claude_link("notes").symlink_to(_mine("my notes"))
+        plan = store.sync_plan()
+        assert [r[0] for r in plan["foreign_store"]] == ["automate"]
+        assert plan["stale_links"] == []
+
+    def test_a_link_to_a_recorded_skill_under_another_name_is_stale(self, installed):
+        link = _claude_link("other")
+        link.symlink_to(paths.store_dir() / "brainstorming")
         assert store.sync_plan()["stale_links"] == [str(link)]
+
+    def test_a_link_into_a_pruned_dir_is_stale_once_it_dangles(self, installed):
+        link = _claude_link("automate")
+        link.symlink_to(paths.store_dir() / "automate")
+        assert store.sync_plan()["stale_links"] == [str(link)]
+
+    def test_a_link_boost_cannot_follow_is_not_called_dangling(self, installed,
+                                                               monkeypatch):
+        # Under a store with no search bit every live link read as broken.
+        link = _claude_link("automate")
+        link.symlink_to(_mine("automate"))
+        real = os.stat
+
+        def stat(p, *a, **k):
+            if str(p) == str(link):
+                raise PermissionError(13, "denied", str(p))
+            return real(p, *a, **k)
+        monkeypatch.setattr(store.os, "stat", stat)
+        assert store._dangles(link) is False
+
+    def test_a_loop_dangles(self, installed):
+        link = _claude_link("loop")
+        link.symlink_to(link)
+        assert store._dangles(link) is True
+
+    def test_a_live_link_does_not_dangle(self, installed):
+        assert store._dangles(_claude_link()) is False
+        assert store._dangles(paths.home() / "nothing-here") is True
+
+    def test_the_store_dir_a_link_leads_into(self, installed):
+        mine = _mine("automate")
+        (mine / "refs").mkdir()
+        made = {}
+        for n, to in (("a", mine), ("b", mine / "refs"),
+                      ("c", paths.store_dir()), ("d", paths.home())):
+            made[n] = _claude_link(n)
+            made[n].symlink_to(to)
+        assert {n: store._store_entry(link) for n, link in made.items()} == {
+            "a": "automate", "b": "automate", "c": None, "d": None}
+
+    def test_a_link_on_another_drive_leads_into_none(self, installed, monkeypatch):
+        def other_drive(*_a):
+            raise ValueError("path is on mount 'D:', start on mount 'C:'")
+        monkeypatch.setattr(store.os.path, "relpath", other_drive)
+        assert store._store_entry(_claude_link()) is None
 
 
 class TestAdoption:
@@ -713,21 +924,40 @@ class TestAdoption:
         assert len(lines) == 5 and all(store.is_unrepaired(ln) for ln in lines[1:])
         assert lockfile.get_skill("pr-me")["agents"] == []
 
+    @posix_modes
     def test_an_unreadable_file_is_named_and_the_rest_still_runs(self, installed):
+        # Asked at plan time, so no preview promises a record the run refuses.
         secret = _mine("pr-me") / "secret.txt"
         secret.write_text("x", encoding="utf-8")
         secret.chmod(0)
         (paths.home() / ".cursor" / "skills" / "brainstorming").unlink()
         try:
-            actions = store.sync_apply(store.sync_plan())
+            plan = store.sync_plan()
+            actions = store.sync_apply(plan)
+        finally:
+            secret.chmod(0o644)
+        assert plan["adoptable_store"] == []
+        assert plan["unreadable_store"] == [("pr-me", str(secret))]
+        assert store.sync_preview(plan) == []
+        assert actions == ["linked brainstorming → cursor"]
+        assert lockfile.get_skill("pr-me") is None
+
+    @posix_modes
+    def test_a_file_unreadable_since_the_plan_is_named(self, installed):
+        secret = _mine("pr-me") / "secret.txt"
+        secret.write_text("x", encoding="utf-8")
+        plan = store.sync_plan()
+        secret.chmod(0)
+        try:
+            actions = store.sync_apply(plan)
         finally:
             secret.chmod(0o644)
         line = ("pr-me was not recorded: ~/.agents/skills/pr-me/secret.txt is "
                 "unreadable — make it readable, then re-run `boost sync`")
         assert line in actions and store.is_unrepaired(line)
-        assert "linked brainstorming → cursor" in actions
         assert lockfile.get_skill("pr-me") is None
 
+    @posix_modes
     def test_an_unreadable_file_under_a_lost_lock_is_named(self, installed):
         secret = paths.store_dir() / "brainstorming" / "secret.txt"
         secret.write_text("x", encoding="utf-8")
@@ -942,6 +1172,70 @@ class TestRemoveForeignCopy:
             "it is no longer a copy of ~/.codex/skills/pr-me")
         assert copy.is_symlink()
 
+    def test_kept_when_it_holds_a_repository(self, installed):
+        _vendor("automate", "# same\n")
+        copy = _mine("automate", "# same\n")
+        row = self._row()
+        (copy / ".git").mkdir()
+        assert store.remove_foreign_copy(row) == store.REPO_KEPT
+        assert copy.is_dir()
+
+    def test_kept_when_part_of_it_cannot_be_read_now(self, installed, monkeypatch):
+        _vendor("automate", "# same\n")
+        copy = _mine("automate", "# same\n")
+        row = self._row()
+        monkeypatch.setattr(foreign, "unreadable",
+                            lambda p: copy / "refs" if Path(p) == copy else None)
+        assert store.remove_foreign_copy(row) == (
+            "part of it cannot be read now, so what it holds cannot be told")
+        assert copy.is_dir()
+
+    def test_kept_when_the_original_is_this_same_dir(self, installed, monkeypatch):
+        # Asked last, so the reasons above keep their words: the same dir
+        # under another spelling passes each of them as a copy of itself.
+        _vendor("automate", "# same\n")
+        _mine("automate", "# same\n")
+        row = self._row()
+        fresh = {**EMPTY, "foreign_store": [row]}
+        assert store._still_a_copy(row, {}, fresh) is None
+        monkeypatch.setattr(foreign, "same_dir", lambda a, b: True)
+        assert store._still_a_copy(row, {}, fresh) == (
+            "~/.cursor/skills-cursor/automate is this same dir under another name")
+
+    def test_a_delete_that_fails_keeps_its_row_and_the_rest_still_run(
+            self, installed, monkeypatch):
+        for n in ("a-first", "b-next"):
+            _vendor(n, "# same\n")
+            _mine(n, "# same\n")
+        rows = [self._row("a-first"), self._row("b-next")]
+        real = store.util.remove_path
+
+        def remove(p):
+            if Path(p).name == "a-first":
+                raise PermissionError(13, "Permission denied", str(Path(p) / "refs"))
+            return real(p)
+        monkeypatch.setattr(store.util, "remove_path", remove)
+        assert store.remove_foreign_copies(rows) == [
+            "deleting it stopped at ~/.agents/skills/a-first/refs: Permission "
+            "denied — what is left is still there", None]
+        assert (paths.store_dir() / "a-first").is_dir()
+        assert not os.path.lexists(paths.store_dir() / "b-next")
+        pulse = [json.loads(x) for x in paths.pulse_path().read_text(
+            encoding="utf-8").splitlines()]
+        assert [e["subject"] for e in pulse if e["action"] == "prune"] == ["b-next"]
+
+    def test_an_error_with_no_path_names_the_skill(self, installed, monkeypatch):
+        _vendor("automate", "# same\n")
+        _mine("automate", "# same\n")
+        row = self._row()
+
+        def remove(_p):
+            raise OSError("disk on fire")
+        monkeypatch.setattr(store.util, "remove_path", remove)
+        assert store.remove_foreign_copy(row) == (
+            "deleting it stopped at automate: disk on fire — what is left is "
+            "still there")
+
     def test_an_identical_copy_edited_since_is_kept(self, installed):
         _vendor("automate", "# same\n")
         copy = _mine("automate", "# same\n")
@@ -1107,6 +1401,30 @@ class TestWording:
             "`boost sync --prune`",
             "c copies a skill from Codex (~/.codex/skills), not boost's "
             "(changed from the original) — remove with `boost sync --prune`"]
+
+    def test_a_repo_gets_its_own_line_and_no_prune_remedy(self, sandbox):
+        (_mine("r") / ".git").mkdir()
+        _mine("a")
+        rows = [("r", "Codex", "/x/r", "differs"), ("a", "Codex", "/x/a", "identical")]
+        assert store.is_repo_copy(rows[0]) is True
+        assert store.is_repo_copy(rows[1]) is False
+        assert store.foreign_store_lines(rows) == [
+            "a copies a skill from Codex (/x), not boost's — remove with "
+            "`boost sync --prune`",
+            "r is named like a skill from Codex (/x/r), but it is a git "
+            "repository, so `boost sync --prune` leaves it — move or delete "
+            "it yourself if it is a copy"]
+
+    def test_unreadable_line(self, sandbox):
+        d = paths.store_dir()
+        assert store.unreadable_line([("pr-me", str(d / "pr-me" / "refs"))]) == (
+            "pr-me: ~/.agents/skills/pr-me/refs cannot be read, so boost cannot "
+            "tell whose it is or record it — make it readable, then re-run "
+            "`boost sync`")
+        assert store.unreadable_line([("a", str(d / "a")), ("b", str(d / "b" / "x"))]) == (
+            "2 store dirs hold something boost cannot read (a: ~/.agents/skills/a, "
+            "b: ~/.agents/skills/b/x) — make them readable, then re-run "
+            "`boost sync`")
 
     def test_foreign_lines_for_identical_copies_say_nothing_changed(self, sandbox):
         rows = [("a", "o", "/x/a", "identical")]

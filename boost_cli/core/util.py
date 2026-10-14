@@ -50,11 +50,21 @@ def _clear_readonly_and_retry(func, path, exc) -> None:
     directory survived with its contents, and the target's mode went 0o755 to
     0o200. Re-raising restores ``shutil``'s own "Cannot call rmtree on a
     symbolic link" instead of that silent success.
+
+    Only a removal is retried. ``shutil.rmtree`` also reports a failed
+    ``os.open`` or ``os.scandir`` here — a subdir it may not list — and
+    calling ``os.open(path)`` again raised ``TypeError`` (it needs flags),
+    which no caller catches: `boost sync --prune` exited 70 halfway through a
+    delete. A read-only bit is never why those fail, so the error is raised.
     """
-    if os.path.islink(path):
+    if os.path.islink(path) or func not in _RETRYABLE:
         raise exc
     os.chmod(path, stat.S_IWRITE)
     func(path)
+
+
+#: The removals a cleared read-only bit can unblock.
+_RETRYABLE = (os.unlink, os.remove, os.rmdir)
 
 
 def rmtree(path) -> None:

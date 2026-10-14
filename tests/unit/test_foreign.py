@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -779,6 +780,140 @@ class TestSameContent:
         monkeypatch.setattr(foreign.util, "sha256_dir", boom)
         assert foreign.same_content(a, a) is False
         assert foreign.compare(a, a) == foreign.DIFFERS
+
+
+    def test_a_dir_it_cannot_list_is_not_identical(self, sandbox, locked):
+        # The hash skips a subdir it cannot list, so a copy whose extra files
+        # sit in one hashed the same as the copy it was compared with.
+        a = _skill(paths.home() / "a", "same\n")
+        b = _skill(paths.home() / "b", "same\n")
+        (a / "extra").mkdir()
+        (a / "extra" / "x.md").write_text("x", encoding="utf-8")
+        locked(a / "extra")
+        assert foreign.same_content(a, b) is False
+        assert foreign.same_content(b, a) is False
+
+
+@pytest.fixture
+def locked():
+    """chmod a path to 0 for the test, and give its mode back after it.
+
+    Skips the test where a mode cannot lock its owner out: on Windows, or as
+    root.
+    """
+    if sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0):
+        pytest.skip("needs POSIX permission bits, as a user other than root")
+    done: list[tuple[Path, int]] = []
+
+    def lock(p: Path) -> Path:
+        done.append((p, p.stat().st_mode))
+        p.chmod(0)
+        return p
+    yield lock
+    for p, mode in reversed(done):
+        p.chmod(mode)
+
+
+class TestSameDir:
+    def test_one_dir_by_any_path_to_it(self, sandbox):
+        a = _skill(paths.home() / "a")
+        alias = paths.home() / "alias"
+        alias.symlink_to(a)
+        assert foreign.same_dir(a, alias) is True
+        assert foreign._identity(a) == foreign._identity(alias)
+        assert foreign._identity(a)[0] == "inode"
+
+    def test_two_dirs_with_the_same_bytes_are_two(self, sandbox):
+        a = _skill(paths.home() / "a")
+        b = _skill(paths.home() / "b")
+        assert foreign.same_dir(a, b) is False
+        assert foreign._identity(a) != foreign._identity(b)
+
+    def test_a_path_that_cannot_be_looked_at_is_the_same_as_nothing(self, sandbox):
+        a = _skill(paths.home() / "a")
+        gone = paths.home() / "gone"
+        assert foreign.same_dir(a, gone) is False
+        assert foreign.same_dir(gone, gone) is False
+        assert foreign._identity(gone) == ("path", os.path.realpath(gone))
+
+    def test_inventory_lists_one_dir_once_however_it_is_spelled(
+            self, sandbox, monkeypatch):
+        # Two spellings of one dir on a case-insensitive volume: realpath keeps
+        # each as given, so only the inode can tell they are one.
+        _skill(paths.home() / ".codex" / "skills" / "x")
+        _skill(paths.home() / ".cursor" / "skills" / "x")
+        assert len(foreign.inventory()["x"]) == 2
+        monkeypatch.setattr(foreign, "_identity", lambda _p: ("inode", 1, 2))
+        assert len(foreign.inventory()["x"]) == 1
+
+
+class TestHoldsRepo:
+    @pytest.mark.parametrize("where", [".git", "vendor/lib/.git"])
+    def test_a_git_dir_at_any_depth(self, sandbox, where):
+        d = _skill(paths.home() / "s")
+        (d / where).mkdir(parents=True)
+        assert foreign.holds_repo(d) is True
+
+    def test_a_git_file_too(self, sandbox):
+        # What a worktree or a submodule holds in place of the dir.
+        d = _skill(paths.home() / "s")
+        (d / ".git").write_text("gitdir: ../x\n", encoding="utf-8")
+        assert foreign.holds_repo(d) is True
+
+    def test_names_that_only_look_like_it(self, sandbox):
+        d = _skill(paths.home() / "s")
+        (d / "git").mkdir()
+        (d / ".gitignore").write_text("x\n", encoding="utf-8")
+        assert foreign.holds_repo(d) is False
+
+
+class TestUnreadable:
+    @pytest.fixture
+    def tree(self, sandbox) -> Path:
+        d = _skill(paths.home() / "s")
+        (d / "refs").mkdir()
+        (d / "refs" / "a.md").write_text("a", encoding="utf-8")
+        return d
+
+    def test_a_readable_tree(self, tree):
+        assert foreign.unreadable(tree) is None
+
+    @pytest.mark.parametrize("rel", ["SKILL.md", "refs", "refs/a.md", "."])
+    def test_names_what_cannot_be_read(self, tree, locked, rel):
+        bad = tree / rel if rel != "." else tree
+        locked(bad)
+        assert foreign.unreadable(tree) == bad
+
+    def test_the_first_by_name(self, tree, locked):
+        for n in ("b.md", "a.md"):
+            locked(_file(tree / n))
+        assert foreign.unreadable(tree) == tree / "a.md"
+
+    @pytest.mark.parametrize("ignored", [".git", "__pycache__"])
+    def test_what_the_hash_ignores_is_not_looked_at(self, tree, locked, ignored):
+        (tree / ignored).mkdir()
+        locked(tree / ignored)
+        assert foreign.unreadable(tree) is None
+
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs here")
+    def test_a_fifo_does_not_hang_the_walk(self, tree):
+        os.mkfifo(tree / "pipe")
+        assert foreign.unreadable(tree) is None
+
+    def test_a_link_into_a_dir_is_not_followed(self, tree, locked):
+        elsewhere = locked(_skill(paths.home() / "elsewhere"))
+        (tree / "elsewhere").symlink_to(elsewhere)
+        assert foreign.unreadable(tree) is None
+
+    def test_a_link_to_a_file_is_followed_as_the_hash_follows_it(self, tree, locked):
+        secret = locked(_file(paths.home() / "secret.md"))
+        (tree / "secret.md").symlink_to(secret)
+        assert foreign.unreadable(tree) == tree / "secret.md"
+
+
+def _file(p: Path) -> Path:
+    p.write_text("x", encoding="utf-8")
+    return p
 
 
 class TestNewestMtime:

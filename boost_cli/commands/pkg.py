@@ -992,6 +992,7 @@ _PLAN_LABELS = [
     ("older_copies", "older copies of those, left alone"),
     ("foreign_store", "store dirs copying another tool's skills (--prune removes)"),
     ("not_skill_store", "store dirs that are not skills, left alone"),
+    ("unreadable_store", "store dirs boost cannot read, left alone"),
     ("misnamed_store", "store dirs boost cannot record a skill by, left alone"),
     ("plugin_duplicates", "skills Claude Code also loads from a plugin"),
     ("unrecorded_store", "store dirs the lock file has lost"),
@@ -1062,7 +1063,12 @@ def cmd_sync(argv: list[str]) -> int:
                 elif key == "foreign_store":
                     name, owner, path, how = item
                     out.info("%s — %s, %s (%s)"
-                             % (name, owner, _tilde(Path(path)), how))
+                             % (name, owner, _tilde(Path(path)),
+                                "a git repository, which --prune leaves"
+                                if store.is_repo_copy(item) else how))
+                elif key == "unreadable_store":
+                    name, path = item
+                    out.info("%s — %s cannot be read" % (name, _tilde(Path(path))))
                 elif key == "plugin_duplicates":
                     name, plugin_id, _path, how = item
                     out.info("%s — plugin %s (%s)" % (name, plugin_id, how))
@@ -1091,12 +1097,19 @@ def cmd_sync(argv: list[str]) -> int:
     # neither is approved as part of the other. A copy of another tool's skill
     # is deleted; a skill a plugin already ships loses only Claude Code's link.
     copies = plan["foreign_store"]
+    # A store dir holding a git repository is never offered: its history is
+    # in no copy, so it is named and kept rather than put to a confirm.
+    offer = [r for r in copies if not store.is_repo_copy(r)]
     pruned: list[str] = []
     kept: list[str] = []
     declined_copies = False
-    if args.prune and copies:
-        if _go(args, _foreign_prompt(copies)):
-            for row, why in zip(copies, store.remove_foreign_copies(copies),
+    if args.prune:
+        kept += ["kept %s: %s" % (_tilde(store.skill_store_dir(r[0])),
+                                  store.REPO_KEPT)
+                 for r in copies if r not in offer]
+    if args.prune and offer:
+        if _go(args, _foreign_prompt(offer)):
+            for row, why in zip(offer, store.remove_foreign_copies(offer),
                                 strict=True):
                 if why is None:
                     pruned.append(row[0])
@@ -1138,6 +1151,7 @@ def cmd_sync(argv: list[str]) -> int:
                           "foreign_store": left, "plugin_duplicates": dups,
                           "older_copies": plan["older_copies"],
                           "not_skill_store": plan["not_skill_store"],
+                          "unreadable_store": plan["unreadable_store"],
                           "misnamed_store": plan["misnamed_store"],
                           "unrecorded_store": unrecorded,
                           "out_of_scope_links": oos,
@@ -1160,13 +1174,15 @@ def cmd_sync(argv: list[str]) -> int:
     # A decline names what it left rather than the flag the user just ran.
     if declined_copies:
         out.warn("%s copying another tool's skills left in place "
-                 "(declined): %s" % (_plural(len(left), "store dir"),
-                                     ", ".join(r[0] for r in left)), wrap=True)
+                 "(declined): %s" % (_plural(len(offer), "store dir"),
+                                     ", ".join(r[0] for r in offer)), wrap=True)
     elif not args.prune:
         for line in store.foreign_store_lines(left):
             out.warn(line, wrap=True)
     if plan["not_skill_store"]:
         out.info(store.not_skill_line(plan["not_skill_store"]), wrap=True)
+    if plan["unreadable_store"]:
+        out.warn(store.unreadable_line(plan["unreadable_store"]), wrap=True)
     if plan["misnamed_store"]:
         out.info(store.misnamed_line(plan["misnamed_store"]), wrap=True)
     if declined_dups:
@@ -1220,7 +1236,8 @@ def cmd_sync(argv: list[str]) -> int:
                  wrap=True)
     unfixed = left or kept or any(r[3] == foreign.IDENTICAL for r in dups)
     if (not actions and not pruned and not unfixed and not oos and not blocked
-            and not stuck and not in_way and not occupied and not unrecorded):
+            and not stuck and not in_way and not occupied and not unrecorded
+            and not plan["unreadable_store"]):
         out.ok("everything in sync")
     return 0
 

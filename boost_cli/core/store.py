@@ -8,6 +8,7 @@ install():  copy skill dir from a tap clone -> store, symlink into every
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import shutil
 import stat
@@ -324,15 +325,29 @@ def has_content() -> bool:
     another tool's bucket in the store (one with no ``SKILL.md``) held `boost
     doctor` at "lock file missing — run `boost sync`" for good: there was
     nothing a lock could have recorded, and nothing sync could record.
+
+    A dir boost cannot look into counts as content: "no SKILL.md" is an answer
+    only when the lookup says so. ``os.path.isfile`` says False for a dir
+    with no search bit, and a store of those read as empty — which, over a
+    missing lock, told `verify` and `drift` there was nothing to check.
     """
     root = paths.store_dir()
     try:
         names = os.listdir(root)
     except OSError:
         return False
-    return any(not n.startswith(".")
-               and os.path.isfile(os.path.join(root, n, "SKILL.md"))  # noqa: FURB146
+    return any(not n.startswith(".") and _may_hold_skill(os.path.join(root, n))
                for n in names)
+
+
+def _may_hold_skill(d: str) -> bool:
+    """True unless ``d`` is known to hold no ``SKILL.md`` file."""
+    try:
+        return stat.S_ISREG(os.stat(os.path.join(d, "SKILL.md")).st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
 
 
 def source_dir_for(entry: dict) -> Path:
@@ -2985,10 +3000,18 @@ def resolves_into_store(path: Path) -> bool:
 
     Fails closed — a symlink loop, or anything else ``resolve()`` refuses to
     answer, is not in the store as far as this is concerned.
+
+    A path the strings put outside is asked again by inode (:func:`_under`):
+    on a case-insensitive volume a link to ``~/.Agents/skills/x`` leads into
+    the store, and ``resolve()`` keeps the case it was given. Read as another
+    tool's copy, the store's only copy of a skill was a copy of itself, and
+    ``--prune`` deleted it.
     """
     try:
-        target_s = normalize_link_target(path.resolve(strict=True))
-        root_s = normalize_link_target(paths.store_dir().resolve())
+        target = path.resolve(strict=True)
+        root = paths.store_dir().resolve()
+        target_s = normalize_link_target(target)
+        root_s = normalize_link_target(root)
     except (OSError, RuntimeError):
         # RuntimeError is not redundant: on Python 3.12 `resolve(strict=True)`
         # raises RuntimeError("Symlink loop from ...") for a cycle, and
@@ -2997,10 +3020,26 @@ def resolves_into_store(path: Path) -> bool:
         # newer interpreters and false on the oldest supported one — the test
         # passed locally on 3.14 and failed in CI on 3.12.
         return False
+    with contextlib.suppress(ValueError):
+        if os.path.commonpath([target_s, root_s]) == root_s:
+            return True
+    return _under(target, root)
+
+
+def _under(target: Path, root: Path) -> bool:
+    """True if ``target`` or one of its parents is ``root``, by inode."""
     try:
-        return os.path.commonpath([target_s, root_s]) == root_s
-    except ValueError:
+        want = root.stat()
+    except OSError:
         return False
+    for p in (target, *target.parents):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if (st.st_dev, st.st_ino) == (want.st_dev, want.st_ino):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -3137,10 +3176,28 @@ def lock_vouches(integ: lockfile.Integrity | None = None) -> bool:
     `boost doctor` prescribes for exactly this state — into an uninstaller that
     removed every live link of an intact install with green ticks and exit 0.
     ``integ`` is a :func:`lockfile.check` the caller already made.
+
+    "Empty" is any dir at all, not :func:`has_content`'s skills: with no lock,
+    a link into another tool's bucket in the store (``synced/foo``) is not
+    boost's to call stale, and the narrower test swept it. A store boost
+    cannot list cannot be called empty either.
     """
     if integ is None:
         integ = lockfile.check()
-    return integ.ok or (integ.problem == "missing" and not has_content())
+    if integ.ok:
+        return True
+    if integ.problem != "missing":
+        return False
+    root = paths.store_dir()
+    try:
+        names = os.listdir(root)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return not any(not n.startswith(".")
+                   and os.path.isdir(os.path.join(root, n))  # noqa: FURB146
+                   for n in names)
 
 
 def _store_dirs() -> list[str]:
@@ -3183,7 +3240,8 @@ def misnamed_store_dirs() -> list[str]:
 def classify_unrecorded(names: list[str]) -> dict[str, list]:
     """Sort store dirs no lock entry records by whose they are.
 
-    Returns ``{adoptable_store, older_copies, foreign_store, not_skill_store}``:
+    Returns ``{adoptable_store, older_copies, foreign_store, not_skill_store,
+    unreadable_store}``:
 
     * ``adoptable_store`` — a skill nothing else on this machine claims: one
       written or copied in by hand, or left by another installer. Plain
@@ -3193,6 +3251,10 @@ def classify_unrecorded(names: list[str]) -> dict[str, list]:
     * ``foreign_store`` — ``(skill, owner, path, "identical" | "differs")``: a
       copy of another tool's skill. Only ``boost sync --prune`` removes it.
     * ``not_skill_store`` — a dir with no ``SKILL.md``. Named, never touched.
+    * ``unreadable_store`` — ``(skill, path)``: a dir holding ``path``, which
+      boost cannot read (:func:`foreign.unreadable`). Whose it is cannot be
+      told, it cannot be recorded, and its hash would skip what it cannot
+      list, so it is named with that path and never touched.
 
     These were one bucket, "orphaned store dirs", and ``sync --prune`` deleted
     every dir in it. On the machine this was written against that was 28
@@ -3218,34 +3280,56 @@ def classify_unrecorded(names: list[str]) -> dict[str, list]:
     user made so that the agents reading the store see a skill kept
     elsewhere — is in no bucket. It is not a copy, so ``--prune`` must not
     unlink it, and it is that tool's skill, so boost does not record it.
+    "Second path" is decided by inode (:func:`foreign.same_dir`), since a
+    case-insensitive volume spells one dir several ways.
+
+    A dir holding a git repository (:func:`foreign.holds_repo`) is never
+    identical to anything: the hash does not see ``.git``, and the history
+    in it is in no copy. It can still be named like another tool's skill,
+    and ``--prune`` still leaves it (:func:`is_repo_copy`).
     """
     buckets: dict[str, list] = {"adoptable_store": [], "older_copies": [],
-                                "foreign_store": [], "not_skill_store": []}
+                                "foreign_store": [], "not_skill_store": [],
+                                "unreadable_store": []}
     if not names:
         return buckets
-    named = {n: foreign.skill_name(skill_store_dir(n), n) for n in names}
-    found = foreign.inventory([*names, *named.values()])
+    readable = []
     for name in names:
         sdir = skill_store_dir(name)
-        # ``os.path``: ``Path.is_file`` raises under a dir with no search bit
-        # on Python 3.12 and 3.13, and doctor runs this.
-        if not os.path.isfile(sdir / "SKILL.md"):  # noqa: FURB146
+        # Looked at before anything is read: a dir with no search bit has no
+        # SKILL.md as far as ``os.path.isfile`` can tell, and was called "not
+        # a skill" for it. ``os.path`` throughout because ``Path.is_file``
+        # raises under such a dir on Python 3.12 and 3.13, and doctor runs this.
+        if not os.access(sdir, os.R_OK | os.X_OK):
+            buckets["unreadable_store"].append((name, str(sdir)))
+        elif not os.path.isfile(sdir / "SKILL.md"):  # noqa: FURB146
             buckets["not_skill_store"].append(name)
-            continue
+        elif (bad := foreign.unreadable(sdir)) is not None:
+            buckets["unreadable_store"].append((name, str(bad)))
+        else:
+            readable.append(name)
+    if not readable:
+        return buckets
+    named = {n: foreign.skill_name(skill_store_dir(n), n) for n in readable}
+    found = foreign.inventory([*readable, *named.values()])
+    for name in readable:
+        sdir = skill_store_dir(name)
         theirs = found.get(name, [])
         if named[name] != name:
             theirs = theirs + [c for c in found.get(named[name], [])
                                if c.kind == foreign.PLUGIN]
-        real = os.path.realpath(sdir)
-        if any(os.path.realpath(c.path) == real for c in theirs):
+        if any(foreign.same_dir(c.path, sdir) for c in theirs):
             continue
+        repo = foreign.holds_repo(sdir)
         owned = [c for c in theirs if c.kind != foreign.AGENT]
         if owned:
             c = owned[0]
             buckets["foreign_store"].append(
-                (name, c.owner, str(c.path), foreign.compare(sdir, c.path)))
+                (name, c.owner, str(c.path),
+                 foreign.DIFFERS if repo else foreign.compare(sdir, c.path)))
             continue
-        same = [c for c in theirs if foreign.same_content(sdir, c.path)]
+        same = [] if repo else [c for c in theirs
+                                if foreign.same_content(sdir, c.path)]
         if same:
             buckets["foreign_store"].append(
                 (name, same[0].owner, str(same[0].path), foreign.IDENTICAL))
@@ -3411,7 +3495,7 @@ def sort_unrecorded(lock: dict, integ: lockfile.Integrity | None = None
     names = unrecorded_store_dirs(lock)
     out: dict[str, list] = {"adoptable_store": [], "older_copies": [],
                             "foreign_store": [], "not_skill_store": [],
-                            "unrecorded_store": [],
+                            "unreadable_store": [], "unrecorded_store": [],
                             "misnamed_store": misnamed_store_dirs()}
     if not integ.ok and integ.problem != "missing":
         out["unrecorded_store"] = names
@@ -3462,7 +3546,8 @@ def sync_plan() -> dict[str, list]:
       blocked_links:  (skill, agent, path) where something that is not a boost
                       symlink occupies the link path — sync will not clobber it
       stale_links:    paths in agent dirs that are broken/unmanaged symlinks
-      adoptable_store, older_copies, foreign_store, not_skill_store:
+      adoptable_store, older_copies, foreign_store, not_skill_store,
+      unreadable_store:
                       store dirs not present in the lock file, sorted by whose
                       they are (:func:`classify_unrecorded`)
       misnamed_store: store dirs whose name boost cannot record a skill under
@@ -3503,7 +3588,8 @@ def sync_plan() -> dict[str, list]:
     plan: dict[str, list] = {"missing_store": [], "missing_links": [],
             "blocked_links": [], "stale_links": [], "adoptable_store": [],
             "older_copies": [], "foreign_store": [], "not_skill_store": [],
-            "misnamed_store": [], "plugin_duplicates": [], "unrecorded_store": [],
+            "unreadable_store": [], "misnamed_store": [],
+            "plugin_duplicates": [], "unrecorded_store": [],
             "missing_materializations": [], "out_of_scope_links": []}
     for name, entry in lock.items():
         sdir = skill_store_dir(name)
@@ -3587,10 +3673,13 @@ def sync_plan() -> dict[str, list]:
                     plan["out_of_scope_links"].append((name, agent))
     plan.update(sort_unrecorded(lock, integ))
     plan["plugin_duplicates"] = plugin_duplicates(lock, coverage)
-    # A live link to a skill sync is about to record is that skill's link, not
-    # a stale one: sweeping it made the run that adopted a hand-linked skill
-    # delete the link the adoption had just recorded.
-    adopting = set(plan["adoptable_store"])
+    # A live link into a store dir the lock does not record leads to that
+    # dir, whoever's it is, so it is not stale: the sweep used to exempt only
+    # the skills sync was about to record, and removed the links into a copy
+    # of Cursor's skill, another tool's bucket or a misnamed dir one line
+    # above the lines saying those dirs were left alone. One into a dir
+    # `--prune` deletes dangles afterwards, and the next sync sweeps it.
+    unrecorded = {n for n in _store_dirs() if n not in lock}
     # linking_agents, not enabled_agents: boost only ever creates a symlink in
     # an agent it links for, so a link in a native-store agent's skills dir was
     # put there by something else — and the sweep's only ownership test is
@@ -3610,9 +3699,9 @@ def sync_plan() -> dict[str, list]:
             # vouch. Without that guard a missing lock made every live link
             # into an intact store look stale, and sync removed them all.
             if (link.is_symlink() and points_into_store(link)
-                    and (not link.exists()
+                    and (_dangles(link)
                          or (vouches and link.name not in lock
-                             and link.name not in adopting))):
+                             and _store_entry(link) not in unrecorded))):
                 plan["stale_links"].append(str(link))
     # Rules/workflows don't live in the store — they materialize into agent dirs.
     # A materialization whose file (or CLAUDE.md block) is gone can be repaired
@@ -3640,6 +3729,33 @@ def sync_plan() -> dict[str, list]:
                if materialization_is_written("workflow", entry, m)):
             plan["missing_materializations"].append(("workflow", name))
     return plan
+
+
+def _dangles(link: Path) -> bool:
+    """True when the symlink ``link`` is known to lead nowhere.
+
+    Known, not presumed: ``exists()`` answers False for a target boost may not
+    look at, and under a store with no search bit every live link read as a
+    broken one for the sweep to remove. A loop leads nowhere too.
+    """
+    try:
+        link.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError as err:
+        return err.errno == errno.ELOOP
+    return False
+
+
+def _store_entry(link: Path) -> str | None:
+    """The store dir ``link`` leads into, by name, or None if none."""
+    try:
+        rel = os.path.relpath(os.path.realpath(link),
+                              os.path.realpath(paths.store_dir()))
+    except ValueError:
+        return None
+    head = rel.split(os.sep, 1)[0]
+    return None if head in (os.curdir, os.pardir) else head
 
 
 def _rule_materialization_ok(name: str, m: dict) -> bool:
@@ -4140,6 +4256,8 @@ def _still_a_copy(row: tuple, lock: dict, fresh: dict[str, list]) -> str | None:
         return "it is already gone"
     if name in lock:
         return "boost has recorded it since"
+    if foreign.holds_repo(sdir):
+        return REPO_KEPT
     if not os.path.isfile(theirs / "SKILL.md"):  # noqa: FURB146
         return "the copy it duplicates, %s, is gone" % paths.tilde(other)
     if resolves_into_store(theirs):
@@ -4148,6 +4266,8 @@ def _still_a_copy(row: tuple, lock: dict, fresh: dict[str, list]) -> str | None:
     if foreign.leans_on_store(theirs):
         return ("%s links into the store file by file, so deleting this would "
                 "empty it" % paths.tilde(other))
+    if any(r[0] == name for r in fresh["unreadable_store"]):
+        return "part of it cannot be read now, so what it holds cannot be told"
     if name in fresh["not_skill_store"]:
         return "it no longer holds a SKILL.md"
     if name in fresh["adoptable_store"]:
@@ -4159,6 +4279,12 @@ def _still_a_copy(row: tuple, lock: dict, fresh: dict[str, list]) -> str | None:
         return "it is now a copy of %s instead" % paths.tilde(now[2])
     if how == foreign.IDENTICAL and now[3] != foreign.IDENTICAL:
         return "it has changed since it matched %s" % paths.tilde(other)
+    # Last, so every reason above keeps its own words, and by inode: the same
+    # dir under another spelling (a case alias on APFS, a firmlink) is
+    # trivially "identical" to itself, and deleting "the copy" deleted the
+    # only one.
+    if foreign.same_dir(sdir, theirs):
+        return "%s is this same dir under another name" % paths.tilde(other)
     return None
 
 
@@ -4197,10 +4323,33 @@ def remove_foreign_copies(rows: list) -> list[str | None]:
     for row in rows:
         why = _still_a_copy(row, lock, fresh)
         if why is None:
-            util.remove_path(skill_store_dir(row[0]))
-            journal.log("prune", row[0], copy_of=row[2])
+            # Per row, because the result is: one dir that refuses the delete
+            # (a subdir made unreadable since the check) used to end the run
+            # at exit 70 with no word on the rows already removed.
+            try:
+                util.remove_path(skill_store_dir(row[0]))
+            except OSError as err:
+                why = ("deleting it stopped at %s: %s — what is left is "
+                       "still there" % (paths.tilde(err.filename or row[0]),
+                                        err.strerror or err))
+            else:
+                journal.log("prune", row[0], copy_of=row[2])
         kept.append(why)
     return kept
+
+
+#: Why ``--prune`` leaves a store dir holding a git repository.
+REPO_KEPT = ("it is a git repository, and its history is in no copy — move "
+             "or delete it yourself")
+
+
+def is_repo_copy(row: tuple) -> bool:
+    """True when a ``foreign_store`` row's store dir holds a git repository.
+
+    Such a row is still named — the dir shares a name with another tool's
+    skill — but ``--prune`` never offers it (:func:`foreign.holds_repo`).
+    """
+    return foreign.holds_repo(skill_store_dir(row[0]))
 
 
 def remove_foreign_copy(row: tuple) -> str | None:
@@ -4266,9 +4415,16 @@ def _names(items: list[str], limit: int = 5) -> str:
 
 
 def foreign_store_lines(rows: list) -> list[str]:
-    """One line per owner for `sync` and `heal`: whose copies these are."""
+    """One line per owner for `sync` and `heal`: whose copies these are.
+
+    A dir holding a git repository gets its own line, since `--prune`, which
+    the others name, leaves it (:func:`is_repo_copy`).
+    """
+    repos = [r for r in rows if is_repo_copy(r)]
     by_owner: dict[tuple[str, str], list] = {}
     for name, owner, other, how in rows:
+        if (name, owner, other, how) in repos:
+            continue
         by_owner.setdefault((owner, str(Path(other).parent)), []).append((name, how))
     lines = []
     for (owner, where), items in by_owner.items():
@@ -4281,7 +4437,28 @@ def foreign_store_lines(rows: list) -> list[str]:
                         "" if not differ else " (%s from the original)"
                         % ("changed" if len(items) == 1
                            else "%d of them changed" % differ)))
+    lines += ["%s is named like a skill from %s (%s), but it is a git "
+              "repository, so `boost sync --prune` leaves it — move or delete "
+              "it yourself if it is a copy"
+              % (name, owner, paths.tilde(other)) for name, owner, other, _h in repos]
     return lines
+
+
+def unreadable_line(rows: list) -> str:
+    """One line for store dirs holding something boost cannot read.
+
+    ``rows`` are ``(skill, path)`` (``unreadable_store``). Each names the path
+    that could not be read, which is what the user has to fix: the dir
+    itself, or one file or subdir deep inside it.
+    """
+    if len(rows) == 1:
+        name, where = rows[0]
+        return ("%s: %s cannot be read, so boost cannot tell whose it is or "
+                "record it — make it readable, then re-run `boost sync`"
+                % (name, paths.tilde(where)))
+    return ("%d store dirs hold something boost cannot read (%s) — make them "
+            "readable, then re-run `boost sync`"
+            % (len(rows), _names(["%s: %s" % (n, paths.tilde(w)) for n, w in rows])))
 
 
 def plugin_duplicate_lines(rows: list) -> list[str]:

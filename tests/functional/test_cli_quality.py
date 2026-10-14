@@ -3299,6 +3299,41 @@ class TestStoreDirsBoostDidNotInstall:
         assert "nothing to heal automatically" in r.out
         assert copy.is_dir() and "automate" not in _lock()
 
+    @pytest.mark.skipif(
+            sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+            reason="needs POSIX permission bits, as a user other than root")
+    def test_an_unreadable_skill_is_the_users_to_fix_and_heal_fails(
+            self, boost, installed):
+        mine = _store_skill("pr-me")
+        mine.chmod(0o600)   # no search bit: it used to be "not a skill"
+        try:
+            doctor = boost("doctor", expect=1)
+            heal = boost("heal", expect=1)
+        finally:
+            mine.chmod(0o700)
+        line = ("pr-me: ~/.agents/skills/pr-me cannot be read, so boost cannot "
+                "tell whose it is or record it — make it readable, then re-run "
+                "`boost sync`")
+        assert line in _flat(doctor.out)
+        assert line in _flat(heal.out + heal.err)
+        assert "not a skill" not in doctor.out + heal.out
+        assert "pr-me" not in _lock()
+
+    def test_a_git_repository_named_like_a_copy_is_never_sent_to_prune(
+            self, boost, installed):
+        theirs = paths.home() / ".cursor" / "skills-cursor" / "automate"
+        theirs.mkdir(parents=True)
+        (theirs / "SKILL.md").write_text("# automate\n", encoding="utf-8")
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(theirs, copy)
+        (copy / ".git").mkdir()
+        flat = _flat(boost("doctor", expect=1).out)
+        assert ("automate is named like a skill from Cursor's built-ins "
+                "(~/.cursor/skills-cursor/automate), but it is a git repository, "
+                "so `boost sync --prune` leaves it — move or delete it yourself "
+                "if it is a copy") in flat
+        assert "remove with `boost sync --prune`" not in flat
+
     def test_a_dir_that_is_not_a_skill_is_a_note_and_never_an_issue(
             self, boost, installed):
         bucket = paths.store_dir() / "synced" / "bucket"

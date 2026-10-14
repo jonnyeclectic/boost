@@ -464,16 +464,16 @@ def inventory(names: Iterable[str] | None = None) -> dict[str, list[Counterpart]
     from . import store  # lazily: store imports this module at load time
     wanted = None if names is None else set(names)
     found: dict[str, list[Counterpart]] = {}
-    seen: set[str] = set()
+    seen: set[tuple] = set()
 
     def add(c: Counterpart) -> None:
         if wanted is not None and c.name not in wanted:
             return
-        real = os.path.realpath(c.path)
-        if (real in seen or store.resolves_into_store(c.path)
+        key = _identity(c.path)
+        if (key in seen or store.resolves_into_store(c.path)
                 or leans_on_store(c.path)):
             return
-        seen.add(real)
+        seen.add(key)
         found.setdefault(c.name, []).append(c)
 
     store_root = os.path.realpath(paths.store_dir())
@@ -495,12 +495,85 @@ def same_content(a: Path, b: Path) -> bool:
 
     :func:`util.sha256_dir` on both sides — the hash the lock file records —
     so "identical" means what ``boost verify`` means by it. Unreadable is not
-    identical.
+    identical, and that includes a dir the hash cannot list: its walk skips
+    one without a word, so a store copy whose extra files sat in an
+    unreadable subdir hashed the same as the copy it was compared with
+    (:func:`unreadable` asks first).
     """
+    if unreadable(a) is not None or unreadable(b) is not None:
+        return False
     try:
         return util.sha256_dir(a) == util.sha256_dir(b)
     except OSError:
         return False
+
+
+def same_dir(a: Path, b: Path) -> bool:
+    """True when two paths are one directory, by device and inode.
+
+    Strings cannot answer it: on a case-insensitive volume — APFS, the macOS
+    default — ``~/.Agents/skills/x`` is ``~/.agents/skills/x``, and so is
+    ``/System/Volumes/Data/Users/...`` through its firmlink, while
+    ``realpath`` leaves all three spelled as they were. A path that cannot be
+    looked at is not the same as anything.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def _identity(path: Path) -> tuple:
+    """A key that is equal for two paths to one directory (:func:`same_dir`)."""
+    try:
+        st = path.stat()
+    except OSError:
+        return ("path", os.path.realpath(path))
+    return ("inode", st.st_dev, st.st_ino)
+
+
+def holds_repo(path: Path) -> bool:
+    """True when a skill dir holds git metadata — a ``.git`` dir or file — at any depth.
+
+    :func:`util.sha256_dir` skips ``.git``, so a store dir that is the user's
+    clone hashes the same as a plain copy of its working tree, and was called
+    an identical copy that ``--prune`` could delete with its history,
+    branches and stash. Nothing a copy holds stands in for those, so a dir
+    holding one is never a copy (:func:`store.classify_unrecorded`).
+    """
+    return any(".git" in dirs or ".git" in files
+               for _top, dirs, files in os.walk(path))
+
+
+def unreadable(path: Path) -> Path | None:
+    """The first entry in a skill dir boost cannot read, or None.
+
+    A dir it cannot list, or a regular file it cannot open: what
+    :func:`util.sha256_dir` would either skip in silence or fail on. Entries
+    the hash ignores (``util.IGNORED``) are not looked at, and nothing is
+    read — a file is opened and closed, non-blocking, so a FIFO cannot hang
+    the walk. A link is followed the way the hash follows it: to a file, but
+    not into a directory.
+    """
+    stack = [str(path)]
+    while stack:
+        top = stack.pop()
+        try:
+            with os.scandir(top) as it:
+                entries = sorted(it, key=lambda e: e.name)
+        except OSError:
+            return Path(top)
+        for e in entries:
+            if e.name in util.IGNORED:
+                continue
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    stack.append(e.path)
+                elif e.is_file():
+                    os.close(os.open(e.path, os.O_RDONLY | os.O_NONBLOCK))
+            except OSError:
+                return Path(e.path)
+    return None
 
 
 def compare(a: Path, b: Path) -> str:

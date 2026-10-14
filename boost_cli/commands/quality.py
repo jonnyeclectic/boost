@@ -623,6 +623,12 @@ def cmd_doctor(argv):
             bad("lockfile", "lock file missing — %d store dir%s unrecorded, "
                 "run `boost sync` to re-record %s" % (n, _s(n), "it" if n == 1 else "them"))
             lock_ok = False
+        elif unrec is not None and unrec["unreadable_store"]:
+            # Not "nothing installed": the dirs boost cannot read may be skills
+            # the lock had, and the line below names them.
+            rep.note("lockfile", "no lock file — nothing boost can read is "
+                     "left to re-record")
+            lock_ok = True
         else:
             rep.note("lockfile", "no lock file yet — nothing installed")
             lock_ok = True
@@ -952,12 +958,20 @@ def cmd_doctor(argv):
                 "`boost sync` records %s" % (len(mine), _s(len(mine)),
                                              _first(mine),
                                              "it" if len(mine) == 1 else "them"))
-        copies = [r[0] for r in unrec["foreign_store"]]
+        repos = [r for r in unrec["foreign_store"] if store.is_repo_copy(r)]
+        copies = [r[0] for r in unrec["foreign_store"] if r not in repos]
         if copies:
             bad("foreign-copies", "%d store dir%s cop%s another tool's skills, "
                 "not boost's (%s) — remove with `boost sync --prune`"
                 % (len(copies), _s(len(copies)),
                    "ies" if len(copies) == 1 else "y", _first(copies)), wrap=True)
+        # `--prune` leaves a git repository, so naming it there would send the
+        # user to a command that keeps it.
+        for line in store.foreign_store_lines(repos):
+            bad("repo-copies", line, wrap=True)
+        if unrec["unreadable_store"]:
+            bad("unreadable-store", store.unreadable_line(unrec["unreadable_store"]),
+                wrap=True)
         # Notes, not issues: boost leaves these alone by design, so counting
         # them would hold doctor red on a state no boost command changes.
         for line in store.older_copy_lines(unrec["older_copies"]):
@@ -1634,7 +1648,8 @@ def cmd_heal(argv):
     for line in store.older_copy_lines(plan["older_copies"]):
         out.info(line, wrap=True)
     for line in (store.foreign_store_lines(plan["foreign_store"])
-                 + store.plugin_duplicate_lines(plan["plugin_duplicates"])):
+                 + store.plugin_duplicate_lines(plan["plugin_duplicates"])
+                 + store.plugin_variant_lines(plan["plugin_duplicates"])):
         out.info(line, wrap=True)
     # Left alone by design, and named as `sync` names them, so a dir that is
     # not a skill is not silently skipped by the command meant to look.
@@ -1769,6 +1784,11 @@ def cmd_heal(argv):
                      "boost's — move or delete it, then `boost sync` (heal "
                      "does not move files)" % (name, agent, _tilde(path)),
                      wrap=True)
+    # A store dir boost cannot read is not recorded, so heal saw it and left
+    # it: an all-clear under it would be the loop the preview used to start.
+    if plan["unreadable_store"]:
+        stuck.extend(Path(where) for _name, where in plan["unreadable_store"])
+        out.warn(store.unreadable_line(plan["unreadable_store"]), wrap=True)
     # A lock that cannot be read is `boost replay`'s to restore. heal answered
     # "nothing to heal" over it, with every store dir it could not record.
     if not integ.ok and integ.problem != "missing":
