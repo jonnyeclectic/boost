@@ -1334,8 +1334,8 @@ def _row_badges(e: dict, categories: dict):
     category = browse.entry_category(e, categories)
     if category:
         badges.append(("#" + category, "badge_category"))
-    badges.append((browse.short_tap(e["tap"]), "tap"))
-    badges.append(("v" + e["version"], "version"))
+    badges.extend(((browse.short_tap(e["tap"]), "tap"),
+                   ("v" + e["version"], "version")))
     return badges
 
 

@@ -87,7 +87,7 @@ def entry_category(entry: dict, categories=None) -> str:
     return str((categories or {}).get(entry.get("tap", ""), "") or "")
 
 
-def short_tap(tap: str) -> str:
+def short_tap(tap: str | None) -> str:
     """A tap as a row shows it: the repo name, without the owner.
 
     ``trailofbits/skills`` badged in full on every row is the same twenty
@@ -752,8 +752,8 @@ def status_spans(focus: str, width: int,
             spans.append((sx, role, text))
             limit = sx - _HINT_GAP
     for key, label in fit_hints(HINTS.get(focus, HINTS["list"]), limit - x):
-        spans.append((x, "key", key))
-        spans.append((x + len(key) + 1, "hint", label))
+        spans.extend(((x, "key", key),
+                      (x + len(key) + 1, "hint", label)))
         x += len(key) + 1 + len(label) + _HINT_GAP
     return spans
 
@@ -959,8 +959,8 @@ def detail_lines(entry: dict, width: int = 60,
         lines.append([("blank", "")])
 
     add("title", str(entry.get("name", "?")))
-    lines.append(clip_spans(chips(entry, categories), width))
-    lines.append([("rule", "")])
+    lines.extend((clip_spans(chips(entry, categories), width),
+                  [("rule", "")]))
 
     if entry.get("description"):
         add("desc", str(entry["description"]))
