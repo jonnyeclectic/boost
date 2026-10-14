@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import operator
+import os
 import re
 import shutil
 import subprocess
@@ -1317,23 +1318,24 @@ def _kind_theme_key(kind: str) -> str:
 
 
 def _row_badges(e: dict, categories: dict):
-    """Ordered (text, theme-key) badges for a browse row: kind, version, tap,
-    and the item's category, when one is known. Most-important-first, so a
-    narrow terminal drops from the tail without losing the essentials (kind
-    and version survive; category goes first).
+    """Ordered (text, theme-key) badges for a browse row: kind, #category,
+    tap, version. Most-important-first, so a narrow terminal drops from the
+    tail — the version goes first (it is in the detail chips, and on most
+    registries it is ``v0.0.0`` on every row), then the tap, then the
+    category; the kind survives longest.
 
-    The entry's own stamped `category` (`catalog.CACHE_FORMAT` 2+) is used
-    first — it covers un-bundled taps too, which the old tap-level lookup
-    never could. `categories` (`_tap_categories`) is the fallback for a cache
-    written before that field existed, so an un-rescanned tap doesn't lose its
-    badge outright."""
-    badges = [(out.kind_label(e.get("kind", "skill")),
-               _kind_theme_key(e.get("kind", "skill"))),
-              ("v" + e["version"], "version"),
-              ("[%s]" % e["tap"], "tap")]
-    category = e.get("category") or categories.get(e["tap"])
+    The kind keeps its bracketed ``[skill]`` label — one vocabulary with the
+    search rows — and gains its hue from the theme. The tap is the repo name
+    alone (:func:`browse.short_tap`); the owner is in the detail pane. The
+    category is a ``#chip`` from :func:`browse.entry_category`, the same
+    lookup the ``category`` scope searches, so a chip is always findable."""
+    kind = e.get("kind", "skill")
+    badges = [(out.kind_label(kind), _kind_theme_key(kind))]
+    category = browse.entry_category(e, categories)
     if category:
-        badges.append(("[%s]" % category, "badge_category"))
+        badges.append(("#" + category, "badge_category"))
+    badges.extend(((browse.short_tap(e["tap"]), "tap"),
+                   ("v" + e["version"], "version")))
     return badges
 
 
@@ -1415,61 +1417,85 @@ _grad_segments = browse.rule_segments
 def _aurora_pairs(curses):
     """Allocate Aurora curses colour pairs.
 
-    Returns ``(pairs, custom)``: token-name -> attr int (0 if none), and
-    whether true custom colours were achieved — the theme needs to know,
-    because the gradient rule is only honest when its three stops are the
-    real Aurora hues (on the 8/16-colour fallback violet and pink both map to
+    Returns ``(pairs, level)``: token-name -> attr int (0 if none), plus the
+    :func:`browse.palette_level` achieved. The theme needs the level, because
+    the gradient rule and the kind hues are only honest when the hues are
+    distinct (on the 8/16-colour fallback violet and pink both map to
     magenta, and cyan/magenta/magenta reads as confetti, not a gradient).
+
+    Three levels, best first: ``custom`` redefines palette slots to the exact
+    Aurora values; ``256`` picks the nearest xterm-cube index for each (tmux
+    without ``Tc`` lands here, and used to fall all the way to 8 colours);
+    ``base`` maps each to its nearest of the 8. The slate selection background
+    exists on the first two only — ``base`` keeps reverse video.
     """
     names = ("cyan", "violet", "pink", "green", "yellow")
     try:
-        custom = curses.can_change_color() and 16 + len(names) <= curses.COLORS
-    except curses.error:
-        custom = False
+        level = browse.palette_level(bool(curses.can_change_color()),
+                                     int(curses.COLORS))
+    except (curses.error, AttributeError):
+        level = browse.BASE
     fg = dict(_nearest_base(curses))
-    if custom:
+    slate = None
+    if level == browse.CUSTOM:
         rgb = _curses_rgb1000()
-        for idx, nm in enumerate(names):
+        rgb["slate"] = tuple(round(c / 255 * 1000) for c in browse.SLATE)
+        for idx, nm in enumerate((*names, "slate")):
             slot = 16 + idx
             try:
                 curses.init_color(slot, *rgb[nm])
-                fg[nm] = slot
             except curses.error:
-                pass
+                continue
+            if nm == "slate":
+                slate = slot
+            else:
+                fg[nm] = slot
+    elif level == browse.XTERM256:
+        for nm in names:
+            fg[nm] = browse.xterm256(out.TOKENS[nm])
+        slate = browse.xterm256(browse.SLATE)
     fg["red"] = curses.COLOR_RED
     pairs = {}
-    for i, nm in enumerate(("cyan", "violet", "pink", "green", "yellow", "red"),
-                           start=1):
+    plan = [(nm, fg[nm], -1) for nm in
+            ("cyan", "violet", "pink", "green", "yellow", "red")]
+    if slate is not None:
+        # The selected row: bright text and the accent bar, both on slate. An
+        # explicit foreground, not the terminal default — on a light theme the
+        # default is black, and black on slate is unreadable.
+        plan += [("sel", getattr(curses, "COLOR_WHITE", 7), slate),
+                 ("sel_bar", fg["cyan"], slate)]
+    for i, (nm, f, b) in enumerate(plan, start=1):
         try:
-            curses.init_pair(i, fg[nm], -1)
+            curses.init_pair(i, f, b)
             pairs[nm] = curses.color_pair(i)
         except curses.error:
             pairs[nm] = 0
-    return pairs, custom
+    return pairs, level
 
 
-_NAME_X = 4  # column the name (and everything under it) starts at
+_NAME_X = 4  # column, inside the list pane, the name (and its description) start
 
 
 def _browse_theme(curses):
     """Role -> curses attr for the browser, built grayscale-first.
 
-    The browser used six hues at once — cyan kinds, violet taps, pink matches,
-    yellow categories, green states — and read as confetti rather than as one
-    surface. Refactoring UI's rule is the fix: hierarchy comes from weight, and
-    colour is added last, for meaning only.
+    Hierarchy comes from weight — BOLD / normal / DIM — and colour is layered
+    on top for meaning only, so a monochrome terminal (or ``NO_COLOR``) keeps
+    the whole structure. The meanings, and nothing else:
 
-    So the tiers are BOLD / normal / DIM, and the palette is one accent plus two
-    semantics that earn their place:
-
-      accent (cyan)   focus, selection, section heads — the one brand colour
+      accent (cyan)   focus, the selection bar, section heads, the mode pill
+      kind hues       skill cyan · rule violet · workflow pink — kind is the
+                      first thing a reader sorts by, so it earns a hue; three
+                      and no more (see browse.KIND_HUES for the 8-colour map)
       ok (green)      installed; the only "this succeeded" signal
-      warn (yellow)   curated star, and a failed install
-      everything else BOLD for primary, plain for values, DIM for labels,
-                      badges, descriptions and chrome
+      warn (yellow)   a failed install, and the curated star
+      everything else plain for values, DIM for labels, taps, versions and
+                      chrome
 
-    Monochrome terminals keep the whole hierarchy, because the tiers are
-    attributes rather than colours.
+    An earlier pass stripped the kind hues along with four others because six
+    hues at once read as confetti. The kinds came back on their own: bounded
+    to one badge per row, they sort the list at a glance without competing
+    with the accent.
     """
     B, D, N, R = curses.A_BOLD, curses.A_DIM, curses.A_NORMAL, curses.A_REVERSE
     t = {
@@ -1480,30 +1506,38 @@ def _browse_theme(curses):
         # chrome
         "border": D, "border_focus": B, "title": B, "help": D,
         "prompt": B, "query": B, "count": D,
-        "row_sel": R, "scroll": D,
+        "row_sel": R, "row_sel_name": R | B, "sel_bar": R | B, "scroll": D,
+        "pill": R | B, "key": B, "hint": D,
         # rows
         "name": B, "desc": D, "match": B, "star": N, "check": B, "state": N,
         "version": D, "tap": D,
-        "badge_skill": D, "badge_rule": D, "badge_workflow": D,
+        "badge_skill": N, "badge_rule": N, "badge_workflow": N,
         "badge_category": D,
         # detail pane
         "detail_name": B, "head": B, "field": N, "label": D,
+        "kind_skill": B, "kind_rule": B, "kind_workflow": B,
+        "category": N,
         "busy": B, "failed": B,
         "dot_r": N, "dot_y": N, "dot_g": N,
         "rule": [D, D, D],
     }
-    if not hasattr(curses, "start_color"):
+    if not hasattr(curses, "start_color") or os.environ.get("NO_COLOR"):
+        # NO_COLOR (no-color.org) is honoured here as everywhere else in the
+        # CLI; the tiers above are the whole design, so nothing goes missing.
         return t
     try:
         curses.start_color()
         curses.use_default_colors()
     except curses.error:
         return t
-    p, custom = _aurora_pairs(curses)
+    p, level = _aurora_pairs(curses)
 
     def P(nm, bold=False):
         a = p.get(nm, 0)
         return (a | curses.A_BOLD) if bold else a
+
+    def hue(kind, bold=False):
+        return P(browse.kind_hue(kind, level), bold)
 
     # Colour is layered ON the tiers, never instead of them: every role below
     # keeps the weight it had, so removing colour changes nothing structural.
@@ -1512,21 +1546,30 @@ def _browse_theme(curses):
         "ok": P("green", True), "warn": P("yellow"), "err": P("red", True),
         "title": P("cyan", True), "prompt": P("cyan", True),
         "border": P("cyan"), "border_focus": P("cyan", True),
-        "row_sel": P("cyan", True) | curses.A_REVERSE,
         "scroll": P("cyan"),
+        "pill": P("cyan", True) | R, "key": P("cyan", True),
         "match": P("cyan", True), "star": P("yellow"), "check": P("green", True),
         "state": P("green"), "detail_name": P("cyan", True),
         "head": P("cyan", True), "busy": P("cyan", True),
         "ok_line": P("green", True), "failed": P("yellow", True),
         "dot_r": P("red"), "dot_y": P("yellow"), "dot_g": P("green"),
+        "badge_skill": hue("skill"), "badge_rule": hue("rule"),
+        "badge_workflow": hue("workflow"),
+        "kind_skill": hue("skill", True), "kind_rule": hue("rule", True),
+        "kind_workflow": hue("workflow", True),
         # The browser's one gradient moment: the top rule runs cyan → violet
-        # → pink, but only when the terminal can render the real Aurora hues.
-        # The 8/16-colour fallback keeps a single-hue rule (mirroring
+        # → pink, but only when the terminal can render distinct hues. The
+        # 8/16-colour fallback keeps a single-hue rule (mirroring
         # out.gradient's basic-level behaviour) rather than the cyan/magenta/
         # magenta confetti the base palette would produce.
-        "rule": ([P("cyan"), P("violet"), P("pink")] if custom
+        "rule": ([P("cyan"), P("violet"), P("pink")] if level != browse.BASE
                  else [P("cyan")] * 3),
     })
+    if p.get("sel"):
+        # Slate under the selected row, the accent in its bar. Where there is
+        # no slate (base colours) the row keeps reverse video from the tiers.
+        t.update({"row_sel": p["sel"], "row_sel_name": p["sel"] | B,
+                  "sel_bar": p["sel_bar"] | B})
     return t
 
 
@@ -1571,8 +1614,9 @@ def _browse_tui(curses, entries, install=None):
     """Run the curses UI. Returns the list of entries picked for install
     (one or more, via multi-select), or None if the user quit without picking.
 
-    Layout is a single framed surface: title bar, query, scope radios, then a
-    list pane and a detail pane divided by a rule. All of the geometry and all
+    Layout is a single framed surface — title tab, query, scope toggles, then
+    a list pane and a detail pane divided by a rule — with a status bar under
+    it. Matches are ranked (:func:`browse.rank`). All of the geometry and all
     of the matching come from :mod:`core.browse`, which is where they can be
     tested — this function only draws and dispatches keys.
     """
@@ -1699,7 +1743,7 @@ def _browse_tui(curses, entries, install=None):
             pool = unique_entries if collapse else entries
             key = (scope, collapse)
             if key not in index:
-                index[key] = browse.index_entries(pool, scope)
+                index[key] = browse.index_entries(pool, scope, categories)
             found = browse.matches_indexed(index[key], filt)
             sel = max(0, min(sel, len(found) - 1))
             lay = browse.layout(_w, _h, detail=detail)
@@ -1707,8 +1751,9 @@ def _browse_tui(curses, entries, install=None):
                 scr.erase()
                 # status.copy(): the worker thread owns the mapping; a shallow
                 # copy keeps the fold safe from a mid-iteration mutation.
-                _draw_frame(put, th, lay, focus,
-                            browse.session_summary(status.copy()))
+                _draw_frame(put, th, lay, focus)
+                _draw_status(put, th, lay, focus,
+                             browse.session_summary(status.copy()))
                 _draw_query(put, th, lay, filt, focus, len(found), len(pool),
                             len(selected), hidden if collapse else 0)
                 _draw_scopes(put, th, lay, scope, focus)
@@ -1720,7 +1765,7 @@ def _browse_tui(curses, entries, install=None):
                     dscroll = _draw_detail(
                         put, th, lay, found[sel], dscroll, focus,
                         installed_names, status,
-                        browse.install_target(found[sel], targets))
+                        browse.install_target(found[sel], targets), categories)
                 scr.refresh()
             except curses.error:
                 pass  # terminal too small mid-draw; retry on next key
@@ -1801,32 +1846,38 @@ def _browse_tui(curses, entries, install=None):
     return done or state["picks"]
 
 
-def _draw_frame(put, th, lay, focus, summary=None):
-    """Outer box, column divider, and the title sitting in the top rule.
+def _draw_frame(put, th, lay, focus):
+    """Outer box, column divider, and the title tab sitting in the top rule.
 
-    ``summary`` is the session's install chip from
-    :func:`browse.session_summary` — set into the bottom rule when present,
-    so what happened this session is visible even with the detail pane
-    closed or parked elsewhere.
+    The key hints and the session chip used to live in here too — the hints
+    on a chrome row of their own, the chip in the bottom rule. Both moved to
+    the status bar under the frame (:func:`_draw_status`), which gave a
+    result row back to the list and stopped the chip fighting the divider's
+    tee for the same cells.
     """
     w, h = lay.w, lay.h
     if w < 4 or h < 6:
         return
     inner = w - 2
+    bottom = lay.bottom
     put(0, 0, "╭" + "─" * inner + "╮", th["border"])
-    # Dots grouped rather than dash-separated: spaced out they read as part of
-    # the rule instead of as a cluster of window controls.
+    # ╭─ ●●● ─┤ ◆ boost browse ├──── the title is a tab set into the rule,
+    # with the window dots grouped ahead of it so they read as one cluster of
+    # controls rather than as part of the rule.
     put(0, 2, " ", th["border"])
     put(0, 3, "●", th["dot_r"])
     put(0, 4, "●", th["dot_y"])
     put(0, 5, "●", th["dot_g"])
-    title = "  boost browse  "
-    put(0, 6, title, th["title"])
+    put(0, 6, " ─┤ ", th["border"])
+    put(0, 10, "◆", th["accent"])
+    title = " boost browse "
+    put(0, 11, title, th["title"])
+    put(0, 11 + len(title), "├", th["border"])
     # The one gradient moment: the rest of the top rule runs cyan → violet →
     # pink (glyphs unchanged — repainted in place, so monochrome loses
-    # nothing). The theme decides whether the stops are real Aurora hues or
+    # nothing). The theme decides whether the stops are distinct hues or
     # collapse to a single accent; see _browse_theme.
-    grad_x = 6 + len(title)
+    grad_x = 12 + len(title)
     # Tolerate a theme without the stop list (the draw loop never raises on a
     # frame): anything short falls back to the plain border attr.
     stops = th["rule"] if isinstance(th["rule"], (list, tuple)) else ()
@@ -1840,7 +1891,7 @@ def _draw_frame(put, th, lay, focus, summary=None):
     list_edge = th["border_focus"] if focus in ("list", "search", "scopes") \
         else th["border"]
     detail_edge = th["border_focus"] if focus == "detail" else th["border"]
-    for y in range(1, h - 1):
+    for y in range(1, bottom):
         put(y, 0, "│", list_edge if y >= lay.body_y else th["border"])
         put(y, w - 1, "│",
             detail_edge if lay.has_detail and y >= lay.body_y else th["border"])
@@ -1849,37 +1900,30 @@ def _draw_frame(put, th, lay, focus, summary=None):
     put(sep, 0, "├" + "─" * inner + "┤", th["border"])
     if lay.has_detail:
         put(sep, lay.detail_x - 1, "┬", th["border"])
-        for y in range(lay.body_y, h - 1):
+        for y in range(lay.body_y, bottom):
             put(y, lay.detail_x - 1, "│", detail_edge)
         cap = " details " if focus != "detail" else " details · ↑↓ scroll "
         if lay.detail_w > len(cap) + 2:
             put(sep, lay.detail_x + 1, cap,
                 th["accent"] if focus == "detail" else th["muted"])
-    put(h - 1, 0, "╰" + "─" * inner + "╯", th["border"])
+    put(bottom, 0, "╰" + "─" * inner + "╯", th["border"])
     if lay.has_detail:
-        put(h - 1, lay.detail_x - 1, "┴", th["border"])
-    if summary:
-        # Clipped to end before the divider tee (or the corner), so the frame
-        # glyphs survive any message length. Absent, the idle rule is
-        # byte-identical to a summary-less frame.
-        role, text = summary
-        boundary = lay.detail_x - 1 if lay.has_detail else w - 1
-        room = boundary - 3
-        if room > 4:
-            put(h - 1, 2, (" " + text + " ")[:room],
-                th.get(role) or th.get("ok") or 0)
-    # The hint used to live in the bottom rule, where the column divider's
-    # tee landed on top of it and turned "esc quit" into "┴sc quit". It has
-    # its own row now, above the rule that separates chrome from body.
-    # Two hints, not one truncated: clipping the long one mid-word ends the
-    # line on "esc", which reads as a key rather than as a cut-off phrase.
-    hint = ("↑↓ move  ⇥ select  → detail  ^T scope  ^D dupes  "
-            "↵ install  esc quit")
-    if len(hint) > inner - 2:
-        hint = "↑↓ move  ⇥ select  ↵ install  esc quit"
-    if len(hint) > inner - 2:
-        hint = "↑↓  ⇥ sel  ↵ add  esc"
-    put(lay.body_y - 2, 2, hint[:max(0, inner - 2)], th["help"])
+        put(bottom, lay.detail_x - 1, "┴", th["border"])
+
+
+def _draw_status(put, th, lay, focus, summary=None):
+    """The tmux-style status bar under the frame: mode pill, the hints for
+    that mode, and the session's install chip at the right.
+
+    The hints change with focus because the keys do — ``←`` picks a scope on
+    the toggle row and leaves the detail pane everywhere else, and a single
+    hint line could only ever describe one of those. All of the placement is
+    :func:`browse.status_spans`; this only paints it.
+    """
+    if not lay.has_status:
+        return
+    for x, role, text in browse.status_spans(focus, lay.w, summary):
+        put(lay.status_y, x, text, th.get(role) or th.get("ok") or 0)
 
 
 def _draw_query(put, th, lay, filt, focus, n_found, n_all, n_sel, hidden=0):
@@ -1900,46 +1944,52 @@ def _draw_query(put, th, lay, filt, focus, n_found, n_all, n_sel, hidden=0):
 
 
 def _draw_scopes(put, th, lay, scope, focus):
-    """Radio row — which field the query is matched against.
+    """Toggle row — which field the query is matched against.
 
-    Item 2: reachable by arrow. When the row holds focus it says so and shows
-    that left/right pick, rather than leaving ^T as the only way in.
+    ``● all  name  descr  tap  category``: the active scope carries the dot
+    *and* the accent, so it reads with the colour off. Item 2: reachable by
+    arrow; when the row holds focus the active toggle underlines and the row
+    says that left/right pick, rather than leaving ^T as the only way in.
     """
     active = focus == "scopes"
     x = 2
-    put(2, x, "match", th["accent"] if active else th["help"])
-    x += 6
     for name in browse.SCOPES:
         on = name == scope
-        if on:
-            mark, attr = "(●)", th["accent"]
-        else:
-            mark, attr = "( )", th["muted"]
-        put(2, x, mark, attr)
         label = browse.scope_label(name)
-        # The active toggle is underlined while the row is focused, so "which
-        # one is selected" and "which pane am I in" stay separate signals.
-        put(2, x + 4, label, attr | (4 if active and on else 0))
-        x += 5 + len(label)
+        if on:
+            put(2, x, "●", th["accent"])
+            # The active toggle is underlined while the row is focused, so
+            # "which one is selected" and "which pane am I in" stay separate.
+            put(2, x + 2, label, th["accent"] | (4 if active else 0))
+        else:
+            put(2, x + 2, label, th["muted"])
+        x += 4 + len(label)
         if x > lay.w - 6:
             break
-    if active and x + 12 < lay.w - 2:
-        put(2, x + 1, "← → pick", th["help"])
+    if active and x + 10 < lay.w - 2:
+        put(2, x, "← → pick", th["help"])
 
 
 def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
                describe, categories, installed_names, copies=None,
                status=None, scope="all", hidden=0):
-    """The result list. Returns how many rows fit, for page-up/down."""
+    """The result list. Returns how many rows fit, for page-up/down.
+
+    Columns inside the pane: the ``▌`` selection bar, the ✓ multi-select
+    mark, the install-state glyph, then the name at ``_NAME_X``. The ★ column
+    is gone — on a curated catalogue it marked every row — and curated lives
+    in the detail chips.
+    """
     rows = max(1, lay.body_h // 2)
     lw = lay.list_w
+    bottom = lay.bottom
     if not found:
         # A silent void is indistinguishable from a hung draw; the pane says
         # what happened and which keys widen the net (see browse.empty_lines).
         for i, (role, text) in enumerate(browse.empty_lines(filt, scope,
                                                             hidden)):
             y = lay.body_y + 1 + i
-            if y >= lay.h - 1:
+            if y >= bottom:
                 break
             put(y, lay.list_x + 2, text[:max(0, lw - 4)], th[role])
         return rows
@@ -1953,33 +2003,35 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
     railw = lw - (2 if has_bar else 1)
     for i, e in enumerate(view):
         y = lay.body_y + i * 2
-        if y + 1 >= lay.h - 1:
+        if y + 1 >= bottom:
             break
         chosen = top + i == sel
         # Item 5: the whole row highlights, not just its marker. Painting the
-        # full span first means the badges and description inherit it too.
+        # full span first means the badges and description inherit it too —
+        # a soft slate where the terminal has one, reverse video where not.
         row_attr = th["row_sel"] if chosen else 0
         if chosen:
             put(y, lay.list_x, " " * lw, row_attr)
             put(y + 1, lay.list_x, " " * lw, row_attr)
+            put(y, lay.list_x, "▌", th["sel_bar"])
+            put(y + 1, lay.list_x, "▌", th["sel_bar"])
         x = lay.list_x + 1
         put(y, x, "✓" if _desc_key(e) in selected else " ",
             row_attr or th["check"])
-        put(y, x + 1, "★" if e.get("curated") else " ", row_attr or th["star"])
-        # The third mark carries the whole install lifecycle (◐ / ✗ / ●),
+        # The state mark carries the whole install lifecycle (◐ / ✗ / ●),
         # from the same glyph table the detail pane reports with.
         st = (status or {}).get(e["name"], (None, ""))[0]
         glyph, role = browse.state_glyph(st, e["name"] in installed_names)
-        put(y, x + 2, glyph, row_attr or th[role])
-        nx = x + 4
-        namew = max(4, min(len(e["name"]), lw - 6))
+        put(y, x + 1, glyph, row_attr or th[role])
+        nx = lay.list_x + _NAME_X
+        namew = max(4, min(len(e["name"]), lw - _NAME_X - 2))
         nm = out.truncate(e["name"], namew)
-        put(y, nx, nm, row_attr or th["name"])
+        put(y, nx, nm, th["row_sel_name"] if chosen else th["name"])
         if not chosen:
             for pos in browse.highlight_positions(filt, nm):
                 if pos < len(nm):
                     put(y, nx + pos, nm[pos], th["match"])
-        # The badge rail right-aligns to the pane edge so kind/version/tap
+        # The badge rail right-aligns to the pane edge so kind/category/tap
         # stop wandering with every name length. A collapsed row's ×N count
         # leads the rail and is the last badge to drop — copies are accounted
         # for, never disappeared.
@@ -1988,11 +2040,11 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
         if n_copies > 1:
             rail.append(("×%d" % n_copies, "accent_dim"))
         rail += _row_badges(e, categories)
-        name_end = (nx - lay.list_x) + len(nm) + 2
+        name_end = _NAME_X + len(nm) + 2
         for bx, text, tkey in browse.badge_positions(name_end, rail, railw):
             put(y, lay.list_x + bx, text, row_attr or th[tkey])
         put(y + 1, nx, out.truncate(describe(e),
-                                    max(4, lw - (7 if has_bar else 6))),
+                                    max(4, lw - _NAME_X - (3 if has_bar else 2))),
             row_attr or th["desc"])
     if has_bar:
         # The detail pane always had one; a 70,000-row list deserves to know
@@ -2006,44 +2058,48 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
                 thumb = bstart <= j < bstart + blen
                 for dy in (0, 1):
                     y = lay.body_y + j * 2 + dy
-                    if y >= lay.h - 1:
+                    if y >= bottom:
                         break
                     put(y, bx, "█" if thumb else "│", attr)
     return rows
 
 
+#: Detail-pane role -> theme key, for roles whose names differ.
+_DETAIL_ROLE_KEYS = {"title": "detail_name", "desc": "value", "ok": "ok_line"}
+
+
 def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names,
-                 status=None, install_to=None):
+                 status=None, install_to=None, categories=None):
     """The right-hand panel. Returns the clamped scroll offset."""
     st, msg = (status or {}).get(entry["name"], (None, ""))
     # -3, not -2: one column of left padding, and one on the right reserved for
     # the scrollbar. At -2 a wrapped sentence ran into the thumb.
     lines = browse.detail_lines(entry, width=max(8, lay.detail_w - 3),
-                               installed=entry["name"] in installed_names,
-                               state=st, message=msg, install_to=install_to)
+                                installed=entry["name"] in installed_names,
+                                state=st, message=msg, install_to=install_to,
+                                categories=categories)
     visible = max(0, lay.body_h)
     dscroll = browse.clamp_scroll(dscroll, len(lines), visible)
     active = focus == "detail"
-    for i, (role, text) in enumerate(lines[dscroll:dscroll + visible]):
+    for i, line in enumerate(lines[dscroll:dscroll + visible]):
         y = lay.body_y + i
-        if y >= lay.h - 1:
+        if y >= lay.bottom:
             break
-        if role == "rule":
+        if browse.line_role(line) == "rule":
             put(y, lay.detail_x, "─" * max(0, lay.detail_w), th["border"])
             continue
-        attr = {"title": th["detail_name"], "head": th["head"],
-                "desc": th["value"], "state": th["state"],
-                "ok": th.get("ok_line", th["ok"]), "busy": th["busy"],
-                "failed": th["failed"], "muted": th["muted"],
-                "field": th["field"]}.get(role, th["field"])
-        put(y, lay.detail_x + 1, text, attr)
+        x = lay.detail_x + 1
+        for role, text in line:
+            key = _DETAIL_ROLE_KEYS.get(role, role)
+            put(y, x, text, th[key] if key in th else th["field"])
+            x += len(text)
     if len(lines) > visible and visible > 0:
         bar = _scrollbar(len(lines), visible, dscroll)
         if bar:
             bstart, blen = bar
             for i in range(visible):
                 y = lay.body_y + i
-                if y >= lay.h - 1:
+                if y >= lay.bottom:
                     break
                 thumb = bstart <= i < bstart + blen
                 put(y, lay.detail_x + lay.detail_w - 1,

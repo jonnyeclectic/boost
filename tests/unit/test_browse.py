@@ -30,6 +30,13 @@ def _e(name, description="", tap="o/r", kind="skill", version="1.0.0", **kw):
     return d
 
 
+def _dl(*a, **kw):
+    """``detail_lines`` flattened to one ``(role, text)`` per line — what a
+    line says, for the assertions that only care about the words."""
+    return [(browse.line_role(ln), browse.line_text(ln))
+            for ln in browse.detail_lines(*a, **kw)]
+
+
 CORPUS = [
     _e("code-review", "Review a pull request for defects", tap="acme/quality"),
     _e("commit-messages", "Write conventional commit messages", tap="acme/git"),
@@ -376,7 +383,7 @@ class TestInstallStatusLine:
 
     def test_the_detail_pane_shows_the_live_state_over_the_static_one(self):
         e = _e("x")
-        text = " ".join(t for _r, t in browse.detail_lines(
+        text = " ".join(t for _r, t in _dl(
             e, installed=False, state=browse.BUSY))
         assert "installing" in text
         assert "not installed" not in text
@@ -446,7 +453,7 @@ class TestDetailLines:
 
     def test_it_reports_the_essentials(self):
         e = _e("code-review", "Review a PR", tap="acme/quality", version="2.1.0")
-        text = " ".join(t for _role, t in browse.detail_lines(e))
+        text = " ".join(t for _role, t in _dl(e))
         for fact in ("code-review", "2.1.0", "acme/quality", "Review a PR"):
             assert fact in text, fact
 
@@ -454,36 +461,36 @@ class TestDetailLines:
         """"the entire frontmatter users can scroll through" — so an unknown
         key must survive rather than being filtered to a known allowlist."""
         e = _e("x", meta={"license": "MIT", "custom-key": "custom-value"})
-        text = " ".join(t for _role, t in browse.detail_lines(e))
+        text = " ".join(t for _role, t in _dl(e))
         assert "license" in text and "MIT" in text
         assert "custom-key" in text and "custom-value" in text
 
     def test_a_list_valued_key_renders_readably(self):
         e = _e("x", meta={"tags": ["a", "b", "c"]})
-        text = " ".join(t for _role, t in browse.detail_lines(e))
+        text = " ".join(t for _role, t in _dl(e))
         assert "a" in text and "b" in text and "c" in text
         assert "['a'" not in text, "a Python repr is not a rendering"
 
     def test_every_line_carries_a_role_for_theming(self):
-        for role, _text in browse.detail_lines(_e("x", "d")):
+        for role, _text in _dl(_e("x", "d")):
             assert isinstance(role, str) and role
 
     def test_it_never_raises_on_a_sparse_entry(self):
-        assert browse.detail_lines({"name": "bare"})
+        assert _dl({"name": "bare"})
 
     def test_long_values_are_wrapped_to_the_pane_width(self):
         e = _e("x", "word " * 80)
-        lines = browse.detail_lines(e, width=30)
+        lines = _dl(e, width=30)
         assert all(len(t) <= 30 for _r, t in lines), "detail text must wrap"
 
     def test_installed_state_is_surfaced_when_known(self):
         e = _e("code-review")
-        text = " ".join(t for _r, t in browse.detail_lines(e, installed=True))
+        text = " ".join(t for _r, t in _dl(e, installed=True))
         assert "installed" in text.lower()
 
 
 def _render(w=100, h=24, query="", scope="all", focus="list", sel=0,
-            detail=True, entries=None):
+            detail=True, entries=None, summary=None):
     """Draw one frame into a text grid.
 
     The draw helpers take `put` as a parameter, so a recording `put` renders
@@ -508,6 +515,7 @@ def _render(w=100, h=24, query="", scope="all", focus="list", sel=0,
     found = browse.matches(ents, query, scope)
     lay = browse.layout(w, h, detail=detail)
     discovery._draw_frame(put, th, lay, focus)
+    discovery._draw_status(put, th, lay, focus, summary)
     discovery._draw_query(put, th, lay, query, focus, len(found), len(ents), 0)
     discovery._draw_scopes(put, th, lay, scope, focus)
     discovery._draw_rows(put, th, lay, found, sel, set(), query, focus,
@@ -523,14 +531,17 @@ class TestFrameRendering:
     def test_all_four_corners_are_drawn(self):
         g = _render()
         assert g[0][0] == "╭" and g[0][-1] == "╮"
-        assert g[-1][0] == "╰" and g[-1][-1] == "╯"
+        bottom = browse.layout(100, 24, detail=True).bottom
+        assert bottom == len(g) - 2, "the status bar owns the last row"
+        assert g[bottom][0] == "╰" and g[bottom][-1] == "╯"
 
     def test_both_side_borders_are_drawn_on_every_body_row(self):
         """The right border sat in the last column, which the old clip bound
         made unwritable — the frame drew with three sides."""
         g = _render()
-        sep = browse.layout(100, 24, detail=True).body_y - 1
-        for y in range(1, len(g) - 1):
+        lay = browse.layout(100, 24, detail=True)
+        sep = lay.body_y - 1
+        for y in range(1, lay.bottom):
             if y == sep:                       # the ├───┤ chrome/body rule
                 assert g[y][0] == "├" and g[y][-1] == "┤"
                 continue
@@ -542,8 +553,8 @@ class TestFrameRendering:
         lay = browse.layout(110, 24, detail=True)
         x = lay.detail_x - 1
         assert g[lay.body_y - 1][x] == "┬"
-        assert g[-1][x] == "┴"
-        for y in range(lay.body_y, len(g) - 1):
+        assert g[lay.bottom][x] == "┴"
+        for y in range(lay.body_y, lay.bottom):
             assert g[y][x] == "│", "divider broken at row %d" % y
 
     @pytest.mark.parametrize("w,h", [(60, 20), (80, 24), (100, 30), (160, 50)])
@@ -554,27 +565,42 @@ class TestFrameRendering:
     def test_the_title_appears_in_the_top_rule(self):
         assert "boost browse" in _render()[0]
 
-    def test_the_help_row_never_ends_mid_word(self):
+    def test_the_status_bar_never_ends_mid_word(self):
         """A clipped hint ends on `esc`, which reads as a key not a fragment."""
-        for w in (56, 60, 70, 80, 100, 140):
-            lay = browse.layout(w, 24, detail=True)
-            help_row = _render(w=w, h=24)[lay.body_y - 2]
-            assert "esc" not in help_row or "esc quit" in help_row, w
+        for focus in browse.PANES:
+            for w in (40, 56, 60, 70, 80, 100, 140):
+                bar = _render(w=w, h=24, focus=focus)[-1]
+                assert "esc quit" in bar, (focus, w)
+                assert browse.MODES[focus] in bar, (focus, w)
+
+    def test_the_status_bar_carries_the_session_chip(self):
+        bar = _render(w=100, h=24, summary=("ok_line", "✓ 2 installed"))[-1]
+        assert bar.rstrip().endswith("✓ 2 installed")
+        assert "esc quit" in bar
+
+    def test_a_short_terminal_keeps_the_frame_and_drops_the_bar(self):
+        lay = browse.layout(80, 7, detail=False)
+        assert not lay.has_status
+        assert lay.bottom == 6
+        g = _render(w=80, h=7, detail=False)
+        assert g[-1][0] == "╰" and g[-1][-1] == "╯"
 
 
 class TestScopeRadios:
     """Item 8 — the search-scope toggles are visible and show which is on."""
 
-    def test_exactly_one_radio_is_filled(self):
+    def test_exactly_one_toggle_is_filled(self):
         row = _render(scope="name")[2]
-        assert row.count("(●)") == 1
-        assert row.count("( )") == len(browse.SCOPES) - 1
+        assert row.count("●") == 1
+        for scope in browse.SCOPES:
+            assert browse.scope_label(scope) in row, scope
 
-    def test_the_filled_radio_tracks_the_active_scope(self):
+    def test_the_filled_toggle_tracks_the_active_scope(self):
+        """The dot, not just the colour, says which scope is on."""
         for scope in browse.SCOPES:
             row = _render(scope=scope)[2]
-            i = row.index("(●)")
-            assert row[i + 4:].startswith(browse.scope_label(scope))
+            i = row.index("●")
+            assert row[i + 2:].startswith(browse.scope_label(scope))
 
 
 class TestFocusIsVisible:
@@ -699,7 +725,7 @@ class TestInstallStatusInThePane:
         for state, needle in ((browse.BUSY, "installing"),
                               (browse.OK, "installed"),
                               (browse.FAILED, "✗")):
-            lines = browse.detail_lines(CORPUS[0], width=40, installed=False,
+            lines = _dl(CORPUS[0], width=40, installed=False,
                                         state=state, message="boom")
             assert any(needle in t for _r, t in lines), state
 
@@ -1025,7 +1051,10 @@ class TestGradientRuleInTheFrame:
         assert "boost browse" in g[0]
 
 
-class TestSessionChipInTheFrame:
+class TestSessionChipInTheStatusBar:
+    """The install chip moved out of the bottom rule, where it fought the
+    divider's tee for the same cells, into the status bar under the frame."""
+
     def _grid(self, summary, w=100, h=24):
         from boost_cli.commands import discovery
 
@@ -1042,24 +1071,26 @@ class TestSessionChipInTheFrame:
                 return 0
 
         lay = browse.layout(w, h, detail=True)
-        discovery._draw_frame(put, _Theme(), lay, "list", summary=summary)
+        discovery._draw_frame(put, _Theme(), lay, "list")
+        discovery._draw_status(put, _Theme(), lay, "list", summary)
         return ["".join(r) for r in grid], lay
 
-    def test_the_chip_lands_in_the_bottom_rule(self):
-        g, _lay = self._grid(("ok_line", "✓ 2 installed"))
-        assert "✓ 2 installed" in g[-1]
-        assert g[-1][0] == "╰" and g[-1][-1] == "╯"
+    def test_the_chip_lands_in_the_status_bar(self):
+        g, lay = self._grid(("ok_line", "✓ 2 installed"))
+        assert "✓ 2 installed" in g[lay.status_y]
+        assert "✓ 2 installed" not in g[lay.bottom]
 
-    def test_no_summary_keeps_the_idle_rule_byte_identical(self):
-        g, lay = self._grid(None)
-        expected = list("╰" + "─" * (lay.w - 2) + "╯")
-        expected[lay.detail_x - 1] = "┴"
-        assert g[-1] == "".join(expected)
+    def test_the_bottom_rule_is_plain_whatever_the_session_did(self):
+        for summary in (None, ("failed", "✗ " + "x" * 200)):
+            g, lay = self._grid(summary)
+            expected = list("╰" + "─" * (lay.w - 2) + "╯")
+            expected[lay.detail_x - 1] = "┴"
+            assert g[lay.bottom] == "".join(expected), summary
 
-    def test_the_chip_never_overwrites_the_divider_tee(self):
+    def test_a_huge_chip_stays_inside_the_bar(self):
         g, lay = self._grid(("failed", "✗ " + "x" * 200))
-        assert g[-1][lay.detail_x - 1] == "┴"
-        assert g[-1][-1] == "╯"
+        assert len(g[lay.status_y]) == lay.w
+        assert g[lay.status_y].startswith(" LIST ")
 
 
 class TestListScrollbar:
@@ -1083,10 +1114,11 @@ class TestBadgeRailAlignment:
         lay = browse.layout(100, 24, detail=True)
         row = g[lay.body_y]
         # CORPUS[0] is code-review from acme/quality: the rail ends with the
-        # tap badge, whose closing bracket sits one column short of the
-        # divider gap.
-        assert row[lay.list_x + lay.list_w - 2] == "]"
-        assert "[acme/quality]" in row
+        # version badge, whose last digit sits one column short of the divider
+        # gap — and the tap shows as its repo name alone.
+        assert row[lay.list_x + lay.list_w - 2] == "0"
+        assert "quality v1.0.0" in row
+        assert "acme/" not in row
 
     def test_the_kind_badge_text_matches_the_search_vocabulary(self):
         from boost_cli.core import output as out
@@ -1100,7 +1132,7 @@ def test_a_status_message_keeps_a_backticked_command_whole():
     # which leaves a command no one can copy.
     msg = ("not linked: ~/.cursor/skills is not writable — "
            "`chmod u+w ~/.cursor/skills`, then `boost sync` adds the link")
-    lines = [t for role, t in browse.detail_lines(
+    lines = [t for role, t in _dl(
         {"name": "x", "description": "d"}, width=30, state="ok", message=msg)
         if "chmod" in t or "sync" in t or "linked" in t]
     assert any("`chmod u+w ~/.cursor/skills`" in t for t in lines), lines
@@ -1111,7 +1143,7 @@ def test_a_status_token_wider_than_the_pane_still_fits_it():
     # output.wrap lets an over-wide token run long; in a curses pane that
     # drew over the frame and cut the tail off.
     msg = "installed ~/.agents/skills/" + "a-very-long-skill-name" * 3
-    lines = [t for role, t in browse.detail_lines(
+    lines = [t for role, t in _dl(
         {"name": "x"}, width=30, state="ok", message=msg)]
     assert all(len(t) <= 30 for t in lines), lines
     assert "".join(lines).count("a-very-long-skill-name") >= 1
@@ -1124,7 +1156,7 @@ def test_a_command_exactly_as_wide_as_the_pane_is_not_split_by_its_comma():
     cmd = "`chmod u+w ~/.windsurf/skills`"
     assert len(cmd) == 30
     msg = "not linked: ~/.windsurf/skills is not writable — %s, then `boost sync`" % cmd
-    lines = [t for role, t in browse.detail_lines(
+    lines = [t for role, t in _dl(
         {"name": "x"}, width=30, state="ok", message=msg)]
     assert cmd in lines, lines
     assert all(len(t) <= 30 for t in lines), lines
@@ -1181,3 +1213,325 @@ class TestBrowseInstallTargetLines:
         line = self._targets(sandbox)["rule"]
         assert "~/.claude/CLAUDE.md" in line
         assert "skills/CLAUDE.md" not in line
+
+
+# ------------------------------------------------------------------ reskin
+
+
+class TestRanking:
+    """Matches rank by how the *name* meets the query; catalogue order breaks
+    ties. Each test isolates one tier boundary, so a `<` / `<=` slip in
+    match_tier cannot survive."""
+
+    @pytest.mark.parametrize("name,query,tier", [
+        ("code-review", "code-review", browse.EXACT),
+        ("code-review", "code review", browse.EXACT),     # space == hyphen
+        ("Code-Review", "code review", browse.EXACT),     # case-folded
+        ("code-review-pro", "code review", browse.PREFIX),
+        ("code-review-pro", "code-review", browse.PREFIX),
+        ("my-code-review", "code review", browse.SUBSTRING),
+        ("review-the-code", "code review", browse.SUBSTRING),  # any order
+        ("cxoxdxe", "code", browse.FUZZY),
+        ("unrelated", "code", browse.ELSEWHERE),
+        ("code", "code zzz", browse.ELSEWHERE),           # every token counts
+    ])
+    def test_tiers(self, name, query, tier):
+        assert browse.match_tier(name, browse.tokens(query)) == tier
+
+    def test_no_tokens_is_the_lowest_tier(self):
+        assert browse.match_tier("anything", []) == browse.ELSEWHERE
+
+    def test_the_tiers_are_ordered_best_first(self):
+        assert (browse.EXACT < browse.PREFIX < browse.SUBSTRING
+                < browse.FUZZY < browse.ELSEWHERE)
+
+    @pytest.mark.parametrize("better,worse", [
+        ("twin", "twin-tool"),                # exact beats prefix
+        ("twin-tool", "the-twin"),            # prefix beats substring
+        ("the-twin", "t-w-i-n"),              # substring beats fuzzy
+        ("t-w-i-n", "other"),                 # fuzzy beats description-only
+    ])
+    def test_each_boundary_decides_the_order(self, better, worse):
+        rows = [_e(worse, "twin"), _e(better, "twin")]
+        got = [e["name"] for e in browse.rank(rows, "twin")]
+        assert got == [better, worse]
+
+    def test_ties_keep_catalogue_order(self):
+        rows = [_e("b-twin", ""), _e("a-twin", ""), _e("c-twin", "")]
+        assert [e["name"] for e in browse.rank(rows, "twin")] == \
+            ["b-twin", "a-twin", "c-twin"]
+
+    def test_an_empty_query_is_left_untouched(self):
+        rows = [_e("b"), _e("a")]
+        assert browse.rank(rows, "  ") is rows
+
+    def test_matches_come_back_ranked(self):
+        rows = [_e("aaa-eight-twins-helper", ""), _e("eight-twins", ""),
+                _e("eagle", "eight twins in prose")]
+        got = [e["name"] for e in browse.matches(rows, "eight-twins")]
+        assert got[0] == "eight-twins"
+        assert got[1] == "aaa-eight-twins-helper"
+
+
+class TestCategoryScope:
+    def test_category_is_a_scope(self):
+        assert "category" in browse.SCOPES
+        assert browse.scope_label("category") == "category"
+
+    def test_the_entry_category_beats_the_tap_fallback(self):
+        e = _e("x", tap="a/b", category="testing")
+        assert browse.entry_category(e, {"a/b": "devops"}) == "testing"
+
+    def test_the_tap_fallback_fills_a_missing_category(self):
+        assert browse.entry_category(_e("x", tap="a/b"), {"a/b": "devops"}) \
+            == "devops"
+
+    def test_no_category_anywhere_is_empty(self):
+        assert browse.entry_category(_e("x", tap="a/b"), None) == ""
+        assert browse.entry_category(_e("x", tap="a/b"), {"a/b": None}) == ""
+
+    def test_the_category_scope_searches_only_the_category(self):
+        rows = [_e("devops-thing", "", tap="a/b"),
+                _e("plain", "", tap="c/d", category="devops")]
+        got = [e["name"] for e in browse.matches(rows, "devops", "category")]
+        assert got == ["plain"]
+
+    def test_the_category_scope_uses_the_tap_fallback(self):
+        rows = [_e("plain", "", tap="a/b")]
+        assert browse.matches(rows, "devops", "category", {"a/b": "devops"})
+        assert not browse.matches(rows, "devops", "category", {})
+
+    def test_all_includes_the_category(self):
+        hay = browse.haystack(_e("x", tap="a/b"), "all", {"a/b": "devops"})
+        assert "devops" in hay
+
+
+class TestShortTap:
+    @pytest.mark.parametrize("tap,want", [
+        ("trailofbits/skills", "skills"),
+        ("fixture-tap", "fixture-tap"),
+        ("a/b/c", "c"),
+        ("", ""),
+        (None, ""),
+    ])
+    def test_short_tap(self, tap, want):
+        assert browse.short_tap(tap) == want
+
+
+class TestStatusBar:
+    def test_every_pane_has_a_mode_and_hints_that_end_in_quit(self):
+        for pane in browse.PANES:
+            assert browse.MODES[pane]
+            assert browse.HINTS[pane][-1] == ("esc", "quit")
+
+    def test_fit_hints_keeps_everything_that_fits(self):
+        hints = (("a", "one"), ("b", "two"))
+        # "a one" (5) + gap (2) + "b two" (5) == 12
+        assert browse.fit_hints(hints, 12) == list(hints)
+        assert browse.fit_hints(hints, 11) == [("b", "two")]
+
+    def test_fit_hints_drops_from_the_middle_and_keeps_the_last(self):
+        hints = (("1", "a"), ("2", "b"), ("3", "c"), ("esc", "quit"))
+        kept = browse.fit_hints(hints, 12)   # "1 a" + 2 + "esc quit" == 13
+        assert kept == [("esc", "quit")]
+        kept = browse.fit_hints(hints, 13)
+        assert kept == [("1", "a"), ("esc", "quit")]
+
+    def test_fit_hints_gives_up_whole_rather_than_clipping(self):
+        assert browse.fit_hints((("esc", "quit"),), 7) == []
+        assert browse.fit_hints((("esc", "quit"),), 8) == [("esc", "quit")]
+
+    def test_spans_start_with_the_pill(self):
+        spans = browse.status_spans("detail", 80)
+        assert spans[0] == (0, "pill", " DETAIL ")
+        assert spans[1] == (9, "key", "↑↓")
+        assert spans[2] == (12, "hint", "scroll")
+
+    def test_keys_and_labels_alternate_and_do_not_overlap(self):
+        spans = browse.status_spans("list", 200)
+        end = 0
+        for x, _role, text in spans:
+            assert x >= end
+            end = x + len(text)
+        assert end <= 199
+
+    def test_the_summary_sits_at_the_right_edge(self):
+        spans = browse.status_spans("list", 80, ("ok_line", "✓ 3 installed"))
+        x, _role, text = next(s for s in spans if s[1] == "ok_line")
+        assert x + len(text) == 79
+        assert text == "✓ 3 installed"
+        hint_end = max(sx + len(t) for sx, r, t in spans
+                       if r in ("key", "hint"))
+        assert hint_end <= x - 2, "hints give way to the chip"
+
+    def test_a_summary_with_no_room_is_clipped_not_dropped_onto_the_pill(self):
+        spans = browse.status_spans("list", 12, ("failed", "✗ 9 failed"))
+        x, _r, text = next(s for s in spans if s[1] == "failed")
+        assert x >= len(" LIST ")
+        assert x + len(text) <= 11
+
+    def test_no_width_no_spans(self):
+        assert browse.status_spans("list", 0) == []
+
+    def test_an_unknown_focus_falls_back_to_list(self):
+        spans = browse.status_spans("nonsense", 80)
+        assert spans[0][2] == " LIST "
+
+
+class TestPalette:
+    @pytest.mark.parametrize("can_change,colors,level", [
+        (True, 256, browse.CUSTOM),
+        (True, 16 + browse.CUSTOM_SLOTS, browse.CUSTOM),
+        (True, 16 + browse.CUSTOM_SLOTS - 1, browse.BASE),
+        (False, 256, browse.XTERM256),
+        (False, 255, browse.BASE),
+        (False, 8, browse.BASE),
+    ])
+    def test_palette_level(self, can_change, colors, level):
+        assert browse.palette_level(can_change, colors) == level
+
+    def test_kind_hues_never_collide_at_any_level(self):
+        """Two kinds in one colour read as one kind. On base, violet and pink
+        are both magenta — so they may not both be used."""
+        base_of = {"cyan": "cyan", "violet": "magenta", "pink": "magenta",
+                   "yellow": "yellow"}
+        for level in (browse.CUSTOM, browse.XTERM256, browse.BASE):
+            hues = [browse.kind_hue(k, level) for k in
+                    ("skill", "rule", "workflow")]
+            assert len(set(hues)) == 3, level
+            if level == browse.BASE:
+                assert len({base_of[h] for h in hues}) == 3
+
+    def test_kind_hue_falls_back_to_the_skill_hue(self):
+        assert browse.kind_hue("mystery", browse.CUSTOM) == "cyan"
+        assert browse.kind_hue("rule", "nonsense") == \
+            browse.kind_hue("rule", browse.BASE)
+
+    @pytest.mark.parametrize("rgb,index", [
+        ((0, 0, 0), 16),
+        ((255, 255, 255), 231),
+        ((95, 215, 215), 80),          # exact cube point
+        ((0x40, 0xcb, 0xe3), 80),      # Aurora cyan
+        ((128, 128, 128), 244),        # grey ramp beats the cube
+        ((8, 8, 8), 232),              # bottom of the ramp
+        ((238, 238, 238), 255),        # top of the ramp
+        ((255, 0, 0), 196),
+        ((0, 0, 255), 21),
+    ])
+    def test_xterm256(self, rgb, index):
+        assert browse.xterm256(rgb) == index
+
+    def test_the_slate_is_a_dark_grey_not_a_hue(self):
+        assert 232 <= browse.xterm256(browse.SLATE) <= 240
+
+
+class TestDetailSpans:
+    def test_line_text_and_role(self):
+        line = [("label", "kind     "), ("field", "skill")]
+        assert browse.line_text(line) == "kind     skill"
+        assert browse.line_role(line) == "label"
+        assert browse.line_role([]) == "blank"
+
+    def test_clip_spans(self):
+        line = [("a", "abc"), ("b", "defg"), ("c", "h")]
+        assert browse.clip_spans(line, 5) == [("a", "abc"), ("b", "de")]
+        assert browse.clip_spans(line, 3) == [("a", "abc")]
+        assert browse.clip_spans(line, 8) == line
+        assert browse.clip_spans(line, 0) == []
+
+    def test_a_field_is_a_dim_label_and_a_bright_value(self):
+        (line,) = browse.field_lines("tap", "acme/quality", 40)
+        assert line == [("label", "tap      "), ("field", "acme/quality")]
+
+    def test_a_wrapped_value_stays_in_its_column(self):
+        lines = browse.field_lines("tap", "word " * 20, 30)
+        assert len(lines) > 1
+        col = len(lines[0][0][1])
+        assert col == 9
+        for ln in lines:
+            assert len(browse.line_text(ln)) <= 30
+        for ln in lines[1:]:
+            assert ln[0] == ("label", " " * col)
+            assert not ln[1][1].startswith(" ")
+
+    def test_a_long_key_is_never_truncated(self):
+        (line, *_rest) = browse.field_lines("custom-long-key", "v", 40)
+        assert line[0] == ("label", "custom-long-key ")
+
+    def test_an_empty_value_still_renders_its_label(self):
+        assert browse.field_lines("k", "", 40) == [
+            [("label", "k        "), ("field", "")]]
+
+    def test_chips_carry_kind_version_category_and_curated(self):
+        e = _e("x", kind="rule", version="2.0", tap="a/b", curated=True)
+        chips = browse.chips(e, {"a/b": "qa"})
+        assert browse.line_text(chips) == "rule · v2.0 · #qa · ★ curated"
+        assert chips[0] == ("kind_rule", "rule")
+        assert ("star", "★ curated") in chips
+        assert ("category", "#qa") in chips
+
+    def test_chips_leave_out_what_is_unknown(self):
+        e = {"name": "x"}
+        assert browse.line_text(browse.chips(e)) == "skill"
+
+    def test_the_title_no_longer_carries_the_version(self):
+        lines = browse.detail_lines(_e("code-review", version="2.1.0"))
+        assert browse.line_text(lines[0]) == "code-review"
+        assert "v2.1.0" in browse.line_text(lines[1])
+        assert browse.line_role(lines[2]) == "rule"
+
+    def test_frontmatter_does_not_repeat_what_is_shown_above(self):
+        e = _e("x", "the description", meta={
+            "name": "x", "description": "the description", "version": "1",
+            "model": "inherit"})
+        text = [t for _r, t in _dl(e)]
+        assert sum("the description" in t for t in text) == 1
+        assert any(t.startswith("model") for t in text)
+        assert not any(t.startswith("name ") for t in text)
+
+    def test_frontmatter_with_only_shown_keys_has_no_section(self):
+        e = _e("x", "d", meta={"name": "x", "description": "d"})
+        assert not any(t == "FRONTMATTER" for _r, t in _dl(e))
+
+    def test_curated_moved_to_the_chips(self):
+        e = _e("x", curated=True)
+        text = [t for _r, t in _dl(e)]
+        assert any("★ curated" in t for t in text)
+        assert not any(t.startswith("curated") for t in text)
+
+    def test_the_chips_line_is_clipped_to_the_pane(self):
+        e = _e("x", kind="workflow", version="10.20.30", category="c" * 40,
+               curated=True)
+        lines = browse.detail_lines(e, width=20)
+        assert len(browse.line_text(lines[1])) <= 20
+
+    def test_every_span_carries_a_role(self):
+        for line in browse.detail_lines(_e("x", "d", meta={"k": "v"}),
+                                        install_to="~/.agents/skills"):
+            assert line
+            for role, _text in line:
+                assert isinstance(role, str) and role
+
+
+class TestLayoutStatusRow:
+    def test_a_default_layout_puts_the_bar_under_the_frame(self):
+        lay = browse.layout(100, 24, detail=True)
+        assert (lay.body_y, lay.bottom, lay.status_y) == (4, 22, 23)
+        assert lay.body_h == 18
+        assert lay.has_status
+
+    def test_the_bar_needs_eight_rows(self):
+        assert browse.layout(80, 8).has_status
+        assert not browse.layout(80, 7).has_status
+        assert browse.layout(80, 7).bottom == 6
+        assert browse.layout(80, 7).body_h == 2
+
+    def test_a_hand_built_layout_defaults_to_the_last_row(self):
+        lay = browse.Layout(w=10, h=10, body_y=4, body_h=5, list_x=1,
+                            list_w=8, detail_x=10, detail_w=0)
+        assert lay.bottom == 9
+        assert not lay.has_status
+
+    def test_a_degenerate_terminal_never_goes_negative(self):
+        lay = browse.layout(0, 0)
+        assert lay.body_h == 0 and lay.bottom >= -1

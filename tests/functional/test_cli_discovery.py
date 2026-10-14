@@ -1697,7 +1697,7 @@ class TestBrowse:
         picked = discovery._browse_tui(fake, entries)
         assert picked is None
         assert "[skill]" in fake.drawn
-        assert "[fixture-tap]" in fake.drawn
+        assert "fixture-tap" in fake.drawn       # the repo name, unbracketed
         assert "v1.0.2" in fake.drawn          # commit-messages' version
         assert "Conventional, atomic commit message discipline" in fake.drawn
 
@@ -1832,6 +1832,62 @@ class TestBrowseAurora:
         assert len(set(th["rule"])) == 1
         assert th["rule"][0]                    # the accent pair, not bare 0
 
+    def test_kind_badges_get_three_distinct_hues_at_every_level(self):
+        """On 8 colours violet and pink are one magenta, so workflow takes
+        another hue there — two kinds in one colour read as one kind."""
+        from boost_cli.commands import discovery
+
+        for colors, can_change in ((256, True), (256, False), (8, False)):
+            th = discovery._browse_theme(self._color_curses(colors, can_change))
+            kinds = {th["badge_skill"], th["badge_rule"], th["badge_workflow"]}
+            assert len(kinds) == 3, (colors, can_change)
+            assert all(kinds), "every kind badge carries a colour pair"
+
+    def test_256_colours_without_redefinition_use_the_xterm_cube(self):
+        """tmux without Tc: 256 colours, no init_color. It used to drop all
+        the way to the 8 base colours."""
+        from boost_cli.commands import discovery
+        from boost_cli.core import browse
+        from boost_cli.core import output as out
+
+        cc = self._color_curses(colors=256, can_change=False)
+        th = discovery._browse_theme(cc)
+        assert cc.colors == {}, "no slot may be redefined"
+        assert cc.pairs[1][0] == browse.xterm256(out.TOKENS["cyan"])
+        assert len(set(th["rule"])) == 3, "distinct hues earn the gradient"
+        sel_bg = {bg for _fg, bg in cc.pairs.values() if bg != -1}
+        assert sel_bg == {browse.xterm256(browse.SLATE)}
+
+    def test_the_selected_row_is_slate_with_an_accent_bar(self):
+        from boost_cli.commands import discovery
+
+        cc = self._color_curses()
+        th = discovery._browse_theme(cc)
+        slate = 16 + 5
+        assert cc.colors[slate] == tuple(
+            round(c / 255 * 1000) for c in discovery.browse.SLATE)
+        bgs = [bg for _fg, bg in cc.pairs.values()]
+        assert bgs.count(slate) == 2           # the row and its bar
+        assert not th["row_sel"] & cc.A_REVERSE, "slate replaces reverse"
+        assert th["sel_bar"] & cc.A_BOLD
+        assert th["sel_bar"] != th["row_sel"]
+
+    def test_8_colours_keep_reverse_video_for_the_selection(self):
+        from boost_cli.commands import discovery
+
+        th = discovery._browse_theme(self._color_curses(8, False))
+        assert th["row_sel"] == 4              # A_REVERSE from the tiers
+
+    def test_no_color_keeps_the_tiers_and_paints_nothing(self, monkeypatch):
+        from boost_cli.commands import discovery
+
+        monkeypatch.setenv("NO_COLOR", "1")
+        cc = self._color_curses()
+        th = discovery._browse_theme(cc)
+        assert cc.pairs == {} and cc.colors == {}
+        assert th["title"] == cc.A_BOLD
+        assert th["row_sel"] == cc.A_REVERSE
+
     def test_theme_falls_back_without_colour(self):
         from boost_cli.commands import discovery
 
@@ -1869,10 +1925,14 @@ class TestBrowseCards:
         e = {"name": "x", "version": "1.0.0", "tap": "a/b", "kind": "rule"}
         with_category = discovery._row_badges(e, {"a/b": "framework"})
         assert with_category == [
-            ("[rule]", "badge_rule"), ("v1.0.0", "version"),
-            ("[a/b]", "tap"), ("[framework]", "badge_category")]
+            ("[rule]", "badge_rule"), ("#framework", "badge_category"),
+            ("b", "tap"), ("v1.0.0", "version")]
         without_category = discovery._row_badges(e, {})
-        assert without_category == with_category[:3]  # category badge dropped
+        assert without_category == [with_category[0], *with_category[2:]]
+        # the entry's own stamped category beats the tap-level fallback
+        stamped = discovery._row_badges({**e, "category": "testing"},
+                                        {"a/b": "framework"})
+        assert stamped[1] == ("#testing", "badge_category")
 
     def test_entry_source_path_resolves_within_the_tap(self, boost, tapped):
         from boost_cli.commands import discovery
