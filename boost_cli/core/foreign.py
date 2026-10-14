@@ -229,7 +229,7 @@ def managed_plugin_states() -> dict[str, bool]:
     except OSError:
         extra = []
     states: dict[str, bool] = {}
-    for f in [root / "managed-settings.json", *(drop_in / n for n in extra)]:
+    for f in (root / "managed-settings.json", *(drop_in / n for n in extra)):
         value = _object(f).get("enabledPlugins")
         if isinstance(value, dict):
             states.update((k, v) for k, v in value.items() if isinstance(v, bool))
@@ -404,8 +404,8 @@ def plugin_skills(plugin: Plugin) -> dict[str, Path]:
     else:
         dirs = [d for _n, d in _skills_in(root / "skills")]
         dirs += _resolve_listed(root, [*(own or []), *(added or [])])
-        if (own is None and added is None and _is_skill(root)
-                and not os.path.isdir(root / "skills")):
+        if (own is added is None and _is_skill(root)
+                and not os.path.isdir(root / "skills")):  # noqa: FURB146
             dirs = [root]
     declared = manifest.get("name")
     namespace = declared if isinstance(declared, str) else plugin.name

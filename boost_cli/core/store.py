@@ -409,7 +409,8 @@ def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
         # here stays until `sync --prune` drops it, and `update` changes
         # nothing an agent sees.
         if (agent == foreign.CLAUDE
-                and not (os.path.islink(link) and _already_links(link, target))
+                and not (os.path.islink(link)  # noqa: FURB146
+                         and _already_links(link, target))
                 and (hit := covering_plugin(name)) is not None):
             res.covered.append(hit[0].id)
             continue
@@ -3352,7 +3353,7 @@ def left_to_plugin(name: str, agent: str, link: Path, covered: set[str]) -> bool
     :func:`plugin_duplicates`' to report.
     """
     return (agent == foreign.CLAUDE and name in covered
-            and not (os.path.islink(link)
+            and not (os.path.islink(link)  # noqa: FURB146
                      and _already_links(link, skill_store_dir(name))))
 
 
@@ -3378,7 +3379,8 @@ def plugin_duplicates(lock: dict | None = None,
     found = []
     for name, (plugin_id, theirs, how) in coverage.items():
         link = adir / name
-        if os.path.islink(link) and _already_links(link, skill_store_dir(name)):
+        if (os.path.islink(link)  # noqa: FURB146
+                and _already_links(link, skill_store_dir(name))):
             found.append((name, plugin_id, theirs, how))
     return found
 
