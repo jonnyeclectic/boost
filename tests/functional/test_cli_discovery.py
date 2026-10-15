@@ -2861,6 +2861,8 @@ class TestBrowseCategories:
             seen.update(kw, n=len(entries))
 
         monkeypatch.setattr(discovery, "_browse_tui", tui)
+        # Windows ships no curses; the stub never touches it anyway.
+        monkeypatch.setitem(sys.modules, "curses", types.ModuleType("curses"))
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
         boost("browse", "--category", "testing")
