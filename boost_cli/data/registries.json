@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 541,
-  "est_items_total": 36253,
-  "est_items_scannable": 31832,
+  "count": 543,
+  "est_items_total": 36561,
+  "est_items_scannable": 32140,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -641,6 +641,17 @@
       "confidence": "med",
       "list_only": false,
       "curated": false
+    },
+    {
+      "name": "anthropics/knowledge-work-plugins",
+      "url": "https://github.com/anthropics/knowledge-work-plugins",
+      "type": "skill",
+      "category": "general",
+      "focus": "Plugins for knowledge workers in Claude Cowork: sales, finance, legal... (252 skills, 20 workflows)",
+      "est_items": 272,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
     },
     {
       "name": "anthropics/launch-your-agent",
@@ -4588,6 +4599,17 @@
       "category": "general",
       "focus": "Claude Code skills for equity investors and traders - market analysis... (70 skills, 3 workflows)",
       "est_items": 73,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "trailofbits/skills-curated",
+      "url": "https://github.com/trailofbits/skills-curated",
+      "type": "skill",
+      "category": "meta",
+      "focus": "Curated, community-vetted Claude Code plugin marketplace (31 skills, 5 workflows)",
+      "est_items": 36,
       "confidence": "high",
       "list_only": false,
       "curated": false

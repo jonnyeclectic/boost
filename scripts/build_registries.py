@@ -103,7 +103,8 @@ CURATED = frozenset({
     "PatrickJS/awesome-cursorrules", "qdhenry/Claude-Command-Suite",
     # official vendor registries
     "anthropics/claude-code", "anthropics/claude-plugins-official",
-    "anthropics/financial-services", "microsoft/playwright", "openai/skills",
+    "anthropics/financial-services", "anthropics/knowledge-work-plugins",
+    "microsoft/playwright", "openai/skills",
     "google/skills", "github/awesome-copilot", "vercel-labs/agent-skills",
     "huggingface/skills", "greensock/gsap-skills",
     # community, by stars
@@ -388,12 +389,13 @@ SKILLS = [
     # security (2 repos, 830 measured items)
     ("mukul975/Anthropic-Cybersecurity-Skills", "security", "817 structured cybersecurity skills for AI agents Mapped to 6... (817 skills)", 817, "high"),
     ("superagent-ai/skills", "security", "A collection of security skills (13 skills)", 13, "high"),
-    # general (86 repos, 7249 measured items)
+    # general (87 repos, 7616 measured items)
     ("affaan-m/ECC", "general", "The agent harness performance optimization system. Skills, instincts... (281 skills, 243 workflows)", 524, "high"),
     ("vibeeval/vibecosystem", "general", "AI software team for Claude Code - 138 agents, 295 skills, 73 hooks... (299 skills, 6 rules, 138 workflows)", 443, "high"),
     ("j4flmao/agent-skills", "general", "432 skills, 2 rules, 3 workflows", 437, "med"),
     ("asgard-ai-platform/skills", "general", "301 open-source coding agent skills across 22 domains - methodology... (314 skills)", 314, "high"),
     ("nWave-ai/nWave", "general", "AI agents that guide you from idea to working code, with you in... (151 skills, 130 workflows)", 281, "high"),
+    ("anthropics/knowledge-work-plugins", "general", "Plugins for knowledge workers in Claude Cowork: sales, finance, legal... (252 skills, 20 workflows)", 272, "high"),
     ("shinpr/claude-code-workflows", "general", "Production-ready development workflows for Claude Code, powered by... (115 skills, 91 workflows)", 206, "high"),
     ("OneWave-AI/claude-skills", "general", "172 production-ready Claude Code skills for sales, marketing, design... (204 skills)", 204, "high"),
     ("doccker/cc-use-exp", "general", "Claude CodeAntigravityGemini CLICodexCursor  (143 skills, 7 rules, 48 workflows)", 198, "high"),
@@ -479,7 +481,7 @@ SKILLS = [
     ("obra/superpowers", "general", "An agentic skills framework & software development methodology that works (14 skills)", 14, "high"),
     ("ReScienceLab/opc-skills", "general", "Agent Skills for Solopreneurs (13 skills)", 13, "high"),
     ("multica-ai/andrej-karpathy-skills", "general", "A single CLAUDE.md file to improve Claude Code behavior, derived from... (1 skills, 1 rules)", 2, "med"),
-    # meta (26 repos, 4528 measured items)
+    # meta (27 repos, 4564 measured items)
     ("composio-community/awesome-codex-skills", "meta", "A curated list of practical Codex skills for automating workflows... (880 skills)", 880, "high"),
     ("github/awesome-copilot", "meta", "Community-contributed instructions, agents, skills, and configurations... (395 skills, 239 workflows)", 634, "high"),
     ("Microck/ordinary-claude-skills", "meta", "An unappealing collection of Claude Skills and resources (416 skills)", 416, "high"),
@@ -502,6 +504,9 @@ SKILLS = [
     ("bobmatnyc/claude-mpm-skills", "meta", "Curated collection of Claude Code skills for intelligent project... (57 skills)", 57, "high"),
     ("nexscope-ai/Amazon-Skills", "meta", "Free AI agent skills for Amazon sellers- keyword research, competitor... (52 skills)", 52, "high"),
     ("samber/cc-skills-golang", "meta", "A collection of Golang agentic skills that works (46 skills)", 46, "high"),
+    # Re-hosts other authors' plugins after review (ffuf, ghidra, the openai-*
+    # set), so it is a marketplace like claude-plugins-official, not a domain.
+    ("trailofbits/skills-curated", "meta", "Curated, community-vetted Claude Code plugin marketplace (31 skills, 5 workflows)", 36, "high"),
     ("jdrhyne/agent-skills", "meta", "A collection of AI agent skills for Clawdbot, Claude Code, Codex (34 skills)", 34, "high"),
     ("mxyhi/ok-skills", "meta", "Curated AI coding agent skills and AGENTS.md playbooks for Codex... (34 skills)", 34, "high"),
     ("nimrodfisher/data-analytics-skills", "meta", "A comprehensive list of Claude skills for a wide range of data... (33 skills)", 33, "high"),
