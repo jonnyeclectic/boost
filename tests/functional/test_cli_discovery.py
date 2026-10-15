@@ -1491,7 +1491,7 @@ class TestBrowse:
         monkeypatch.setattr(discovery, "sys",
                             types.SimpleNamespace(stdin=tty, stdout=tty))
 
-        def boom(curses, entries):
+        def boom(curses, entries, **_kw):
             raise real_curses.error("nocbreak() returned ERR")
 
         monkeypatch.setattr(discovery, "_browse_tui", boom)
@@ -1529,7 +1529,7 @@ class TestBrowse:
                             types.SimpleNamespace(stdin=tty, stdout=tty))
         monkeypatch.setattr(
             discovery, "_browse_tui",
-            lambda curses, entries: [next(e for e in entries
+            lambda curses, entries, **_kw: [next(e for e in entries
                                           if e["name"] == "brainstorming")])
         r = boost("browse")
         assert "installed brainstorming v1.4.0" in r.out
@@ -1541,7 +1541,8 @@ class TestBrowse:
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",
                             types.SimpleNamespace(stdin=tty, stdout=tty))
-        monkeypatch.setattr(discovery, "_browse_tui", lambda curses, entries: None)
+        monkeypatch.setattr(discovery, "_browse_tui",
+                            lambda curses, entries, **_kw: None)
         r = boost("browse")
         assert "installed" not in r.out
         assert not (paths.store_dir() / "brainstorming").exists()
@@ -1560,7 +1561,7 @@ class TestBrowse:
         workflow = {"name": "AGENT-playbook", "kind": "workflow",
                     "version": "1.0", "tap": "fixture-tap"}
         monkeypatch.setattr(discovery, "_browse_tui",
-                            lambda curses, entries: [workflow])
+                            lambda curses, entries, **_kw: [workflow])
         r = boost("browse")                       # default expect=0 → no crash
         assert "vanished from tap" in r.out       # friendly message, not Error:
         assert "boost update" in r.out            # the hint is shown
@@ -2706,3 +2707,164 @@ class TestFallBackColourFollowsStderr:
         warn_line, hint_line = e.getvalue().splitlines()[:2]
         assert "\x1b[" in warn_line
         assert "\x1b[" in hint_line, "the hint must follow the line above it"
+
+
+class TestBrowseCategories:
+    """^G picks a category inside the browser; --category opens on one and
+    --categories lists them."""
+
+    @staticmethod
+    def _entries():
+        from boost_cli.core import catalog
+        rows = sorted(catalog.all_entries(), key=lambda e: e["name"])
+        # alphabetical: brainstorming, commit-messages, cowboy-coding,
+        # jira-integration, tdd-workflow
+        cats = {"commit-messages": "git", "tdd-workflow": "testing",
+                "cowboy-coding": "testing"}
+        return [dict(e, category=cats.get(e["name"], "")) for e in rows]
+
+    @staticmethod
+    def _install(entry):
+        return types.SimpleNamespace(dest=paths.store_dir() / entry["name"],
+                                     linked=[], conflicts=[])
+
+    def test_the_picker_applies_a_category(self, boost, tapped):
+        from boost_cli.commands import discovery
+        # Picker rows: all(5), testing(2), uncategorized(2), git(1).
+        fake = _FakeCurses([7, _FakeCurses.KEY_DOWN, 10, 10], size=(30, 120))
+        picked = discovery._browse_tui(fake, self._entries(),
+                                       install=self._install)
+        assert [e["name"] for e in picked] == ["cowboy-coding"]
+        drawn = " ".join(fake.drawn)
+        assert "#testing" in drawn                   # the query chip
+        assert any("2/2" in s for s in fake.drawn)   # narrowed to testing
+        assert " CATEGORY " in drawn                 # the picker's mode pill
+        assert any(s.startswith("● all") and s.rstrip().endswith("5")
+                   for s in fake.drawn)
+
+    def test_typing_jumps_inside_the_picker(self, boost, tapped):
+        from boost_cli.commands import discovery
+        fake = _FakeCurses([7, ord("g"), 10, 10], size=(30, 120))
+        picked = discovery._browse_tui(fake, self._entries(),
+                                       install=self._install)
+        assert [e["name"] for e in picked] == ["commit-messages"]
+
+    def test_esc_closes_the_picker_not_the_browser(self, boost, tapped):
+        from boost_cli.commands import discovery
+        fake = _FakeCurses([7, _FakeCurses.KEY_DOWN, 27, 10])
+        picked = discovery._browse_tui(fake, self._entries(),
+                                       install=self._install)
+        # Still running, no category applied: Enter took the first row.
+        assert [e["name"] for e in picked] == ["brainstorming"]
+        # The count never narrowed to the two testing rows.
+        assert not any("2/2" in s for s in fake.drawn)
+
+    def test_paging_inside_the_picker_stays_in_range(self, boost, tapped):
+        from boost_cli.commands import discovery
+        keys = [7, _FakeCurses.KEY_NPAGE, _FakeCurses.KEY_NPAGE,
+                _FakeCurses.KEY_UP, _FakeCurses.KEY_PPAGE, 10, 10]
+        picked = discovery._browse_tui(_FakeCurses(keys, size=(30, 120)),
+                                       self._entries(), install=self._install)
+        assert [e["name"] for e in picked] == ["brainstorming"]   # back on all
+
+    def test_an_opening_category_can_be_lifted(self, boost, tapped):
+        from boost_cli.commands import discovery
+        # Opens on git; ^G opens on the git row; UP x3 reaches `all`.
+        keys = [7] + [_FakeCurses.KEY_UP] * 3 + [10, 10]
+        fake = _FakeCurses(keys, size=(30, 120))
+        picked = discovery._browse_tui(fake, self._entries(),
+                                       install=self._install, category="git")
+        assert [e["name"] for e in picked] == ["brainstorming"]
+        assert fake.drawn.count("#git") >= 1
+
+    def test_an_opening_category_narrows_the_list(self, boost, tapped):
+        from boost_cli.commands import discovery
+        fake = _FakeCurses([10], size=(30, 120))
+        picked = discovery._browse_tui(fake, self._entries(),
+                                       install=self._install, category="GIT")
+        assert [e["name"] for e in picked] == ["commit-messages"]
+        assert any("○ nothing" in s for s in fake.drawn) is False
+
+    def test_an_empty_category_explains_itself(self, boost, tapped):
+        from boost_cli.commands import discovery
+        fake = _FakeCurses([], size=(30, 120))
+        discovery._browse_tui(fake, self._entries(), category="nope")
+        assert "○ nothing in #nope" in fake.drawn
+
+    def test_idle_polls_do_not_refilter(self, boost, tapped, monkeypatch):
+        """The loop wakes every 80 ms to redraw; filtering 42,000 rows on each
+        tick spent the CPU re-deriving an answer it already had."""
+        from boost_cli.commands import discovery
+        from boost_cli.core import browse
+        calls = []
+        real = browse.matches_indexed
+
+        def counting(*a, **kw):
+            calls.append(a[1])
+            return real(*a, **kw)
+
+        monkeypatch.setattr(browse, "matches_indexed", counting)
+        discovery._browse_tui(_FakeCurses([-1, -1, -1, ord("t"), -1, -1]),
+                              self._entries())
+        assert calls == ["", "t"]
+
+    def test_the_collector_is_unfrozen_on_the_way_out(self, boost, tapped):
+        import gc
+
+        from boost_cli.commands import discovery
+
+        class Boom(_FakeCurses):
+            def wrapper(self, fn):
+                raise self.error("mid-draw")
+
+        before = gc.get_freeze_count()
+        with pytest.raises(Boom.error):
+            discovery._browse_tui(Boom([]), self._entries())
+        assert gc.get_freeze_count() == before
+
+    def test_the_categories_flag_lists_counts(self, boost, tapped, monkeypatch):
+        from boost_cli.core import catalog
+        rows = self._entries()
+        monkeypatch.setattr(catalog, "all_entries", lambda: rows)
+        r = boost("browse", "--categories")
+        assert "3 categories · 5 items" in r.out
+        lines = [ln.split() for ln in r.out.splitlines()]
+        assert ["testing", "2"] in lines and ["git", "1"] in lines
+        assert ["uncategorized", "2"] in lines
+        assert "boost browse --category <name>" in r.out
+
+    def test_an_unknown_category_points_at_the_list(self, boost, tapped):
+        r = boost("browse", "--category", "nope", expect=1)
+        assert "no entries in category 'nope'" in r.err
+        assert "boost browse --categories" in r.err
+
+    def test_the_category_flag_uses_the_tap_fallback(self, boost, tapped,
+                                                     monkeypatch):
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+        rows = [dict(e, category="") for e in catalog.all_entries()]
+        monkeypatch.setattr(catalog, "all_entries", lambda: rows)
+        monkeypatch.setattr(discovery, "_tap_categories",
+                            lambda: {rows[0]["tap"]: "fixtures"})
+        r = boost("browse", "--category", "fixtures")   # non-TTY: plain list
+        assert "5 items" in r.out
+
+    def test_the_category_flag_reaches_the_tui(self, boost, tapped,
+                                               monkeypatch):
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+        rows = self._entries()
+        monkeypatch.setattr(catalog, "all_entries", lambda: rows)
+        seen = {}
+
+        def tui(curses, entries, **kw):
+            seen.update(kw, n=len(entries))
+
+        monkeypatch.setattr(discovery, "_browse_tui", tui)
+        # Windows ships no curses; the stub never touches it anyway.
+        monkeypatch.setitem(sys.modules, "curses", types.ModuleType("curses"))
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+        boost("browse", "--category", "testing")
+        # The whole catalogue goes in — the category is a filter it can lift.
+        assert seen == {"category": "testing", "n": 5}

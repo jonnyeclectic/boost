@@ -131,7 +131,7 @@ class TestIndexedFiltering:
         for scope in browse.SCOPES:
             idx = browse.index_entries(CORPUS, scope)
             for q in ("", "co", "code review", "zzz", "beta"):
-                assert browse.matches_indexed(idx, q) == \
+                assert browse.matches_indexed(idx, q, scope) == \
                     browse.matches(CORPUS, q, scope), (scope, q)
 
 
@@ -811,7 +811,7 @@ class TestEmptyLines:
         # Exact bytes: a drifted keycap ("^t") or a mangled template would
         # pass any substring check while lying about the keys.
         lines = browse.empty_lines("q", "all", hidden=22379)
-        assert lines[1][1] == "→ backspace widens · ^T scope"
+        assert lines[1][1] == "→ backspace widens · ^T scope · ^G category"
         assert lines[2][1] == "→ ^D shows 22,379 hidden duplicates"
 
     def test_a_single_hidden_duplicate_still_gets_the_hint(self):
@@ -1535,3 +1535,411 @@ class TestLayoutStatusRow:
     def test_a_degenerate_terminal_never_goes_negative(self):
         lay = browse.layout(0, 0)
         assert lay.body_h == 0 and lay.bottom >= -1
+
+
+# ------------------------------------------------------------------ scoring
+
+
+def _names(rows):
+    return [e["name"] for e in rows]
+
+
+class TestFold:
+    def test_every_separator_becomes_a_space(self):
+        assert browse.fold("A-b_c/d.e:f(g h") == "a b c d e f g h"
+
+    def test_positions_survive(self):
+        for text in ("code-review", "owner/repo", "x(y)", ""):
+            assert len(browse.fold(text)) == len(text)
+
+    def test_the_haystack_is_folded(self):
+        assert browse.haystack(_e("Code-Review"), "name") == "code review"
+        assert browse.haystack(_e("x", tap="a/b"), "tap") == "a b"
+
+
+class TestWordStarts:
+    def test_a_word_starts_at_the_beginning_or_after_a_space(self):
+        assert browse._word_start("ab cd", 0)
+        assert browse._word_start("ab cd", 3)
+        assert not browse._word_start("ab cd", 1)
+        assert not browse._word_start("ab cd", 4)
+
+    @pytest.mark.parametrize("hay,s,i,want", [
+        ("code review", "rev", 0, 5),
+        ("code review", "cod", 0, 0),
+        ("code review", "cod", 1, -1),       # only word starts at or after i
+        ("xcode code", "code", 0, 6),        # mid-word occurrences are skipped
+        ("ab ab", "ab", 1, 3),
+        ("ab ab", "ab", 3, 3),               # a start exactly at i counts
+        ("ab ab", "ab", 4, -1),
+        ("", "a", 0, -1),
+    ])
+    def test_next_word_start(self, hay, s, i, want):
+        assert browse._next_word_start(hay, s, i) == want
+
+
+class TestAlignment:
+    def test_a_long_name_aligns_to_its_words_not_one_letter_per_word(self):
+        # The reported failure: `arch` used to be fished out one letter at a
+        # time after taking the `a` of `agent`.
+        hay = "bmad agent architect"
+        assert browse._align_words("bmadarch", hay) == [0, 1, 2, 3, 11, 12, 13, 14]
+        assert browse.match_positions("bmadarch", "bmad-agent-architect") == \
+            [0, 1, 2, 3, 11, 12, 13, 14]
+
+    def test_a_run_is_continued_before_any_jump(self):
+        assert browse._align_words("cod", "code cod") == [0, 1, 2]
+
+    def test_a_letter_found_nowhere_at_a_word_start_falls_back_to_anywhere(self):
+        assert browse._align_words("bs", "brainstorm") == [0, 5]
+
+    def test_no_fit_is_none(self):
+        assert browse._align_words("zz", "abc") is None
+        assert browse._align_plain("zz", "abc") is None
+        assert browse._align_substring("zz", "abc") is None
+
+    def test_plain_alignment_takes_first_occurrences(self):
+        assert browse._align_plain("om", "brainstorm") == [7, 9]
+
+    def test_a_substring_prefers_its_word_start_occurrence(self):
+        assert browse._align_substring("rev", "prev rev") == [5, 6, 7]
+        assert browse._align_substring("rev", "prev") == [1, 2, 3]
+
+    def test_align_takes_the_better_of_its_candidates(self):
+        # Word-aware wins here...
+        _sc, pos = browse.align("ar", "a b ar")
+        assert pos == [4, 5]
+        # ...and a substring short-circuits.
+        assert browse.align("view", "review")[1] == [2, 3, 4, 5]
+        assert browse.align("", "x") is None
+        assert browse.align("q", "x") is None
+
+    def test_runs(self):
+        assert browse.runs([]) == []
+        assert browse.runs([0, 1, 2, 5, 7, 8]) == [(0, 3), (5, 1), (7, 2)]
+
+
+class TestScoreWeights:
+    """Each pair flips if one weight moves the wrong way, so a mutated
+    constant cannot survive by leaving every ordering intact."""
+
+    def test_empty_scores_zero(self):
+        assert browse.score_positions([], "abc") == 0
+
+    def test_the_exact_arithmetic(self):
+        # c(0): word + first; o(1): run; r(5): word, gap 3; v(7): gap 1
+        assert browse.score_positions([0, 1, 5, 7], "code review") == \
+            (browse._BONUS_WORD + browse._BONUS_FIRST) + browse._BONUS_RUN \
+            + (browse._BONUS_WORD - 3) - 1
+
+    def test_the_gap_penalty_is_capped(self):
+        near = browse.score_positions([0, 5], "a" * 10)
+        far = browse.score_positions([0, 9], "a" * 10)
+        assert near == far == browse._BONUS_WORD + browse._BONUS_FIRST \
+            - browse._GAP_CAP
+
+    def test_a_shorter_gap_beats_a_longer_one_under_the_cap(self):
+        assert browse.score_positions([0, 2], "a" * 5) > \
+            browse.score_positions([0, 3], "a" * 5)
+
+    def test_a_word_start_beats_mid_word(self):
+        assert browse.score_positions([2], "a bc") > \
+            browse.score_positions([3], "a bc")
+
+    def test_the_first_word_beats_a_later_one(self):
+        assert browse.score_positions([0], "ab ab") > \
+            browse.score_positions([3], "ab ab")
+
+    def test_a_run_beats_a_jump_to_a_word(self):
+        # `co` as one run in `code` versus `c` + the `o` of a later word.
+        assert browse.score_positions([0, 1], "code o") > \
+            browse.score_positions([0, 5], "code o")
+
+    @pytest.mark.parametrize("name", [
+        "code-review", "a-code-review", "xcode", "pr review", "code review pro",
+        "ccode-c", "c", "review-code", "co-de", "x",
+    ])
+    @pytest.mark.parametrize("tok", [
+        "c", "co", "code", "code review", "e r", "review", "ode", "o", "xc",
+        "crv", "zz",
+    ])
+    def test_the_fast_score_agrees_with_the_alignment(self, name, tok):
+        fn, ft = browse.fold(name), browse.fold(tok)
+        hit = browse.align(ft, fn)
+        assert browse._score(fn, [ft]) == (hit[0] if hit else 0)
+
+    def test_scores_sum_across_tokens(self):
+        fn = "code review"
+        assert browse._score(fn, ["code", "review"]) == \
+            browse._score(fn, ["code"]) + browse._score(fn, ["review"])
+
+
+def _pieces_reference(needle, hay, min_piece=3):
+    """Every split of needle into >= min_piece runs, each starting a word of
+    hay after the last — tried by brute force."""
+    starts = [i for i in range(len(hay)) if i == 0 or hay[i - 1] == " "]
+
+    def go(j, i):
+        if j == len(needle):
+            return True
+        for cut in range(j + min_piece, len(needle) + 1):
+            piece = needle[j:cut]
+            for k in starts:
+                if k >= i and hay.startswith(piece, k) and go(cut, k + len(piece)):
+                    return True
+        return False
+
+    return go(0, 0)
+
+
+class TestTight:
+    @pytest.mark.parametrize("needle,hay,want", [
+        ("view", "a review tool", True),          # a substring, mid-word too
+        ("codrev", "code review", True),          # two word-starting pieces
+        ("crv", "create react vite", False),      # one letter a word is thin
+        ("coderev", "my code and reviews", True),
+        ("codrev", "xcode review", False),        # `cod` must start a word
+        ("abcdef", "abx abcd ef", False),         # `ef` is too short a piece
+        ("abcdefg", "abx abcd efg", True),        # needs the shorter `abcd`
+        ("ab", "a b", False),                     # too short to be pieces
+        ("", "anything", True),
+    ])
+    def test_cases(self, needle, hay, want):
+        assert browse.tight(needle, hay) is want
+
+    def test_the_minimum_piece(self):
+        assert browse._MIN_PIECE == 3
+        assert browse.tight("abcdef", "abc def")
+        assert not browse.tight("abcde", "abc de")
+
+    def test_it_agrees_with_a_brute_force_reference(self):
+        hays = ["code review tool", "abx abcd efg", "re rev review",
+                "aaa aaa aaa", "test driven development", "x"]
+        needles = ["codrev", "abcdefg", "rerev", "aaaaaa", "testdev",
+                   "tesdridev", "revrev", "aaaaaaaaa", "xyz", "coder"]
+        for h in hays:
+            for n in needles:
+                if n in h:
+                    continue
+                assert browse._pieces(n, h) == _pieces_reference(n, h), (n, h)
+
+    def test_repeated_words_do_not_blow_up(self):
+        # Memoised: without it this is exponential in the word count.
+        hay = " ".join(["abc"] * 60) + " zzz"
+        assert not browse.tight("abcabcabcabcabcabcq", hay)
+
+
+class TestTokenMatching:
+    def test_loose_text_per_scope(self):
+        assert browse.loose_text("name", "hay", "nm") == "hay"
+        assert browse.loose_text("tap", "hay", "nm") == "hay"
+        assert browse.loose_text("category", "hay", "nm") == "hay"
+        assert browse.loose_text("all", "hay", "nm") == "nm"
+        assert browse.loose_text("description", "hay", "nm") is None
+
+    def test_a_substring_always_matches(self):
+        assert browse.token_matches("view", "a review", None)
+
+    def test_not_a_subsequence_never_matches(self):
+        assert not browse.token_matches("zq", "a review", "a review")
+
+    def test_a_scattered_subsequence_needs_the_loose_text(self):
+        hay = "create react vite"
+        assert browse.token_matches("crv", hay, hay)
+        assert not browse.token_matches("crv", hay, None)
+        assert not browse.token_matches("crv", hay, "other")
+
+    def test_word_pieces_match_without_the_loose_text(self):
+        assert browse.token_matches("codrev", "code review", None)
+
+
+class TestThinSpread:
+    """The user-visible behaviour: letters spread one per word stop matching
+    prose, and stop outranking the name the user was typing."""
+
+    def test_a_scattered_description_match_is_dropped_in_all(self):
+        rows = [_e("alpha", "create a react based vite starter")]
+        assert not browse.matches(rows, "crv", "all")
+
+    def test_a_scattered_name_match_survives_in_all(self):
+        rows = [_e("create-react-vite", "")]
+        assert _names(browse.matches(rows, "crv", "all")) == \
+            ["create-react-vite"]
+
+    def test_the_description_scope_is_strict(self):
+        rows = [_e("x", "create react vite"), _e("y", "code review notes")]
+        assert _names(browse.matches(rows, "crv", "description")) == []
+        assert _names(browse.matches(rows, "codrev", "description")) == ["y"]
+
+    def test_tap_and_category_keep_acronyms(self):
+        rows = [_e("x", tap="anthropics/skills", category="data-science")]
+        assert browse.matches(rows, "as", "tap")
+        assert browse.matches(rows, "dsci", "category")
+
+    def test_scope_is_required(self):
+        with pytest.raises(TypeError):
+            browse.matches_indexed(browse.index_entries(CORPUS, "all"), "x")  # type: ignore[call-arg]
+
+    def test_the_index_carries_the_folded_name(self):
+        (_entry, hay, fname), = browse.index_entries([_e("Code-Review", "d")], "all")
+        assert fname == "code review"
+        assert hay.startswith("code review d")
+
+    def test_an_empty_query_returns_every_row(self):
+        idx = browse.index_entries(CORPUS, "all")
+        assert browse.matches_indexed(idx, " ", "all") == CORPUS
+
+
+class TestScoredRanking:
+    def test_the_word_aligned_name_outranks_the_scattered_one(self):
+        rows = [_e("bagisto-datagrid-development", ""), _e("tdd-developer", "")]
+        assert _names(browse.matches(rows, "tdddev", "all"))[0] == \
+            "tdd-developer"
+
+    def test_a_mid_word_substring_does_not_jump_the_tier(self):
+        rows = [_e("accrual-schedule", ""), _e("cc-review", "")]
+        assert browse.match_tier("accrual-schedule", ["ccr"]) == browse.FUZZY
+        assert browse.match_tier("cc-review", ["cc"]) == browse.PREFIX
+        assert _names(browse.matches(rows, "ccr", "all")) == \
+            ["cc-review", "accrual-schedule"]
+
+    def test_a_word_start_substring_is_the_substring_tier(self):
+        assert browse.match_tier("my-code-review", ["review"]) == \
+            browse.SUBSTRING
+        assert browse.match_tier("prereview", ["review"]) == browse.FUZZY
+
+    def test_within_a_tier_the_better_alignment_leads(self):
+        rows = [_e("gxixtx-wxf", ""), _e("git-workflow", "")]
+        assert _names(browse.rank(rows, "gitwf")) == ["git-workflow",
+                                                      "gxixtx-wxf"]
+
+    def test_a_shorter_name_breaks_a_score_tie(self):
+        rows = [_e("code-review-for-monorepos", ""), _e("code-review-pro", "")]
+        assert _names(browse.rank(rows, "code review")) == \
+            ["code-review-pro", "code-review-for-monorepos"]
+
+    def test_rows_the_name_did_not_score_keep_catalogue_order(self):
+        rows = [_e("zz-long-name", "code review"), _e("aa", "code review")]
+        assert _names(browse.rank(rows, "code review")) == ["zz-long-name", "aa"]
+        assert browse.rank_key("aa", ["code"]) == (browse.ELSEWHERE, 0, 0)
+
+    def test_a_partial_name_match_outranks_a_description_only_one(self):
+        rows = [_e("other", "code review"), _e("code-helper", "a review")]
+        assert _names(browse.matches(rows, "code review", "all")) == \
+            ["code-helper", "other"]
+
+    def test_the_rank_key_shape(self):
+        tier, neg, length = browse.rank_key("code-review", ["code"])
+        assert tier == browse.PREFIX and neg < 0 and length == 11
+
+    def test_highlighting_follows_the_ranking_alignment(self):
+        assert browse.highlight_positions("arch", "bmad-agent-architect") == \
+            {11, 12, 13, 14}
+        assert browse.highlight_positions("code rev", "Code-Review") == \
+            {0, 1, 2, 3, 5, 6, 7}
+
+
+# ------------------------------------------------------------------ categories
+
+
+class TestCategories:
+    ROWS: typing.ClassVar[list[dict]] = [
+        _e("a", category="testing"), _e("b", category="Testing"),
+        _e("c", tap="x/y"), _e("d", tap="p/q"), _e("e", category="ai")]
+    CATS: typing.ClassVar[dict[str, str]] = {"x/y": "devops"}
+
+    def test_category_of_lowercases_and_names_the_empty_one(self):
+        assert browse.category_of(self.ROWS[1]) == "testing"
+        assert browse.category_of(self.ROWS[2], self.CATS) == "devops"
+        assert browse.category_of(self.ROWS[3], self.CATS) == \
+            browse.UNCATEGORIZED
+
+    def test_counts_largest_first_then_by_name(self):
+        assert browse.category_counts(self.ROWS, self.CATS) == [
+            ("testing", 2), ("ai", 1), ("devops", 1),
+            (browse.UNCATEGORIZED, 1)]
+
+    def test_counts_add_up_to_the_total(self):
+        assert sum(n for _c, n in browse.category_counts(self.ROWS)) == \
+            len(self.ROWS)
+
+    def test_in_category(self):
+        assert browse.in_category(self.ROWS[0], "TESTING ")
+        assert browse.in_category(self.ROWS[2], "devops", self.CATS)
+        assert not browse.in_category(self.ROWS[2], "devops")
+        assert browse.in_category(self.ROWS[3], browse.UNCATEGORIZED)
+        assert not browse.in_category(self.ROWS[4], "testing")
+
+    def test_no_category_is_no_filter(self):
+        assert all(browse.in_category(e, "") for e in self.ROWS)
+
+
+class TestPicker:
+    def test_rows_lead_with_everything(self):
+        rows = browse.picker_rows(TestCategories.ROWS, TestCategories.CATS)
+        assert rows[0] == ("", 5)
+        assert rows[1:] == browse.category_counts(TestCategories.ROWS,
+                                                  TestCategories.CATS)
+
+    def test_it_opens_on_the_active_category(self):
+        rows = [("", 9), ("testing", 5), ("ai", 4)]
+        assert browse.picker_index(rows, "AI") == 2
+        assert browse.picker_index(rows, "") == 0
+        assert browse.picker_index(rows, "gone") == 0
+
+    @pytest.mark.parametrize("sel,n,visible,want", [
+        (0, 5, 10, 0),        # everything fits
+        (0, 30, 10, 0),
+        (5, 30, 10, 0),       # centred, clamped at the top
+        (15, 30, 10, 10),     # centred
+        (29, 30, 10, 20),     # clamped at the bottom
+        (3, 30, 0, 0),        # no room
+        (10, 10, 10, 0),      # exactly fits
+    ])
+    def test_top(self, sel, n, visible, want):
+        assert browse.picker_top(sel, n, visible) == want
+
+    def test_jump_steps_through_matching_labels_and_wraps(self):
+        rows = [("", 9), ("data", 3), ("devops", 2), ("ai", 1)]
+        assert browse.picker_jump(rows, 0, "d") == 1
+        assert browse.picker_jump(rows, 1, "D") == 2
+        assert browse.picker_jump(rows, 2, "d") == 1          # wraps
+        assert browse.picker_jump(rows, 3, "a") == 0          # `all` row
+        assert browse.picker_jump(rows, 0, "a") == 3
+        assert browse.picker_jump(rows, 2, "z") == 2          # none: stays
+
+    def test_line_layout(self):
+        line = browse.picker_line("testing", 1234, 20, True)
+        assert line == "● testing      1,234"
+        assert len(line) == 20
+        assert browse.picker_line("", 5, 10, False) == "  all    5"
+
+    def test_a_long_label_is_cut_before_the_count(self):
+        line = browse.picker_line("a" * 40, 12, 16, False)
+        assert line.endswith(" 12") and len(line) == 16
+
+    def test_a_zero_width_line_is_empty(self):
+        assert browse.picker_line("x", 1, 0, False) == ""
+
+    def test_query_chip(self):
+        assert browse.query_chip("testing") == "#testing"
+        assert browse.query_chip("") == ""
+
+    def test_the_picker_has_a_mode_and_cancels_rather_than_quits(self):
+        assert browse.MODES["picker"] == "CATEGORY"
+        assert browse.HINTS["picker"][-1] == ("esc", "cancel")
+        assert "picker" not in browse.PANES
+
+    def test_the_search_and_list_bars_advertise_the_key(self):
+        for pane in ("search", "list"):
+            assert ("^G", "category") in browse.HINTS[pane]
+
+
+class TestEmptyLinesCategory:
+    def test_the_category_is_named_with_the_query(self):
+        head = browse.empty_lines("zz", "name", category="testing")[0][1]
+        assert head == "○ no matches for 'zz' in name · #testing"
+
+    def test_an_empty_category_says_so(self):
+        assert browse.empty_lines("", "all", category="testing")[0][1] == \
+            "○ nothing in #testing"

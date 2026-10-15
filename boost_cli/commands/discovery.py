@@ -8,6 +8,7 @@ Also exports detect_stack(), shared with the Quality commands.
 from __future__ import annotations
 
 import contextlib
+import gc
 import json
 import operator
 import os
@@ -1610,7 +1611,7 @@ def _install_targets() -> dict[str, str]:
     }
 
 
-def _browse_tui(curses, entries, install=None):
+def _browse_tui(curses, entries, install=None, category=""):
     """Run the curses UI. Returns the list of entries picked for install
     (one or more, via multi-select), or None if the user quit without picking.
 
@@ -1619,6 +1620,9 @@ def _browse_tui(curses, entries, install=None):
     it. Matches are ranked (:func:`browse.rank`). All of the geometry and all
     of the matching come from :mod:`core.browse`, which is where they can be
     tested — this function only draws and dispatches keys.
+
+    ``category`` opens the browser already narrowed to one category; ^G
+    switches it, or clears it, from inside.
     """
     state: dict[str, Any] = {"picks": None}
     categories = _tap_categories()
@@ -1635,6 +1639,12 @@ def _browse_tui(curses, entries, install=None):
     copies = {id(e): n for e, n in deduped}
     unique_entries = [e for e, _n in deduped]
     hidden = len(entries) - len(unique_entries)
+    # Everything allocated so far lives as long as the browser does, and the
+    # collector would otherwise walk all of it — every catalogue dict — on
+    # each gen-2 pass, which the ranking's per-keystroke tuples trigger.
+    # Measured over a 61,801-entry catalogue: a one-letter query 122 ms
+    # unfrozen, 52 ms frozen. Undone on the way out (see the finally below).
+    gc.freeze()
     # name -> (state, message). Item 1: an install runs without leaving the
     # browser, and the detail pane reports it. Threaded so the draw loop keeps
     # answering keys while files are written — an install that freezes the UI
@@ -1733,18 +1743,33 @@ def _browse_tui(curses, entries, install=None):
         filt, sel, detail = "", 0, True
         focus, scope, dscroll = "list", browse.SCOPES[0], 0
         collapse = True
+        cat = category
+        picker: dict | None = None     # {"rows", "sel"} while ^G is open
         selected: set = set()
         # One haystack per entry per scope, built on first use and reused for
         # every keystroke: re-deriving it inside the filter cost 125 ms per key
         # over 71,700 entries, which is slower than the draw poll.
         index: dict = {}
+        pools: dict = {}
+        # The result list, recomputed only when something it depends on
+        # changes. The loop wakes every 80 ms to redraw a finished lazy-load;
+        # re-filtering 42,000 rows on each of those ticks spent the CPU on
+        # an answer it already had.
+        memo: tuple = (None, [])
         while True:
             _h, _w = scr.getmaxyx()
-            pool = unique_entries if collapse else entries
-            key = (scope, collapse)
+            if (collapse, cat) not in pools:
+                pools[(collapse, cat)] = [
+                    e for e in (unique_entries if collapse else entries)
+                    if browse.in_category(e, cat, categories)]
+            pool = pools[(collapse, cat)]
+            key = (scope, collapse, cat)
             if key not in index:
                 index[key] = browse.index_entries(pool, scope, categories)
-            found = browse.matches_indexed(index[key], filt)
+            if memo[0] != (key, filt):
+                memo = ((key, filt),
+                        browse.matches_indexed(index[key], filt, scope))
+            found = memo[1]
             sel = max(0, min(sel, len(found) - 1))
             lay = browse.layout(_w, _h, detail=detail)
             try:
@@ -1752,15 +1777,20 @@ def _browse_tui(curses, entries, install=None):
                 # status.copy(): the worker thread owns the mapping; a shallow
                 # copy keeps the fold safe from a mid-iteration mutation.
                 _draw_frame(put, th, lay, focus)
-                _draw_status(put, th, lay, focus,
+                _draw_status(put, th, lay, "picker" if picker else focus,
                              browse.session_summary(status.copy()))
                 _draw_query(put, th, lay, filt, focus, len(found), len(pool),
-                            len(selected), hidden if collapse else 0)
+                            len(selected), hidden if collapse else 0, cat)
                 _draw_scopes(put, th, lay, scope, focus)
-                rows = _draw_rows(put, th, lay, found, sel, selected, filt,
-                                  focus, describe, categories, installed_names,
-                                  copies if collapse else None, status,
-                                  scope, hidden if collapse else 0)
+                if picker:
+                    rows = _draw_picker(put, th, lay, picker["rows"],
+                                        picker["sel"], cat)
+                else:
+                    rows = _draw_rows(put, th, lay, found, sel, selected,
+                                      filt, focus, describe, categories,
+                                      installed_names,
+                                      copies if collapse else None, status,
+                                      scope, hidden if collapse else 0, cat)
                 if lay.has_detail and found:
                     dscroll = _draw_detail(
                         put, th, lay, found[sel], dscroll, focus,
@@ -1772,6 +1802,36 @@ def _browse_tui(curses, entries, install=None):
                 rows = 1
             key = scr.getch()
             if key == -1:                                 # poll tick, no key
+                continue
+            if picker is not None:
+                # The picker owns every key while it is open: Esc closes it
+                # rather than quitting the browser behind it.
+                n = len(picker["rows"])
+                if key in (27, 7):                        # ESC / ^G: cancel
+                    picker = None
+                elif key in (10, 13, curses.KEY_ENTER):
+                    cat = picker["rows"][picker["sel"]][0]
+                    picker, sel, dscroll = None, 0, 0
+                elif key == curses.KEY_UP:
+                    picker["sel"] = max(0, picker["sel"] - 1)
+                elif key == curses.KEY_DOWN:
+                    picker["sel"] = min(n - 1, picker["sel"] + 1)
+                elif key == curses.KEY_PPAGE:
+                    picker["sel"] = max(0, picker["sel"] - max(1, rows))
+                elif key == curses.KEY_NPAGE:
+                    picker["sel"] = min(n - 1, picker["sel"] + max(1, rows))
+                elif 33 <= key <= 126:
+                    picker["sel"] = browse.picker_jump(picker["rows"],
+                                                       picker["sel"], chr(key))
+                continue
+            if key == 7:                                  # ^G: category
+                # Counted over the rows the browser is showing — collapsed or
+                # not — before any category, so every count is what picking
+                # it would leave.
+                rows_ = browse.picker_rows(
+                    unique_entries if collapse else entries, categories)
+                picker = {"rows": rows_,
+                          "sel": browse.picker_index(rows_, cat)}
                 continue
             if key == 9 and found:                        # TAB: multi-select
                 selected.symmetric_difference_update({_desc_key(found[sel])})
@@ -1833,7 +1893,10 @@ def _browse_tui(curses, entries, install=None):
                 filt, sel, dscroll = filt + chr(key), 0, 0
                 focus = "search" if focus == "search" else focus
 
-    curses.wrapper(ui)  # wrapper guards drawing with try/finally endwin()
+    try:
+        curses.wrapper(ui)  # wrapper guards drawing with try/finally endwin()
+    finally:
+        gc.unfreeze()
     # Join before returning. The workers are daemons so the draw loop can exit
     # promptly, but a daemon dies with the process — quitting right after Enter
     # would abandon an install mid-write. `store.install` stages atomically, so
@@ -1926,21 +1989,28 @@ def _draw_status(put, th, lay, focus, summary=None):
         put(lay.status_y, x, text, th.get(role) or th.get("ok") or 0)
 
 
-def _draw_query(put, th, lay, filt, focus, n_found, n_all, n_sel, hidden=0):
-    """The query row: chevron, text, cursor when focused, right-aligned count.
+def _draw_query(put, th, lay, filt, focus, n_found, n_all, n_sel, hidden=0,
+                category=""):
+    """The query row: chevron, category chip, text, cursor when focused,
+    right-aligned count.
 
     ``hidden`` is stated, never implied: a browser that quietly drops a third of
     the catalogue and shows a smaller total is indistinguishable from one with a
-    broken filter.
+    broken filter. The category chip sits where the query starts for the same
+    reason — it narrows as much as the text does, so it reads as part of it.
     """
     active = focus == "search"
     put(1, 2, "❯", th["prompt"] if active else th["border"])
-    put(1, 4, filt or "type to filter…",
+    chip = browse.query_chip(category)
+    qx = 4 + (len(chip) + 1 if chip else 0)
+    if chip:
+        put(1, 4, chip, th["category"])
+    put(1, qx, filt or "type to filter…",
         th["query"] if filt else th["help"])
     if active:
-        put(1, 4 + len(filt), "▏", th["prompt"])
+        put(1, qx + len(filt), "▏", th["prompt"])
     tail = browse.count_tail(n_found, n_all, n_sel, hidden)
-    put(1, max(4 + len(filt) + 2, lay.w - 2 - len(tail)), tail, th["count"])
+    put(1, max(qx + len(filt) + 2, lay.w - 2 - len(tail)), tail, th["count"])
 
 
 def _draw_scopes(put, th, lay, scope, focus):
@@ -1972,7 +2042,7 @@ def _draw_scopes(put, th, lay, scope, focus):
 
 def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
                describe, categories, installed_names, copies=None,
-               status=None, scope="all", hidden=0):
+               status=None, scope="all", hidden=0, category=""):
     """The result list. Returns how many rows fit, for page-up/down.
 
     Columns inside the pane: the ``▌`` selection bar, the ✓ multi-select
@@ -1987,7 +2057,7 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
         # A silent void is indistinguishable from a hung draw; the pane says
         # what happened and which keys widen the net (see browse.empty_lines).
         for i, (role, text) in enumerate(browse.empty_lines(filt, scope,
-                                                            hidden)):
+                                                            hidden, category)):
             y = lay.body_y + 1 + i
             if y >= bottom:
                 break
@@ -2064,6 +2134,33 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
     return rows
 
 
+def _draw_picker(put, th, lay, rows, sel, category):
+    """The ^G category picker, drawn over the list pane. Returns how many rows
+    fit, for page-up/down.
+
+    Over the list rather than in a window of its own: the query, the count and
+    the detail pane stay where they were, so picking a category reads as
+    changing a filter, not as leaving the browser.
+    """
+    lw = lay.list_w
+    put(lay.body_y, lay.list_x + 2, "category", th["head"])
+    visible = max(1, lay.bottom - lay.body_y - 2)
+    top = browse.picker_top(sel, len(rows), visible)
+    for i, (cat, n) in enumerate(rows[top:top + visible]):
+        y = lay.body_y + 2 + i
+        if y >= lay.bottom:
+            break
+        chosen = top + i == sel
+        line = browse.picker_line(cat, n, max(0, lw - 3),
+                                  cat == category.strip().lower())
+        if chosen:
+            put(y, lay.list_x, " " * lw, th["row_sel"])
+            put(y, lay.list_x, "▌", th["sel_bar"])
+        put(y, lay.list_x + 2, line,
+            th["row_sel_name"] if chosen else th["value"])
+    return visible
+
+
 #: Detail-pane role -> theme key, for roles whose names differ.
 _DETAIL_ROLE_KEYS = {"title": "detail_name", "desc": "value", "ok": "ok_line"}
 
@@ -2108,31 +2205,58 @@ def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names,
     return dscroll
 
 
+def _print_categories(entries, categories) -> int:
+    """``boost browse --categories``: each category and its item count, over
+    the deduplicated catalogue — the numbers the ^G picker shows."""
+    unique = [e for e, _n in browse.dedupe(entries)]
+    out.heading("%d categories · %s items" % (
+        len(browse.category_counts(unique, categories)),
+        format(len(unique), ",")))
+    out.table([(c, format(n, ",")) for c, n in
+               browse.category_counts(unique, categories)],
+              headers=("category", "items"), whole=("category",))
+    out.info(out.c("open one with `boost browse --category <name>`", out.DIM))
+    return 0
+
+
 def cmd_browse(argv):
     """Full-screen fuzzy browser over every catalog entry."""
     p = cliparse.parser(
         prog="boost browse",
         description="Interactive full-screen TUI with fuzzy search")
     p.add_argument("--category", default="",
-                   help="only browse entries whose category matches (case-insensitive)")
+                   help="open on one category (case-insensitive); ^G switches")
+    p.add_argument("--categories", action="store_true",
+                   help="list the categories and how many items each holds")
     args = p.parse_args(argv)
     entries = sorted(catalog.all_entries(), key=operator.itemgetter("name"))
-    if args.category:
-        entries = catalog.filter_by_category(entries, args.category)
-        if not entries:
-            raise BoostError("no entries in category %r" % args.category,
-                            hint="try `boost browse` with no --category to see them all")
-    elif not entries:
+    if not entries:
         raise BoostError("no skills available to browse",
                         hint="add registries with `boost tap --defaults`")
+    categories = _tap_categories()
+    if args.categories:
+        return _print_categories(entries, categories)
+    narrowed = entries
+    if args.category:
+        # browse.in_category, not catalog.filter_by_category: the browser files
+        # an entry by its stamped category *or* its tap's, and a flag that
+        # disagreed with the chips it opens on would reject a category the
+        # ^G picker lists.
+        narrowed = [e for e in entries
+                    if browse.in_category(e, args.category, categories)]
+        if not narrowed:
+            raise BoostError("no entries in category %r" % args.category,
+                            hint="`boost browse --categories` lists them")
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        return _browse_plain(entries, "interactive mode needs a TTY")
+        return _browse_plain(narrowed, "interactive mode needs a TTY")
     try:
         import curses
     except ImportError:
-        return _browse_plain(entries, "curses is unavailable on this Python")
+        return _browse_plain(narrowed, "curses is unavailable on this Python")
     try:
-        picked = _browse_tui(curses, entries)
+        # The whole catalogue, not `narrowed`: the category is a filter the
+        # browser can lift, so it needs the rows outside it too.
+        picked = _browse_tui(curses, entries, category=args.category)
     except curses.error as e:
         # An fd that claims isatty() but isn't a real pty (IDE run consoles,
         # `script`, TERM=dumb) can fail deep inside curses.wrapper's own
@@ -2140,7 +2264,7 @@ def cmd_browse(argv):
         # already ran its finally block (endwin() included), so the screen is
         # restored by the time this is caught — printing here lands on a
         # normal terminal, not a hosed one.
-        return _browse_plain(entries,
+        return _browse_plain(narrowed,
                              "the terminal does not support curses (%s)" % e)
     if not picked:
         return 0
