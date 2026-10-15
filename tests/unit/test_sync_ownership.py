@@ -11,6 +11,7 @@ re-check standing between a confirm and a deletion.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
@@ -79,6 +80,11 @@ def _classify(*names):
 
 def _claude_link(name: str = "brainstorming") -> Path:
     return paths.home() / ".claude" / "skills" / name
+
+
+def _leads_to(link: Path, target: Path) -> bool:
+    return (store.normalize_link_target(link.readlink())
+            == store.normalize_link_target(target))
 
 
 def _disable_claude_code() -> None:
@@ -753,7 +759,7 @@ class TestLinkAgentsLeavesACoveredSkillToItsPlugin:
         _claude_link().unlink()
         _claude_link().symlink_to(mine)
         assert store.link_agents("brainstorming").covered == [PLUGIN]
-        assert os.readlink(_claude_link()) == str(mine)
+        assert _leads_to(_claude_link(), mine)
 
     def test_claude_codes_dir_is_not_created_for_it(self, claude_plugin, installed):
         claude_plugin()
@@ -927,6 +933,24 @@ class TestSyncPlanKeepsAnAdoptedSkillsLink:
     def test_a_loop_dangles(self, installed):
         link = _claude_link("loop")
         link.symlink_to(link)
+        with pytest.raises(OSError) as exc:
+            link.stat()
+        assert store._dangles(link) is True, (
+            exc.value.errno, getattr(exc.value, "winerror", None))
+
+    def test_a_loop_as_windows_reports_it_dangles(self, installed, monkeypatch):
+        # ERROR_CANT_RESOLVE_FILENAME, with an errno that is not ELOOP.
+        link = _claude_link("loop")
+        link.symlink_to(_mine("loop"))
+        real = os.stat
+
+        def stat(p, *a, **k):
+            if str(p) == str(link):
+                err = OSError(errno.EINVAL, "cannot resolve", str(p))
+                err.winerror = 1921
+                raise err
+            return real(p, *a, **k)
+        monkeypatch.setattr(store.os, "stat", stat)
         assert store._dangles(link) is True
 
     def test_a_live_link_does_not_dangle(self, installed):
@@ -1038,7 +1062,7 @@ class TestAdoption:
             "pr-me was not linked: ~/.claude/skills/pr-me is in the way and is "
             "not boost's to replace — to link boost's copy, move or delete it, "
             "then re-run `boost sync`"]
-        assert os.readlink(_claude_link("pr-me")) == str(checkout)
+        assert _leads_to(_claude_link("pr-me"), checkout)
         e = lockfile.get_skill("pr-me")
         assert e["only_agents"] is None and e["agents"] == REST
 
@@ -1324,7 +1348,7 @@ class TestInstallingOverAStoreDir:
         link.symlink_to(paths.home() / "gone")
         with pytest.raises(BoostError, match="does not record it"):
             store.install(catalog.resolve_one("tdd-workflow"))
-        assert os.readlink(link) == str(paths.home() / "gone")
+        assert _leads_to(link, paths.home() / "gone")
 
     @pytest.mark.parametrize("text", ["{not json", '{"version": 99}'])
     def test_over_an_unreadable_lock_it_names_replay(self, installed, text):

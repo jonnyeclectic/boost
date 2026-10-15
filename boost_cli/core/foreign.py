@@ -660,9 +660,11 @@ def unreadable(path: Path) -> Path | None:
     :func:`util.sha256_dir` would either skip in silence or fail on. Entries
     the hash ignores (``util.IGNORED``) are not looked at, and nothing is
     read — a file is opened and closed, non-blocking, so a FIFO cannot hang
-    the walk. A link is followed the way the hash follows it: to a file, but
-    not into a directory.
+    the walk (Windows has no ``O_NONBLOCK``, and no FIFO a directory lists).
+    A link is followed the way the hash follows it: to a file, but not into a
+    directory.
     """
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
     stack = [str(path)]
     while stack:
         top = stack.pop()
@@ -678,7 +680,7 @@ def unreadable(path: Path) -> Path | None:
                 if e.is_dir(follow_symlinks=False):
                     stack.append(e.path)
                 elif e.is_file():
-                    os.close(os.open(e.path, os.O_RDONLY | os.O_NONBLOCK))
+                    os.close(os.open(e.path, flags))
             except OSError:
                 return Path(e.path)
     return None

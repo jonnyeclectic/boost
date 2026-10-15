@@ -3843,14 +3843,17 @@ def _dangles(link: Path) -> bool:
 
     Known, not presumed: ``exists()`` answers False for a target boost may not
     look at, and under a store with no search bit every live link read as a
-    broken one for the sweep to remove. A loop leads nowhere too.
+    broken one for the sweep to remove. A loop leads nowhere too: ``ELOOP``,
+    or on Windows ERROR_CANT_RESOLVE_FILENAME (1921), which Python does not
+    map to ``ELOOP``.
     """
     try:
         link.stat()
     except (FileNotFoundError, NotADirectoryError):
         return True
     except OSError as err:
-        return err.errno == errno.ELOOP
+        return (err.errno == errno.ELOOP
+                or getattr(err, "winerror", None) == 1921)
     return False
 
 
