@@ -409,12 +409,26 @@ on the left, the selected item's detail on the right.
 | `→` `←` | into and out of the detail pane, where `↑`/`↓` scroll it |
 | `⇥` | select, and multi-select for a batch install |
 | `^T` | cycle the match toggles without leaving the results |
+| `^G` | pick a category — counts per category, type a letter to jump, `↵` applies, `esc` cancels |
 | `↵` | install, in place, without leaving the browser |
 | `esc` | quit |
 
 The query splits on spaces and every token must match, so `code review` narrows
 where `code` alone would not. Selection lives on `⇥` rather than space for
 exactly that reason, and `q` stays a character so `quality` is searchable.
+
+Matching is aligned, not just found. A token can skip letters, but the browser
+prefers runs and word starts: `bmadarch` reads as `bmad` + `arch` in
+`bmad-agent-architect`, not one letter fished out of each word, and that is what
+lights up and what ranks. In the name any such spelling still matches — `gitwf`
+finds `git-workflow` first — while in a description every piece must start a
+word and be three letters or more (`codrev` meets "code review"; `crv` does
+not), because over a long sentence letters scattered one per word match nearly
+everything.
+
+`^G` narrows to one category and the active one rides in the query as
+`#testing`; `boost browse --category testing` opens there, and `boost browse
+--categories` lists every category with its count.
 
 Duplicates are collapsed. Registries render one skill into `.claude/`,
 `.cursor/`, `.gemini/` and a plugin root, so on a real 60,047-entry catalogue

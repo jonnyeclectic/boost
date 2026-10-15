@@ -87,6 +87,42 @@ def entry_category(entry: dict, categories=None) -> str:
     return str((categories or {}).get(entry.get("tap", ""), "") or "")
 
 
+#: What the picker and the query chip call an entry with no category at all —
+#: a tap the bundled registry catalogue does not list, on a cache too old to
+#: carry a stamped one. Listed rather than dropped, so the picker's counts add
+#: up to the total above them.
+UNCATEGORIZED = "uncategorized"
+
+
+def category_of(entry: dict, categories=None) -> str:
+    """:func:`entry_category` as the picker files it: lowercased, and
+    :data:`UNCATEGORIZED` rather than empty."""
+    return entry_category(entry, categories).strip().lower() or UNCATEGORIZED
+
+
+def in_category(entry: dict, category: str, categories=None) -> bool:
+    """True when ``entry`` is filed under ``category`` (case-insensitive).
+
+    An empty ``category`` is no filter and matches everything, so callers can
+    apply it unconditionally. Goes through :func:`entry_category`, tap
+    fallback included, for the reason that function exists: the chip on a row
+    and the filter that finds it must agree.
+    """
+    if not category:
+        return True
+    return category_of(entry, categories) == category.strip().lower()
+
+
+def category_counts(entries, categories=None) -> list[tuple[str, int]]:
+    """``(category, rows)`` for every category in ``entries``, largest first,
+    then by name — the order the picker lists them in."""
+    counts: dict[str, int] = {}
+    for e in entries:
+        c = category_of(e, categories)
+        counts[c] = counts.get(c, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
 def short_tap(tap: str | None) -> str:
     """A tap as a row shows it: the repo name, without the owner.
 
@@ -97,22 +133,41 @@ def short_tap(tap: str | None) -> str:
     return str(tap or "").rsplit("/", 1)[-1]
 
 
+#: Characters after which a new word starts: kebab and snake names, owner/repo
+#: taps, dotted file names, and prose.
+_SEPS = " -_/.:("
+
+_FOLD = str.maketrans(dict.fromkeys(_SEPS, " "))
+
+
+def fold(text: str) -> str:
+    """``text`` lowercased with every word separator turned into a space.
+
+    One separator instead of seven is what makes "the next word starting with
+    ``arch``" a single ``find(" arch")``; seven finds per lookup were 85% of a
+    keystroke over the real catalogue. Positions survive — every character
+    maps to exactly one — so an alignment found in the folded text highlights
+    the original.
+    """
+    return text.lower().translate(_FOLD)
+
+
 def haystack(entry: dict, scope: str, categories=None) -> str:
-    """The text ``scope`` searches for one entry."""
+    """The text ``scope`` searches for one entry, :func:`fold` ed."""
     name = str(entry.get("name", ""))
     if scope == "name":
-        return name.lower()
+        return fold(name)
     if scope == "description":
-        return str(entry.get("description", "")).lower()
+        return fold(str(entry.get("description", "")))
     if scope == "tap":
-        return str(entry.get("tap", "")).lower()
+        return fold(str(entry.get("tap", "")))
     if scope == "category":
-        return entry_category(entry, categories).lower()
+        return fold(entry_category(entry, categories))
     # `all`, and any unrecognised scope: never raise on a keystroke.
-    return " ".join((name, str(entry.get("description", "")),
-                     str(entry.get("tap", "")),
-                     str(entry.get("kind", "")),
-                     entry_category(entry, categories))).lower()
+    return fold(" ".join((name, str(entry.get("description", "")),
+                          str(entry.get("tap", "")),
+                          str(entry.get("kind", "")),
+                          entry_category(entry, categories))))
 
 
 def subseq(needle: str, hay: str) -> bool:
@@ -135,8 +190,8 @@ def subseq(needle: str, hay: str) -> bool:
 
 
 def index_entries(entries, scope: str,
-                  categories=None) -> list[tuple[dict, str]]:
-    """Pair each entry with its lowercased haystack for ``scope``.
+                  categories=None) -> list[tuple[dict, str, str]]:
+    """``(entry, haystack, folded name)`` for each entry, for ``scope``.
 
     Built once per scope and reused for every keystroke. Rebuilding the joined
     string inside the filter cost 125 ms per key on a 71,700-entry catalogue —
@@ -144,14 +199,224 @@ def index_entries(entries, scope: str,
     index is caller-owned rather than a module cache: the TUI holds the entry
     list for the whole session, and a global keyed on object identity would be
     a use-after-free waiting for the first caller that does not.
+
+    The folded name rides along because ranking reads it for every surviving
+    row on every keystroke, whatever the scope.
     """
-    return [(e, haystack(e, scope, categories)) for e in entries]
+    return [(e, haystack(e, scope, categories), fold(str(e.get("name", ""))))
+            for e in entries]
 
 
 #: Rank tiers, best first. A match is placed by how its *name* meets the
 #: query; anything that matched only through the description, tap or a
 #: scattered subsequence sorts last, in catalogue order.
 EXACT, PREFIX, SUBSTRING, FUZZY, ELSEWHERE = range(5)
+
+# --------------------------------------------------------------- scoring
+#
+# A subsequence test answers "could these letters be found in this order",
+# which over a long name is nearly always yes and says nothing about *how*.
+# `bmadarch` is a subsequence of `bmad-agent-architect` two ways: one takes
+# the `a` of `agent` and then fishes `r`, `c`, `h` out of `architect`; the
+# other takes `bmad` and `arch`, two runs, each starting a word. A reader
+# means the second. The first is the thin spread — one letter per word — and
+# the browser used to highlight it and rank every such row the same.
+#
+# So a match is aligned, not just found: the aligner prefers to continue a run
+# and, when a run breaks, to restart at the next word that begins with as much
+# of the rest of the token as possible. The alignment is then scored, and the
+# score orders rows inside a tier. Every step is a `str.find`, never a
+# per-character Python loop over the text, because this runs on every row that
+# survives the filter on every keystroke.
+
+#: How far ahead the aligner looks for a word that starts with the rest of the
+#: token. Four is enough to tell `arch` in `architect` from the `a` of `agent`;
+#: longer only costs finds.
+_LOOKAHEAD = 4
+
+_BONUS_WORD = 10     # a match that starts a word
+_BONUS_FIRST = 6     # ...the first word of the text, on top
+_BONUS_RUN = 8       # a match directly after the previous one
+_GAP_CAP = 4         # a gap costs one per skipped character, at most this
+
+
+# Everything below takes :func:`fold` ed text, where a space is the only
+# separator left.
+
+def _word_start(hay: str, j: int) -> bool:
+    """True when ``hay[j]`` begins a word."""
+    return j == 0 or hay[j - 1] == " "
+
+
+def _next_word_start(hay: str, s: str, i: int) -> int:
+    """The first index ``>= i`` where a word starts with ``s``, else -1."""
+    if i == 0 and hay.startswith(s):
+        return 0
+    k = hay.find(" " + s, max(0, i - 1))
+    return k + 1 if k >= 0 else -1
+
+
+def _align_words(needle: str, hay: str) -> list[int] | None:
+    """Positions of ``needle`` in ``hay``, aligned to runs and word starts.
+
+    Greedy, left to right: continue the current run when the next character
+    allows it; otherwise jump to the nearest word that starts with the longest
+    prefix (up to :data:`_LOOKAHEAD`) of what is left; otherwise take the next
+    occurrence anywhere. None when the needle does not fit.
+
+    Greedy can miss an alignment a full search would find — that is what
+    :func:`align` pairs it with a plain scan and a substring hit for.
+    """
+    pos: list[int] = []
+    j, i, m = 0, 0, len(needle)
+    while j < m:
+        if pos and hay.startswith(needle[j], pos[-1] + 1):
+            k = pos[-1] + 1
+        else:
+            k = -1
+            for size in range(min(m - j, _LOOKAHEAD), 0, -1):
+                k = _next_word_start(hay, needle[j:j + size], i)
+                if k >= 0:
+                    break
+            if k < 0:
+                k = hay.find(needle[j], i)
+                if k < 0:
+                    return None
+        pos.append(k)
+        i = k + 1
+        j += 1
+    return pos
+
+
+def _align_plain(needle: str, hay: str) -> list[int] | None:
+    """Positions of the first-occurrence subsequence match, or None."""
+    pos, i = [], 0
+    for ch in needle:
+        k = hay.find(ch, i)
+        if k < 0:
+            return None
+        pos.append(k)
+        i = k + 1
+    return pos
+
+
+def _align_substring(needle: str, hay: str) -> list[int] | None:
+    """Positions of ``needle`` as one run — at a word start when it occurs at
+    one — or None when it is not a substring at all."""
+    k = _next_word_start(hay, needle, 0)
+    if k < 0:
+        k = hay.find(needle)
+    if k < 0:
+        return None
+    return list(range(k, k + len(needle)))
+
+
+def score_positions(pos: list[int], hay: str) -> int:
+    """How well an alignment reads: runs and word starts up, gaps down.
+
+    Higher is better. The numbers only have to order alignments of one token
+    against each other, so their scale means nothing on its own.
+    """
+    if not pos:
+        return 0
+    s = _BONUS_FIRST if pos[0] == 0 else 0
+    prev = -1
+    for k in pos:
+        if _word_start(hay, k):
+            s += _BONUS_WORD
+        if prev >= 0:
+            s += _BONUS_RUN if k == prev + 1 else -min(_GAP_CAP, k - prev - 1)
+        prev = k
+    return s
+
+
+def align(needle: str, hay: str) -> tuple[int, list[int]] | None:
+    """``(score, positions)`` of the best alignment of ``needle`` in ``hay``,
+    or None when it is not a subsequence.
+
+    A substring is one run and nothing beats it, so it short-circuits; that is
+    also the common case, which keeps a one-letter query over the whole
+    catalogue cheap. Otherwise the word-aware and the plain alignment are both
+    scored and the better one wins.
+    """
+    if not needle:
+        return None
+    pos = _align_substring(needle, hay)
+    if pos is not None:
+        return score_positions(pos, hay), pos
+    best = None
+    for found in (_align_words(needle, hay), _align_plain(needle, hay)):
+        if found is not None:
+            sc = score_positions(found, hay)
+            if best is None or sc > best[0]:
+                best = (sc, found)
+    return best
+
+
+def runs(pos: list[int]) -> list[tuple[int, int]]:
+    """An alignment as ``(start, length)`` runs of consecutive positions."""
+    out: list[tuple[int, int]] = []
+    for k in pos:
+        if out and k == out[-1][0] + out[-1][1]:
+            out[-1] = (out[-1][0], out[-1][1] + 1)
+        else:
+            out.append((k, 1))
+    return out
+
+
+#: Shortest run that counts as a piece of a word outside the name. A single
+#: letter at the start of a word is an acronym, which is a fine way to type a
+#: name and no way to find a sentence: over a 200-character description,
+#: `c`, `r`, `v` each start some word, in that order, almost every time.
+_MIN_PIECE = 3
+
+
+def tight(needle: str, hay: str) -> bool:
+    """True when ``needle`` meets ``hay`` as a substring or as pieces of words.
+
+    The filter outside the name. A token found only by picking single letters
+    out of many words is not a match a reader recognises — it is what made a
+    three-letter query in the ``all`` scope keep most of the catalogue — so
+    every run must start a word and be at least :data:`_MIN_PIECE` long:
+    ``codrev`` meets ``code review``; ``crv`` does not.
+    """
+    return needle in hay or _pieces(needle, hay)
+
+
+def _pieces(needle: str, hay: str) -> bool:
+    """The non-substring half of :func:`tight`."""
+    head = needle[:_MIN_PIECE]
+    if len(needle) < _MIN_PIECE or (
+            not hay.startswith(head) and " " + head not in hay):
+        return False        # no word starts the first piece: most rows, in C
+    failed: set[tuple[int, int]] = set()
+
+    def pieces(j: int, i: int) -> bool:
+        # needle[j:] as word-starting runs of hay at or after i. Exhaustive,
+        # not greedy: `abc` over `abx bc` needs `a`+`bc`... which is a
+        # one-letter run, so it fails here by rule — but `abcd` over
+        # `abx bcd` needs the *shorter* first run, and greedy longest-first
+        # without backtracking would miss it. `failed` memoises dead ends,
+        # so a description of repeated words cannot make it exponential.
+        if j == len(needle):
+            return True
+        if len(needle) - j < _MIN_PIECE or (j, i) in failed:
+            return False
+        head = needle[j:j + _MIN_PIECE]
+        k = _next_word_start(hay, head, i)
+        while k >= 0:
+            n = _MIN_PIECE
+            while (j + n < len(needle) and k + n < len(hay)
+                   and hay[k + n] == needle[j + n]):
+                n += 1
+            for cut in range(n, _MIN_PIECE - 1, -1):
+                if pieces(j + cut, k + cut):
+                    return True
+            k = _next_word_start(hay, head, k + 1)
+        failed.add((j, i))
+        return False
+
+    return pieces(0, 0)
 
 
 def match_tier(name: str, toks: list[str]) -> int:
@@ -164,42 +429,145 @@ def match_tier(name: str, toks: list[str]) -> int:
     over a 42,000-entry catalogue ``eight-twin`` matched 8,900 rows — and the
     list showed them in alphabetical order, with the one the user typed the
     name of somewhere past the first screen.
+
+    A substring only counts when it starts a word. ``ccr`` inside
+    ``accrual-schedule`` is three letters that happen to sit together, and
+    ranking it above ``cc-review`` — which the user was typing — is the same
+    thin match the scorer exists to demote; mid-word it competes on score.
     """
-    n = name.lower()
-    if not toks:
+    return _tier(fold(name), [fold(t) for t in toks])
+
+
+def _tier(fname: str, ftoks: list[str]) -> int:
+    if not ftoks:
         return ELSEWHERE
-    joined = (" ".join(toks), "-".join(toks))
-    if n in joined:
+    joined = " ".join(ftoks)
+    if fname == joined:
         return EXACT
-    if n.startswith(joined):
+    if fname.startswith(joined):
         return PREFIX
-    if all(t in n for t in toks):
+    if all(_next_word_start(fname, t, 0) >= 0 for t in ftoks):
         return SUBSTRING
-    if all(subseq(t, n) for t in toks):
+    if all(subseq(t, fname) for t in ftoks):
         return FUZZY
     return ELSEWHERE
 
 
-def rank(found: list[dict], query: str) -> list[dict]:
-    """``found`` ordered by :func:`match_tier`, catalogue order within a tier.
+def _substring_score(t: str, k: int) -> int:
+    """:func:`score_positions` of ``t`` as one run starting at ``k`` — the
+    same number, by arithmetic. Ranking runs on every surviving row, and a
+    substring hit is the common case; building its position list only to walk
+    it back was most of a one-letter query's cost."""
+    return ((_BONUS_FIRST if k == 0 else 0)
+            + _BONUS_RUN * (len(t) - 1)
+            + _BONUS_WORD * t[:-1].count(" "))
 
-    A stable sort on the tier alone, so the incoming order (alphabetical, in
-    the browser) breaks every tie. An empty query returns ``found`` untouched:
-    there is nothing to rank by, and the first frame should not pay for a sort.
+
+def _score(fname: str, ftoks: list[str]) -> int:
+    """Summed :func:`align` score of every token that meets ``fname``.
+
+    A token that does not meet the name adds nothing rather than disqualifying
+    the row, so a row whose name carries ``code`` and whose description carries
+    ``review`` still outranks one that matched only in its description.
+    """
+    total = 0
+    for t in ftoks:
+        k = _next_word_start(fname, t, 0)
+        if k >= 0:
+            total += _substring_score(t, k) + _BONUS_WORD
+            continue
+        k = fname.find(t)
+        if k >= 0:
+            total += _substring_score(t, k)
+            continue
+        hit = align(t, fname)
+        if hit is not None:
+            total += hit[0]
+    return total
+
+
+def _key(fname: str, ftoks: list[str]) -> tuple[int, int, int]:
+    sc = _score(fname, ftoks)
+    return (_tier(fname, ftoks), -sc, len(fname) if sc else 0)
+
+
+def rank_key(name: str, toks: list[str]) -> tuple[int, int, int]:
+    """Sort key: tier, then alignment score, then the shorter name.
+
+    The shorter name breaks a tie because the query covers more of it —
+    ``code-review`` before ``code-review-for-monorepos`` for ``code review``.
+    A row the name gave no score at all keeps catalogue order instead: its
+    name length says nothing about how it matched.
+    """
+    return _key(fold(name), [fold(t) for t in toks])
+
+
+def rank(found: list[dict], query: str) -> list[dict]:
+    """``found`` ordered by :func:`rank_key`, catalogue order breaking ties.
+
+    A stable sort, so the incoming order (alphabetical, in the browser) breaks
+    every remaining tie. An empty query returns ``found`` untouched: there is
+    nothing to rank by, and the first frame should not pay for a sort.
     """
     toks = tokens(query)
     if not toks:
         return found
-    return sorted(found, key=lambda e: match_tier(str(e.get("name", "")), toks))
+    return sorted(found, key=lambda e: rank_key(str(e.get("name", "")), toks))
 
 
-def matches_indexed(indexed, query: str) -> list[dict]:
-    """Filter a list built by :func:`index_entries`, best matches first."""
+#: Scopes whose whole haystack is a short label — a name, ``owner/repo``, a
+#: category. Any subsequence of a label still matches: an acronym is a fine
+#: way to type one (``as`` for ``anthropics/skills``), and the score ranks a
+#: scattered one last. The thin spread is a property of *prose*, so only text
+#: that carries prose has to be :func:`tight`.
+_LABEL_SCOPES = frozenset(("name", "tap", "category"))
+
+
+def loose_text(scope: str, hay: str, fname: str) -> str | None:
+    """The part of a row any subsequence may match in, for ``scope``.
+
+    The whole haystack for a label scope, the name alone for ``all`` (whose
+    haystack also carries the description), and nothing for ``description``.
+    """
+    if scope in _LABEL_SCOPES:
+        return hay
+    if scope == "description":
+        return None
+    return fname
+
+
+def token_matches(tok: str, hay: str, name: str | None = None) -> bool:
+    """Whether one :func:`fold` ed token keeps a row whose haystack is
+    ``hay``: anywhere in ``name`` (the :func:`loose_text`, or None), or
+    :func:`tight` ly in the haystack."""
+    # Cheapest test first: a substring is the common hit and is one C-level
+    # scan, and it settles both arms at once.
+    if tok in hay:
+        return True
+    if not subseq(tok, hay):
+        return False
+    if name is not None and subseq(tok, name):
+        return True
+    return _pieces(tok, hay)
+
+
+def matches_indexed(indexed, query: str, scope: str) -> list[dict]:
+    """Filter a list built by :func:`index_entries`, best matches first.
+
+    ``scope`` is required and must be the one the index was built for: it
+    decides where a loose subsequence is enough (:func:`loose_text`). A default
+    would let a caller that forgot it filter the description scope as loosely
+    as a name — the leak :func:`tight` exists to close — and never notice.
+    """
     toks = tokens(query)
     if not toks:
-        return [e for e, _hay in indexed]
-    return rank([e for e, hay in indexed
-                 if all(subseq(t, hay) for t in toks)], query)
+        return [e for e, _hay, _n in indexed]
+    ftoks = [fold(t) for t in toks]
+    kept = [(e, n) for e, hay, n in indexed
+            if all(token_matches(t, hay, loose_text(scope, hay, n))
+                   for t in ftoks)]
+    kept.sort(key=lambda r: _key(r[1], ftoks))
+    return [e for e, _n in kept]
 
 
 def matches(entries, query: str, scope: str = "all",
@@ -212,17 +580,19 @@ def matches(entries, query: str, scope: str = "all",
     Convenience wrapper that indexes on the spot; a repeated caller should hold
     an :func:`index_entries` result instead.
     """
-    return matches_indexed(index_entries(entries, scope, categories), query)
+    return matches_indexed(index_entries(entries, scope, categories), query,
+                           scope)
 
 
 def match_positions(needle: str, hay: str) -> list[int]:
-    """Indices of hay consumed by a subsequence match, or [] if it does not."""
-    positions, i = [], 0
-    for j, ch in enumerate(hay):
-        if i < len(needle) and ch == needle[i]:
-            positions.append(j)
-            i += 1
-    return positions if i == len(needle) else []
+    """Indices of ``hay`` the best alignment of ``needle`` lands on, or [].
+
+    The best alignment, not the first: highlighting the first occurrence of
+    each letter is what lit up one letter per word on a long name, so the row
+    showed a reason for the match that was not the one it ranked by.
+    """
+    hit = align(fold(needle), fold(hay))
+    return hit[1] if hit else []
 
 
 def highlight_positions(query: str, text: str) -> set[int]:
@@ -231,7 +601,7 @@ def highlight_positions(query: str, text: str) -> set[int]:
     A union across tokens, so `code review` lights up both words rather than
     only whichever one the single-token highlighter happened to see.
     """
-    low = text.lower()
+    low = fold(text)
     hits: set[int] = set()
     for t in tokens(query):
         hits.update(match_positions(t, low))
@@ -557,18 +927,26 @@ def scrollbar(total: int, visible: int, top: int) -> tuple[int, int] | None:
     return (round((visible - thumb) * top / max_top), thumb)
 
 
-def empty_lines(query: str, scope: str, hidden: int = 0) -> list[tuple[str, str]]:
+def empty_lines(query: str, scope: str, hidden: int = 0,
+                category: str = "") -> list[tuple[str, str]]:
     """``(role, text)`` lines for a zero-match list pane.
 
     A silent void is indistinguishable from a hung draw, so the pane says
     what happened and which keys widen the net — in the same ○/→ grammar
     every other boost empty state uses, and every line muted, because an
     absence is the quietest thing on screen. Never returns nothing.
+
+    An active ``category`` is named in the head: it narrows as much as the
+    query does, and a "no matches for 'x'" that leaves it out sends the user
+    deleting a query that was never the problem.
     """
     q = " ".join(query.split())
-    head = ("○ no matches for '%s' in %s" % (q, scope_label(scope))
-            if q else "○ nothing here")
-    lines = [("muted", head), ("muted", "→ backspace widens · ^T scope")]
+    where = scope_label(scope) + (" · #" + category if category else "")
+    head = ("○ no matches for '%s' in %s" % (q, where) if q
+            else "○ nothing in #%s" % category if category
+            else "○ nothing here")
+    lines = [("muted", head),
+             ("muted", "→ backspace widens · ^T scope · ^G category")]
     if hidden > 0:
         lines.append(("muted",
                       "→ ^D shows %s hidden duplicates" % format(hidden, ",")))
@@ -612,6 +990,65 @@ def count_tail(n_found: int, n_all: int, n_sel: int, hidden: int) -> str:
     if hidden:
         tail += "  (%s dupes hidden)" % format(hidden, ",")
     return tail
+
+
+# --------------------------------------------------------------- picker
+
+def picker_rows(entries, categories=None) -> list[tuple[str, int]]:
+    """The category picker's rows: ``("", total)`` — every category — first,
+    then :func:`category_counts`."""
+    return [("", len(entries)), *category_counts(entries, categories)]
+
+
+def picker_index(rows, category: str) -> int:
+    """The row the picker opens on: the active category, else the top."""
+    want = category.strip().lower()
+    for i, (c, _n) in enumerate(rows):
+        if c == want:
+            return i
+    return 0
+
+
+def picker_top(sel: int, n: int, visible: int) -> int:
+    """First visible picker row: the selection kept on screen, centred where
+    the list allows, never scrolled past either end."""
+    if visible <= 0 or n <= visible:
+        return 0
+    return max(0, min(sel - visible // 2, n - visible))
+
+
+def picker_jump(rows, sel: int, ch: str) -> int:
+    """The next row after ``sel`` whose label starts with ``ch``, wrapping;
+    ``sel`` when none does. Typing is how a 30-row list is crossed without
+    holding an arrow down — and pressing the same letter again steps through
+    every category that starts with it."""
+    ch = ch.lower()
+    n = len(rows)
+    for step in range(1, n + 1):
+        i = (sel + step) % n
+        if (rows[i][0] or "all").startswith(ch):
+            return i
+    return sel
+
+
+def picker_line(category: str, count: int, width: int,
+                active: bool) -> str:
+    """One picker row, ``width`` wide: ``● testing ···· 1,234``.
+
+    The dot marks the category in force, so it reads with the colour off; the
+    count right-aligns so the column scans. A label too long for the row is
+    cut, never the count.
+    """
+    num = format(count, ",")
+    label = category or "all"
+    room = max(0, width - 2 - 1 - len(num))
+    head = ("●" if active else " ") + " " + label[:room]
+    return (head.ljust(width - len(num)) + num)[:max(0, width)]
+
+
+def query_chip(category: str) -> str:
+    """The query row's category chip, ``#testing``, or ``""`` for none."""
+    return "#" + category if category else ""
 
 
 # --------------------------------------------------------------- palette
@@ -690,19 +1127,23 @@ def xterm256(rgb) -> int:
 #: tmux and vim name theirs, because the same arrow means four different things
 #: depending on which pane holds focus.
 MODES = {"search": "SEARCH", "scopes": "SCOPE", "list": "LIST",
-         "detail": "DETAIL"}
+         "detail": "DETAIL", "picker": "CATEGORY"}
 
 #: ``(key, label)`` hints per focus, most useful first, quitting always last.
 HINTS = {
     "search": (("a-z", "filter"), ("↓", "scopes"), ("↵", "install"),
-               ("^T", "scope"), ("esc", "quit")),
+               ("^T", "scope"), ("^G", "category"), ("esc", "quit")),
     "scopes": (("← →", "pick"), ("↓", "list"), ("↑", "search"),
                ("esc", "quit")),
     "list": (("↑↓", "move"), ("⇥", "select"), ("↵", "install"),
-             ("→", "detail"), ("^T", "scope"), ("^D", "dupes"),
-             ("esc", "quit")),
+             ("→", "detail"), ("^T", "scope"), ("^G", "category"),
+             ("^D", "dupes"), ("esc", "quit")),
     "detail": (("↑↓", "scroll"), ("←", "list"), ("↵", "install"),
                ("esc", "quit")),
+    # Not a pane in the focus ring — an overlay over the list — so Esc
+    # closes it rather than quitting, and the bar has to say so.
+    "picker": (("↑↓", "move"), ("a-z", "jump"), ("↵", "apply"),
+               ("esc", "cancel")),
 }
 
 _HINT_GAP = 2

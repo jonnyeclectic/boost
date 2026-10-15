@@ -122,7 +122,7 @@
       <a class="cmd-link" href="#cmd-reindex" data-search="reindex build/refresh the full-content search index  --force --dense --export-shard tap --import-shard file --fetch-shards --fetch-index --json">reindex</a>
       <a class="cmd-link" href="#cmd-discover" data-search="discover search github for skill repos you have not tapped yet search github for skill repositories you have not tapped yet --limit limit --json --local query">discover</a>
       <a class="cmd-link" href="#cmd-recommend" data-search="recommend suggest skills based on your project&#x27;s tech stack  --path path --category category --limit limit --json">recommend</a>
-      <a class="cmd-link" href="#cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category">browse</a>
+      <a class="cmd-link" href="#cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category --categories">browse</a>
       <a class="cmd-link" href="#cmd-index" data-search="index build the discovery registry via github code search  --limit limit --json query">index</a>
       <a class="cmd-link" href="#cmd-trending" data-search="trending show trending items by install count  --limit limit --json">trending</a>
       <a class="cmd-link" href="#cmd-stats" data-search="stats install statistics &amp; trend for a single skill  --json name">stats</a>
@@ -465,13 +465,14 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category">
+      <section class="cmd" id="cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category --categories">
         <h3><span class="cname">browse</span><span class="gtag">find</span></h3>
         <p class="summary">Interactive full-screen TUI with fuzzy search</p>
-        <pre class="syn">boost browse [--category CATEGORY]</pre>
+        <pre class="syn">boost browse [--category CATEGORY] [--categories]</pre>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--category CATEGORY</code><span>only browse entries whose category matches (case-insensitive)</span></div>
+          <div class="arg"><code>--category CATEGORY</code><span>open on one category (case-insensitive); ^G switches</span></div>
+          <div class="arg"><code>--categories</code><span>list the categories and how many items each holds</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-index" data-search="index build the discovery registry via github code search  --limit limit --json query">
