@@ -571,7 +571,8 @@ def _fake_add_many(monkeypatch, outcomes, entries=3, index=None):
     assert len(outcomes) == len(names), "one outcome per default registry"
     calls: dict = {}
 
-    def add_many(urls, curated=False, pins=None, jobs=None, on_done=None):
+    def add_many(urls, curated=False, pins=None, jobs=None, on_done=None,
+                 curated_names=()):
         calls["pins"] = pins
         calls["urls"] = list(urls)
         rows = []

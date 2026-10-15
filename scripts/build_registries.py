@@ -88,6 +88,43 @@ SELF_INSTALLING = {
         "&& cd ~/.claude/skills/gstack && ./setup",
 }
 
+# The registries that earn the ★. Every row used to carry `curated: true`, so
+# the star marked all 541 and said nothing; it now marks the most popular and
+# most capable, which is what a newcomer reads it as. The rule, measured against
+# GitHub on 2026-10-14: >= 10k stars, >= 5 items, not list-only, not archived,
+# not self-installing — minus repos whose stars belong to a product rather than
+# the skills it ships (an SDK, a gateway, a cookbook) — plus every default tap,
+# so `tap --defaults` and `tap --catalog` agree about the same repo. Hardcoded
+# because the build is offline and `--check` must be byte-for-byte; re-measure
+# with `--verify-live`'s token and edit this set, never the JSON.
+CURATED = frozenset({
+    # default taps (config.DEFAULT_TAPS) that are in the catalogue
+    "anthropics/skills", "obra/superpowers", "trailofbits/skills",
+    "PatrickJS/awesome-cursorrules", "qdhenry/Claude-Command-Suite",
+    # official vendor registries
+    "anthropics/claude-code", "anthropics/claude-plugins-official",
+    "anthropics/financial-services", "anthropics/knowledge-work-plugins",
+    "microsoft/playwright", "openai/skills",
+    "google/skills", "github/awesome-copilot", "vercel-labs/agent-skills",
+    "huggingface/skills", "greensock/gsap-skills",
+    # community, by stars
+    "mattpocock/skills", "affaan-m/ECC", "DietrichGebert/ponytail",
+    "nextlevelbuilder/ui-ux-pro-max-skill", "JuliusBrussee/caveman",
+    "addyosmani/agent-skills", "Leonxlnx/taste-skill", "pbakaus/impeccable",
+    "coreyhaines31/marketingskills", "zhaoxuya520/reverse-skill",
+    "wshobson/agents", "Yeachan-Heo/oh-my-claudecode",
+    "mukul975/Anthropic-Cybersecurity-Skills", "davila7/claude-code-templates",
+    "alirezarezvani/claude-skills", "OthmanAdi/planning-with-files",
+    "phuryn/pm-skills", "Donchitos/Claude-Code-Game-Studios",
+    "VoltAgent/awesome-claude-code-subagents",
+    "EveryInc/compound-engineering-plugin", "AgriciDaniel/claude-seo",
+    "muratcankoylan/Agent-Skills-for-Context-Engineering",
+    "wanshuiyin/Auto-claude-code-research-in-sleep",
+    "composio-community/awesome-codex-skills",
+    "Orchestra-Research/AI-Research-SKILLs", "jeffallan/claude-skills",
+    "zubair-trabzada/geo-seo-claude",
+})
+
 # --- skills (SKILL.md registries) -------------------------------------------
 SKILLS = [
     ("travisvn/awesome-claude-skills", "meta", "Curated awesome-list of Claude Skills, tools, and resources", 60, "high"),
@@ -352,12 +389,13 @@ SKILLS = [
     # security (2 repos, 830 measured items)
     ("mukul975/Anthropic-Cybersecurity-Skills", "security", "817 structured cybersecurity skills for AI agents Mapped to 6... (817 skills)", 817, "high"),
     ("superagent-ai/skills", "security", "A collection of security skills (13 skills)", 13, "high"),
-    # general (86 repos, 7249 measured items)
+    # general (87 repos, 7616 measured items)
     ("affaan-m/ECC", "general", "The agent harness performance optimization system. Skills, instincts... (281 skills, 243 workflows)", 524, "high"),
     ("vibeeval/vibecosystem", "general", "AI software team for Claude Code - 138 agents, 295 skills, 73 hooks... (299 skills, 6 rules, 138 workflows)", 443, "high"),
     ("j4flmao/agent-skills", "general", "432 skills, 2 rules, 3 workflows", 437, "med"),
     ("asgard-ai-platform/skills", "general", "301 open-source coding agent skills across 22 domains - methodology... (314 skills)", 314, "high"),
     ("nWave-ai/nWave", "general", "AI agents that guide you from idea to working code, with you in... (151 skills, 130 workflows)", 281, "high"),
+    ("anthropics/knowledge-work-plugins", "general", "Plugins for knowledge workers in Claude Cowork: sales, finance, legal... (252 skills, 20 workflows)", 272, "high"),
     ("shinpr/claude-code-workflows", "general", "Production-ready development workflows for Claude Code, powered by... (115 skills, 91 workflows)", 206, "high"),
     ("OneWave-AI/claude-skills", "general", "172 production-ready Claude Code skills for sales, marketing, design... (204 skills)", 204, "high"),
     ("doccker/cc-use-exp", "general", "Claude CodeAntigravityGemini CLICodexCursor  (143 skills, 7 rules, 48 workflows)", 198, "high"),
@@ -443,7 +481,7 @@ SKILLS = [
     ("obra/superpowers", "general", "An agentic skills framework & software development methodology that works (14 skills)", 14, "high"),
     ("ReScienceLab/opc-skills", "general", "Agent Skills for Solopreneurs (13 skills)", 13, "high"),
     ("multica-ai/andrej-karpathy-skills", "general", "A single CLAUDE.md file to improve Claude Code behavior, derived from... (1 skills, 1 rules)", 2, "med"),
-    # meta (26 repos, 4528 measured items)
+    # meta (27 repos, 4564 measured items)
     ("composio-community/awesome-codex-skills", "meta", "A curated list of practical Codex skills for automating workflows... (880 skills)", 880, "high"),
     ("github/awesome-copilot", "meta", "Community-contributed instructions, agents, skills, and configurations... (395 skills, 239 workflows)", 634, "high"),
     ("Microck/ordinary-claude-skills", "meta", "An unappealing collection of Claude Skills and resources (416 skills)", 416, "high"),
@@ -466,6 +504,9 @@ SKILLS = [
     ("bobmatnyc/claude-mpm-skills", "meta", "Curated collection of Claude Code skills for intelligent project... (57 skills)", 57, "high"),
     ("nexscope-ai/Amazon-Skills", "meta", "Free AI agent skills for Amazon sellers- keyword research, competitor... (52 skills)", 52, "high"),
     ("samber/cc-skills-golang", "meta", "A collection of Golang agentic skills that works (46 skills)", 46, "high"),
+    # Re-hosts other authors' plugins after review (ffuf, ghidra, the openai-*
+    # set), so it is a marketplace like claude-plugins-official, not a domain.
+    ("trailofbits/skills-curated", "meta", "Curated, community-vetted Claude Code plugin marketplace (31 skills, 5 workflows)", 36, "high"),
     ("jdrhyne/agent-skills", "meta", "A collection of AI agent skills for Clawdbot, Claude Code, Codex (34 skills)", 34, "high"),
     ("mxyhi/ok-skills", "meta", "Curated AI coding agent skills and AGENTS.md playbooks for Codex... (34 skills)", 34, "high"),
     ("nimrodfisher/data-analytics-skills", "meta", "A comprehensive list of Claude skills for a wide range of data... (33 skills)", 33, "high"),
@@ -734,7 +775,7 @@ def rows(pairs, typ):
             "est_items": est,
             "confidence": conf,
             "list_only": name in LIST_ONLY,
-            "curated": True,
+            "curated": name in CURATED,
             # Only where set: adding a null to every row would rewrite the
             # whole generated file to say nothing about 460 registries.
             **({"self_installing": SELF_INSTALLING[name]}

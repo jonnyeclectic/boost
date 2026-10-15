@@ -49,8 +49,13 @@ def _tap_catalog(args, tapped: list[tuple[str, int]] | None = None) -> int:
                 % (len(selection), sum(e.get("est_items") or 0 for e in selection)))
         return 0
     focus = {str(e["name"]): e.get("focus", "") for e in selection}
+    # The ★ follows the catalogue's own `curated` column, not the whole batch:
+    # stamping every row is what made it mark 463 registries. `--curated` still
+    # stars the lot, because that is the user saying so.
     return _tap_all([str(e["url"]) for e in selection], jobs=args.jobs,
-                    focus=focus, tapped=tapped)
+                    focus=focus, tapped=tapped, curated=args.curated,
+                    curated_names=frozenset(str(e["name"]) for e in selection
+                                            if e.get("curated")))
 
 
 def _print_dry_run(pairs: list[tuple[str, str]]) -> int:
@@ -89,7 +94,8 @@ def _tap_all(urls: list[str], jobs: int | None,
              focus: dict[str, str] | None = None,
              pins: dict[str, str] | None = None,
              curated: bool = True,
-             tapped: list[tuple[str, int]] | None = None) -> int:
+             tapped: list[tuple[str, int]] | None = None,
+             curated_names: frozenset[str] = frozenset()) -> int:
     """Clone many registries at once, then scan each one that arrived.
 
     The split is the whole optimisation. Cloning is network latency — 1.6 s per
@@ -98,7 +104,8 @@ def _tap_all(urls: list[str], jobs: int | None,
     its output can be printed in order and its errors belong to one tap.
     """
     focus = focus or {}
-    results = registry.add_many(urls, curated=curated, pins=pins, jobs=jobs)
+    results = registry.add_many(urls, curated=curated, pins=pins, jobs=jobs,
+                                curated_names=curated_names)
     rc = 0
     for res in results:
         name = res["name"]

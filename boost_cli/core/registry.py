@@ -7,6 +7,7 @@ import difflib
 import os
 import sys
 import time
+from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
@@ -287,7 +288,7 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
             hint="add its key with `boost trust add <name> <key>`, "
                  "or relax `boost policy set require_signed_taps false`")
     cfg = config.load()
-    row = {"name": name, "url": url, "curated": curated}
+    row = _row(name, url, curated, by_user=curated)
     if at:
         row["pin"] = at
     cfg.setdefault("taps", []).append(row)
@@ -295,6 +296,61 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     start_refresh_clock()
     tap.pin = at or ""
     return tap
+
+
+#: Marks a ★ the user asked for (`--curated`, the defaults), as opposed to one
+#: copied from the catalogue's column. :func:`overstarred` never takes one back.
+CURATED_BY_USER = "user"
+
+
+def _row(name: str, url: str, curated: bool, by_user: bool) -> dict:
+    row: dict = {"name": name, "url": url, "curated": curated}
+    if curated and by_user:
+        row["curated_by"] = CURATED_BY_USER
+    return row
+
+
+def overstarred() -> list[str]:
+    """Taps starred in config that the bundled catalogue does not curate.
+
+    Every catalogue row once shipped ``curated: true`` and `tap --catalog`
+    stamped the whole batch, so a machine that tapped the catalogue holds
+    ~460 starred rows where the catalogue now stars ~40. Only that direction
+    is drift: an unstarred tap stays unstarred, because a plain `boost tap` is
+    opt-in. A tap the catalogue does not list is the user's own and is never
+    named, nor is a row whose star the user asked for (``curated_by``). A row
+    written before that marker existed cannot say who starred it, so an
+    explicit `--curated` on a catalogue repo from back then reads as drift.
+    """
+    wanted = {str(e.get("name")): bool(e.get("curated"))
+              for e in config.load_registry_catalog()}
+    rows = config.get("taps", []) or []
+    if not isinstance(rows, list):
+        return []
+    return [str(t["name"]) for t in rows
+            if isinstance(t, dict) and t.get("curated")
+            and t.get("curated_by") != CURATED_BY_USER
+            and wanted.get(str(t.get("name"))) is False]
+
+
+def unstar(names: list[str]) -> list[str]:
+    """Clear the ★ on ``names`` in one config write; return those cleared.
+
+    Config only. Each tap's cache still carries the old flag on every entry
+    (stamped at scan time), so the caller rebuilds those caches.
+    """
+    todo = set(names)
+    if not todo:
+        return []
+    cfg = config.load()
+    done: list[str] = []
+    for t in cfg.get("taps") or []:
+        if isinstance(t, dict) and t.get("name") in todo and t.get("curated"):
+            t["curated"] = False
+            done.append(str(t["name"]))
+    if done:
+        config.save(cfg)
+    return done
 
 
 #: Default concurrency for :func:`add_many`. Tapping is network-latency bound,
@@ -391,7 +447,8 @@ def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
 
 def add_many(specs: list[str], curated: bool = False,
              pins: dict[str, str] | None = None, jobs: int | None = None,
-             on_done=None) -> list[dict]:
+             on_done=None,
+             curated_names: Collection[str] = ()) -> list[dict]:
     """Clone many taps at once and register them in a single config write.
 
     Returns one result dict per spec, in the order given, each with ``ok`` and
@@ -401,6 +458,11 @@ def add_many(specs: list[str], curated: bool = False,
 
     `pins` maps a tap name to the commit to check out, for published vector
     shards (see ``core.shards``).
+
+    `curated` stars every tap in the batch; `curated_names` stars only the
+    named ones. A catalogue tap needs the second: one flag for the whole batch
+    is how all 463 registries of `tap --catalog` came out curated, which made
+    the ★ mark everything and so mean nothing.
     """
     if not specs:
         return []
@@ -428,7 +490,8 @@ def add_many(specs: list[str], curated: bool = False,
 
     def work(spec: str) -> dict:
         name, _url = parse_spec(spec)
-        return _clone_one(spec, curated, pins.get(name))
+        return _clone_one(spec, curated or name in curated_names,
+                          pins.get(name))
 
     with ThreadPoolExecutor(max_workers=tap_jobs(jobs)) as pool:
         for res in pool.map(work, todo):
@@ -443,7 +506,8 @@ def add_many(specs: list[str], curated: bool = False,
         cfg = config.load()
         rows = cfg.setdefault("taps", [])
         for r in fresh:
-            row = {"name": r["name"], "url": r["url"], "curated": curated}
+            row = _row(r["name"], r["url"], r["tap"].curated,
+                       by_user=curated)
             pin = pins.get(r["name"])
             if pin:
                 row["pin"] = pin

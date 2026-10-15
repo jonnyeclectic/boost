@@ -44,7 +44,8 @@ def _selection(catalog_scope: bool) -> list[dict]:
     """
     if not catalog_scope:
         return [d.copy() for d in config.DEFAULT_TAPS]
-    return [{"name": e["name"], "url": e["url"]}
+    return [{"name": e["name"], "url": e["url"],
+             "curated": bool(e.get("curated"))}
             for e in config.load_registry_catalog()
             if not e.get("list_only") and e.get("name") and e.get("url")]
 
@@ -90,8 +91,10 @@ def _tap_defaults(selection: list[dict], pins: dict[str, dict],
     # for work that takes ~2 s done together, and the first thing a new user
     # sees should not be a progress bar.
     with spin.Spinner("tapping %d registries" % len(names)):
-        results = registry.add_many([str(d["url"]) for d in selection],
-                                    curated=True, pins=commits)
+        results = registry.add_many(
+            [str(d["url"]) for d in selection], pins=commits,
+            curated_names=frozenset(str(d["name"]) for d in selection
+                                    if d.get("curated")))
     for res in results:
         name = res["name"]
         if res.get("skipped"):
