@@ -388,6 +388,35 @@ class TestRegistryCatalog:
         monkeypatch.setattr(config, "REGISTRY_CATALOG", tmp_path / "nope.json")
         assert config.load_registry_catalog() == []
 
+    def test_a_rewritten_file_is_reread_not_served_from_the_memo(
+            self, monkeypatch, tmp_path):
+        f = tmp_path / "registries.json"
+        monkeypatch.setattr(config, "REGISTRY_CATALOG", f)
+        f.write_text(json.dumps({"registries": [{"name": "a/b"}]}), encoding="utf-8")
+        assert config.load_registry_catalog() == [{"name": "a/b"}]
+        f.write_text(json.dumps({"registries": [{"name": "c/dd"}]}), encoding="utf-8")
+        assert config.load_registry_catalog() == [{"name": "c/dd"}]
+
+    def test_the_memo_is_not_reparsed_and_not_shared_by_reference(
+            self, monkeypatch, tmp_path):
+        f = tmp_path / "registries.json"
+        monkeypatch.setattr(config, "REGISTRY_CATALOG", f)
+        f.write_text(json.dumps({"registries": [{"name": "a/b"}]}), encoding="utf-8")
+        first = config.load_registry_catalog()
+        first.append({"name": "mutated/by-caller"})
+        monkeypatch.setattr(config.json, "loads",
+                            lambda *a, **k: pytest.fail("reparsed an unchanged file"))
+        second = config.load_registry_catalog()        # served from the memo
+        assert second == [{"name": "a/b"}]
+        second.append({"name": "mutated/by-caller"})
+        assert config.load_registry_catalog() == [{"name": "a/b"}]
+
+    def test_a_non_object_file_reads_as_no_registries(self, monkeypatch, tmp_path):
+        f = tmp_path / "registries.json"
+        monkeypatch.setattr(config, "REGISTRY_CATALOG", f)
+        f.write_text("[1, 2]", encoding="utf-8")
+        assert config.load_registry_catalog() == []
+
 
 class TestRegistryCategories:
     def test_maps_name_to_category_dropping_uncategorized_rows(self, monkeypatch):

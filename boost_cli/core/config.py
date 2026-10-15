@@ -208,13 +208,31 @@ def first_run() -> bool:
 REGISTRY_CATALOG = paths.package_root() / "data" / "registries.json"
 
 
+#: ``(path, mtime_ns, size) -> rows`` for the last parse of the registry data.
+_REGISTRY_MEMO: tuple[tuple[str, int, int], list] | None = None
+
+
 def load_registry_catalog() -> list:
-    """The bundled curated registries, or [] if the data file is missing."""
+    """The bundled curated registries, or [] if the data file is missing.
+
+    Memoised on the file's stat stamp, because `catalog._cached_tap` now asks
+    for a tap's category on every cache file it parses: 468 parses of a
+    541-row file measured 201 ms (13 ms memoised), a cost every `boost search` would pay to
+    learn the same answer 468 times. Keyed on the stamp rather than held for
+    the process, so a rewritten (or monkeypatched) file is still re-read.
+    """
+    global _REGISTRY_MEMO
     try:
+        st = REGISTRY_CATALOG.stat()
+        stamp = (str(REGISTRY_CATALOG), st.st_mtime_ns, st.st_size)
+        if _REGISTRY_MEMO is not None and _REGISTRY_MEMO[0] == stamp:
+            return list(_REGISTRY_MEMO[1])
         data = json.loads(REGISTRY_CATALOG.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
-    return data.get("registries", [])
+    rows = data.get("registries", []) if isinstance(data, dict) else []
+    _REGISTRY_MEMO = (stamp, rows)
+    return list(rows)
 
 
 def registry_categories() -> dict:

@@ -1794,3 +1794,84 @@ class TestSelectLockSource:
             matches, {"source_file": "two/x.mdc", "source_dir": "one"})
         assert entry["skill_md"] == "two/x.mdc"
         assert warning is None
+
+
+class TestATapRecategorisedSinceItsCacheWasWritten:
+    """`category` falls back to the tap's curated category at scan time, so a
+    registry moved out of `general` in `registries.json` reached no machine
+    that had tapped it. The cache records the category it was scanned under,
+    and a different one today is a stale cache like an old format is."""
+
+    def _cats(self, monkeypatch, tap, cat):
+        monkeypatch.setattr(config, "registry_categories",
+                            lambda: {tap.name: cat} if cat else {})
+
+    def test_the_cache_records_the_category_it_was_scanned_under(
+            self, sandbox, fixture_tap_src, monkeypatch):
+        tap = registry.add(str(fixture_tap_src))
+        self._cats(monkeypatch, tap, "backend")
+        catalog.rebuild_tap(tap)
+        data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        assert data["tap_category"] == "backend"
+
+    def test_a_moved_category_rescans_a_cloned_tap(
+            self, sandbox, fixture_tap_src, monkeypatch):
+        tap = registry.add(str(fixture_tap_src))
+        self._cats(monkeypatch, tap, "general")
+        catalog.rebuild_tap(tap)
+        self._cats(monkeypatch, tap, "backend")
+        rescans = []
+        real = catalog.rebuild_tap
+        monkeypatch.setattr(catalog, "rebuild_tap",
+                            lambda t: rescans.append(t.name) or real(t))
+        entries = catalog.load_tap(tap)
+        assert [e["name"] for e in entries] == FIXTURE_NAMES
+        assert rescans == [tap.name]
+        data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        assert data["tap_category"] == "backend"
+
+    def test_an_unmoved_category_is_served_from_the_cache(
+            self, sandbox, fixture_tap_src, monkeypatch):
+        tap = registry.add(str(fixture_tap_src))
+        self._cats(monkeypatch, tap, "backend")
+        catalog.rebuild_tap(tap)
+        monkeypatch.setattr(catalog, "rebuild_tap",
+                            lambda t: pytest.fail("rescanned a current cache"))
+        assert [e["name"] for e in catalog.load_tap(tap)] == FIXTURE_NAMES
+
+    def test_a_cache_predating_the_field_is_current_for_an_uncategorised_tap(
+            self, sandbox, fixture_tap_src, monkeypatch):
+        # Absent reads as "": an unbundled tap has nothing to have missed, so
+        # it must not pay a rescan on every load.
+        tap = registry.add(str(fixture_tap_src))
+        self._cats(monkeypatch, tap, "")
+        catalog.rebuild_tap(tap)
+        data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        del data["tap_category"]
+        tap.cache_file.write_text(json.dumps(data), encoding="utf-8")
+        monkeypatch.setattr(catalog, "rebuild_tap",
+                            lambda t: pytest.fail("rescanned a current cache"))
+        assert [e["name"] for e in catalog.load_tap(tap)] == FIXTURE_NAMES
+
+    def test_a_cache_predating_the_field_is_stale_for_a_categorised_tap(
+            self, sandbox, fixture_tap_src, monkeypatch):
+        tap = registry.add(str(fixture_tap_src))
+        self._cats(monkeypatch, tap, "")
+        catalog.rebuild_tap(tap)
+        data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        del data["tap_category"]
+        tap.cache_file.write_text(json.dumps(data), encoding="utf-8")
+        self._cats(monkeypatch, tap, "infra")
+        catalog.load_tap(tap)
+        data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        assert data["tap_category"] == "infra"
+
+    def test_a_moved_category_without_a_clone_serves_the_stale_entries(
+            self, sandbox, monkeypatch):
+        paths.ensure_dirs()
+        tap = registry.Tap(name="acme/gone", url="")
+        tap.cache_file.write_text(json.dumps({
+            "format": catalog.CACHE_FORMAT, "tap_category": "general",
+            "skills": [{"name": "kept", "category": "general"}]}), encoding="utf-8")
+        self._cats(monkeypatch, tap, "backend")
+        assert catalog.load_tap(tap) == [{"name": "kept", "category": "general"}]
