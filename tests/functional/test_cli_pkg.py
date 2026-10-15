@@ -47,6 +47,14 @@ def _lock():
     return json.loads(paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
 
+def _vendor_skill(name, body):
+    """One of Cursor's built-in skills, where Cursor keeps them."""
+    d = paths.home() / ".cursor" / "skills-cursor" / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(body, encoding="utf-8")
+    return d
+
+
 class _FakeTtyStdin(io.StringIO):
     """Scripted stdin that claims to be a terminal, so prompts actually fire."""
 
@@ -66,6 +74,32 @@ def _skill_dir(tmp_path, name, version="0.1.0", body="# Skill\n\nBody text.\n"):
 # ── install ──────────────────────────────────────────────────────────────
 
 class TestInstall:
+    def test_a_store_dir_the_lock_does_not_record_is_not_replaced(
+            self, boost, tapped):
+        d = paths.store_dir() / "brainstorming"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        r = boost("install", "brainstorming", expect=1)
+        assert ("brainstorming is already in the store at "
+                "~/.agents/skills/brainstorming, and the lock file does not "
+                "record it") in _flat(r.out + r.err)
+        assert (d / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
+        boost("install", "brainstorming", "--force")
+        assert (d / "SKILL.md").read_text(encoding="utf-8") != "# mine\n"
+
+    def test_a_skill_a_plugin_ships_is_not_linked_into_claude_code(
+            self, boost, installed, claude_plugin):
+        # A link would list it twice there. The line says why it is missing,
+        # so an empty ~/.claude/skills is not a mystery.
+        claude_plugin()
+        boost("uninstall", "brainstorming")
+        r = boost("install", "brainstorming")
+        assert ("not linked into Claude Code: plugin eight-backend@eight "
+                "already loads the same files") in _flat(r.out)
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "brainstorming")
+        assert (paths.home() / ".cursor" / "skills" / "brainstorming").is_symlink()
+
     def test_rule_install_scans_content_for_injection(self, boost,
                                                       fixture_tap_src, tmp_path):
         # boost installs Markdown the agent executes; a rule's content is now
@@ -326,6 +360,26 @@ class TestUninstall:
         assert "Uninstalled 1 skill" in r.out
         assert _lock() == {}
 
+    def test_the_prompt_says_when_the_store_holds_the_only_copy(
+            self, boost, installed, monkeypatch):
+        # `boost sync` records a skill put in the store by hand where it found
+        # it, so uninstalling it deletes the skill itself.
+        for name in ("pr-me", "pr-too"):
+            d = paths.store_dir() / name
+            d.mkdir()
+            (d / "SKILL.md").write_text("# %s\n" % name, encoding="utf-8")
+        boost("sync")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("uninstall", "pr-me", "brainstorming", expect=1)
+        assert ("uninstall 2 skills: pr-me, brainstorming? The store holds the "
+                "only copy of pr-me, so it is deleted for good. [y/N]") in r.out
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("uninstall", "pr-me", "pr-too", expect=1)
+        assert ("The store holds the only copy of pr-me, pr-too, so they are "
+                "deleted for good. [y/N]") in r.out
+        assert (paths.store_dir() / "pr-me" / "SKILL.md").is_file()
+
     def test_multi_names_are_listed_in_one_prompt(self, boost, tapped,
                                                   monkeypatch):
         boost("install", "brainstorming", "commit-messages")
@@ -471,30 +525,287 @@ class TestSync:
         assert "brainstorming → cursor" in r.out
         assert "in the way" in r.out
 
-    def test_orphan_reported_and_pruned(self, boost, installed):
-        orphan = paths.store_dir() / "orphan-x"
-        orphan.mkdir()
-        (orphan / "SKILL.md").write_text("# orphan\n", encoding="utf-8")
+    def test_a_skill_added_by_hand_is_recorded_and_linked(self, boost, installed):
+        # It was an "orphaned store dir", which plain sync left alone and
+        # `--prune` deleted: the user's own skill, for the price of a yes.
+        mine = paths.store_dir() / "orphan-x"
+        mine.mkdir()
+        (mine / "SKILL.md").write_text("# orphan\n", encoding="utf-8")
         r = boost("sync")
-        assert ("1 orphaned store dir left in place: orphan-x — "
-                "remove with `boost sync --prune`") in r.out
-        assert orphan.is_dir()
+        assert "recorded orphan-x as a local skill" in r.out
+        assert "linked orphan-x → claude-code" in r.out
+        assert (paths.home() / ".claude" / "skills" / "orphan-x").is_symlink()
+        assert _lock()["orphan-x"]["tap"] == "local"
         r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
-        assert "pruned ~/.agents/skills/orphan-x" in r.out
-        assert not orphan.exists()
+        assert mine.is_dir()
+        assert "everything in sync" in r.out
+
+    def test_a_copy_of_a_vendor_skill_is_named_and_pruned_on_request(
+            self, boost, installed):
+        theirs = _vendor_skill("automate", "# automate\n")
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(theirs, copy)
+        r = boost("sync")
+        flat = " ".join(r.out.split())      # the line wraps to the pane
+        assert ("automate copies a skill from Cursor's built-ins "
+                "(~/.cursor/skills-cursor), not boost's — remove with "
+                "`boost sync --prune`") in flat
+        assert "everything in sync" not in r.out
+        assert copy.is_dir() and "automate" not in _lock()
+        r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
+        assert "pruned ~/.agents/skills/automate" in r.out
+        assert not copy.exists()
+        assert (theirs / "SKILL.md").is_file(), "the original is not boost's"
+
+    def test_prune_names_a_git_repository_and_never_offers_it(
+            self, boost, installed, monkeypatch):
+        # The hash skips .git, so the user's clone of a Cursor skill was an
+        # "identical" copy, and --prune deleted its history with the dir.
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(_vendor_skill("automate", "# automate\n"), copy)
+        (copy / ".git").mkdir()
+        (copy / ".git" / "HEAD").write_text("ref: refs/heads/main\n",
+                                            encoding="utf-8")
+        monkeypatch.delenv("BOOST_ASSUME_YES")   # any confirm would be declined
+        r = boost("sync", "--prune")
+        flat = _flat(r.out + r.err)
+        assert ("kept ~/.agents/skills/automate: it is a git repository, and its "
+                "history is in no copy — move or delete it yourself") in flat
+        assert "declined" not in flat and "?" not in r.out
+        assert (copy / ".git" / "HEAD").is_file()
+        data = json.loads(boost("sync", "--json", "--prune").out)
+        assert data["pruned"] == [] and copy.is_dir()
 
     def test_prune_declined_does_not_tell_you_to_rerun_the_flag_you_just_ran(
             self, boost, installed, monkeypatch):
         # Bug: --prune declined told the user to run `boost sync --prune` —
         # the command they had just run and said no to.
-        orphan = paths.store_dir() / "orphan-x"
-        orphan.mkdir()
-        (orphan / "SKILL.md").write_text("# orphan\n", encoding="utf-8")
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(_vendor_skill("automate", "# automate\n"), copy)
         monkeypatch.delenv("BOOST_ASSUME_YES")
         r = boost("sync", "--prune")   # non-tty stdin declines
-        assert "1 orphaned store dir left in place (declined): orphan-x" in r.out
+        assert ("1 store dir copying another tool's skills left in place "
+                "(declined): automate") in " ".join(r.out.split())
         assert "boost sync --prune" not in r.out
-        assert orphan.is_dir()
+        assert copy.is_dir()
+
+    def test_prune_drops_claude_codes_link_to_a_skill_a_plugin_ships(
+            self, boost, installed, claude_plugin):
+        # Case 3: two of one team's plugins, or a plugin and a tap, ship the
+        # same skill, and Claude Code lists it twice.
+        claude_plugin()
+        link = paths.home() / ".claude" / "skills" / "brainstorming"
+        r = boost("sync")
+        assert ("brainstorming shows twice in Claude Code — plugin "
+                "eight-backend@eight ships the same files; `boost sync --prune` "
+                "drops boost's Claude Code link") in " ".join(r.out.split())
+        assert "everything in sync" not in r.out
+        assert link.is_symlink()
+        r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
+        assert ("unlinked brainstorming → claude-code (Claude Code loads the "
+                "same files from plugin eight-backend@eight)"
+                ) in " ".join(r.out.split())
+        assert not os.path.lexists(link)
+        assert (paths.home() / ".cursor" / "skills" / "brainstorming").is_symlink()
+        entry = _lock()["brainstorming"]
+        assert "claude-code" not in entry["agents"]
+        assert entry.get("only_agents") is None, "the scope is left as it was"
+        r = boost("sync")
+        assert "everything in sync" in r.out
+        assert not os.path.lexists(link), "sync does not bring the link back"
+
+    def test_a_plugin_skill_that_only_shares_the_name_is_left_alone(
+            self, boost, installed, claude_plugin):
+        claude_plugin(body="# the plugin's own brainstorming\n")
+        r = boost("sync", "--prune")
+        assert ("brainstorming shows twice in Claude Code — plugin "
+                "eight-backend@eight ships a different skill by that name; both "
+                "left as they are") in " ".join(r.out.split())
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
+        assert "everything in sync" in r.out
+
+    def test_a_declined_plugin_prune_keeps_the_link_and_says_so(
+            self, boost, installed, claude_plugin, monkeypatch):
+        claude_plugin()
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("sync", "--prune")   # non-tty stdin declines
+        assert ("1 skill still linked into Claude Code beside a plugin's copy "
+                "(declined): brainstorming") in " ".join(r.out.split())
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
+
+    def test_the_plugin_prune_prompt_says_what_claude_code_keeps(
+            self, boost, installed, claude_plugin, monkeypatch):
+        claude_plugin()
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("sync", "--prune")
+        assert ("Drop boost's Claude Code link for 1 skill an enabled plugin "
+                "ships with the same files (Claude Code goes on loading the "
+                "plugin's copy): brainstorming? [y/N]") in r.out
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
+
+    def test_a_dir_boost_cannot_name_a_skill_by_is_noted_and_left(
+            self, boost, installed):
+        # A Finder duplicate: its name can never be a lock key, and listed with
+        # the other store dirs it made sync exit with an error.
+        dup = paths.store_dir() / "brainstorming copy"
+        shutil.copytree(paths.store_dir() / "brainstorming", dup)
+        r = boost("sync", "--diff")
+        assert ("store dirs boost cannot record a skill by, left alone (1)"
+                in r.out)
+        r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
+        assert ("~/.agents/skills/brainstorming copy: boost cannot record a "
+                "skill by that name (only letters, digits, '.', '_' and '-') — "
+                "left alone") in _flat(r.out)
+        assert "everything in sync" in r.out
+        assert (dup / "SKILL.md").is_file() and "brainstorming copy" not in _lock()
+        assert json.loads(boost("sync", "--json").out)["misnamed_store"] == [
+            "brainstorming copy"]
+
+    def test_over_a_corrupt_lock_the_store_dirs_are_named_not_in_sync(
+            self, boost, installed):
+        paths.lockfile_path().write_text("{oops", encoding="utf-8")
+        r = boost("sync")
+        assert ("the lock file is corrupt, so sync records nothing and leaves 1 "
+                "store dir as it is: brainstorming — restore it with `boost "
+                "replay`") in _flat(r.out + r.err)
+        assert "everything in sync" not in r.out
+        data = json.loads(boost("sync", "--json").out)
+        assert (data["unrecorded_store"], data["lock"]) == (["brainstorming"],
+                                                            "corrupt")
+        # The preview words it the same way, not as a lock that was lost.
+        diff = _flat(boost("sync", "--diff").out)
+        assert ("the lock file is corrupt, so sync will record nothing — "
+                "restore it with `boost replay`") in diff
+        assert "store dirs the lock file cannot record, left alone (1)" in diff
+        assert "has lost" not in diff
+        plan = json.loads(boost("sync", "--diff", "--json").out)
+        assert (plan["unrecorded_store"], plan["lock"]) == (["brainstorming"],
+                                                            "corrupt")
+
+    def test_a_lock_in_another_schema_is_named_while_it_records_everything(
+            self, boost, installed):
+        # It still lists brainstorming, so no store dir looked unrecorded and
+        # sync said "everything in sync" while doctor and heal exited 1.
+        lock = paths.lockfile_path()
+        data = json.loads(lock.read_text(encoding="utf-8"))
+        lock.write_text(json.dumps(data | {"version": 2}), encoding="utf-8")
+        line = ("the lock file is schema v2, not v3, so sync %s nothing — "
+                "restore it with `boost replay`")
+        r = boost("sync")
+        assert line % "records" in _flat(r.out + r.err)
+        diff = boost("sync", "--diff")
+        assert line % "will record" in _flat(diff.out + diff.err)
+        assert "everything in sync" not in r.out + diff.out
+        assert json.loads(boost("sync", "--json").out)["lock"] == "schema"
+        assert json.loads(boost("sync", "--diff", "--json").out)["lock"] == "schema"
+        assert json.loads(lock.read_text(encoding="utf-8"))["version"] == 2
+
+    def test_a_corrupt_lock_over_an_empty_store_is_named_too(self, boost):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text("{oops", encoding="utf-8")
+        for argv in (("sync",), ("sync", "--diff")):
+            r = boost(*argv)
+            assert "the lock file is corrupt" in _flat(r.out + r.err)
+            assert "everything in sync" not in r.out
+            assert r.rc == 0
+
+    @pytest.mark.skipif(
+            sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+            reason="needs POSIX permission bits, as a user other than root")
+    def test_a_lost_lock_names_an_unreadable_skill_without_blaming_the_lock(
+            self, boost, installed):
+        # The lock was only missing, so `boost replay` is no remedy: the file
+        # is, and the line says which.
+        secret = paths.store_dir() / "brainstorming" / "secret.txt"
+        secret.write_text("x", encoding="utf-8")
+        secret.chmod(0)
+        paths.lockfile_path().unlink()
+        try:
+            r = boost("sync")
+        finally:
+            secret.chmod(0o644)
+        flat = _flat(r.out + r.err)
+        assert ("brainstorming: ~/.agents/skills/brainstorming/secret.txt cannot "
+                "be read, so boost cannot tell whose it is or record it — make "
+                "it readable, then re-run `boost sync`") in flat
+        assert "boost replay" not in flat and "recorded" not in r.out
+        assert "everything in sync" not in r.out
+
+    @pytest.mark.skipif(
+            sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+            reason="needs POSIX permission bits, as a user other than root")
+    def test_an_unreadable_skill_is_named_at_plan_time_and_left(self, boost,
+                                                                installed):
+        # Asked before any preview: every one promised a record the run then
+        # refused.
+        mine = paths.store_dir() / "pr-me"
+        mine.mkdir()
+        (mine / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        secret = mine / "secret.txt"
+        secret.write_text("x", encoding="utf-8")
+        secret.chmod(0)
+        try:
+            sync = boost("sync")
+            diff = boost("sync", "--diff")
+            plan = json.loads(boost("sync", "--diff", "--json").out)
+            data = json.loads(boost("sync", "--json").out)
+        finally:
+            secret.chmod(0o644)
+        line = ("pr-me: ~/.agents/skills/pr-me/secret.txt cannot be read, so "
+                "boost cannot tell whose it is or record it — make it readable, "
+                "then re-run `boost sync`")
+        assert line in _flat(sync.out + sync.err)
+        assert "everything in sync" not in sync.out + diff.out
+        assert ("pr-me — ~/.agents/skills/pr-me/secret.txt cannot be read"
+                in _flat(diff.out))
+        assert "record" not in _flat(diff.out).replace(line, "")
+        assert plan["unreadable_store"] == [["pr-me", str(secret)]]
+        assert data["unreadable_store"] == [["pr-me", str(secret)]]
+        assert "pr-me" not in _lock()
+
+    def test_diff_renders_every_ownership_row_as_a_readable_line(
+            self, boost, installed, claude_plugin):
+        claude_plugin()
+        shutil.copytree(_vendor_skill("automate", "# automate\n"),
+                        paths.store_dir() / "automate")
+        old = paths.home() / ".codex" / "skills" / "pr-me"
+        old.mkdir(parents=True)
+        (old / "SKILL.md").write_text("# old\n", encoding="utf-8")
+        os.utime(old / "SKILL.md", (1e9, 1e9))
+        mine = paths.store_dir() / "pr-me"
+        mine.mkdir()
+        (mine / "SKILL.md").write_text("# new\n", encoding="utf-8")
+        r = boost("sync", "--diff")
+        flat = _flat(r.out)
+        assert "pr-me — ~/.codex/skills/pr-me (Codex)" in flat
+        assert ("automate — Cursor's built-ins, ~/.cursor/skills-cursor/automate "
+                "(identical)") in flat
+        assert "brainstorming — plugin eight-backend@eight (identical)" in flat
+        assert "('" not in r.out, "printed a raw Python tuple"
+
+    def test_a_copy_whose_original_goes_while_the_confirm_waits_is_kept(
+            self, boost, installed, monkeypatch):
+        # The confirm can sit unanswered for as long as the user likes, so the
+        # removal asks again; and a copy that differs says what the yes costs.
+        from boost_cli.core import output
+        theirs = _vendor_skill("automate", "# automate\n")
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(theirs, copy)
+        (copy / "SKILL.md").write_text("# automate, ported\n", encoding="utf-8")
+        asked = []
+
+        def confirm(prompt, default=False, quiet=False):
+            asked.append(prompt)
+            shutil.rmtree(theirs)
+            return True
+        monkeypatch.setattr(output, "confirm", confirm)
+        r = boost("sync", "--prune")
+        assert "it differs from the original, and those changes go too" in _flat(
+            asked[0])
+        assert "kept ~/.agents/skills/automate: " in _flat(r.out)
+        assert "pruned" not in r.out
+        assert (copy / "SKILL.md").is_file()
 
     def test_yes_flag_is_accepted_by_the_parser(self, boost, installed):
         # Bug: argparse rejected --yes here ("unrecognized arguments"), so
@@ -1012,6 +1323,22 @@ class TestMaterializedGovernance:
 # ── reinstall ────────────────────────────────────────────────────────────
 
 class TestReinstall:
+    def test_a_skill_kept_in_the_store_is_skipped_not_copied_onto_itself(
+            self, boost, installed):
+        # The copy is staged without `.git`, so it deleted the repo's history.
+        d = paths.store_dir() / "pr-me"
+        (d / ".git").mkdir(parents=True)
+        (d / ".git" / "HEAD").write_text("ref: refs/heads/main\n",
+                                         encoding="utf-8")
+        (d / "SKILL.md").write_text("# pr-me\n", encoding="utf-8")
+        boost("sync")
+        r = boost("reinstall", "--all")
+        assert ("pr-me is kept in the store itself, so there is nothing to "
+                "reinstall it from — skipped") in _flat(r.out)
+        assert "reinstalled brainstorming v1.4.0" in r.out
+        assert "Reinstalled 1 skill" in r.out
+        assert (d / ".git" / "HEAD").is_file()
+
     def test_by_name(self, boost, installed):
         r = boost("reinstall", "brainstorming")
         assert "reinstalled brainstorming v1.4.0" in r.out
@@ -1180,6 +1507,42 @@ class TestBundle:
 # ── import ───────────────────────────────────────────────────────────────
 
 class TestImport:
+    def test_importing_over_the_only_copy_asks_first(self, boost, installed,
+                                                     tmp_path, monkeypatch):
+        d = paths.store_dir() / "pr-me"
+        d.mkdir()
+        (d / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        boost("sync")
+        src = _skill_dir(tmp_path, "pr-me")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("import", src, expect=1)
+        assert ("the store holds the only copy of pr-me, and importing "
+                "replaces it for good — continue? [y/N]") in _flat(r.out)
+        assert "cancelled" in r.out
+        assert (d / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("y\n"))
+        boost("import", src)
+        assert _lock()["pr-me"]["source_dir"] == str(src)
+
+    def test_import_all_asks_once_and_a_no_imports_nothing(
+            self, boost, installed, tmp_path, monkeypatch):
+        for name in ("pr-me", "pr-too"):
+            d = paths.store_dir() / name
+            d.mkdir()
+            (d / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        boost("sync")
+        root = tmp_path / "many"
+        for name in ("pr-me", "pr-too", "fresh"):
+            _skill_dir(root, name)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("import", root, "--all", expect=1)
+        prompt = _flat(r.out)
+        assert prompt.count("the store holds the only copy of") == 1
+        assert "pr-me" in prompt and "pr-too" in prompt
+        assert "fresh" not in _lock()
+
     def test_dir_with_skill_md(self, boost, sandbox, tmp_path):
         d = _skill_dir(tmp_path, "my-skill")
         r = boost("import", d)
@@ -1763,13 +2126,25 @@ class TestSyncJson:
         plan = json.loads(boost("sync", "--diff", "--json").out)
         assert plan == {"missing_store": [], "missing_links": [],
                         "blocked_links": [], "stale_links": [],
-                        "orphaned_store": [], "unrecorded_store": [],
+                        "adoptable_store": [], "older_copies": [],
+                        "foreign_store": [], "not_skill_store": [],
+                        "unreadable_store": [], "misnamed_store": [],
+                        "plugin_duplicates": [], "unrecorded_store": [],
                         "missing_materializations": [], "out_of_scope_links": [],
-                        "project": {"missing": [], "orphaned": []}}
+                        "project": {"missing": [], "orphaned": []}, "lock": None}
         data = json.loads(boost("sync", "--json").out)
-        assert data == {"actions": [], "pruned": [], "orphaned_store": [],
+        assert data == {"actions": [], "pruned": [], "kept": [],
+                        "foreign_store": [], "plugin_duplicates": [],
+                        "older_copies": [], "not_skill_store": [],
+                        "unreadable_store": [], "misnamed_store": [],
                         "unrecorded_store": [], "out_of_scope_links": [],
-                        "blocked_links": []}
+                        "blocked_links": [], "lock": None}
+
+    def test_both_shapes_say_what_the_lock_was(self, boost, installed):
+        paths.lockfile_path().unlink()
+        assert json.loads(boost("sync", "--diff", "--json").out)["lock"] == "missing"
+        assert json.loads(boost("sync", "--json").out)["lock"] == "missing"
+        assert json.loads(boost("sync", "--json").out)["lock"] is None
 
     def test_a_narrowing_reinstall_is_reported_and_pruned_only_on_request(
             self, boost, installed):
@@ -1807,13 +2182,32 @@ class TestSyncJson:
         assert "boost sync --prune" in r.out
         assert "everything in sync" not in r.out
 
-    def test_json_prune_orphan(self, boost, installed):
-        orphan = paths.store_dir() / "orphan-y"
-        orphan.mkdir()
+    def test_json_prune_removes_a_copy_and_never_a_dir_that_is_not_a_skill(
+            self, boost, installed):
+        # The dir with no SKILL.md was the case `--prune` got most wrong: on a
+        # real machine it was another tool's sync bucket of nine skills.
+        bucket = paths.store_dir() / "synced"
+        (bucket / "inner").mkdir(parents=True)
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(_vendor_skill("automate", "# automate\n"), copy)
         data = json.loads(boost("sync", "--json", "--prune").out)
-        assert data["pruned"] == ["orphan-y"]
-        assert data["orphaned_store"] == []
-        assert not orphan.exists()
+        assert data["pruned"] == ["automate"]
+        assert data["foreign_store"] == []
+        assert data["not_skill_store"] == ["synced"]
+        assert bucket.is_dir() and not copy.exists()
+
+    def test_json_reports_a_plugin_duplicate_and_prune_drops_it(
+            self, boost, installed, claude_plugin):
+        theirs = claude_plugin()
+        data = json.loads(boost("sync", "--json").out)
+        assert data["plugin_duplicates"] == [
+            ["brainstorming", "eight-backend@eight", str(theirs), "identical"]]
+        assert data["actions"] == []
+        data = json.loads(boost("sync", "--json", "--prune").out)
+        assert data["actions"] == [
+            "unlinked brainstorming → claude-code (Claude Code loads the same "
+            "files from plugin eight-backend@eight)"]
+        assert data["plugin_duplicates"] == data["kept"] == []
 
 
 # ── edge coverage: update / reinstall ────────────────────────────────────

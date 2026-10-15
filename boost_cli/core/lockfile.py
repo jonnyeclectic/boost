@@ -117,6 +117,17 @@ def check() -> Integrity:
     return Integrity(True, None, version)
 
 
+def fault(integ: Integrity) -> str:
+    """What is wrong with a lock :func:`check` found corrupt or in another
+    schema, worded to follow "the lock file": ``is corrupt``, or ``is schema
+    v2, not v3``. A lock that is only missing has no fault to name here: sync
+    re-records what it lost, so its callers word that case themselves.
+    """
+    if integ.problem == "corrupt":
+        return "is corrupt"
+    return "is schema v%s, not v%d" % (integ.version, SCHEMA_VERSION)
+
+
 def _stamp(iso: str) -> str:
     return iso.replace(":", "").replace("-", "")
 

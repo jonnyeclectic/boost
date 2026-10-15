@@ -26,6 +26,7 @@ from ..core import (
     catalog,
     complete,
     config,
+    foreign,
     frontmatter,
     gitutil,
     installscan,
@@ -1625,7 +1626,9 @@ def _tool_doctor(args: dict):
     # but not the config key the user has to change.
     agent_errs = agents.check()
     plan = store.sync_plan() if not agent_errs else {}
-    issues = sum(len(v) for v in plan.values())
+    # Counted as `boost doctor` counts them: a bucket naming something boost
+    # leaves alone by design is listed below, not scored as a problem.
+    issues = store.plan_issues(plan)
     # Two different questions, and answering the second with the first is what
     # made this tool disagree with every other one. `taps` is the literal clone
     # list — the rows config.json holds, boost's own among them. `tapped` is
@@ -1647,8 +1650,53 @@ def _tool_doctor(args: dict):
              # same reads without the accumulation.
              mcp.tap_line(tapped=tapped, total=len(taps),
                           items=sum(catalog.kind_counts().values()))]
+    # The buckets of tuples, and the ones whose remedy depends on the lock, get
+    # sentences in `boost sync`'s words, so this surface names whose a thing
+    # is and what to do about it rather than printing a repr.
+    integ = lockfile.check()
+    lost = integ.problem == "missing"
+    # A lock that cannot be read is an issue of its own, whatever the store
+    # holds: over a schema-v2 lock that still recorded every skill, this
+    # answered "healthy" while CLI `doctor` and `heal` exited 1.
+    lock_bad = not integ.ok and not lost
+    if lock_bad:
+        lines.append("the lock file %s — ask the user to restore it with "
+                     "`boost replay`" % lockfile.fault(integ))
+
+    def unrecorded(names: list[str]) -> list[str]:
+        n = len(names)
+        if lost:
+            return ["%d store dir%s the lock file has lost (%s) — `boost sync` "
+                    "re-records %s" % (n, "" if n == 1 else "s", ", ".join(names),
+                                       "it" if n == 1 else "them")]
+        return ["%d store dir%s the lock file cannot be read about (%s) — "
+                "`boost replay` restores the lock that knows whose they are"
+                % (n, "" if n == 1 else "s", ", ".join(names))]
+
+    worded = {
+        "adoptable_store": lambda names: [
+            "%s was added outside boost — `boost sync` records it as a local "
+            "skill and links it" % n for n in names],
+        "unreadable_store": lambda rows: [store.unreadable_line(rows)],
+        "foreign_store": store.foreign_store_lines,
+        "plugin_duplicates": lambda rows: (store.plugin_duplicate_lines(rows)
+                                           + store.plugin_variant_lines(rows)),
+        "older_copies": store.older_copy_lines,
+        "not_skill_store": lambda names: [store.not_skill_line(names)],
+        "misnamed_store": lambda names: [store.misnamed_line(names)],
+        "blocked_links": lambda rows: [
+            "%s not linked for %s: %s is in the way and is not boost's — ask "
+            "the user to move or delete it, then run `boost sync`"
+            % (n, a, paths.tilde(p)) for n, a, p in rows],
+        "out_of_scope_links": lambda rows: [
+            "%s is linked for %s, outside its declared scope — `boost sync "
+            "--prune` removes the link" % (n, a) for n, a in rows],
+        "unrecorded_store": unrecorded,
+    }
     for key, vals in plan.items():
-        if vals:
+        if vals and key in worded:
+            lines.extend(worded[key](vals))
+        elif vals:
             lines.append("%s: %s" % (key, ", ".join(str(v) for v in vals)))
     # sync_plan already reports MISSING rule/workflow materializations; the
     # digest check adds the drift sync cannot see — content edited in place,
@@ -1687,7 +1735,7 @@ def _tool_doctor(args: dict):
                    "checks were skipped" % (n, e.message, n)
                    for n, e in agent_errs]
     lines.extend(agent_lines)
-    total = issues + len(mat_issues) + len(agent_lines)
+    total = issues + len(mat_issues) + len(agent_lines) + lock_bad
     # A machine with no taps has nothing to disagree about, so every check
     # above passes and the old reply called it "healthy" — directly under the
     # line saying `taps: 0 (0 items available)`. That is the one state where
@@ -1721,8 +1769,42 @@ def _tool_doctor(args: dict):
         # Not `boost sync`: an unresolvable agent dir makes sync refuse too.
         lines.append("%d issue(s) — run `boost doctor` for details" % total)
     else:
-        lines.append("%d issue(s) — run `boost sync` to fix" % issues)
+        lines.append(_doctor_verdict(plan, total, lock_bad, lost))
     return "\n".join(lines), total > 0
+
+
+def _doctor_verdict(plan: dict[str, list], total: int, lock_bad: bool,
+                    lost: bool) -> str:
+    """The MCP doctor's last line: which issues `boost sync` fixes.
+
+    It said "run `boost sync` to fix" over a lock only `boost replay` restores
+    and a file only the user can move, so an agent that followed it ran sync,
+    saw nothing change, and was told the same again. Three kinds, and the
+    line names each one present: what sync fixes, what only `--prune` does
+    (the user's call, since it deletes or unlinks), and what is the user's
+    to change.
+    """
+    repos = sum(1 for r in plan.get("foreign_store", ()) if store.is_repo_copy(r))
+    user = (lock_bad + len(plan.get("blocked_links", ()))
+            + len(plan.get("unreadable_store", ())) + repos
+            + (0 if lost else len(plan.get("unrecorded_store", ()))))
+    prune = (len(plan.get("foreign_store", ())) - repos
+             + len(plan.get("out_of_scope_links", ()))
+             + sum(1 for r in plan.get("plugin_duplicates", ())
+                   if r[3] == foreign.IDENTICAL))
+    if not user and not prune:
+        return "%d issue(s) — run `boost sync` to fix" % total
+    parts = []
+    if total > user + prune:
+        parts.append("`boost sync` fixes %d" % (total - user - prune))
+    if prune:
+        parts.append("%d need%s `boost sync --prune`, which deletes or unlinks, "
+                     "so ask the user first" % (prune, "s" if prune == 1 else ""))
+    if user:
+        parts.append("%d %s the user's to change, and `boost sync` leaves %s"
+                     % (user, "is" if user == 1 else "are",
+                        "it" if user == 1 else "them"))
+    return "%d issue(s) — %s" % (total, "; ".join(parts))
 
 
 def _tool_discover_github(args: dict):

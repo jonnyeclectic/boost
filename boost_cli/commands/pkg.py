@@ -26,6 +26,7 @@ from ..core import (
     complete,
     config,
     deps,
+    foreign,
     frontmatter,
     gitutil,
     installscan,
@@ -317,6 +318,12 @@ def _warn_unwritable(res, stream=None) -> None:
         out.warn(line, stream=stream)
     for line in refused:
         out.warn(line, stream=stream, wrap=True)
+    # Not a skip to repair: the plugin already puts the skill in front of
+    # Claude Code, and a link would list it twice. Said, so the missing link
+    # is not a mystery.
+    for plugin_id in dict.fromkeys(getattr(res, "covered", None) or ()):
+        out.info("not linked into Claude Code: plugin %s already loads the "
+                 "same files" % plugin_id, stream=stream, wrap=True)
 
 
 def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
@@ -847,6 +854,15 @@ def cmd_uninstall(argv: list[str]) -> int:
             # least likely to expect — so name which ones.
             prompt = "uninstall %s? (%s from %s)" % (
                 what, ", ".join(from_repo), _tilde(where))
+        # A skill `boost sync` recorded where it found it has no copy outside
+        # the store, so this removal is the one that cannot be undone.
+        only = [n for n in args.names if n not in from_repo
+                and (e := lockfile.get_skill(n)) is not None
+                and store.only_copy(n, e)]
+        if only:
+            prompt += (" The store holds the only copy of %s, so %s deleted "
+                       "for good." % (", ".join(only),
+                                      "it is" if len(only) == 1 else "they are"))
         if not out.confirm(prompt):
             out.info("cancelled")
             return 1
@@ -972,7 +988,13 @@ _PLAN_LABELS = [
     ("missing_links", "missing agent links"),
     ("blocked_links", "agent links blocked by a foreign file"),
     ("stale_links", "stale links"),
-    ("orphaned_store", "orphaned store dirs"),
+    ("adoptable_store", "skills added outside boost, to record and link"),
+    ("older_copies", "older copies of those, left alone"),
+    ("foreign_store", "store dirs copying another tool's skills (--prune removes)"),
+    ("not_skill_store", "store dirs that are not skills, left alone"),
+    ("unreadable_store", "store dirs boost cannot read, left alone"),
+    ("misnamed_store", "store dirs boost cannot record a skill by, left alone"),
+    ("plugin_duplicates", "skills Claude Code also loads from a plugin"),
     ("unrecorded_store", "store dirs the lock file has lost"),
     ("missing_materializations", "missing rule/workflow files"),
     ("out_of_scope_links", "linked outside declared scope"),
@@ -980,6 +1002,10 @@ _PLAN_LABELS = [
 
 #: Plan keys whose items are ``(skill, agent)`` pairs rather than paths.
 _PAIR_KEYS = ("missing_links", "out_of_scope_links")
+
+#: ``unrecorded_store``'s label over a lock that is corrupt or in another
+#: schema: sync re-records what a missing lock lost, and nothing over these.
+_UNREADABLE_LOCK_LABEL = "store dirs the lock file cannot record, left alone"
 
 
 def cmd_sync(argv: list[str]) -> int:
@@ -989,8 +1015,10 @@ def cmd_sync(argv: list[str]) -> int:
     ap.add_argument("--diff", action="store_true",
                     help="show the plan without applying it")
     ap.add_argument("--prune", action="store_true",
-                    help="also delete orphaned store dirs and links outside "
-                         "a declared --agent scope")
+                    help="also delete store dirs that copy another tool's "
+                         "skills, drop boost's Claude Code link to a skill an "
+                         "enabled plugin ships identically, and remove links "
+                         "outside a declared --agent scope")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the --prune confirmation prompts")
@@ -999,13 +1027,27 @@ def cmd_sync(argv: list[str]) -> int:
     # A checkout can be missing skills its project lock records — that is the
     # normal state right after `git clone` — so sync repairs the repo too.
     pplan = store.project_sync_plan()
+    # Asked before the repair, which writes a lock where there was none. A
+    # lock that is corrupt or in another schema is `boost replay`'s to
+    # restore, and it is named whatever the store holds: a schema-v2 lock
+    # still lists every skill, so no store dir looked unrecorded and sync
+    # said "everything in sync" while doctor and heal exited 1. Both
+    # `--json` shapes carry it as ``lock``: None, or the problem
+    # (``missing``, ``corrupt``, ``schema``) sync found.
+    integ = lockfile.check()
+    lock_bad = not integ.ok and integ.problem != "missing"
 
     if args.diff:
         if args.json:
-            print(json.dumps(plan | {"project": pplan}, indent=2))
+            print(json.dumps(plan | {"project": pplan, "lock": integ.problem},
+                             indent=2))
             return 0
+        if lock_bad:
+            out.warn("the lock file %s, so sync will record nothing — restore "
+                     "it with `boost replay`" % lockfile.fault(integ), wrap=True)
         if not any(plan.values()) and not any(pplan.values()):
-            out.ok("everything in sync")
+            if not lock_bad:
+                out.ok("everything in sync")
             return 0
         if pplan["missing"]:
             out.heading("missing from this project (%d)" % len(pplan["missing"]))
@@ -1018,6 +1060,8 @@ def cmd_sync(argv: list[str]) -> int:
         for key, label in _PLAN_LABELS:
             if not plan[key]:
                 continue
+            if key == "unrecorded_store" and lock_bad:
+                label = _UNREADABLE_LOCK_LABEL
             out.heading("%s (%d)" % (label, len(plan[key])))
             for item in plan[key]:
                 if key in _PAIR_KEYS:
@@ -1033,6 +1077,21 @@ def cmd_sync(argv: list[str]) -> int:
                     name, agent, path = item
                     out.info("%s → %s (%s in the way)"
                              % (name, agent, _tilde(Path(path))))
+                elif key == "older_copies":
+                    name, owner, path = item
+                    out.info("%s — %s (%s)" % (name, _tilde(Path(path)), owner))
+                elif key == "foreign_store":
+                    name, owner, path, how = item
+                    out.info("%s — %s, %s (%s)"
+                             % (name, owner, _tilde(Path(path)),
+                                "a git repository, which --prune leaves"
+                                if store.is_repo_copy(item) else how))
+                elif key == "unreadable_store":
+                    name, path = item
+                    out.info("%s — %s cannot be read" % (name, _tilde(Path(path))))
+                elif key == "plugin_duplicates":
+                    name, plugin_id, _path, how = item
+                    out.info("%s — plugin %s (%s)" % (name, plugin_id, how))
                 else:
                     out.info(_tilde(item))
         return 0
@@ -1040,9 +1099,9 @@ def cmd_sync(argv: list[str]) -> int:
     actions = store.sync_apply(plan) + store.project_sync_apply(pplan)
     # Links outside a declared `--agent` scope work and are in use, so sync
     # reports them and stops. Removing one changes which agents can run a
-    # skill, which is the same class of decision as deleting an orphaned store
-    # dir — hence the same explicit `--prune`, and its own confirm so the two
-    # are never approved as one.
+    # skill, which is the same class of decision as deleting a store dir that
+    # copies another tool's skill — hence the same explicit `--prune`, and its
+    # own confirm so the two are never approved as one.
     oos = plan["out_of_scope_links"]
     if args.prune and oos:
         go = (args.yes or bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
@@ -1052,50 +1111,109 @@ def cmd_sync(argv: list[str]) -> int:
         if go:
             actions += store.prune_out_of_scope_links(plan)
             oos = []
-    orphans = plan["orphaned_store"]
-    pruned = []
-    if args.prune and orphans:
-        go = (args.yes or bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
-              args.yes or out.confirm("Delete %s: %s?" % (_plural(len(orphans), "orphaned store dir"),
-                                              ", ".join(orphans))))
-        if go:
-            for name in orphans:
-                util.remove_path(store.skill_store_dir(name))
-                journal.log("prune", name)
-                pruned.append(name)
-    left = [n for n in orphans if n not in pruned]
-    # Re-recorded by sync_apply when the lock was merely missing; still here
-    # only when it is corrupt or in another schema, which sync never overwrites.
-    unrecorded = [n for n in plan["unrecorded_store"]
-                  if lockfile.get_skill(n) is None]
+    # Two more opt-in removals, each with its own confirm stating its cost so
+    # neither is approved as part of the other. A copy of another tool's skill
+    # is deleted; a skill a plugin already ships loses only Claude Code's link.
+    copies = plan["foreign_store"]
+    # A store dir holding a git repository is never offered: its history is
+    # in no copy, so it is named and kept rather than put to a confirm.
+    offer = [r for r in copies if not store.is_repo_copy(r)]
+    pruned: list[str] = []
+    kept: list[str] = []
+    declined_copies = False
+    if args.prune:
+        kept += ["kept %s: %s" % (_tilde(store.skill_store_dir(r[0])),
+                                  store.REPO_KEPT)
+                 for r in copies if r not in offer]
+    if args.prune and offer:
+        if _go(args, _foreign_prompt(offer)):
+            for row, why in zip(offer, store.remove_foreign_copies(offer),
+                                strict=True):
+                if why is None:
+                    pruned.append(row[0])
+                else:
+                    kept.append("kept %s: %s"
+                                % (_tilde(store.skill_store_dir(row[0])), why))
+        else:
+            declined_copies = True
+    left = [r for r in copies if r[0] not in pruned]
+    same = [r for r in plan["plugin_duplicates"] if r[3] == foreign.IDENTICAL]
+    dropped: list[str] = []
+    declined_dups = False
+    if args.prune and same:
+        if _go(args, "Drop boost's Claude Code link for %s an enabled plugin "
+                     "ships with the same files (Claude Code goes on loading "
+                     "the plugin's copy): %s?"
+                     % (_plural(len(same), "skill"),
+                        ", ".join(r[0] for r in same))):
+            for row in same:
+                ok, line = store.drop_plugin_link(row)
+                (actions if ok else kept).append(line)
+                if ok:
+                    dropped.append(row[0])
+        else:
+            declined_dups = True
+    dups = [r for r in plan["plugin_duplicates"] if r[0] not in dropped]
+    # Re-recorded by sync_apply when the lock was merely missing, and a dir it
+    # could not record has its own line saying why. Over a lock that is
+    # corrupt or in another schema nothing is written, so all of them are
+    # left as they were, and the remedy is the lock's.
+    unrecorded = plan["unrecorded_store"] if lock_bad else []
     blocked = plan["blocked_links"]
     if args.json:
         # `sync --diff --json` above is indent=2; this printed one unindented
         # line, so the two `--json` shapes of the same command disagreed on
         # style for no reason tied to their content.
-        print(json.dumps({"actions": actions, "pruned": pruned,
-                          "orphaned_store": left, "unrecorded_store": unrecorded,
+        print(json.dumps({"actions": actions, "pruned": pruned, "kept": kept,
+                          "foreign_store": left, "plugin_duplicates": dups,
+                          "older_copies": plan["older_copies"],
+                          "not_skill_store": plan["not_skill_store"],
+                          "unreadable_store": plan["unreadable_store"],
+                          "misnamed_store": plan["misnamed_store"],
+                          "unrecorded_store": unrecorded,
                           "out_of_scope_links": oos,
-                          "blocked_links": blocked}, indent=2))
+                          "blocked_links": blocked,
+                          "lock": integ.problem}, indent=2))
         return 0
     for a in actions:
         (out.warn if store.is_unrepaired(a) else out.ok)(a)
-    if unrecorded:
-        out.warn("%s the lock file cannot record, left as they are: %s — "
-                 "restore the lock with `boost replay`"
-                 % (_plural(len(unrecorded), "store dir"), ", ".join(unrecorded)))
+    for line in kept:
+        out.warn(line, wrap=True)
+    if lock_bad:
+        out.warn("the lock file %s, so sync records nothing%s — restore it "
+                 "with `boost replay`"
+                 % (lockfile.fault(integ),
+                    " and leaves %s as %s: %s"
+                    % (_plural(len(unrecorded), "store dir"),
+                       "it is" if len(unrecorded) == 1 else "they are",
+                       ", ".join(unrecorded)) if unrecorded else ""), wrap=True)
     for name in pruned:
         out.ok("pruned %s" % _tilde(store.skill_store_dir(name)))
-    if left:
-        # args.prune true here means the user already ran --prune and
-        # declined the confirm — telling them to run the command they just
-        # ran is not a remedy, so name the decline instead.
-        if args.prune:
-            out.warn("%s left in place (declined): %s"
-                     % (_plural(len(left), "orphaned store dir"), ", ".join(left)))
-        else:
-            out.warn("%s left in place: %s — remove with `boost sync --prune`"
-                     % (_plural(len(left), "orphaned store dir"), ", ".join(left)))
+    for line in store.older_copy_lines(plan["older_copies"]):
+        out.info(line, wrap=True)
+    # A decline names what it left rather than the flag the user just ran.
+    if declined_copies:
+        out.warn("%s copying another tool's skills left in place "
+                 "(declined): %s" % (_plural(len(offer), "store dir"),
+                                     ", ".join(r[0] for r in offer)), wrap=True)
+    elif not args.prune:
+        for line in store.foreign_store_lines(left):
+            out.warn(line, wrap=True)
+    if plan["not_skill_store"]:
+        out.info(store.not_skill_line(plan["not_skill_store"]), wrap=True)
+    if plan["unreadable_store"]:
+        out.warn(store.unreadable_line(plan["unreadable_store"]), wrap=True)
+    if plan["misnamed_store"]:
+        out.info(store.misnamed_line(plan["misnamed_store"]), wrap=True)
+    if declined_dups:
+        out.warn("%s still linked into Claude Code beside a plugin's copy "
+                 "(declined): %s" % (_plural(len(same), "skill"),
+                                     ", ".join(r[0] for r in same)), wrap=True)
+    elif not args.prune:
+        for line in store.plugin_duplicate_lines(dups):
+            out.warn(line, wrap=True)
+    for line in store.plugin_variant_lines(dups):
+        out.info(line, wrap=True)
     if oos:
         if args.prune:
             out.warn("%s outside the declared scope (declined): %s"
@@ -1136,10 +1254,46 @@ def cmd_sync(argv: list[str]) -> int:
     for path in occupied:
         out.warn("%s, then re-run `boost sync`" % store.occupied_refusal(path),
                  wrap=True)
-    if (not actions and not pruned and not left and not oos and not blocked
-            and not stuck and not in_way and not occupied):
+    unfixed = left or kept or any(r[3] == foreign.IDENTICAL for r in dups)
+    if (not actions and not pruned and not unfixed and not oos and not blocked
+            and not stuck and not in_way and not occupied and not lock_bad
+            and not plan["unreadable_store"]):
         out.ok("everything in sync")
     return 0
+
+
+def _go(args, prompt: str) -> bool:
+    """A `--prune` confirm: `--yes` or BOOST_ASSUME_YES skip it, and `--json`
+    never prompts, since a question on stdout would break the JSON after it."""
+    if args.json:
+        return args.yes or bool(os.environ.get("BOOST_ASSUME_YES"))
+    return args.yes or out.confirm(prompt)
+
+
+def _foreign_prompt(rows: list) -> str:
+    """The `--prune` confirm for copies of other tools' skills, with its cost.
+
+    Deleting one costs more than it looks: the agents that read the store
+    natively lose the skill, and a changed copy — a port, say — loses the
+    change. Both are said before the question rather than discovered after.
+    """
+    differ = sum(1 for r in rows if r[3] == foreign.DIFFERS)
+    native = [agents.display_name(a) for a in agents.native_store_agents()]
+    costs = []
+    if differ:
+        costs.append("%s from the original, and those changes go too"
+                     % ("it differs" if len(rows) == 1 else "%d differ" % differ))
+    if native:
+        costs.append("%s read%s %s directly and will stop seeing %s"
+                     % (" and ".join(native), "s" if len(native) == 1 else "",
+                        _tilde(paths.store_dir()),
+                        "it" if len(rows) == 1 else "them"))
+    return ("Delete %s that %s another tool's skill%s%s: %s?"
+            % (_plural(len(rows), "store dir"),
+               "copies" if len(rows) == 1 else "copy",
+               "" if len(rows) == 1 else "s",
+               " (%s)" % "; ".join(costs) if costs else "",
+               ", ".join(r[0] for r in rows)))
 
 
 # ── update ───────────────────────────────────────────────────────────────
@@ -1669,6 +1823,12 @@ def cmd_reinstall(argv: list[str]) -> int:
             done_kinds.add(kind)
             continue
         if lk.get("tap") == "local":
+            if integrity.self_sourced(name, lk):
+                # Its source is its own store dir: "reinstalling" would copy
+                # it onto itself, and there is no other copy to restore.
+                out.info("%s is kept in the store itself, so there is nothing "
+                         "to reinstall it from — skipped" % name, wrap=True)
+                continue
             src = store.local_source_dir(lk)
             url = str(lk.get("source_url") or "")
             if src is None and not url:
@@ -2057,7 +2217,22 @@ def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
 def _import_root(root: Path, name: str | None, do_all: bool,
                  only: list[str] | None, display: str,
                  remote: store.RemoteSource | None = None) -> int:
+    def replacing(dirs: list[tuple[Path, str | None]]) -> bool:
+        """Ask before an import overwrites a skill that has no other copy."""
+        only_copies = [n for d, r in dirs
+                       if store.replaces_only_copy(n := store.import_name(d, r), d)]
+        if not only_copies:
+            return True
+        if out.confirm("the store holds the only copy of %s, and importing "
+                       "replaces it for good — continue?"
+                       % ", ".join(only_copies)):
+            return True
+        out.info("cancelled")
+        return False
+
     def one(skill_dir: Path, rename: str | None = None) -> int:
+        if not replacing([(skill_dir, rename)]):
+            return 1
         res = store.install_from_path(skill_dir, name=rename, only_agents=only,
                                       remote=remote)
         _report_result(res)
@@ -2086,6 +2261,8 @@ def _import_root(root: Path, name: str | None, do_all: bool,
         # One refused skill must not abandon the rest: same contract as a
         # multi-skill `boost install`, which warns per item and still reports a
         # summary (test_multi_policy_block_rc1_others_install).
+        if not replacing([(dir_of(e), None) for e in entries]):
+            return 1
         imported, refused = 0, 0
         for e in entries:
             try:

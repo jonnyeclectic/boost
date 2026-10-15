@@ -29,6 +29,7 @@ from ..core import (
     claude_settings,
     complete,
     config,
+    foreign,
     frontmatter,
     gitutil,
     imperative,
@@ -55,6 +56,11 @@ from ._common import _iter_installed, _iter_installed_all, _require_lock_integri
 # agent turned off has a row per installed rule and workflow, so an uncapped
 # list is as long as the install.
 _MAT_NOTE_SHOWN = 4
+
+
+def _first(names: list[str], limit: int = 5) -> str:
+    """Up to ``limit`` names for a one-line check, with an ellipsis for more."""
+    return ", ".join(names[:limit]) + (", …" if len(names) > limit else "")
 
 # --- conflict: normative-rule extraction -----------------------------------
 
@@ -229,6 +235,9 @@ def _drift_status(name: str, entry: dict) -> str:
     """'in-sync' | 'local-edits' | 'upstream-moved' | 'source-missing'
     | 'store-missing' | 'n/a' (local imports with no tap source)."""
     sdir = store.skill_store_dir(name)
+    if sdir.is_dir() and integrity.self_sourced(name, entry):
+        # Kept in the store itself: an edit there is the skill, not drift.
+        return staleness.NA
     store_sha = util.sha256_dir(sdir) if sdir.is_dir() else None
     is_local = entry.get("tap") == "local"
     lock_sha = entry.get("sha256", "")
@@ -598,16 +607,31 @@ def cmd_doctor(argv):
     # exist. check() reports the raw state instead, so "parses" is only ever
     # claimed for a file doctor actually parsed.
     integ = lockfile.check()
+    skills = lockfile.installed()
+    # Sorted once, by the check just made: the lock line counts what `boost
+    # sync` re-records, and the store-dirs block below names the rest. Not
+    # without agents, whose dirs are what say whose a store dir is.
+    unrec = store.sort_unrecorded(skills, integ) if agents_ok else None
     if integ.ok:
         rep.ok("lockfile", "lock file parses (v%d)" % lockfile.SCHEMA_VERSION)
         lock_ok = True
     elif integ.problem == "missing":
-        if store.has_content():
-            n = sum(1 for c in paths.store_dir().iterdir()
-                    if c.is_dir() and not c.name.startswith("."))
+        # What `boost sync` re-records, not every dir in the store: counting
+        # another tool's bucket or a copy of Cursor's skills, which sync
+        # leaves, kept this line red after the run it prescribes.
+        lost = (unrec["unrecorded_store"] if unrec is not None
+                else store.unrecorded_store_dirs({}) if store.has_content() else [])
+        if lost:
+            n = len(lost)
             bad("lockfile", "lock file missing — %d store dir%s unrecorded, "
                 "run `boost sync` to re-record %s" % (n, _s(n), "it" if n == 1 else "them"))
             lock_ok = False
+        elif unrec is not None and unrec["unreadable_store"]:
+            # Not "nothing installed": the dirs boost cannot read may be skills
+            # the lock had, and the line below names them.
+            rep.note("lockfile", "no lock file — nothing boost can read is "
+                     "left to re-record")
+            lock_ok = True
         else:
             rep.note("lockfile", "no lock file yet — nothing installed")
             lock_ok = True
@@ -619,7 +643,6 @@ def cmd_doctor(argv):
             % (integ.version, lockfile.SCHEMA_VERSION))
         lock_ok = False
 
-    skills = lockfile.installed()
     # linking_agents, not enabled_agents, for the same reason `sync_plan` uses
     # it: the lock's `agents` field is measured by `store.linked_agents`, which
     # only walks linking agents — so a native-store name in there is a *stale*
@@ -628,6 +651,10 @@ def cmd_doctor(argv):
     # directory holding no symlink and reports "not linked — run `boost sync`",
     # which sync then declines to act on. Doctor and sync have to agree.
     enabled = agents.linking_agents() if agents_ok else {}
+    # A skill an enabled plugin ships with the same files gets no Claude Code
+    # link, so its absence is no fault (`store.left_to_plugin`).
+    coverage = store.plugin_coverage(skills) if agents_ok else {}
+    covered = store.covered_skills(coverage)
     skill_issues = 0
     quarantined_skills = 0
     for name, entry in sorted(skills.items()):
@@ -658,7 +685,8 @@ def cmd_doctor(argv):
         # tamper detection: the lock file records a sha256 at install time, but
         # only `boost verify` ever re-checked it — surface content drift here too.
         locked = entry.get("sha256")
-        if locked and util.sha256_dir(sdir) != locked:
+        if (locked and not integrity.self_sourced(name, entry)
+                and util.sha256_dir(sdir) != locked):
             bad("skill", "skill %s modified since install — run `boost verify`" % name)
             skill_issues += 1
         # A deliberate sideline (`focus`, `profile use`, `context apply`)
@@ -669,11 +697,14 @@ def cmd_doctor(argv):
         # undid the switch they had just made.
         if entry.get("sidelined_by"):
             continue
-        for agent in entry.get("agents", []):
-            adir = enabled.get(agent)
-            if adir is None:
-                continue
+        # The agents the skill's scope takes in, as `boost sync` walks them:
+        # the lock's `agents` is what was linked, so a link never made — one
+        # refused at install, or for an agent enabled since — was a repair
+        # sync offered and doctor never mentioned.
+        for agent, adir in store.scoped_agents(entry, enabled).items():
             link = adir / name
+            if store.left_to_plugin(name, agent, link, covered):
+                continue
             # Two different failures wore one message. `boost sync` creates a
             # link where nothing is in the way and replaces a boost-owned one
             # that dangles — but it will not delete a real file or directory
@@ -692,6 +723,12 @@ def cmd_doctor(argv):
                 bad("skill-link", "skill %s not linked for %s — %s exists and is not a boost "
                     "link; move or delete it, then run `boost sync`"
                     % (name, agent, paths.tilde(link)))
+            elif os.path.islink(link) and not store.is_boost_link(link):  # noqa: FURB146
+                # Dangling, and not boost's: sync leaves it, so prescribing
+                # sync alone was a loop.
+                bad("skill-link", "skill %s not linked for %s — %s is a broken "
+                    "link boost did not make; move or delete it, then run "
+                    "`boost sync`" % (name, agent, paths.tilde(link)))
             else:
                 bad("skill-link", "skill %s not linked for %s — run `boost sync`" % (name, agent))
             skill_issues += 1
@@ -918,29 +955,66 @@ def cmd_doctor(argv):
         rep.ok("rules-workflows", "%d rule%s and %d workflow%s fully materialized%s"
                % (n_rules, _s(n_rules), n_flows, _s(n_flows), note))
 
-    root = paths.store_dir()
-    orphans = [c.name for c in sorted(root.iterdir())
-               if c.is_dir() and not c.name.startswith(".") and c.name not in skills
-               ] if root.is_dir() else []
-    # Only while the lock can vouch. Without one every store dir reads as an
-    # orphan, the lock line above already names the state and its remedy, and
-    # a second "run `boost sync`" line counted the same fault twice.
-    if orphans and store.lock_vouches():
-        bad("orphans", "%d orphaned store dir%s (%s) — run `boost sync`"
-            % (len(orphans), _s(len(orphans)), ", ".join(orphans[:5])))
+    # Store dirs the lock does not record, sorted by whose they are: this was
+    # one "orphaned store dir" line, prescribing a `boost sync` that did
+    # nothing with them while `heal` reported nothing to heal. A dir a lost
+    # lock had is the lock line's (`store.sort_unrecorded` keeps it out of
+    # these buckets), so no fault is counted twice; one a lock that cannot be
+    # read may have recorded is in none of them.
+    if unrec is not None:
+        mine = unrec["adoptable_store"]
+        if mine:
+            bad("unrecorded-skills", "%d skill%s added outside boost (%s) — "
+                "`boost sync` records %s" % (len(mine), _s(len(mine)),
+                                             _first(mine),
+                                             "it" if len(mine) == 1 else "them"))
+        repos = [r for r in unrec["foreign_store"] if store.is_repo_copy(r)]
+        copies = [r[0] for r in unrec["foreign_store"] if r not in repos]
+        if copies:
+            bad("foreign-copies", "%d store dir%s cop%s another tool's skills, "
+                "not boost's (%s) — remove with `boost sync --prune`"
+                % (len(copies), _s(len(copies)),
+                   "ies" if len(copies) == 1 else "y", _first(copies)), wrap=True)
+        # `--prune` leaves a git repository, so naming it there would send the
+        # user to a command that keeps it.
+        for line in store.foreign_store_lines(repos):
+            bad("repo-copies", line, wrap=True)
+        if unrec["unreadable_store"]:
+            bad("unreadable-store", store.unreadable_line(unrec["unreadable_store"]),
+                wrap=True)
+        # Notes, not issues: boost leaves these alone by design, so counting
+        # them would hold doctor red on a state no boost command changes.
+        for line in store.older_copy_lines(unrec["older_copies"]):
+            rep.note("older-copies", line, wrap=True)
+        if unrec["not_skill_store"]:
+            rep.note("not-skills", store.not_skill_line(unrec["not_skill_store"]),
+                     wrap=True)
+        if unrec["misnamed_store"]:
+            rep.note("misnamed", store.misnamed_line(unrec["misnamed_store"]),
+                     wrap=True)
+    dups = store.plugin_duplicates(skills, coverage) if agents_ok else []
+    same = [r[0] for r in dups if r[3] == foreign.IDENTICAL]
+    if same:
+        bad("plugin-duplicates", "%d skill%s show%s twice in Claude Code, which "
+            "also loads %s from an enabled plugin (%s) — `boost sync --prune` "
+            "drops boost's Claude Code link"
+            % (len(same), _s(len(same)), "s" if len(same) == 1 else "",
+               "it" if len(same) == 1 else "them", _first(same)), wrap=True)
+    for line in store.plugin_variant_lines(dups):
+        rep.note("plugin-variants", line, wrap=True)
 
-    broken, foreign = _broken_links() if agents_ok else ([], [])
+    broken, strays = _broken_links() if agents_ok else ([], [])
     if broken:
         bad("broken-links", "%d broken symlink%s in agent dirs — run `boost heal`"
             % (len(broken), _s(len(broken))))
-    if foreign:
+    if strays:
         # `out.info`, not `bad`: this does not raise the issue count, because
         # boost will not fix it and `heal` deliberately leaves it — counting it
         # would leave doctor permanently red on something no boost command can
         # clear, which is how a health check stops being read.
         rep.note("foreign-links", "%d broken symlink%s in agent dirs not created by boost — "
                  "left alone; yours to remove or repair"
-                 % (len(foreign), _s(len(foreign))))
+                 % (len(strays), _s(len(strays))))
 
     others = claude_settings.foreign_hooks("global")
     if others:
@@ -1387,7 +1461,8 @@ def cmd_test(argv):
         score, _notes = util.score_skill(sdir)
         if util.lint_failed(sdir, score, min_score=40):
             failed.append("lint")
-        if not sdir.is_dir() or util.sha256_dir(sdir) != entry.get("sha256"):
+        if not sdir.is_dir() or (not integrity.self_sourced(name, entry)
+                                 and util.sha256_dir(sdir) != entry.get("sha256")):
             failed.append("verify")
         if len(body.encode("utf-8")) > 64 * 1024:
             failed.append("size")
@@ -1531,13 +1606,19 @@ def cmd_heal(argv):
             link.unlink()
             out.ok("removed broken link %s" % _tilde(link))
         actions.append("unlink %s" % link.name)
+    plan = store.sync_plan()
+    # One where a recorded skill's link goes is named below, as a link it
+    # blocks, with what to do about it; saying it twice read as two problems.
+    blocking = {Path(p) for _n, _a, p in plan["blocked_links"]}
     for link in theirs:
+        if link in blocking:
+            continue
         # Named, never touched: it is in a directory boost writes to, so the
         # user should know it is dangling — but boost did not put it there.
         out.warn("broken link %s does not point into %s — left alone"
                  % (_tilde(link), _tilde(paths.store_dir())))
-
-    plan = store.sync_plan()
+    # Asked before `sync_apply`, which writes a lock where there was none.
+    integ = lockfile.check()
     if dry:
         # `ours` above is exactly what a real run unlinks before computing
         # this plan, so `sync_plan`'s stale-link sweep never sees those paths
@@ -1576,6 +1657,24 @@ def cmd_heal(argv):
     # itself created; these entries boost did not create, so deleting one on a
     # plain `boost heal` would be silently removing another tool's file. Named
     # every run so the flag is discoverable from the command that would use it.
+    # Named, never acted on: deleting another tool's copy, or dropping a link
+    # Claude Code also gets from a plugin, changes what an agent can run. Both
+    # wait for `boost sync --prune`, whose confirm says what each costs.
+    for line in store.older_copy_lines(plan["older_copies"]):
+        out.info(line, wrap=True)
+    for line in (store.foreign_store_lines(plan["foreign_store"])
+                 + store.plugin_duplicate_lines(plan["plugin_duplicates"])
+                 + store.plugin_variant_lines(plan["plugin_duplicates"])):
+        out.info(line, wrap=True)
+    # Left alone by design, and named as `sync` names them, so a dir that is
+    # not a skill is not silently skipped by the command meant to look.
+    if plan["not_skill_store"]:
+        out.info(store.not_skill_line(plan["not_skill_store"]), wrap=True)
+    if plan["misnamed_store"]:
+        out.info(store.misnamed_line(plan["misnamed_store"]), wrap=True)
+    declined_copies = bool(plan["foreign_store"]) or any(
+        r[3] == foreign.IDENTICAL for r in plan["plugin_duplicates"])
+
     duplicates = store.duplicate_discovery()
     declined_duplicates = bool(duplicates) and not args.prune_duplicates
     for dup in duplicates:
@@ -1688,6 +1787,30 @@ def cmd_heal(argv):
         stuck.append(path)
         out.warn("%s, then `boost sync` (heal does not move files)"
                  % store.occupied_refusal(path), wrap=True)
+    # A real file or dir where a skill's link goes. Neither heal nor sync
+    # deletes what boost did not put there, so "nothing to heal" above it was
+    # an all-clear for a link that is still missing. A block a whole agent
+    # dir is behind is named once, below.
+    linking = agents.linking_agents()
+    for name, agent, path in plan["blocked_links"]:
+        if agent in linking and Path(path) == linking[agent] / name:
+            stuck.append(Path(path))
+            out.warn("%s not linked for %s: %s is in the way and is not "
+                     "boost's — move or delete it, then `boost sync` (heal "
+                     "does not move files)" % (name, agent, _tilde(path)),
+                     wrap=True)
+    # A store dir boost cannot read is not recorded, so heal saw it and left
+    # it: an all-clear under it would be the loop the preview used to start.
+    if plan["unreadable_store"]:
+        stuck.extend(Path(where) for _name, where in plan["unreadable_store"])
+        out.warn(store.unreadable_line(plan["unreadable_store"]), wrap=True)
+    # A lock that cannot be read is `boost replay`'s to restore. heal answered
+    # "nothing to heal" over it, with every store dir it could not record.
+    if not integ.ok and integ.problem != "missing":
+        stuck.append(paths.lockfile_path())
+        out.warn("the lock file %s, so heal cannot tell which store dirs are "
+                 "boost's — restore it with `boost replay`" % lockfile.fault(integ),
+                 wrap=True)
     for d, block in blocked.items():
         stuck.append(d)
         out.warn("%s — heal does not %s; %s"
@@ -1700,7 +1823,7 @@ def cmd_heal(argv):
         # fix, and deliberately left. A bare "nothing to heal" printed under
         # the line offering the flag contradicts it.
         out.ok("nothing to heal automatically"
-               if declined_duplicates else "nothing to heal")
+               if declined_duplicates or declined_copies else "nothing to heal")
     if actions and not dry:
         journal.log("heal", "%d actions" % len(actions))
     return 1 if cfg_err or stuck else 0
@@ -1908,24 +2031,34 @@ def cmd_health(argv):
     kv("taps", "%d configured · %d cloned" % (len(taps), len(cloned)),
        {"configured": len(taps), "cloned": len(cloned)})
 
-    expected = [n for n, e in installed if not e.get("quarantined")]
+    expected = [(n, e) for n, e in installed if not e.get("quarantined")]
+    linking = agents.linking_agents()
+    # A skill an enabled plugin ships with the same files reaches Claude Code
+    # without a link, and boost makes none (`store.left_to_plugin`): it counts
+    # as there, or `sync --prune` would leave this row amber for good.
+    covered = store.covered_skills(store.plugin_coverage(dict(installed)))
     coverage_ok = True
-    for agent, adir in agents.linking_agents().items():
-        linked = sum(1 for n in expected
-                     if os.path.islink(adir / n) and os.path.exists(adir / n))  # noqa: FURB141, FURB146
-        full = linked == len(expected)
+    for agent, adir in linking.items():
+        # Over the skills whose scope takes the agent in, as `boost sync`
+        # counts them: one installed `--agent cursor`, or recorded by sync
+        # with the links it found, is not missing from the others.
+        due = [n for n, e in expected if agent in store.scoped_agents(e, linking)]
+        linked = sum(1 for n in due
+                     if (os.path.islink(adir / n) and os.path.exists(adir / n))  # noqa: FURB141, FURB146
+                     or store.left_to_plugin(n, agent, adir / n, covered))
+        full = linked == len(due)
         coverage_ok = coverage_ok and full
-        kv(agent, "%d/%d %s" % (linked, len(expected),
+        kv(agent, "%d/%d %s" % (linked, len(due),
                                 out.role("✓", "success") if full
                                 else out.role("!", "warn")),
-           {"linked": linked, "expected": len(expected), "ok": full})
+           {"linked": linked, "expected": len(due), "ok": full})
     # Agents that read the canonical store have no links to count, so they
     # used to be scored an unconditional len(expected)/len(expected) — green
     # even with a skill's store directory gone, in the same report `drift`
     # called store-missing. Stat the store instead. They are listed even when
     # full, because an agent silently absent from a health report reads as
     # "boost is not wired up for it".
-    store_present = sum(1 for n in expected if store.skill_store_dir(n).is_dir())
+    store_present = sum(1 for n, _e in expected if store.skill_store_dir(n).is_dir())
     store_full = store_present == len(expected)
     for agent in agents.native_store_agents():
         coverage_ok = coverage_ok and store_full
@@ -1948,10 +2081,10 @@ def cmd_health(argv):
     decay_n = sum(1 for r in _decay_rows(Path.cwd()) if r["verdict"] == "decay")
     kv("decay", "%d candidate%s" % (decay_n, _s(decay_n)), decay_n)
 
-    broken, foreign = _broken_links()
+    broken, strays = _broken_links()
     kv("broken links", "%d%s" % (
-        len(broken), " (+%d not ours)" % len(foreign) if foreign else ""),
-       {"ours": len(broken), "foreign": len(foreign)})
+        len(broken), " (+%d not ours)" % len(strays) if strays else ""),
+       {"ours": len(broken), "foreign": len(strays)})
 
     # `registry.last_refresh_at` reads the marker `boost update` stamps, not a
     # tap clone's git log — a clone's newest commit is the *upstream's* clock,

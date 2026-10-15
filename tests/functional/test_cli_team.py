@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import getpass
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -22,6 +23,21 @@ import pytest
 from boost_cli.core import journal, lockfile, paths
 
 USER = getpass.getuser()
+
+
+class _FakeTtyStdin(io.StringIO):
+    """Scripted stdin that claims to be a terminal, so prompts actually fire."""
+
+    def isatty(self):
+        return True
+
+
+def _hand_made_skill(name):
+    """A skill put in the store by hand, for `boost sync` to record."""
+    d = paths.store_dir() / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("# %s\n" % name, encoding="utf-8")
+    return d
 
 
 def _member(cohort: str, percent: int) -> bool:
@@ -557,6 +573,34 @@ class TestProfile:
         assert r["uninstalled"] == ["cowboy-coding"]
         assert r["sidelined"] == []
 
+    def test_use_prune_keeps_a_skill_whose_only_copy_is_the_store(
+            self, boost, tapped, monkeypatch):
+        # Recorded by `boost sync` where it was found, it has nowhere to come
+        # back from, so switching profiles must not delete it on the way.
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("install", "cowboy-coding")
+        mine = _hand_made_skill("pr-me")
+        boost("sync")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("profile", "use", "solo", "--prune")
+        assert ("uninstall 1 skill not in the profile (cowboy-coding)? [y/N]"
+                in r.out)
+        monkeypatch.setenv("BOOST_ASSUME_YES", "1")
+        r = boost("profile", "use", "solo", "--prune")
+        flat = " ".join(r.out.split())
+        assert "uninstalled cowboy-coding" in flat
+        assert ("kept pr-me: the store holds its only copy — `boost uninstall "
+                "pr-me` deletes it") in flat
+        assert ("sidelined 1 skill not in the profile (unlinked, still "
+                "installed): pr-me") in flat
+        assert (mine / "SKILL.md").is_file()
+        assert not os.path.lexists(paths.home() / ".claude" / "skills" / "pr-me")
+        r = json.loads(boost("profile", "use", "solo", "--prune", "--json").out)
+        assert (r["uninstalled"], r["sidelined"]) == ([], ["pr-me"])
+        assert r["only_copies"] == ["pr-me"] and r["kept_extras"] is False
+
     def test_use_json_declines_prune(self, boost, tapped, monkeypatch):
         boost("install", "brainstorming")
         boost("profile", "save", "solo")
@@ -876,6 +920,27 @@ class TestReplay:
 
         r = boost("replay", "rollback", snap_id)
         assert "already at this snapshot — nothing to do" in r.out
+
+    def test_rollback_keeps_a_skill_whose_only_copy_is_the_store(
+            self, boost, tapped, tick_clock):
+        # Recorded by `boost sync` where it was found, it has nowhere to come
+        # back from: rolling back past it must not delete it.
+        boost("install", "brainstorming")
+        mine = _hand_made_skill("pr-me")
+        boost("sync")                        # snapshot: {brainstorming}
+        boost("install", "cowboy-coding")    # snapshot: {brainstorming, pr-me}
+        snap_id = lockfile.history_list()[0]["id"]
+        r = boost("replay", "rollback", snap_id)
+        flat = " ".join(r.out.split())
+        assert ("kept pr-me: the store holds its only copy — `boost uninstall "
+                "pr-me` deletes it") in flat
+        assert "uninstalled cowboy-coding" in flat
+        assert (mine / "SKILL.md").is_file() and "pr-me" in lockfile.installed()
+        assert "nothing else to roll back" in boost(
+            "replay", "rollback", snap_id).out
+        assert json.loads(boost("replay", "rollback", snap_id, "--json").out) == {
+            "id": snap_id, "no_changes": True, "not_rolled_back": [],
+            "only_copies": ["pr-me"]}
 
     def test_rollback_declined(self, boost, tapped, tick_clock, monkeypatch):
         _history_ops(boost)

@@ -663,7 +663,7 @@ class TestDoctor:
         paths.lockfile_path().unlink()
         r = boost("doctor", expect=1)
         assert "run `boost sync` to re-record it" in r.out
-        assert "orphaned store dir" not in r.out
+        assert "added outside boost" not in r.out
         r = boost("sync")
         assert "re-recorded brainstorming from" in r.out
         assert "removed stale link" not in r.out
@@ -676,10 +676,11 @@ class TestDoctor:
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
         r = boost("sync")
         assert "removed stale link" not in r.out
-        assert "restore the lock with `boost replay`" in r.out + r.err
+        assert ("the lock file is corrupt, so sync records nothing"
+                in " ".join((r.out + r.err).split()))
         assert link.is_symlink() and link.exists()
         r = boost("doctor", expect=1)
-        assert "orphaned store dir" not in r.out
+        assert "added outside boost" not in r.out
 
     def test_heal_previews_the_re_record(self, boost, installed):
         paths.lockfile_path().unlink()
@@ -695,6 +696,18 @@ class TestDoctor:
         assert "lock file parses (v3)" not in r.out
         assert "no lock file yet — nothing installed" in r.out
         assert "lock file integrity OK" in r.out
+
+    def test_a_scoped_link_the_lock_does_not_list_is_still_checked(
+            self, boost, installed):
+        # Doctor walked the lock's `agents`, which records the links made, so
+        # a link never made — or dropped from that list — was never missed.
+        e = lockfile.get_skill("brainstorming")
+        e["agents"] = [a for a in e["agents"] if a != "cursor"]
+        lockfile.set_skill("brainstorming", e)
+        (paths.home() / ".cursor" / "skills" / "brainstorming").unlink()
+        r = boost("doctor", expect=1)
+        assert ("skill brainstorming not linked for cursor — run `boost sync`"
+                in _flat(r.out))
 
     def test_corrupt_lock_rc1(self, boost, installed):
         paths.lockfile_path().write_text(
@@ -1897,6 +1910,21 @@ class TestHeal:
         assert len(mentions) == 1, mentions
         assert mentions[0].strip().startswith("would remove broken link")
 
+    def test_a_link_something_else_holds_the_place_of_is_named_and_fails(
+            self, boost, installed):
+        # Heal does not move files, so it used to say nothing about this one
+        # and report "nothing to heal" over a skill Cursor could not see.
+        link = paths.home() / ".cursor" / "skills" / "brainstorming"
+        link.unlink()
+        link.mkdir()
+        line = ("brainstorming not linked for cursor: ~/.cursor/skills/"
+                "brainstorming is in the way and is not boost's — move or delete "
+                "it, then `boost sync` (heal does not move files)")
+        assert line in _flat(boost("heal", "--dry-run", expect=1).out)
+        r = boost("heal", expect=1)
+        assert line in _flat(r.out) and "nothing to heal" not in r.out
+        assert link.is_dir() and not link.is_symlink()
+
     def test_restores_missing_store_from_tap(self, boost, installed):
         shutil.rmtree(paths.store_dir() / "brainstorming")
         r = boost("heal")
@@ -2150,6 +2178,19 @@ class TestHealth:
         assert "2 events" in r.out                # tap + install in journal
         assert re.search(r"fingerprint\s+[0-9a-f]{16}", r.out)
         assert "● healthy" in r.out
+
+    def test_an_agent_is_scored_on_the_skills_scoped_to_it(self, boost, installed):
+        # Scored on every installed skill, an agent left out of a skill's
+        # `--agent` scope read as missing a link it was never meant to have.
+        boost("install", "brainstorming", "--force", "--agent", "cursor")
+        boost("sync", "--prune")
+        r = boost("health")
+        assert re.search(r"cursor\s+1/1 ✓", r.out)
+        assert re.search(r"claude-code\s+0/0 ✓", r.out)
+        assert "● healthy" in r.out
+        data = json.loads(boost("health", "--json").out)
+        assert data["cursor"] == {"linked": 1, "expected": 1, "ok": True}
+        assert data["claude-code"] == {"linked": 0, "expected": 0, "ok": True}
 
     def test_native_store_row_reflects_a_missing_store_dir(self, boost, installed):
         # The bug: the native-store row was an unconditional
@@ -3191,3 +3232,213 @@ class TestAnItemMaterializedNowhere:
         flat = " ".join(boost("doctor").out.split())
         assert "1 rule and 0 workflows fully materialized" in flat
         assert "loaded by nothing" not in flat
+
+
+def _flat(text):
+    """Output with its pane wrapping undone, so a sentence can be asserted."""
+    return " ".join(text.split())
+
+
+def _store_skill(name, body="# mine\n"):
+    d = paths.store_dir() / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(body, encoding="utf-8")
+    return d
+
+
+class TestStoreDirsBoostDidNotInstall:
+    """doctor, heal and sync give one answer for each store dir the lock lacks.
+
+    They were one "orphaned store dir" line: doctor prescribed `boost sync`,
+    which did nothing with them, and `heal` said there was nothing to heal.
+    """
+
+    def test_an_edited_skill_kept_in_the_store_is_not_tampering(self, boost,
+                                                                installed):
+        # It changes by being edited where it is; no one reviewed a copy of it.
+        # A tap skill's edit, beside it, still reads as one.
+        fm = "---\nname: pr-me\ndescription: mine\n---\n"
+        d = _store_skill("pr-me", fm + "# mine\n")
+        boost("sync")
+        (d / "SKILL.md").write_text(fm + "# edited\n", encoding="utf-8")
+        _tamper("brainstorming")
+        out = _flat(boost("doctor", expect=1).out)
+        assert "skill brainstorming modified since install" in out
+        assert "skill pr-me modified" not in out
+        boost("verify", "pr-me")
+        boost("verify", "brainstorming", expect=1)
+        drift = json.loads(boost("drift", "--json").out)["skills"]
+        assert {r["name"]: r["status"] for r in drift} == {
+            "brainstorming": "local-edits", "pr-me": "n/a"}
+        tested = json.loads(boost("test", "--json", expect=1).out)["skills"]
+        assert {r["name"]: "verify" in r["failed"] for r in tested} == {
+            "brainstorming": True, "pr-me": False}
+
+    def test_a_skill_added_by_hand_is_an_issue_sync_clears(self, boost, installed):
+        _store_skill("pr-me")
+        r = boost("doctor", expect=1)
+        assert ("1 skill added outside boost (pr-me) — `boost sync` records it"
+                in _flat(r.out))
+        boost("sync")
+        assert "added outside boost" not in boost("doctor").out
+
+    def test_heal_records_it_too(self, boost, installed):
+        _store_skill("pr-me")
+        r = boost("heal", "--dry-run")
+        assert "would record pr-me, which boost did not install, and link it" in r.out
+        assert "recorded pr-me as a local skill" in boost("heal").out
+        assert _lock()["pr-me"]["tap"] == "local"
+
+    def test_an_older_copy_elsewhere_is_named_and_left(self, boost, installed):
+        old = paths.home() / ".codex" / "skills" / "pr-me"
+        old.mkdir(parents=True)
+        (old / "SKILL.md").write_text("# old\n", encoding="utf-8")
+        os.utime(old / "SKILL.md", (1e9, 1e9))
+        _store_skill("pr-me", "# new\n")
+        flat = _flat(boost("doctor", expect=1).out)
+        assert ("pr-me: the copy in ~/.codex/skills/pr-me (Codex) is older by "
+                "file times — left alone") in flat
+        assert "1 skill added outside boost (pr-me)" in flat
+        assert ("pr-me: the copy in ~/.codex/skills/pr-me (Codex) is older by "
+                "file times — left alone") in _flat(boost("heal").out)
+        boost("sync")
+        assert (old / "SKILL.md").read_text(encoding="utf-8") == "# old\n"
+
+    def test_a_copy_of_another_tools_skill_is_named_and_heal_keeps_it(
+            self, boost, installed):
+        theirs = paths.home() / ".cursor" / "skills-cursor" / "automate"
+        theirs.mkdir(parents=True)
+        (theirs / "SKILL.md").write_text("# automate\n", encoding="utf-8")
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(theirs, copy)
+        assert ("1 store dir copies another tool's skills, not boost's "
+                "(automate) — remove with `boost sync --prune`"
+                ) in _flat(boost("doctor", expect=1).out)
+        r = boost("heal")
+        assert ("automate copies a skill from Cursor's built-ins "
+                "(~/.cursor/skills-cursor), not boost's — remove with "
+                "`boost sync --prune`") in _flat(r.out)
+        assert "nothing to heal automatically" in r.out
+        assert copy.is_dir() and "automate" not in _lock()
+
+    @pytest.mark.skipif(
+            sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+            reason="needs POSIX permission bits, as a user other than root")
+    def test_an_unreadable_skill_is_the_users_to_fix_and_heal_fails(
+            self, boost, installed):
+        mine = _store_skill("pr-me")
+        mine.chmod(0o600)   # no search bit: it used to be "not a skill"
+        try:
+            doctor = boost("doctor", expect=1)
+            heal = boost("heal", expect=1)
+        finally:
+            mine.chmod(0o700)
+        line = ("pr-me: ~/.agents/skills/pr-me cannot be read, so boost cannot "
+                "tell whose it is or record it — make it readable, then re-run "
+                "`boost sync`")
+        assert line in _flat(doctor.out)
+        assert line in _flat(heal.out + heal.err)
+        assert "not a skill" not in doctor.out + heal.out
+        assert "pr-me" not in _lock()
+
+    def test_a_git_repository_named_like_a_copy_is_never_sent_to_prune(
+            self, boost, installed):
+        theirs = paths.home() / ".cursor" / "skills-cursor" / "automate"
+        theirs.mkdir(parents=True)
+        (theirs / "SKILL.md").write_text("# automate\n", encoding="utf-8")
+        copy = paths.store_dir() / "automate"
+        shutil.copytree(theirs, copy)
+        (copy / ".git").mkdir()
+        flat = _flat(boost("doctor", expect=1).out)
+        assert ("automate is named like a skill from Cursor's built-ins "
+                "(~/.cursor/skills-cursor/automate), but it is a git repository, "
+                "so `boost sync --prune` leaves it — move or delete it yourself "
+                "if it is a copy") in flat
+        assert "remove with `boost sync --prune`" not in flat
+
+    def test_a_dir_that_is_not_a_skill_is_a_note_and_never_an_issue(
+            self, boost, installed):
+        bucket = paths.store_dir() / "synced" / "bucket"
+        bucket.mkdir(parents=True)
+        r = boost("doctor")
+        line = ("~/.agents/skills/synced holds no SKILL.md, so it is not a skill "
+                "— left alone")
+        assert line in _flat(r.out)
+        r = boost("heal")
+        assert line in _flat(r.out) and "nothing to heal" in r.out
+        boost("sync", "--prune")
+        assert bucket.is_dir()
+
+    def test_a_dir_boost_cannot_name_a_skill_by_is_a_note_everywhere(
+            self, boost, installed):
+        # A Finder duplicate stopped doctor three checks in, and made heal and
+        # sync exit with an error, because no path into the store takes it.
+        dup = paths.store_dir() / "brainstorming copy"
+        shutil.copytree(paths.store_dir() / "brainstorming", dup)
+        line = ("~/.agents/skills/brainstorming copy: boost cannot record a "
+                "skill by that name (only letters, digits, '.', '_' and '-') — "
+                "left alone")
+        r = boost("doctor")                 # a note: exit 0
+        assert line in _flat(r.out) and "● healthy" in r.out
+        r = boost("heal")
+        assert line in _flat(r.out) and "nothing to heal" in r.out
+        assert (dup / "SKILL.md").is_file()
+
+    def test_a_lost_lock_counts_only_what_sync_can_re_record(
+            self, boost, installed):
+        # The copy and the dir that is not a skill have lines of their own.
+        # Counted as "unrecorded" too, they promised a re-record sync never
+        # makes.
+        theirs = paths.home() / ".cursor" / "skills-cursor" / "automate"
+        theirs.mkdir(parents=True)
+        (theirs / "SKILL.md").write_text("# automate\n", encoding="utf-8")
+        shutil.copytree(theirs, paths.store_dir() / "automate")
+        (paths.store_dir() / "synced" / "bucket").mkdir(parents=True)
+        paths.lockfile_path().unlink()
+        flat = _flat(boost("doctor", expect=1).out)
+        assert ("lock file missing — 1 store dir unrecorded, run `boost sync` "
+                "to re-record it") in flat
+        assert ("1 store dir copies another tool's skills, not boost's "
+                "(automate)") in flat
+        assert "re-recorded brainstorming from" in boost("sync").out
+        assert sorted(_lock()) == ["brainstorming"]
+
+    def test_heal_over_a_lock_it_cannot_read_says_so_and_fails(
+            self, boost, installed):
+        # Heal re-records nothing over a lock it cannot read, so it cannot
+        # say "nothing to heal" over one either.
+        paths.lockfile_path().write_text("{oops", encoding="utf-8")
+        r = boost("heal", expect=1)
+        assert ("the lock file is corrupt, so heal cannot tell which store dirs "
+                "are boost's — restore it with `boost replay`"
+                ) in _flat(r.out + r.err)
+        assert "nothing to heal" not in r.out
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
+        paths.lockfile_path().write_text(
+            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
+        r = boost("heal", expect=1)
+        assert ("the lock file is schema v2, not v3, so heal cannot tell which "
+                "store dirs are boost's") in _flat(r.out + r.err)
+
+    def test_a_plugin_duplicate_is_an_issue_until_prune_drops_the_link(
+            self, boost, installed, claude_plugin):
+        claude_plugin()
+        link = paths.home() / ".claude" / "skills" / "brainstorming"
+        assert ("1 skill shows twice in Claude Code, which also loads it from an "
+                "enabled plugin (brainstorming) — `boost sync --prune` drops "
+                "boost's Claude Code link") in _flat(boost("doctor", expect=1).out)
+        r = boost("heal")
+        assert "nothing to heal automatically" in r.out
+        assert link.is_symlink()
+        boost("sync", "--prune")
+        r = boost("doctor")                 # the missing link is no fault
+        assert "shows twice" not in r.out and "● healthy" in r.out
+        assert "not linked for claude-code" not in r.out
+        assert re.search(r"claude-code\s+1/1 ✓", boost("health").out)
+
+    def test_a_plugin_skill_that_only_shares_the_name_is_a_note(
+            self, boost, installed, claude_plugin):
+        claude_plugin(body="# the plugin's own\n")
+        assert ("brainstorming shows twice in Claude Code — plugin "
+                "eight-backend@eight ships a different skill by that name; both "
+                "left as they are") in _flat(boost("doctor").out)

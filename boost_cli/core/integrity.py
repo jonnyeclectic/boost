@@ -23,6 +23,7 @@ to trust it.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from ..errors import BoostError
@@ -46,12 +47,39 @@ def _store_dir(name: str) -> Path:
     return paths.store_dir() / name
 
 
+def self_sourced(name: str, entry: dict | None) -> bool:
+    """Whether ``entry`` records skill ``name`` as its own source.
+
+    What `boost sync` writes for a skill put in the store by hand: ``tap:
+    local``, no URL, and a ``source_dir`` that is the store dir itself. The
+    user edits such a skill where it is, so its digest is the content boost
+    first saw, not a copy anyone fetched and reviewed, and drifting from it
+    is the skill changing rather than being tampered with. A local import
+    whose source is elsewhere is not this, even once that source is gone:
+    it was copied from something, and differing from the copy still means
+    something.
+    """
+    if not entry or entry.get("tap") != "local" or entry.get("source_url"):
+        return False
+    raw = str(entry.get("source_dir") or "")
+    if not raw:
+        return False
+    try:
+        return os.path.samefile(raw, _store_dir(name))
+    except OSError:
+        # Either side missing or unreadable: the recorded path still says
+        # which dir it named.
+        return os.path.realpath(raw) == os.path.realpath(_store_dir(name))
+
+
 def status(name: str, entry: dict | None = None) -> str:
     """Classify an installed skill's integrity against its lock entry.
 
     ``entry`` may be supplied to avoid a re-read when the caller already has it.
     Returns one of the ``STATUS_*`` constants. ``UNLOCKED`` means the lock has no
-    recorded ``sha256`` to compare against — an old entry, not a failure.
+    recorded ``sha256`` to compare against — an old entry, not a failure. A
+    skill kept in the store itself (:func:`self_sourced`) is ``OK`` whatever it
+    hashes to: editing it is how it changes.
     """
     if entry is None:
         entry = lockfile.get_skill(name)
@@ -64,6 +92,8 @@ def status(name: str, entry: dict | None = None) -> str:
     recorded = entry.get("sha256")
     if not recorded:
         return STATUS_UNLOCKED
+    if self_sourced(name, entry):
+        return STATUS_OK
     return STATUS_OK if util.sha256_dir(sdir) == recorded else STATUS_MODIFIED
 
 

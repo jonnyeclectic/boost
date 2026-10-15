@@ -489,20 +489,29 @@ def cmd_profile(argv) -> int:
             # `list`/`doctor` still calling it set aside.
             _warn_unwritable(store.unsideline(n),
                              stream=sys.stderr if args.json else None)
-    uninstalled, sidelined, kept_extras = [], [], False
+    uninstalled: list[str] = []
+    sidelined: list[str] = []
+    kept_extras = False
+    only: list[str] = []
     if extras:
+        # A skill `boost sync` recorded where it found it has no copy outside
+        # the store, so --prune would delete it for good as a side effect of
+        # switching profiles. It is set aside like any extra instead.
+        only = [n for n in extras
+                if args.prune and store.only_copy(n, lockfile.get_skill(n) or {})]
+        doomed = [n for n in extras if n not in only]
         # A declined --prune confirm used to leave extras fully installed
         # and linked, then still print the unconditional "switched" below —
         # a checkmark for a state the machine was not in. Falling through to
         # the same sideline extras get without --prune keeps that claim true
         # either way, without a second prompt. `and` short-circuits, so no
         # prompt is raised when --prune was not asked for.
-        pruned = args.prune and out.confirm(
+        pruned = args.prune and bool(doomed) and out.confirm(
             "uninstall %d skill%s not in the profile (%s)?"
-            % (len(extras), _s(len(extras)), ", ".join(extras)),
+            % (len(doomed), _s(len(doomed)), ", ".join(doomed)),
             quiet=args.json)
         if pruned:
-            for n in extras:
+            for n in doomed:
                 store.uninstall(n)
                 if not args.json:
                     out.ok("uninstalled %s" % n)
@@ -513,19 +522,24 @@ def cmd_profile(argv) -> int:
             # still installed — and is now reported beside a populated
             # `sidelined`: kept, but unlinked. It stays False when --prune
             # was never passed, since nothing was ever kept against a no.
-            kept_extras = bool(args.prune)
-            for n in extras:
-                store.sideline(n, "profile")
-            sidelined = extras
-            if not args.json:
-                out.info("sidelined %d skill%s not in the profile (unlinked, still installed): %s"
-                         % (len(extras), _s(len(extras)), ", ".join(extras)))
+            kept_extras = bool(args.prune) and bool(doomed)
+        if not args.json:
+            for n in only:
+                out.info("kept %s: the store holds its only copy — "
+                         "`boost uninstall %s` deletes it" % (n, n))
+        sidelined = only if pruned else extras
+        for n in sidelined:
+            store.sideline(n, "profile")
+        if sidelined and not args.json:
+            out.info("sidelined %d skill%s not in the profile (unlinked, still installed): %s"
+                     % (len(sidelined), _s(len(sidelined)), ", ".join(sidelined)))
     journal.log("profile", args.name, op="use")
     if args.json:
         print(json.dumps({"name": args.name, "installed": installed_now,
                           "not_found": not_found, "uninstalled": uninstalled,
                           "sidelined": sidelined, "kept_extras": kept_extras,
-                          "other_kind": other_kind}, indent=2))
+                          "other_kind": other_kind,
+                          **({"only_copies": only} if only else {})}, indent=2))
         return 0
     out.ok("switched to profile %s" % args.name)
     return 0
@@ -864,6 +878,15 @@ def cmd_replay(argv) -> int:
     # later run repeated the same warning and still claimed "complete". Split
     # it out up front: it never gates the confirm prompt below, only whether
     # there is anything else left to do.
+    # A skill recorded since the snapshot whose only copy is the store — one
+    # `boost sync` found and recorded — is deleted for good by an uninstall,
+    # so rollback leaves it and says how to remove it.
+    only = [n for n in added if store.only_copy(n, current[n])]
+    added = [n for n in added if n not in only]
+    if only and not args.json:
+        for n in only:
+            out.info("kept %s: the store holds its only copy — `boost "
+                     "uninstall %s` deletes it" % (n, n))
     resolved = {n: _resolve_entry(n, prefer_tap=snap_skills[n].get("tap"))
                for n in removed}
     restorable = [n for n in removed if resolved[n] is not None]
@@ -875,11 +898,14 @@ def cmd_replay(argv) -> int:
             # here. Adding it broke that PR's own contract test, and the test
             # is the specification — see the note on this train's PR.
             print(json.dumps({"id": args.id, "no_changes": True,
-                              "not_rolled_back": mat_diff}, indent=2))
+                              "not_rolled_back": mat_diff,
+                              **({"only_copies": only} if only else {})},
+                             indent=2))
             return 0
         for n in gone:
             out.warn("%s is gone from every tap — cannot restore" % n)
-        out.ok("skills already match this snapshot — nothing to do"
+        out.ok("nothing else to roll back" if only else
+               "skills already match this snapshot — nothing to do"
                if mat_diff else "already at this snapshot — nothing to do")
         return 0
     if not args.json:
@@ -925,7 +951,8 @@ def cmd_replay(argv) -> int:
         print(json.dumps({"id": args.id, "uninstalled": uninstalled,
                           "restored": restored, "unrestorable": gone,
                           "version_diffs": version_diffs,
-                          "not_rolled_back": mat_diff}, indent=2))
+                          "not_rolled_back": mat_diff,
+                          **({"only_copies": only} if only else {})}, indent=2))
         return 1 if gone else 0
     if gone:
         out.warn("finished with %d skill%s not restored: %s"
