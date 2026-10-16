@@ -92,6 +92,12 @@ class InstallResult:
     # removes a link — pruning stays `boost sync --prune`'s decision — so these
     # are exactly what the next `sync --diff` reports as out of scope.
     out_of_scope: list[str] = field(default_factory=list)
+    # A workflow's copy in the canonical store (`_skill_copy`): where it was
+    # written, or, when it was not, why — a name a skill already holds, a
+    # source with no description. Core words the reason; the command prints
+    # it.
+    skill_copy: Path | None = None
+    skill_note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -803,8 +809,11 @@ def _untouched_materializations(existing: dict | None,
     in ``CLAUDE.md`` or a live slash command that no record claimed and no
     command could reverse.
     """
+    # The skill copy is never carried: it names no agent, so it is never in
+    # ``linked``, and carrying it appended a second copy of the row on every
+    # reinstall. `_install_workflow` decides it afresh each run.
     return [m for m in (existing or {}).get("materializations") or []
-            if m.get("agent") not in linked]
+            if m.get("agent") not in linked and not lockfile.is_skill_copy(m)]
 
 
 def materialization_is_written(kind: str, entry: dict, m: dict) -> bool:
@@ -1371,6 +1380,22 @@ def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
     which reads exactly like a fresh install. ``force`` is the user saying
     to replace it anyway, and ``retry`` names the command that does.
     """
+    owner = None if existing else skill_copy_owner(name)
+    if owner is not None:
+        if force:
+            # The user asked for the skill. The workflow keeps its own files
+            # and loses only its copy here, and its next install finds a skill
+            # by this name and skips the copy rather than writing over it.
+            _drop_skill_copy_row(owner)
+            return
+        raise BoostError("%s is already in the store at %s, as the skill copy "
+                         "of workflow %s" % (name, paths.tilde(
+                             skill_store_dir(name)), owner),
+                         hint=("%s replaces it; the workflow keeps its own "
+                               "files" % retry if retry else
+                               "`boost install %s --force --no-as-skill` takes "
+                               "the copy out of the store" % owner),
+                         wrap=True)
     if existing or force:
         return
     dest = skill_store_dir(name)
@@ -1409,7 +1434,8 @@ def _refuse_self_installing(entry: dict) -> None:
 def install(entry: dict, force: bool = False,
             only_agents: list[str] | None = None,
             scope: str = "user", base=None,
-            via: str | None = None) -> InstallResult:
+            via: str | None = None,
+            as_skill: bool | None = None) -> InstallResult:
     """Install a catalog entry. Raises BoostError on policy block or conflict.
 
     ``scope`` is ``"user"`` (default — the canonical store, symlinked into the
@@ -1421,6 +1447,10 @@ def install(entry: dict, force: bool = False,
     ``registry.add``'s ``via=`` kwarg to ``journal.log``. ``None`` means an
     ordinary ``boost install``, and is dropped from the event like any other
     ``None``-valued field (``journal.log``).
+
+    ``as_skill`` is a workflow's ``--as-skill``/``--no-as-skill``; ``None``
+    replays what the lock recorded, else follows ``workflows_as_skills``. Any
+    other kind ignores it.
     """
     scopes.check_scope(scope)
     _refuse_self_installing(entry)
@@ -1430,7 +1460,8 @@ def install(entry: dict, force: bool = False,
                              scope=scope, base=base, via=via)
     if kind == "workflow":
         return _install_workflow(entry, force=force, only_agents=only_agents,
-                                 scope=scope, base=base, via=via)
+                                 scope=scope, base=base, via=via,
+                                 as_skill=as_skill)
     if kind != "skill":
         raise BoostError(
             "%s is a %s, which boost does not know how to install" % (entry["name"], kind),
@@ -2533,6 +2564,8 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
                         path.unlink()  # file held only our block
         elif path.is_file():
             path.unlink()
+            if lockfile.is_skill_copy(m):
+                _rmdir_quietly(path.parent)
     journal.log("quarantine", name)
     return affected
 
@@ -2606,7 +2639,8 @@ def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
 def _install_workflow(entry: dict, force: bool = False,
                       only_agents: list[str] | None = None,
                       scope: str = "user", base=None,
-                      via: str | None = None) -> InstallResult:
+                      via: str | None = None,
+                      as_skill: bool | None = None) -> InstallResult:
     """Materialize a workflow (slash command / subagent) into each enabled agent.
 
     A verbatim Markdown drop into the agent's ``commands/`` or ``agents/`` dir —
@@ -2684,6 +2718,12 @@ def _install_workflow(entry: dict, force: bool = False,
     # As for rules: an unrecorded materialization is a live slash command that
     # `_uninstall_workflow` — driven by this list — can never remove.
     materializations.extend(_refused_materializations(existing, linked, refused))
+    # Last, always: `boost info` and update's risk diff read the first
+    # readable row as "the" installed text, and that is an agent's file.
+    copy_row, copy_note = _skill_copy(name, slot, raw, existing, as_skill,
+                                      scope)
+    if copy_row is not None:
+        materializations.append(copy_row)
 
     now = util.now_iso()
     lockfile.set_workflow(name, {
@@ -2703,6 +2743,15 @@ def _install_workflow(entry: dict, force: bool = False,
         "pinned": bool((existing or {}).get("pinned")),
         "quarantined": False,
         "materializations": materializations,
+        # Only an explicit `--as-skill`/`--no-as-skill` is recorded, and then
+        # it sticks through update, reinstall and sync. Absent means "follow
+        # `workflows_as_skills`", so turning the config off reaches entries
+        # installed while it was on — recording the resolved value would
+        # have frozen every one of them at True.
+        **({"as_skill": as_skill} if as_skill is not None
+           else {"as_skill": existing["as_skill"]}
+           if existing and isinstance(existing.get("as_skill"), bool)
+           else {}),
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
 
@@ -2716,24 +2765,332 @@ def _install_workflow(entry: dict, force: bool = False,
     res.conflicts = conflicts
     res.upgraded = existing is not None
     res.scope = scope
+    res.skill_copy = Path(copy_row["path"]).parent if copy_row else None
+    res.skill_note = copy_note
     return res
 
 
+# --------------------------------------------------------------------------
+# A workflow's skill copy: the same procedure, reachable from the store
+# --------------------------------------------------------------------------
+# A subagent rendered into ~/.claude/agents is invisible to an agent that reads
+# only skills — Codex has no workflow format at all (config.DEFAULTS) and reads
+# ~/.agents/skills directly. So a workflow also gets
+# ``<store>/<name>/SKILL.md``, recorded as one more materialization row
+# (``slot: "skill"``, ``agent: None``) on the workflow's own lock entry. Being
+# a row is what makes update refresh it, uninstall and quarantine remove it,
+# `boost verify` hash it and `boost sync` rewrite it when it goes missing,
+# with no second code path for any of them.
+#
+# It is never linked. The agents boost links skills into already get the
+# workflow's own file, and a link would show them the procedure twice.
+# Antigravity takes no workflow and so gets neither — not linking it there is
+# the cost of one rule for every linking agent. Gemini reads the store
+# natively and gets its own agent file too; nothing boost writes can hide a
+# store dir from it.
+#
+# User scope only. Project scope has no canonical store — a project skill is
+# a real dir per agent (`_install_project_skill`) — so the equivalent would be
+# a per-agent design of its own, and is not attempted.
+#
+# Known limit: the dir is recognised as the workflow's through the lock. With
+# the lock file lost there is no workflow entry either, and `boost sync`
+# treats the dir like any unrecorded store skill.
+
+
+def _copy_row(entry: dict | None) -> dict | None:
+    """The skill-copy row on a workflow's lock ``entry``, or None."""
+    return next((m for m in (entry or {}).get("materializations") or ()
+                 if lockfile.is_skill_copy(m)), None)
+
+
+def workflow_owned_store_names() -> set[str]:
+    """Store dirs that are a workflow's skill copy, by name.
+
+    Recorded on the workflow, not in the ``skills`` section, so every check
+    that asks "does the lock record this store dir?" with the skills section
+    alone would call it a hand-added skill — and `boost sync` would adopt it
+    and link it into every agent, the duplicate the copy exists to avoid.
+    """
+    return {Path(m["path"]).parent.name
+            for entry in lockfile.installed_workflows().values()
+            if (m := _copy_row(entry)) is not None and m.get("path")}
+
+
+def skill_copy_owner(name: str) -> str | None:
+    """The workflow whose skill copy is the store dir ``name``, or None."""
+    for wname, entry in lockfile.installed_workflows().items():
+        m = _copy_row(entry)
+        if m is not None and Path(m.get("path", "")).parent.name == name:
+            return wname
+    return None
+
+
+def _drop_skill_copy_row(workflow: str) -> None:
+    """Forget a workflow's skill copy without touching the file."""
+    entry = lockfile.get_workflow(workflow)
+    if not entry:
+        return
+    entry["materializations"] = [m for m in entry.get("materializations") or ()
+                                 if not lockfile.is_skill_copy(m)]
+    lockfile.set_workflow(workflow, entry)
+
+
+def wants_skill_copy(as_skill: bool | None, existing: dict | None) -> bool:
+    """Whether a workflow install should write its skill copy.
+
+    The explicit flag, else the one an earlier install recorded, else the
+    ``workflows_as_skills`` config.
+    """
+    if as_skill is not None:
+        return as_skill
+    recorded = (existing or {}).get("as_skill")
+    if isinstance(recorded, bool):
+        return recorded
+    return bool(config.get("workflows_as_skills", True))
+
+
+def _text_sha(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _file_sha(path: Path) -> str | None:
+    try:
+        return _text_sha(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def skill_copy_blocker(name: str, existing: dict | None) -> str | None:
+    """Why the store dir ``name`` cannot take this workflow's copy, or None.
+
+    A skill the lock records by that name, or anything else already there
+    that is not this workflow's own copy, wins: the copy is a convenience and
+    is never worth a file the user or another tool put there.
+    """
+    if not util.is_safe_component(name):
+        return "%r is not a name the skill store can hold" % name
+    if lockfile.get_skill(name):
+        return ("a skill named %s is already installed — the workflow is "
+                "not written to the skill store" % name)
+    dest = skill_store_dir(name)
+    own = _copy_row(existing)
+    if (os.path.lexists(dest)
+            and (own is None or Path(own.get("path", "")).parent != dest)):
+        return ("%s is already in the skill store and is not this workflow's "
+                "— left alone" % paths.tilde(dest))
+    return None
+
+
+def _remove_skill_copy(m: dict) -> tuple[bool, str | None]:
+    """Remove one recorded copy if it is still what boost wrote.
+
+    ``(removed, kept)``: an edited copy is the user's now and stays, and
+    ``kept`` names it. The dir goes too once it is empty — leaving it would
+    leave a store dir with no SKILL.md, which sync names as not a skill.
+    """
+    path = Path(m.get("path", ""))
+    if not _present(path):
+        _rmdir_quietly(path.parent)
+        return False, None
+    if _file_sha(path) != m.get("sha256"):
+        return False, str(path)
+    path.unlink(missing_ok=True)
+    _rmdir_quietly(path.parent)
+    return True, None
+
+
+def _rmdir_quietly(d: Path) -> None:
+    """Remove ``d`` if it is an empty store dir; leave anything else."""
+    with contextlib.suppress(OSError):
+        if d.parent == paths.store_dir():
+            d.rmdir()
+
+
+def _skill_copy(name: str, slot: str, raw: str, existing: dict | None,
+                as_skill: bool | None, scope: str
+                ) -> tuple[dict | None, str | None]:
+    """Write (or retire) the workflow's skill copy: ``(row, note)``.
+
+    ``row`` is what to record, None when there is no copy after this run.
+    ``note`` says why there is none, or what happened to an old one, when
+    that is worth telling the user.
+    """
+    from . import frontmatter, workflows
+    own = _copy_row(existing)
+    if scope == scopes.SCOPE_PROJECT:
+        return None, ("not written to the skill store: --as-skill is user "
+                      "scope only" if as_skill else None)
+    if not wants_skill_copy(as_skill, existing):
+        if own is None:
+            return None, None
+        removed, kept = _remove_skill_copy(own)
+        if kept:
+            return None, ("left %s in place: it was edited since boost wrote "
+                          "it" % paths.tilde(kept))
+        return None, ("removed its copy from the skill store" if removed
+                      else None)
+    meta, _ = frontmatter.parse(raw)
+    desc = workflows.skill_description(slot, meta)
+    if desc is None:
+        if own is not None:
+            _remove_skill_copy(own)
+        return None, ("not written to the skill store: it has no "
+                      "description, and a skill host picks skills by theirs")
+    blocker = skill_copy_blocker(name, existing)
+    if blocker:
+        return None, blocker
+    text = workflows.render_skill(name, desc, raw)
+    dest = skill_store_dir(name) / "SKILL.md"
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        util.atomic_write_text(dest, text)
+    except OSError as err:
+        # The agents' files are written; a store that refuses one file is not
+        # worth failing the install over. A copy already on disk stays
+        # recorded, so uninstall can still remove it.
+        return own, ("not written to the skill store: %s"
+                     % (err.strerror or err))
+    return ({"agent": None, "slot": workflows.SLOT_SKILL, "path": str(dest),
+             "sha256": _text_sha(text)}, None)
+
+
+def _installed_raw(entry: dict) -> str | None:
+    """The source text a workflow was installed from, or None if it is gone.
+
+    Only text whose sha256 is the one the lock recorded, so a backfill writes
+    the procedure that is installed, never a newer one the tap has moved to —
+    which would be the covert update a pin exists to prevent. The tap's file
+    is asked first; then the agents' own files, which are verbatim for every
+    agent but Gemini (:func:`workflows.render`), so a tap that moved still
+    leaves one copy of the installed text on disk.
+    """
+    want = entry.get("sha256")
+    if not want:
+        return None
+    candidates: list[Path] = []
+    with contextlib.suppress(BoostError):
+        candidates.append(registry.get(entry.get("tap") or "").path
+                          / entry.get("source_file", ""))
+    candidates += [Path(m["path"]) for m in entry.get("materializations") or ()
+                   if m.get("path") and not lockfile.is_skill_copy(m)
+                   and not m.get("unwritable")]
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _text_sha(text) == want:
+            return text
+    return None
+
+
+def _backfill_candidates() -> list[tuple[str, dict, str]]:
+    """``(name, entry, source text)`` for each installed workflow an install
+    would give a skill copy today and that has none.
+
+    The same conditions :func:`_skill_copy` writes under: user scope, live
+    (not quarantined, not stranded), wanted (:func:`wants_skill_copy`), with a
+    description, and with nothing else at its store dir. A workflow whose
+    installed text cannot be found is left out — `boost update` writes its
+    copy from the tap.
+    """
+    from . import frontmatter, workflows
+    out = []
+    for name, entry in sorted(lockfile.installed_workflows().items()):
+        if (entry.get("scope", scopes.SCOPE_USER) == scopes.SCOPE_PROJECT
+                or entry.get("quarantined") or scopes.stranded(entry)
+                or _copy_row(entry) is not None
+                or not wants_skill_copy(None, entry)
+                or skill_copy_blocker(name, entry)):
+            continue
+        raw = _installed_raw(entry)
+        if raw is None:
+            continue
+        slot = entry.get("slot") or workflows.detect_slot(
+            entry.get("source_file", ""))
+        if workflows.skill_description(slot, frontmatter.parse(raw)[0]):
+            out.append((name, entry, raw))
+    return out
+
+
+def workflows_without_skill_copy() -> list[str]:
+    """Installed workflows `boost heal --as-skill` would give a skill copy."""
+    return [name for name, _entry, _raw in _backfill_candidates()]
+
+
+def backfill_skill_copies(dry: bool = False) -> list[str]:
+    """Write the skill copy of every workflow installed without one.
+
+    For workflows installed before the copy existed, or while
+    ``workflows_as_skills`` was off. Writes only the copy and its row: the
+    agents' files are already what the lock says, and reinstalling to get one
+    file would rewrite them from whatever the tap holds now. Returns one line
+    per workflow, in the tense of ``dry``.
+    """
+    from . import workflows
+    lines = []
+    for name, entry, raw in _backfill_candidates():
+        dest = skill_store_dir(name)
+        if dry:
+            lines.append("would write workflow %s's skill copy to %s"
+                         % (name, paths.tilde(dest)))
+            continue
+        slot = entry.get("slot") or workflows.detect_slot(
+            entry.get("source_file", ""))
+        row, note = _skill_copy(name, slot, raw, entry, None,
+                                scopes.SCOPE_USER)
+        if row is None:
+            lines.append("workflow %s: %s" % (name, note))
+            continue
+        entry["materializations"] = [*(entry.get("materializations") or ()),
+                                     row]
+        lockfile.set_workflow(name, entry)
+        lines.append("wrote workflow %s's skill copy to %s"
+                     % (name, paths.tilde(dest)))
+    return lines
+
+
 def _uninstall_workflow(name: str, workflow: dict) -> dict:
-    """Remove every file dropped for an installed workflow."""
+    """Remove every file dropped for an installed workflow.
+
+    Its skill copy goes only while it is still what boost wrote: the store is
+    where a user edits skills, and an edited copy is theirs now. The result's
+    ``kept`` names any left in place.
+    """
     removed: list[str] = []
     plan: list[tuple[Path, str]] = []
+    copies: list[dict] = []
+    kept: list[str] = []
     for m in workflow.get("materializations", []):
         path = Path(m.get("path", ""))
+        if lockfile.is_skill_copy(m):
+            copies.append(m)
+            continue
         with _refused_removal(name, path):
             if _present(path):
                 plan.append((path, ""))
         if m.get("agent"):
             removed.append(m["agent"])
+    for m in copies:
+        path = Path(m.get("path", ""))
+        with _refused_removal(name, path):
+            if _present(path):
+                if _file_sha(path) == m.get("sha256"):
+                    plan.append((path, ""))
+                else:
+                    kept.append(str(path))
     gone = _remove_all_or_nothing(name, plan)
+    for m in copies:
+        if m.get("path") not in kept:
+            _rmdir_quietly(Path(m.get("path", "")).parent)
     lockfile.remove_workflow(name)
     journal.log("uninstall", name)
-    return _materialized_result(name, removed, workflow, "workflow", gone)
+    res = _materialized_result(name, removed, workflow, "workflow", gone)
+    if kept:
+        res["kept"] = kept
+    return res
 
 
 def _materialized_result(name: str, removed: list[str], entry: dict,
@@ -3314,8 +3671,13 @@ def unrecorded_store_dirs(lock: dict) -> list[str]:
     machine (:func:`classify_unrecorded`), and whether a lock may be read as
     "none of these are boost's" at all is :func:`lock_vouches`. A name boost
     could not record is :func:`misnamed_store_dirs`'s, not this list's.
+
+    A workflow's skill copy is recorded too, on the workflow
+    (:func:`workflow_owned_store_names`), and is not a candidate.
     """
-    return [n for n in _store_dirs() if n not in lock and util.is_safe_component(n)]
+    owned = workflow_owned_store_names()
+    return [n for n in _store_dirs()
+            if n not in lock and n not in owned and util.is_safe_component(n)]
 
 
 def misnamed_store_dirs() -> list[str]:
