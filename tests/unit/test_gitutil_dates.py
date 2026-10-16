@@ -179,3 +179,14 @@ class TestUpdatingKeepsADeepCloneDeep:
         out = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=clone,
                              capture_output=True, text=True, check=True)
         assert out.stdout.strip() == "1"
+
+
+class TestHeadTime:
+    def test_the_newest_commit(self, tap):
+        assert gitutil.head_time(tap) == NEW
+
+    def test_a_shallow_clone_still_has_one(self, tap, tmp_path):
+        assert gitutil.head_time(_shallow_clone(tap, tmp_path / "clone")) == NEW
+
+    def test_not_a_repo(self, tmp_path):
+        assert gitutil.head_time(tmp_path) is None

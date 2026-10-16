@@ -508,6 +508,14 @@ def path_updated_at(repo: Path, rel_dir: str = ".", rev: str = "HEAD") -> int | 
     return None if sha in _graft_points(repo) else int(when)
 
 
+def head_time(repo: Path) -> int | None:
+    """The HEAD commit's committer time, or None. No earlier than any date
+    :func:`path_updated_at` can find at HEAD, shallow clone or not."""
+    proc = run(["-C", str(repo), "log", "-1", "--format=%ct", "HEAD"], check=False)
+    when = proc.stdout.strip()
+    return int(when) if proc.returncode == 0 and when.isdigit() else None
+
+
 def log_for_path(repo: Path, rel_path: str = ".", n: int = 20) -> list[str]:
     """Formatted one-line log entries for a path inside a repo."""
     proc = run(["-C", str(repo), "log", "--date=short", "-n", str(n),
