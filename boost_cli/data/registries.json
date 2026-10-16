@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 543,
-  "est_items_total": 36561,
-  "est_items_scannable": 32140,
+  "count": 537,
+  "est_items_total": 36234,
+  "est_items_scannable": 31743,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -38,17 +38,6 @@
       "curated": false
     },
     {
-      "name": "blefnk/awesome-cursor-rules",
-      "url": "https://github.com/blefnk/awesome-cursor-rules",
-      "type": "rule",
-      "category": "frontend",
-      "focus": "Modern frontend rules for Next.js, React, TypeScript",
-      "est_items": 20,
-      "confidence": "med",
-      "list_only": false,
-      "curated": false
-    },
-    {
       "name": "BlueBirdBack/godot-cursorrules",
       "url": "https://github.com/BlueBirdBack/godot-cursorrules",
       "type": "rule",
@@ -56,6 +45,17 @@
       "focus": "Godot 4.4 game-development coding-standard cursor rules",
       "est_items": 10,
       "confidence": "low",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "cursor/community-plugins",
+      "url": "https://github.com/cursor/community-plugins",
+      "type": "rule",
+      "category": "meta",
+      "focus": "Cursor's community plugins repo (formerly pontusab/directories, the cursor.directory backing repo)",
+      "est_items": 1,
+      "confidence": "high",
       "list_only": false,
       "curated": false
     },
@@ -82,12 +82,12 @@
       "curated": false
     },
     {
-      "name": "DVC2/cursor_prompts",
-      "url": "https://github.com/DVC2/cursor_prompts",
+      "name": "DVC2/cursor-agent-configs",
+      "url": "https://github.com/DVC2/cursor-agent-configs",
       "type": "rule",
       "category": "general",
       "focus": "Curated advanced .mdc rules for agent behavior, memory, workflows",
-      "est_items": 15,
+      "est_items": 11,
       "confidence": "low",
       "list_only": false,
       "curated": false
@@ -112,6 +112,17 @@
       "est_items": 25,
       "confidence": "low",
       "list_only": true,
+      "curated": false
+    },
+    {
+      "name": "holtwood/awesome-cursorrules-zh",
+      "url": "https://github.com/holtwood/awesome-cursorrules-zh",
+      "type": "rule",
+      "category": "meta",
+      "focus": "Chinese curated collection of 132+ Cursor rules across 32 domains",
+      "est_items": 446,
+      "confidence": "high",
+      "list_only": false,
       "curated": false
     },
     {
@@ -170,17 +181,6 @@
       "curated": false
     },
     {
-      "name": "LessUp/awesome-cursorrules-zh",
-      "url": "https://github.com/LessUp/awesome-cursorrules-zh",
-      "type": "rule",
-      "category": "meta",
-      "focus": "Chinese curated collection of 132+ Cursor rules across 32 domains",
-      "est_items": 132,
-      "confidence": "high",
-      "list_only": false,
-      "curated": false
-    },
-    {
       "name": "matank001/cursor-security-rules",
       "url": "https://github.com/matank001/cursor-security-rules",
       "type": "rule",
@@ -221,28 +221,6 @@
       "focus": "PHP and Laravel Cursor rules for standards, testing, conventions",
       "est_items": 12,
       "confidence": "med",
-      "list_only": false,
-      "curated": false
-    },
-    {
-      "name": "pontusab/directories",
-      "url": "https://github.com/pontusab/directories",
-      "type": "rule",
-      "category": "meta",
-      "focus": "Backing repo for cursor.directory; Cursor & Windsurf rules and MCPs",
-      "est_items": 400,
-      "confidence": "high",
-      "list_only": false,
-      "curated": false
-    },
-    {
-      "name": "quintonwall/cursorrules",
-      "url": "https://github.com/quintonwall/cursorrules",
-      "type": "rule",
-      "category": "general",
-      "focus": "Collection of cursor rules files for different languages",
-      "est_items": 15,
-      "confidence": "low",
       "list_only": false,
       "curated": false
     },
@@ -375,7 +353,7 @@
       "focus": "Curated collection of official and community-built Claude skills",
       "est_items": 40,
       "confidence": "med",
-      "list_only": false,
+      "list_only": true,
       "curated": false
     },
     {
@@ -463,6 +441,17 @@
       "focus": "Agent skills for Kubernetes cluster operations - Cilium, Talos, Flux... (62 skills)",
       "est_items": 62,
       "confidence": "med",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "AIPentest/CyberStrikeAI",
+      "url": "https://github.com/AIPentest/CyberStrikeAI",
+      "type": "skill",
+      "category": "general",
+      "focus": "The system of action for AI-native cybersecurity-where intent becomes... (23 skills, 16 workflows)",
+      "est_items": 40,
+      "confidence": "high",
       "list_only": false,
       "curated": false
     },
@@ -709,6 +698,17 @@
       "curated": false
     },
     {
+      "name": "appeeky/aso-skills",
+      "url": "https://github.com/appeeky/aso-skills",
+      "type": "skill",
+      "category": "general",
+      "focus": "AI agent skills for App Store Optimization (ASO) and app marketing... (40 skills)",
+      "est_items": 40,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "appeeky/stripe-skills",
       "url": "https://github.com/appeeky/stripe-skills",
       "type": "skill",
@@ -891,17 +891,6 @@
       "category": "general",
       "focus": "Seedance 2.0 Higgsfield | 15 Claude prompt skills for AI video... (30 skills)",
       "est_items": 30,
-      "confidence": "high",
-      "list_only": false,
-      "curated": false
-    },
-    {
-      "name": "besoeasy/open-skills",
-      "url": "https://github.com/besoeasy/open-skills",
-      "type": "skill",
-      "category": "general",
-      "focus": "Battle-tested skill library for AI agents. Save 98% of API costs with... (40 skills)",
-      "est_items": 40,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -1281,6 +1270,17 @@
       "curated": false
     },
     {
+      "name": "coreweave/forge-agent-lens-for-claude-code",
+      "url": "https://github.com/coreweave/forge-agent-lens-for-claude-code",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Claude Code plugin that traces sessions, tool calls, and subagents to... (3 skills)",
+      "est_items": 3,
+      "confidence": "med",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "coreyhaines31/marketingskills",
       "url": "https://github.com/coreyhaines31/marketingskills",
       "type": "skill",
@@ -1578,17 +1578,6 @@
       "curated": false
     },
     {
-      "name": "Ed1s0nZ/CyberStrikeAI",
-      "url": "https://github.com/Ed1s0nZ/CyberStrikeAI",
-      "type": "skill",
-      "category": "general",
-      "focus": "The system of action for AI-native cybersecurity-where intent becomes... (23 skills, 16 workflows)",
-      "est_items": 39,
-      "confidence": "high",
-      "list_only": false,
-      "curated": false
-    },
-    {
       "name": "elastic/agent-skills",
       "url": "https://github.com/elastic/agent-skills",
       "type": "skill",
@@ -1650,17 +1639,6 @@
       "category": "marketing",
       "focus": "Growth experiments, cold outbound, sales pipeline, content ops and revenue intelligence",
       "est_items": 27,
-      "confidence": "high",
-      "list_only": false,
-      "curated": false
-    },
-    {
-      "name": "Eronred/aso-skills",
-      "url": "https://github.com/Eronred/aso-skills",
-      "type": "skill",
-      "category": "general",
-      "focus": "AI agent skills for App Store Optimization (ASO) and app marketing... (40 skills)",
-      "est_items": 40,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -1830,17 +1808,6 @@
       "list_only": false,
       "curated": false,
       "self_installing": "git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack && cd ~/.claude/skills/gstack && ./setup"
-    },
-    {
-      "name": "GDvega/super-android-kotlin-firebase-skill",
-      "url": "https://github.com/GDvega/super-android-kotlin-firebase-skill",
-      "type": "skill",
-      "category": "java",
-      "focus": "A modular Agent Skills repository for Android, Kotlin, Jetpack Compose... (38 skills)",
-      "est_items": 38,
-      "confidence": "med",
-      "list_only": false,
-      "curated": false
     },
     {
       "name": "Gentleman-Programming/Gentleman.Dots",
@@ -3324,7 +3291,7 @@
       "focus": "Curated collection of official and community Claude skills",
       "est_items": 30,
       "confidence": "low",
-      "list_only": false,
+      "list_only": true,
       "curated": false
     },
     {
@@ -4824,17 +4791,6 @@
       "curated": false
     },
     {
-      "name": "wandb/weave-claude-code",
-      "url": "https://github.com/wandb/weave-claude-code",
-      "type": "skill",
-      "category": "ai",
-      "focus": "Claude Code plugin that traces sessions, tool calls, and subagents to... (3 skills)",
-      "est_items": 3,
-      "confidence": "med",
-      "list_only": false,
-      "curated": false
-    },
-    {
       "name": "wandb/weave-integration-skills",
       "url": "https://github.com/wandb/weave-integration-skills",
       "type": "skill",
@@ -5396,17 +5352,6 @@
       "curated": false
     },
     {
-      "name": "davepoon/claude-code-subagents-collection",
-      "url": "https://github.com/davepoon/claude-code-subagents-collection",
-      "type": "workflow",
-      "category": "general",
-      "focus": "BuildWithClaude hub of skills, agents, commands, hooks, plugins",
-      "est_items": 100,
-      "confidence": "med",
-      "list_only": false,
-      "curated": false
-    },
-    {
       "name": "DavidROliverBA/Daves-Claude-Code-Skills",
       "url": "https://github.com/DavidROliverBA/Daves-Claude-Code-Skills",
       "type": "workflow",
@@ -5638,8 +5583,8 @@
       "curated": false
     },
     {
-      "name": "jeremylongshore/claude-code-plugins-plus-skills",
-      "url": "https://github.com/jeremylongshore/claude-code-plugins-plus-skills",
+      "name": "jeremylongshore/tons-of-skills-marketplace",
+      "url": "https://github.com/jeremylongshore/tons-of-skills-marketplace",
       "type": "workflow",
       "category": "general",
       "focus": "471 plugins, 3,069 skills, 347 agents for Claude Code. Open-source... (1 workflows)",
@@ -5678,17 +5623,6 @@
       "focus": "Installable collection of Claude Code skills, commands, subagents",
       "est_items": 30,
       "confidence": "low",
-      "list_only": false,
-      "curated": false
-    },
-    {
-      "name": "klovaaxel/web-a11y-agent-skills",
-      "url": "https://github.com/klovaaxel/web-a11y-agent-skills",
-      "type": "workflow",
-      "category": "ui",
-      "focus": "Framework-agnostic web accessibility skills and Cursor subagents for... (10 skills, 16 workflows)",
-      "est_items": 26,
-      "confidence": "med",
       "list_only": false,
       "curated": false
     },
