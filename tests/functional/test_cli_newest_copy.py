@@ -54,6 +54,7 @@ class TestAPluginsNewerCopyWins:
         assert ("brainstorming shows twice in Claude Code — plugin %s ships a "
                 "newer copy (by commit dates); `boost sync --prune` drops "
                 "boost's older Claude Code link" % PLUGIN) in _flat(r.out)
+        assert "everything in sync" not in r.out
         assert _link().is_symlink()
         r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
         assert ("unlinked brainstorming → claude-code (Claude Code loads plugin "

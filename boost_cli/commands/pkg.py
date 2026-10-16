@@ -1257,7 +1257,7 @@ def cmd_sync(argv: list[str]) -> int:
     for path in occupied:
         out.warn("%s, then re-run `boost sync`" % store.occupied_refusal(path),
                  wrap=True)
-    unfixed = left or kept or any(r[3] == foreign.IDENTICAL for r in dups)
+    unfixed = left or kept or any(store.plugin_serves(r[3]) for r in dups)
     if (not actions and not pruned and not unfixed and not oos and not blocked
             and not stuck and not in_way and not occupied and not lock_bad
             and not plan["unreadable_store"]):

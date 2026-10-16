@@ -470,14 +470,24 @@ def unshallow(repo: Path) -> bool:
     :data:`UNSHALLOW_TIMEOUT` rather than :func:`run`'s five minutes, so a
     huge or stalled remote costs an install a minute and an undated skill,
     not five.
+
+    A timeout kills git, which then cannot remove the ``.git/shallow.lock``
+    it took, and every later fetch of that tap (``boost update``) fails on
+    "Unable to create ... shallow.lock: File exists". So a lock this fetch
+    created is removed when it dies; one that was there before is another
+    git process's and is left alone.
     """
     if not is_shallow(repo):
         return True
+    lock = Path(repo) / ".git" / "shallow.lock"
+    held = lock.exists()
     try:
         proc = run(["-C", str(repo), "fetch", "--quiet", "--unshallow",
                     "--filter=blob:none", "origin"], check=False,
                    timeout=UNSHALLOW_TIMEOUT)
     except BoostError:
+        if not held:
+            lock.unlink(missing_ok=True)
         return False
     return proc.returncode == 0 and not is_shallow(repo)
 

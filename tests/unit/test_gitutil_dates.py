@@ -163,6 +163,37 @@ class TestUnshallow:
         monkeypatch.setattr(gitutil, "run", boom)
         assert gitutil.unshallow(clone) is False
 
+    def test_a_timed_out_fetch_leaves_no_shallow_lock(self, tap, tmp_path,
+                                                      monkeypatch):
+        # A killed `fetch --unshallow` leaves .git/shallow.lock, and every
+        # later fetch of that tap then dies "Unable to create ... File exists".
+        clone = _shallow_clone(tap, tmp_path / "clone")
+        lock = clone / ".git" / "shallow.lock"
+        real = gitutil.run
+
+        def killed(args, **kw):
+            if "--unshallow" in args:
+                lock.write_text("", encoding="utf-8")
+                raise gitutil.BoostError("git fetch timed out after 60s")
+            return real(args, **kw)
+        monkeypatch.setattr(gitutil, "run", killed)
+        assert gitutil.unshallow(clone) is False
+        assert not lock.exists()
+        _commit(tap, "skills/a", NEW + 100)
+        gitutil.pull(clone)            # the next update still fetches
+
+    def test_a_lock_held_before_the_fetch_is_not_removed(self, tap, tmp_path,
+                                                         monkeypatch):
+        clone = _shallow_clone(tap, tmp_path / "clone")
+        lock = clone / ".git" / "shallow.lock"
+        lock.write_text("", encoding="utf-8")
+
+        def boom(*a, **k):
+            raise gitutil.BoostError("git fetch timed out after 60s")
+        monkeypatch.setattr(gitutil, "run", boom)
+        assert gitutil.unshallow(clone) is False
+        assert lock.exists(), "another git process's lock is not ours to drop"
+
     def test_the_fetch_stays_blobless(self, tap, tmp_path, monkeypatch):
         clone = _shallow_clone(tap, tmp_path / "clone")
         calls = []
