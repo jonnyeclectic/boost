@@ -2592,12 +2592,15 @@ def stale_quarantine_artifacts(name: str, entry: dict) -> bool:
     return False
 
 
-def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
+def release_materialized(kind: str, name: str, entry: dict,
+                         skipped: list[str] | None = None) -> list[str]:
     """Restore what :func:`quarantine_materialized` removed, byte-for-byte.
 
     A stash record whose ``content`` is None (the artifact was already gone at
     quarantine time) is skipped — there is nothing truthful to restore.
-    Persists the entry and returns the agents restored.
+    Persists the entry and returns the agents restored. A skill copy whose
+    store dir something else took meanwhile is not restored, and its path is
+    appended to ``skipped`` for the caller to name.
     """
     from . import rules
     # The stash names absolute paths under the row's base, so releasing a
@@ -2611,6 +2614,18 @@ def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
         if content is None:
             continue
         path = Path(m.get("path", ""))
+        if lockfile.is_skill_copy(m) and not _stashed_copy_is_ours(path,
+                                                                  content):
+            # Something took the store dir while the workflow was held: a
+            # skill installed by that name, or a dir the user made. The copy
+            # is a convenience and never worth their file; the workflow
+            # forgets it, and its next install says why there is none.
+            entry["materializations"] = [
+                r for r in entry.get("materializations") or ()
+                if not lockfile.is_skill_copy(r)]
+            if skipped is not None:
+                skipped.append(str(path.parent))
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         if m.get("mode") == rules.MODE_CLAUDE:
             current = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -2827,13 +2842,35 @@ def skill_copy_owner(name: str) -> str | None:
 
 
 def _drop_skill_copy_row(workflow: str) -> None:
-    """Forget a workflow's skill copy without touching the file."""
+    """Forget a workflow's skill copy without touching the file.
+
+    From the quarantine stash too: a release replays the stash, and a copy
+    left there would be written back over whatever took the dir meanwhile.
+    """
     entry = lockfile.get_workflow(workflow)
     if not entry:
         return
-    entry["materializations"] = [m for m in entry.get("materializations") or ()
-                                 if not lockfile.is_skill_copy(m)]
+    for key in ("materializations", "quarantine_stash"):
+        if key in entry:
+            entry[key] = [m for m in entry.get(key) or ()
+                          if not lockfile.is_skill_copy(m)]
     lockfile.set_workflow(workflow, entry)
+
+
+def _stashed_copy_is_ours(path: Path, content: str) -> bool:
+    """Whether a release may write a stashed skill copy back to ``path``.
+
+    Not when the lock records a skill by that name, and not over anything in
+    the dir but the very text stashed — an interrupted quarantine leaves
+    that, and rewriting it changes nothing.
+    """
+    if lockfile.get_skill(path.parent.name):
+        return False
+    if not os.path.lexists(path.parent):
+        return True
+    return (not os.path.islink(path.parent)
+            and _file_sha(path) == _text_sha(content)
+            and {c.name for c in path.parent.iterdir()} == {path.name})
 
 
 def wants_skill_copy(as_skill: bool | None, existing: dict | None) -> bool:
@@ -2927,17 +2964,25 @@ def _skill_copy(name: str, slot: str, raw: str, existing: dict | None,
             return None, None
         removed, kept = _remove_skill_copy(own)
         if kept:
-            return None, ("left %s in place: it was edited since boost wrote "
-                          "it" % paths.tilde(kept))
+            # Still recorded: unowned, the dir is a hand-added skill to
+            # `boost sync`, which adopts it and links it into every agent —
+            # beside the workflow's own file. A later run retires it once it
+            # is back to what boost wrote; uninstall leaves it either way.
+            return own, ("left %s in place: it was edited since boost wrote "
+                         "it" % paths.tilde(kept))
         return None, ("removed its copy from the skill store" if removed
                       else None)
     meta, _ = frontmatter.parse(raw)
     desc = workflows.skill_description(slot, meta)
     if desc is None:
+        no_desc = ("not written to the skill store: it has no description, "
+                   "and a skill host picks skills by theirs")
         if own is not None:
-            _remove_skill_copy(own)
-        return None, ("not written to the skill store: it has no "
-                      "description, and a skill host picks skills by theirs")
+            _removed, kept = _remove_skill_copy(own)
+            if kept:
+                return own, "%s; left the edited %s in place" % (
+                    no_desc, paths.tilde(kept))
+        return None, no_desc
     blocker = skill_copy_blocker(name, existing)
     if blocker:
         return None, blocker

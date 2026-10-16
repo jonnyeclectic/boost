@@ -593,9 +593,14 @@ def cmd_quarantine(argv):
             out.ok("released %s (linked: %s)"
                    % (name, ", ".join(res.linked) or "none"))
         else:
-            restored = store.release_materialized(kind, name, entry)
+            skipped: list[str] = []
+            restored = store.release_materialized(kind, name, entry,
+                                                  skipped=skipped)
             out.ok("released %s %s (restored: %s)"
                    % (kind, name, ", ".join(restored) or "none"))
+            for d in skipped:
+                out.info("not restored as a skill: %s now holds something "
+                         "else — left alone" % paths.tilde(d), wrap=True)
         return 0
 
     name = args.name

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -358,3 +359,120 @@ class TestHealBackfill:
         r = boost("heal", "--as-skill")
         assert "workflows_as_skills is off" in _flat(r.out)
         assert not (paths.store_dir() / "reviewer").exists()
+
+
+MINE = "---\nname: reviewer\ndescription: mine\n---\nMY SKILL\n"
+
+
+class TestReviewFindings:
+    """Paths where the copy used to outlive, or overwrite, what owns the dir."""
+
+    def _skill_src(self, tmp_path):
+        src = tmp_path / "src" / "reviewer"
+        src.mkdir(parents=True)
+        (src / "SKILL.md").write_text(MINE, encoding="utf-8")
+        return src
+
+    def test_release_never_overwrites_a_skill_installed_meanwhile(
+            self, boost, wf_tap, tmp_path):
+        boost("install", "reviewer")
+        boost("quarantine", "reviewer")
+        # A forced skill install takes the dir from the quarantined workflow:
+        # it must forget the stashed copy too, not only the live row.
+        store._refuse_unrecorded("reviewer", None, True)
+        entry = lockfile.get_workflow("reviewer")
+        assert not any(m["slot"] == "skill"
+                       for m in entry.get("quarantine_stash") or ())
+        boost("import", self._skill_src(tmp_path))
+        boost("quarantine", "--release", "reviewer")
+        assert _copy().read_text(encoding="utf-8") == MINE
+        assert lockfile.get_skill("reviewer") is not None
+
+    def test_release_leaves_a_dir_made_during_quarantine(self, boost, wf_tap):
+        boost("install", "reviewer")
+        boost("quarantine", "reviewer")
+        _copy().parent.mkdir(parents=True)
+        _copy().write_text(MINE, encoding="utf-8")
+        r = boost("quarantine", "--release", "reviewer")
+        assert ("not restored as a skill: ~/.agents/skills/reviewer now holds "
+                "something else — left alone") in _flat(r.out)
+        assert _copy().read_text(encoding="utf-8") == MINE
+        # the workflow no longer claims it, and its own files came back
+        assert not any(m["slot"] == "skill" for m in _rows())
+        assert "reviewer" not in store.workflow_owned_store_names()
+        assert (paths.home() / ".claude" / "agents" / "reviewer.md").is_file()
+
+    def test_release_rewrites_the_copy_when_the_lock_records_a_skill(
+            self, boost, wf_tap):
+        boost("install", "reviewer")
+        boost("quarantine", "reviewer")
+        # Dir gone but a skill entry by that name: still not ours to write.
+        lockfile.set_skill("reviewer", {"tap": "local", "version": "1"})
+        boost("quarantine", "--release", "reviewer")
+        assert not _copy().exists()
+        assert not any(m["slot"] == "skill" for m in _rows())
+
+    def test_a_kept_edited_copy_stays_owned_so_sync_does_not_adopt_it(
+            self, boost, wf_tap):
+        boost("install", "reviewer")
+        _copy().write_text(WANT + "my notes\n", encoding="utf-8")
+        r = boost("install", "reviewer", "--force", "--no-as-skill")
+        assert "left ~/.agents/skills/reviewer/SKILL.md in place" in _flat(r.out)
+        assert "reviewer" in store.workflow_owned_store_names()
+        boost("sync", "--yes")
+        assert lockfile.get_skill("reviewer") is None
+        assert not os.path.lexists(paths.home() / ".claude" / "skills"
+                                   / "reviewer")
+        assert _copy().read_text(encoding="utf-8").endswith("my notes\n")
+        # nor does verify, heal or doctor put boost's text back over it
+        boost("verify", expect=None)
+        boost("heal", expect=None)
+        boost("doctor", expect=None)
+        assert _copy().read_text(encoding="utf-8").endswith("my notes\n")
+        assert lockfile.get_skill("reviewer") is None
+        # once it is back to what boost wrote, the next run retires it
+        _copy().write_text(WANT, encoding="utf-8")
+        boost("reinstall", "reviewer")
+        assert not (paths.store_dir() / "reviewer").exists()
+        assert not any(m["slot"] == "skill" for m in _rows())
+
+    def test_a_kept_copy_without_description_stays_owned(self, boost,
+                                                         wf_tap):
+        boost("install", "reviewer")
+        _copy().write_text(WANT + "my notes\n", encoding="utf-8")
+        _commit(wf_tap, "agents/reviewer.md",
+                AGENT.replace("description: Reviews a diff for bugs\n",
+                              "").replace("1.0.0", "1.1.0"),
+                "drop description")
+        r = boost("update", "--yes")
+        assert "left the edited ~/.agents/skills/reviewer/SKILL.md in place" \
+            in _flat(r.out)
+        assert "reviewer" in store.workflow_owned_store_names()
+        assert _copy().read_text(encoding="utf-8").endswith("my notes\n")
+
+    def test_mcp_install_reply_names_the_copy(self, boost, wf_tap):
+        from boost_cli.commands import configuration
+        reply = configuration._tool_install({"name": "reviewer"})
+        text = reply[0] if isinstance(reply, tuple) else reply
+        assert "as a skill: %s" % _copy().parent in text
+
+    def test_mcp_install_reply_says_why_there_is_no_copy(self, boost, wf_tap):
+        mine = paths.store_dir() / "reviewer"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text(MINE, encoding="utf-8")
+        from boost_cli.commands import configuration
+        reply = configuration._tool_install({"name": "reviewer"})
+        text = reply[0] if isinstance(reply, tuple) else reply
+        assert "is not this workflow's" in _flat(text)
+
+    def test_reinstall_says_the_copy_was_retired(self, boost, wf_tap):
+        boost("install", "reviewer")
+        boost("config", "set", "workflows_as_skills", "false")
+        r = boost("reinstall", "reviewer")
+        assert "removed its copy from the skill store" in _flat(r.out)
+        assert not (paths.store_dir() / "reviewer").exists()
+
+    def test_install_says_it_once(self, boost, wf_tap):
+        boost("install", "reviewer")
+        r = boost("install", "reviewer", "--force", "--no-as-skill")
+        assert _flat(r.out).count("removed its copy from the skill store") == 1

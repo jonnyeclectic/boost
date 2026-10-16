@@ -304,15 +304,13 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
 
 
 def _report_skill_copy(res) -> None:
-    """The workflow's copy in the skill store, on its own line: where it went,
-    or why it did not. Its own line so the ``materialized →`` field stays the
-    list of agents a dry run predicts."""
+    """The workflow's copy in the skill store, on its own line. Its own line
+    so the ``materialized →`` field stays the list of agents a dry run
+    predicts. Why there is none is :func:`_warn_unwritable`'s to say, so
+    update, reinstall and sync say it too."""
     copy = getattr(res, "skill_copy", None)
     if copy is not None:
         out.ok("as a skill → %s" % _tilde(copy))
-    note = getattr(res, "skill_note", None)
-    if note:
-        out.info(note, wrap=True)
 
 
 def _warn_unwritable(res, stream=None) -> None:
@@ -326,6 +324,12 @@ def _warn_unwritable(res, stream=None) -> None:
 
     ``stream`` for a caller speaking JSON on stdout: relinking under
     `focus --json` must still say what it skipped, on stderr."""
+    # What became of the workflow's skill copy: retired, kept as edited, or
+    # skipped for a name something else holds. Every caller that installs
+    # passes through here, so none removes a copy without a word.
+    note = getattr(res, "skill_note", None)
+    if note:
+        out.info(note, stream=stream, wrap=True)
     conflicts, refused = _skipped_agent_lines(res)
     for line in conflicts:
         out.warn(line, stream=stream)

@@ -162,6 +162,48 @@ class TestOwnership:
         store._drop_skill_copy_row("missing")  # no entry: nothing to do
         assert lockfile.get_workflow("missing") is None
 
+    def test_drop_row_clears_the_stash_too(self, sandbox):
+        lockfile.set_workflow("wf", _entry(
+            _agent_row(), _copy_row(), quarantined=True,
+            quarantine_stash=[_agent_row(), {**_copy_row(), "content": "T"}]))
+        store._drop_skill_copy_row("wf")
+        got = lockfile.get_workflow("wf")
+        assert got["quarantine_stash"] == [_agent_row()]
+        assert got["materializations"] == [_agent_row()]
+        # an entry with no stash does not grow one
+        lockfile.set_workflow("wf", _entry(_copy_row()))
+        store._drop_skill_copy_row("wf")
+        assert "quarantine_stash" not in lockfile.get_workflow("wf")
+
+
+class TestStashedCopyIsOurs:
+    def _path(self):
+        return paths.store_dir() / "wf" / "SKILL.md"
+
+    def test_an_absent_dir_is_ours(self, sandbox):
+        assert store._stashed_copy_is_ours(self._path(), "T") is True
+
+    def test_a_recorded_skill_is_not(self, sandbox):
+        lockfile.set_skill("wf", {"tap": "t"})
+        assert store._stashed_copy_is_ours(self._path(), "T") is False
+
+    def test_the_very_text_left_by_an_interrupted_quarantine_is(self,
+                                                                sandbox):
+        self._path().parent.mkdir(parents=True)
+        self._path().write_text("T", encoding="utf-8")
+        assert store._stashed_copy_is_ours(self._path(), "T") is True
+        assert store._stashed_copy_is_ours(self._path(), "U") is False
+        (self._path().parent / "extra.md").write_text("x", encoding="utf-8")
+        assert store._stashed_copy_is_ours(self._path(), "T") is False
+
+    def test_a_symlinked_dir_is_not(self, sandbox, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        (real / "SKILL.md").write_text("T", encoding="utf-8")
+        paths.store_dir().mkdir(parents=True, exist_ok=True)
+        self._path().parent.symlink_to(real)
+        assert store._stashed_copy_is_ours(self._path(), "T") is False
+
 
 class TestInstalledRaw:
     def test_needs_a_recorded_sha(self, sandbox):
@@ -215,6 +257,19 @@ def test_losing_the_description_retires_the_copy(sandbox):
     assert row2 is None
     assert "it has no description" in (note or "")
     assert not (paths.store_dir() / "wf").exists()
+
+
+def test_losing_the_description_keeps_an_edited_copy_recorded(sandbox):
+    raw = "---\ndescription: d\n---\nbody\n"
+    row, _ = store._skill_copy("wf", "agents", raw, None, None, "user")
+    (paths.store_dir() / "wf" / "SKILL.md").write_text("mine",
+                                                     encoding="utf-8")
+    row2, note = store._skill_copy("wf", "agents", "---\nname: wf\n---\nb\n",
+                                   _entry(row), None, "user")
+    assert row2 == row
+    assert note == ("not written to the skill store: it has no description, "
+                    "and a skill host picks skills by theirs; left the edited "
+                    "~/.agents/skills/wf/SKILL.md in place")
 
 
 def test_a_store_that_refuses_keeps_the_old_row(sandbox, monkeypatch):
@@ -308,6 +363,9 @@ class TestInstallPath:
         assert res.skill_note == ("left ~/.agents/skills/reviewer/SKILL.md in "
                                   "place: it was edited since boost wrote it")
         assert _store_copy().read_text(encoding="utf-8") == "mine"
+        # still the workflow's, so sync never adopts it as a hand-added skill
+        assert lockfile.is_skill_copy(
+            lockfile.get_workflow("reviewer")["materializations"][-1])
 
     def test_a_skill_by_that_name_wins(self, tap):
         lockfile.set_skill("reviewer", {"tap": "t"})
