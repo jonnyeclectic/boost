@@ -453,6 +453,10 @@ def is_shallow(repo: Path) -> bool:
     return (Path(repo) / ".git" / "shallow").is_file()
 
 
+#: Seconds :func:`unshallow` waits for history before giving the date up.
+UNSHALLOW_TIMEOUT = 60
+
+
 def unshallow(repo: Path) -> bool:
     """Fetch the rest of a shallow clone's history, still without blobs.
 
@@ -462,12 +466,19 @@ def unshallow(repo: Path) -> bool:
     trees only — a blobless fetch brings no file outside the sparse cone.
     True when the clone is complete afterwards; a failure (offline, a remote
     that is gone) is False and raises nothing, since a date is never worth
-    failing the install or update that asked for it.
+    failing the install or update that asked for it. The fetch gets
+    :data:`UNSHALLOW_TIMEOUT` rather than :func:`run`'s five minutes, so a
+    huge or stalled remote costs an install a minute and an undated skill,
+    not five.
     """
     if not is_shallow(repo):
         return True
-    proc = run(["-C", str(repo), "fetch", "--quiet", "--unshallow",
-                "--filter=blob:none", "origin"], check=False)
+    try:
+        proc = run(["-C", str(repo), "fetch", "--quiet", "--unshallow",
+                    "--filter=blob:none", "origin"], check=False,
+                   timeout=UNSHALLOW_TIMEOUT)
+    except BoostError:
+        return False
     return proc.returncode == 0 and not is_shallow(repo)
 
 

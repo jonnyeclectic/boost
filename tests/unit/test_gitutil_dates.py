@@ -144,6 +144,25 @@ class TestUnshallow:
                             lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
         assert gitutil.unshallow(clone) is False
 
+    def test_the_fetch_has_its_own_short_timeout(self, tap, tmp_path, monkeypatch):
+        clone = _shallow_clone(tap, tmp_path / "clone")
+        seen = []
+
+        def rec(args, **kw):
+            seen.append(kw.get("timeout"))
+            return subprocess.CompletedProcess(args, 0, "", "")
+        monkeypatch.setattr(gitutil, "run", rec)
+        gitutil.unshallow(clone)
+        assert seen == [gitutil.UNSHALLOW_TIMEOUT] and gitutil.UNSHALLOW_TIMEOUT == 60
+
+    def test_a_timed_out_fetch_is_false(self, tap, tmp_path, monkeypatch):
+        clone = _shallow_clone(tap, tmp_path / "clone")
+
+        def boom(*a, **k):
+            raise gitutil.BoostError("git fetch timed out after 60s")
+        monkeypatch.setattr(gitutil, "run", boom)
+        assert gitutil.unshallow(clone) is False
+
     def test_the_fetch_stays_blobless(self, tap, tmp_path, monkeypatch):
         clone = _shallow_clone(tap, tmp_path / "clone")
         calls = []
