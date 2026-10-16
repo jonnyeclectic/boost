@@ -4454,6 +4454,9 @@ def _record_unrecorded(name: str, why: str) -> str | None:
         record = {"version": cat.get("version", "0.0.0"), "tap": cat["tap"],
                   "source_dir": cat.get("rel_dir", "."),
                   "commit": gitutil.head_commit(tap.path)}
+        # Dated as install dates it: the store copy is that tap's files.
+        if dated := source_updated_at(cat["tap"], cat.get("rel_dir", ".")):
+            record["source_updated_at"] = dated
         how = "from %s" % cat["tap"]
     else:
         # The shape `import_local` writes for a skill with no tap behind it.

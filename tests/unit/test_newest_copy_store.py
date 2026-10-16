@@ -124,8 +124,9 @@ class TestSourceUpdatedAt:
     def test_no_tap_to_read(self, installed, tap):
         assert store.source_updated_at(tap, "skills/brainstorming") is None
 
-    def test_a_tap_not_cloned(self, installed):
+    def test_a_tap_not_cloned(self, installed, monkeypatch):
         shutil.rmtree(installed.path)
+        monkeypatch.setattr(gitutil, "run", lambda *a, **k: pytest.fail("ran git"))
         assert store.source_updated_at(installed.name, ".") is None
 
     def test_no_git(self, installed, monkeypatch):

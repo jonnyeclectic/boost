@@ -137,6 +137,13 @@ class TestUnshallow:
         assert gitutil.unshallow(clone) is False
         assert gitutil.is_shallow(clone)
 
+    def test_a_fetch_that_leaves_it_shallow_is_false(self, tap, tmp_path,
+                                                     monkeypatch):
+        clone = _shallow_clone(tap, tmp_path / "clone")
+        monkeypatch.setattr(gitutil, "run",
+                            lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+        assert gitutil.unshallow(clone) is False
+
     def test_the_fetch_stays_blobless(self, tap, tmp_path, monkeypatch):
         clone = _shallow_clone(tap, tmp_path / "clone")
         calls = []
