@@ -1137,14 +1137,17 @@ def cmd_sync(argv: list[str]) -> int:
         else:
             declined_copies = True
     left = [r for r in copies if r[0] not in pruned]
-    same = [r for r in plan["plugin_duplicates"] if r[3] == foreign.IDENTICAL]
+    same = [r for r in plan["plugin_duplicates"] if store.plugin_serves(r[3])]
     dropped: list[str] = []
     declined_dups = False
     if args.prune and same:
+        newer = any(r[3] != foreign.IDENTICAL for r in same)
         if _go(args, "Drop boost's Claude Code link for %s an enabled plugin "
-                     "ships with the same files (Claude Code goes on loading "
-                     "the plugin's copy): %s?"
+                     "ships %s (Claude Code goes on loading the plugin's "
+                     "copy): %s?"
                      % (_plural(len(same), "skill"),
+                        "with the same files or in a newer copy" if newer
+                        else "with the same files",
                         ", ".join(r[0] for r in same))):
             for row in same:
                 ok, line = store.drop_plugin_link(row)
@@ -1726,6 +1729,9 @@ def cmd_update(argv: list[str]) -> int:
             out.ok("refreshed %s v%s (source changed)" % (name, new_v))
         upgraded += 1
     # Rules and workflows refresh from the same tap update.
+    # Skills installed before boost dated them, so a plugin's copy of the
+    # same name can be weighed against them (store.serving_plugin).
+    store.backfill_source_dates(results)
     upgraded += _update_materialized("rule", lockfile.installed_rules(), results)
     upgraded += _update_materialized("workflow", lockfile.installed_workflows(), results)
     if not upgraded:
