@@ -267,6 +267,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         where = " (this repo)" if res.scope == "project" else ""
         out.ok("materialized%s → %s"
                % (where, " · ".join(res.linked) or "(no enabled agents)"))
+        _report_skill_copy(res)
         _warn_unwritable(res)
         out.ok("lock updated (.skill-lock.json)")
         _warn_injection(res)
@@ -302,6 +303,16 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
     _offer_mcp(res, no_mcp=no_mcp)
 
 
+def _report_skill_copy(res) -> None:
+    """The workflow's copy in the skill store, on its own line. Its own line
+    so the ``materialized →`` field stays the list of agents a dry run
+    predicts. Why there is none is :func:`_warn_unwritable`'s to say, so
+    update, reinstall and sync say it too."""
+    copy = getattr(res, "skill_copy", None)
+    if copy is not None:
+        out.ok("as a skill → %s" % _tilde(copy))
+
+
 def _warn_unwritable(res, stream=None) -> None:
     """Name what an install skipped, and the remedy — every path that
     installs, reinstall and update included, so none reports success over an
@@ -313,6 +324,12 @@ def _warn_unwritable(res, stream=None) -> None:
 
     ``stream`` for a caller speaking JSON on stdout: relinking under
     `focus --json` must still say what it skipped, on stderr."""
+    # What became of the workflow's skill copy: retired, kept as edited, or
+    # skipped for a name something else holds. Every caller that installs
+    # passes through here, so none removes a copy without a word.
+    note = getattr(res, "skill_note", None)
+    if note:
+        out.info(note, stream=stream, wrap=True)
     conflicts, refused = _skipped_agent_lines(res)
     for line in conflicts:
         out.warn(line, stream=stream)
@@ -488,6 +505,29 @@ def _expand_dependencies(entries: list[dict]) -> tuple[list[dict], resolve.Resol
 
 # ── install ──────────────────────────────────────────────────────────────
 
+def _preview_skill_copy(e: dict, seen: dict | None, as_skill: bool | None,
+                        scope: str) -> None:
+    """The dry run's line for a workflow's skill copy, asked the way the run
+    decides it, so the two agree."""
+    from ..core import workflows
+    if scope == scopes.SCOPE_PROJECT or not store.wants_skill_copy(as_skill,
+                                                                   seen):
+        return
+    try:
+        raw = (registry.get(e["tap"]).path / e.get("skill_md", "")).read_text(
+            encoding="utf-8", errors="replace")
+    except (OSError, BoostError):
+        return
+    slot = workflows.detect_slot(e.get("skill_md", ""))
+    if workflows.skill_description(slot, frontmatter.parse(raw)[0]) is None:
+        return
+    blocker = store.skill_copy_blocker(e["name"], seen)
+    if blocker:
+        out.info("  %s" % blocker, wrap=True)
+        return
+    out.info("  as a skill → %s" % _tilde(store.skill_store_dir(e["name"])))
+
+
 def cmd_install(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost install",
                                  description="Install a skill from a tap registry")
@@ -518,6 +558,16 @@ def cmd_install(argv: list[str]) -> int:
                          "(the wider spellings are reported, never installed)")
     ap.add_argument("--no-mcp", action="store_true",
                     help="don't offer to register MCP servers a skill declares")
+    skill_g = ap.add_mutually_exclusive_group()
+    skill_g.add_argument("--as-skill", dest="as_skill", action="store_const",
+                         const=True, default=None,
+                         help="also put a workflow in the skill store, for "
+                              "agents that read only skills (default: the "
+                              "workflows_as_skills config); remembered")
+    skill_g.add_argument("--no-as-skill", dest="as_skill",
+                         action="store_const", const=False,
+                         help="don't put a workflow in the skill store; "
+                              "remembered")
     args = ap.parse_args(argv)
     args.scope = args.scope or scopes.SCOPE_USER
     # Resolved before the dry-run branch, because both sides need it and only
@@ -705,6 +755,9 @@ def cmd_install(argv: list[str]) -> int:
                                                                   e["version"], e["tap"],
                                                                   where))
                     out.info("  materialize → %s" % " · ".join(mat))
+                    if k == "workflow":
+                        _preview_skill_copy(e, seen, args.as_skill,
+                                            args.scope)
                     continue
                 seen = lockfile.get_skill(e["name"])
                 verb = "upgrade" if seen else "install"
@@ -752,7 +805,8 @@ def cmd_install(argv: list[str]) -> int:
         if multi:
             out.heading("%s v%s (%s)" % (e["name"], e["version"], e["tap"]))
         try:
-            res = store.install(e, force=args.force, only_agents=only, scope=args.scope)
+            res = store.install(e, force=args.force, only_agents=only,
+                                scope=args.scope, as_skill=args.as_skill)
         except BoostError as err:
             if not multi:
                 raise
@@ -891,6 +945,9 @@ def cmd_uninstall(argv: list[str]) -> int:
             verb = "unlinked ←" if kind == "skill" and not is_project \
                 else "removed from"
             out.ok("%s %s" % (verb, " · ".join(info["unlinked"])))
+        for path in info.get("kept") or ():
+            out.warn("left %s in place: it was edited since boost wrote it"
+                     % _tilde(path), wrap=True)
         if is_project:
             refused = info.get("refused") or []
             escaped = info.get("escaped") or []
