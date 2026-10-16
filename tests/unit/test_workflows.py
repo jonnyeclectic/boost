@@ -311,3 +311,94 @@ class TestRenderGeminiCommand:
         # it (Gemini derives the slash command from the path).
         out = workflows.render_gemini_command("supersecretname", MARKDOWN)
         assert "supersecretname" not in out
+
+
+# --------------------------------------------------------------------------
+# The skill copy: a workflow reachable from the canonical store
+# --------------------------------------------------------------------------
+SUBAGENT = (
+    "---\n"
+    "name: source-name\n"
+    "description: Reviews a diff for bugs\n"
+    "tools: Read, Grep\n"
+    "model: sonnet\n"
+    "color: blue\n"
+    "isolation: worktree\n"
+    "---\n"
+    "\n"
+    "# Reviewer\n"
+    "\n"
+    "Read the diff.\r\n"
+    "Then report.\n"
+)
+
+
+class TestSkillDescription:
+    def test_a_subagent_with_a_description_qualifies(self):
+        assert workflows.skill_description(
+            "agents", {"description": "  Reviews code  "}) == "Reviews code"
+
+    def test_a_command_with_a_description_qualifies(self):
+        assert workflows.skill_description(
+            "commands", {"description": "Ships it"}) == "Ships it"
+
+    @pytest.mark.parametrize("slot", ["agents", "commands"])
+    @pytest.mark.parametrize("meta", [{}, {"description": ""},
+                                      {"description": "   "},
+                                      {"description": None}])
+    def test_no_description_means_no_copy(self, slot, meta):
+        assert workflows.skill_description(slot, meta) is None
+
+    def test_an_unknown_slot_never_qualifies(self):
+        assert workflows.skill_description(
+            "skill", {"description": "x"}) is None
+        assert workflows.skill_description(
+            "other", {"description": "x"}) is None
+
+
+class TestRenderSkill:
+    def test_exact_output(self):
+        out = workflows.render_skill("reviewer", "Reviews a diff for bugs",
+                                     SUBAGENT)
+        assert out == ("---\nname: reviewer\n"
+                       "description: Reviews a diff for bugs\n---\n\n"
+                       "# Reviewer\n\nRead the diff.\r\nThen report.\n")
+
+    def test_host_only_keys_are_dropped(self):
+        out = workflows.render_skill("reviewer", "d", SUBAGENT)
+        for key in ("tools:", "model:", "color:", "isolation:",
+                    "source-name"):
+            assert key not in out
+
+    def test_the_body_is_byte_identical(self):
+        out = workflows.render_skill("reviewer", "d", SUBAGENT)
+        assert out.endswith(SUBAGENT.split("---\n", 2)[2].lstrip("\n"))
+
+    def test_a_description_that_needs_quoting_is_quoted(self):
+        out = workflows.render_skill("r", "Use when: a # b", "body\n")
+        from boost_cli.core import frontmatter
+        meta, body = frontmatter.parse(out)
+        assert meta == {"name": "r", "description": "Use when: a # b"}
+        assert body == "body"
+        assert 'description: "Use when: a # b"' in out
+
+    def test_no_frontmatter_keeps_the_whole_text(self):
+        assert workflows.render_skill("r", "d", "just text\n") == (
+            "---\nname: r\ndescription: d\n---\n\njust text\n")
+
+    def test_an_unclosed_fence_is_body_not_metadata(self):
+        raw = "---\nname: x\nno close\n"
+        assert workflows.render_skill("r", "d", raw).endswith("\n\n" + raw)
+
+    def test_a_dots_close_is_honoured(self):
+        raw = "---\ndescription: d\n...\nBody\n"
+        assert workflows.render_skill("r", "d", raw).endswith("---\n\nBody\n")
+
+    def test_render_dispatches_the_skill_slot_for_any_agent(self):
+        want = workflows.render_skill("reviewer", "Reviews a diff for bugs",
+                                      SUBAGENT)
+        assert workflows.render(None, workflows.SLOT_SKILL, "reviewer",
+                                SUBAGENT) == want
+        # Asked before the Gemini branches: a skill row is never TOML.
+        assert workflows.render("gemini", workflows.SLOT_SKILL, "reviewer",
+                                SUBAGENT) == want
