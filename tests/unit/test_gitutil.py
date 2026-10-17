@@ -284,6 +284,8 @@ class TestPull:
         monkeypatch.setattr("boost_cli.core.gitutil.run", rec)
 
         repo = tmp_path / "clone"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".git" / "shallow").write_text("a" * 40 + "\n", encoding="utf-8")
         summary = gitutil.pull(repo)
         assert summary == "aaaaaaa → bbbbbbb"
 
@@ -297,6 +299,12 @@ class TestPull:
         assert calls[[a for a, _ in calls].index(oh)][1].get("check") is False
         # fallback fired: FETCH_HEAD reset must be present
         assert ["-C", str(repo), "reset", "--hard", "--quiet", "FETCH_HEAD"] in argvs
+
+    def test_pull_keeps_a_complete_clone_complete(self, tmp_path, monkeypatch):
+        calls = _record_run(monkeypatch, stdout="a" * 40 + "\n")
+        gitutil.pull(tmp_path / "clone")
+        assert ["-C", str(tmp_path / "clone"), "fetch", "--quiet", "origin"] in [
+            a for a, _ in calls]
 
     def test_pull_skips_fallback_when_origin_head_moves(self, tmp_path, monkeypatch):
         # When the origin/HEAD reset already advances HEAD, the FETCH_HEAD

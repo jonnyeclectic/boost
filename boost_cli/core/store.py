@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import operator
 import os
 import shutil
 import stat
@@ -62,8 +63,9 @@ class InstallResult:
     # `linked` so the lock records only real links, while the install report can
     # still tell the user the skill reached them.
     native: list[str] = field(default_factory=list)
-    # Plugins that already put this skill in front of Claude Code with the
-    # same files (:func:`covering_plugin`), so no Claude Code link was made.
+    # Plugins that already put this skill in front of Claude Code — the same
+    # files, or a newer copy (:func:`serving_plugin`) — so no Claude Code link
+    # was made.
     # Kept out of `refused`: nothing refused, and a refusal is retried by the
     # next reinstall, where this link is meant to stay absent.
     covered: list[str] = field(default_factory=list)
@@ -393,8 +395,13 @@ def source_dir_for(entry: dict) -> Path:
     return src
 
 
+#: :func:`link_agents`' default ``updated_at``: read the date from the lock.
+FROM_LOCK = "lock"
+
+
 def link_agents(name: str, only: list[str] | None = None, *,
-                keep_theirs: bool = False) -> InstallResult:
+                keep_theirs: bool = False,
+                updated_at: str | None = FROM_LOCK) -> InstallResult:
     """Symlink store/<name> into each linking agent dir. Returns result with
     .linked (agent names), .conflicts (paths that were real files/dirs) and
     .native (agents that read the store directly and needed no link).
@@ -403,10 +410,13 @@ def link_agents(name: str, only: list[str] | None = None, *,
     linked, so a dir that refuses writes only refuses a link that needs one:
     a missing link, or one pointing elsewhere.
 
-    Claude Code gets no new link while an enabled plugin ships the same files
-    (.covered): it already lists the plugin's copy, and a link would list the
-    skill a second time. That holds for an explicit ``--agent claude-code``
-    too, since the skill is in front of Claude Code either way.
+    Claude Code gets no new link while an enabled plugin ships the same files,
+    or a copy newer than boost's (.covered, :func:`serving_plugin`): it
+    already lists the plugin's copy, and a link would list the skill a second
+    time. That holds for an explicit ``--agent claude-code`` too, since the
+    skill is in front of Claude Code either way. ``updated_at`` is when boost's
+    copy last changed (:func:`source_updated_at`); an install passes the date
+    of what it is about to record, and every other caller the lock's.
 
     ``keep_theirs`` leaves a symlink that is not boost's (:func:`is_boost_link`)
     where it is, as a conflict, the way a file is left. :func:`unsideline`
@@ -433,7 +443,8 @@ def link_agents(name: str, only: list[str] | None = None, *,
         if (agent == foreign.CLAUDE
                 and not (os.path.islink(link)  # noqa: FURB146
                          and _already_links(link, target))
-                and (hit := covering_plugin(name)) is not None):
+                and (hit := serving_plugin(name, _lock_date(name, updated_at)))
+                is not None):
             res.covered.append(hit[0].id)
             continue
         try:
@@ -483,6 +494,63 @@ def link_agents(name: str, only: list[str] | None = None, *,
             continue
         res.linked.append(agent)
     return res
+
+
+def _lock_date(name: str, updated_at: str | None) -> str | None:
+    """``updated_at``, or the lock's date for ``name`` when it is :data:`FROM_LOCK`."""
+    if updated_at != FROM_LOCK:
+        return updated_at
+    return (lockfile.get_skill(name) or {}).get("source_updated_at")
+
+
+def source_updated_at(tap_name: str | None, rel_dir: str,
+                      rev: str = "HEAD") -> str | None:
+    """When a tap skill's files last changed at ``rev``, as :func:`util.now_iso` writes.
+
+    The newest commit touching anything under its source dir — ``SKILL.md``,
+    scripts, assets. A tap clone is ``--depth 1``, where that question has
+    one answer for every dir, so the clone is deepened first
+    (:func:`gitutil.unshallow`: commits and trees only, and once per tap).
+    None for the ``local`` tap, a tap that is gone or not cloned, no git, or
+    a clone that could not be deepened (offline): the date is what decides
+    between boost's copy and a plugin's, and an unknown one decides nothing.
+    """
+    if not tap_name or tap_name == "local":
+        return None
+    try:
+        tap = registry.get(tap_name)
+        if not tap.is_cloned:
+            return None
+        gitutil.unshallow(tap.path)
+        when = gitutil.path_updated_at(tap.path, rel_dir or ".", rev or "HEAD")
+    except BoostError:
+        return None
+    return None if when is None else util.iso_from_epoch(when)
+
+
+def backfill_source_dates(taps) -> list[str]:
+    """Record :func:`source_updated_at` for installed skills that have none.
+
+    For the skills from ``taps`` installed before boost recorded the date:
+    ``boost update`` reinstalls only a skill whose source changed, so without
+    this the date would reach no skill already on the machine. Read at the
+    commit each was installed from, so a pinned skill is dated by the files
+    it has. A ``boost import`` row has no tap clone to read and is skipped.
+    Returns the names dated.
+    """
+    wanted = set(taps)
+    done = []
+    for name, entry in sorted(lockfile.installed().items()):
+        if (entry.get("tap") not in wanted or entry.get("source_updated_at")
+                or entry.get("source_url")):
+            continue
+        when = source_updated_at(entry.get("tap"), entry.get("source_dir") or ".",
+                                 entry.get("commit") or "HEAD")
+        if when is None:
+            continue
+        lockfile.set_skill(name, {**entry, "source_updated_at": when})
+        done.append(name)
+    return done
 
 
 def _already_links(link: Path, target: Path) -> bool:
@@ -1459,13 +1527,16 @@ def install(entry: dict, force: bool = False,
     _require_writable(name)
     _copy_skill(src, dest)
 
-    res = link_agents(name, only=preserved_agent_scope(only_agents, existing))
+    # Dated before linking: it is what decides whether a plugin's copy of the
+    # same name is newer, and so whether Claude Code gets boost's link.
+    tap = registry.get(entry["tap"])
+    dated = source_updated_at(entry["tap"], entry.get("rel_dir", "."))
+    res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
+                      updated_at=dated)
     res.upgraded = existing is not None
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
 
-    tap = registry.get(entry["tap"])
-    from . import gitutil
     now = util.now_iso()
     lockfile.set_skill(name, {
         "version": entry.get("version", "0.0.0"),
@@ -1495,6 +1566,7 @@ def install(entry: dict, force: bool = False,
         # link could not be looked at, so uninstall does not forget it.
         **({"refused_agents": refused} if (refused := unrecorded_agents(name, res))
            else {}),
+        **({"source_updated_at": dated} if dated else {}),
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
     return res
@@ -2862,7 +2934,10 @@ def install_from_path(src_dir: Path, name: str | None = None,
     dest = skill_store_dir(name)
     _require_writable(name)
     _copy_skill(src_dir, dest)
-    res = link_agents(name, only=preserved_agent_scope(only_agents, existing))
+    # An import records no date, so the one a tap install left in the lock
+    # must not stand for these files.
+    res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
+                      updated_at=None)
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
     prior_tap = (existing or {}).get("tap")
@@ -3486,17 +3561,77 @@ def covering_plugin(name: str, index: dict | None = None
                  if foreign.same_content(sdir, hit[1])), None)
 
 
+def plugin_serves(how: str) -> bool:
+    """True when the plugin's copy is the one Claude Code should list.
+
+    ``how`` is a :func:`plugin_coverage` verdict: the same files, or a copy
+    the dates show is newer than boost's. Then boost makes no Claude Code
+    link, `sync` and `doctor` count none missing, and ``sync --prune`` drops
+    the one boost has. Every other verdict keeps boost's link.
+    """
+    return how == foreign.IDENTICAL or foreign.split_how(how)[0] == foreign.NEWER_IN_PLUGIN
+
+
+def _weigh(sdir: Path, hits: list[tuple[foreign.Plugin, Path]],
+           updated_at: str | None) -> tuple[foreign.Plugin, Path, str]:
+    """``(plugin, its copy, how)``: which of ``hits`` to weigh store copy ``sdir`` against.
+
+    The one with the same files, whichever comes first. Otherwise, with a
+    date for boost's copy, the newest copy a plugin ships that is newer than
+    it, else the first plugin, by id, with the verdict
+    :func:`foreign.newest_copy` gives it (:func:`foreign.dated_how`). With
+    no date for boost's copy nothing is dated, and it reads
+    :data:`foreign.DIFFERS` as before.
+    """
+    same = next((h for h in hits if foreign.same_content(sdir, h[1])), None)
+    if same is not None:
+        return (*same, foreign.IDENTICAL)
+    boost_at = util.epoch_from_iso(updated_at)
+    if boost_at is None:
+        return (*hits[0], foreign.DIFFERS)
+    weighed = []
+    for plugin, theirs in hits:
+        when, source = foreign.plugin_skill_updated_at(plugin, theirs)
+        how = foreign.dated_how(foreign.newest_copy(boost_at, when, source), source)
+        weighed.append((plugin, theirs, how, when or 0.0))
+    newer = [w for w in weighed if plugin_serves(w[2])]
+    plugin, theirs, how, _when = (max(newer, key=operator.itemgetter(3)) if newer
+                                  else weighed[0])
+    return plugin, theirs, how
+
+
+def serving_plugin(name: str, updated_at: str | None, index: dict | None = None
+                   ) -> tuple[foreign.Plugin, Path, str] | None:
+    """The enabled plugin whose copy of ``name`` Claude Code should list, or None.
+
+    :func:`covering_plugin`'s, or one whose copy is newer than boost's, which
+    changed last at ``updated_at`` (:func:`source_updated_at`). The third
+    value is the verdict (:func:`plugin_serves`). Boost cannot turn a plugin
+    off — Claude Code's settings are never written — so when two copies
+    differ, the way to show only the newer is to withhold boost's link when
+    it is the older.
+    """
+    if index is None:
+        index = foreign.plugin_index()
+    hits = _plugin_hits(name, index) if index else []
+    if not hits:
+        return None
+    found = _weigh(skill_store_dir(name), hits, updated_at)
+    return found if plugin_serves(found[2]) else None
+
+
 def plugin_coverage(lock: dict, index: dict | None = None
                     ) -> dict[str, tuple[str, str, str]]:
-    """``{skill: (plugin id, plugin's copy, "identical" | "differs")}`` for each
-    skill in ``lock`` whose scope takes in Claude Code that a plugin also ships.
+    """``{skill: (plugin id, plugin's copy, how)}`` for each skill in ``lock``
+    whose scope takes in Claude Code that a plugin also ships.
 
-    "identical" is :func:`covering_plugin`'s answer, so it is the one that keeps
-    boost from linking the skill into Claude Code: `sync` creates no such link
-    and reports none missing or blocked. A plugin that ships a different skill
-    by the name is a note. Left out: a quarantined or sidelined skill, which
-    has no link to weigh, and a store copy without its ``SKILL.md``, which has
-    nothing to compare.
+    ``how`` is "identical", "differs", or for a different skill whose dates
+    say which copy is newer a :func:`foreign.dated_how` verdict (:func:`_weigh`
+    picks the plugin). The ones :func:`plugin_serves` accepts keep boost from
+    linking the skill into Claude Code: `sync` creates no such link and
+    reports none missing or blocked. The rest are notes. Left out: a
+    quarantined or sidelined skill, which has no link to weigh, and a store
+    copy without its ``SKILL.md``, which has nothing to compare.
     """
     linking = agents.linking_agents()
     if foreign.CLAUDE not in linking:
@@ -3517,17 +3652,16 @@ def plugin_coverage(lock: dict, index: dict | None = None
         hits = _plugin_hits(name, index)
         if not hits:
             continue
-        same = next((h for h in hits if foreign.same_content(sdir, h[1])), None)
-        plugin, theirs = same or hits[0]
-        found[name] = (plugin.id, str(theirs),
-                       foreign.IDENTICAL if same else foreign.DIFFERS)
+        plugin, theirs, how = _weigh(sdir, hits, entry.get("source_updated_at"))
+        found[name] = (plugin.id, str(theirs), how)
     return found
 
 
 def covered_skills(coverage: dict[str, tuple[str, str, str]]) -> set[str]:
-    """The skills in ``coverage`` (:func:`plugin_coverage`) whose plugin ships
-    the same files: the ones boost makes no Claude Code link for."""
-    return {n for n, (_p, _t, how) in coverage.items() if how == foreign.IDENTICAL}
+    """The skills in ``coverage`` (:func:`plugin_coverage`) whose plugin's copy
+    Claude Code should list (:func:`plugin_serves`): the ones boost makes no
+    Claude Code link for."""
+    return {n for n, (_p, _t, how) in coverage.items() if plugin_serves(how)}
 
 
 def left_to_plugin(name: str, agent: str, link: Path, covered: set[str]) -> bool:
@@ -3630,13 +3764,14 @@ def plan_issues(plan: dict[str, list]) -> int:
     line instead, and one line can name several items, so the two totals
     differ whenever a line does.
 
-    A plugin duplicate is one only when the copies are identical: then boost's
-    link adds nothing and ``sync --prune`` can drop it. Two different skills
-    under one name are both worth keeping, so that one is a note.
+    A plugin duplicate is one only when the plugin's copy is the one to list
+    (:func:`plugin_serves`): identical, or newer than boost's. Then boost's
+    link adds nothing current and ``sync --prune`` can drop it. Otherwise
+    boost's link is kept, so that one is a note.
     """
     return sum(len(v) for k, v in plan.items()
                if k not in (*INFORMATIONAL, "plugin_duplicates")) + sum(
-        1 for d in plan.get("plugin_duplicates", ()) if d[3] == foreign.IDENTICAL)
+        1 for d in plan.get("plugin_duplicates", ()) if plugin_serves(d[3]))
 
 
 def sync_plan() -> dict[str, list]:
@@ -4320,6 +4455,9 @@ def _record_unrecorded(name: str, why: str) -> str | None:
         record = {"version": cat.get("version", "0.0.0"), "tap": cat["tap"],
                   "source_dir": cat.get("rel_dir", "."),
                   "commit": gitutil.head_commit(tap.path)}
+        # Dated as install dates it: the store copy is that tap's files.
+        if dated := source_updated_at(cat["tap"], cat.get("rel_dir", ".")):
+            record["source_updated_at"] = dated
         how = "from %s" % cat["tap"]
     else:
         # The shape `import_local` writes for a skill with no tap behind it.
@@ -4490,18 +4628,20 @@ def drop_plugin_link(row: tuple) -> tuple[bool, str]:
     boost's, one leading to the store copy. Claude Code's settings are never
     written, so disabling the plugin stays the user's other way out.
     """
-    name, plugin_id, _theirs, _how = row
+    name, plugin_id, _theirs, how = row
     entry = lockfile.get_skill(name)
     linking = agents.linking_agents()
     if entry is None or foreign.CLAUDE not in linking:
         return False, "kept %s: it is no longer linked into Claude Code" % name
-    hit = covering_plugin(name)
+    hit = serving_plugin(name, entry.get("source_updated_at"))
     if hit is None:
         enabled = any(p.id == plugin_id for p in foreign.enabled_plugins())
         return False, ("kept %s → %s: %s" % (
             name, foreign.CLAUDE,
-            "it no longer matches the copy in plugin %s" % plugin_id if enabled
-            else "plugin %s is no longer enabled" % plugin_id))
+            "plugin %s is no longer enabled" % plugin_id if not enabled
+            else "it no longer matches the copy in plugin %s" % plugin_id
+            if how == foreign.IDENTICAL
+            else "plugin %s's copy is no longer the newer one" % plugin_id))
     link = linking[foreign.CLAUDE] / name
     if not (os.path.islink(link) and _already_links(link, skill_store_dir(name))):
         return False, ("left %s alone: %s is no longer boost's link"
@@ -4518,9 +4658,13 @@ def drop_plugin_link(row: tuple) -> tuple[bool, str]:
     else:
         entry.pop("refused_agents", None)
     lockfile.set_skill(name, entry)
-    journal.log("sync-prune", name, plugin=hit[0].id)
-    return True, ("unlinked %s → %s (Claude Code loads the same files from "
-                  "plugin %s)" % (name, foreign.CLAUDE, hit[0].id))
+    journal.log("sync-prune", name, plugin=hit[0].id, how=hit[2])
+    if hit[2] == foreign.IDENTICAL:
+        return True, ("unlinked %s → %s (Claude Code loads the same files from "
+                      "plugin %s)" % (name, foreign.CLAUDE, hit[0].id))
+    return True, ("unlinked %s → %s (Claude Code loads plugin %s's newer copy, "
+                  "by %s)" % (name, foreign.CLAUDE, hit[0].id,
+                              foreign.date_words(foreign.split_how(hit[2])[1])))
 
 
 def _names(items: list[str], limit: int = 5) -> str:
@@ -4575,7 +4719,9 @@ def unreadable_line(rows: list) -> str:
 
 
 def plugin_duplicate_lines(rows: list) -> list[str]:
-    """One line per plugin for the identical copies among ``rows``."""
+    """Lines for the ``rows`` whose plugin's copy Claude Code should list
+    (:func:`plugin_serves`): one per plugin for identical copies, then one per
+    skill a plugin ships a newer copy of, naming how that is known."""
     by_plugin: dict[str, list[str]] = {}
     for name, plugin_id, _p, how in rows:
         if how == foreign.IDENTICAL:
@@ -4583,14 +4729,43 @@ def plugin_duplicate_lines(rows: list) -> list[str]:
     return ["%s %s twice in Claude Code — plugin %s ships the same files; "
             "`boost sync --prune` drops boost's Claude Code link"
             % (_names(names, 8), "shows" if len(names) == 1 else "show", plugin_id)
-            for plugin_id, names in by_plugin.items()]
+            for plugin_id, names in by_plugin.items()] + plugin_newer_lines(rows)
+
+
+def plugin_newer_lines(rows: list) -> list[str]:
+    """A line for each of ``rows`` whose plugin ships a newer copy than boost's."""
+    return ["%s shows twice in Claude Code — plugin %s ships a newer copy "
+            "(by %s); `boost sync --prune` drops boost's older Claude Code link"
+            % (name, plugin_id, foreign.date_words(foreign.split_how(how)[1]))
+            for name, plugin_id, _p, how in rows
+            if how != foreign.IDENTICAL and plugin_serves(how)]
 
 
 def plugin_variant_lines(rows: list) -> list[str]:
-    """A line for each of ``rows`` whose plugin ships a different skill."""
-    return ["%s shows twice in Claude Code — plugin %s ships a different skill "
-            "by that name; both left as they are" % (name, plugin_id)
-            for name, plugin_id, _p, how in rows if how != foreign.IDENTICAL]
+    """A line for each of ``rows`` whose plugin ships a different skill that
+    boost keeps its link beside: one boost's copy is newer than, or one whose
+    dates decide nothing.
+
+    Boost never writes Claude Code's settings, so for an older plugin copy it
+    names the way the user can turn it off rather than doing it.
+    """
+    lines = []
+    for name, plugin_id, _p, how in rows:
+        verdict, source = foreign.split_how(how)
+        if how == foreign.IDENTICAL or plugin_serves(how):
+            continue
+        if verdict == foreign.NEWER_IN_BOOST:
+            lines.append("%s shows twice in Claude Code — boost's copy is newer "
+                         "than plugin %s's (by %s), which still loads; boost "
+                         "leaves Claude Code's plugin settings alone — to list "
+                         "only boost's, disable %s with `/plugin` in Claude "
+                         "Code, which turns off all of its skills"
+                         % (name, plugin_id, foreign.date_words(source), plugin_id))
+        else:
+            lines.append("%s shows twice in Claude Code — plugin %s ships a "
+                         "different skill by that name; both left as they are"
+                         % (name, plugin_id))
+    return lines
 
 
 def older_copy_lines(rows: list) -> list[str]:

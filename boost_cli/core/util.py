@@ -343,6 +343,22 @@ def user() -> str:
         return "unknown"
 
 
+def iso_from_epoch(when: float) -> str:
+    """A Unix time in :func:`now_iso`'s format."""
+    return datetime.fromtimestamp(when, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def epoch_from_iso(iso) -> float | None:
+    """A :func:`now_iso`-format time as a Unix time; None for anything else."""
+    if not isinstance(iso, str):
+        return None
+    try:
+        return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=UTC).timestamp()
+    except ValueError:
+        return None
+
+
 def rel_time(iso: str) -> str:
     """'2026-07-16T01:00:00Z' -> '3h ago' (best effort)."""
     try:
