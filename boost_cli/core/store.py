@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import operator
 import os
 import shutil
 import stat
@@ -3594,7 +3595,7 @@ def _weigh(sdir: Path, hits: list[tuple[foreign.Plugin, Path]],
         how = foreign.dated_how(foreign.newest_copy(boost_at, when, source), source)
         weighed.append((plugin, theirs, how, when or 0.0))
     newer = [w for w in weighed if plugin_serves(w[2])]
-    plugin, theirs, how, _when = (max(newer, key=lambda w: w[3]) if newer
+    plugin, theirs, how, _when = (max(newer, key=operator.itemgetter(3)) if newer
                                   else weighed[0])
     return plugin, theirs, how
 

@@ -405,7 +405,7 @@ def _read_from(plugin: Plugin) -> Path | None:
     if source is None:
         return plugin.path
     root, rel = source
-    if os.path.isabs(rel):
+    if Path(rel).is_absolute():
         return None
     folder = root / rel
     base = os.path.realpath(root)

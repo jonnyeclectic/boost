@@ -143,7 +143,7 @@ class TestSourceUpdatedAt:
         _commit_all(src, NEW)
         tap = registry.add(str(src))
         # A path clone ignores --depth; re-clone over file:// as a real tap is.
-        shutil.rmtree(tap.path)
+        util.rmtree(tap.path)
         gitutil.clone_shallow(src.as_uri(), tap.path)
         assert gitutil.is_shallow(tap.path)
         assert store.source_updated_at(tap.name, "skills/a") == util.iso_from_epoch(OLD)
