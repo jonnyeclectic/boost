@@ -1438,7 +1438,7 @@ def _require_writable(name: str) -> None:
 
 
 def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
-                       retry: str | None = None) -> None:
+                       retry: str | None = None) -> str | None:
     """Refuse to copy over a store dir the lock file does not record.
 
     Such a dir is a skill the user put in the store by hand, another tool's
@@ -1447,15 +1447,20 @@ def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
     installs knew to look: ``existing`` is ``None`` for every one of them,
     which reads exactly like a fresh install. ``force`` is the user saying
     to replace it anyway, and ``retry`` names the command that does.
+
+    Returns the workflow whose skill copy a forced install is taking over,
+    for the caller to disown with :func:`_drop_skill_copy_row` once every
+    other refusal has passed. Dropping it here would let a later refusal
+    (policy, capability, an unwritable store) leave the copy unowned, and
+    `boost sync` would then adopt it and link it beside the workflow.
     """
     owner = None if existing else skill_copy_owner(name)
     if owner is not None:
         if force:
             # The user asked for the skill. The workflow keeps its own files
-            # and loses only its copy here, and its next install finds a skill
-            # by this name and skips the copy rather than writing over it.
-            _drop_skill_copy_row(owner)
-            return
+            # and loses only its copy, and its next install finds a skill by
+            # this name and skips the copy rather than writing over it.
+            return owner
         raise BoostError("%s is already in the store at %s, as the skill copy "
                          "of workflow %s" % (name, paths.tilde(
                              skill_store_dir(name)), owner),
@@ -1465,10 +1470,10 @@ def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
                                "the copy out of the store" % owner),
                          wrap=True)
     if existing or force:
-        return
+        return None
     dest = skill_store_dir(name)
     if not os.path.lexists(dest):
-        return
+        return None
     if lockfile.check().problem in ("corrupt", "schema"):
         hint = ("the lock file cannot be read — `boost replay` restores the "
                 "lock that knows whose it is")
@@ -1550,12 +1555,14 @@ def install(entry: dict, force: bool = False,
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
 
-    _refuse_unrecorded(name, existing, force,
-                       retry="`boost install %s --force`" % name)
+    disowned = _refuse_unrecorded(name, existing, force,
+                                  retry="`boost install %s --force`" % name)
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
     dest = skill_store_dir(name)
     _require_writable(name)
+    if disowned:
+        _drop_skill_copy_row(disowned)
     _copy_skill(src, dest)
 
     # Dated before linking: it is what decides whether a plugin's copy of the
@@ -3322,7 +3329,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
                   "`boost sync` records a skill put in the store by hand"))
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
-    _refuse_unrecorded(name, existing, force)
+    disowned = _refuse_unrecorded(name, existing, force)
     violations = policy.check_install(
         {"name": name, "tap": tap_label,
          "version": str(meta.get("version") or "0.0.0"),
@@ -3335,6 +3342,8 @@ def install_from_path(src_dir: Path, name: str | None = None,
     _enforce_capability_policy(name, src_dir / "SKILL.md")
     dest = skill_store_dir(name)
     _require_writable(name)
+    if disowned:
+        _drop_skill_copy_row(disowned)
     _copy_skill(src_dir, dest)
     # An import records no date, so the one a tap install left in the lock
     # must not stand for these files.

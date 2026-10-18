@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import lockfile, paths, registry, store
+from boost_cli.core import lockfile, paths, policy, registry, store
 from boost_cli.errors import BoostError
 
 AGENT = ("---\nname: reviewer\nversion: 1.0.0\n"
@@ -211,10 +211,32 @@ class TestCollision:
         assert lockfile.get_skill("reviewer") is not None
         assert _copy().read_text(encoding="utf-8").endswith("mine\n")
 
+    def test_a_forced_install_that_is_refused_leaves_the_copy_owned(
+            self, boost, wf_tap, tmp_path):
+        # --force gets past the copy, but a later refusal (here the capability
+        # policy) must not leave it disowned: an unowned store dir is one
+        # `boost sync` adopts and links beside the workflow.
+        boost("install", "reviewer")
+        p = policy.load()
+        p["denied_capabilities"] = ["network"]
+        policy.save(p)
+        src = tmp_path / "src" / "reviewer"
+        src.mkdir(parents=True)
+        (src / "SKILL.md").write_text(
+            "---\nname: reviewer\ndescription: mine\n"
+            "capabilities: [network]\n---\nmine\n", encoding="utf-8")
+        with pytest.raises(BoostError, match="network"):
+            store.install_from_path(src, name="reviewer", force=True)
+        assert any(m["slot"] == "skill" for m in _rows())
+        assert "reviewer" in store.workflow_owned_store_names()
+        assert _copy().read_text(encoding="utf-8") == WANT
+        assert "recorded reviewer" not in _flat(boost("sync").out)
+
     def test_a_forced_skill_install_takes_the_dir_from_the_workflow(
             self, boost, wf_tap):
         boost("install", "reviewer")
-        store._refuse_unrecorded("reviewer", None, True)
+        store._drop_skill_copy_row(
+            store._refuse_unrecorded("reviewer", None, True))
         assert not any(m["slot"] == "skill" for m in _rows())
         # Disowned, the dir is just a dir: the workflow's next install will
         # not write over it. Cleared, it is the workflow's again.
@@ -379,7 +401,8 @@ class TestReviewFindings:
         boost("quarantine", "reviewer")
         # A forced skill install takes the dir from the quarantined workflow:
         # it must forget the stashed copy too, not only the live row.
-        store._refuse_unrecorded("reviewer", None, True)
+        store._drop_skill_copy_row(
+            store._refuse_unrecorded("reviewer", None, True))
         entry = lockfile.get_workflow("reviewer")
         assert not any(m["slot"] == "skill"
                        for m in entry.get("quarantine_stash") or ())

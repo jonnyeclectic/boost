@@ -425,7 +425,11 @@ class TestRemovalPaths:
         # An entry of its own means the skill is boost's already: no refusal.
         store._refuse_unrecorded("reviewer", {"tap": "t"}, False)
         assert "reviewer" in store.workflow_owned_store_names()
-        store._refuse_unrecorded("reviewer", None, True)
+        # Forced, it names the owner and disowns nothing yet: the caller
+        # drops the row only once every later refusal has passed.
+        assert store._refuse_unrecorded("reviewer", None, True) == "reviewer"
+        assert "reviewer" in store.workflow_owned_store_names()
+        store._drop_skill_copy_row("reviewer")
         assert "reviewer" not in store.workflow_owned_store_names()
         assert _store_copy().is_file()
 
