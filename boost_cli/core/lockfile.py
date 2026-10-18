@@ -346,12 +346,27 @@ def agent_names(kind: str, entry: dict | None) -> list[str]:
     this helper existed, `boost stats`' rule/workflow branch sorted its
     agents line while the skill branch printed raw lock/install order —
     two presentations of the same fact that happened to disagree.
+
+    A workflow's skill copy (:func:`is_skill_copy`) is a row too, and names no
+    agent: it sits in the canonical store, reached by whichever agents read
+    that. It is left out here, because ``None`` sorted beside agent names
+    raises, and printing it as ``?`` names an agent that does not exist.
     """
     if not entry:
         return []
     if kind == "skill":
         return sorted(entry.get("agents") or [])
-    return sorted({m.get("agent", "?") for m in entry.get("materializations") or []})
+    return sorted({m.get("agent", "?") for m in entry.get("materializations") or []
+                   if not is_skill_copy(m)})
+
+
+def is_skill_copy(m: dict) -> bool:
+    """Whether materialization row ``m`` is a workflow's copy in the skill store.
+
+    Its ``slot`` is :data:`workflows.SLOT_SKILL` and its ``agent`` is None.
+    """
+    from . import workflows
+    return m.get("slot") == workflows.SLOT_SKILL
 
 
 def find_any(name: str) -> tuple[str, dict] | None:

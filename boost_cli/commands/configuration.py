@@ -26,7 +26,6 @@ from ..core import (
     catalog,
     complete,
     config,
-    foreign,
     frontmatter,
     gitutil,
     installscan,
@@ -1592,6 +1591,12 @@ def _tool_install(args: dict):
     if res.native:
         lines.append("available without linking (reads %s directly): %s"
                      % (res.dest.parent, ", ".join(res.native)))
+    # A workflow's copy in the skill store is how a skills-only agent reaches
+    # it; an agent told nothing concludes the same as above.
+    if res.skill_copy is not None:
+        lines.append("as a skill: %s" % res.skill_copy)
+    if res.skill_note:
+        lines.append(res.skill_note)
     lines.append("quality score: %d/100" % res.score)
     if res.conflicts:
         lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
@@ -1791,7 +1796,7 @@ def _doctor_verdict(plan: dict[str, list], total: int, lock_bad: bool,
     prune = (len(plan.get("foreign_store", ())) - repos
              + len(plan.get("out_of_scope_links", ()))
              + sum(1 for r in plan.get("plugin_duplicates", ())
-                   if r[3] == foreign.IDENTICAL))
+                   if store.plugin_serves(r[3])))
     if not user and not prune:
         return "%d issue(s) — run `boost sync` to fix" % total
     parts = []

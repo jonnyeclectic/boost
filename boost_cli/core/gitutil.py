@@ -363,10 +363,20 @@ def materialize(repo: Path, rel_dir: str) -> None:
             hint="this needs network — the tap stores only Markdown locally") from None
 
 
+def _depth(repo: Path) -> list[str]:
+    """``--depth 1`` for a shallow clone, nothing for a complete one.
+
+    A clone :func:`unshallow` deepened so its skills' dates can be read must
+    stay deep: a ``fetch --depth 1`` puts ``.git/shallow`` back and cuts the
+    history to one commit again, and every date read after it is the HEAD's.
+    """
+    return ["--depth", "1"] if is_shallow(repo) else []
+
+
 def pull(repo: Path) -> str:
-    """Update a shallow clone. Returns a one-line summary."""
+    """Update a clone, keeping it as shallow as it is. Returns a one-line summary."""
     before = head_commit(repo)
-    proc = run(["-C", str(repo), "fetch", "--depth", "1", "--quiet", "origin"],
+    proc = run(["-C", str(repo), "fetch", *_depth(repo), "--quiet", "origin"],
               check=False)
     if proc.returncode != 0:
         stderr = (proc.stderr or "") + (proc.stdout or "")
@@ -396,7 +406,8 @@ def checkout_commit(repo: Path, sha: str) -> None:
 
     The fetch keeps `--depth 1` and the blobless filter for the same reason the
     clone does — pinning a tap must not cost the history and blobs the sparse
-    clone was built to avoid (458 taps held 12 GB before that work).
+    clone was built to avoid (458 taps held 12 GB before that work). A clone
+    that is already complete stays so (:func:`_depth`).
     """
     if not _is_sha(sha):
         raise BoostError("%r is not a full commit SHA" % sha,
@@ -404,7 +415,7 @@ def checkout_commit(repo: Path, sha: str) -> None:
     have = run(["-C", str(repo), "cat-file", "-e", sha + "^{commit}"],
                check=False)
     if have.returncode != 0:
-        run(["-C", str(repo), "fetch", "--quiet", "--depth", "1",
+        run(["-C", str(repo), "fetch", "--quiet", *_depth(repo),
              "--filter=blob:none", "origin", sha])
     run(["-C", str(repo), "checkout", "--quiet", "--detach", sha])
     # A detached checkout leaves the sparse cone as it was, but re-applying is
@@ -440,6 +451,90 @@ def is_shallow(repo: Path) -> bool:
     ``fetch --unshallow``, which fails on a complete repository.
     """
     return (Path(repo) / ".git" / "shallow").is_file()
+
+
+#: Seconds :func:`unshallow` waits for history before giving the date up.
+UNSHALLOW_TIMEOUT = 60
+
+
+def unshallow(repo: Path) -> bool:
+    """Fetch the rest of a shallow clone's history, still without blobs.
+
+    What makes a skill's date readable (:func:`path_updated_at`). Measured on
+    real taps: 0.5 s and 156 KB for ``anthropics/skills`` (60 commits), 3 s
+    and 11.5 MB for one with 3,220; a second run costs nothing. Commits and
+    trees only — a blobless fetch brings no file outside the sparse cone.
+    True when the clone is complete afterwards; a failure (offline, a remote
+    that is gone) is False and raises nothing, since a date is never worth
+    failing the install or update that asked for it. The fetch gets
+    :data:`UNSHALLOW_TIMEOUT` rather than :func:`run`'s five minutes, so a
+    huge or stalled remote costs an install a minute and an undated skill,
+    not five.
+
+    A timeout kills git, which then cannot remove the ``.git/shallow.lock``
+    it took, and every later fetch of that tap (``boost update``) fails on
+    "Unable to create ... shallow.lock: File exists". So a lock this fetch
+    created is removed when it dies; one that was there before is another
+    git process's and is left alone.
+    """
+    if not is_shallow(repo):
+        return True
+    lock = Path(repo) / ".git" / "shallow.lock"
+    held = lock.exists()
+    try:
+        proc = run(["-C", str(repo), "fetch", "--quiet", "--unshallow",
+                    "--filter=blob:none", "origin"], check=False,
+                   timeout=UNSHALLOW_TIMEOUT)
+    except BoostError:
+        if not held:
+            lock.unlink(missing_ok=True)
+        return False
+    return proc.returncode == 0 and not is_shallow(repo)
+
+
+def _graft_points(repo: Path) -> set[str]:
+    """The commits a shallow repo's history is cut at; empty for a complete one.
+
+    Located with ``rev-parse --git-path``, so a worktree or submodule whose
+    ``.git`` is a file finds its repository's list too.
+    """
+    proc = run(["-C", str(repo), "rev-parse", "--git-path", "shallow"], check=False)
+    rel = proc.stdout.strip()
+    if proc.returncode != 0 or not rel:
+        return set()
+    try:
+        text = (Path(repo) / rel).read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    return {ln.strip() for ln in text.splitlines() if ln.strip()}
+
+
+def path_updated_at(repo: Path, rel_dir: str = ".", rev: str = "HEAD") -> int | None:
+    """When ``rel_dir`` last changed at ``rev``: a Unix time, or None.
+
+    The committer time of the newest commit touching any file under the dir,
+    so a change to a script or an asset counts as much as one to ``SKILL.md``.
+    None when no commit touched it, git fails, or the commit found is one the
+    history is cut at (:func:`_graft_points`). That last is not caution: git
+    reads a graft point as a root commit that added every file, so in a
+    ``--depth 1`` clone every dir "changed" in the HEAD commit, and the date
+    is the HEAD's for all of them. Only the trees are read, which a blobless
+    clone holds.
+    """
+    proc = run(["-C", str(repo), "log", "-1", "--format=%H" + _LOG_SEP + "%ct",
+                rev or "HEAD", "--", rel_dir or "."], check=False)
+    sha, _sep, when = proc.stdout.strip().partition(_LOG_SEP)
+    if proc.returncode != 0 or not when.isdigit():
+        return None
+    return None if sha in _graft_points(repo) else int(when)
+
+
+def head_time(repo: Path) -> int | None:
+    """The HEAD commit's committer time, or None. No earlier than any date
+    :func:`path_updated_at` can find at HEAD, shallow clone or not."""
+    proc = run(["-C", str(repo), "log", "-1", "--format=%ct", "HEAD"], check=False)
+    when = proc.stdout.strip()
+    return int(when) if proc.returncode == 0 and when.isdigit() else None
 
 
 def log_for_path(repo: Path, rel_path: str = ".", n: int = 20) -> list[str]:

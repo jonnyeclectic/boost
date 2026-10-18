@@ -876,9 +876,20 @@ def cmd_doctor(argv):
             if not store.materialization_is_written("workflow", entry, m):
                 continue
             if not m.get("unwritable") and not os.path.isfile(m.get("path", "")):
-                bad("workflow", "workflow %s missing its %s file — run `boost reinstall %s`"
-                    % (name, m.get("agent", "?"), name))
+                if lockfile.is_skill_copy(m):
+                    bad("workflow", "workflow %s missing its skill copy at %s "
+                        "— run `boost sync`" % (name, _tilde(m.get("path", ""))),
+                        wrap=True)
+                else:
+                    bad("workflow", "workflow %s missing its %s file — run "
+                        "`boost reinstall %s`"
+                        % (name, m.get("agent", "?"), name))
                 mat_issues += 1
+    # A note, not an issue: the workflow works for every agent with a workflow
+    # format. Only an agent that reads skills alone (Codex) misses it.
+    unreached = store.workflows_without_skill_copy() if agents_ok else []
+    if unreached:
+        rep.note("workflows-as-skills", _as_skill_note(unreached), wrap=True)
     # Said once, as a note rather than an issue: the row is there because the
     # user changed that agent's config after installing, which is their
     # decision, and the two ways out are theirs to pick. Reporting it as a
@@ -1000,6 +1011,8 @@ def cmd_doctor(argv):
             "drops boost's Claude Code link"
             % (len(same), _s(len(same)), "s" if len(same) == 1 else "",
                "it" if len(same) == 1 else "them", _first(same)), wrap=True)
+    for line in store.plugin_newer_lines(dups):
+        bad("plugin-newer", line, wrap=True)
     for line in store.plugin_variant_lines(dups):
         rep.note("plugin-variants", line, wrap=True)
 
@@ -1556,6 +1569,16 @@ def cmd_decay(argv):
     return 0
 
 
+def _as_skill_note(names: list[str]) -> str:
+    """The doctor/heal line for workflows installed without a skill copy."""
+    n = len(names)
+    shown = ", ".join(names[:_MAT_NOTE_SHOWN]) + (
+        " and %d more" % (n - _MAT_NOTE_SHOWN) if n > _MAT_NOTE_SHOWN else "")
+    return ("%d workflow%s not reachable as skill%s (%s) — `boost heal "
+            "--as-skill` puts %s in the skill store"
+            % (n, _s(n), _s(n), shown, "it" if n == 1 else "them"))
+
+
 def cmd_heal(argv):
     ap = cliparse.parser(
         prog="boost heal",
@@ -1566,6 +1589,9 @@ def cmd_heal(argv):
                     help="remove the duplicate-discovery symlinks `boost doctor` "
                          "reports (an agent that collapses them silently is "
                          "never reported, so never pruned)")
+    ap.add_argument("--as-skill", action="store_true",
+                    help="give installed workflows their copy in the skill "
+                         "store, for agents that read only skills")
     args = ap.parse_args(argv)
     dry = args.dry_run
     actions: list[str] = []
@@ -1673,7 +1699,25 @@ def cmd_heal(argv):
     if plan["misnamed_store"]:
         out.info(store.misnamed_line(plan["misnamed_store"]), wrap=True)
     declined_copies = bool(plan["foreign_store"]) or any(
-        r[3] == foreign.IDENTICAL for r in plan["plugin_duplicates"])
+        store.plugin_serves(r[3]) for r in plan["plugin_duplicates"])
+
+    # Opt-in like --prune-duplicates, though it removes nothing: it writes into
+    # the skill store, which a plain heal only ever repairs.
+    if args.as_skill:
+        if not config.get("workflows_as_skills", True):
+            out.info("workflows_as_skills is off, so no workflow gets a skill "
+                     "copy — `boost config set workflows_as_skills true` "
+                     "turns it on", wrap=True)
+        for line in store.backfill_skill_copies(dry=dry):
+            if dry or line.startswith("workflow "):
+                out.info(line, wrap=True)
+            else:
+                out.ok(line)
+            actions.append(line)
+    else:
+        unreached = store.workflows_without_skill_copy()
+        if unreached:
+            out.info(_as_skill_note(unreached), wrap=True)
 
     duplicates = store.duplicate_discovery()
     declined_duplicates = bool(duplicates) and not args.prune_duplicates

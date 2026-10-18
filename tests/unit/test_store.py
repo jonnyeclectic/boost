@@ -4411,8 +4411,9 @@ class TestNarrowedRuleAndWorkflowKeepTheirRecords:
         store.install(_workflow_entry(tap))
         store.install(_workflow_entry(tap), force=True, only_agents=["cursor"])
         rec = lockfile.get_workflow("ship-it")
+        # Every agent, plus the copy in the skill store, which names none.
         assert {m["agent"] for m in rec["materializations"]} == {
-            "claude-code", "windsurf", "cursor", "gemini"}
+            "claude-code", "windsurf", "cursor", "gemini", None}
 
     def test_uninstall_then_removes_the_orphaned_slash_command(self, tap):
         store.install(_workflow_entry(tap))

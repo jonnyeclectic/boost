@@ -114,6 +114,13 @@ DEFAULTS = {
     },
     "serve": {"port": 8787},
     "policy_enforce": True,
+    # A workflow (a subagent, or a slash command with a description) also gets
+    # a copy in the canonical store, ``~/.agents/skills/<name>/SKILL.md``, so
+    # agents that read skills and no workflow format — Codex — can reach it.
+    # `boost install --as-skill/--no-as-skill` overrides it per install, and
+    # that choice sticks; with neither flag an install follows this. See
+    # store._skill_copy.
+    "workflows_as_skills": True,
     "telemetry": False,
     "logging": {
         # Console verbosity for the diagnostic log on stderr. "OFF" keeps

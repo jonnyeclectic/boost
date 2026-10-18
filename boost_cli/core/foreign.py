@@ -60,7 +60,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import BoostError
-from . import agents, frontmatter, jsonstate, paths, util
+from . import agents, frontmatter, gitutil, jsonstate, paths, util
 
 VENDOR = "vendor"
 PLUGIN = "plugin"
@@ -70,8 +70,21 @@ AGENT = "agent"
 CLAUDE = "claude-code"
 
 #: How two copies of a skill compare, as plans record it and messages word it.
+#: A variant pair — the same name, different files — is :data:`DIFFERS` until
+#: the dates say which is newer (:func:`newest_copy`).
 IDENTICAL = "identical"
 DIFFERS = "differs"
+NEWER_IN_PLUGIN = "newer-in-plugin"
+NEWER_IN_BOOST = "newer-in-boost"
+
+#: Where a plugin skill's date came from (:func:`plugin_skill_updated_at`).
+#: The first two are when it really last changed; a bound is no earlier than
+#: that, and can only show that boost's copy is the newer one.
+DATE_GIT = "git"
+DATE_FILES = "files"
+DATE_BOUND = "upper-bound"
+DATE_UNKNOWN = "unknown"
+EXACT_DATES = (DATE_GIT, DATE_FILES)
 
 #: The fields a marketplace entry may add to a plugin. Beside a
 #: ``plugin.json``, an entry that sets ``strict: false`` and declares any of
@@ -388,17 +401,11 @@ def _read_from(plugin: Plugin) -> Path | None:
     branch there, from a directory boost has not seen recorded, so it keeps
     its ``installPath`` here.
     """
-    found = _marketplace(plugin)
-    if found is None:
+    source = _folder_source(plugin)
+    if source is None:
         return plugin.path
-    record, root = found
-    kind = record.get("source")
-    entry = _marketplace_entry(plugin)
-    if (not isinstance(kind, dict) or kind.get("source") != "directory"
-            or entry is None or not isinstance(entry.get("source"), str)):
-        return plugin.path
-    rel = entry["source"]
-    if os.path.isabs(rel):
+    root, rel = source
+    if Path(rel).is_absolute():
         return None
     folder = root / rel
     base = os.path.realpath(root)
@@ -407,6 +414,30 @@ def _read_from(plugin: Plugin) -> Path | None:
     except ValueError:
         inside = False
     return folder if inside else None
+
+
+def _folder_source(plugin: Plugin) -> tuple[Path, str] | None:
+    """``(marketplace dir, entry source)`` for a plugin Claude Code reads
+    from a local folder (:func:`_read_from`), else None."""
+    found = _marketplace(plugin)
+    if found is None:
+        return None
+    record, root = found
+    kind = record.get("source")
+    entry = _marketplace_entry(plugin)
+    if (not isinstance(kind, dict) or kind.get("source") != "directory"
+            or entry is None or not isinstance(entry.get("source"), str)):
+        return None
+    return root, entry["source"]
+
+
+def reads_folder(plugin: Plugin) -> bool:
+    """True when Claude Code reads ``plugin`` from a folder of the user's.
+
+    Its file times are then real edit times, unlike a cache copy's, which are
+    when Claude Code installed it.
+    """
+    return _folder_source(plugin) is not None
 
 
 def _source_is_root(entry: dict) -> bool:
@@ -711,3 +742,109 @@ def newest_mtime(path: Path) -> float:
             except OSError:
                 continue
     return best
+
+
+def _inside(path: Path, root: Path) -> bool:
+    """True when ``path`` is ``root`` or below it, both resolved."""
+    a, b = os.path.realpath(path), os.path.realpath(root)
+    try:
+        return os.path.commonpath([a, b]) == b
+    except ValueError:
+        return False
+
+
+def _repo_root(path: Path) -> Path | None:
+    """The top of the git work tree ``path`` is in, or None."""
+    if not gitutil.has_git():
+        return None
+    proc = gitutil.run(["-C", str(path), "rev-parse", "--show-toplevel"],
+                       check=False)
+    top = proc.stdout.strip()
+    return Path(top) if proc.returncode == 0 and top else None
+
+
+def _clean(path: Path) -> bool:
+    """True when git sees no edit, and no untracked file, under ``path``."""
+    proc = gitutil.run(["-C", str(path), "status", "--porcelain", "--", "."],
+                       check=False)
+    return proc.returncode == 0 and not proc.stdout.strip()
+
+
+def plugin_skill_updated_at(plugin: Plugin, path: Path) -> tuple[float | None, str]:
+    """``(when, source)``: when a plugin's skill dir last changed, and how that is known.
+
+    Only read, never fetched: the dirs are Claude Code's. In order:
+
+    * :data:`DATE_GIT` — the dir is in a git checkout with the history to
+      date it (:func:`gitutil.path_updated_at`) and nothing in it is edited.
+      For a cache or marketplace checkout the repository must be Claude
+      Code's own, under :func:`plugins_root`: a dotfiles repo at ``$HOME``
+      that tracks ``~/.claude`` dates the user's commit, not the plugin's.
+    * :data:`DATE_FILES` — a plugin read from a folder of the user's
+      (:func:`reads_folder`): its newest file time is when it was edited.
+    * :data:`DATE_BOUND` — anything else. The checkouts Claude Code makes
+      are ``--depth 1`` or not git at all, so the best on hand is the HEAD's
+      date or the install's file times, the earlier of the two. Both are no
+      earlier than the skill's real last change.
+    * :data:`DATE_UNKNOWN` — no file to date, ``when`` None.
+    """
+    files = newest_mtime(path) or None
+    folder = reads_folder(plugin)
+    root = _repo_root(path)
+    ours = root is not None and (folder or _inside(root, plugins_root()))
+    if ours and _clean(path):
+        exact = gitutil.path_updated_at(path, ".")
+        if exact is not None:
+            return float(exact), DATE_GIT
+    if folder:
+        return (files, DATE_FILES) if files is not None else (None, DATE_UNKNOWN)
+    head = gitutil.head_time(path) if ours else None
+    bounds = [b for b in (files, head) if b is not None]
+    return (float(min(bounds)), DATE_BOUND) if bounds else (None, DATE_UNKNOWN)
+
+
+def newest_copy(boost_at: float | None, plugin_at: float | None, source: str) -> str:
+    """Which copy of a variant pair is newer: a :data:`NEWER_IN_BOOST`,
+    :data:`NEWER_IN_PLUGIN` or :data:`DIFFERS` (not known).
+
+    ``boost_at`` is exact: the commit date of boost's copy in a complete tap
+    clone. ``plugin_at`` is exact only for a :data:`EXACT_DATES` ``source``;
+    otherwise it is an upper bound, so a boost date past it shows boost's copy
+    is newer, and a boost date before it shows nothing. Reading a bound both
+    ways called nearly every plugin newer, because Claude Code installs a
+    plugin after the commit boost's copy dates from. Equal dates decide
+    nothing either: two copies changed in the same second are not one newer.
+    """
+    if boost_at is None or plugin_at is None:
+        return DIFFERS
+    if boost_at > plugin_at:
+        return NEWER_IN_BOOST
+    if plugin_at > boost_at and source in EXACT_DATES:
+        return NEWER_IN_PLUGIN
+    return DIFFERS
+
+
+def dated_how(verdict: str, source: str) -> str:
+    """A :func:`newest_copy` verdict as plans record it: ``"<verdict>:<source>"``
+    for a dated one, so the wording can say how it is known; :data:`DIFFERS`
+    as it is."""
+    return verdict if verdict == DIFFERS else "%s:%s" % (verdict, source)
+
+
+def split_how(how: str) -> tuple[str, str]:
+    """``(verdict, date source)`` from a recorded verdict (:func:`dated_how`);
+    the source is "" for an undated one."""
+    verdict, _sep, source = how.partition(":")
+    return verdict, source
+
+
+#: How each date source reads after "by": what boost's last commit was
+#: weighed against.
+DATE_WORDS = {DATE_GIT: "commit dates",
+              DATE_FILES: "boost's commits against the plugin's file times",
+              DATE_BOUND: "boost's commits against the plugin's install date"}
+
+
+def date_words(source: str) -> str:
+    """``source`` (:data:`DATE_GIT` and the rest) worded to follow "by"."""
+    return DATE_WORDS.get(source, "dates boost could not place")

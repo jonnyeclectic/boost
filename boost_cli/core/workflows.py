@@ -38,6 +38,11 @@ from . import frontmatter, util
 
 SLOT_COMMANDS = "commands"
 SLOT_AGENTS = "agents"
+# Not a directory any agent reads workflows from: the slot of the copy boost
+# writes into the canonical store (``~/.agents/skills/<name>/SKILL.md``) so an
+# agent that only reads skills — Codex, which has no slash-command format —
+# can still reach the workflow. See :func:`render_skill`.
+SLOT_SKILL = "skill"
 
 # Source directory names that mark a workflow as a subagent rather than a
 # slash command. Everything else (commands/, workflows/, or frontmatter-only)
@@ -902,6 +907,62 @@ def sanitize_gemini_agent(name: str, raw: str) -> str:
     return out if _sanitize_once(name, out) == out else raw
 
 
+def skill_description(slot: str, meta: dict) -> str | None:
+    """The description a workflow's skill copy would carry, or None for none.
+
+    Both slots qualify, on one condition: a non-empty ``description``. A
+    subagent is a procedure with a name, which is exactly what a skill is; a
+    slash command is too, and Codex's own plugin importer turns a Claude
+    ``commands/*.md`` into a SKILL.md for that reason (``config.DEFAULTS``'
+    codex entry). What a command loses is its ``$ARGUMENTS`` substitution,
+    which a skill has no way to receive — the prompt still reads.
+
+    The description is the condition because boost's own checks call a
+    SKILL.md without one a fault (``util`` lint: "missing required field:
+    description"), and a skill host picks a skill by its description: a copy
+    without one is a file `boost doctor` would complain about and no agent
+    would ever choose.
+    """
+    if slot not in (SLOT_AGENTS, SLOT_COMMANDS):
+        return None
+    desc = str(meta.get("description") or "").strip()
+    return desc or None
+
+
+def _skill_body(raw: str) -> str:
+    """``raw`` after its frontmatter, byte for byte; all of it when it has none.
+
+    The same fences :func:`frontmatter.split` accepts (``---`` or ``...`` to
+    close), but sliced from the original text rather than re-joined from
+    ``splitlines()``, which drops the final newline and turns CRLF into LF —
+    the body is the procedure, and the copy promises it unchanged.
+    """
+    lines = raw.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return raw
+    for i in range(1, len(lines)):
+        if lines[i].strip() in ("---", "..."):
+            return "".join(lines[i + 1:]).lstrip("\r\n")
+    return raw
+
+
+def render_skill(name: str, description: str, raw: str) -> str:
+    """A workflow as the ``SKILL.md`` of its copy in the canonical store.
+
+    The frontmatter is cut to ``name`` and ``description`` — the two keys the
+    Agent Skills format requires. Everything else a workflow carries
+    (``tools``, ``model``, ``color``, ``isolation``, ``argument-hint``…) is one
+    host's subagent or command vocabulary; a skill host either ignores it or,
+    as Gemini does for its own agents, validates it and rejects the file.
+
+    ``name`` is the store dir's name, never the source's ``name:``: a skill
+    host keys a skill by the two agreeing, and the dir is what boost records.
+    The body is unchanged (:func:`_skill_body`).
+    """
+    head = frontmatter.dump({"name": name, "description": description})
+    return "%s\n\n%s" % (head, _skill_body(raw))
+
+
 def render(agent: str | None, slot: str, name: str, raw: str) -> str:
     """The text to write for ``name`` in ``slot`` for ``agent``.
 
@@ -911,7 +972,17 @@ def render(agent: str | None, slot: str, name: str, raw: str) -> str:
     :func:`sanitize_gemini_agent` — the body is still verbatim there. Pairs
     with :func:`target_ext`: the two agree on exactly which combination is
     special, so the extension and the content can never disagree.
+
+    The skill slot (:data:`SLOT_SKILL`) is asked first and belongs to no
+    agent: it is the copy in the canonical store, rendered by
+    :func:`render_skill`. Routing it through here is what lets every reader
+    that re-renders a recorded row to compare it — `boost update`'s risk diff
+    among them — compare like with like.
     """
+    if slot == SLOT_SKILL:
+        meta, _ = frontmatter.parse(raw)
+        return render_skill(name, str(meta.get("description") or "").strip(),
+                            raw)
     if target_ext(agent, slot) == TOML_EXT:
         return render_gemini_command(name, raw)
     if agent in TOML_COMMAND_AGENTS and slot == SLOT_AGENTS:
