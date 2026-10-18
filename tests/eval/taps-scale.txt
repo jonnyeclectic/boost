@@ -23,6 +23,10 @@
 # registries largest-first WITHIN each type, round-robin across types —
 # straight largest-first lets the 341-strong skill tail crowd out the 26
 # rule registries, and a corpus that is 95% skills is not an install.
+#
+# No one distractor may carry more than 1,000 est items (5% of the
+# target), so the corpus is not one registry's vocabulary. Skipped:
+#   jeremylongshore/tons-of-skills-marketplace (4,253)
 
 # --- the required corpus, verbatim (holds every golden target) ---
 anthropics/skills                       3b3fad96af16a10759d930941b4520ba0c40edae    20    20
