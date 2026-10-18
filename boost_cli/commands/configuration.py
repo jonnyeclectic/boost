@@ -26,7 +26,6 @@ from ..core import (
     catalog,
     complete,
     config,
-    foreign,
     frontmatter,
     gitutil,
     installscan,
@@ -1797,7 +1796,7 @@ def _doctor_verdict(plan: dict[str, list], total: int, lock_bad: bool,
     prune = (len(plan.get("foreign_store", ())) - repos
              + len(plan.get("out_of_scope_links", ()))
              + sum(1 for r in plan.get("plugin_duplicates", ())
-                   if r[3] == foreign.IDENTICAL))
+                   if store.plugin_serves(r[3])))
     if not user and not prune:
         return "%d issue(s) — run `boost sync` to fix" % total
     parts = []

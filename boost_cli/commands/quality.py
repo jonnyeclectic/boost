@@ -1011,6 +1011,8 @@ def cmd_doctor(argv):
             "drops boost's Claude Code link"
             % (len(same), _s(len(same)), "s" if len(same) == 1 else "",
                "it" if len(same) == 1 else "them", _first(same)), wrap=True)
+    for line in store.plugin_newer_lines(dups):
+        bad("plugin-newer", line, wrap=True)
     for line in store.plugin_variant_lines(dups):
         rep.note("plugin-variants", line, wrap=True)
 
@@ -1697,7 +1699,7 @@ def cmd_heal(argv):
     if plan["misnamed_store"]:
         out.info(store.misnamed_line(plan["misnamed_store"]), wrap=True)
     declined_copies = bool(plan["foreign_store"]) or any(
-        r[3] == foreign.IDENTICAL for r in plan["plugin_duplicates"])
+        store.plugin_serves(r[3]) for r in plan["plugin_duplicates"])
 
     # Opt-in like --prune-duplicates, though it removes nothing: it writes into
     # the skill store, which a plain heal only ever repairs.

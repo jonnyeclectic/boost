@@ -1807,6 +1807,13 @@ class TestDoctorVerdict:
             "which deletes or unlinks, so ask the user first; 3 are the "
             "user's to change, and `boost sync` leaves them")
 
+    def test_a_newer_plugin_copy_is_prunes_and_an_older_one_is_a_note(self, sandbox):
+        got = self._verdict(1, plugin_duplicates=[
+            ("c", "p@m", "/y", "newer-in-plugin:git"),
+            ("d", "p@m", "/z", "newer-in-boost:upper-bound")])
+        assert got == ("1 issue(s) — 1 needs `boost sync --prune`, which "
+                       "deletes or unlinks, so ask the user first")
+
     def test_one_of_each_reads_in_the_singular(self, sandbox):
         assert self._verdict(2, foreign_store=[("a", "o", "/x/a", "differs")],
                              unrecorded_store=["b"]) == (
