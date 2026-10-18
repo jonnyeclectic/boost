@@ -725,7 +725,7 @@ WORKFLOWS = [
     ("eclosion-labs/terraform-cursor-plugin", "infra", "Cursor plugin for terraform (17 skills, 24 workflows)", 41, "med"),
     ("glapsfun/cnative-skills", "infra", "Agentic skills for cloud-native tools (1 skills, 13 workflows)", 14, "low"),
     ("docker/claude-plugins", "infra", "2 workflows", 2, "med"),
-    # general (25 repos, 2627 measured items)
+    # general (25 repos, 6879 measured items)
     ("davepoon/buildwithclaude", "general", "A single hub to find Claude Skills, Agents, Commands, Hooks, Plugins... (763 workflows)", 763, "high"),
     ("xu-xiang/everything-claude-code-zh", "general", "everything-claude-code Claude Code agents, skills, hooks, commands... (81 skills, 194 workflows)", 275, "high"),
     ("athola/claude-night-market", "general", "23 Claude Code plugins: TDD enforcement hooks, git/PR workflows... (15 skills, 194 workflows)", 209, "high"),
@@ -750,7 +750,7 @@ WORKFLOWS = [
     ("centminmod/my-claude-code-setup", "general", "Shared starter template configuration and CLAUDE.md memory bank system... (7 skills, 1 rules, 20 workflows)", 28, "high"),
     ("hnaymyh123-henry/claude-dev-skill", "general", "A Claude Code custom skill that turns Claude into a Tech Lead... (26 workflows)", 26, "high"),
     ("anthropics/financial-services", "general", "8 workflows", 8, "high"),
-    ("jeremylongshore/tons-of-skills-marketplace", "general", "471 plugins, 3,069 skills, 347 agents for Claude Code. Open-source... (1 workflows)", 1, "med"),
+    ("jeremylongshore/tons-of-skills-marketplace", "general", "471 plugins, 3,069 skills, 347 agents for Claude Code. Open-source... (3482 skills, 771 workflows)", 4253, "med"),
     # meta (7 repos, 1133 measured items)
     ("loulanyue/awesome-claude-notes", "meta", "Community-maintained distribution of reusable AI coding agents... (135 skills, 648 workflows)", 783, "high"),
     ("agentlas-ai/Agentlas-OS", "meta", "Agent OS: keep specialist agents in a hub, spin up a temporary... (48 skills, 2 rules, 62 workflows)", 112, "high"),

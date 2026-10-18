@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
   "count": 537,
-  "est_items_total": 36234,
-  "est_items_scannable": 31743,
+  "est_items_total": 40486,
+  "est_items_scannable": 35995,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -5587,8 +5587,8 @@
       "url": "https://github.com/jeremylongshore/tons-of-skills-marketplace",
       "type": "workflow",
       "category": "general",
-      "focus": "471 plugins, 3,069 skills, 347 agents for Claude Code. Open-source... (1 workflows)",
-      "est_items": 1,
+      "focus": "471 plugins, 3,069 skills, 347 agents for Claude Code. Open-source... (3482 skills, 771 workflows)",
+      "est_items": 4253,
       "confidence": "med",
       "list_only": false,
       "curated": false
