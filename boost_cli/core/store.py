@@ -1527,6 +1527,10 @@ def install(entry: dict, force: bool = False,
     """
     scopes.check_scope(scope)
     _refuse_self_installing(entry)
+    if scope != scopes.SCOPE_PROJECT:
+        # Before anything is copied or linked: lockfile.write refuses a
+        # corrupt lock too, but by then the files would be on disk unrecorded.
+        lockfile.refuse_corrupt()
     kind = entry.get("kind", "skill")
     if kind == "rule":
         return _install_rule(entry, force=force, only_agents=only_agents,
@@ -3372,6 +3376,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
     src_dir = Path(src_dir)
     if not (src_dir / "SKILL.md").exists():
         raise BoostError("%s has no SKILL.md" % src_dir)
+    lockfile.refuse_corrupt()       # before the copy, as in `install`
     meta = _import_meta(src_dir)
     name = name or str(meta.get("name") or src_dir.name)
     existing = lockfile.get_skill(name)
