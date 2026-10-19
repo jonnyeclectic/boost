@@ -92,6 +92,21 @@ class TestConfig:
         r = boost("config", "get", expect=1)
         assert "config get requires a KEY" in r.err
 
+    def test_set_with_a_typo_warns_and_names_the_meant_key(self, boost, sandbox):
+        # It used to print only "✓ set ..." and exit 0 while
+        # agents.claude-code.enabled stayed true. The write is kept — unknown
+        # keys are accepted on purpose — but no longer reads as the fix.
+        r = boost("config", "set", "agents.claude-code.enable", "false")
+        assert "set agents.claude-code.enable = false" in r.out
+        assert ("did you mean 'agents.claude-code.enabled'?"
+                in " ".join(r.err.split()))
+        assert boost("config", "get", "agents.claude-code.enabled").out.strip() == "true"
+
+    def test_set_of_a_known_key_prints_no_warning(self, boost, sandbox):
+        r = boost("config", "set", "serve.port", "9998")
+        assert "did you mean" not in r.out + r.err
+        assert "not a key" not in r.out + r.err
+
     def test_set_nested_persists_to_disk(self, boost, sandbox):
         r = boost("config", "set", "serve.port", "9999")
         assert "set serve.port = 9999" in r.out

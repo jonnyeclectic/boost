@@ -136,23 +136,74 @@ def render_claude_body(title: str, body: str) -> str:
     return "# %s" % title
 
 
+def block_span(text: str, name: str) -> tuple[int, int] | None:
+    """``(i, j)`` such that ``text[i:j]`` is rule ``name``'s managed block.
+
+    None for both "no block" and a malformed one: a start marker with no end
+    after it, or a second start marker before that end. The second shape is
+    what an orphan start becomes after one more install — merge_block appends
+    a whole block below it, and "first start to first end" then spans the
+    user's own text in between. Every reader and writer of the block goes
+    through here so they agree on what the block is; `require_well_formed`
+    tells the two Nones apart.
+    """
+    start, end = markers(name)
+    i = text.find(start)
+    if i == -1:
+        return None
+    j = text.find(end, i)
+    if j == -1 or text.find(start, i + len(start), j) != -1:
+        return None
+    return i, j + len(end)
+
+
+def require_well_formed(text: str, name: str,
+                        path: Path | None = None) -> None:
+    """Raise if any start marker for ``name`` in ``text`` is not a clean block.
+
+    The refusal every write and removal takes before touching the file:
+    guessing where a damaged block ends is guessing which of the user's lines
+    to delete. *Every* start counts, not just the first: a clean block with a
+    stray start below it passes `block_span`, so strip_block removed the clean
+    one and uninstall dropped the lock row while the stray start stayed.
+    Two clean blocks are not refused — each start has its own end.
+    """
+    start, end = markers(name)
+    pos = 0
+    damaged = False
+    while (i := text.find(start, pos)) != -1:
+        j = text.find(end, i + len(start))
+        if j == -1 or text.find(start, i + len(start), j) != -1:
+            damaged = True
+            break
+        pos = j + len(end)
+    if damaged:
+        where = " in %s" % path if path is not None else ""
+        raise BoostError(
+            "rule %s's managed block%s has no matching end marker, so boost "
+            "cannot tell where its text stops and yours begins" % (name, where),
+            hint="restore `%s` after the rule's text (or delete `%s`), then "
+                 "run the command again" % (end, start),
+            wrap=True)
+
+
 def merge_block(text: str, name: str, body: str) -> str:
     """Return ``text`` with rule ``name``'s managed block set to ``body``.
 
     Idempotent: if a block for ``name`` already exists it is replaced in place;
     otherwise the block is appended after exactly one blank line. The result
     always ends in a single newline so repeated installs don't accrete blank
-    lines at end-of-file.
+    lines at end-of-file. A malformed block raises (`require_well_formed`)
+    rather than appending a second block below the orphan start.
     """
     start, end = markers(name)
     block = "%s\n%s\n%s" % (start, body.strip("\n"), end)
-    i = text.find(start)
-    if i != -1:
-        j = text.find(end, i)
-        if j != -1:
-            j += len(end)
-            merged = text[:i] + block + text[j:]
-            return merged.rstrip("\n") + "\n"
+    require_well_formed(text, name)
+    span = block_span(text, name)
+    if span is not None:
+        i, j = span
+        merged = text[:i] + block + text[j:]
+        return merged.rstrip("\n") + "\n"
     base = text.rstrip("\n")
     if base:
         return base + "\n\n" + block + "\n"
@@ -167,17 +218,28 @@ def read_block(text: str, name: str) -> str | None:
     is the standing instruction about to be replaced. Without a way to read it
     back, a refresh could only be gated on the incoming half.
 
-    Returns None for both "no block" and a start marker with no end — the second
-    is malformed, and `strip_block` already declines to guess there.
+    Returns None for both "no block" and a malformed one (`block_span`) — the
+    second, and `strip_block` already declines to guess there.
+    """
+    span = block_span(text, name)
+    if span is None:
+        return None
+    start, end = markers(name)
+    i, j = span
+    return text[i + len(start):j - len(end)].strip("\n")
+
+
+def unclosed_block(text: str, name: str) -> bool:
+    """True when ``text`` has rule ``name``'s start marker and no end after it.
+
+    The case `read_block` folds into "absent". `boost doctor` needs it apart:
+    a start marker on its own read as a block that was there, and the remedy
+    for it is a hand edit -- restore the end marker or delete the orphan --
+    not the reinstall that answers a block that is gone.
     """
     start, end = markers(name)
     i = text.find(start)
-    if i == -1:
-        return None
-    j = text.find(end, i)
-    if j == -1:
-        return None
-    return text[i + len(start):j].strip("\n")
+    return i != -1 and text.find(end, i) == -1
 
 
 def strip_block(text: str, name: str) -> str:
@@ -187,14 +249,10 @@ def strip_block(text: str, name: str) -> str:
     blank-line gap it introduced is collapsed, and a file that becomes empty
     collapses to ``""`` rather than a lone newline.
     """
-    start, end = markers(name)
-    i = text.find(start)
-    if i == -1:
-        return text
-    j = text.find(end, i)
-    if j == -1:
-        return text  # no end marker: malformed, leave the file untouched
-    j += len(end)
+    span = block_span(text, name)
+    if span is None:
+        return text  # absent, or malformed: leave the file untouched
+    i, j = span
     before = text[:i].rstrip("\n")
     after = text[j:].strip("\n")
     parts = [p for p in (before, after) if p]

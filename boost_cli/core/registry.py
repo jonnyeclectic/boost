@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import sys
 import time
+import urllib.parse
+import urllib.request
 from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
@@ -98,6 +101,12 @@ def parse_spec(spec: str):
     # own home-dir lookup (USERPROFILE on Windows), which ignores the $HOME
     # override the whole test suite (and BOOST_HOME sandboxing) relies on.
     p = paths.expand(spec)
+    # `file://<dir>` of a directory on this machine is that directory: cloned
+    # as a URL it kept the spec as its `url`, so `boost tap <dir>` then
+    # `boost tap file://<dir>` was two taps of one repo under one name.
+    local = _file_url_path(spec)
+    if local is not None and _looks_like_a_directory(local):
+        p = local
     if _looks_like_a_directory(p):
         if not gitutil.is_repo(p):
             # The dir exists, so git's own "repository '...' does not exist"
@@ -124,14 +133,39 @@ def parse_spec(spec: str):
     if spec.startswith(("./", "../", "~", "/", "\\")) or p.is_absolute():
         raise BoostError("no such directory: %s" % p,
                         hint="boost tap needs an existing local git repository")
-    if spec.startswith(("http://", "https://", "git@", "ssh://")):
-        tail = spec.split(":")[-1] if spec.startswith("git@") else spec
-        parts = [x for x in tail.replace(".git", "").split("/") if x][-2:]
-        return _checked("/".join(parts), spec, spec)
+    # Any `scheme://` is a URL, not only the four this used to list: a
+    # `file://` or `git://` spec fell through to the owner/repo branch below
+    # and was cloned as `https://github.com/file:///…`. Which transports are
+    # safe is `gitutil.clone_shallow`'s call (it refuses `ext::` and kin), not
+    # a reason to rewrite the spec here.
+    if _SCHEME.match(spec) or spec.startswith("git@"):
+        tail = spec.split(":")[-1] if spec.startswith("git@") \
+            else spec.split("://", 1)[1]
+        segs = [x for x in tail.split("/") if x]
+        if segs:
+            # The suffix only: `.replace(".git", "")` named
+            # `foo/my.github.io` as `foo/myhub.io`.
+            segs[-1] = segs[-1].removesuffix(".git")
+        return _checked("/".join(segs[-2:]), spec, spec)
     if "/" in spec and " " not in spec:
         return _checked(spec, "https://github.com/%s" % spec, spec)
     raise BoostError("cannot parse tap spec %r" % spec,
                     hint="use owner/repo, a git URL, or a local directory")
+
+
+_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+def _file_url_path(spec: str) -> Path | None:
+    """The local path a `file://` spec names, or None if it names none.
+
+    Only an empty or `localhost` host is this machine; `file://otherhost/…`
+    stays a URL for git to judge.
+    """
+    u = urllib.parse.urlparse(spec)
+    if u.scheme.lower() != "file" or u.netloc.lower() not in ("", "localhost"):
+        return None
+    return Path(urllib.request.url2pathname(u.path))
 
 
 def _checked(name: str, url: str, spec: str) -> tuple[str, str]:
@@ -232,6 +266,49 @@ def get(name: str) -> Tap:
                     else "list taps with `boost taps`")
 
 
+def same_source(a: str, b: str) -> bool:
+    """True when two tap URLs name the same repository.
+
+    A tap's name is only the last two parts of its URL, so the name alone
+    cannot answer "is this already tapped?": `~/a/fixture-tap` and
+    `~/b/fixture-tap` are both `fixture-tap`, and a GitHub and a GitLab
+    `owner/repo` are both `owner/repo`. Spellings of one remote still match —
+    `owner/repo`, `…/repo.git`, `git@host:owner/repo` — so re-tapping a repo
+    by another of its names stays the harmless no-op it was. Local paths
+    compare exactly (`parse_spec` has already resolved them); a remote's host
+    compares case-blind, and its path only on github.com, the one forge boost
+    can say that of.
+    """
+    return _source_key(a) == _source_key(b)
+
+
+def _source_key(url: str) -> str:
+    if url.startswith("git@"):
+        url = url[len("git@"):].replace(":", "/", 1)
+    elif _SCHEME.match(url):
+        url = url.split("://", 1)[1]
+        # Userinfo sits before the host; an `@` after the first `/` is path.
+        url = url.split("@", 1)[-1] if "@" in url.split("/", 1)[0] else url
+    else:
+        return url
+    host, _, path = url.partition("/")
+    host = host.lower()
+    path = path.rstrip("/").removesuffix(".git")
+    # A host is case-blind everywhere, a path only where the forge says so:
+    # a self-hosted `Team/Repo` and a `file:///srv/A` are not their
+    # lowercase twins.
+    if host.split(":", 1)[0] == "github.com":
+        path = path.lower()
+    return host + "/" + path
+
+
+def _taken(name: str, url: str, existing: str) -> BoostError:
+    """The error for `name` already belonging to a different repository."""
+    return BoostError(
+        "tap name %s is already used by %s" % (name, existing),
+        hint="`boost untap %s` first to tap %s in its place" % (name, url))
+
+
 def is_tapped(name: str) -> bool:
     """True if `name` is a currently configured tap's exact ``Tap.name``.
 
@@ -258,6 +335,8 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     name, url = parse_spec(spec)
     for existing in list_taps():
         if existing.name == name:
+            if not same_source(existing.url, url):
+                raise _taken(name, url, existing.url)
             raise BoostError("tap %s is already configured" % name,
                             hint="`boost update %s` to refresh it" % name)
     # Validated here, before the clone, not only inside `checkout_commit`:
@@ -468,24 +547,43 @@ def add_many(specs: list[str], curated: bool = False,
         return []
     paths.ensure_dirs()
     pins = pins or {}
-    existing = {t.name for t in list_taps()}
+    existing = {t.name: t.url for t in list_taps()}
+    batch: dict[str, str] = {}
     results: list[dict] = []
     todo: list[str] = []
     for spec in specs:
         try:
-            name, _url = parse_spec(spec)
+            name, url = parse_spec(spec)
         except BoostError as exc:
             results.append({"spec": spec, "name": spec, "ok": False,
                             "error": exc.message})
             continue
+        # A different repository under a taken name is a failure, not a skip:
+        # "already tapped" with nothing tapped is the answer that hid it.
+        if name in existing and not same_source(existing[name], url):
+            results.append({"spec": spec, "name": name, "ok": False,
+                            "error": _taken(name, url, existing[name]).message})
+            continue
         if name in existing:
+            results.append({"spec": spec, "name": name, "ok": False,
+                            "skipped": True, "error": "already tapped"})
+            continue
+        # Two specs of this one run claiming a name is not "already used by":
+        # nothing holds the name yet, and `boost untap` would not help.
+        if name in batch and not same_source(batch[name], url):
+            results.append({
+                "spec": spec, "name": name, "ok": False,
+                "error": "two specs in this batch both name %s: %s and %s"
+                         % (name, batch[name], url)})
+            continue
+        if name in batch:
             results.append({"spec": spec, "name": name, "ok": False,
                             "skipped": True, "error": "already tapped"})
             continue
         # Guard against the same registry appearing twice in one selection:
         # two threads cloning into one directory is a corrupt clone, not a race
         # anyone would enjoy debugging.
-        existing.add(name)
+        batch[name] = url
         todo.append(spec)
 
     def work(spec: str) -> dict:

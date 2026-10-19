@@ -105,3 +105,58 @@ class TestTapPathSpec:
     def test_a_real_directory_still_taps(self, boost, fixture_tap_src):
         boost("tap", str(fixture_tap_src))
         assert "fixture-tap" in boost("taps").out
+
+
+class TestOverLongNames:
+    """A name longer than one path component allows — 255 bytes on APFS and
+    ext4 — reached ``Path.exists()``, which is not total: pathlib swallows
+    ENOENT and friends but not ENAMETOOLONG, so four commands answered a
+    300-character name with ``OSError: [Errno 63] File name too long`` and a
+    crash report. Tap's parse boundary already refuses one by length; these
+    are the same rule, applied where each command turns input into a path."""
+
+    LONG = "a" * 300
+
+    def test_create(self, boost, sandbox):
+        text = assert_clean_error(
+            boost("create", self.LONG, "--dir", str(sandbox), expect=1))
+        assert "skill name is too long (300 bytes, limit 255)" in text
+
+    def test_profile_save(self, boost, sandbox):
+        text = assert_clean_error(boost("profile", "save", self.LONG, expect=1))
+        assert "too long" in text
+
+    def test_profile_save_counts_the_suffix(self, boost, sandbox):
+        # 252 bytes is a legal slug, but the file is `<slug>.json` — 257
+        # bytes — so a check on the slug alone still let this one crash.
+        text = assert_clean_error(boost("profile", "save", "b" * 252, expect=1))
+        assert "too long" in text
+
+    # The one test here that writes a real 255-byte name: under a Windows
+    # runner's temp dir the *total* path passes MAX_PATH, which is a
+    # long-path setting this test cannot see rather than boost's limit.
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="total path exceeds MAX_PATH under the runner's temp dir")
+    def test_profile_save_at_the_limit_still_works(self, boost, sandbox):
+        boost("profile", "save", "c" * 250)          # 250 + ".json" == 255
+
+    def test_export_output(self, boost, sandbox, installed):
+        text = assert_clean_error(
+            boost("export", installed, "-o", str(sandbox / self.LONG), expect=1))
+        assert "too long" in text
+
+    def test_infer_output(self, boost, sandbox):
+        (sandbox / "proj").mkdir()
+        text = assert_clean_error(
+            boost("infer", "--path", str(sandbox / "proj"),
+                  "-o", str(sandbox / self.LONG), expect=1))
+        assert "too long" in text
+
+    def test_infer_output_under_an_over_long_directory(self, boost, sandbox):
+        # The long component need not be the last one: `exists()` stats the
+        # whole path, so a long parent crashes it just the same.
+        (sandbox / "proj").mkdir()
+        text = assert_clean_error(
+            boost("infer", "--path", str(sandbox / "proj"),
+                  "-o", str(sandbox / self.LONG / "x.md"), expect=1))
+        assert "too long" in text

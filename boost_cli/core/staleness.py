@@ -64,6 +64,36 @@ def catalog_relation(installed_version: str, latest_version: str
     return None
 
 
+# ── update_hold: why `boost update` must leave an installed copy alone ────
+HOLD_LOCAL_EDITS = "local-edits"  # the installed copy was edited after install
+HOLD_DOWNGRADE = "downgrade"      # the tap now advertises an older version
+
+
+def update_hold(locally_modified: bool, installed_version: str,
+                latest_version: str, discard_edits: bool,
+                allow_downgrade: bool) -> str | None:
+    """Why an otherwise-due refresh must be skipped, else ``None``.
+
+    Both holds guard something an overwrite cannot give back. A local edit is
+    the one copy of the user's change -- `boost drift` already calls it
+    local-edits and update used to overwrite it anyway, unseen. A tap rewound
+    to an older release reads as "source changed" to `upstream_reason`, so it
+    was followed silently, version and all. Edits outrank the downgrade
+    because they are the part that is unrecoverable. An empty
+    ``latest_version`` declares nothing and is not a downgrade
+    (`catalog_relation`). Each hold has its own release -- ``discard_edits``
+    and ``allow_downgrade`` -- because consenting to lose an edit is not
+    consenting to walk a version back, and neither is what `--force` (move
+    pinned taps) asked for. The caller then says what it did.
+    """
+    if locally_modified and not discard_edits:
+        return HOLD_LOCAL_EDITS
+    if (not allow_downgrade
+            and catalog_relation(installed_version, latest_version) == AHEAD):
+        return HOLD_DOWNGRADE
+    return None
+
+
 # ── drift_state: how an installed skill's store copy relates to lock+tap ───
 IN_SYNC = "in-sync"
 LOCAL_EDITS = "local-edits"
@@ -108,22 +138,43 @@ def drift_state(store_sha: str | None, lock_sha: str,
 #: skill loop and the rule/workflow loop so a row is identified consistently
 #: rather than by kind-specific logic, and reused here to count them.
 OUTDATED_SOURCE_MISSING = "source missing"
+#: The LATEST cell for a missing row whose tap is still configured: the
+#: footer's own words, so the row and the summary name one state.
+OUTDATED_REMOVED_UPSTREAM = "removed upstream"
 
 
-def outdated_footer(total: int, source_missing: int) -> str:
+def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
     """Summary line for `boost outdated`, worded so it never promises
     `boost update` can fix a row whose source is gone.
 
     ``source_missing`` counts rows carrying ``OUTDATED_SOURCE_MISSING`` as
-    their "latest" value — those need a re-tap (or removal), not an update.
+    their "latest" value. ``removed`` is the subset of those whose tap is
+    still configured — the item was dropped upstream — and re-tapping would
+    restore nothing, so only the rest are told to re-tap. Every such row used
+    to read as a deleted tap, while `boost taps` showed it present.
     """
     if source_missing == 0:
         return ("%d outdated · `boost update` upgrades "
                 "(pinned items stay put)" % total)
     updatable = total - source_missing
-    if updatable == 0:
+    untapped = source_missing - removed
+    if updatable == removed == 0:
         return ("%d outdated · source missing — `boost update` can't "
                 "restore a deleted tap; re-tap or `boost uninstall`" % total)
-    return ("%d outdated · %d upstream (`boost update` upgrades, pinned "
-            "items stay put) · %d source missing (re-tap or `boost "
-            "uninstall`)" % (total, updatable, source_missing))
+    if updatable == untapped == 0:
+        them, copies = (("them", "these copies") if total > 1
+                        else ("it", "this copy"))
+        return ("%d outdated · %s — `boost update` can't bring %s back; "
+                "`boost uninstall` %s, or keep %s as-is"
+                % (total, OUTDATED_REMOVED_UPSTREAM, them, them, copies))
+    parts = ["%d outdated" % total]
+    if updatable:
+        parts.append("%d upstream (`boost update` upgrades, pinned items "
+                     "stay put)" % updatable)
+    if untapped:
+        parts.append("%d source missing (re-tap or `boost uninstall`)"
+                     % untapped)
+    if removed:
+        parts.append("%d removed upstream (`boost uninstall`, or keep as-is)"
+                     % removed)
+    return " · ".join(parts)

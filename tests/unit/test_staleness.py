@@ -136,6 +136,55 @@ class TestOutdatedFooter:
         assert "5 source missing" not in footer
 
 
+class TestOutdatedFooterRemovedUpstream:
+    """A row whose tap is still configured but no longer ships the item was
+    worded as a deleted tap, and told the user to re-tap — which restores
+    nothing, since the tap is right there."""
+
+    def test_all_removed_never_says_re_tap(self):
+        footer = staleness.outdated_footer(1, 1, removed=1)
+        assert footer == ("1 outdated · removed upstream — `boost update` "
+                          "can't bring it back; `boost uninstall` it, or keep "
+                          "this copy as-is")
+        assert "re-tap" not in footer
+        assert "deleted tap" not in footer
+
+    def test_all_removed_speaks_in_the_plural_for_several_rows(self):
+        assert staleness.outdated_footer(2, 2, removed=2) == (
+            "2 outdated · removed upstream — `boost update` can't bring them "
+            "back; `boost uninstall` them, or keep these copies as-is")
+
+    def test_removed_marker_matches_the_footer_wording(self):
+        # The table's LATEST cell and the footer must name the same state.
+        assert staleness.OUTDATED_REMOVED_UPSTREAM == "removed upstream"
+        assert staleness.OUTDATED_REMOVED_UPSTREAM in (
+            staleness.outdated_footer(1, 1, removed=1))
+
+    def test_removed_defaults_to_zero_so_old_callers_keep_their_wording(self):
+        assert staleness.outdated_footer(2, 2) == staleness.outdated_footer(
+            2, 2, removed=0)
+        assert "deleted tap" in staleness.outdated_footer(2, 2)
+
+    def test_untapped_and_removed_are_counted_apart(self):
+        footer = staleness.outdated_footer(5, 3, removed=1)
+        assert footer == ("5 outdated · 2 upstream (`boost update` upgrades, "
+                          "pinned items stay put) · 2 source missing (re-tap "
+                          "or `boost uninstall`) · 1 removed upstream "
+                          "(`boost uninstall`, or keep as-is)")
+
+    def test_no_upstream_bucket_when_every_row_is_missing(self):
+        footer = staleness.outdated_footer(3, 3, removed=2)
+        assert footer == ("3 outdated · 1 source missing (re-tap or `boost "
+                          "uninstall`) · 2 removed upstream (`boost "
+                          "uninstall`, or keep as-is)")
+
+    def test_upstream_plus_removed_omits_the_untapped_bucket(self):
+        footer = staleness.outdated_footer(2, 1, removed=1)
+        assert "1 upstream" in footer
+        assert "1 removed upstream" in footer
+        assert "source missing" not in footer
+
+
 class TestCatalogRelation:
     """`boost info`'s installed-vs-catalog decision, compared as versions."""
 
@@ -171,3 +220,55 @@ class TestCatalogRelation:
 
     def test_unknown_installed_version_is_behind_a_real_one(self):
         assert staleness.catalog_relation("?", "1.0.0") == staleness.BEHIND
+
+
+class TestUpdateHold:
+    """Why `boost update` must leave an installed copy alone, else None."""
+
+    def test_constant_values(self):
+        assert staleness.HOLD_LOCAL_EDITS == "local-edits"
+        assert staleness.HOLD_DOWNGRADE == "downgrade"
+
+    def test_clean_upgrade_is_not_held(self):
+        assert staleness.update_hold(False, "1.0.0", "1.1.0", False, False) is None
+
+    def test_same_version_content_refresh_is_not_held(self):
+        assert staleness.update_hold(False, "1.0.0", "1.0.0", False, False) is None
+
+    def test_local_edits_hold(self):
+        assert staleness.update_hold(True, "1.0.0", "1.1.0", False, False) \
+            == staleness.HOLD_LOCAL_EDITS
+
+    def test_lower_upstream_version_holds(self):
+        assert staleness.update_hold(False, "1.5.0", "1.4.0", False, False) \
+            == staleness.HOLD_DOWNGRADE
+
+    def test_local_edits_outrank_a_downgrade(self):
+        # The edits are what cannot be recovered; name them first.
+        assert staleness.update_hold(True, "1.5.0", "1.4.0", False, False) \
+            == staleness.HOLD_LOCAL_EDITS
+
+    def test_an_undeclared_upstream_version_is_not_a_downgrade(self):
+        # No version in the catalog is no signal, not "v0.0.0".
+        assert staleness.update_hold(False, "1.5.0", "", False, False) is None
+
+    def test_discard_edits_releases_only_the_edit_hold(self):
+        assert staleness.update_hold(True, "1.0.0", "1.1.0", True, False) \
+            is None
+        # Consenting to lose edits is not consenting to walk a version back.
+        assert staleness.update_hold(True, "1.5.0", "1.4.0", True, False) \
+            == staleness.HOLD_DOWNGRADE
+        assert staleness.update_hold(False, "1.5.0", "1.4.0", True, False) \
+            == staleness.HOLD_DOWNGRADE
+
+    def test_allow_downgrade_releases_only_the_downgrade_hold(self):
+        assert staleness.update_hold(False, "1.5.0", "1.4.0", False, True) \
+            is None
+        assert staleness.update_hold(True, "1.5.0", "1.4.0", False, True) \
+            == staleness.HOLD_LOCAL_EDITS
+        assert staleness.update_hold(True, "1.0.0", "1.1.0", False, True) \
+            == staleness.HOLD_LOCAL_EDITS
+
+    def test_both_flags_release_both_holds(self):
+        assert staleness.update_hold(True, "1.5.0", "1.4.0", True, True) \
+            is None

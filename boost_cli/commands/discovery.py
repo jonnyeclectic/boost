@@ -165,6 +165,9 @@ def cmd_search(argv):
         scored = [(h["entry"], h["score"]) for h in hits]
     else:
         scored = catalog.search(query)
+    # Whether the query matched before --category narrowed it: an empty list
+    # the filter produced is a different answer from one the query did.
+    matched_before_filter = len(scored)
     if args.category:
         scored = [(e, s) for e, s in scored
                  if catalog.matches_category(e, args.category)]
@@ -190,6 +193,26 @@ def cmd_search(argv):
                 "no searchable terms in %r" % query,
                 "a term needs 2 or more ASCII letters or digits — %s"
                 % _quoted(dropped)))
+        elif matched_before_filter and hit_cap:
+            # The filter only ever saw the top k: retrieval stopped at its
+            # cap, so a match in the category may sit past it, and "it
+            # matches outside that category" would be a claim about the
+            # whole catalogue made from one page of it.
+            print(out.empty_state(
+                "none of the top %d matches for %r are in category %r"
+                % (matched_before_filter, query, args.category),
+                "narrow the query so the category's items rank higher, or "
+                "drop --category"))
+            _note_dropped_terms(dropped)
+        elif matched_before_filter:
+            # The query matched; only the filter emptied the list. "no
+            # matches" plus a `boost discover` hint sent the user to GitHub
+            # for something already on disk, never naming the filter.
+            print(out.empty_state(
+                "no matches for %r in category %r" % (query, args.category),
+                "it matches outside that category — drop --category, or "
+                "`boost browse --categories` lists them"))
+            _note_dropped_terms(dropped)
         else:
             # The standardized ○/→ empty state, so "nothing here" reads the same
             # as every other command's; both wordings are pinned by tests.
@@ -2315,15 +2338,24 @@ def cmd_trending(argv):
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
-    evs = journal.events(action="install")
+    # New installs only: `boost update` and `boost reinstall` journal an
+    # "install" per refresh, and counting them ranked an item by how often its
+    # tap moved rather than by how often anyone chose it.
+    evs = [ev for ev in journal.events(action="install")
+           if journal.is_new_install(ev)]
     # setdefault, not a dict comprehension: a comprehension keeps the LAST
     # entry per name (whichever tap sorts last in catalog.all_entries()),
     # while cmd_recommend's equivalent aggregation (agg.setdefault) keeps the
     # first — so the two commands showed different descriptions for a name
     # shipped by more than one tap. First-wins here matches that convention.
     by_name: dict[str, dict] = {}
+    # (tap, name) too: a ranked row was installed from one particular tap,
+    # which its journal event names, and that tap's entry is the one to
+    # describe. First-wins is only the fallback for an event with no tap.
+    by_tap_name: dict[tuple[str, str], dict] = {}
     for e in catalog.all_entries():
         by_name.setdefault(e["name"], e)
+        by_tap_name.setdefault((e["tap"], e["name"]), e)
     if not evs:
         curated = sorted((e for e in by_name.values() if e.get("curated")),
                          key=operator.itemgetter("name"))[:args.limit]
@@ -2356,9 +2388,12 @@ def cmd_trending(argv):
     agg: dict[str, Any] = {}
     for ev in evs:  # most-recent-first, so first ts per subject is the latest
         name = ev.get("subject") or "?"
-        rec = agg.setdefault(name, {"count": 0, "last": ev.get("ts", "")})
+        rec = agg.setdefault(name, {"count": 0, "last": ev.get("ts", ""),
+                                    "tap": ev.get("tap")})
         rec["count"] += 1
     ranked = sorted(agg.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+    entry_for = {name: by_tap_name.get((rec["tap"], name))
+                 or by_name.get(name, {}) for name, rec in ranked}
     if args.as_json:
         # `kind` is carried so rules and workflows stay distinguishable —
         # the prose table shows it, and a payload that dropped it would make
@@ -2366,15 +2401,15 @@ def cmd_trending(argv):
         print(json.dumps(
             {"source": "installs", "items": [
                 {"name": name, "installs": rec["count"], "last": rec["last"],
-                 "kind": by_name.get(name, {}).get("kind", "skill"),
-                 "description": by_name.get(name, {}).get("description", "")}
+                 "kind": entry_for[name].get("kind", "skill"),
+                 "description": entry_for[name].get("description", "")}
                 for name, rec in ranked[:args.limit]]}, indent=2))
         return 0
     # reserve name/installs/last/kind columns
     descw = max(out.term_width() - 54, 24)
     out.table([(name, str(rec["count"]), util.rel_time(rec["last"]),
-                by_name.get(name, {}).get("kind", "skill"),
-                out.truncate(by_name.get(name, {}).get("description", ""), descw))
+                entry_for[name].get("kind", "skill"),
+                out.truncate(entry_for[name].get("description", ""), descw))
                for name, rec in ranked[:args.limit]],
               headers=("name", "installs", "last", "kind", "description"),
               whole=("name",))  # `boost install <name>`

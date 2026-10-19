@@ -753,3 +753,117 @@ class TestWrittenAgentNames:
     def test_no_entry_names_none(self, sandbox, entry):
         assert integrity.written_agent_names("rule", entry) == []
         assert integrity.written_agent_names("skill", entry) == []
+
+
+class TestLocallyEdited:
+    """What `boost update` asks before it overwrites an installed item.
+
+    `materialized_status` answers with the *first* fault it meets, so a rule
+    whose CLAUDE.md block was edited and whose Cursor file was deleted read as
+    MISSING -- and a guard keyed on MODIFIED would let the refresh overwrite
+    the edit it never saw. This asks about every written row.
+    """
+
+    @staticmethod
+    def _row(path, text, agent="claude-code"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return {"agent": agent, "mode": "file", "path": str(path),
+                "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
+
+    def test_an_untouched_skill_is_not_edited(self, installed):
+        assert integrity.locally_edited(
+            "skill", installed, lockfile.get_skill(installed)) is False
+
+    def test_an_edited_skill_is(self, installed):
+        _tamper(installed)
+        assert integrity.locally_edited(
+            "skill", installed, lockfile.get_skill(installed)) is True
+
+    def test_a_missing_skill_store_is_not_an_edit(self, installed):
+        import shutil
+        shutil.rmtree(paths.store_dir() / installed)
+        assert integrity.locally_edited(
+            "skill", installed, lockfile.get_skill(installed)) is False
+
+    def test_an_untouched_rule_is_not_edited(self, sandbox):
+        row = self._row(paths.home() / ".claude" / "rules" / "r.md", "a\n")
+        assert integrity.locally_edited(
+            "rule", "r", {"materializations": [row]}) is False
+
+    def test_an_edited_rule_file_is(self, sandbox):
+        p = paths.home() / ".claude" / "rules" / "r.md"
+        row = self._row(p, "a\n")
+        p.write_text("a\nMY EDIT\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "rule", "r", {"materializations": [row]}) is True
+
+    def test_an_edit_behind_a_missing_row_is_still_seen(self, sandbox):
+        gone = self._row(paths.home() / ".claude" / "rules" / "gone.md", "a\n")
+        Path(gone["path"]).unlink()
+        p = paths.home() / ".claude" / "rules" / "kept.md"
+        kept = self._row(p, "a\n")
+        p.write_text("edited\n", encoding="utf-8")
+        e = {"materializations": [gone, kept]}
+        assert integrity.materialized_status("r", e, "rule") == \
+            integrity.STATUS_MISSING
+        assert integrity.locally_edited("rule", "r", e) is True
+
+    def test_an_edited_claude_block_is(self, sandbox):
+        from boost_cli.core import rules
+        p = paths.home() / ".claude" / "CLAUDE.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(rules.merge_block("", "r", "body"), encoding="utf-8")
+        block = rules.read_block(p.read_text(encoding="utf-8"), "r")
+        row = {"agent": "claude-code", "mode": rules.MODE_CLAUDE,
+               "path": str(p),
+               "sha256": hashlib.sha256(block.encode("utf-8")).hexdigest()}
+        e = {"materializations": [row]}
+        assert integrity.locally_edited("rule", "r", e) is False
+        p.write_text(p.read_text(encoding="utf-8").replace("body", "body!"),
+                     encoding="utf-8")
+        assert integrity.locally_edited("rule", "r", e) is True
+
+    def test_a_row_without_a_digest_is_no_evidence(self, sandbox):
+        row = self._row(paths.home() / ".claude" / "rules" / "r.md", "a\n")
+        del row["sha256"]
+        assert integrity.locally_edited(
+            "rule", "r", {"materializations": [row]}) is False
+
+    def test_a_quarantined_item_is_not_edited(self, sandbox):
+        p = paths.home() / ".claude" / "rules" / "r.md"
+        row = self._row(p, "a\n")
+        p.write_text("b\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "rule", "r", {"quarantined": True,
+                          "materializations": [row]}) is False
+
+    def test_a_workflows_edited_skill_store_copy_is_not_an_edit(
+            self, sandbox):
+        # The as-skill copy is preserved by install itself ("left the edited
+        # ... in place"), so holding the workflow for it would block the
+        # workflow's own files for an edit the refresh never overwrites.
+        from boost_cli.core import workflows
+        copy = paths.store_dir() / "reviewer" / "SKILL.md"
+        row = self._row(copy, "a\n") | {"agent": None,
+                                        "slot": workflows.SLOT_SKILL}
+        copy.write_text("a\nmy notes\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "workflow", "reviewer", {"materializations": [row]}) is False
+        cmd = paths.home() / ".claude" / "agents" / "reviewer.md"
+        other = self._row(cmd, "b\n")
+        cmd.write_text("b!\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "workflow", "reviewer",
+            {"materializations": [row, other]}) is True
+
+    def test_a_row_for_an_agent_boost_no_longer_writes_is_skipped(
+            self, sandbox):
+        p = paths.home() / ".cursor" / "rules" / "r.mdc"
+        row = self._row(p, "a\n", agent="cursor")
+        p.write_text("b\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "rule", "r", {"materializations": [row]}) is True
+        TestARowNothingWritesIsNotAMissingArtifact._disable("cursor")
+        assert integrity.locally_edited(
+            "rule", "r", {"materializations": [row]}) is False

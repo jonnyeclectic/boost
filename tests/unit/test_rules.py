@@ -289,6 +289,89 @@ class TestStripBlock:
         assert rules.strip_block(merged, "r") == original
 
 
+class TestMalformedBlock:
+    """An orphan start marker followed by the user's own text.
+
+    One more install appends a whole block below the orphan, and "first start
+    to first end" then spans the user's lines in between: the next reinstall
+    replaced them, and strip_block would have deleted them.
+    """
+
+    ORPHAN = "<!-- boost:rule:r start -->\nOLD\n# My own notes\nkeep me\n"
+    DOUBLED = ORPHAN + "\n<!-- boost:rule:r start -->\nNEW\n<!-- boost:rule:r end -->\n"
+
+    def test_span_of_a_clean_block(self):
+        t = "x\n" + "<!-- boost:rule:r start -->\nB\n<!-- boost:rule:r end -->" + "\ny"
+        i, j = rules.block_span(t, "r")
+        assert (i, j) == (2, len(t) - 2)
+
+    def test_span_absent_and_malformed_are_none(self):
+        assert rules.block_span("# notes\n", "r") is None
+        assert rules.block_span(self.ORPHAN, "r") is None
+        assert rules.block_span(self.DOUBLED, "r") is None
+
+    def test_a_second_clean_block_does_not_make_the_first_malformed(self):
+        one = rules.merge_block("", "r", "A")
+        assert rules.block_span(one + one, "r") == (0, len(one) - 1)
+
+    def test_another_rules_start_between_does_not_count(self):
+        t = rules.merge_block("", "r", "A").replace(
+            "A\n", "A\n<!-- boost:rule:other start -->\n")
+        assert rules.block_span(t, "r") is not None
+
+    @pytest.mark.parametrize("text", [ORPHAN, DOUBLED])
+    def test_merge_refuses_rather_than_append_or_span(self, text):
+        with pytest.raises(BoostError) as ei:
+            rules.merge_block(text, "r", "NEWER")
+        assert ei.value.message == (
+            "rule r's managed block has no matching end marker, so boost "
+            "cannot tell where its text stops and yours begins")
+        assert "`<!-- boost:rule:r end -->`" in ei.value.hint
+        assert "`<!-- boost:rule:r start -->`" in ei.value.hint
+
+    def test_refusal_names_the_file(self):
+        with pytest.raises(BoostError) as ei:
+            rules.require_well_formed(self.ORPHAN, "r", Path("/x/CLAUDE.md"))
+        assert ("managed block in %s has" % Path("/x/CLAUDE.md")
+                in ei.value.message)
+
+    def test_well_formed_and_absent_pass(self):
+        rules.require_well_formed("# notes\n", "r")
+        rules.require_well_formed(rules.merge_block("", "r", "B"), "r")
+
+    CLEAN = "<!-- boost:rule:r start -->\nB\n<!-- boost:rule:r end -->\n"
+    STRAY = "<!-- boost:rule:r start -->\n# My own notes\n"
+
+    @pytest.mark.parametrize("text", [
+        CLEAN + "\n" + STRAY,          # a clean block, then a stray start
+        CLEAN + CLEAN + STRAY,          # the stray one after a second block
+        "head\n" + CLEAN + "mid\n" + STRAY + "tail\n",
+    ])
+    def test_a_stray_start_after_a_clean_block_refuses(self, text):
+        # strip_block removes only the first block, so uninstall would drop
+        # the lock row while the stray start stays in the file.
+        assert rules.block_span(text, "r") is not None
+        with pytest.raises(BoostError) as ei:
+            rules.require_well_formed(text, "r")
+        assert ei.value.message.startswith("rule r's managed block has no")
+
+    def test_two_clean_blocks_pass(self):
+        rules.require_well_formed(self.CLEAN + self.CLEAN, "r")
+        rules.require_well_formed(self.CLEAN + "x\n" + self.CLEAN, "r")
+
+    def test_another_rules_stray_start_does_not_count(self):
+        rules.require_well_formed(
+            self.CLEAN + "<!-- boost:rule:other start -->\n", "r")
+
+    def test_read_and_strip_decline_the_doubled_shape(self):
+        assert rules.read_block(self.DOUBLED, "r") is None
+        assert rules.strip_block(self.DOUBLED, "r") == self.DOUBLED
+
+    def test_read_block_returns_exactly_the_body(self):
+        t = rules.merge_block("head\n", "r", "B1\nB2") + "tail\n"
+        assert rules.read_block(t, "r") == "B1\nB2"
+
+
 class TestRuleNameTraversal:
     """A tap controls its rule frontmatter, so `name` reaches rule_target as
     attacker input. Before the guard, `../../../../.ssh/authorized_keys`
@@ -361,3 +444,27 @@ class TestReadBlock:
         text = rules.merge_block("my own notes\n", "r", "managed")
         assert rules.read_block(text, "r") == "managed"
         assert "my own notes" not in (rules.read_block(text, "r") or "")
+
+
+class TestUnclosedBlock:
+    """The half of `read_block`'s None that doctor must tell apart: a start
+    marker left with no end, which only a hand edit repairs."""
+
+    def test_a_start_marker_with_no_end_is_unclosed(self):
+        start, _end = rules.markers("x")
+        assert rules.unclosed_block("notes\n" + start + "\nbody\n", "x")
+
+    def test_a_whole_block_is_not(self):
+        assert not rules.unclosed_block(rules.merge_block("", "x", "b"), "x")
+
+    def test_no_block_at_all_is_not(self):
+        assert not rules.unclosed_block("just notes\n", "x")
+
+    def test_an_end_marker_before_the_start_does_not_close_it(self):
+        start, end = rules.markers("x")
+        assert rules.unclosed_block(end + "\n" + start + "\nbody\n", "x")
+
+    def test_another_rules_end_marker_does_not_close_it(self):
+        start, _end = rules.markers("x")
+        _s, other_end = rules.markers("y")
+        assert rules.unclosed_block(start + "\nbody\n" + other_end, "x")

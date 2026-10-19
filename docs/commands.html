@@ -105,7 +105,7 @@
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp --as-skill --no-as-skill name">install</a>
       <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --local -y, --yes name">uninstall</a>
       <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes">sync</a>
-      <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --shards --json tap">update</a>
+      <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --discard-edits --allow-downgrade --shards --json tap">update</a>
       <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all name">reinstall</a>
       <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  --dry-run {dump,install} file">bundle</a>
       <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">import</a>
@@ -261,10 +261,10 @@
           <div class="arg"><code>-y, --yes</code><span>skip the --prune confirmation prompts</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --shards --json tap">
+      <section class="cmd" id="cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --discard-edits --allow-downgrade --shards --json tap">
         <h3><span class="cname">update</span><span class="gtag">pkg</span></h3>
         <p class="summary">Sync taps or update installed skills</p>
-        <pre class="syn">boost update [--taps-only] [-y] [--force] [--shards] [--json] [TAP]</pre>
+        <pre class="syn">boost update [--taps-only] [-y] [--force] [--discard-edits] [--allow-downgrade] [--shards] [--json] [TAP]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>TAP</code><span>refresh only this tap</span></div>
@@ -274,6 +274,8 @@
           <div class="arg"><code>--taps-only</code><span>refresh tap clones &amp; catalogs without touching skills</span></div>
           <div class="arg"><code>-y, --yes</code><span>skip the confirmation prompt</span></div>
           <div class="arg"><code>--force</code><span>move pinned taps too, clearing their pin</span></div>
+          <div class="arg"><code>--discard-edits</code><span>refresh locally edited skills, rules and workflows too, overwriting the edits</span></div>
+          <div class="arg"><code>--allow-downgrade</code><span>follow a tap whose upstream version is now older than the installed one</span></div>
           <div class="arg"><code>--shards</code><span>refresh prebuilt vectors from the published manifest, moving taps to the commits it names</span></div>
           <div class="arg"><code>--json</code><span>with --shards: print the per-tap result as JSON</span></div>
         </div>

@@ -274,6 +274,68 @@ class TestSetValue:
         assert "not a section" in str(e.value)
 
 
+class TestUnknownKeyWarning:
+    """`config set` saves a key boost does not know (integrations invent
+    their own), but a typo under a section boost owns used to print a check
+    mark and change nothing. The warning keeps the write and names the key
+    that was probably meant."""
+
+    def test_a_known_key_draws_no_warning(self, sandbox):
+        assert config.unknown_key_warning("agents.claude-code.enabled") is None
+        assert config.unknown_key_warning("serve.port") is None
+
+    def test_an_invented_top_level_key_draws_no_warning(self, sandbox):
+        # The documented lenient path: integrations write their own sections.
+        assert config.unknown_key_warning("brand.new.key") is None
+        assert config.unknown_key_warning("myplugin") is None
+
+    def test_a_typo_under_a_known_section_names_the_close_key(self, sandbox):
+        w = config.unknown_key_warning("serve.prot")
+        assert w is not None
+        assert "'serve.prot'" in w
+        assert "did you mean 'serve.port'?" in w
+
+    def test_an_unknown_key_with_no_close_match_still_warns(self, sandbox):
+        w = config.unknown_key_warning("logging.zzzzzz")
+        assert w is not None
+        assert "'logging.zzzzzz'" in w
+        assert "did you mean" not in w
+
+    def test_a_typo_in_an_agent_setting(self, sandbox):
+        w = config.unknown_key_warning("agents.claude-code.enable")
+        assert w is not None
+        assert "did you mean 'agents.claude-code.enabled'?" in w
+
+    def test_an_agent_setting_another_agent_declares_is_known(self, sandbox):
+        # known_agents reads links_skills for every agent, though DEFAULTS
+        # only spells it out for some — so it is not a typo on claude-code.
+        assert config.unknown_key_warning(
+            "agents.claude-code.links_skills") is None
+
+    def test_a_typo_in_an_agent_name(self, sandbox):
+        w = config.unknown_key_warning("agents.claud-code.enabled")
+        assert w is not None
+        assert "did you mean 'agents.claude-code.enabled'?" in w
+
+    def test_a_new_agent_without_a_dir_is_named(self, sandbox):
+        config.set_value("agents.zed.enabled", "true")
+        w = config.unknown_key_warning("agents.zed.enabled")
+        assert w is not None
+        assert "agents.zed.dir" in w
+
+    def test_a_new_agent_with_a_dir_draws_no_warning(self, sandbox):
+        config.set_value("agents.zed.dir", "~/.zed/skills")
+        assert config.unknown_key_warning("agents.zed.dir") is None
+        config.set_value("agents.zed.enabled", "false")
+        assert config.unknown_key_warning("agents.zed.enabled") is None
+
+    def test_agent_keys_match_what_known_agents_reads(self, sandbox):
+        # The list the warning checks against must be the one agents.py
+        # actually consumes, or a real setting would be called a typo.
+        assert set(config.AGENT_KEYS) == set(
+            agents.known_agents()["claude-code"])
+
+
 class TestUnset:
     def test_present_returns_true_and_persists(self, sandbox):
         config.set_value("custom.flag", "true")

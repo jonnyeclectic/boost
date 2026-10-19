@@ -3,10 +3,11 @@
 """Configuration: ~/.boost/config.json with deep-merged defaults."""
 from __future__ import annotations
 
+import difflib
 import json
 import sys
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 from ..errors import BoostError
 from . import jsonstate, output, paths, typedvalue, util
@@ -449,6 +450,66 @@ def spec_for(dotted: str) -> str:
             return typedvalue.ANY
         node = node[part]
     return typedvalue.spec_for(node)
+
+
+#: Every per-agent setting `agents.known_agents` reads. DEFAULTS spells out
+#: only the ones an agent departs from, so a key absent from one agent's
+#: defaults (``links_skills`` on claude-code) is still a real setting there.
+AGENT_KEYS = ("dir", "enabled", "links_skills", "project_scope", "skills_only",
+              "workflows", "dedupes_by_path", "project_dir")
+
+
+def _did_you_mean(dotted: str, prefix: list[str], part: str, rest: list[str],
+                  known) -> str:
+    close = difflib.get_close_matches(part, list(known), n=1)
+    msg = "%r is not a key boost reads" % dotted
+    if close:
+        msg += " — did you mean %r?" % ".".join(prefix + close + rest)
+    return msg + " (saved anyway)"
+
+
+def unknown_key_warning(dotted: str) -> str | None:
+    """Why `config set <dotted>` probably did not do what was meant, or None.
+
+    `set_value` stores keys DEFAULTS does not describe, on purpose:
+    integrations write their own top-level sections. But a typo under a
+    section boost owns — ``agents.claude-code.enable`` — was stored the same
+    way, reported with a check mark, and changed nothing. So this stays
+    silent for an invented top-level key and speaks up only below a section
+    boost reads. ``agents`` is the one open section — a user may add an agent
+    — so a name there is a typo only when it is close to a known agent, and a
+    new agent is named when it still has no ``dir``, without which boost has
+    nowhere to put its skills. Reads the saved config, so call it after the
+    write.
+    """
+    parts = dotted.split(".")
+    if parts[0] == "agents" and len(parts) >= 2:
+        name, rest = parts[1], parts[2:]
+        defaults: dict = cast(dict, DEFAULTS["agents"])
+        if name not in defaults:
+            spec = (get("agents") or {}).get(name)
+            has_dir = isinstance(spec, dict) and bool(spec.get("dir"))
+            if not has_dir and difflib.get_close_matches(name, list(defaults),
+                                                         n=1):
+                return _did_you_mean(dotted, ["agents"], name, rest, defaults)
+            if not has_dir:
+                return ("agent %r has no dir, so boost will not use it — "
+                        "`boost config set agents.%s.dir <path>`"
+                        % (name, name))
+        if rest and rest[0] not in AGENT_KEYS:
+            return _did_you_mean(dotted, parts[:2], rest[0], rest[1:],
+                                 AGENT_KEYS)
+        return None
+    node: Any = DEFAULTS
+    for i, part in enumerate(parts):
+        if not isinstance(node, dict):
+            return None
+        if part not in node:
+            # i == 0 is an invented top-level section — the lenient path.
+            return (None if i == 0 else
+                    _did_you_mean(dotted, parts[:i], part, parts[i + 1:], node))
+        node = node[part]
+    return None
 
 
 def get_int(dotted: str, default: int) -> int:

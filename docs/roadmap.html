@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>529</b><span>Loop finds</span></div>
+      <div class="stat"><b>76</b><span>Planned</span></div>
+      <div class="stat"><b>535</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1564,6 +1564,18 @@ NOT ALREADY CARDED, but read the existing card first.
           <span class="m">three call sites size a stderr line by stdout — and pane_width, the card's own model, has it too</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="tap-spec-names-the-wrong-repo">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
+        <h3>boost tap answers for a different repo than the one it was given</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/tap-spec-names-the-wrong-repo.md">Write-up &middot; tap-spec-names-the-wrong-repo.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">Three ways `boost tap` answered for a different repo than the one asked for — a same-basename repo "already tapped", file:// cloned from GitHub, an empty repo tapped as 0 items…</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -2694,6 +2706,18 @@ NOT ALREADY CARDED, but read the existing card first.
           <span class="m">Two windows-3.14 jobs were killed at 30.4 and 30.3 min in one morning — both while pytest was still printing results, and the second one blocked a release.</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="cli-surface-edges">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Long names, <code>--help &lt;command&gt;</code> and TAB after a global flag</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/cli-surface-edges.md">Write-up &middot; cli-surface-edges.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the tap fix for an over-long name covered one command, and four others still crashed on the same input</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -3233,6 +3257,18 @@ NOT ALREADY CARDED, but read the existing card first.
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">a rule whose every materialization row names an agent boost no longer writes reads "ok" in verify and is counted as installed by health — only doctor says otherwise</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="doctor-integrity-agrees-with-verify-and-heal">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Diagnostics · Bug</span></div>
+        <h3><code>boost doctor</code> agrees with <code>verify</code> on rule/workflow edits, and stops prescribing a <code>heal</code> that declines</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/doctor-integrity-agrees-with-verify-and-heal.md">Write-up &middot; doctor-integrity-agrees-with-verify-and-heal.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">doctor said healthy over hand-edited rules/workflows, and prescribed a heal that declines for a pinned skill</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -5760,6 +5796,18 @@ All of the above is pure logic in <code>core/browse.py</code> under unit tests a
           <span class="m">boost browse listed fuzzy matches alphabetically, so a typed name landed past the first screen; reskinned with ranked matches, a category scope and a tmux-style status bar</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="misleading-empty-states-and-counts">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
+        <h3>Four messages that sent the user the wrong way</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/misleading-empty-states-and-counts.md">Write-up &middot; misleading-empty-states-and-counts.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">four commands that answered confidently and wrongly — each now names what actually happened</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -6492,6 +6540,18 @@ All of the above is pure logic in <code>core/browse.py</code> under unit tests a
         </div>
       </article>
 
+      <article class="cap rcard" id="update-overwrote-local-edits-and-downgraded">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Supply chain</span></div>
+        <h3>Update no longer overwrites local edits or walks a version back</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/update-overwrote-local-edits-and-downgraded.md">Write-up &middot; update-overwrote-local-edits-and-downgraded.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">edits and versions held unless --discard-edits / --allow-downgrade</span>
+        </div>
+      </article>
+
       <article class="cap rcard" id="project-scope-symlink-escape-on-write">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Integrity</span></div>
         <h3>Project scope — refuse to write through an escaping symlink</h3>
@@ -6884,6 +6944,17 @@ All of the above is pure logic in <code>core/browse.py</code> under unit tests a
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
           <span class="m">fixed — quarantine unlinks every agent it can, names each one it could not with its chmod, and a re-run finishes</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="rule-block-orphan-start-marker">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
+        <h3>A rule block missing its end marker made the next reinstall delete the user's own <code>CLAUDE.md</code> text</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/rule-block-orphan-start-marker.md">Write-up &middot; rule-block-orphan-start-marker.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

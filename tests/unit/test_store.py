@@ -1137,6 +1137,7 @@ class TestImportProvenance:
             "declined", msg, msg)
         actions = store.sync_apply(store.sync_plan())
         assert msg in actions
+        assert store.is_unrepaired(msg)    # a ✓ here would claim a repair
         assert lockfile.get_skill("alpha")["source_url"] == self.URL
 
 
@@ -1568,6 +1569,18 @@ class TestSyncApply:
                   in a for a in actions)
         assert not (paths.store_dir() / "local-skill").is_dir()
         assert lockfile.get_skill("local-skill") is not None
+        # A repair it did not make: heal and sync print it as a warning and
+        # heal exits 1, rather than a ✓ over a skill still missing.
+        declined = [a for a in actions if "repair declined" in a]
+        assert declined and all(store.is_unrepaired(a) for a in declined)
+
+    def test_is_unrepaired_names_each_declined_repair_and_nothing_else(self):
+        assert store.is_unrepaired(store._declined("alpha", "tap", "alpha"))
+        assert store.is_unrepaired(
+            store._declined("rule r", "tap", "r"))
+        assert not store.is_unrepaired(
+            "reinstalled missing alpha from fixture-tap")
+        assert not store.is_unrepaired(store._DROPPED % "alpha")
 
 
 class TestCopySkillAtomic:
@@ -4421,6 +4434,128 @@ class TestNarrowedRuleAndWorkflowKeepTheirRecords:
         store.uninstall("ship-it")
         assert not (paths.home() / ".claude" / "commands" / "ship-it.md").exists()
         assert not (paths.home() / ".gemini" / "commands" / "ship-it.toml").exists()
+
+
+class TestDamagedRuleBlockRefuses:
+    """A CLAUDE.md block whose end marker the user deleted by hand.
+
+    Uninstall used to report the rule removed and drop its lock row while the
+    block stayed live; install then appended a second block, and the next
+    reinstall replaced everything from the orphan start to the new end —
+    deleting the user's own notes in between.
+    """
+
+    def _damage(self, tap):
+        store.install(_rule_entry(tap))
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        text = claude_md.read_text(encoding="utf-8").replace(
+            "<!-- boost:rule:team-conventions end -->\n", "")
+        claude_md.write_text(text + "# My own notes\nkeep me\n",
+                             encoding="utf-8")
+        return claude_md, claude_md.read_text(encoding="utf-8")
+
+    def test_uninstall_refuses_and_keeps_the_lock_row(self, tap):
+        claude_md, before = self._damage(tap)
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("team-conventions")
+        assert str(claude_md) in ei.value.message
+        assert lockfile.get_rule("team-conventions") is not None
+        assert claude_md.read_text(encoding="utf-8") == before
+        # all-or-nothing: the other agents' files are still there too
+        assert (paths.home() / ".windsurf" / "rules"
+                / "team-conventions.md").exists()
+
+    def test_reinstall_refuses_before_any_write(self, tap):
+        claude_md, before = self._damage(tap)
+        cursor = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
+        cursor.unlink()
+        with pytest.raises(BoostError):
+            store.install(_rule_entry(tap), force=True)
+        assert claude_md.read_text(encoding="utf-8") == before
+        assert not cursor.exists()
+
+    def test_a_later_agents_damage_stops_the_earlier_writes(self, tap):
+        # GEMINI.md is written after cursor's file, so refusing inside the
+        # write loop would land cursor's file first with no lock row for it.
+        store.install(_rule_entry(tap))
+        store.uninstall("team-conventions")
+        gemini_md = paths.home() / ".gemini" / "GEMINI.md"
+        gemini_md.write_text("<!-- boost:rule:team-conventions start -->\n"
+                             "# My own notes\n", encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            store.install(_rule_entry(tap))
+        assert str(gemini_md) in ei.value.message
+        assert not (paths.home() / ".cursor" / "rules"
+                    / "team-conventions.mdc").exists()
+        assert not (paths.home() / ".claude" / "CLAUDE.md").exists()
+
+    def test_repaired_block_uninstalls_and_keeps_user_text(self, tap):
+        claude_md, before = self._damage(tap)
+        claude_md.write_text(before.replace(
+            "# My own notes", "<!-- boost:rule:team-conventions end -->\n"
+            "# My own notes"), encoding="utf-8")
+        store.uninstall("team-conventions")
+        assert claude_md.read_text(encoding="utf-8") == "# My own notes\nkeep me\n"
+        assert lockfile.get_rule("team-conventions") is None
+
+
+class TestDamagedRuleBlockRefusesEverywhere:
+    """The follow-ups to TestDamagedRuleBlockRefuses: a stray start after an
+    intact block, release's own write loop, and the scope guard's order."""
+
+    STRAY = "<!-- boost:rule:team-conventions start -->\n# My own notes\n"
+
+    def test_uninstall_refuses_a_stray_start_after_a_clean_block(self, tap):
+        store.install(_rule_entry(tap))
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        claude_md.write_text(claude_md.read_text(encoding="utf-8")
+                             + "\n" + self.STRAY, encoding="utf-8")
+        before = claude_md.read_text(encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("team-conventions")
+        assert str(claude_md) in ei.value.message
+        assert claude_md.read_text(encoding="utf-8") == before
+        assert lockfile.get_rule("team-conventions") is not None
+        assert (paths.home() / ".windsurf" / "rules"
+                / "team-conventions.md").exists()
+
+    def test_release_refuses_before_restoring_any_file(self, tap):
+        # claude-code is restored before gemini, so a refusal from inside the
+        # loop would leave CLAUDE.md written and the entry still quarantined.
+        store.install(_rule_entry(tap))
+        store.quarantine_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        assert not claude_md.exists()
+        gemini_md = paths.home() / ".gemini" / "GEMINI.md"
+        gemini_md.parent.mkdir(parents=True, exist_ok=True)
+        gemini_md.write_text(self.STRAY, encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            store.release_materialized(
+                "rule", "team-conventions",
+                lockfile.get_rule("team-conventions"))
+        assert str(gemini_md) in ei.value.message
+        assert not claude_md.exists()
+        assert gemini_md.read_text(encoding="utf-8") == self.STRAY
+        lk = lockfile.get_rule("team-conventions")
+        assert lk["quarantined"] is True
+        assert lk["quarantine_stash"]
+
+    def test_project_scope_checks_containment_before_reading(self, tap,
+                                                             tmp_path):
+        # An escaping CLAUDE.local.md must be refused as an escape, not read
+        # through: the damaged-block message would name a file outside the
+        # repo and send the user to repair it.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside.md"
+        outside.write_text(self.STRAY, encoding="utf-8")
+        (repo / "CLAUDE.local.md").symlink_to(outside)
+        with pytest.raises(BoostError) as ei:
+            store.install(_rule_entry(tap), scope="project", base=str(repo))
+        assert "outside this project" in ei.value.message
+        assert outside.read_text(encoding="utf-8") == self.STRAY
+        assert not (repo / ".cursor").exists()
 
 
 class TestSyncSeesLinksOutsideTheDeclaredScope:

@@ -2343,6 +2343,23 @@ def _install_rule(entry: dict, force: bool = False,
     targets = narrow_materializing(agents.materializing_agents(resolved_base),
                                     only_agents, name, "rule",
                                     explicit=explicit_agents)
+    # A damaged block in any context file stops the install before the first
+    # write. merge_block refuses it too, but mid-loop, after earlier agents'
+    # files had landed with no lock row to undo them.
+    for agent, skills_dir in targets.items():
+        mode, path = rules.rule_target(
+            agent, skills_dir, name, base=resolved_base,
+            dotdir=agents.project_dotdir(agent, skills_dir))
+        # Containment first: reading through an escaping symlink would name
+        # a file outside the repo in the refusal and send the user to fix it.
+        if resolved_base is not None:
+            scopes.ensure_in_base(resolved_base, path)
+        if mode == rules.MODE_CLAUDE:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue  # absent, or refused: the write loop handles both
+            rules.require_well_formed(text, name, path)
     for agent, skills_dir in targets.items():
         mode, path = rules.rule_target(
             agent, skills_dir, name, base=resolved_base,
@@ -2513,6 +2530,11 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
             if m.get("mode") == rules.MODE_CLAUDE:
                 if _present(path) and path.exists():
                     text = path.read_text(encoding="utf-8")
+                    # A damaged block refuses the whole uninstall, before the
+                    # lock is touched: strip_block declines to guess, and
+                    # dropping the row anyway reported the rule removed while
+                    # its text stayed live and no command could reach it.
+                    rules.require_well_formed(text, name, path)
                     stripped = rules.strip_block(text, name)
                     # No block of ours (a refused write): no rewrite. An
                     # empty result held only our block: boost created it.
@@ -2687,6 +2709,18 @@ def release_materialized(kind: str, name: str, entry: dict,
     # the way `reinstall` did.
     _refuse_stranded_base(entry.get("scope", scopes.SCOPE_USER),
                           entry.get("base"), kind, name)
+    # A damaged block in any context file refuses the release before the
+    # first restore — merge_block would refuse it mid-loop, after earlier
+    # agents' files were written with the entry still marked quarantined.
+    for m in entry.get("quarantine_stash") or []:
+        if m.get("content") is None or m.get("mode") != rules.MODE_CLAUDE:
+            continue
+        path = Path(m.get("path", ""))
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue  # absent: the restore writes it fresh
+        rules.require_well_formed(text, name, path)
     restored: list[str] = []
     for m in entry.get("quarantine_stash") or []:
         content = m.get("content")
@@ -4551,7 +4585,16 @@ def is_unrepaired(action: str) -> bool:
     """True for a :func:`sync_apply` line that reports a repair it did *not*
     make, so callers print it as a warning rather than under a check mark."""
     return any(mark in action for mark in (
-        _NOT_REMATERIALIZED, _NOT_LINKED_MARK, _NOT_RECORDED_MARK))
+        _NOT_REMATERIALIZED, _NOT_LINKED_MARK, _NOT_RECORDED_MARK,
+        _DECLINED_MARK, _NOT_CLONED_MARK))
+
+
+#: A pin that blocks a repair. Missing from :func:`is_unrepaired` until it was
+#: added, so `heal` printed the decline under a ✓ and exited 0 over a skill
+#: still missing, and `doctor` went on prescribing `heal`.
+_DECLINED_MARK = " — repair declined "
+#: A URL import's store dir, which sync never re-clones -- also a decline.
+_NOT_CLONED_MARK = "'s store dir is missing — `boost reinstall "
 
 
 _DROPPED = "dropped %s from lock (store dir missing, source gone)"
@@ -4560,9 +4603,9 @@ _GONE = ("%s %s has a missing materialization but its source is gone — "
 
 
 def _declined(label: str, where: str, name: str) -> str:
-    return ("%s is pinned and its %s source has moved — repair declined "
+    return ("%s is pinned and its %s source has moved%s"
             "(unpin, or `boost reinstall %s` to accept the new content)"
-            % (label, where, name))
+            % (label, where, _DECLINED_MARK, name))
 
 
 def _lock_source(name: str, tap_name: str, entry: dict,
@@ -4590,8 +4633,8 @@ def plan_missing_store(name: str) -> StoreRepair:
         # never touches the network. Dropping the entry instead would throw
         # away the one record of where the skill came from, so keep it and
         # name the command that can.
-        msg = ("%s's store dir is missing — `boost reinstall %s` clones it "
-               "again from %s" % (name, name, entry["source_url"]))
+        msg = ("%s%s%s` clones it again from %s"
+               % (name, _NOT_CLONED_MARK, name, entry["source_url"]))
         return StoreRepair("declined", msg, msg)
     if tap_name == "local":
         src = local_source_dir(entry)

@@ -35,6 +35,21 @@ def is_expertise_event(event: dict) -> bool:
     return event.get("action") in EXPERTISE_ACTIONS
 
 
+# `via` values for an "install" event that re-applied an item already
+# installed: `boost update` upgrading it, `boost reinstall` repairing it. Both
+# go through store.install(force=True), which journals "install" every time,
+# so without the tag one install and one upgrade read as two installs.
+REFRESH_VIAS = frozenset({"update", "reinstall"})
+
+
+def is_new_install(event: dict) -> bool:
+    """True for an "install" event that put an item on this machine, rather
+    than refreshing one already there. An uninstall followed by an install is
+    a new install; an upgrade is not."""
+    return (event.get("action") == "install"
+            and event.get("via") not in REFRESH_VIAS)
+
+
 def log(action: str, subject: str = "", **fields) -> None:
     """Append one event line to the pulse feed, rotating when oversized.
 

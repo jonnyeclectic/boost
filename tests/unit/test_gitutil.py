@@ -183,7 +183,9 @@ class TestCloneAndInspect:
     def test_clone_shallow_issues_exact_argv(self, tmp_path, monkeypatch):
         calls = _record_run(monkeypatch)
         gitutil.clone_shallow("git@example:x.git", tmp_path / "d", sparse=False)
-        (args, kw), = calls
+        # The clone, then the check that it holds a commit at all.
+        (args, kw), (verify, _) = calls
+        assert verify == ["-C", str(tmp_path / "d"), "rev-parse", "--verify", "--quiet", "HEAD"]
         assert args == ["clone", "--depth", "1", "--quiet",
                         "-c", "core.autocrlf=false", "-c", "core.eol=lf", "--",
                         "git@example:x.git", str(tmp_path / "d")]
@@ -193,7 +195,8 @@ class TestCloneAndInspect:
         """The default: same flags plus the blobless/sparse pair, then the cone."""
         calls = _record_run(monkeypatch)
         gitutil.clone_shallow("git@example:x.git", tmp_path / "d")
-        (clone_args, kw), (cone_args, _) = calls
+        (clone_args, kw), (cone_args, _), (verify, _) = calls
+        assert verify == ["-C", str(tmp_path / "d"), "rev-parse", "--verify", "--quiet", "HEAD"]
         assert clone_args == ["clone", "--depth", "1", "--quiet",
                               "-c", "core.autocrlf=false", "-c", "core.eol=lf",
                               "--filter=blob:none", "--sparse", "--",
@@ -226,8 +229,9 @@ class TestCloneAndInspect:
     def test_clone_shallow_allows_ordinary_https(self, tmp_path, monkeypatch):
         calls = _record_run(monkeypatch)
         gitutil.clone_shallow("https://github.com/o/r", tmp_path / "d")
-        # a normal remote clones, not rejected: the clone, then its sparse cone
-        assert len(calls) == 2
+        # a normal remote clones, not rejected: the clone, its sparse cone,
+        # then the check that it holds a commit
+        assert len(calls) == 3
         assert calls[0][0][0] == "clone"
         assert "sparse-checkout" in calls[1][0]
 
