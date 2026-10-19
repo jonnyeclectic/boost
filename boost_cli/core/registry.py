@@ -8,6 +8,8 @@ import os
 import re
 import sys
 import time
+import urllib.parse
+import urllib.request
 from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
@@ -99,6 +101,12 @@ def parse_spec(spec: str):
     # own home-dir lookup (USERPROFILE on Windows), which ignores the $HOME
     # override the whole test suite (and BOOST_HOME sandboxing) relies on.
     p = paths.expand(spec)
+    # `file://<dir>` of a directory on this machine is that directory: cloned
+    # as a URL it kept the spec as its `url`, so `boost tap <dir>` then
+    # `boost tap file://<dir>` was two taps of one repo under one name.
+    local = _file_url_path(spec)
+    if local is not None and _looks_like_a_directory(local):
+        p = local
     if _looks_like_a_directory(p):
         if not gitutil.is_repo(p):
             # The dir exists, so git's own "repository '...' does not exist"
@@ -146,6 +154,18 @@ def parse_spec(spec: str):
 
 
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+def _file_url_path(spec: str) -> Path | None:
+    """The local path a `file://` spec names, or None if it names none.
+
+    Only an empty or `localhost` host is this machine; `file://otherhost/…`
+    stays a URL for git to judge.
+    """
+    u = urllib.parse.urlparse(spec)
+    if u.scheme.lower() != "file" or u.netloc.lower() not in ("", "localhost"):
+        return None
+    return Path(urllib.request.url2pathname(u.path))
 
 
 def _checked(name: str, url: str, spec: str) -> tuple[str, str]:
@@ -255,8 +275,9 @@ def same_source(a: str, b: str) -> bool:
     `owner/repo` are both `owner/repo`. Spellings of one remote still match —
     `owner/repo`, `…/repo.git`, `git@host:owner/repo` — so re-tapping a repo
     by another of its names stays the harmless no-op it was. Local paths
-    compare exactly (`parse_spec` has already resolved them); a remote
-    compares case-blind, as its host and the forges that matter are.
+    compare exactly (`parse_spec` has already resolved them); a remote's host
+    compares case-blind, and its path only on github.com, the one forge boost
+    can say that of.
     """
     return _source_key(a) == _source_key(b)
 
@@ -266,10 +287,19 @@ def _source_key(url: str) -> str:
         url = url[len("git@"):].replace(":", "/", 1)
     elif _SCHEME.match(url):
         url = url.split("://", 1)[1]
+        # Userinfo sits before the host; an `@` after the first `/` is path.
         url = url.split("@", 1)[-1] if "@" in url.split("/", 1)[0] else url
     else:
         return url
-    return url.rstrip("/").removesuffix(".git").lower()
+    host, _, path = url.partition("/")
+    host = host.lower()
+    path = path.rstrip("/").removesuffix(".git")
+    # A host is case-blind everywhere, a path only where the forge says so:
+    # a self-hosted `Team/Repo` and a `file:///srv/A` are not their
+    # lowercase twins.
+    if host.split(":", 1)[0] == "github.com":
+        path = path.lower()
+    return host + "/" + path
 
 
 def _taken(name: str, url: str, existing: str) -> BoostError:
@@ -518,6 +548,7 @@ def add_many(specs: list[str], curated: bool = False,
     paths.ensure_dirs()
     pins = pins or {}
     existing = {t.name: t.url for t in list_taps()}
+    batch: dict[str, str] = {}
     results: list[dict] = []
     todo: list[str] = []
     for spec in specs:
@@ -537,10 +568,22 @@ def add_many(specs: list[str], curated: bool = False,
             results.append({"spec": spec, "name": name, "ok": False,
                             "skipped": True, "error": "already tapped"})
             continue
+        # Two specs of this one run claiming a name is not "already used by":
+        # nothing holds the name yet, and `boost untap` would not help.
+        if name in batch and not same_source(batch[name], url):
+            results.append({
+                "spec": spec, "name": name, "ok": False,
+                "error": "two specs in this batch both name %s: %s and %s"
+                         % (name, batch[name], url)})
+            continue
+        if name in batch:
+            results.append({"spec": spec, "name": name, "ok": False,
+                            "skipped": True, "error": "already tapped"})
+            continue
         # Guard against the same registry appearing twice in one selection:
         # two threads cloning into one directory is a corrupt clone, not a race
         # anyone would enjoy debugging.
-        existing[name] = url
+        batch[name] = url
         todo.append(spec)
 
     def work(spec: str) -> dict:

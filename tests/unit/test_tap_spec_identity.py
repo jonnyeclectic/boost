@@ -74,6 +74,13 @@ class TestSameSource:
         ("https://github.com/o/r", "ssh://git@github.com/o/r"),
         ("https://GitHub.com/O/R", "https://github.com/o/r"),
         ("/srv/a/tap", "/srv/a/tap"),
+        # Userinfo is not part of the repository's identity...
+        ("https://user@host.example/o/r", "https://host.example/o/r"),
+        ("ssh://git@github.com:22/o/r", "ssh://github.com:22/o/r"),
+        # ...and a host is case-blind wherever it appears.
+        ("https://GIT.CORP/Team/Repo", "https://git.corp/Team/Repo"),
+        ("git@GitHub.com:O/R.git", "https://github.com/o/r"),
+        ("ssh://git@GitHub.com:22/O/R", "ssh://github.com:22/o/r"),
     ])
     def test_same(self, a, b):
         assert registry.same_source(a, b)
@@ -83,9 +90,56 @@ class TestSameSource:
         ("/srv/a/tap", "/srv/b/tap"),
         ("/srv/A/tap", "/srv/a/tap"),
         ("https://github.com/o/r", "https://github.com/o/r2"),
+        # An `@` in the path is not userinfo: cutting at it made every
+        # `…/o/r@x` the same as every other, whatever the host.
+        ("https://h1.example/o/r@x", "https://h2.example/o/r@x"),
+        # Only GitHub's paths are case-blind; a self-hosted forge or a
+        # file:// path is the case it was written in.
+        ("https://git.corp/Team/Repo", "https://git.corp/team/repo"),
+        ("file:///srv/A/tap", "file:///srv/a/tap"),
+        ("ssh://git@git.corp:22/Team/Repo", "ssh://git@git.corp:22/team/repo"),
     ])
     def test_different(self, a, b):
         assert not registry.same_source(a, b)
+
+
+class TestFileUrlOfALocalDirectory:
+    """`file://<dir>` is the directory, not a second spelling of a new tap."""
+
+    def test_parses_like_the_bare_path(self, sandbox):
+        a = _repo(sandbox / "a" / "fixture-tap")
+        assert registry.parse_spec("file://" + str(a)) == \
+            registry.parse_spec(str(a)) == ("fixture-tap", str(a.resolve()))
+
+    def test_percent_encoding_and_localhost(self, sandbox):
+        a = _repo(sandbox / "my tap")
+        assert registry.parse_spec("file://localhost" + str(a).replace(
+            " ", "%20")) == ("my tap", str(a.resolve()))
+
+    def test_add_after_bare_path_is_already_configured(self, sandbox):
+        a = _repo(sandbox / "a" / "fixture-tap")
+        registry.add(str(a))
+        with pytest.raises(BoostError, match="already configured"):
+            registry.add("file://" + str(a))
+        assert _urls() == [str(a.resolve())]
+
+    def test_add_many_after_bare_path_is_skipped(self, sandbox):
+        a = _repo(sandbox / "a" / "fixture-tap")
+        registry.add(str(a))
+        [res] = registry.add_many(["file://" + str(a)])
+        assert res["skipped"] is True
+        assert taps_cmd._skip_if_already_tapped("file://" + str(a)) is True
+
+    def test_directory_that_is_not_a_repo_says_so(self, sandbox):
+        d = sandbox / "plain"
+        d.mkdir()
+        with pytest.raises(BoostError, match="is not a git repository"):
+            registry.parse_spec("file://" + str(d))
+
+    def test_remote_host_is_left_a_url(self, sandbox):
+        a = _repo(sandbox / "a" / "fixture-tap")
+        spec = "file://otherhost" + str(a)
+        assert registry.parse_spec(spec)[1] == spec
 
 
 class TestNameTakenByAnotherUrl:
@@ -127,8 +181,20 @@ class TestNameTakenByAnotherUrl:
         first, second = registry.add_many([str(a), str(b)])
         assert first["ok"] is True
         assert second["ok"] is False and not second.get("skipped")
-        assert str(a.resolve()) in second["error"]
+        # Nothing held the name before this run, so "already used by" (and
+        # the untap advice that goes with it) would be false.
+        assert second["error"] == (
+            "two specs in this batch both name fixture-tap: %s and %s"
+            % (a.resolve(), b.resolve()))
         assert _urls() == [str(a.resolve())]
+
+    def test_add_many_conflict_with_config_says_already_used(self, sandbox):
+        a = _repo(sandbox / "a" / "fixture-tap")
+        b = _repo(sandbox / "b" / "fixture-tap")
+        registry.add(str(a))
+        [res] = registry.add_many([str(b)])
+        assert res["error"] == "tap name fixture-tap is already used by %s" \
+            % a.resolve()
 
     def test_add_many_same_spec_twice_in_a_batch_is_skipped(self, sandbox):
         a = _repo(sandbox / "a" / "fixture-tap")
