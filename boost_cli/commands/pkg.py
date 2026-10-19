@@ -1531,7 +1531,12 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
             out.warn("%s %s is no longer in tap %s — leaving as-is"
                      % (kind, name, tapname))
             continue
-        entry = matches[0]
+        # The lock's `source_file`, not scan order: one tap can ship a name
+        # twice, and `matches[0]` refreshed the copy the user did not pick.
+        entry, warning = catalog.select_lock_source(matches, lk)
+        entry = cast(dict, entry)             # matches is non-empty above
+        if warning:
+            out.warn(warning)
         old_v = str(lk.get("version", "0.0.0"))
         new_v = str(entry.get("version", "0.0.0"))
         bumped = util.semver_gt(new_v, old_v)
@@ -1765,7 +1770,13 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     if not matches:
         out.warn("%s is no longer in tap %s — leaving as-is" % (label, tapname))
         return 0, 0, 0
-    entry = matches[0]
+    # The lock's `source_dir`, not scan order: with two same-named copies in
+    # one tap (`install --path` picked one), `matches[0]` silently swapped the
+    # user's choice for whichever copy scanned first.
+    entry, warning = catalog.select_lock_source(matches, lk)
+    entry = cast(dict, entry)             # matches is non-empty above
+    if warning:
+        out.warn("%s: %s" % (label, warning))
     old_v = str(lk.get("version", "0.0.0"))
     new_v = str(entry.get("version", "0.0.0"))
     head, src_sha = "", None
