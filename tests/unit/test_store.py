@@ -4423,6 +4423,69 @@ class TestNarrowedRuleAndWorkflowKeepTheirRecords:
         assert not (paths.home() / ".gemini" / "commands" / "ship-it.toml").exists()
 
 
+class TestDamagedRuleBlockRefuses:
+    """A CLAUDE.md block whose end marker the user deleted by hand.
+
+    Uninstall used to report the rule removed and drop its lock row while the
+    block stayed live; install then appended a second block, and the next
+    reinstall replaced everything from the orphan start to the new end —
+    deleting the user's own notes in between.
+    """
+
+    def _damage(self, tap):
+        store.install(_rule_entry(tap))
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        text = claude_md.read_text(encoding="utf-8").replace(
+            "<!-- boost:rule:team-conventions end -->\n", "")
+        claude_md.write_text(text + "# My own notes\nkeep me\n",
+                             encoding="utf-8")
+        return claude_md, claude_md.read_text(encoding="utf-8")
+
+    def test_uninstall_refuses_and_keeps_the_lock_row(self, tap):
+        claude_md, before = self._damage(tap)
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("team-conventions")
+        assert str(claude_md) in ei.value.message
+        assert lockfile.get_rule("team-conventions") is not None
+        assert claude_md.read_text(encoding="utf-8") == before
+        # all-or-nothing: the other agents' files are still there too
+        assert (paths.home() / ".windsurf" / "rules"
+                / "team-conventions.md").exists()
+
+    def test_reinstall_refuses_before_any_write(self, tap):
+        claude_md, before = self._damage(tap)
+        cursor = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
+        cursor.unlink()
+        with pytest.raises(BoostError):
+            store.install(_rule_entry(tap), force=True)
+        assert claude_md.read_text(encoding="utf-8") == before
+        assert not cursor.exists()
+
+    def test_a_later_agents_damage_stops_the_earlier_writes(self, tap):
+        # GEMINI.md is written after cursor's file, so refusing inside the
+        # write loop would land cursor's file first with no lock row for it.
+        store.install(_rule_entry(tap))
+        store.uninstall("team-conventions")
+        gemini_md = paths.home() / ".gemini" / "GEMINI.md"
+        gemini_md.write_text("<!-- boost:rule:team-conventions start -->\n"
+                             "# My own notes\n", encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            store.install(_rule_entry(tap))
+        assert str(gemini_md) in ei.value.message
+        assert not (paths.home() / ".cursor" / "rules"
+                    / "team-conventions.mdc").exists()
+        assert not (paths.home() / ".claude" / "CLAUDE.md").exists()
+
+    def test_repaired_block_uninstalls_and_keeps_user_text(self, tap):
+        claude_md, before = self._damage(tap)
+        claude_md.write_text(before.replace(
+            "# My own notes", "<!-- boost:rule:team-conventions end -->\n"
+            "# My own notes"), encoding="utf-8")
+        store.uninstall("team-conventions")
+        assert claude_md.read_text(encoding="utf-8") == "# My own notes\nkeep me\n"
+        assert lockfile.get_rule("team-conventions") is None
+
+
 class TestSyncSeesLinksOutsideTheDeclaredScope:
     """The blind spot between sync's two sweeps.
 

@@ -289,6 +289,60 @@ class TestStripBlock:
         assert rules.strip_block(merged, "r") == original
 
 
+class TestMalformedBlock:
+    """An orphan start marker followed by the user's own text.
+
+    One more install appends a whole block below the orphan, and "first start
+    to first end" then spans the user's lines in between: the next reinstall
+    replaced them, and strip_block would have deleted them.
+    """
+
+    ORPHAN = "<!-- boost:rule:r start -->\nOLD\n# My own notes\nkeep me\n"
+    DOUBLED = ORPHAN + "\n<!-- boost:rule:r start -->\nNEW\n<!-- boost:rule:r end -->\n"
+
+    def test_span_of_a_clean_block(self):
+        t = "x\n" + "<!-- boost:rule:r start -->\nB\n<!-- boost:rule:r end -->" + "\ny"
+        i, j = rules.block_span(t, "r")
+        assert (i, j) == (2, len(t) - 2)
+
+    def test_span_absent_and_malformed_are_none(self):
+        assert rules.block_span("# notes\n", "r") is None
+        assert rules.block_span(self.ORPHAN, "r") is None
+        assert rules.block_span(self.DOUBLED, "r") is None
+
+    def test_another_rules_start_between_does_not_count(self):
+        t = rules.merge_block("", "r", "A").replace(
+            "A\n", "A\n<!-- boost:rule:other start -->\n")
+        assert rules.block_span(t, "r") is not None
+
+    @pytest.mark.parametrize("text", [ORPHAN, DOUBLED])
+    def test_merge_refuses_rather_than_append_or_span(self, text):
+        with pytest.raises(BoostError) as ei:
+            rules.merge_block(text, "r", "NEWER")
+        assert ei.value.message == (
+            "rule r's managed block has no matching end marker, so boost "
+            "cannot tell where its text stops and yours begins")
+        assert "`<!-- boost:rule:r end -->`" in ei.value.hint
+        assert "`<!-- boost:rule:r start -->`" in ei.value.hint
+
+    def test_refusal_names_the_file(self):
+        with pytest.raises(BoostError) as ei:
+            rules.require_well_formed(self.ORPHAN, "r", Path("/x/CLAUDE.md"))
+        assert "managed block in /x/CLAUDE.md has" in ei.value.message
+
+    def test_well_formed_and_absent_pass(self):
+        rules.require_well_formed("# notes\n", "r")
+        rules.require_well_formed(rules.merge_block("", "r", "B"), "r")
+
+    def test_read_and_strip_decline_the_doubled_shape(self):
+        assert rules.read_block(self.DOUBLED, "r") is None
+        assert rules.strip_block(self.DOUBLED, "r") == self.DOUBLED
+
+    def test_read_block_returns_exactly_the_body(self):
+        t = rules.merge_block("head\n", "r", "B1\nB2") + "tail\n"
+        assert rules.read_block(t, "r") == "B1\nB2"
+
+
 class TestRuleNameTraversal:
     """A tap controls its rule frontmatter, so `name` reaches rule_target as
     attacker input. Before the guard, `../../../../.ssh/authorized_keys`

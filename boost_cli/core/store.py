@@ -2343,6 +2343,19 @@ def _install_rule(entry: dict, force: bool = False,
     targets = narrow_materializing(agents.materializing_agents(resolved_base),
                                     only_agents, name, "rule",
                                     explicit=explicit_agents)
+    # A damaged block in any context file stops the install before the first
+    # write. merge_block refuses it too, but mid-loop, after earlier agents'
+    # files had landed with no lock row to undo them.
+    for agent, skills_dir in targets.items():
+        mode, path = rules.rule_target(
+            agent, skills_dir, name, base=resolved_base,
+            dotdir=agents.project_dotdir(agent, skills_dir))
+        if mode == rules.MODE_CLAUDE:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue  # absent, or refused: the write loop handles both
+            rules.require_well_formed(text, name, path)
     for agent, skills_dir in targets.items():
         mode, path = rules.rule_target(
             agent, skills_dir, name, base=resolved_base,
@@ -2513,6 +2526,11 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
             if m.get("mode") == rules.MODE_CLAUDE:
                 if _present(path) and path.exists():
                     text = path.read_text(encoding="utf-8")
+                    # A damaged block refuses the whole uninstall, before the
+                    # lock is touched: strip_block declines to guess, and
+                    # dropping the row anyway reported the rule removed while
+                    # its text stayed live and no command could reach it.
+                    rules.require_well_formed(text, name, path)
                     stripped = rules.strip_block(text, name)
                     # No block of ours (a refused write): no rewrite. An
                     # empty result held only our block: boost created it.
