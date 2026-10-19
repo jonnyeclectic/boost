@@ -108,33 +108,34 @@ class TestFileUrlOfALocalDirectory:
 
     def test_parses_like_the_bare_path(self, sandbox):
         a = _repo(sandbox / "a" / "fixture-tap")
-        assert registry.parse_spec("file://" + str(a)) == \
+        assert registry.parse_spec(a.as_uri()) == \
             registry.parse_spec(str(a)) == ("fixture-tap", str(a.resolve()))
 
     def test_percent_encoding_and_localhost(self, sandbox):
         a = _repo(sandbox / "my tap")
-        assert registry.parse_spec("file://localhost" + str(a).replace(
-            " ", "%20")) == ("my tap", str(a.resolve()))
+        spec = a.as_uri().replace("file://", "file://localhost", 1)
+        assert "%20" in spec
+        assert registry.parse_spec(spec) == ("my tap", str(a.resolve()))
 
     def test_add_after_bare_path_is_already_configured(self, sandbox):
         a = _repo(sandbox / "a" / "fixture-tap")
         registry.add(str(a))
         with pytest.raises(BoostError, match="already configured"):
-            registry.add("file://" + str(a))
+            registry.add(a.as_uri())
         assert _urls() == [str(a.resolve())]
 
     def test_add_many_after_bare_path_is_skipped(self, sandbox):
         a = _repo(sandbox / "a" / "fixture-tap")
         registry.add(str(a))
-        [res] = registry.add_many(["file://" + str(a)])
+        [res] = registry.add_many([a.as_uri()])
         assert res["skipped"] is True
-        assert taps_cmd._skip_if_already_tapped("file://" + str(a)) is True
+        assert taps_cmd._skip_if_already_tapped(a.as_uri()) is True
 
     def test_directory_that_is_not_a_repo_says_so(self, sandbox):
         d = sandbox / "plain"
         d.mkdir()
         with pytest.raises(BoostError, match="is not a git repository"):
-            registry.parse_spec("file://" + str(d))
+            registry.parse_spec(d.as_uri())
 
     def test_remote_host_is_left_a_url(self, sandbox):
         a = _repo(sandbox / "a" / "fixture-tap")
