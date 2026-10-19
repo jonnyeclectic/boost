@@ -1097,3 +1097,85 @@ class TestAReinstallPreviewsTheLinkScopeItWillReplay:
         for a in others:
             assert a not in link_line[0], "preview widens the recorded scope"
             assert a not in live_line[0], "run widens the recorded scope"
+
+
+@pytest.fixture()
+def own_tap(boost, fixture_tap_src, tmp_path, request):
+    """The fixture tap under a name unique to this test, tapped."""
+    slug = "own-" + request.node.name.replace("[", "-").replace("]", "")[-40:]
+    tap_dir = tmp_path / slug
+    shutil.copytree(fixture_tap_src, tap_dir)
+    boost("tap", tap_dir)
+    return tap_dir
+
+
+class TestAnInstalledItemIsRefusedInBothModes:
+    """`install x --dry-run` over an installed ``x`` said "would upgrade" and
+    exited 0, while the run refused with "already installed" and exited 1:
+    the preview chose its verb from whether the lock held the name and never
+    asked the run's question. Both now ask `store.check_existing`."""
+
+    def _both(self, boost, *argv):
+        dry = boost(*argv, "--dry-run", expect=None)
+        live = boost(*argv, expect=None)
+        return dry, live
+
+    def test_an_installed_skill_without_force(self, boost, own_tap):
+        boost("install", "brainstorming")
+        dry, live = self._both(boost, "install", "brainstorming")
+        assert live.rc == 1 and dry.rc == 1
+        assert "brainstorming is already installed (v1.4.0)" in live.err
+        assert dry.err == live.err
+        assert "would" not in dry.out
+
+    def test_a_pinned_skill_without_force(self, boost, own_tap):
+        boost("install", "brainstorming")
+        boost("pin", "brainstorming")
+        dry, live = self._both(boost, "install", "brainstorming")
+        assert live.rc == 1 and dry.rc == 1
+        assert "brainstorming is pinned" in live.err
+        assert dry.err == live.err
+
+    def test_a_forced_reinstall_previews_a_reinstall(self, boost, own_tap):
+        boost("install", "brainstorming")
+        dry = boost("install", "brainstorming", "--force", "--dry-run")
+        assert "would reinstall brainstorming v1.4.0" in dry.out
+        assert "would upgrade" not in dry.out
+        boost("install", "brainstorming", "--force")
+
+    def test_a_fresh_install_still_previews_an_install(self, boost, own_tap):
+        dry = boost("install", "brainstorming", "--dry-run")
+        assert "would install brainstorming v1.4.0" in dry.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_an_installed_project_skill_without_force(
+            self, boost, own_tap, tmp_path, monkeypatch):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        boost("install", "brainstorming", "--local")
+        dry, live = self._both(boost, "install", "brainstorming", "--local")
+        assert live.rc == 1 and dry.rc == 1
+        assert "already installed in this project" in live.err
+        assert dry.err == live.err
+        forced = boost("install", "brainstorming", "--local", "--force",
+                       "--dry-run")
+        assert "would reinstall brainstorming" in forced.out
+
+    def test_one_installed_name_among_several_is_a_per_entry_warning(
+            self, boost, own_tap):
+        boost("install", "brainstorming")
+        names = sorted(e["name"] for e in store_catalog_skills()
+                       if e["name"] != "brainstorming")[:1]
+        assert names, "fixture tap ships only one skill"
+        dry, live = self._both(boost, "install", "brainstorming", *names)
+        assert live.rc == 1 and dry.rc == 1
+        warn = "brainstorming: brainstorming is already installed (v1.4.0)"
+        assert warn in live.out and warn in dry.out
+        assert "would install %s" % names[0] in dry.out
+        assert lockfile.get_skill(names[0]) is not None
+
+
+def store_catalog_skills():
+    from boost_cli.core import catalog
+    return [e for e in catalog.all_entries() if e.get("kind", "skill") == "skill"]

@@ -1397,7 +1397,8 @@ def cmd_lint(argv):
     else:
         names = args.names or []
         path_names = [n for n in names if catalog.is_path_target(n)]
-        other_names = [n for n in names if n not in path_names]
+        other_names = [store.installed_name(n) for n in names
+                       if n not in path_names]
         for n in path_names:
             p = catalog.resolve_path_target(n)
             targets.append((p.name, p))
@@ -1471,7 +1472,8 @@ def cmd_drift(argv):
     _require_lock_integrity()
 
     rows = []
-    for kind, name, entry in _iter_installed_all(args.names or None):
+    names = [store.installed_name(n) for n in args.names]
+    for kind, name, entry in _iter_installed_all(names or None):
         status = (_drift_status(name, entry) if kind == "skill"
                   else _drift_status_materialized(kind, name, entry))
         rows.append({"name": name, "kind": kind, "status": status,
@@ -1510,7 +1512,8 @@ def cmd_test(argv):
     # escapes for the table, which is display, not data — a consumer parsing
     # those would be parsing our palette.
     results: list[dict] = []
-    for name, entry in _iter_installed(args.names or None):
+    names = [store.installed_name(n) for n in args.names]
+    for name, entry in _iter_installed(names or None):
         sdir = store.skill_store_dir(name)
         md = sdir / "SKILL.md"
         meta, body = _read_skill(sdir)

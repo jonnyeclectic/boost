@@ -1158,7 +1158,7 @@ def cmd_focus(argv: list[str]) -> int:
                                   wrap=True))
         return 0
 
-    names = list(dict.fromkeys(args.skills))
+    names = list(dict.fromkeys(store.installed_name(n) for n in args.skills))
     inst = lockfile.installed()
     for name in names:
         entry = inst.get(name)
@@ -1212,6 +1212,7 @@ def cmd_impact(argv: list[str]) -> int:
 
     inst = lockfile.installed()
     if args.name:
+        args.name = store.installed_name(args.name)
         if args.name not in inst:
             found = lockfile.find_any(args.name)
             if found is not None:
