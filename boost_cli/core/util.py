@@ -540,6 +540,28 @@ def check_path_length(path: Path, *, what: str = "path") -> Path:
     return path
 
 
+def write_unclaimed(directory: Path, stem: str, suffix: str, text: str) -> Path:
+    """Write ``text`` to ``directory/<stem><suffix>`` without replacing anything.
+
+    When that name is taken, ``<stem>.1<suffix>``, ``<stem>.2<suffix>``, ... are
+    tried in turn. Each attempt opens with ``"x"``, so a file that appears
+    between the check and the write is skipped rather than clobbered. For a
+    file written on the user's behalf that they never named: the name is
+    boost's guess, so a file already sitting there is theirs, not ours.
+    """
+    n = 0
+    while True:
+        dest = directory / ("%s%s%s" % (stem, ".%d" % n if n else "", suffix))
+        try:
+            with dest.open("x", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+            return dest
+        except FileExistsError:
+            n += 1
+        except OSError as exc:
+            raise BoostError("cannot write %s: %s" % (dest, exc)) from exc
+
+
 def resolve_slug(raw: str, *, what: str = "name") -> str:
     """Slugify a user-typed ``raw``, refusing one with nothing to slug.
 

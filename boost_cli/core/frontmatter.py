@@ -252,6 +252,26 @@ def parse(text: str) -> tuple[dict, str]:
     return (parse_block(block) if block else {}), body
 
 
+def tags_of(meta) -> list[str]:
+    """``tags:`` off third-party frontmatter as a list of strings.
+
+    A list and a comma string (``tags: a, b`` or a lone ``tags: testing``) are
+    both common in real repos; anything else reads as "no tags". Iterating the
+    raw value instead split a scalar string into single characters, and a
+    ``tags: {a: 1}`` must not raise. Case is kept; callers that facet fold it.
+    """
+    if not isinstance(meta, dict):
+        return []
+    raw = meta.get("tags")
+    if isinstance(raw, (str, int, float)) and not isinstance(raw, bool):
+        raw = str(raw).split(",")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(t).strip() for t in raw
+            if isinstance(t, (str, int, float)) and not isinstance(t, bool)
+            and str(t).strip()]
+
+
 def _dump_item(v) -> str:
     """Render one scalar the way `dump()` would, quoting only when needed."""
     if isinstance(v, str) and _needs_quoting(v):

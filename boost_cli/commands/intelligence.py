@@ -130,14 +130,18 @@ def _save_state(fname: str, data: dict) -> None:
 
 
 def _save_generated_fallback(name: str, text: str, reason: str) -> None:
-    fallback = Path.cwd() / ("%s.SKILL.md" % name)
-    fallback.write_text(text, encoding="utf-8")
+    # Never over an existing <name>.SKILL.md: that file is the user's, and this
+    # runs on the very path where they just declined a replace.
+    fallback = util.write_unclaimed(Path.cwd(), name, ".SKILL.md", text)
     out.warn("not installed: %s" % reason)
     out.info("generated skill saved to %s" % _tilde(fallback))
 
 
-def _install_generated(name: str, text: str, yes: bool = False) -> None:
+def _install_generated(name: str, text: str, yes: bool = False) -> bool:
     """Write a generated SKILL.md to a tempdir and install it as `name`.
+
+    Returns False when the install did not happen (the generation is saved
+    beside the cwd instead), so the caller can exit non-zero.
 
     The tempdir is the only copy of a just-generated skill, so a refused install
     must not be allowed to propagate out of the ``with`` block and delete it —
@@ -161,7 +165,7 @@ def _install_generated(name: str, text: str, yes: bool = False) -> None:
             "%s is already installed from %s — replace it?" % (name, owner))):
         _save_generated_fallback(
             name, text, "%s is already installed from %s" % (name, owner))
-        return
+        return False
     with tempfile.TemporaryDirectory(prefix="boost-gen-") as td:
         src = Path(td) / name
         src.mkdir()
@@ -175,11 +179,12 @@ def _install_generated(name: str, text: str, yes: bool = False) -> None:
             res = store.install_from_path(src, name=name, tap_label="local")
         except BoostError as err:
             _save_generated_fallback(name, text, err.message)
-            return
+            return False
     out.ok("%s %s → %s" % ("replaced" if owner else "installed", name, _tilde(res.dest)))
     if res.linked:
         out.info(out.role("linked into: %s" % ", ".join(res.linked), "muted"))
     _warn_unwritable(res)
+    return True
 
 
 def _write_generated(dest: Path, text: str, yes: bool = False) -> bool:
@@ -231,8 +236,12 @@ def cmd_distill(argv: list[str]) -> int:
         meta, body = frontmatter.parse(text)
         sources.append({"name": name, "origin": origin, "text": text,
                         "meta": meta, "body": body})
-    new = util.resolve_slug(args.output, what="output name") if args.output \
-        else names[0] + "-distilled"
+    # The default comes from the *bare* first name: `fx:tdd-workflow` would
+    # otherwise name the output `fx:tdd-workflow-distilled`, which the printed
+    # `boost import` hint then rejects as an invalid skill name.
+    new = util.resolve_slug(
+        args.output or catalog.split_name(names[0])[1] + "-distilled",
+        what="output name")
 
     out.heading("distilling %s → %s" % (", ".join(names), new))
     merged = _distill_ai(new, sources) if ai.available() else None
@@ -241,7 +250,8 @@ def cmd_distill(argv: list[str]) -> int:
         merged = _distill_merge(new, sources)
 
     if args.install:
-        _install_generated(new, merged, yes=args.yes)
+        if not _install_generated(new, merged, yes=args.yes):
+            return 1
     else:
         dest = Path.cwd() / new / "SKILL.md"
         if not _write_generated(dest, merged, yes=args.yes):
@@ -292,7 +302,7 @@ def _distill_merge(new: str, sources: list[dict]) -> str:
     """Mechanical merge: union tags, dedupe exact-duplicate body lines."""
     tags: list[str] = []
     for s in sources:
-        for t in s["meta"].get("tags") or []:
+        for t in frontmatter.tags_of(s["meta"]):
             if t not in tags:
                 tags.append(t)
     desc = next((str(s["meta"].get("description") or "").strip()
@@ -420,7 +430,8 @@ def cmd_infer(argv: list[str]) -> int:
         text = _infer_template(name, facts)
 
     if args.install:
-        _install_generated(name, text, yes=args.yes)
+        if not _install_generated(name, text, yes=args.yes):
+            return 1
         journal.log("infer", name, path=str(root))
     elif args.output:
         if not _write_generated(paths.expand(args.output), text, yes=args.yes):
@@ -676,7 +687,8 @@ def cmd_absorb(argv: list[str]) -> int:
         _note_fallback()
         text = _absorb_template(name, patterns)
     if args.install:
-        _install_generated(name, text, yes=args.yes)
+        if not _install_generated(name, text, yes=args.yes):
+            return 1
     else:
         print(text, end="" if text.endswith("\n") else "\n")
     journal.log("absorb", name, patterns=len(patterns), files=len(files))

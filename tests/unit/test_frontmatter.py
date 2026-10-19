@@ -3,6 +3,8 @@
 """Unit tests: boost_cli/core/frontmatter.py — the SKILL.md YAML-subset parser."""
 from __future__ import annotations
 
+import pytest
+
 from boost_cli.core import frontmatter
 
 
@@ -488,3 +490,32 @@ class TestMutationPrecision:
     def test_dump_escapes_embedded_quote_exact(self):
         # value has a quote AND a colon -> quoted branch escapes the quote
         assert frontmatter.dump({"d": 'a": b'}) == '---\nd: "a\\": b"\n---'
+
+
+class TestTagsOf:
+    """`tags_of` reads list, comma-string and scalar `tags:` alike."""
+
+    def test_a_scalar_string_is_one_tag_not_its_characters(self):
+        assert frontmatter.tags_of({"tags": "testing"}) == ["testing"]
+
+    def test_a_comma_string_splits_and_strips(self):
+        assert frontmatter.tags_of({"tags": " a, B ,,c "}) == ["a", "B", "c"]
+
+    def test_a_list_keeps_case_and_drops_blanks(self):
+        assert frontmatter.tags_of({"tags": ["Git", " x ", "", 5]}) == ["Git", "x", "5"]
+
+    def test_a_number_is_one_tag(self):
+        assert frontmatter.tags_of({"tags": 5}) == ["5"]
+        assert frontmatter.tags_of({"tags": 1.5}) == ["1.5"]
+
+    @pytest.mark.parametrize("raw", [None, {"a": 1}, True, [True, {"a": 1}, None]])
+    def test_junk_reads_as_no_tags(self, raw):
+        assert frontmatter.tags_of({"tags": raw}) == []
+
+    def test_a_non_dict_meta_or_missing_key_is_no_tags(self):
+        assert frontmatter.tags_of(None) == []
+        assert frontmatter.tags_of({}) == []
+
+    def test_parsed_scalar_frontmatter_round_trip(self):
+        meta, _ = frontmatter.parse("---\nname: x\ntags: testing\n---\nbody\n")
+        assert frontmatter.tags_of(meta) == ["testing"]
