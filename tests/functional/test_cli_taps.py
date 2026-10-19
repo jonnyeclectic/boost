@@ -104,7 +104,19 @@ class TestTap:
         # staleness a pin exists to prevent.
         r = boost("tap", tapped, "--at", "a" * 40, expect=1)
         assert "tap fixture-tap is already configured" in r.err
-        assert "boost update fixture-tap" in r.err  # the hint
+        # `boost update` skips a pinned tap and `--force` goes to HEAD, so
+        # the hint names the one sequence that lands on the commit asked for.
+        err = " ".join(r.err.split())
+        assert "boost untap fixture-tap" in err
+        assert "--at %s" % ("a" * 40) in err
+        assert "boost update" not in err
+
+    def test_untap_survives_a_nameless_config_row(self, boost, tapped):
+        cfg = config.load()
+        cfg["taps"].append({"url": "https://github.com/x/y"})
+        config.save(cfg)
+        boost("untap", "fixture-tap", "-f")
+        assert config.load()["taps"] == [{"url": "https://github.com/x/y"}]
 
     def test_garbage_spec_rc1(self, boost, sandbox):
         r = boost("tap", "@@@garbage@@@", expect=1)
