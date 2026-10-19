@@ -79,12 +79,15 @@ def _skip_if_already_tapped(spec: str) -> bool:
     errored (exit 1), the second printed this muted line and exited 0. A
     spec that fails to parse is not "already tapped" — it falls through so
     the ordinary `registry.add` call raises its usual, more specific error.
+    Nor is a *different* repository under the same name: it falls through
+    too, and `registry.add` refuses it naming the URL that holds the name.
     """
     try:
-        name, _url = registry.parse_spec(spec)
+        name, url = registry.parse_spec(spec)
     except BoostError:
         return False
-    if not registry.is_tapped(name):
+    if not any(t.name == name and registry.same_source(t.url, url)
+               for t in registry.list_taps()):
         return False
     out.info(out.role("%s already tapped" % name, "muted"))
     return True
