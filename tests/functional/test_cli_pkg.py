@@ -1848,6 +1848,55 @@ class TestSnapshot:
         link = paths.home() / ".claude" / "skills" / "brainstorming"
         assert link.is_symlink() and link.exists()
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+    def test_symlinked_store_entry_round_trips(self, boost, installed,
+                                               tmp_path):
+        # Regression: a symlinked store child was archived as an absolute
+        # link; restore emptied the store, then the data filter refused the
+        # link mid-extract — every installed skill gone, rc 70.
+        boost("install", "tdd-workflow")
+        dev = tmp_path / "snap-devskill"
+        dev.mkdir()
+        (dev / "SKILL.md").write_text("---\nname: mydev\n---\n# mydev\n",
+                                      encoding="utf-8")
+        (paths.store_dir() / "mydev").symlink_to(dev)
+        (paths.store_dir() / "gone").symlink_to(tmp_path / "snap-nowhere")
+        r = boost("snapshot", "save", "withlink")
+        assert "archived the contents of symlinked mydev" in r.out
+        assert "skipped dangling symlink gone" in r.out
+        snap_id = re.search(r"saved (snap-[\w-]+)", r.out).group(1)
+        boost("uninstall", "tdd-workflow")
+        r = boost("snapshot", "restore", snap_id, "--yes")
+        # sync records the hand-made skill the store now holds a copy of
+        assert "restored %s (3 skills)" % snap_id in r.out
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert (paths.store_dir() / "tdd-workflow" / "SKILL.md").is_file()
+        mydev = paths.store_dir() / "mydev"
+        assert not mydev.is_symlink() and (mydev / "SKILL.md").is_file()
+        assert not os.path.lexists(paths.store_dir() / "gone")
+        assert dev.is_dir()   # the link's target is never touched
+        leftovers = [p.name for p in paths.store_dir().resolve().parent.iterdir()
+                     if p.name.startswith(".boost-restore")]
+        assert leftovers == []
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+    def test_refused_archive_leaves_store_intact(self, boost, installed):
+        # A snapshot the data filter refuses (an absolute link, as old saves
+        # wrote) must fail before anything in the store is removed.
+        paths.ensure_dirs()
+        bad = paths.snapshots_dir() / "snap-abslink.tar.gz"
+        with tarfile.open(str(bad), "w:gz") as tf:
+            ti = tarfile.TarInfo("mydev")
+            ti.type = tarfile.SYMTYPE
+            ti.linkname = "/etc"
+            tf.addfile(ti)
+        r = boost("snapshot", "restore", "abslink", "--yes", expect=1)
+        assert "snapshot snap-abslink cannot be restored" in r.err
+        assert "the store was left untouched" in r.err
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert _lock()["brainstorming"]["version"] == "1.4.0"
+        assert not os.path.lexists(paths.store_dir() / "mydev")
+
     def test_corrupt_archive_rc1_store_intact(self, boost, installed):
         paths.ensure_dirs()
         (paths.snapshots_dir() / "snap-bad.tar.gz").write_bytes(b"not a tar")
