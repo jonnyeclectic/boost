@@ -277,6 +277,15 @@ class TestInstallVia:
         ev = journal.events(action="install")[0]
         assert ev["via"] == "protocol"
 
+    def test_project_skill_install_records_tap_url(self, tap, entry, tmp_path):
+        from boost_cli.core import projectlock
+        repo = tmp_path / "proj-tapurl"
+        (repo / ".git").mkdir(parents=True)
+        store.install(entry, scope="project", base=str(repo))
+        rec = projectlock.get_skill(repo, "brainstorming")
+        assert rec is not None
+        assert rec["tap_url"] == tap.url
+
     def test_project_skill_install_records_via(self, entry, tmp_path):
         repo = tmp_path / "proj"
         (repo / ".git").mkdir(parents=True)

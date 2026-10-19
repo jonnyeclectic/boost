@@ -32,6 +32,8 @@ def fake_clone(monkeypatch):
 
     def clone(url, dest, sparse=True):
         dest.mkdir(parents=True, exist_ok=True)
+        # A real clone has `.git`; without it `update` re-clones the dir.
+        (dest / ".git").mkdir(exist_ok=True)
         (dest / "SKILL.md").write_text("---\nname: x\n---\nb\n", encoding="utf-8")
 
     def checkout(repo, sha):
