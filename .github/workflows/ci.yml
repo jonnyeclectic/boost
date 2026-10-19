@@ -553,7 +553,7 @@ jobs:
     # because its figures are a snapshot of the pack and the weights as they
     # stood then. The retraction at the end of this block is NOT part of that
     # snapshot and is dated separately. For what the cap is worth against the
-    # pack committed today, run `scripts/mutation_shards.py plan --shards 12
+    # pack committed today, run `scripts/mutation_shards.py plan --shards 16
     # --explain --timeout-minutes 75` rather than trust a number restated here.
     #
     # The split was never the problem — the runners were. The committed pack
@@ -640,7 +640,7 @@ jobs:
     # shards (dd416340: 54.2 predicted, 63.1 worst). The width stands: 74% is
     # measured and inside the 80% gate. What does not stand is the margin the
     # planner prints. On #1032's weights -- the pack as committed when this
-    # was measured -- `plan --shards 12` said 25.2 median and a 48.0 tail, 64%
+    # was measured -- `plan` at twelve shards said 25.2 median and a 48.0 tail, 64%
     # of the cap, so that pack, asked about the run its own weights were
     # timed from, under-predicted that job by 7.8 minutes. (#1038 has since
     # re-timed them; `plan` now prints 26.2 / 50.1, 67%. The observed figures
@@ -683,7 +683,7 @@ jobs:
     # where that purchase is worth making.
     #
     # Figures re-derived 2026-10-05 against the pack committed that day, and
-    # they go stale on the next weights refresh: run `plan --shards 12
+    # they go stale on the next weights refresh: run `plan --shards 16
     # --explain --timeout-minutes 75` for the live ones rather than trusting
     # these, and read them next to the observed 34.6 / 55.8 rather than alone.
     #
@@ -713,7 +713,7 @@ jobs:
       # rerun of the whole matrix to learn anything.
       fail-fast: false
       matrix:
-        index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
@@ -774,11 +774,11 @@ jobs:
           .venv/bin/pip -q install -r requirements/mutation-tools.txt
           # sqlite-vec so dense.py's mutants are covered by the dense tests
           .venv/bin/pip -q install sqlite-vec || true
-      - name: mutate shard ${{ matrix.index }} of 12
+      - name: mutate shard ${{ matrix.index }} of 16
         env:
           SHARD: ${{ matrix.index }}
         run: |
-          PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 12 --index "$SHARD")"
+          PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 16 --index "$SHARD")"
           echo "shard $SHARD patterns: $PATTERNS"
           # `mutmut run` with no arguments runs EVERY mutant. An empty plan must
           # therefore run nothing at all, not silently become a full 26-minute
@@ -879,7 +879,7 @@ jobs:
         # partial result: mutmut counts an unrun mutant as "not checked" and the
         # gate divides by total, so silently accepting one would quietly lower
         # the score instead of failing.
-        run: python3 scripts/mutation_shards.py merge --shards 12 --into mutants --source shard-results
+        run: python3 scripts/mutation_shards.py merge --shards 16 --into mutants --source shard-results
       - name: mutation strength gate (>=80% killed)
         if: needs.mutation-scope.outputs.relevant == 'true'
         run: .venv/bin/python scripts/mutation_gate.py --min 80
