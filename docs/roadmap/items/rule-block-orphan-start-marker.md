@@ -28,9 +28,13 @@ everything from the orphan <em>start</em> to the new block's <em>end</em>, becau
 marker, its first end marker, and no second start between them. <code>merge_block</code>,
 <code>read_block</code> and <code>strip_block</code> all go through it.
 <code>require_well_formed</code> tells "absent" from "damaged" and refuses the damaged case with
-the file named and the marker to restore. Install checks every context file before the first
-write, because <code>GEMINI.md</code> is written after Cursor's rules file, so a refusal from
-inside the loop left that file on disk with no lock row to remove it. Uninstall refuses before the
+the file named and the marker to restore. It checks <em>every</em> start marker for the rule, not
+just the first: a clean block followed by a stray start passed, strip_block removed the clean one,
+and uninstall dropped the lock row with the stray start still in the file. (A second complete block
+is not refused.) Install checks every context file before the first write, containment first under
+project scope, because <code>GEMINI.md</code> is written after Cursor's rules file, so a refusal from
+inside the loop left that file on disk with no lock row to remove it. <code>release</code> takes the same pre-check
+before restoring anything from a quarantine stash. Uninstall refuses before the
 lock is touched, the same all-or-nothing contract as a locked agent dir. Re-running the repro: uninstall,
 reinstall and <code>install --force</code> each exit 1 with the hint, the lock row survives, and
 <code>keep me</code> is still there. <code>boost doctor</code> still tests for the start marker as

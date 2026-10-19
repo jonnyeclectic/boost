@@ -4486,6 +4486,65 @@ class TestDamagedRuleBlockRefuses:
         assert lockfile.get_rule("team-conventions") is None
 
 
+class TestDamagedRuleBlockRefusesEverywhere:
+    """The follow-ups to TestDamagedRuleBlockRefuses: a stray start after an
+    intact block, release's own write loop, and the scope guard's order."""
+
+    STRAY = "<!-- boost:rule:team-conventions start -->\n# My own notes\n"
+
+    def test_uninstall_refuses_a_stray_start_after_a_clean_block(self, tap):
+        store.install(_rule_entry(tap))
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        claude_md.write_text(claude_md.read_text(encoding="utf-8")
+                             + "\n" + self.STRAY, encoding="utf-8")
+        before = claude_md.read_text(encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("team-conventions")
+        assert str(claude_md) in ei.value.message
+        assert claude_md.read_text(encoding="utf-8") == before
+        assert lockfile.get_rule("team-conventions") is not None
+        assert (paths.home() / ".windsurf" / "rules"
+                / "team-conventions.md").exists()
+
+    def test_release_refuses_before_restoring_any_file(self, tap):
+        # claude-code is restored before gemini, so a refusal from inside the
+        # loop would leave CLAUDE.md written and the entry still quarantined.
+        store.install(_rule_entry(tap))
+        store.quarantine_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        assert not claude_md.exists()
+        gemini_md = paths.home() / ".gemini" / "GEMINI.md"
+        gemini_md.parent.mkdir(parents=True, exist_ok=True)
+        gemini_md.write_text(self.STRAY, encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            store.release_materialized(
+                "rule", "team-conventions",
+                lockfile.get_rule("team-conventions"))
+        assert str(gemini_md) in ei.value.message
+        assert not claude_md.exists()
+        assert gemini_md.read_text(encoding="utf-8") == self.STRAY
+        lk = lockfile.get_rule("team-conventions")
+        assert lk["quarantined"] is True
+        assert lk["quarantine_stash"]
+
+    def test_project_scope_checks_containment_before_reading(self, tap,
+                                                             tmp_path):
+        # An escaping CLAUDE.local.md must be refused as an escape, not read
+        # through: the damaged-block message would name a file outside the
+        # repo and send the user to repair it.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside.md"
+        outside.write_text(self.STRAY, encoding="utf-8")
+        (repo / "CLAUDE.local.md").symlink_to(outside)
+        with pytest.raises(BoostError) as ei:
+            store.install(_rule_entry(tap), scope="project", base=str(repo))
+        assert "outside this project" in ei.value.message
+        assert outside.read_text(encoding="utf-8") == self.STRAY
+        assert not (repo / ".cursor").exists()
+
+
 class TestSyncSeesLinksOutsideTheDeclaredScope:
     """The blind spot between sync's two sweeps.
 

@@ -2350,6 +2350,10 @@ def _install_rule(entry: dict, force: bool = False,
         mode, path = rules.rule_target(
             agent, skills_dir, name, base=resolved_base,
             dotdir=agents.project_dotdir(agent, skills_dir))
+        # Containment first: reading through an escaping symlink would name
+        # a file outside the repo in the refusal and send the user to fix it.
+        if resolved_base is not None:
+            scopes.ensure_in_base(resolved_base, path)
         if mode == rules.MODE_CLAUDE:
             try:
                 text = path.read_text(encoding="utf-8")
@@ -2705,6 +2709,18 @@ def release_materialized(kind: str, name: str, entry: dict,
     # the way `reinstall` did.
     _refuse_stranded_base(entry.get("scope", scopes.SCOPE_USER),
                           entry.get("base"), kind, name)
+    # A damaged block in any context file refuses the release before the
+    # first restore — merge_block would refuse it mid-loop, after earlier
+    # agents' files were written with the entry still marked quarantined.
+    for m in entry.get("quarantine_stash") or []:
+        if m.get("content") is None or m.get("mode") != rules.MODE_CLAUDE:
+            continue
+        path = Path(m.get("path", ""))
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue  # absent: the restore writes it fresh
+        rules.require_well_formed(text, name, path)
     restored: list[str] = []
     for m in entry.get("quarantine_stash") or []:
         content = m.get("content")

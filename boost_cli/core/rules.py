@@ -159,14 +159,25 @@ def block_span(text: str, name: str) -> tuple[int, int] | None:
 
 def require_well_formed(text: str, name: str,
                         path: Path | None = None) -> None:
-    """Raise if ``text`` holds a start marker for ``name`` but no clean block.
+    """Raise if any start marker for ``name`` in ``text`` is not a clean block.
 
     The refusal every write and removal takes before touching the file:
     guessing where a damaged block ends is guessing which of the user's lines
-    to delete.
+    to delete. *Every* start counts, not just the first: a clean block with a
+    stray start below it passes `block_span`, so strip_block removed the clean
+    one and uninstall dropped the lock row while the stray start stayed.
+    Two clean blocks are not refused — each start has its own end.
     """
     start, end = markers(name)
-    if start in text and block_span(text, name) is None:
+    pos = 0
+    damaged = False
+    while (i := text.find(start, pos)) != -1:
+        j = text.find(end, i + len(start))
+        if j == -1 or text.find(start, i + len(start), j) != -1:
+            damaged = True
+            break
+        pos = j + len(end)
+    if damaged:
         where = " in %s" % path if path is not None else ""
         raise BoostError(
             "rule %s's managed block%s has no matching end marker, so boost "

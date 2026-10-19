@@ -338,6 +338,30 @@ class TestMalformedBlock:
         rules.require_well_formed("# notes\n", "r")
         rules.require_well_formed(rules.merge_block("", "r", "B"), "r")
 
+    CLEAN = "<!-- boost:rule:r start -->\nB\n<!-- boost:rule:r end -->\n"
+    STRAY = "<!-- boost:rule:r start -->\n# My own notes\n"
+
+    @pytest.mark.parametrize("text", [
+        CLEAN + "\n" + STRAY,          # a clean block, then a stray start
+        CLEAN + CLEAN + STRAY,          # the stray one after a second block
+        "head\n" + CLEAN + "mid\n" + STRAY + "tail\n",
+    ])
+    def test_a_stray_start_after_a_clean_block_refuses(self, text):
+        # strip_block removes only the first block, so uninstall would drop
+        # the lock row while the stray start stays in the file.
+        assert rules.block_span(text, "r") is not None
+        with pytest.raises(BoostError) as ei:
+            rules.require_well_formed(text, "r")
+        assert ei.value.message.startswith("rule r's managed block has no")
+
+    def test_two_clean_blocks_pass(self):
+        rules.require_well_formed(self.CLEAN + self.CLEAN, "r")
+        rules.require_well_formed(self.CLEAN + "x\n" + self.CLEAN, "r")
+
+    def test_another_rules_stray_start_does_not_count(self):
+        rules.require_well_formed(
+            self.CLEAN + "<!-- boost:rule:other start -->\n", "r")
+
     def test_read_and_strip_decline_the_doubled_shape(self):
         assert rules.read_block(self.DOUBLED, "r") is None
         assert rules.strip_block(self.DOUBLED, "r") == self.DOUBLED
