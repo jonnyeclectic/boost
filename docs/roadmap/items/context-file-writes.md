@@ -31,3 +31,12 @@ write through a committed link that points outside the repo. A linked file that 
 boost's block is emptied, not unlinked. Uninstall now de-duplicates on the resolved file, so
 <code>GEMINI.md -&gt; AGENTS.md</code> counts as one file. <code>atomic_write_text</code> is
 unchanged, because the lock and config files depend on its private, replace-the-path behaviour.
+
+<b>A link out of the repo is refused before the first change, not part-way through.</b> The
+containment check first ran inside the write, so it fired mid-loop. A project uninstall whose
+<code>GEMINI.md</code> had been re-pointed outside the repo deleted <code>CLAUDE.local.md</code>
+and the Cursor and Windsurf rule files, then raised at <code>GEMINI.md</code>, leaving
+<code>AGENTS.md</code> holding the block and the lock row in place. Quarantine and release had
+the same mid-loop refusal. The new <code>util.user_file_target</code> resolves and checks a path
+without writing it. Uninstall, quarantine and release now call it on every file they will
+write through, before they change any file or persist the quarantine stash.

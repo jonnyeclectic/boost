@@ -282,6 +282,22 @@ def current_umask() -> int:
     return mask
 
 
+def user_file_target(path: Path, base=None) -> Path:
+    """The file :func:`write_user_file` would write for ``path``, checked.
+
+    A symlink resolves through every hop; a plain path is itself. With
+    ``base``, a target outside the repo raises :class:`BoostError` here, so a
+    caller changing several files can ask about every one before it changes
+    the first: raising at the write itself left an uninstall half-applied.
+    """
+    path = Path(path)
+    target = Path(os.path.realpath(path)) if path.is_symlink() else path
+    if base is not None:
+        from . import scopes  # local: scopes -> projectlock -> util
+        scopes.ensure_in_base(base, target)
+    return target
+
+
 def write_user_file(path: Path, text: str, base=None) -> Path:
     """Atomically rewrite a file the *user* owns, keeping its link and mode.
 
@@ -303,11 +319,7 @@ def write_user_file(path: Path, text: str, base=None) -> Path:
     boundary :func:`scopes.ensure_in_base` holds for every project write.
     Returns the path actually written.
     """
-    path = Path(path)
-    target = Path(os.path.realpath(path)) if path.is_symlink() else path
-    if base is not None:
-        from . import scopes  # local: scopes -> projectlock -> util
-        scopes.ensure_in_base(base, target)
+    target = user_file_target(path, base)
     try:
         mode = stat.S_IMODE(target.stat().st_mode)
     except FileNotFoundError:

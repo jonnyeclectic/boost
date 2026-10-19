@@ -2496,9 +2496,14 @@ def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]],
         # The leaf resolves too: `GEMINI.md -> AGENTS.md` is one file.
         once.setdefault(Path(os.path.realpath(path.parent / path.name)),
                         (path, text))
-    for path, _text in once.values():
+    for path, text in once.values():
         if not os.access(str(path.parent), os.W_OK):
             raise _removal_refused(name, path)
+        if text or path.is_symlink():
+            # A committed link re-pointed out of the repo is refused here,
+            # before any file changes, not by the write part-way through.
+            with _refused_removal(name, path):
+                util.user_file_target(path, base)
     for path, text in once.values():
         with _refused_removal(name, path):
             if text or path.is_symlink():
@@ -2645,6 +2650,12 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
                 # rather than re-appending at end-of-file.
                 full_text = path.read_text(encoding="utf-8")
                 content = rules.read_block(full_text, name)
+                if content is not None:
+                    # A file the removal will rewrite is checked against the
+                    # repo now, before the stash is persisted or any file
+                    # changes: refused by the write itself, it left earlier
+                    # agents' files gone mid-loop.
+                    util.user_file_target(path, entry.get("base"))
         elif path.is_file():
             content = path.read_text(encoding="utf-8")
         if content is None:
@@ -2726,6 +2737,9 @@ def release_materialized(kind: str, name: str, entry: dict,
         if m.get("content") is None or m.get("mode") != rules.MODE_CLAUDE:
             continue
         path = Path(m.get("path", ""))
+        # And a link out of the repo, which the write would refuse just as
+        # late.
+        util.user_file_target(path, entry.get("base"))
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:

@@ -16,6 +16,7 @@ import os
 import shutil
 import stat
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -141,6 +142,27 @@ class TestWriteUserFile:
         (repo / "GEMINI.md").symlink_to("AGENTS.md")
         util.write_user_file(repo / "GEMINI.md", "b", base=repo)
         assert (repo / "AGENTS.md").read_text(encoding="utf-8") == "b"
+
+    def test_user_file_target_resolves_checks_and_writes_nothing(
+            self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        plain = repo / "AGENTS.md"
+        plain.write_text("a", encoding="utf-8")
+        link = repo / "GEMINI.md"
+        link.symlink_to("AGENTS.md")
+        assert util.user_file_target(plain, base=repo) == plain
+        assert str(util.user_file_target(link, base=repo)) == \
+            os.path.realpath(plain)
+        outside = tmp_path / "out.md"
+        escape = repo / "CLAUDE.local.md"
+        escape.symlink_to(outside)
+        # Without a base, nothing is checked: user scope writes anywhere.
+        assert str(util.user_file_target(escape)) == os.path.realpath(outside)
+        with pytest.raises(BoostError, match="resolves outside this project"):
+            util.user_file_target(escape, base=repo)
+        assert not outside.exists()
+        assert plain.read_text(encoding="utf-8") == "a"
 
     def test_boost_owned_writer_is_unchanged(self, tmp_path):
         # atomic_write_text keeps its own contract: private, path replaced.
@@ -280,7 +302,72 @@ class TestProjectScopeLinkedContextFile:
         gemini = repo / "GEMINI.md"
         gemini.unlink()
         gemini.symlink_to(outside)
+        others = self._others(repo, gemini)
         with pytest.raises(BoostError, match="resolves outside this project"):
             store.uninstall(RULE)
         assert outside.read_text(encoding="utf-8") == before
         assert gemini.is_symlink()
+        # Refused before the first change: nothing else was removed, and the
+        # lock still names every materialization.
+        assert self._others(repo, gemini) == others
+        assert lockfile.get_rule(RULE) is not None
+
+    @staticmethod
+    def _others(repo, skip):
+        """Every recorded materialization but ``skip``, with its text."""
+        got = {}
+        for m in lockfile.get_rule(RULE)["materializations"]:
+            path = m["path"]
+            if path == str(skip):
+                continue
+            got[path] = Path(path).read_text(encoding="utf-8")
+        assert len(got) >= 3
+        assert all(BLOCK_START in t or "Always write tests first." in t
+                   for t in got.values())
+        return got
+
+    def _escape(self, repo, tmp_path, text):
+        """Re-point the committed GEMINI.md link out of the repo."""
+        outside = tmp_path / "outside.md"
+        outside.write_text(text, encoding="utf-8")
+        gemini = repo / "GEMINI.md"
+        gemini.unlink()
+        gemini.symlink_to(outside)
+        return gemini, outside
+
+    def test_quarantine_refuses_a_link_that_now_escapes(self, tap, tmp_path):
+        repo, agents_md = self._repo(tmp_path)
+        store.install(_rule_entry(tap), scope="project", base=str(repo))
+        # The far side holds our block too, so quarantine would strip it.
+        before = agents_md.read_text(encoding="utf-8")
+        gemini, outside = self._escape(repo, tmp_path, before)
+        others = self._others(repo, gemini)
+        with pytest.raises(BoostError, match="resolves outside this project"):
+            store.quarantine_materialized("rule", RULE,
+                                          lockfile.get_rule(RULE))
+        assert outside.read_text(encoding="utf-8") == before
+        assert self._others(repo, gemini) == others
+        entry = lockfile.get_rule(RULE)
+        assert not entry.get("quarantined")
+        assert "quarantine_stash" not in entry
+
+    def test_release_refuses_a_link_that_now_escapes(self, tap, tmp_path):
+        repo, agents_md = self._repo(tmp_path)
+        store.install(_rule_entry(tap), scope="project", base=str(repo))
+        store.quarantine_materialized("rule", RULE, lockfile.get_rule(RULE))
+        held = {m["path"]: Path(m["path"]).read_text(encoding="utf-8")
+                for m in lockfile.get_rule(RULE)["materializations"]
+                if os.path.exists(m["path"])}
+        assert all(BLOCK_START not in t for t in held.values())
+        gemini, outside = self._escape(repo, tmp_path,
+                                       "someone else's file\n")
+        held.pop(str(gemini), None)
+        with pytest.raises(BoostError, match="resolves outside this project"):
+            store.release_materialized("rule", RULE, lockfile.get_rule(RULE))
+        assert outside.read_text(encoding="utf-8") == "someone else's file\n"
+        now = {m["path"]: Path(m["path"]).read_text(encoding="utf-8")
+               for m in lockfile.get_rule(RULE)["materializations"]
+               if m["path"] != str(gemini) and os.path.exists(m["path"])}
+        assert now == held
+        assert agents_md.read_text(encoding="utf-8") == "# Team agent guide\n"
+        assert lockfile.get_rule(RULE)["quarantined"] is True
