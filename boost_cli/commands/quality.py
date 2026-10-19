@@ -197,10 +197,12 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
 
     Two things this deliberately does NOT do.
 
-    **It does not look in a native-store agent's dir.** `linking_agents`, not
-    `enabled_agents`: boost never links into `~/.gemini/skills`, so anything
+    **It does not look in a native-store agent's dir.** `unlinking_agents`,
+    not `known_agents`: boost never links into `~/.gemini/skills`, so anything
     dangling there belongs to someone else and is none of this command's
-    business. The rest of `cmd_heal` already had this right.
+    business. A *disabled* agent's dir is looked in: boost linked there while
+    it was enabled, and a link it left behind still dangles where that agent
+    reads.
 
     **It does not report a link boost did not create as ours.** `heal` deletes
     what this returns first, and a broken link is not necessarily garbage — a
@@ -210,7 +212,7 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
     """
     ours: list[Path] = []
     theirs: list[Path] = []
-    for adir in agents.linking_agents().values():
+    for adir in agents.unlinking_agents().values():
         # ``os.path``: ``Path.is_dir`` raises under a dotdir with no search
         # bit on Python 3.12 and 3.13, and doctor and heal exited 70 there.
         if not os.path.isdir(adir):  # noqa: FURB146
@@ -544,6 +546,13 @@ def cmd_doctor(argv):
     # skipped check that printed nothing would read as a passed one.
     agent_errs = agents.check()
     agents_ok = not agent_errs
+    # A row with no dir is skipped rather than refused, so it leaves the other
+    # checks on; it is still a broken config, and nothing else names it.
+    for aname in agents.dirless(claim=True):
+        bad("agent-config", "agents.%s has no dir, so boost skips it — set one "
+            "with `boost config set agents.%s.dir <dir>`, or remove the row "
+            "with `boost config unset agents.%s`" % (aname, aname, aname),
+            wrap=True)
     for aname, err in agent_errs:
         key = "agents.%s.dir" % aname
         bad("agent-config", "%s: %s — %s, or set a path with `boost config set "

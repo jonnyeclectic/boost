@@ -759,7 +759,9 @@ def unlink_agents(name: str) -> list[str]:
     removes the skill from their view.
     """
     removed = []
-    for agent, adir in agents.linking_agents().items():
+    # Disabled agents too (:func:`agents.unlinking_agents`): a link left in
+    # one dangles into the store dir uninstall deletes next.
+    for agent, adir in agents.unlinking_agents().items():
         link = adir / name
         if is_boost_link(link):
             link.unlink()
@@ -3528,8 +3530,8 @@ def _check_links_removable(name: str, entry: dict) -> None:
     """
     linked = entry.get("agents") or ()
     recorded = ({*linked, *(entry.get("refused_agents") or ())} if linked
-                else set(agents.linking_agents()))
-    for agent, adir in agents.linking_agents().items():
+                else set(agents.unlinking_agents()))
+    for agent, adir in agents.unlinking_agents().items():
         link = adir / name
         try:
             os.lstat(link)
@@ -4436,8 +4438,9 @@ def sync_plan() -> dict[str, list]:
     # `points_into_store`, which such a link passes. `boost sync` would have
     # deleted another tool's files without `--prune-duplicates` ever being
     # typed. Same "topology, not ownership" line as duplicate_discovery, which
-    # reports those entries and removes nothing.
-    for adir in agents.linking_agents().values():
+    # reports those entries and removes nothing. Disabled agents are swept
+    # too (`unlinking_agents`): boost linked there while they were enabled.
+    for adir in agents.unlinking_agents().values():
         if not os.path.isdir(adir):  # noqa: FURB146
             continue
         for link in adir.iterdir():

@@ -3,22 +3,75 @@
 """AI agent targets: where installed skills get symlinked."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, paths
+from . import config, output, paths
 
 DISPLAY = {"claude-code": "Claude Code", "windsurf": "Windsurf",
            "cursor": "Cursor", "gemini": "Gemini CLI",
            "antigravity": "Antigravity CLI", "codex": "Codex"}
 
 
+# Rows already warned about in this process: known_agents runs dozens of
+# times per command, and one warning per row is the message.
+_WARNED_DIRLESS: set[str] = set()
+
+
+def _row_dir(spec: dict) -> Path | None:
+    """The agent row's expanded ``dir``, or None when it names no directory.
+
+    ``Path("")`` is ``.``: a row with no ``dir`` (a mistyped
+    ``agents.curosr.enabled``, or an agent enabled before its dir was set)
+    used to resolve to the working directory, so `boost install` symlinked the
+    skill into whatever directory it ran from and called that agent linked.
+    Raises what :func:`paths.expand` raises for an unset ``${VAR}``.
+    """
+    raw = str(spec.get("dir") or "").strip()
+    if not raw:
+        return None
+    p = paths.expand(raw)
+    return None if p == Path() else p
+
+
+def dirless(claim: bool = False) -> list[str]:
+    """Configured agents whose row names no directory, in ``config.json`` order.
+
+    :func:`known_agents` leaves these out, with a warning, rather than resolve
+    them to the cwd. ``claim`` is for a caller that reports them itself
+    (``boost doctor``), so the warning is not printed beside its own line.
+    """
+    names = []
+    for name, spec in (config.get("agents") or {}).items():
+        try:
+            if _row_dir(spec) is None:
+                names.append(name)
+        except BoostError:
+            continue  # an unresolvable dir is check()'s to report
+    if claim:
+        _WARNED_DIRLESS.update(names)
+    return names
+
+
 def known_agents() -> dict[str, dict]:
-    """{name: {"dir": Path, "enabled": bool, "links_skills": bool}} per agent."""
+    """{name: {"dir": Path, "enabled": bool, "links_skills": bool}} per agent.
+
+    A row with no ``dir`` is skipped, with a warning (:func:`_row_dir`).
+    """
     out = {}
     for name, spec in (config.get("agents") or {}).items():
+        adir = _row_dir(spec)
+        if adir is None:
+            if name not in _WARNED_DIRLESS:
+                _WARNED_DIRLESS.add(name)
+                output.warn("agents.%s has no dir, so boost skips it — set one "
+                            "with `boost config set agents.%s.dir <dir>`, or "
+                            "remove the row with `boost config unset agents.%s`"
+                            % (name, name, name), stream=sys.stderr, wrap=True)
+            continue
         out[name] = {
-            "dir": paths.expand(str(spec.get("dir", ""))),
+            "dir": adir,
             "enabled": bool(spec.get("enabled", True)),
             # Defaults True: an agent only reads the canonical store if it
             # implements the Agent Skills standard's `~/.agents/skills` path,
@@ -67,7 +120,7 @@ def check() -> list[tuple[str, BoostError]]:
     bad = []
     for name, spec in (config.get("agents") or {}).items():
         try:
-            paths.expand(str(spec.get("dir", "")))
+            _row_dir(spec)
         except BoostError as e:
             bad.append((name, e))
     return bad
@@ -122,8 +175,9 @@ def linking_agents() -> dict[str, Path]:
     :func:`dedupes_by_path`), so there the cost is redundant work rather than
     noise; not linking is right either way.
 
-    So this is the set to iterate for anything symlink-shaped (link, unlink,
-    stale-link sweeps, coverage checks) — including the sweep in
+    So this is the set to iterate for anything symlink-shaped that *writes*
+    (link, coverage checks); unlink and the stale-link sweeps take the wider
+    :func:`unlinking_agents`, which adds disabled agents and nothing else — including the sweep in
     :func:`store.sync_plan`, whose only ownership test is ``points_into_store``:
     over a native-store agent's skills dir it would delete links boost never
     created. What materializes *into* an agent's dotdir is a different set again
@@ -132,6 +186,20 @@ def linking_agents() -> dict[str, Path]:
     """
     return {n: s["dir"] for n, s in known_agents().items()
             if s["enabled"] and s["links_skills"]}
+
+
+def unlinking_agents() -> dict[str, Path]:
+    """Every agent that links skills, *enabled or not*: the set to remove from.
+
+    :func:`linking_agents` is the set boost writes links into. Removal and the
+    broken-link sweeps need the wider one, because disabling an agent stops
+    new links without taking the old ones away: uninstalling a skill while
+    cursor was disabled left ``~/.cursor/skills/<name>`` dangling into the
+    deleted store dir, where Cursor still read it and doctor never looked.
+    A native-store agent (``links_skills: false``) stays out, for the reason
+    :func:`linking_agents` gives — boost never linked there.
+    """
+    return {n: s["dir"] for n, s in known_agents().items() if s["links_skills"]}
 
 
 def project_agents() -> dict[str, Path]:
