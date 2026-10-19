@@ -235,3 +235,146 @@ class TestGeminiArgs:
             pytest.skip("gemini is not an enabled workflow agent here")
         assert toml[0].read_text(encoding="utf-8") \
             == 'prompt = "Run with {{args}} here."\n'
+
+
+def _foreign_install(tap, name):
+    """The review's repro: the user's own command at claude-code's path, then
+    a workflow of that name installed through the CLI. Returns the path."""
+    from boost_cli.core import catalog
+    mine = _claude("commands", name)
+    mine.parent.mkdir(parents=True, exist_ok=True)
+    mine.write_text("MY OWN %s\n" % name, encoding="utf-8")
+    _wf(tap, name, "commands/%s.md" % name)
+    catalog.rebuild_tap(tap)
+    assert pkg.cmd_install([name, "--no-as-skill"]) == 0
+    return mine
+
+
+def _agents(name):
+    return sorted(m["agent"] for m in _rows(name) if m.get("agent"))
+
+
+class TestForeignStaysInScope:
+    """A foreign path is recorded apart, so the agent stays in scope and the
+    user's file is still never boost's."""
+
+    def test_recorded_apart_and_never_owned(self, tap):
+        mine = _foreign_install(tap, "fa")
+        entry = lockfile.get_workflow("fa")
+        assert entry["foreign"] == [{"agent": "claude-code",
+                                     "slot": "commands", "path": str(mine)}]
+        assert str(mine) not in [m["path"] for m in _rows("fa")]
+        assert "claude-code" in store.preserved_agent_scope(None, entry)
+        # With the file still there, no command writes over it or calls it a
+        # fault, and the record survives each re-install.
+        assert store.sync_plan()["missing_materializations"] == []
+        assert pkg.cmd_reinstall(["fa"]) == 0
+        assert pkg.cmd_sync([]) == 0
+        assert pkg.cmd_install(["fa", "--force"]) == 0
+        assert mine.read_text(encoding="utf-8") == "MY OWN fa\n"
+        assert "claude-code" not in _agents("fa")
+        assert lockfile.get_workflow("fa")["foreign"][0]["path"] == str(mine)
+        # Quarantine and uninstall never touch it either.
+        store.quarantine_materialized("workflow", "fa",
+                                      lockfile.get_workflow("fa"))
+        assert mine.read_text(encoding="utf-8") == "MY OWN fa\n"
+        store.release_materialized("workflow", "fa",
+                                   lockfile.get_workflow("fa"))
+        res = store.uninstall("fa")
+        assert mine.read_text(encoding="utf-8") == "MY OWN fa\n"
+        assert "claude-code" not in res.get("removed", [])
+
+    @pytest.mark.parametrize("how", ["sync", "reinstall", "force"])
+    def test_moved_aside_the_next_run_writes_it(self, tap, how):
+        name = "fb-%s" % how
+        mine = _foreign_install(tap, name)
+        others = _agents(name)
+        mine.rename(mine.with_suffix(".bak"))
+        assert store.sync_plan()["missing_materializations"] == [
+            ("workflow", name)]
+        argv = {"sync": (pkg.cmd_sync, []),
+                "reinstall": (pkg.cmd_reinstall, [name]),
+                "force": (pkg.cmd_install, [name, "--force"])}[how]
+        assert argv[0](argv[1]) == 0
+        assert mine.read_text(encoding="utf-8") == CMD
+        assert _agents(name) == sorted([*others, "claude-code"])
+        assert {"agent": "claude-code", "slot": "commands", "path": str(mine),
+                "sha256": _sha(CMD)} in _rows(name)
+        assert "foreign" not in lockfile.get_workflow(name)
+        assert store.sync_plan()["missing_materializations"] == []
+
+    def test_doctor_names_a_freed_path(self, tap, capsys):
+        from boost_cli.commands import quality
+        mine = _foreign_install(tap, "fc")
+        capsys.readouterr()
+        quality.cmd_doctor([])
+        assert "fc was not written for claude-code" not in capsys.readouterr().out
+        mine.unlink()
+        quality.cmd_doctor([])
+        out = capsys.readouterr().out
+        assert "workflow fc was not written for claude-code" in out
+        assert "`boost sync`" in out
+
+    def test_the_hint_names_sync_not_install(self, tap):
+        res = store.InstallResult(name="x", dest=Path("."), kind="workflow")
+        res.foreign = [str(_claude("commands", "x"))]
+        _c, refused = pkg._skipped_agent_lines(res)
+        assert refused == [
+            "not written: ~/.claude/commands/x.md exists and is not managed "
+            "by boost — left alone; move it aside, then `boost sync` writes it"]
+
+    def test_a_narrowed_run_keeps_another_agents_record(self, tap):
+        mine = _foreign_install(tap, "fd")
+        store.install(_wf(tap, "fd", "commands/fd.md"), force=True,
+                      only_agents=["cursor"], as_skill=False)
+        assert lockfile.get_workflow("fd")["foreign"][0]["path"] == str(mine)
+
+    def test_scope_ignores_foreign_with_nothing_written(self):
+        rows = {"materializations": [],
+                "foreign": [{"agent": "claude-code", "path": "/x"}]}
+        assert store.preserved_agent_scope(None, rows) is None
+        rows["materializations"] = [{"agent": "cursor", "path": "/y"}]
+        assert store.preserved_agent_scope(None, rows) == ["cursor",
+                                                           "claude-code"]
+
+    def test_foreign_rows_and_freed(self, sandbox, tmp_path):
+        held = tmp_path / "held.md"
+        held.write_text("x", encoding="utf-8")
+        gone = tmp_path / "gone.md"
+        dangling = tmp_path / "link.md"
+        entry = {"foreign": [{"agent": "claude-code", "path": str(held)},
+                             {"agent": "claude-code", "path": str(gone)},
+                             {"agent": "", "path": str(gone)},
+                             {"agent": "claude-code"}, "junk"]}
+        assert store.foreign_rows(entry) == entry["foreign"][:2]
+        assert store.foreign_rows(None) == []
+        assert store._freed_foreign(entry) == [entry["foreign"][1]]
+        if hasattr(dangling, "symlink_to"):
+            try:
+                dangling.symlink_to(tmp_path / "nowhere")
+            except OSError:
+                return
+            entry["foreign"] = [{"agent": "claude-code", "path": str(dangling)}]
+            assert store._freed_foreign(entry) == []
+
+
+def test_freed_foreign_skips_an_agent_boost_does_not_write(sandbox, tmp_path):
+    gone = str(tmp_path / "gone.md")
+    entry = {"foreign": [{"agent": "no-such-agent", "path": gone}]}
+    assert store.foreign_rows(entry) == entry["foreign"]
+    assert store._freed_foreign(entry) == []
+
+
+def test_portable_contracts_foreign_paths(sandbox):
+    home = Path.home()
+    lock = {"skills": {}, "rules": {}, "workflows": {"w": {
+        "materializations": [{"agent": "cursor",
+                              "path": str(home / ".cursor" / "w.md")}],
+        "foreign": [{"agent": "claude-code",
+                     "path": str(home / ".claude" / "commands" / "w.md")},
+                    "junk"]}}}
+    out = lockfile.portable(lock)["workflows"]["w"]
+    assert out["foreign"][0]["path"] == "~/.claude/commands/w.md"
+    assert out["foreign"][1] == "junk"
+    assert out["materializations"][0]["path"] == "~/.cursor/w.md"
+    assert lock["workflows"]["w"]["foreign"][0]["path"].startswith(str(home))

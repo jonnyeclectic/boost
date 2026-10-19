@@ -372,10 +372,12 @@ def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
         refused += ["not written: %s, then `boost sync` writes it"
                     % store.occupied_refusal(path)
                     for path in getattr(res, "conflicts", None) or ()]
-    # A file of the user's own at a workflow's path: never replaced, and not
-    # recorded, so no later sync or uninstall touches it either.
+    # A file of the user's own at a workflow's path: never replaced, and
+    # recorded apart (`store.foreign_rows`), so uninstall never touches it and
+    # `boost sync` writes the command once the path is free. `install` again
+    # would only say "already installed".
     refused += ["not written: %s exists and is not managed by boost — left "
-                "alone; move it aside and install again to replace it"
+                "alone; move it aside, then `boost sync` writes it"
                 % _tilde(path)
                 for path in getattr(res, "foreign", None) or ()]
     return conflicts, refused

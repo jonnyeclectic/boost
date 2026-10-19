@@ -938,6 +938,17 @@ def cmd_doctor(argv):
                         "`boost reinstall %s`"
                         % (name, m.get("agent", "?"), name))
                 mat_issues += 1
+        # The user's own file held this path at install. While it is there
+        # that is their choice, not a fault; once it is gone the command is
+        # missing, and `boost sync` writes it (`store.sync_plan` agrees).
+        for r in store.foreign_rows(entry):
+            if (store.materialization_is_written("workflow", entry, r)
+                    and not os.path.lexists(r["path"])):
+                bad("workflow", "workflow %s was not written for %s: a file "
+                    "boost did not write held %s, and it is gone now — run "
+                    "`boost sync`" % (name, r["agent"], _tilde(r["path"])),
+                    wrap=True)
+                mat_issues += 1
         if mat_issues == before:
             mat_issues += _drifted("workflow", name, entry, bad)
     # A note, not an issue: the workflow works for every agent with a workflow

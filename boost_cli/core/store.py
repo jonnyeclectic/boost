@@ -70,8 +70,8 @@ class InstallResult:
     # next reinstall, where this link is meant to stay absent.
     covered: list[str] = field(default_factory=list)
     # A workflow's target paths that already held a file boost did not write
-    # (no lock row records the path). Left alone, and the agent not recorded:
-    # see :func:`_foreign_target`.
+    # (no lock row records the path). Left alone, and recorded apart from the
+    # materializations, in the entry's ``foreign``: see :func:`foreign_rows`.
     foreign: list[str] = field(default_factory=list)
     score: int = 0
     upgraded: bool = False
@@ -696,6 +696,14 @@ def preserved_agent_scope(only_agents: list[str] | None,
     if recorded is None:
         recorded = [m.get("agent")
                     for m in existing.get("materializations") or ()]
+        # A workflow agent whose path held the user's own file is kept in
+        # scope the way a refused skill link is, and for the same reason:
+        # without it the agent dropped out of every later reinstall, update
+        # and sync, so moving the file aside never brought the command back.
+        # Only beside written agents, as below: none written means every
+        # agent already, and narrowing to the foreign ones would strand it.
+        if any(recorded):
+            recorded += [r.get("agent") for r in foreign_rows(existing)]
     elif recorded:
         # A skill's `agents` is what is linked, so an agent whose dir refused
         # the link was not in it, and replaying it never retried that agent:
@@ -1616,7 +1624,7 @@ def carried_user_state(existing: dict | None) -> dict:
       without a word and ``boost verify`` went on passing.
     * **derived, rebuilt** — ``version``, ``tap``, ``source_*``, ``commit``,
       ``sha256``, ``updated_at``, ``agents``, ``refused_agents``,
-      ``source_updated_at``, ``materializations``.
+      ``source_updated_at``, ``materializations``, a workflow's ``foreign``.
     * **reset on purpose** — ``quarantined`` (the content was just put back)
       and ``sidelined_by`` (the install relinks, and ``agents`` is measured
       from disk, so keeping the flag would describe links that exist).
@@ -2916,14 +2924,47 @@ def _foreign_target(path: Path, rendered: str, owned: set) -> bool:
 
     ``force`` does not override this: ``update`` and ``reinstall`` always pass
     it (:func:`preserved_agent_scope`), so honouring it here would let every
-    update overwrite a file that a moved source now collides with. The user
-    moves their file aside and installs again. A directory at the path is not
+    update overwrite a file that a moved source now collides with. The path
+    is recorded in the entry's ``foreign`` (:func:`foreign_rows`), so once
+    the user moves their file aside `boost sync` writes it. ``owned`` is
+    built from ``materializations`` alone, so that record never makes the
+    path boost's. A directory at the path is not
     this check's business: the write raises IsADirectoryError and
     :func:`_refused_target` words it.
     """
     if str(path) in owned or not os.path.lexists(path) or occupied(path):
         return False
     return path.is_symlink() or _file_sha(path) != _text_sha(rendered)
+
+
+def foreign_rows(entry: dict | None) -> list[dict]:
+    """A workflow entry's ``foreign`` record: the agents it did not write
+    because the user's own file held the path, as ``{agent, slot, path}``.
+
+    Kept apart from ``materializations`` on purpose. Every reader of those
+    rows takes the path for boost's: uninstall deletes it, quarantine stashes
+    it, ``boost info`` and the update risk diff read it as the installed text,
+    and the next install treats it as owned and writes over it. None of that
+    may happen to the user's file. The record exists for three readers only:
+    :func:`preserved_agent_scope` keeps the agent in re-install scope,
+    :func:`sync_plan` asks for a write once the path is free, and ``boost
+    doctor`` says so.
+    """
+    return [r for r in (entry or {}).get("foreign") or ()
+            if isinstance(r, dict) and r.get("agent") and r.get("path")]
+
+
+def _freed_foreign(entry: dict) -> list[dict]:
+    """The ``foreign`` rows whose path no longer holds anything: free to write.
+
+    ``lexists``, not ``isfile``: a dangling symlink of the user's is still
+    theirs, and the install refuses it again, so flagging it would turn every
+    `boost sync` into a repair that never lands. Rows for an agent boost no
+    longer writes are left out, as for materializations.
+    """
+    return [r for r in foreign_rows(entry)
+            if not os.path.lexists(r["path"])
+            and materialization_is_written("workflow", entry, r)]
 
 
 def _retire_moved(name: str, existing: dict | None, linked: list[str],
@@ -3002,6 +3043,8 @@ def _install_workflow(entry: dict, force: bool = False,
     conflicts: list[str] = []
     refused: list[dict] = []
     foreign: list[str] = []
+    foreign_record: list[dict] = []
+    # From ``materializations`` only: a ``foreign`` row names the user's file.
     owned = {m.get("path") for m in (existing or {}).get("materializations")
              or () if not lockfile.is_skill_copy(m)}
     # workflow_agents, not materializing_agents: an agent can have a verified
@@ -3023,6 +3066,8 @@ def _install_workflow(entry: dict, force: bool = False,
         rendered = workflows.render(agent, slot, name, raw)
         if _foreign_target(path, rendered, owned):
             foreign.append(str(path))
+            foreign_record.append({"agent": agent, "slot": slot,
+                                   "path": str(path)})
             continue
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -3047,6 +3092,12 @@ def _install_workflow(entry: dict, force: bool = False,
     # As for rules: an unrecorded materialization is a live slash command that
     # `_uninstall_workflow` — driven by this list — can never remove.
     materializations.extend(_refused_materializations(existing, linked, refused))
+    # An agent this run did not try (a narrowed `--agent`) keeps its foreign
+    # row, as it keeps its materialization; one it tried is decided afresh.
+    tried = {*linked, *(r["agent"] for r in refused),
+             *(r["agent"] for r in foreign_record)}
+    foreign_record += [r for r in foreign_rows(existing)
+                       if r["agent"] not in tried]
     # Last, always: `boost info` and update's risk diff read the first
     # readable row as "the" installed text, and that is an agent's file.
     copy_row, copy_note = _skill_copy(name, slot, raw, existing, as_skill,
@@ -3082,6 +3133,7 @@ def _install_workflow(entry: dict, force: bool = False,
            else {"as_skill": existing["as_skill"]}
            if existing and isinstance(existing.get("as_skill"), bool)
            else {}),
+        **({"foreign": foreign_record} if foreign_record else {}),
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
 
@@ -4634,7 +4686,8 @@ def sync_plan() -> dict[str, list]:
             continue
         if any(m.get("unwritable") or not os.path.isfile(m.get("path", ""))
                for m in entry.get("materializations") or []
-               if materialization_is_written("workflow", entry, m)):
+               if materialization_is_written("workflow", entry, m)) \
+                or _freed_foreign(entry):
             plan["missing_materializations"].append(("workflow", name))
     return plan
 
