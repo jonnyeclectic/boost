@@ -614,6 +614,38 @@ class TestSearchCategoryFilter:
         assert "in category" not in r.out
         assert "try `boost discover zzzznothing`" in r.out
 
+    def test_a_saturated_retrieval_does_not_claim_matches_elsewhere(
+            self, boost, tapped, monkeypatch):
+        # Retrieval stopped at its cap, so the filter only saw the top k;
+        # "it matches outside that category" would assert what was never
+        # checked about the matches past the cap.
+        from boost_cli.core import rag
+
+        def fake_retrieve_any(query, k=60, **kwargs):
+            hits = [{"entry": {"name": "skill-%d" % i, "description": "d",
+                               "kind": "skill", "tap": "fixture-tap",
+                               "category": "docs"},
+                     "score": 1.0, "content": None, "snippet": ""}
+                    for i in range(k)]
+            return hits, "BM25 full-content"
+        monkeypatch.setattr(rag, "retrieve_any", fake_retrieve_any)
+        r = boost("search", "anything", "--category", "no-such-category")
+        assert ("○ none of the top 60 matches for 'anything' are in "
+                "category 'no-such-category'") in r.out
+        assert "it matches outside that category" not in r.out
+        assert "boost discover" not in r.out
+
+    def test_an_unsaturated_filter_miss_still_says_it_matches_elsewhere(
+            self, boost, tapped):
+        r = boost("search", "workflow", "--category", "no-such-category")
+        assert "it matches outside that category" in r.out
+        assert "none of the top" not in r.out
+
+    def test_a_filter_miss_still_names_the_dropped_terms(self, boost, tapped):
+        r = boost("search", "R", "workflow", "--category", "no-such-category")
+        assert "in category 'no-such-category'" in r.out
+        assert "not searched: 'R'" in r.out
+
 
 # ---------------------------------------------------------------- index
 

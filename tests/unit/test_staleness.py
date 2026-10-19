@@ -149,6 +149,17 @@ class TestOutdatedFooterRemovedUpstream:
         assert "re-tap" not in footer
         assert "deleted tap" not in footer
 
+    def test_all_removed_speaks_in_the_plural_for_several_rows(self):
+        assert staleness.outdated_footer(2, 2, removed=2) == (
+            "2 outdated · removed upstream — `boost update` can't bring them "
+            "back; `boost uninstall` them, or keep these copies as-is")
+
+    def test_removed_marker_matches_the_footer_wording(self):
+        # The table's LATEST cell and the footer must name the same state.
+        assert staleness.OUTDATED_REMOVED_UPSTREAM == "removed upstream"
+        assert staleness.OUTDATED_REMOVED_UPSTREAM in (
+            staleness.outdated_footer(1, 1, removed=1))
+
     def test_removed_defaults_to_zero_so_old_callers_keep_their_wording(self):
         assert staleness.outdated_footer(2, 2) == staleness.outdated_footer(
             2, 2, removed=0)

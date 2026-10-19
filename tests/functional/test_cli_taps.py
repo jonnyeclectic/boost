@@ -599,6 +599,30 @@ class TestOutdated:
         r = boost("outdated")
         assert "1 outdated · removed upstream" in r.out
         assert "re-tap or" not in r.out
+        # The LATEST cell names the same state the footer does; the JSON
+        # keeps its machine reason unchanged.
+        row = next(l for l in r.out.splitlines() if "brainstorming" in l)
+        assert "removed upstream" in row
+        assert "source missing" not in r.out
+        data = json.loads(boost("outdated", "--json").out)
+        assert [(d["name"], d["reason"], d["latest"]) for d in data] == [
+            ("brainstorming", staleness.SOURCE_MISSING, None)]
+
+    def test_two_entries_dropped_upstream_read_in_the_plural(
+            self, boost, fixture_tap_src, tmp_path):
+        src = _copy_tap(fixture_tap_src, tmp_path / "drop2-tap")
+        boost("tap", src)
+        boost("install", "brainstorming")
+        boost("install", "jira-integration")
+        for d in ("skills/brainstorming", "skills/jira-integration"):
+            subprocess.run(["git", "-C", str(src), "rm", "-rq", d],
+                           check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(src), "commit", "-qm", "drop"],
+                       check=True, capture_output=True)
+        boost("update")
+        r = boost("outdated")
+        assert ("2 outdated · removed upstream — `boost update` can't bring "
+                "them back; `boost uninstall` them") in r.out
 
     def test_content_change_shows_head_commit(self, boost, installed):
         clone = paths.repos_dir() / "fixture-tap"
@@ -619,11 +643,13 @@ class TestOutdated:
         shutil.rmtree(clone / "skills" / "brainstorming")
         _commit_clone(clone, "drop skill")       # cache still lists it
         r = boost("outdated")
-        assert "source missing" in r.out
         assert "1 outdated" in r.out
         # The tap is still configured, so re-tapping restores nothing: the
-        # footer names the item as removed upstream, not the tap as deleted.
-        assert "removed upstream" in r.out
+        # row and the footer both name the item as removed upstream, not the
+        # tap as deleted (the JSON reason below stays source-missing).
+        row = next(l for l in r.out.splitlines() if "brainstorming" in l)
+        assert "removed upstream" in row
+        assert "source missing" not in r.out
         assert "re-tap or" not in r.out
         assert "deleted tap" not in r.out
         data = json.loads(boost("outdated", "--json").out)

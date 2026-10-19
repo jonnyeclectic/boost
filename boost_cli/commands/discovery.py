@@ -167,7 +167,7 @@ def cmd_search(argv):
         scored = catalog.search(query)
     # Whether the query matched before --category narrowed it: an empty list
     # the filter produced is a different answer from one the query did.
-    matched_before_filter = bool(scored)
+    matched_before_filter = len(scored)
     if args.category:
         scored = [(e, s) for e, s in scored
                  if catalog.matches_category(e, args.category)]
@@ -193,6 +193,17 @@ def cmd_search(argv):
                 "no searchable terms in %r" % query,
                 "a term needs 2 or more ASCII letters or digits — %s"
                 % _quoted(dropped)))
+        elif matched_before_filter and hit_cap:
+            # The filter only ever saw the top k: retrieval stopped at its
+            # cap, so a match in the category may sit past it, and "it
+            # matches outside that category" would be a claim about the
+            # whole catalogue made from one page of it.
+            print(out.empty_state(
+                "none of the top %d matches for %r are in category %r"
+                % (matched_before_filter, query, args.category),
+                "narrow the query so the category's items rank higher, or "
+                "drop --category"))
+            _note_dropped_terms(dropped)
         elif matched_before_filter:
             # The query matched; only the filter emptied the list. "no
             # matches" plus a `boost discover` hint sent the user to GitHub
@@ -201,6 +212,7 @@ def cmd_search(argv):
                 "no matches for %r in category %r" % (query, args.category),
                 "it matches outside that category — drop --category, or "
                 "`boost browse --categories` lists them"))
+            _note_dropped_terms(dropped)
         else:
             # The standardized ○/→ empty state, so "nothing here" reads the same
             # as every other command's; both wordings are pinned by tests.

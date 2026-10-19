@@ -22,15 +22,18 @@ All four reproduced in a sandbox against the fixture tap.
 GitHub for something already on disk, without naming the filter that emptied the list. Search now
 records whether the query matched before <code>--category</code> narrowed it, and when only the
 filter emptied the result it says <i>no matches for 'ideation' in category 'nope'</i> with a hint to
-drop <code>--category</code> or list them via <code>boost browse --categories</code>. A query that
-matched nothing at all keeps the discover hint.
+drop <code>--category</code> or list them via <code>boost browse --categories</code>. When retrieval
+stopped at its cap, the filter only saw the top <i>k</i>, so it says <i>none of the top 60 matches for
+'ideation' are in category 'nope'</i> instead of claiming the query matches elsewhere. Both branches
+still name any term the index dropped. A query that matched nothing at all keeps the discover hint.
 
 <b><code>boost trending</code> counted upgrades as installs.</b> <code>boost update</code> and
 <code>boost reinstall</code> both call <code>store.install(force=True)</code>, which journals an
 <code>install</code> every time: one install plus one upgrade showed <i>2 installs</i>, a reinstall
 made it 3. Those two paths now pass <code>via="update"</code> / <code>via="reinstall"</code>
 (the parameter <code>store.install</code> already took), and <code>journal.is_new_install</code>
-drops them from the count. An uninstall followed by an install still counts — that is a choice made
+drops them from the count — in <code>boost trending</code> and in <code>boost who</code>'s
+INSTALLS column alike. An uninstall followed by an install still counts — that is a choice made
 twice. The row's description now comes from the tap the event names, with first-tap-wins kept as the
 fallback for an event that names none.
 
@@ -39,7 +42,9 @@ drops an item, the footer read <i>source missing — <code>boost update</code> c
 tap; re-tap or <code>boost uninstall</code></i>, while <code>boost taps</code> listed the tap present
 and current. <code>outdated_footer</code> now takes a <code>removed</code> count — missing rows whose
 tap is still configured — and words those as <i>removed upstream</i>, advising uninstall or keeping
-the copy. Re-tap advice is given only for the untapped rows; the JSON is unchanged.
+the copy (<i>them</i> when there are several). The table's LATEST cell says <i>removed upstream</i>
+for those rows too, so the row and the footer name one state. Re-tap advice is given only for the
+untapped rows; the JSON is unchanged.
 
 <b><code>boost config set</code> with a typo printed a check mark and changed nothing.</b>
 <code>agents.claude-code.enabeld false</code> and <code>agents.claud-code.enabled false</code> both

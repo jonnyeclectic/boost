@@ -1025,7 +1025,9 @@ def cmd_who(argv) -> int:
         u["events"] += 1
         if e.get("subject") and journal.is_expertise_event(e):
             u["skills"].add(e["subject"])
-        if e.get("action") == "install":
+        # New installs only, as `boost trending` counts them: an update or a
+        # reinstall journals "install" too, and is not one.
+        if journal.is_new_install(e):
             u["installs"] += 1
         u["last"] = max(u["last"], e.get("ts", ""))
     if args.json:

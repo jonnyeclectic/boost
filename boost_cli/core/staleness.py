@@ -108,6 +108,9 @@ def drift_state(store_sha: str | None, lock_sha: str,
 #: skill loop and the rule/workflow loop so a row is identified consistently
 #: rather than by kind-specific logic, and reused here to count them.
 OUTDATED_SOURCE_MISSING = "source missing"
+#: The LATEST cell for a missing row whose tap is still configured: the
+#: footer's own words, so the row and the summary name one state.
+OUTDATED_REMOVED_UPSTREAM = "removed upstream"
 
 
 def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
@@ -129,9 +132,11 @@ def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
         return ("%d outdated · source missing — `boost update` can't "
                 "restore a deleted tap; re-tap or `boost uninstall`" % total)
     if updatable == 0 and untapped == 0:
-        return ("%d outdated · removed upstream — `boost update` can't bring "
-                "it back; `boost uninstall` it, or keep this copy as-is"
-                % total)
+        them, copies = (("them", "these copies") if total > 1
+                        else ("it", "this copy"))
+        return ("%d outdated · %s — `boost update` can't bring %s back; "
+                "`boost uninstall` %s, or keep %s as-is"
+                % (total, OUTDATED_REMOVED_UPSTREAM, them, them, copies))
     parts = ["%d outdated" % total]
     if updatable:
         parts.append("%d upstream (`boost update` upgrades, pinned items "
