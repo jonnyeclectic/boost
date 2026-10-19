@@ -1440,7 +1440,46 @@ def _confirm_risky_materialized(kind: str, name: str, lk: dict,
     return _show_and_confirm("%s %s" % (kind, name), diff, name)
 
 
-def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
+def _hold_update(label: str, name: str, lk: dict, kind: str, old_v: str,
+                 new_v: str, discard_edits: bool,
+                 allow_downgrade: bool) -> tuple[bool, bool]:
+    """Apply `staleness.update_hold` for one item: ``(held, edited)``.
+
+    A held item is named with the way past it, because each remedy is a
+    deliberate act: `boost reinstall` discards one item's edits,
+    `--discard-edits` every edited item's this run, and `--allow-downgrade`
+    follows a rewound tap. `--force` releases neither; it moves pinned taps.
+    ``edited`` lets a released refresh say what it threw away.
+    """
+    edited = integrity.locally_edited(kind, name, lk)
+    hold = staleness.update_hold(edited, old_v, new_v, discard_edits,
+                                 allow_downgrade)
+    if hold == staleness.HOLD_LOCAL_EDITS:
+        out.warn("%s has local edits — update skipped; `boost reinstall %s` "
+                 "discards them, or `boost update --discard-edits` for every "
+                 "edited item" % (label, name), wrap=True)
+    elif hold == staleness.HOLD_DOWNGRADE:
+        out.warn("%s: upstream is at v%s, behind your v%s — update skipped; "
+                 "`boost update --allow-downgrade` downgrades"
+                 % (label, new_v, old_v), wrap=True)
+    return hold is not None, edited
+
+
+def _refresh_line(label: str, old_v: str, new_v: str, edited: bool,
+                  bumped: bool) -> str:
+    """The success line for a refresh, saying which way the version moved."""
+    if bumped:
+        msg = "upgraded %s v%s → v%s" % (label, old_v, new_v)
+    elif new_v and util.semver_gt(old_v, new_v):
+        msg = "downgraded %s v%s → v%s" % (label, old_v, new_v)
+    else:
+        msg = "refreshed %s v%s (source changed)" % (label, new_v or old_v)
+    return msg + (" — local edits discarded" if edited else "")
+
+
+def _update_materialized(kind: str, installed: dict[str, dict], results,
+                         discard_edits: bool = False,
+                         allow_downgrade: bool = False) -> tuple[int, int]:
     """Re-materialize installed rules/workflows whose tap source moved.
 
     Mirrors the skill upgrade loop: for each installed item from a refreshed
@@ -1448,10 +1487,12 @@ def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
     changed — behind the same risky-diff gate the skill loop uses, and behind
     the same pin/quarantine skips: a pinned rule stays put, and refreshing a
     quarantined one would re-materialize the very content quarantine removed.
-    Returns how many were refreshed.
+    An edited or downgraded item is held unless its flag releases it
+    (`_hold_update`).
+    Returns ``(refreshed, held)``.
     """
     import hashlib
-    n = 0
+    n = held = 0
     for name, lk in sorted(installed.items()):
         tapname = lk.get("tap")
         if lk.get("pinned") or lk.get("quarantined"):
@@ -1492,6 +1533,12 @@ def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
                      "the record" % (kind, name, _tilde(Path(lk["base"])),
                                      name), wrap=True)
             continue
+        hold, edited = _hold_update("%s %s" % (kind, name), name, lk, kind,
+                                    old_v, str(entry.get("version") or ""),
+                                    discard_edits, allow_downgrade)
+        if hold:
+            held += 1
+            continue
         try:
             new_raw = (registry.get(tapname).path
                        / entry.get("skill_md", "")).read_text(
@@ -1511,10 +1558,10 @@ def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             continue
-        out.ok(("upgraded %s %s v%s → v%s" % (kind, name, old_v, new_v)) if bumped
-               else ("refreshed %s %s v%s (source changed)" % (kind, name, new_v)))
+        out.ok(_refresh_line("%s %s" % (kind, name), old_v,
+                             str(entry.get("version") or ""), edited, bumped))
         n += 1
-    return n
+    return n, held
 
 
 def _resync_vectors(moved: list[str]) -> None:
@@ -1687,6 +1734,12 @@ def cmd_update(argv: list[str]) -> int:
                     help="skip the confirmation prompt")
     ap.add_argument("--force", action="store_true",
                     help="move pinned taps too, clearing their pin")
+    ap.add_argument("--discard-edits", action="store_true",
+                    help="refresh locally edited skills, rules and workflows "
+                         "too, overwriting the edits")
+    ap.add_argument("--allow-downgrade", action="store_true",
+                    help="follow a tap whose upstream version is now older "
+                         "than the installed one")
     ap.add_argument("--shards", action="store_true",
                     help="refresh prebuilt vectors from the published "
                          "manifest, moving taps to the commits it names")
@@ -1746,7 +1799,7 @@ def cmd_update(argv: list[str]) -> int:
         # `boost update --taps-only` exists precisely to notice that morning.
         return 1 if failures and not results else 0
 
-    upgraded = 0
+    upgraded = held = 0
     for name, lk in sorted(lockfile.installed().items()):
         tapname = lk.get("tap")
         if (lk.get("pinned") or lk.get("quarantined")
@@ -1771,6 +1824,12 @@ def cmd_update(argv: list[str]) -> int:
                                            head, lk.get("sha256", ""), src_sha)
         if reason is None:
             continue
+        hold, edited = _hold_update(name, name, lk, "skill", old_v,
+                                    str(entry.get("version") or ""),
+                                    args.discard_edits, args.allow_downgrade)
+        if hold:
+            held += 1
+            continue
         if not _confirm_risky_update(name, entry):
             out.warn("%s: update skipped — review the diff, then `boost update "
                      "--yes` to apply" % name)
@@ -1780,18 +1839,25 @@ def cmd_update(argv: list[str]) -> int:
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             continue
-        if reason == "version":
-            out.ok("upgraded %s v%s → v%s" % (name, old_v, new_v))
-        else:
-            out.ok("refreshed %s v%s (source changed)" % (name, new_v))
+        out.ok(_refresh_line(name, old_v, str(entry.get("version") or ""),
+                             edited, reason == staleness.VERSION))
         upgraded += 1
     # Rules and workflows refresh from the same tap update.
     # Skills installed before boost dated them, so a plugin's copy of the
     # same name can be weighed against them (store.serving_plugin).
     store.backfill_source_dates(results)
-    upgraded += _update_materialized("rule", lockfile.installed_rules(), results)
-    upgraded += _update_materialized("workflow", lockfile.installed_workflows(), results)
-    if not upgraded:
+    for kind, section in (("rule", lockfile.installed_rules()),
+                          ("workflow", lockfile.installed_workflows())):
+        n, h = _update_materialized(kind, section, results,
+                                    discard_edits=args.discard_edits,
+                                    allow_downgrade=args.allow_downgrade)
+        upgraded += n
+        held += h
+    if held:
+        # Never "everything up to date" over items it just declined to touch.
+        out.info(out.role("%d item%s held back — see above"
+                          % (held, "s" if held != 1 else ""), "muted"))
+    elif not upgraded:
         if pinned_skips and pinned_skips == len(results) and not failures:
             # Every tap was a pinned skip: nothing was actually checked over
             # the network, which "everything up to date" would misreport as

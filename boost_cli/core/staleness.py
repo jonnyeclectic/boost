@@ -64,6 +64,36 @@ def catalog_relation(installed_version: str, latest_version: str
     return None
 
 
+# ── update_hold: why `boost update` must leave an installed copy alone ────
+HOLD_LOCAL_EDITS = "local-edits"  # the installed copy was edited after install
+HOLD_DOWNGRADE = "downgrade"      # the tap now advertises an older version
+
+
+def update_hold(locally_modified: bool, installed_version: str,
+                latest_version: str, discard_edits: bool,
+                allow_downgrade: bool) -> str | None:
+    """Why an otherwise-due refresh must be skipped, else ``None``.
+
+    Both holds guard something an overwrite cannot give back. A local edit is
+    the one copy of the user's change -- `boost drift` already calls it
+    local-edits and update used to overwrite it anyway, unseen. A tap rewound
+    to an older release reads as "source changed" to `upstream_reason`, so it
+    was followed silently, version and all. Edits outrank the downgrade
+    because they are the part that is unrecoverable. An empty
+    ``latest_version`` declares nothing and is not a downgrade
+    (`catalog_relation`). Each hold has its own release -- ``discard_edits``
+    and ``allow_downgrade`` -- because consenting to lose an edit is not
+    consenting to walk a version back, and neither is what `--force` (move
+    pinned taps) asked for. The caller then says what it did.
+    """
+    if locally_modified and not discard_edits:
+        return HOLD_LOCAL_EDITS
+    if (not allow_downgrade
+            and catalog_relation(installed_version, latest_version) == AHEAD):
+        return HOLD_DOWNGRADE
+    return None
+
+
 # ── drift_state: how an installed skill's store copy relates to lock+tap ───
 IN_SYNC = "in-sync"
 LOCAL_EDITS = "local-edits"

@@ -234,6 +234,46 @@ def materialized_status(name: str, entry: dict,
     return STATUS_UNLOCKED if unlocked else STATUS_OK
 
 
+
+def locally_edited(kind: str, name: str, entry: dict) -> bool:
+    """Whether any installed copy of ``name`` was edited since boost wrote it.
+
+    The question `boost update` asks before overwriting: a skill's store dir,
+    or any written rule/workflow artifact, no longer hashing to its recorded
+    digest. Not :func:`materialized_status`, which answers with the *first*
+    fault it meets -- a rule whose Cursor file was deleted reads ``MISSING``
+    there however its CLAUDE.md block was edited, and the refresh would
+    overwrite the edit it never looked at. A missing artifact, a row without a
+    digest and a quarantined item are no evidence of an edit, and a row for an
+    agent boost no longer writes is skipped as everywhere else. Neither is a
+    workflow's skill-store copy: install already keeps an edited one in place
+    rather than overwriting it, so it must not hold the workflow's own files.
+    """
+    import hashlib
+
+    from . import rules, workflows
+    if kind == "skill":
+        return status(name, entry) == STATUS_MODIFIED
+    if entry.get("quarantined"):
+        return False
+    for m in entry.get("materializations") or []:
+        recorded = m.get("sha256")
+        if m.get("slot") == workflows.SLOT_SKILL:
+            continue
+        if not recorded or not agents.materialization_is_written(
+                kind, entry.get("base"), m.get("agent")):
+            continue
+        try:
+            text = Path(m.get("path", "")).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        content = (rules.read_block(text, name)
+                   if m.get("mode") == rules.MODE_CLAUDE else text)
+        if content is not None and hashlib.sha256(
+                content.encode("utf-8")).hexdigest() != recorded:
+            return True
+    return False
+
 def project_status(entry: dict, base) -> str:
     """Classify a project-scoped skill's integrity against its per-repo lock.
 
