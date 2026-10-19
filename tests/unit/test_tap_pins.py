@@ -128,7 +128,9 @@ class TestUpdateReclonesAMissingPinnedTap:
         assert registry.list_taps()[0].is_cloned
         # The pin survives — this is a reclone onto it, not a move off it.
         assert registry.list_taps()[0].pin == SHA
-        assert fake_clone["checkouts"][-1] == ("o__a", SHA)
+        # Checked out in the staging clone, before it replaces the tap dir,
+        # so an unhonourable pin never costs the tree already there.
+        assert fake_clone["checkouts"][-1] == ("o__a.boost-reclone", SHA)
 
     def test_force_clones_at_head_and_drops_the_pin(self, sandbox, fake_clone):
         registry.add("o/a", at=SHA)

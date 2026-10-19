@@ -35,3 +35,7 @@ design) and the many callers of <code>is_cloned</code> keep their meaning. Docto
 tap as an issue, heal names it, skips its catalog rebuild and exits 1, and both point at
 <code>boost update &lt;name&gt;</code>, which now takes the re-clone branch for it and honours a
 pin.
+The re-clone lands in a staging sibling and replaces the tap directory only once it has
+finished (and checked out the pin, if there is one). If the clone fails because the machine is
+offline, auth fails, or the remote moved, the old tree is left in place, still scannable and
+installable from.

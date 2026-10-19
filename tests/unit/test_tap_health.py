@@ -12,7 +12,10 @@ from __future__ import annotations
 import shutil
 import subprocess
 
-from boost_cli.core import lockfile, registry, util
+import pytest
+
+from boost_cli.core import gitutil, lockfile, paths, registry, util
+from boost_cli.errors import BoostError
 
 
 def _copy_tap(fixture_tap_src, tmp_path, name):
@@ -93,6 +96,79 @@ class TestUpdateRecloneBrokenTap:
         assert failed == {}
         assert done["health-pin"] == "cloned at %s" % first[:7]
         assert registry.get("health-pin").pin == first
+
+
+class TestFailedRecloneKeepsTheTree:
+    """`update` on a broken clone used to clear the tree *before* cloning, so
+    a re-clone that failed left nothing on disk to scan or install from."""
+
+    def _staging(self, tap):
+        return tap.path.with_name(tap.path.name + ".boost-reclone")
+
+    def test_unreachable_source_leaves_the_tree_in_place(
+            self, boost, fixture_tap_src, tmp_path):
+        src = _copy_tap(fixture_tap_src, tmp_path, "health-keep")
+        boost("tap", src)
+        tap = registry.get("health-keep")
+        _break(tap)
+        before = sorted(str(p.relative_to(tap.path))
+                        for p in tap.path.rglob("*"))
+        assert before
+        shutil.move(str(src), str(tmp_path / "moved-away"))
+        with pytest.raises(BoostError):
+            registry.update("health-keep")
+        after = sorted(str(p.relative_to(tap.path))
+                       for p in tap.path.rglob("*"))
+        assert after == before
+        assert not self._staging(tap).exists()
+        assert registry.get("health-keep").is_broken_clone
+
+    def test_install_still_works_after_a_failed_reclone(
+            self, boost, fixture_tap_src, tmp_path):
+        src = _copy_tap(fixture_tap_src, tmp_path, "health-inst")
+        boost("tap", src)
+        _break(registry.get("health-inst"))
+        shutil.move(str(src), str(tmp_path / "gone-inst"))
+        res = boost("update", "health-inst", expect=None)
+        assert res.rc != 0
+        # `is_sparse` is memoised per process; a real `install` is a new one.
+        gitutil._SPARSE.clear()
+        boost("install", "brainstorming")
+        assert (paths.store_dir() / "brainstorming").is_dir()
+
+    def test_unhonourable_pin_leaves_the_tree_in_place(
+            self, boost, fixture_tap_src, tmp_path, monkeypatch):
+        src = _copy_tap(fixture_tap_src, tmp_path, "health-badpin")
+        first = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"],
+                               check=True, capture_output=True,
+                               text=True).stdout.strip()
+        boost("tap", src, "--at", first)
+        tap = registry.get("health-badpin")
+        _break(tap)
+        marker = tap.path / "marker.txt"
+        marker.write_text("kept", encoding="utf-8")
+
+        def refuse(path, sha):
+            raise BoostError("no such commit")
+        monkeypatch.setattr(registry.gitutil, "checkout_commit", refuse)
+        with pytest.raises(BoostError):
+            registry.update("health-badpin")
+        assert marker.read_text(encoding="utf-8") == "kept"
+        assert not self._staging(tap).exists()
+
+    def test_a_stale_staging_dir_does_not_block_the_reclone(
+            self, boost, fixture_tap_src, tmp_path):
+        boost("tap", _copy_tap(fixture_tap_src, tmp_path, "health-stale"))
+        tap = registry.get("health-stale")
+        _break(tap)
+        staging = self._staging(tap)
+        staging.mkdir()
+        (staging / "junk.txt").write_text("x", encoding="utf-8")
+        done, failed = registry.update("health-stale")
+        assert failed == {}
+        assert done["health-stale"] == "cloned"
+        assert (tap.path / ".git").is_dir()
+        assert not staging.exists()
 
 
 class TestDoctorAndHealSeeIt:

@@ -594,6 +594,41 @@ def _clear_path(path) -> None:
                  "by hand, then retry") from exc
 
 
+def _reclone(tap: Tap, pin: str | None) -> None:
+    """Clone ``tap`` afresh (checked out at ``pin`` if given), replacing
+    whatever is at ``tap.path`` **only once the new clone is complete**.
+
+    The clone lands in a staging sibling first. Clearing the old path and
+    then cloning into it lost a broken clone's tree whenever the re-clone
+    failed — offline, an auth error, a remote moved or deleted — and that tree
+    was still scannable and installable from; doctor and heal both point at
+    `boost update <name>`, so their own remedy destroyed it. A failed clone or
+    an unhonourable pin now leaves ``tap.path`` exactly as it was. (A pin that
+    cannot be checked out still never lands as a tree on HEAD with a stale pin
+    beside it: the staging copy is discarded with it.)
+    """
+    staging = tap.path.with_name(tap.path.name + ".boost-reclone")
+    _clear_path(staging)
+    try:
+        gitutil.clone_shallow(tap.url, staging)
+        if pin:
+            gitutil.checkout_commit(staging, pin)
+    except BoostError:
+        with suppress(OSError):
+            util.remove_path(staging)
+        raise
+    # `is_cloned` is `path.is_dir()`, which a *dangling* symlink answers
+    # False to, so a dangling link reaches here too and is cleared like any
+    # other leftover before the finished clone moves into place.
+    _clear_path(tap.path)
+    try:
+        os.replace(staging, tap.path)
+    except OSError as exc:
+        raise BoostError(
+            "could not move the new clone into %s" % paths.tilde(tap.path),
+            hint="retry `boost update %s`" % tap.name) from exc
+
+
 def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
     """Clone one tap without touching config. Never raises.
 
@@ -1010,19 +1045,10 @@ def update(name: str | None = None,
             # create work tree dir ... File exists"). Without the removal the
             # tap can never be recovered: doctor reports it not cloned and
             # points at `update`, and update fails the same way forever.
-            _clear_path(tap.path)
-            gitutil.clone_shallow(tap.url, tap.path)
-            if tap.pin and not force:
-                try:
-                    gitutil.checkout_commit(tap.path, tap.pin)
-                except BoostError:
-                    # A pin that cannot be honoured must not leave a tap
-                    # on HEAD with a stale pin recorded beside it — the
-                    # next sweep would read `is_cloned` true and quietly
-                    # "skip" a tree that was never checked out.
-                    util.rmtree(tap.path)
-                    raise
-                return "cloned at %s" % tap.pin[:7], False
+            pin = tap.pin if not force else None
+            _reclone(tap, pin)
+            if pin:
+                return "cloned at %s" % pin[:7], False
             return "cloned", bool(tap.pin)
         elif tap.pin and not force:
             # A pinned tap is held at one commit on purpose: prebuilt
