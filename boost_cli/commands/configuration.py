@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from itertools import chain
 from pathlib import Path
@@ -1689,7 +1690,7 @@ def _tool_doctor(args: dict):
     # adopting it as `local` is the wrong fix (lockfile.unrestored_corrupt).
     backup = (lockfile.unrestored_corrupt() if plan.get("adoptable_store")
               else None)
-    worded = {
+    worded: dict[str, Callable[[list], list[str]]] = {
         "adoptable_store": lambda names: (
             [lockfile.unrestored_line(len(names), ", ".join(names), backup)]
             if backup else
@@ -1702,6 +1703,7 @@ def _tool_doctor(args: dict):
         "older_copies": store.older_copy_lines,
         "not_skill_store": lambda names: [store.not_skill_line(names)],
         "misnamed_store": lambda names: [store.misnamed_line(names)],
+        "workflow_copies": store.workflow_copy_lines,
         "blocked_links": lambda rows: [
             "%s not linked for %s: %s is in the way and is not boost's — ask "
             "the user to move or delete it, then run `boost sync`"
@@ -1808,6 +1810,7 @@ def _doctor_verdict(plan: dict[str, list], total: int, lock_bad: bool,
     repos = sum(1 for r in plan.get("foreign_store", ()) if store.is_repo_copy(r))
     user = (lock_bad + len(plan.get("blocked_links", ()))
             + len(plan.get("unreadable_store", ())) + repos
+            + len(plan.get("workflow_copies", ()))
             + (0 if lost else len(plan.get("unrecorded_store", ())))
             + (len(plan.get("adoptable_store", ())) if unrestored else 0))
     prune = (len(plan.get("foreign_store", ())) - repos

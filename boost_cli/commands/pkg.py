@@ -329,6 +329,11 @@ def _warn_unwritable(res, stream=None) -> None:
     note = getattr(res, "skill_note", None)
     if note:
         out.info(note, stream=stream, wrap=True)
+    # A link in the skill the copy left out: the rest installed, and this
+    # names the file the skill may still expect.
+    for line in getattr(res, "skipped_links", None) or ():
+        out.warn("%s: not copied — the link %s" % (res.name, line),
+                 stream=stream, wrap=True)
     conflicts, refused = _skipped_agent_lines(res)
     for line in conflicts:
         out.warn(line, stream=stream)
@@ -524,9 +529,11 @@ def _preview_skill_copy(e: dict, seen: dict | None, as_skill: bool | None,
     except (OSError, BoostError):
         return
     slot = workflows.detect_slot(e.get("skill_md", ""))
-    if workflows.skill_description(slot, frontmatter.parse(raw)[0]) is None:
+    desc = workflows.skill_description(slot, frontmatter.parse(raw)[0])
+    if desc is None:
         return
-    blocker = store.skill_copy_blocker(e["name"], seen)
+    blocker = store.skill_copy_blocker(
+        e["name"], seen, workflows.render_skill(e["name"], desc, raw))
     if blocker:
         out.info("  %s" % blocker, wrap=True)
         return
@@ -1064,6 +1071,8 @@ _PLAN_LABELS = [
     ("not_skill_store", "store dirs that are not skills, left alone"),
     ("unreadable_store", "store dirs boost cannot read, left alone"),
     ("misnamed_store", "store dirs boost cannot record a skill by, left alone"),
+    ("workflow_copies", "workflow skill copies the lock has lost, left alone "
+                        "(`boost install <workflow>` re-records)"),
     ("plugin_duplicates", "skills Claude Code also loads from a plugin"),
     ("unrecorded_store", "store dirs the lock file has lost"),
     ("missing_materializations", "missing rule/workflow files"),
@@ -1147,6 +1156,9 @@ def cmd_sync(argv: list[str]) -> int:
                     name, agent, path = item
                     out.info("%s → %s (%s in the way)"
                              % (name, agent, _tilde(Path(path))))
+                elif key == "workflow_copies":
+                    name, path = item
+                    out.info("%s — %s" % (name, _tilde(Path(path))))
                 elif key == "older_copies":
                     name, owner, path = item
                     out.info("%s — %s (%s)" % (name, _tilde(Path(path)), owner))
@@ -1243,6 +1255,7 @@ def cmd_sync(argv: list[str]) -> int:
                           "not_skill_store": plan["not_skill_store"],
                           "unreadable_store": plan["unreadable_store"],
                           "misnamed_store": plan["misnamed_store"],
+                          "workflow_copies": plan["workflow_copies"],
                           "unrecorded_store": unrecorded,
                           "out_of_scope_links": oos,
                           "blocked_links": blocked,
@@ -1278,6 +1291,8 @@ def cmd_sync(argv: list[str]) -> int:
         out.warn(store.unreadable_line(plan["unreadable_store"]), wrap=True)
     if plan["misnamed_store"]:
         out.info(store.misnamed_line(plan["misnamed_store"]), wrap=True)
+    for line in store.workflow_copy_lines(plan["workflow_copies"]):
+        out.warn(line, wrap=True)
     if declined_dups:
         out.warn("%s still linked into Claude Code beside a plugin's copy "
                  "(declined): %s" % (_plural(len(same), "skill"),

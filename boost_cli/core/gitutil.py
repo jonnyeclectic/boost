@@ -383,6 +383,34 @@ def materialize(repo: Path, rel_dir: str) -> None:
             hint="this needs network — the tap stores only Markdown locally") from None
 
 
+def materialize_paths(repo: Path, rels: list[str]) -> None:
+    """Widen `repo`'s sparse checkout to each repo-relative path in `rels`.
+
+    For what a skill's symlinks point at elsewhere in the tap
+    (``skills/x/helper.py -> ../../shared/helper.py``): :func:`materialize`
+    checks out the skill's own dir, and a link out of it would otherwise lead
+    to a file the cone never fetched. Each path is added as itself and as a
+    directory (``/p`` and ``/p/*``), since a link may name either. One `add`
+    for all of them, never `set`, and a no-op on a full clone.
+    """
+    patterns: list[str] = []
+    for rel in rels:
+        rel = rel.strip("/")
+        if rel and rel != ".":
+            patterns += ["/%s" % rel, "/%s/*" % rel]
+    have = _sparse_list(repo) or set()
+    patterns = [p for p in dict.fromkeys(patterns) if p not in have]
+    if not patterns or not is_sparse(Path(repo)):
+        return
+    try:
+        run(["-C", str(repo), "sparse-checkout", "add", *patterns])
+    except BoostError as e:
+        raise BoostError(
+            "could not fetch %s from the %s tap: %s"
+            % (", ".join(rels), Path(repo).name, e),
+            hint="this needs network — the tap stores only Markdown locally") from None
+
+
 def _depth(repo: Path) -> list[str]:
     """``--depth 1`` for a shallow clone, nothing for a complete one.
 
