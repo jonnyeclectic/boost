@@ -4585,7 +4585,16 @@ def is_unrepaired(action: str) -> bool:
     """True for a :func:`sync_apply` line that reports a repair it did *not*
     make, so callers print it as a warning rather than under a check mark."""
     return any(mark in action for mark in (
-        _NOT_REMATERIALIZED, _NOT_LINKED_MARK, _NOT_RECORDED_MARK))
+        _NOT_REMATERIALIZED, _NOT_LINKED_MARK, _NOT_RECORDED_MARK,
+        _DECLINED_MARK, _NOT_CLONED_MARK))
+
+
+#: A pin that blocks a repair. Missing from :func:`is_unrepaired` until it was
+#: added, so `heal` printed the decline under a ✓ and exited 0 over a skill
+#: still missing, and `doctor` went on prescribing `heal`.
+_DECLINED_MARK = " — repair declined "
+#: A URL import's store dir, which sync never re-clones -- also a decline.
+_NOT_CLONED_MARK = "'s store dir is missing — `boost reinstall "
 
 
 _DROPPED = "dropped %s from lock (store dir missing, source gone)"
@@ -4594,9 +4603,9 @@ _GONE = ("%s %s has a missing materialization but its source is gone — "
 
 
 def _declined(label: str, where: str, name: str) -> str:
-    return ("%s is pinned and its %s source has moved — repair declined "
+    return ("%s is pinned and its %s source has moved%s"
             "(unpin, or `boost reinstall %s` to accept the new content)"
-            % (label, where, name))
+            % (label, where, _DECLINED_MARK, name))
 
 
 def _lock_source(name: str, tap_name: str, entry: dict,
@@ -4624,8 +4633,8 @@ def plan_missing_store(name: str) -> StoreRepair:
         # never touches the network. Dropping the entry instead would throw
         # away the one record of where the skill came from, so keep it and
         # name the command that can.
-        msg = ("%s's store dir is missing — `boost reinstall %s` clones it "
-               "again from %s" % (name, name, entry["source_url"]))
+        msg = ("%s%s%s` clones it again from %s"
+               % (name, _NOT_CLONED_MARK, name, entry["source_url"]))
         return StoreRepair("declined", msg, msg)
     if tap_name == "local":
         src = local_source_dir(entry)

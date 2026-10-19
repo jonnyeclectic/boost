@@ -229,6 +229,19 @@ def read_block(text: str, name: str) -> str | None:
     return text[i + len(start):j - len(end)].strip("\n")
 
 
+def unclosed_block(text: str, name: str) -> bool:
+    """True when ``text`` has rule ``name``'s start marker and no end after it.
+
+    The case `read_block` folds into "absent". `boost doctor` needs it apart:
+    a start marker on its own read as a block that was there, and the remedy
+    for it is a hand edit -- restore the end marker or delete the orphan --
+    not the reinstall that answers a block that is gone.
+    """
+    start, end = markers(name)
+    i = text.find(start)
+    return i != -1 and text.find(end, i) == -1
+
+
 def strip_block(text: str, name: str) -> str:
     """Return ``text`` with rule ``name``'s managed block removed.
 
