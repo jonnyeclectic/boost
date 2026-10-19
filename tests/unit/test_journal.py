@@ -472,3 +472,25 @@ class TestLogUnderAReadOnlyBoostHome:
         err = " ".join(capsys.readouterr().err.split())
         assert "make ~/.boost/state/pulse.jsonl writable" in err
         assert [e["subject"] for e in journal.events()] == ["x"]
+
+
+class TestIsNewInstall:
+    """`boost trending` ranks by this: an upgrade or a reinstall journals an
+    "install" too, and must not read as someone choosing the item again."""
+
+    @pytest.mark.parametrize("via", [None, "protocol"])
+    def test_a_plain_install_counts(self, via):
+        assert journal.is_new_install({"action": "install", "via": via}) is True
+
+    def test_an_event_without_via_counts(self):
+        assert journal.is_new_install({"action": "install"}) is True
+
+    @pytest.mark.parametrize("via", ["update", "reinstall"])
+    def test_a_refresh_does_not_count(self, via):
+        assert journal.is_new_install({"action": "install", "via": via}) is False
+
+    def test_another_action_never_counts(self):
+        assert journal.is_new_install({"action": "uninstall"}) is False
+
+    def test_refresh_vias_is_exactly_the_two_refresh_paths(self):
+        assert frozenset({"update", "reinstall"}) == journal.REFRESH_VIAS

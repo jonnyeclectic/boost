@@ -550,9 +550,12 @@ def cmd_outdated(argv) -> int:
     out.table(rows, headers=("NAME", "INSTALLED", "LATEST", "TAP"),
               whole=("NAME",))
     print()
-    source_missing = sum(1 for r in results
-                         if r["reason"] == staleness.SOURCE_MISSING)
-    out.dim(staleness.outdated_footer(len(results), source_missing))
+    missing = [r for r in results if r["reason"] == staleness.SOURCE_MISSING]
+    # A missing row whose tap is still configured lost the item upstream;
+    # re-tapping it would restore nothing, so the footer counts it apart.
+    configured = {t.name for t in registry.list_taps()}
+    removed = sum(1 for r in missing if r["tap"] in configured)
+    out.dim(staleness.outdated_footer(len(results), len(missing), removed))
     return 0
 
 

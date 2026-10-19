@@ -136,6 +136,44 @@ class TestOutdatedFooter:
         assert "5 source missing" not in footer
 
 
+class TestOutdatedFooterRemovedUpstream:
+    """A row whose tap is still configured but no longer ships the item was
+    worded as a deleted tap, and told the user to re-tap — which restores
+    nothing, since the tap is right there."""
+
+    def test_all_removed_never_says_re_tap(self):
+        footer = staleness.outdated_footer(1, 1, removed=1)
+        assert footer == ("1 outdated · removed upstream — `boost update` "
+                          "can't bring it back; `boost uninstall` it, or keep "
+                          "this copy as-is")
+        assert "re-tap" not in footer
+        assert "deleted tap" not in footer
+
+    def test_removed_defaults_to_zero_so_old_callers_keep_their_wording(self):
+        assert staleness.outdated_footer(2, 2) == staleness.outdated_footer(
+            2, 2, removed=0)
+        assert "deleted tap" in staleness.outdated_footer(2, 2)
+
+    def test_untapped_and_removed_are_counted_apart(self):
+        footer = staleness.outdated_footer(5, 3, removed=1)
+        assert footer == ("5 outdated · 2 upstream (`boost update` upgrades, "
+                          "pinned items stay put) · 2 source missing (re-tap "
+                          "or `boost uninstall`) · 1 removed upstream "
+                          "(`boost uninstall`, or keep as-is)")
+
+    def test_no_upstream_bucket_when_every_row_is_missing(self):
+        footer = staleness.outdated_footer(3, 3, removed=2)
+        assert footer == ("3 outdated · 1 source missing (re-tap or `boost "
+                          "uninstall`) · 2 removed upstream (`boost "
+                          "uninstall`, or keep as-is)")
+
+    def test_upstream_plus_removed_omits_the_untapped_bucket(self):
+        footer = staleness.outdated_footer(2, 1, removed=1)
+        assert "1 upstream" in footer
+        assert "1 removed upstream" in footer
+        assert "source missing" not in footer
+
+
 class TestCatalogRelation:
     """`boost info`'s installed-vs-catalog decision, compared as versions."""
 

@@ -110,20 +110,36 @@ def drift_state(store_sha: str | None, lock_sha: str,
 OUTDATED_SOURCE_MISSING = "source missing"
 
 
-def outdated_footer(total: int, source_missing: int) -> str:
+def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
     """Summary line for `boost outdated`, worded so it never promises
     `boost update` can fix a row whose source is gone.
 
     ``source_missing`` counts rows carrying ``OUTDATED_SOURCE_MISSING`` as
-    their "latest" value — those need a re-tap (or removal), not an update.
+    their "latest" value. ``removed`` is the subset of those whose tap is
+    still configured — the item was dropped upstream — and re-tapping would
+    restore nothing, so only the rest are told to re-tap. Every such row used
+    to read as a deleted tap, while `boost taps` showed it present.
     """
     if source_missing == 0:
         return ("%d outdated · `boost update` upgrades "
                 "(pinned items stay put)" % total)
     updatable = total - source_missing
-    if updatable == 0:
+    untapped = source_missing - removed
+    if updatable == 0 and removed == 0:
         return ("%d outdated · source missing — `boost update` can't "
                 "restore a deleted tap; re-tap or `boost uninstall`" % total)
-    return ("%d outdated · %d upstream (`boost update` upgrades, pinned "
-            "items stay put) · %d source missing (re-tap or `boost "
-            "uninstall`)" % (total, updatable, source_missing))
+    if updatable == 0 and untapped == 0:
+        return ("%d outdated · removed upstream — `boost update` can't bring "
+                "it back; `boost uninstall` it, or keep this copy as-is"
+                % total)
+    parts = ["%d outdated" % total]
+    if updatable:
+        parts.append("%d upstream (`boost update` upgrades, pinned items "
+                     "stay put)" % updatable)
+    if untapped:
+        parts.append("%d source missing (re-tap or `boost uninstall`)"
+                     % untapped)
+    if removed:
+        parts.append("%d removed upstream (`boost uninstall`, or keep as-is)"
+                     % removed)
+    return " · ".join(parts)

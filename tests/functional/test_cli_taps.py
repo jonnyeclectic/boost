@@ -583,6 +583,23 @@ class TestOutdated:
         assert "1 upstream" in r.out
         assert "1 source missing" in r.out
 
+    def test_entry_dropped_after_update_is_removed_upstream(
+            self, boost, fixture_tap_src, tmp_path):
+        # The reported path: `boost update` rescans, the catalog no longer
+        # lists the skill, and the footer used to say to re-tap a tap that
+        # `boost taps` shows present and current.
+        src = _copy_tap(fixture_tap_src, tmp_path / "drop-tap")
+        boost("tap", src)
+        boost("install", "brainstorming")
+        subprocess.run(["git", "-C", str(src), "rm", "-rq",
+                        "skills/brainstorming"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(src), "commit", "-qm", "drop"],
+                       check=True, capture_output=True)
+        assert "no longer in tap" in boost("update").out
+        r = boost("outdated")
+        assert "1 outdated · removed upstream" in r.out
+        assert "re-tap or" not in r.out
+
     def test_content_change_shows_head_commit(self, boost, installed):
         clone = paths.repos_dir() / "fixture-tap"
         md = clone / "skills" / "brainstorming" / "SKILL.md"
@@ -604,6 +621,11 @@ class TestOutdated:
         r = boost("outdated")
         assert "source missing" in r.out
         assert "1 outdated" in r.out
+        # The tap is still configured, so re-tapping restores nothing: the
+        # footer names the item as removed upstream, not the tap as deleted.
+        assert "removed upstream" in r.out
+        assert "re-tap or" not in r.out
+        assert "deleted tap" not in r.out
         data = json.loads(boost("outdated", "--json").out)
         assert data == [{"name": "brainstorming", "kind": "skill",
                          "installed": "1.4.0", "latest": None,

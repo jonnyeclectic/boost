@@ -130,6 +130,10 @@ def cmd_config(argv) -> int:
                                  "`boost config unset` it first") from e
         val = config.get(args.key)
         journal.log("config", args.key, op="set")
+        # stderr: the write stands either way, and `--json` keeps its stdout.
+        warning = config.unknown_key_warning(args.key)
+        if warning:
+            out.warn(warning, stream=sys.stderr, wrap=True)
         if args.json:
             print(json.dumps({"key": args.key, "value": val}))
             return 0
