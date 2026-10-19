@@ -69,6 +69,10 @@ class InstallResult:
     # Kept out of `refused`: nothing refused, and a refusal is retried by the
     # next reinstall, where this link is meant to stay absent.
     covered: list[str] = field(default_factory=list)
+    # A workflow's target paths that already held a file boost did not write
+    # (no lock row records the path). Left alone, and the agent not recorded:
+    # see :func:`_foreign_target`.
+    foreign: list[str] = field(default_factory=list)
     score: int = 0
     upgraded: bool = False
     kind: str = "skill"
@@ -2900,6 +2904,57 @@ def release_materialized(kind: str, name: str, entry: dict,
     return restored
 
 
+def _foreign_target(path: Path, rendered: str, owned: set) -> bool:
+    """Whether ``path`` holds a file boost did not write and must not replace.
+
+    A workflow lands at a fixed name in a dir the user also writes their own
+    slash commands into, so ``~/.claude/commands/<name>.md`` can already be
+    theirs. Writing over it destroyed it, and because the lock then recorded
+    the path, uninstall deleted what was left. A path a lock row records is
+    boost's; a file there with the very text this run would write is adopted,
+    since nothing is lost either way. Anything else is refused.
+
+    ``force`` does not override this: ``update`` and ``reinstall`` always pass
+    it (:func:`preserved_agent_scope`), so honouring it here would let every
+    update overwrite a file that a moved source now collides with. The user
+    moves their file aside and installs again. A directory at the path is not
+    this check's business: the write raises IsADirectoryError and
+    :func:`_refused_target` words it.
+    """
+    if str(path) in owned or not os.path.lexists(path) or occupied(path):
+        return False
+    return path.is_symlink() or _file_sha(path) != _text_sha(rendered)
+
+
+def _retire_moved(name: str, existing: dict | None, linked: list[str],
+                  materializations: list[dict]) -> list[dict]:
+    """Remove the files a re-install stopped writing; the rows to keep.
+
+    For an agent this run wrote to, an old row at a path the new run did not
+    write (a slot change) names a file nothing will record once the list is
+    rebuilt. It is removed while it is still what boost wrote. An edited one
+    is the user's now and stays, and its row is returned so uninstall still
+    reaches it and ``boost verify`` still reports the edit. An agent this run
+    did *not* write keeps its rows through :func:`_untouched_materializations`,
+    so its old command survives a refused new write.
+    """
+    new_paths = {m["path"] for m in materializations}
+    kept: list[dict] = []
+    for m in (existing or {}).get("materializations") or ():
+        if (lockfile.is_skill_copy(m) or m.get("agent") not in linked
+                or m.get("path") in new_paths):
+            continue
+        path = Path(m.get("path", ""))
+        with _refused_removal(name, path):
+            if not _present(path):
+                continue
+            if m.get("sha256") and _file_sha(path) != m["sha256"]:
+                kept.append(m)
+                continue
+            path.unlink()
+    return kept
+
+
 def _install_workflow(entry: dict, force: bool = False,
                       only_agents: list[str] | None = None,
                       scope: str = "user", base=None,
@@ -2946,6 +3001,9 @@ def _install_workflow(entry: dict, force: bool = False,
     blocked: list[tuple[str, str]] = []
     conflicts: list[str] = []
     refused: list[dict] = []
+    foreign: list[str] = []
+    owned = {m.get("path") for m in (existing or {}).get("materializations")
+             or () if not lockfile.is_skill_copy(m)}
     # workflow_agents, not materializing_agents: an agent can have a verified
     # rules surface and no slash-command format at all (Codex), and installing
     # into a directory it never reads would report a command that does not
@@ -2963,6 +3021,9 @@ def _install_workflow(entry: dict, force: bool = False,
         if resolved_base is not None:
             scopes.ensure_in_base(resolved_base, path)
         rendered = workflows.render(agent, slot, name, raw)
+        if _foreign_target(path, rendered, owned):
+            foreign.append(str(path))
+            continue
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             util.atomic_write_text(path, rendered)
@@ -2978,6 +3039,11 @@ def _install_workflow(entry: dict, force: bool = False,
             "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest()})
         linked.append(agent)
 
+    # A path this run no longer writes for an agent it did write (the source
+    # moved from commands/ to agents/): the old file is a live slash command
+    # that no row would claim once the list is rebuilt.
+    materializations.extend(_retire_moved(name, existing, linked,
+                                          materializations))
     # As for rules: an unrecorded materialization is a live slash command that
     # `_uninstall_workflow` — driven by this list — can never remove.
     materializations.extend(_refused_materializations(existing, linked, refused))
@@ -3027,6 +3093,7 @@ def _install_workflow(entry: dict, force: bool = False,
     res.unwritable = unwritable
     res.blocked = blocked
     res.conflicts = conflicts
+    res.foreign = foreign
     res.upgraded = existing is not None
     res.scope = scope
     res.skill_copy = Path(copy_row["path"]).parent if copy_row else None
@@ -3362,8 +3429,15 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
         if lockfile.is_skill_copy(m):
             copies.append(m)
             continue
+        # An agent's file gets the copy's test: one the user edited since
+        # boost wrote it is theirs, and deleting it lost the edit in silence.
+        # A row with no recorded sha (an older lock, a refused write) has
+        # nothing to compare and is removed as before.
         with _refused_removal(name, path):
             if _present(path):
+                if m.get("sha256") and _file_sha(path) != m["sha256"]:
+                    kept.append(str(path))
+                    continue
                 plan.append((path, ""))
         if m.get("agent"):
             removed.append(m["agent"])
