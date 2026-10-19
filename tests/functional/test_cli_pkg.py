@@ -1677,6 +1677,23 @@ class TestBundle:
         assert "no Boostfile at" in r.err
         assert "boost bundle dump Boostfile" in r.err
 
+    def test_install_boostfile_with_a_bom(self, boost, tapped, tmp_path):
+        # Windows editors prefix a BOM; it glued onto the first directive and
+        # failed a valid line as "unrecognised: \ufeffskill ...".
+        vf = tmp_path / "Boostfile"
+        vf.write_bytes(b"\xef\xbb\xbfskill fixture-tap:brainstorming@1.4.0\n")
+        r = boost("bundle", "install", vf)
+        assert "installed brainstorming v1.4.0 (fixture-tap)" in r.out
+        assert "unrecognised" not in r.out
+        assert "brainstorming" in _lock()
+
+    def test_install_stdin_with_a_bom(self, boost, tapped, monkeypatch):
+        text = "\ufeffskill fixture-tap:commit-messages@1.0.2\n"
+        monkeypatch.setattr("sys.stdin", io.StringIO(text))
+        r = boost("bundle", "install", "-")
+        assert "installed commit-messages v1.0.2 (fixture-tap)" in r.out
+        assert "commit-messages" in _lock()
+
     def test_install_unrecognised_line_rc1(self, boost, tapped, tmp_path):
         vf = tmp_path / "Boostfile"
         vf.write_text("florp what\n", encoding="utf-8")
