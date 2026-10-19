@@ -282,9 +282,26 @@ def same_source(a: str, b: str) -> bool:
     by another of its names stays the harmless no-op it was. Local paths
     compare exactly (`parse_spec` has already resolved them); a remote's host
     compares case-blind, and its path only on github.com, the one forge boost
-    can say that of.
+    can say that of. Two local spellings of one directory — `~/x` and `~/X`
+    on APFS or NTFS, where `resolve()` keeps the case it was given — match
+    by asking the filesystem, not by comparing the strings.
     """
-    return _source_key(a) == _source_key(b)
+    if _source_key(a) == _source_key(b):
+        return True
+    return _is_local(a) and _is_local(b) and _same_file(a, b)
+
+
+def _is_local(url: str) -> bool:
+    return not (url.startswith("git@") or _SCHEME.match(url))
+
+
+def _same_file(a: str, b: str) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        # A clone source that has since moved or vanished is not evidence
+        # that two spellings are one directory.
+        return False
 
 
 def _source_key(url: str) -> str:

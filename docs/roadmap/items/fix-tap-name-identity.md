@@ -21,7 +21,10 @@ one cache file. <code>untap FIX</code> then deleted the clone that <code>fix</co
 <code>boost outdated</code> went on to report its installed skills as "removed upstream" and told
 the user to uninstall them. Every identity check now compares <code>registry.name_key</code>
 (<code>str.casefold</code>) on every platform, so a config written on Linux stays valid on a Mac.
-The same repository under a different case is "already tapped". A different repository is
+The same repository under a different case is "already tapped". For a local path that
+includes two spellings of one directory: <code>Path.resolve()</code> keeps the case it is given,
+so <code>registry.same_source</code> asks the filesystem (<code>os.path.samefile</code>) when the
+strings differ, instead of reporting the directory as a different repository. A different repository is
 refused with the name it collides with. <code>get()</code> gains a case-folded lookup tier that
 runs last, so the exact spelling still wins. A config written before this change can still
 hold both rows. For that case, <code>remove()</code> asks the filesystem

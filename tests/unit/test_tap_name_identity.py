@@ -71,6 +71,15 @@ def _gh(name):
             "curated": False}
 
 
+def _folding_dir(tmp_path, name):
+    """`tmp_path/name`, created; skip unless `tmp_path/NAME` is the same dir."""
+    path = tmp_path / name
+    path.mkdir()
+    if not (tmp_path / name.upper()).exists():
+        pytest.skip("case-sensitive filesystem")
+    return path
+
+
 class TestNameKey:
     def test_folds_case(self):
         assert registry.name_key("Obra/SuperPowers") == "obra/superpowers"
@@ -102,6 +111,17 @@ class TestAddRefusesACaseVariant:
         assert ei.value.hint.startswith("`boost untap idcase-local` first")
         assert [t["name"] for t in config.get("taps")] == ["idcase-local"]
         assert (tap.path / "skills" / "a" / "SKILL.md").is_file()
+
+    def test_local_case_variant_of_one_dir_is_already_configured(
+            self, sandbox, tmp_path):
+        # The reviewer's repro: `boost tap $H/fix` then `boost tap $H/FIX` on
+        # APFS is one directory, so it is "already configured", not "taken".
+        first = _repo(_folding_dir(tmp_path, "idcase-same"))
+        registry.add(str(first))
+        with pytest.raises(BoostError) as ei:
+            registry.add(str(tmp_path / "IDCASE-SAME"))
+        assert ei.value.message == "tap idcase-same is already configured"
+        assert [t["name"] for t in config.get("taps")] == ["idcase-same"]
 
     def test_exact_name_still_refused(self, sandbox, monkeypatch):
         _rows(_gh("idcase/exact"))
@@ -151,7 +171,60 @@ class TestAddManyRefusesACaseVariant:
             "two specs in this batch both name IDBATCH-TWO")
 
 
+class TestSameSourceLocal:
+    def test_two_spellings_of_one_dir_match(self, tmp_path):
+        d = _folding_dir(tmp_path, "idsrc-one")
+        assert registry.same_source(str(d), str(tmp_path / "IDSRC-ONE"))
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks")
+    def test_symlink_to_one_dir_matches(self, tmp_path):
+        (tmp_path / "real").mkdir()
+        (tmp_path / "alias").symlink_to(tmp_path / "real")
+        assert registry.same_source(str(tmp_path / "alias"),
+                                    str(tmp_path / "real"))
+
+    def test_two_dirs_do_not_match(self, tmp_path):
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        assert not registry.same_source(str(tmp_path / "a"),
+                                        str(tmp_path / "b"))
+
+    def test_vanished_source_does_not_match_or_raise(self, tmp_path):
+        (tmp_path / "a").mkdir()
+        assert not registry.same_source(str(tmp_path / "a"),
+                                        str(tmp_path / "gone"))
+
+    def test_remote_is_never_asked_of_the_filesystem(self, tmp_path,
+                                                     monkeypatch):
+        def boom(*_a):
+            raise AssertionError("samefile on a remote URL")
+        monkeypatch.setattr(registry.os.path, "samefile", boom)
+        (tmp_path / "a").mkdir()
+        local = str(tmp_path / "a")
+        assert not registry.same_source(local, "https://example.com/a")
+        assert not registry.same_source("https://example.com/a", local)
+        assert not registry.same_source(local, "git@example.com:o/a")
+        assert not registry.same_source("git@example.com:o/a", local)
+
+
 class TestTapCommandSkip:
+    def test_local_case_variant_of_one_dir_is_skipped(self, sandbox, tmp_path,
+                                                      capsys):
+        first = _repo(_folding_dir(tmp_path, "idskip-same"))
+        registry.add(str(first))
+        capsys.readouterr()
+        assert taps_cmd.cmd_tap([str(tmp_path / "IDSKIP-SAME")]) == 0
+        assert "idskip-same already tapped" in capsys.readouterr().out
+        assert [t["name"] for t in config.get("taps")] == ["idskip-same"]
+
+    def test_add_many_skips_a_local_case_variant(self, sandbox, tmp_path):
+        first = _repo(_folding_dir(tmp_path, "idmany-same"))
+        registry.add(str(first))
+        [res] = registry.add_many([str(tmp_path / "IDMANY-SAME")])
+        assert res["ok"] is False
+        assert res["skipped"] is True
+        assert res["error"] == "already tapped"
+
     def test_case_variant_prints_the_configured_name(self, sandbox, capsys):
         _rows(_gh("idskip/repo"))
         assert taps_cmd._skip_if_already_tapped("IDSKIP/Repo") is True
