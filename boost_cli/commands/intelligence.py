@@ -187,6 +187,7 @@ def _write_generated(dest: Path, text: str, yes: bool = False) -> bool:
 
     ``yes`` — see :func:`_install_generated`.
     """
+    util.check_path_length(dest, what="output path")
     if dest.exists() and not (yes or out.confirm("overwrite %s?" % _tilde(dest))):
         out.info("aborted — %s left untouched" % _tilde(dest))
         return False
