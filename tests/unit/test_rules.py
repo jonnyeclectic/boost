@@ -332,7 +332,8 @@ class TestMalformedBlock:
     def test_refusal_names_the_file(self):
         with pytest.raises(BoostError) as ei:
             rules.require_well_formed(self.ORPHAN, "r", Path("/x/CLAUDE.md"))
-        assert "managed block in /x/CLAUDE.md has" in ei.value.message
+        assert ("managed block in %s has" % Path("/x/CLAUDE.md")
+                in ei.value.message)
 
     def test_well_formed_and_absent_pass(self):
         rules.require_well_formed("# notes\n", "r")
