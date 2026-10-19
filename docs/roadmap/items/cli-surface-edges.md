@@ -34,4 +34,5 @@ the suffix pushes the name past the limit.
 treated <code>--debug</code> as the command name. Completion now strips the same leading flags
 <code>cli.main</code> strips (passed in as data, because <code>core</code> cannot import
 <code>cli</code>), and it never strips the word being typed. <code>boost help &lt;TAB&gt;</code>
-now offers command names, since the usage line advertises <code>boost help &lt;command&gt;</code>.
+now offers command names, since the usage line advertises <code>boost help &lt;command&gt;</code>,
+and so do <code>boost --help &lt;TAB&gt;</code> and <code>boost -h &lt;TAB&gt;</code>, which route the same way.

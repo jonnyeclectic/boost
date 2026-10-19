@@ -379,9 +379,10 @@ def candidates(words: list[str], commands: Registry,
         if len(words) == 2:                     # completing the command itself
             return [c for c in _command_names(commands) if c.startswith(current)]
         command = words[1]
-        if command == "help":
+        if command in ("help", "-h", "--help"):
             # The help pseudo-command is not a COMMANDS row, so no source
-            # knows it, yet the top-level usage line advertises it.
+            # knows it, yet the top-level usage line advertises it — and
+            # `cli._route` sends `--help <cmd>` / `-h <cmd>` the same way.
             if len(words) != 3:
                 return []
             return [c for c in _command_names(commands) if c.startswith(current)]

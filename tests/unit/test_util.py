@@ -1360,10 +1360,24 @@ class TestCheckPathLength:
         util.check_path_length(tmp_path / ("a" * 255))
 
     def test_bytes_not_characters_are_counted(self, tmp_path):
-        # 128 two-byte characters are 256 bytes, which no filesystem accepts.
+        # 128 two-byte characters are 256 bytes, which APFS and ext4 refuse.
         with pytest.raises(BoostError) as exc:
             util.check_path_length(tmp_path / ("é" * 128))
         assert "256 bytes" in exc.value.message
+
+    def test_the_echo_is_exactly_forty_characters_and_an_ellipsis(self, tmp_path):
+        # Any component over 255 bytes is at least 64 characters (UTF-8 is at
+        # most 4 bytes a character), so the echo is always truncated; pin
+        # where, so the cut cannot drift a character either way.
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("a" * 256))
+        assert exc.value.message.endswith(": %r" % ("a" * 40 + "…"))
+
+    def test_the_hint_names_the_filesystems_it_is_true_of(self, tmp_path):
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("a" * 256))
+        assert exc.value.hint == ("APFS and ext4 refuse a file or directory "
+                                  "name over 255 bytes")
 
     def test_the_message_does_not_echo_the_whole_component(self, tmp_path):
         with pytest.raises(BoostError) as exc:

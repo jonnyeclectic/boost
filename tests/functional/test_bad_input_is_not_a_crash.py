@@ -108,8 +108,8 @@ class TestTapPathSpec:
 
 
 class TestOverLongNames:
-    """A name longer than one path component allows — 255 bytes on APFS, ext4
-    and NTFS — reached ``Path.exists()``, which is not total: pathlib swallows
+    """A name longer than one path component allows — 255 bytes on APFS and
+    ext4 — reached ``Path.exists()``, which is not total: pathlib swallows
     ENOENT and friends but not ENAMETOOLONG, so four commands answered a
     300-character name with ``OSError: [Errno 63] File name too long`` and a
     crash report. Tap's parse boundary already refuses one by length; these

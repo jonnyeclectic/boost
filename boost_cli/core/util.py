@@ -442,7 +442,9 @@ def slugify(name: str) -> str:
     return _slug_or_none(name) or "skill"
 
 
-#: The longest single path component APFS, ext4 and NTFS will take, in bytes.
+#: The longest single path component APFS and ext4 will take, in bytes.
+#: (NTFS counts 255 UTF-16 units instead, so it takes some names this refuses;
+#: refusing them everywhere keeps the answer the same on every OS.)
 #: Past it the OS refuses even to *stat* the path, and `Path.exists()` is not
 #: total: pathlib swallows ENOENT, ENOTDIR, EBADF and ELOOP, but ENAMETOOLONG
 #: raises straight out as a bare OSError that the CLI frames as a crash.
@@ -452,12 +454,13 @@ MAX_COMPONENT_BYTES = 255
 def _check_component(part: str, what: str) -> None:
     size = len(part.encode("utf-8", "surrogateescape"))
     if size > MAX_COMPONENT_BYTES:
-        shown = part if len(part) <= 40 else part[:40] + "…"
+        # Over 255 bytes is at least 64 characters (UTF-8 is at most four
+        # bytes a character), so the echo is always a truncation.
         raise BoostError(
             "%s is too long (%d bytes, limit %d): %r"
-            % (what, size, MAX_COMPONENT_BYTES, shown),
-            hint="no filesystem accepts a file or directory name longer "
-                 "than %d bytes" % MAX_COMPONENT_BYTES)
+            % (what, size, MAX_COMPONENT_BYTES, part[:40] + "…"),
+            hint="APFS and ext4 refuse a file or directory name over %d "
+                 "bytes" % MAX_COMPONENT_BYTES)
 
 
 def check_path_length(path: Path, *, what: str = "path") -> Path:

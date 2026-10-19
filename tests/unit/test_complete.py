@@ -84,6 +84,14 @@ class TestLeadingGlobalFlagsAndHelp:
         got = complete.candidates(["boost", "--debug"], COMMANDS,
                                   global_flags=self.GLOBALS)
         assert "install" not in got
+        # No real command starts with `-`, so the line above answers [] even
+        # if the last word were peeled. A flag set holding a command *prefix*
+        # tells the two apart: kept, `ins` completes; peeled, nothing does.
+        got = complete.candidates(["boost", "ins"], COMMANDS,
+                                  global_flags=frozenset({"ins"}))
+        assert got == [c for c in complete._command_names(COMMANDS)
+                       if c.startswith("ins")]
+        assert "install" in got
 
     def test_a_global_after_the_command_is_the_command_s_own(self, sandbox):
         # `cli._extract_globals` only peels flags *before* the command, so a
@@ -107,6 +115,17 @@ class TestLeadingGlobalFlagsAndHelp:
 
     def test_help_takes_one_command_only(self, sandbox):
         assert complete.candidates(["boost", "help", "install", ""],
+                                   COMMANDS) == []
+
+    @pytest.mark.parametrize("word", ["help", "--help", "-h"])
+    def test_every_spelling_of_help_offers_command_names(self, sandbox, word):
+        # `boost --help install` routes like `boost help install`, so TAB
+        # after either flag must offer what TAB after `help` does.
+        got = complete.candidates(["boost", word, "ins"], COMMANDS)
+        assert got == [c for c in complete._command_names(COMMANDS)
+                       if c.startswith("ins")]
+        assert "install" in got and "search" not in got
+        assert complete.candidates(["boost", word, "install", ""],
                                    COMMANDS) == []
 
     def test_help_after_a_global_flag(self, sandbox):
