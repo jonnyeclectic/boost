@@ -2373,7 +2373,11 @@ def _install_rule(entry: dict, force: bool = False,
             path.parent.mkdir(parents=True, exist_ok=True)
             if mode == rules.MODE_CLAUDE:
                 current = path.read_text(encoding="utf-8") if path.exists() else ""
-                util.atomic_write_text(path, rules.merge_block(current, name, claude_body))
+                # A context file is the user's: write through a symlink to
+                # it and keep its mode (see util.write_user_file).
+                util.write_user_file(
+                    path, rules.merge_block(current, name, claude_body),
+                    base=resolved_base)
                 # Hash what `rules.read_block` will read back (the stripped
                 # body), so `boost verify` can tell an edited block from ours.
                 written = claude_body.strip("\n")
@@ -2461,7 +2465,8 @@ def _refused_removal(name: str, path: Path):
         raise _removal_refused(name, path) from None
 
 
-def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> int:
+def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]],
+                           base=None) -> int:
     """Apply an uninstall's removals, or none of them. Returns how many files.
 
     ``plan`` holds ``(path, new_text)`` for each file to change: ``""`` to
@@ -2488,14 +2493,18 @@ def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> int:
     """
     once: dict[Path, tuple[Path, str]] = {}
     for path, text in plan:
-        once.setdefault(path.parent.resolve() / path.name, (path, text))
+        # The leaf resolves too: `GEMINI.md -> AGENTS.md` is one file.
+        once.setdefault(Path(os.path.realpath(path.parent / path.name)),
+                        (path, text))
     for path, _text in once.values():
         if not os.access(str(path.parent), os.W_OK):
             raise _removal_refused(name, path)
     for path, text in once.values():
         with _refused_removal(name, path):
-            if text:
-                util.atomic_write_text(path, text)
+            if text or path.is_symlink():
+                # Rewritten in place through any link, so the user's link
+                # survives uninstall; a linked file emptied stays, empty.
+                util.write_user_file(path, text, base=base)
             else:
                 path.unlink(missing_ok=True)
     return len(once)
@@ -2544,7 +2553,7 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
                 plan.append((path, ""))
         if m.get("agent"):
             removed.append(m["agent"])
-    gone = _remove_all_or_nothing(name, plan)
+    gone = _remove_all_or_nothing(name, plan, base=rule.get("base"))
     lockfile.remove_rule(name)
     journal.log("uninstall", name)
     return _materialized_result(name, removed, rule, "rule", gone)
@@ -2659,8 +2668,9 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
                 text = path.read_text(encoding="utf-8")
                 if rules.read_block(text, name) is not None:
                     stripped = rules.strip_block(text, name)
-                    if stripped:
-                        util.atomic_write_text(path, stripped)
+                    if stripped or path.is_symlink():
+                        util.write_user_file(path, stripped,
+                                             base=entry.get("base"))
                     else:
                         path.unlink()  # file held only our block
         elif path.is_file():
@@ -2750,9 +2760,11 @@ def release_materialized(kind: str, name: str, entry: dict,
             # the file, or the stash predates this field) falls back to
             # merge_block's append.
             if full_text is not None and rules.strip_block(full_text, name) == current:
-                util.atomic_write_text(path, full_text)
+                util.write_user_file(path, full_text, base=entry.get("base"))
             else:
-                util.atomic_write_text(path, rules.merge_block(current, name, content))
+                util.write_user_file(
+                    path, rules.merge_block(current, name, content),
+                    base=entry.get("base"))
         else:
             util.atomic_write_text(path, content)
         if m.get("agent"):

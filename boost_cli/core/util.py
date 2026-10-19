@@ -246,7 +246,16 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     spelled. That test arrived with this change, so it corroborates the pin
     rather than independently motivating it.
     """
-    path = Path(path)
+    _replace_atomically(Path(path), text, encoding, mode=None)
+
+
+def _replace_atomically(path: Path, text: str, encoding: str,
+                        mode: int | None) -> None:
+    """The temp-file + fsync + ``os.replace`` core of both writers.
+
+    ``mode`` of ``None`` keeps ``mkstemp``'s 0600, which is right for the
+    files boost owns; :func:`write_user_file` passes the mode to keep.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent),
                                prefix="." + path.name + ".", suffix=".tmp")
@@ -255,12 +264,56 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
         os.replace(tmp, str(path))
     except BaseException:
         # Never leave a temp turd behind, and never mask the original error.
         with contextlib.suppress(OSError):
             Path(tmp).unlink()
         raise
+
+
+def current_umask() -> int:
+    """The process umask, read the only way POSIX offers: set it and put it
+    back. Used for the mode a file *created* on the user's behalf gets."""
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask
+
+
+def write_user_file(path: Path, text: str, base=None) -> Path:
+    """Atomically rewrite a file the *user* owns, keeping its link and mode.
+
+    :func:`atomic_write_text` is for boost's own files, and two of its
+    properties are wrong for a context file such as ``~/.claude/CLAUDE.md``
+    or a repo's ``GEMINI.md``. ``os.replace`` swaps out the path itself, so
+    a symlink to a dotfiles checkout (or ``GEMINI.md -> AGENTS.md``) became a
+    detached regular copy, the rule never reached the file the user edits,
+    and uninstall could not restore the link. And ``mkstemp`` is always
+    0600, so a 0644 ``AGENTS.md`` came back private — a mode change git
+    reports on a committed file.
+
+    So a symlink is followed and the write lands on its target, through
+    every hop, and the link stays a link. The target keeps its existing
+    permission bits; a new file gets ``0o666 & ~umask``, what a plain
+    ``open()`` would have given it. With ``base`` (project scope), the
+    *resolved* target must still sit inside the repo: a committed link
+    pointing out of it is refused rather than written through, the same
+    boundary :func:`scopes.ensure_in_base` holds for every project write.
+    Returns the path actually written.
+    """
+    path = Path(path)
+    target = Path(os.path.realpath(path)) if path.is_symlink() else path
+    if base is not None:
+        from . import scopes  # local: scopes -> projectlock -> util
+        scopes.ensure_in_base(base, target)
+    try:
+        mode = stat.S_IMODE(target.stat().st_mode)
+    except FileNotFoundError:
+        mode = 0o666 & ~current_umask()
+    _replace_atomically(target, text, "utf-8", mode=mode)
+    return target
 
 
 def positive_int(s: str) -> int:
