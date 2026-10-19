@@ -421,15 +421,18 @@ def cmd_taps(argv) -> int:
     return 0
 
 
-def _outdated_display(r: dict) -> str:
+def _outdated_display(r: dict, configured: frozenset[str] = frozenset()) -> str:
     """Table rendering of one `cmd_outdated` row's machine fields.
 
     ``reason``/``latest``/``latest_commit`` are the JSON-facing values;
     everything a human reads (the "(content changed)" wording, the short
     commit) is derived here so the two representations can't drift apart.
+    ``configured`` names the taps still configured: a missing row from one of
+    them was removed upstream, which is what the footer calls it too.
     """
     if r["reason"] == staleness.SOURCE_MISSING:
-        return staleness.OUTDATED_SOURCE_MISSING
+        return (staleness.OUTDATED_REMOVED_UPSTREAM if r["tap"] in configured
+                else staleness.OUTDATED_SOURCE_MISSING)
     latest = r["latest"] or "?"
     if r["reason"] == staleness.CONTENT:
         return ("%s (%s)" % (latest, r["latest_commit"])
@@ -546,16 +549,19 @@ def cmd_outdated(argv) -> int:
     if not results:
         out.ok("everything up to date")
         return 0
+    # A missing row whose tap is still configured lost the item upstream;
+    # re-tapping it would restore nothing, so it is worded and counted apart.
+    configured = frozenset(t.name for t in registry.list_taps())
     rows = [(r["name"] + ("" if r["kind"] == "skill" else " (%s)" % r["kind"]),
              r["installed"] + (" (pinned)" if r["pinned"] else ""),
-             _outdated_display(r), r["tap"]) for r in results]
+             _outdated_display(r, configured), r["tap"]) for r in results]
     # NAME is what `boost update`/`upgrade` take.
     out.table(rows, headers=("NAME", "INSTALLED", "LATEST", "TAP"),
               whole=("NAME",))
     print()
-    source_missing = sum(1 for r in results
-                         if r["reason"] == staleness.SOURCE_MISSING)
-    out.dim(staleness.outdated_footer(len(results), source_missing))
+    missing = [r for r in results if r["reason"] == staleness.SOURCE_MISSING]
+    removed = sum(1 for r in missing if r["tap"] in configured)
+    out.dim(staleness.outdated_footer(len(results), len(missing), removed))
     return 0
 
 

@@ -1554,7 +1554,8 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
             # A dir that refused the refresh is named here, as for a skill.
             _warn_unwritable(store.install(
                 entry, force=True,
-                scope=lk.get("scope", "user"), base=lk.get("base")))
+                scope=lk.get("scope", "user"), base=lk.get("base"),
+                via="update"))
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             continue
@@ -1835,7 +1836,7 @@ def cmd_update(argv: list[str]) -> int:
                      "--yes` to apply" % name)
             continue
         try:
-            _warn_unwritable(store.install(entry, force=True))
+            _warn_unwritable(store.install(entry, force=True, via="update"))
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             continue
@@ -1934,7 +1935,7 @@ def cmd_reinstall(argv: list[str]) -> int:
             try:
                 res = store.install(entry, force=True,
                                     scope=lk.get("scope", "user"),
-                                    base=lk.get("base"))
+                                    base=lk.get("base"), via="reinstall")
             except BoostError as err:
                 # The hint too: a refusal to recreate a deleted repo is only
                 # useful with the `boost uninstall` that clears it.
@@ -2001,7 +2002,7 @@ def cmd_reinstall(argv: list[str]) -> int:
         if warning:
             out.warn(warning)
         try:
-            res = store.install(entry, force=True)
+            res = store.install(entry, force=True, via="reinstall")
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             failed += 1

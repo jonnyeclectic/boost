@@ -595,9 +595,56 @@ class TestSearchCategoryFilter:
         data = json.loads(r.out)
         assert {e["name"] for e in data} == {"tdd-workflow", "jira-integration"}
 
-    def test_filtering_to_nothing_reuses_the_standard_empty_state(self, boost, tapped):
+    def test_filtering_to_nothing_names_the_filter_not_the_query(self, boost, tapped):
+        # The query matched; only --category emptied the list. "no matches
+        # for 'workflow'" plus a `boost discover` hint sent the user to GitHub
+        # for something already on disk and never mentioned the filter.
         r = boost("search", "workflow", "--category", "no-such-category")
-        assert "no matches for 'workflow'" in r.out
+        assert "○ no matches for 'workflow' in category 'no-such-category'" in r.out
+        assert "drop --category" in r.out
+        assert "`boost browse --categories`" in r.out
+        assert "boost discover" not in r.out
+
+    def test_a_query_matching_nothing_keeps_the_discover_hint_under_a_filter(
+            self, boost, tapped):
+        # Nothing matched before the filter either, so GitHub is still the
+        # right next place to look and the category is beside the point.
+        r = boost("search", "zzzznothing", "--category", "testing")
+        assert "no matches for 'zzzznothing'" in r.out
+        assert "in category" not in r.out
+        assert "try `boost discover zzzznothing`" in r.out
+
+    def test_a_saturated_retrieval_does_not_claim_matches_elsewhere(
+            self, boost, tapped, monkeypatch):
+        # Retrieval stopped at its cap, so the filter only saw the top k;
+        # "it matches outside that category" would assert what was never
+        # checked about the matches past the cap.
+        from boost_cli.core import rag
+
+        def fake_retrieve_any(query, k=60, **kwargs):
+            hits = [{"entry": {"name": "skill-%d" % i, "description": "d",
+                               "kind": "skill", "tap": "fixture-tap",
+                               "category": "docs"},
+                     "score": 1.0, "content": None, "snippet": ""}
+                    for i in range(k)]
+            return hits, "BM25 full-content"
+        monkeypatch.setattr(rag, "retrieve_any", fake_retrieve_any)
+        r = boost("search", "anything", "--category", "no-such-category")
+        assert ("○ none of the top 60 matches for 'anything' are in "
+                "category 'no-such-category'") in r.out
+        assert "it matches outside that category" not in r.out
+        assert "boost discover" not in r.out
+
+    def test_an_unsaturated_filter_miss_still_says_it_matches_elsewhere(
+            self, boost, tapped):
+        r = boost("search", "workflow", "--category", "no-such-category")
+        assert "it matches outside that category" in r.out
+        assert "none of the top" not in r.out
+
+    def test_a_filter_miss_still_names_the_dropped_terms(self, boost, tapped):
+        r = boost("search", "R", "workflow", "--category", "no-such-category")
+        assert "in category 'no-such-category'" in r.out
+        assert "not searched: 'R'" in r.out
 
 
 # ---------------------------------------------------------------- index
@@ -2048,6 +2095,62 @@ class TestTrending:
         house = next(l for l in r.out.splitlines() if l.startswith("house-style"))
         assert "skill" in brain.split()
         assert "rule" in house.split()
+
+    def test_update_and_reinstall_are_not_counted_as_installs(
+            self, boost, tapped):
+        # `boost update` and `boost reinstall` go through store.install with
+        # force=True, which journals an "install" each time — one install and
+        # one upgrade read as "2 installs" of local activity.
+        from boost_cli.core import journal
+        boost("install", "brainstorming")
+        journal.log("install", "brainstorming", via="update")
+        journal.log("install", "brainstorming", via="reinstall")
+        r = boost("trending")
+        brain = next(l for l in r.out.splitlines()
+                     if l.startswith("brainstorming"))
+        assert brain.split()[1] == "1"
+        data = json.loads(boost("trending", "--json").out)
+        assert [(i["name"], i["installs"]) for i in data["items"]] == [
+            ("brainstorming", 1)]
+
+    def test_a_real_update_and_reinstall_journal_no_new_install(
+            self, boost, fixture_tap_src, tmp_path):
+        # End to end: the update and reinstall paths must say who they are,
+        # or the filter above has nothing to filter on.
+        tap_dir = tmp_path / "trend-tap"
+        shutil.copytree(fixture_tap_src, tap_dir)
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        md = tap_dir / "skills" / "brainstorming" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8").replace("1.4.0", "1.5.0"),
+                      encoding="utf-8")
+        _git(tap_dir, "commit", "-qam", "bump")
+        assert "upgraded brainstorming" in boost("update").out
+        boost("reinstall", "brainstorming")
+        brain = next(l for l in boost("trending").out.splitlines()
+                     if l.startswith("brainstorming"))
+        assert brain.split()[1] == "1"
+
+    def test_only_refresh_events_falls_back_to_curated(self, boost, tapped):
+        # A journal holding nothing but upgrades has no install activity to
+        # rank, so it must read as "no local install data", not as a table.
+        from boost_cli.core import journal
+        journal.log("install", "brainstorming", via="update")
+        r = boost("trending")
+        assert "curated picks (no local install data yet)" in r.out
+
+    def test_description_comes_from_the_tap_it_was_installed_from(
+            self, boost, tmp_path):
+        from boost_cli.core import journal
+        _make_mirror_tap(tmp_path / "mirror-a", "shared-skill", "from tap a")
+        _make_mirror_tap(tmp_path / "mirror-b", "shared-skill", "from tap b")
+        boost("tap", tmp_path / "mirror-a")
+        boost("tap", tmp_path / "mirror-b")
+        journal.log("install", "shared-skill", tap="mirror-b")
+        r = boost("trending")
+        line = next(l for l in r.out.splitlines() if l.startswith("shared-skill"))
+        assert "from tap b" in line
+        assert "from tap a" not in line
 
     def test_long_description_is_clipped(self, boost, tapped, monkeypatch):
         # D23/D24: at a narrow width the table clips wide text columns to fit
