@@ -881,7 +881,7 @@ class TestDoctor:
         assert "1 issue needs attention" in r
 
     def test_pinned_skill_with_a_moved_source_names_the_real_choices(
-            self, boost, fixture_tap_src, tmp_path):
+            self, boost, fixture_tap_src, tmp_path, monkeypatch):
         # `boost heal` declines this repair, so prescribing it sent the user
         # round in a loop: doctor -> heal (declined) -> doctor.
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "pinned-tap")
@@ -891,12 +891,23 @@ class TestDoctor:
         _bump(tap_dir, "brainstorming", "1.4.0", "1.5.0")
         boost("update", "--taps-only")
         shutil.rmtree(paths.store_dir() / "brainstorming")
-        r = _flat(boost("doctor", expect=1).out)
-        assert ("skill brainstorming missing from store — brainstorming is "
-                "pinned and its tap source has moved — repair declined "
-                "(unpin, or `boost reinstall brainstorming` to accept the new "
-                "content)") in r
+
+        # Doctor is read-only and offline. Deciding whether the pin blocks the
+        # repair hashes the tap source, which widens a sparse clone and can
+        # fetch -- so doctor must not ask, and points at the preview instead.
+        def refuse(*_a, **_k):
+            raise AssertionError("doctor materialized a tap source")
+        # A scoped context, never ``monkeypatch.undo()``: undo would also
+        # revert the sandbox's HOME and point the heal below at the real one.
+        with monkeypatch.context() as m:
+            m.setattr("boost_cli.core.gitutil.materialize", refuse)
+            m.setattr("boost_cli.core.store.source_dir_for", refuse)
+            r = _flat(boost("doctor", expect=1).out)
+        assert ("skill brainstorming missing from store — it is pinned, so "
+                "`boost heal --dry-run` shows whether heal can restore it") in r
         assert "missing from store — run `boost heal`" not in r
+        assert r.count("—") == r.count(" — ")  # no doubled dash
+        assert "— repair declined" not in r
 
         h = boost("heal", expect=1)
         line = next(ln for ln in h.out.splitlines() if "repair declined" in ln)
@@ -904,6 +915,44 @@ class TestDoctor:
         assert "nothing to heal" not in h.out
         p = boost("heal", "--dry-run", expect=1)
         assert "repair declined" in p.out and "nothing to heal" not in p.out
+
+    def test_heal_fails_over_a_url_import_it_cannot_reclone(
+            self, boost, sandbox):
+        url = "https://example.invalid/owner/repo.git"
+        lockfile.set_skill("alpha", {"tap": "local", "source_url": url,
+                                     "version": "0.1.0", "sha256": "0" * 64})
+        msg = ("alpha's store dir is missing — `boost reinstall alpha` "
+               "clones it again from %s" % url)
+        for argv in (("heal",), ("heal", "--dry-run")):
+            h = boost(*argv, expect=1)
+            line = next(ln for ln in h.out.splitlines() if msg in ln)
+            assert "✓" not in line
+            assert "nothing to heal" not in h.out
+        assert lockfile.get_skill("alpha")["source_url"] == url
+
+    def test_heal_fails_over_a_pinned_rule_whose_source_moved(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "pinned-rule-tap")
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.0.0\n---\n\n"
+                        "Use two-space indents.\n", "add rule")
+        boost("tap", tap_dir)
+        boost("install", "house-style")
+        boost("pin", "house-style")
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.1.0\n---\n\n"
+                        "Use four-space indents.\n", "rewrite rule")
+        boost("update")
+        cm = paths.home() / ".claude" / "CLAUDE.md"
+        cm.write_text("# notes\n", encoding="utf-8")
+        declined = ("rule house-style is pinned and its tap source has moved "
+                    "— repair declined")
+        for argv in (("heal",), ("heal", "--dry-run")):
+            h = boost(*argv, expect=1)
+            line = next(ln for ln in h.out.splitlines() if declined in ln)
+            assert "✓" not in line
+        # Declined means untouched: the pin held, nothing was written.
+        assert cm.read_text(encoding="utf-8") == "# notes\n"
 
 
 

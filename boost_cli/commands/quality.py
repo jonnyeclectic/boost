@@ -482,7 +482,6 @@ def _mat_remedy(off: list[tuple[str, str, str, str]]) -> str:
             "remove the artifact.%s" % (drop, tail))
 
 
-
 def _drifted(kind: str, name: str, entry: dict, bad) -> int:
     """Name a rule/workflow whose written content no longer hashes to the
     lock, and return the issue count it adds.
@@ -497,6 +496,7 @@ def _drifted(kind: str, name: str, entry: dict, bad) -> int:
         return 0
     bad(kind, "%s %s modified since install — run `boost verify`" % (kind, name))
     return 1
+
 
 def cmd_doctor(argv):
     ap = cliparse.parser(
@@ -678,15 +678,15 @@ def cmd_doctor(argv):
         sdir = store.skill_store_dir(name)
         if not sdir.is_dir():
             # A pin over a moved source is a repair heal declines, so naming
-            # heal sent the user round doctor -> heal -> doctor. The planner
-            # heal runs says so; asked only for a pinned entry, because its
-            # pin check hashes the tap source, which materializes it.
-            repair = (store.plan_missing_store(name)
-                      if entry.get("pinned") and not store.is_url_import(entry)
-                      else None)
-            if repair is not None and repair.action == "declined":
-                bad("skill", "skill %s missing from store — %s"
-                    % (name, repair.applied), wrap=True)
+            # heal sent the user round doctor -> heal -> doctor. Whether the
+            # source moved is a hash of the tap source, and reading that goes
+            # through `source_dir_for`, which widens a sparse clone and can
+            # fetch. Doctor stays read-only and offline, so it names the
+            # preview that answers instead of asking itself.
+            if entry.get("pinned") and not store.is_url_import(entry):
+                bad("skill", "skill %s missing from store — it is pinned, so "
+                    "`boost heal --dry-run` shows whether heal can restore it"
+                    % name, wrap=True)
                 skill_issues += 1
                 continue
             fix = ("boost reinstall %s" % name if store.is_url_import(entry)

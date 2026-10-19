@@ -30,6 +30,12 @@ present; it is now named as malformed with the hand edit that fixes it
 saying <code>run `boost heal`</code>, a loop with no exit.
 <code>store.is_unrepaired</code> now recognises a declined repair (a pin, or a
 URL import sync cannot re-clone), so heal and sync print it as a warning and
-heal exits 1 in both the real and <code>--dry-run</code> runs. Doctor asks
-<code>store.plan_missing_store</code> for a pinned entry and prints its answer:
-unpin, or <code>boost reinstall</code>.
+<b>heal's exit code changes</b>: it now exits 1, in both the real and
+<code>--dry-run</code> runs, whenever it leaves a declined repair behind (a
+pinned skill, rule or workflow over a moved source, or a URL import whose store
+dir is gone), where it used to exit 0. Doctor stays read-only and offline:
+deciding whether a pin blocks the repair means hashing the tap source, which
+widens a sparse clone and can fetch, so for a pinned skill missing from the
+store it no longer prescribes <code>boost heal</code> and instead says
+<code>it is pinned, so `boost heal --dry-run` shows whether heal can restore
+it</code>.
