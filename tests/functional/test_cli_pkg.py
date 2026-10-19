@@ -2137,13 +2137,23 @@ class TestKindAwarePkgSurface:
         r = boost("bundle", "install", vf)
         assert "Installed 2 items" in r.out
 
-    def test_dry_run_verb_is_upgrade_for_an_installed_rule(
+    def test_dry_run_verb_is_reinstall_for_a_forced_installed_rule(
             self, boost, fixture_tap_src, tmp_path):
         boost("tap", self._tap_with_rule(fixture_tap_src, tmp_path, "dr-tap"))
         boost("install", "house-style")
-        r = boost("install", "house-style", "--dry-run")
-        assert "would upgrade rule house-style v1.0.0" in r.out
+        r = boost("install", "house-style", "--force", "--dry-run")
+        assert "would reinstall rule house-style v1.0.0" in r.out
         assert "would install" not in r.out
+
+    def test_dry_run_of_an_installed_rule_refuses_like_the_run(
+            self, boost, fixture_tap_src, tmp_path):
+        boost("tap", self._tap_with_rule(fixture_tap_src, tmp_path, "drr-tap"))
+        boost("install", "house-style")
+        dry = boost("install", "house-style", "--dry-run", expect=1)
+        live = boost("install", "house-style", expect=1)
+        assert "house-style is already installed" in live.err
+        assert dry.err == live.err
+        assert "would" not in dry.out
 
     def test_installed_rule_dependency_is_not_repulled(
             self, boost, fixture_tap_src, tmp_path):

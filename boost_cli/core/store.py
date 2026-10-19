@@ -261,6 +261,52 @@ def resolve_lock_entry(name: str) -> tuple[str, str | None, dict | None]:
     return bare, kind, entry
 
 
+def installed_name(name: str) -> str:
+    """The bare lock key a command acting on an installed ``name`` should use.
+
+    ``install`` accepts ``tap:skill`` and every ambiguity hint tells the user
+    to type it, but the lock — user and project — keys items by the bare
+    name, so a command that probed it with the qualified string answered
+    "not installed" about an item ``boost list`` shows. This is the one place
+    such a command turns what was typed into the key it looks up.
+
+    An unqualified ``name`` comes back unchanged, and so does — bare — a
+    qualified one nothing is installed under: the caller's own lookup then
+    reports the miss in its usual words. A qualifier that names a tap the
+    installed item did *not* come from raises rather than acting on another
+    tap's copy, and so does one that matches only an item the command would
+    not reach: a bare name resolves skill-first (:func:`lockfile.find_any`),
+    so ``other:x`` selecting the rule ``x`` while a skill ``x`` is installed
+    would otherwise uninstall or pin the skill.
+    """
+    qualifier, bare = catalog.split_name(name)
+    if qualifier is None:
+        return name
+    held = [(kind, section[bare]) for kind, section in lockfile.all_installed().items()
+            if bare in section]
+    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
+    project_entry = projectlock.get_skill(pbase, bare) if pbase is not None else None
+    if project_entry is not None:
+        held.append(("skill", project_entry))
+    if not held:
+        return bare
+    taps = [str(entry.get("tap") or "local") for _kind, entry in held]
+    if not any(catalog.tap_matches(t, qualifier) for t in taps):
+        raise BoostError(
+            "%s is not installed — %s is installed from %s, not %s"
+            % (name, bare, ", ".join(dict.fromkeys(taps)), qualifier),
+            hint="name it `%s` or `%s:%s`" % (bare, taps[0], bare), wrap=True)
+    if not catalog.tap_matches(taps[0], qualifier):
+        kind = next(k for (k, _e), t in zip(held, taps, strict=True)
+                    if catalog.tap_matches(t, qualifier))
+        raise BoostError(
+            "%s is ambiguous here — it selects the %s %s, but the %s %s from %s "
+            "is the one this command would act on"
+            % (name, kind, bare, held[0][0], bare, taps[0]),
+            hint="uninstall one of the two first, or see `boost list`", wrap=True)
+    return bare
+
+
 def upstream_source(name: str) -> tuple[str, str, str, str]:
     """``(bare, kind, tap, rel)``: where item ``name`` lives in its tap.
 
@@ -1417,6 +1463,52 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
         hint="uninstall it there first — a different scope cannot force-overwrite it")
 
 
+def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
+                   base=None, kind: str | None = None) -> dict | None:
+    """The lock record an install of ``entry`` would replace, or its refusal.
+
+    Every "already installed" / "is pinned" / cross-scope refusal the install
+    paths make about what is *already there*, in one place, so that
+    ``install --dry-run`` asks the very same question before it prints a plan.
+    The preview used to read the lock itself and call any hit an "upgrade",
+    exiting 0 where the run it described refused with exit 1.
+
+    ``kind`` defaults to the entry's own; ``scope``/``base`` are what
+    :func:`install` is called with. Returns the existing record (``None`` for a
+    fresh install); a returned record therefore means ``force`` let it through.
+    """
+    kind = kind or entry.get("kind", "skill")
+    name = entry["name"]
+    if kind in ("rule", "workflow"):
+        resolved_base = _require_project_base(scope, base, "%s %s" % (kind, name))
+        _refuse_stranded_base(scope, base, kind, name)
+        existing = (lockfile.get_rule if kind == "rule"
+                    else lockfile.get_workflow)(name)
+        _check_scope_conflict(name, existing, scope, resolved_base, force)
+        return existing
+    if scope == scopes.SCOPE_PROJECT:
+        resolved_base = _require_project_base(scope, base, name)
+        if resolved_base is None:         # _require_project_base already raised
+            raise BoostError("there is no project here to install %s into" % name)
+        existing = projectlock.get_skill(resolved_base, name)
+        if existing and not force:
+            raise BoostError(
+                "%s is already installed in this project (v%s)"
+                % (name, existing.get("version")),
+                # Not `reinstall --local`: reinstall has no scope flag (it
+                # would exit 2), and bare `reinstall` reads the user lock only,
+                # so it answers "not installed" for the very skill this is about.
+                hint="`boost install %s --local --force` to force" % name)
+        return existing
+    existing = lockfile.get_skill(name)
+    if existing and existing.get("pinned") and not force:
+        raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
+    if existing and not force:
+        raise BoostError("%s is already installed (v%s)" % (name, existing.get("version")),
+                        hint="`boost reinstall %s` to force, `boost update` to upgrade" % name)
+    return existing
+
+
 def _require_writable(name: str) -> None:
     """Refuse an install before its first write if its record cannot be kept.
 
@@ -1572,12 +1664,7 @@ def install(entry: dict, force: bool = False,
         return _install_project_skill(entry, force=force, only_agents=only_agents,
                                       base=base, via=via)
     name = entry["name"]
-    existing = lockfile.get_skill(name)
-    if existing and existing.get("pinned") and not force:
-        raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
-    if existing and not force:
-        raise BoostError("%s is already installed (v%s)" % (name, existing.get("version")),
-                        hint="`boost reinstall %s` to force, `boost update` to upgrade" % name)
+    existing = check_existing(entry, force=force, kind="skill")
 
     violations = policy.check_install(entry, len(lockfile.installed()))
     if violations:
@@ -1661,15 +1748,8 @@ def _install_project_skill(entry: dict, force: bool = False,
     if resolved_base is None:             # _require_project_base already raised
         raise BoostError("there is no project here to install %s into" % name)
 
-    existing = projectlock.get_skill(resolved_base, name)
-    if existing and not force:
-        raise BoostError(
-            "%s is already installed in this project (v%s)"
-            % (name, existing.get("version")),
-            # Not `reinstall --local`: reinstall has no scope flag (it would
-            # exit 2), and bare `reinstall` reads the user lock only, so it
-            # answers "not installed" for the very skill this line is about.
-            hint="`boost install %s --local --force` to force" % name)
+    existing = check_existing(entry, force=force, scope=scopes.SCOPE_PROJECT,
+                              base=resolved_base, kind="skill")
 
     violations = policy.check_install(entry, len(projectlock.installed(resolved_base)))
     if violations:
@@ -2339,9 +2419,8 @@ def _install_rule(entry: dict, force: bool = False,
     # is nowhere to put this, say so immediately. Also needed ahead of the
     # existing-install check below, which compares against this scope/base.
     resolved_base = _require_project_base(scope, base, "rule %s" % name)
-    _refuse_stranded_base(scope, base, "rule", name)
-    existing = lockfile.get_rule(name)
-    _check_scope_conflict(name, existing, scope, resolved_base, force)
+    existing = check_existing(entry, force=force, scope=scope, base=base,
+                              kind="rule")
     explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 
@@ -2838,9 +2917,8 @@ def _install_workflow(entry: dict, force: bool = False,
     from . import gitutil, workflows
     name = entry["name"]
     resolved_base = _require_project_base(scope, base, "workflow %s" % name)
-    _refuse_stranded_base(scope, base, "workflow", name)
-    existing = lockfile.get_workflow(name)
-    _check_scope_conflict(name, existing, scope, resolved_base, force)
+    existing = check_existing(entry, force=force, scope=scope, base=base,
+                              kind="workflow")
     explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 
@@ -3556,7 +3634,10 @@ def uninstall(name: str) -> dict:
     (rule/workflow) — those are removed from entirely different places, and a
     caller that assumes "skill" for all three narrates a store directory that
     a rule or workflow never had.
+
+    ``name`` may be tap-qualified (:func:`installed_name`).
     """
+    name = installed_name(name)
     entry = lockfile.get_skill(name)
     if not entry:
         rule = lockfile.get_rule(name)

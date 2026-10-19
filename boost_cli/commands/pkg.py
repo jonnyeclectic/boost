@@ -709,7 +709,10 @@ def cmd_install(argv: list[str]) -> int:
             # raise `multi` on a `requires:` closure.
             try:
                 if args.scope == scopes.SCOPE_PROJECT and e.get("kind", "skill") == "skill":
-                    seen = projectlock.get_skill(pbase, e["name"])
+                    # The run's own refusal, ahead of the header: a preview
+                    # must not promise a reinstall the run declines.
+                    seen = store.check_existing(e, force=args.force,
+                                                scope=args.scope)
                     # agents_for_scope(pbase), not enabled_agents(): project scope
                     # copies into each agent's *repo-local* dotdir, which excludes
                     # Antigravity CLI (its layout is two levels under ~/.gemini and
@@ -739,11 +742,12 @@ def cmd_install(argv: list[str]) -> int:
                     continue
                 if e.get("kind") in ("rule", "workflow"):
                     k = e["kind"]
-                    seen = (lockfile.get_rule if k == "rule"
-                            else lockfile.get_workflow)(e["name"])
-                    # Same verb the real run's summary uses ("Upgraded 1 rule");
-                    # the skill preview below already says "upgrade".
-                    verb = "upgrade" if seen else "install"
+                    # The run's refusals first ("already installed" without
+                    # --force, a cross-scope clash even with it), so a record
+                    # that is seen here is one --force replaces: a reinstall.
+                    seen = store.check_existing(e, force=args.force,
+                                                scope=args.scope)
+                    verb = "reinstall" if seen else "install"
                     where = "into this repo" if args.scope == "project" else "user config"
                     # The real run's two steps, in its order: replay the lock's
                     # recorded scope, then narrow — so the preview refuses in the
@@ -764,8 +768,11 @@ def cmd_install(argv: list[str]) -> int:
                         _preview_skill_copy(e, seen, args.as_skill,
                                             args.scope)
                     continue
-                seen = lockfile.get_skill(e["name"])
-                verb = "upgrade" if seen else "install"
+                # Same refusal as the run ("already installed", "is pinned");
+                # past it, a seen record is one --force overwrites.
+                seen = store.check_existing(e, force=args.force,
+                                            scope=args.scope)
+                verb = "reinstall" if seen else "install"
                 # The lock's recorded scope, replayed exactly as `store.install`
                 # replays it before calling `link_agents` — the same two steps
                 # the rule/workflow branch above takes, and left out here for
@@ -889,6 +896,7 @@ def cmd_uninstall(argv: list[str]) -> int:
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     args = ap.parse_args(argv)
+    args.names = [store.installed_name(n) for n in args.names]
     # Ask only when someone is there to answer. out.confirm() returns its
     # `default` on a non-TTY, so gating on it unconditionally would turn every
     # scripted `boost uninstall x` — CI step, Makefile, Dockerfile — into a
@@ -1955,6 +1963,7 @@ def cmd_reinstall(argv: list[str]) -> int:
     ap.add_argument("--all", action="store_true",
                     help="reinstall every installed skill, rule and workflow")
     args = ap.parse_args(argv)
+    args.names = [store.installed_name(n) for n in args.names]
     done, failed = 0, 0
     done_kinds: set[str] = set()
     items: list[tuple] = []
@@ -2511,6 +2520,7 @@ def cmd_pin(argv: list[str]) -> int:
     ap.add_argument("--commit", action="store_true",
                     help="also freeze the exact source commit (integrity pin)")
     args = ap.parse_args(argv)
+    args.name = store.installed_name(args.name)
     rc = _set_pin(args.name, True)
     found = lockfile.find_any(args.name)
     if rc == 0 and args.commit and found is not None:
@@ -2534,6 +2544,7 @@ def cmd_unpin(argv: list[str]) -> int:
     # trailer prints after — it qualifies `_set_pin`'s own "unpinned" line, so
     # printing it first would leave the trailer describing a line that has
     # not appeared yet (mirrors `cmd_pin`'s ok-line-then-trailer order).
+    args.name = store.installed_name(args.name)
     found = lockfile.find_any(args.name)
     cleared_commit_pin = bool(
         found and integrity.clear_commit_pin(args.name, found[1], kind=found[0]))
