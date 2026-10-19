@@ -1504,6 +1504,29 @@ def _refuse_self_installing(entry: dict) -> None:
         hint="run the registry's own installer: %s" % cmd, wrap=True)
 
 
+def carried_user_state(existing: dict | None) -> dict:
+    """The user-set lock fields a re-install must carry that it does not rebuild.
+
+    Every lock builder below recomputes an entry from scratch, so a field it
+    does not name is dropped. Audited, the fields split three ways:
+
+    * **user state, carried** — ``installed_at``, ``pinned``, ``tags``,
+      ``only_agents`` (via :func:`declared_agent_scope`), a workflow's
+      ``as_skill``, and ``commit_pin``, which is the one this returns. Each
+      builder carried the others by name and none carried ``commit_pin``, so
+      ``boost reinstall`` of a commit-pinned item erased the integrity pin
+      without a word and ``boost verify`` went on passing.
+    * **derived, rebuilt** — ``version``, ``tap``, ``source_*``, ``commit``,
+      ``sha256``, ``updated_at``, ``agents``, ``refused_agents``,
+      ``source_updated_at``, ``materializations``.
+    * **reset on purpose** — ``quarantined`` (the content was just put back)
+      and ``sidelined_by`` (the install relinks, and ``agents`` is measured
+      from disk, so keeping the flag would describe links that exist).
+    """
+    pin = (existing or {}).get("commit_pin")
+    return {"commit_pin": pin} if pin else {}
+
+
 def install(entry: dict, force: bool = False,
             only_agents: list[str] | None = None,
             scope: str = "user", base=None,
@@ -1603,6 +1626,7 @@ def install(entry: dict, force: bool = False,
         "agents": linked_agents(name),
         "only_agents": declared_agent_scope(only_agents, existing),
         "tags": (existing or {}).get("tags", []),
+        **carried_user_state(existing),
         # The agents whose dir refused the link, so `install --force` retries
         # them once the dir is fixed (preserved_agent_scope), and those whose
         # link could not be looked at, so uninstall does not forget it.
@@ -2425,6 +2449,7 @@ def _install_rule(entry: dict, force: bool = False,
         # the content, so a surviving flag would be a lie.
         "pinned": bool((existing or {}).get("pinned")),
         "quarantined": False,
+        **carried_user_state(existing),
         "materializations": materializations,
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
@@ -2900,6 +2925,7 @@ def _install_workflow(entry: dict, force: bool = False,
         # reinstall, quarantine does not.
         "pinned": bool((existing or {}).get("pinned")),
         "quarantined": False,
+        **carried_user_state(existing),
         "materializations": materializations,
         # Only an explicit `--as-skill`/`--no-as-skill` is recorded, and then
         # it sticks through update, reinstall and sync. Absent means "follow
@@ -3444,6 +3470,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
         # but sync sees no scope and widens them right back.
         "only_agents": declared,
         "tags": (existing or {}).get("tags", []),
+        **carried_user_state(existing),
         **({"refused_agents": refused} if (refused := unrecorded_agents(name, res))
            else {}),
     })
@@ -4578,9 +4605,62 @@ def _pin_blocks_repair(entry: dict, source_sha) -> bool:
     a clone's cone. An unpinned entry can never be blocked, so it never needs
     the answer.
     """
-    if not entry.get("pinned"):
+    if not entry.get("pinned") and not entry.get("commit_pin"):
         return False
-    return _pinned_repair_blocked(entry, source_sha())
+    if moved_off_commit_pin(entry, entry.get("tap")) is not None:
+        return True
+    return bool(entry.get("pinned")) and _pinned_repair_blocked(
+        entry, source_sha())
+
+
+def moved_off_commit_pin(entry: dict, tap_name: str | None) -> str | None:
+    """The tap HEAD a re-install would record over ``entry``'s commit pin.
+
+    ``None`` when there is no commit pin, or the tap still sits on it. A
+    re-install records the tap's *current* commit, so installing anything
+    else would move the item off the commit ``boost pin --commit`` froze —
+    even with byte-identical content, `boost verify` then fails. An unreadable
+    tap answers ``""``, which still blocks: fail closed, as the sha guard does.
+    """
+    pin = entry.get("commit_pin")
+    if not pin:
+        return None
+    try:
+        head = gitutil.head_commit(registry.get(str(tap_name)).path)
+    except BoostError:
+        head = ""
+    return None if head == pin else head
+
+
+def reinstall_pin_hold(kind: str, lk: dict, cat_entry: dict | None = None,
+                       src: Path | None = None) -> str | None:
+    """Why ``boost reinstall`` must not touch ``lk``, or ``None`` if it may.
+
+    Reinstall exists to put the *same* content back, which a pin allows. What
+    a pin forbids is the move: re-installing a pinned item whose source has
+    changed since (the tap moved, `boost update` skipped it) used to install
+    the new version under the old pin, and a commit-pinned one recorded a
+    commit nobody pinned. The same guard `boost sync` applies to repair.
+    ``cat_entry`` is the tap source, ``src`` a local one.
+    """
+    if not lk.get("pinned") and not lk.get("commit_pin"):
+        return None
+    if cat_entry is not None:
+        head = moved_off_commit_pin(lk, cat_entry.get("tap"))
+        if head is not None:
+            return ("commit-pinned at %s, and %s is now at %s"
+                    % (str(lk["commit_pin"])[:12], cat_entry.get("tap"),
+                       head[:12] or "an unreadable commit"))
+        sha = (_skill_source_sha(cat_entry) if kind == "skill"
+               else _source_text_sha(str(cat_entry.get("tap")), cat_entry))
+    elif src is not None:
+        sha = _local_source_sha(src)
+    else:
+        return None
+    if lk.get("pinned") and _pinned_repair_blocked(lk, sha):
+        return ("pinned at v%s, and its source has changed since"
+                % lk.get("version", "0.0.0"))
+    return None
 
 
 @dataclass(frozen=True)
@@ -4635,8 +4715,8 @@ _GONE = ("%s %s has a missing materialization but its source is gone — "
 
 def _declined(label: str, where: str, name: str) -> str:
     return ("%s is pinned and its %s source has moved%s"
-            "(unpin, or `boost reinstall %s` to accept the new content)"
-            % (label, where, _DECLINED_MARK, name))
+            "(`boost unpin %s`, then `boost reinstall %s` to accept the new "
+            "content)" % (label, where, _DECLINED_MARK, name, name))
 
 
 def _lock_source(name: str, tap_name: str, entry: dict,

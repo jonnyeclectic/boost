@@ -549,7 +549,8 @@ class TestProfile:
     def test_save_json(self, boost, installed):
         first = json.loads(boost("profile", "save", "daily", "--json").out)
         assert first == {"name": "daily", "updated": False, "was_skills": None,
-                          "skills": 1, "rules_not_captured": 0,
+                          "skills": 1, "sidelined_not_captured": [],
+                          "rules_not_captured": 0,
                           "workflows_not_captured": 0}
         boost("install", "tdd-workflow")
         second = json.loads(boost("profile", "save", "daily", "--json").out)

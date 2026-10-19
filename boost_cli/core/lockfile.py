@@ -365,6 +365,19 @@ def installed() -> dict:
     return read()["skills"]
 
 
+def split_sidelined(skills: dict) -> tuple[dict, list[str]]:
+    """``(active, sidelined names)`` of a name -> entry skills mapping.
+
+    A sidelined skill (``sidelined_by`` set by focus, profile or context) is
+    installed but deliberately unlinked, so it is not part of the setup an
+    agent sees. `profile save` snapshots that setup: recording a sidelined
+    skill made `profile use` relink it later — a skill that was off when the
+    profile was saved came back on when it was restored.
+    """
+    active = {n: e for n, e in skills.items() if not e.get("sidelined_by")}
+    return active, sorted(n for n in skills if n not in active)
+
+
 def get_rule(name: str) -> dict | None:
     """Return the lock entry for rule ``name``, or None if not installed."""
     return read()["rules"].get(name)

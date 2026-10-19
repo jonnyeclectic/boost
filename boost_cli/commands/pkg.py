@@ -1495,7 +1495,7 @@ def _refresh_line(label: str, old_v: str, new_v: str, edited: bool,
 
 def _update_materialized(kind: str, installed: dict[str, dict], results,
                          discard_edits: bool = False,
-                         allow_downgrade: bool = False) -> tuple[int, int]:
+                         allow_downgrade: bool = False) -> tuple[int, int, int]:
     """Re-materialize installed rules/workflows whose tap source moved.
 
     Mirrors the skill upgrade loop: for each installed item from a refreshed
@@ -1505,13 +1505,15 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
     quarantined one would re-materialize the very content quarantine removed.
     An edited or downgraded item is held unless its flag releases it
     (`_hold_update`).
-    Returns ``(refreshed, held)``.
+    Returns ``(refreshed, held, pinned)`` — the last counts pinned items whose
+    source did move, so the caller can say they were held rather than that
+    everything is up to date.
     """
     import hashlib
-    n = held = 0
+    n = held = pinned = 0
     for name, lk in sorted(installed.items()):
         tapname = lk.get("tap")
-        if lk.get("pinned") or lk.get("quarantined"):
+        if lk.get("quarantined"):
             continue
         if tapname in (None, "local") or tapname not in results:
             continue
@@ -1536,6 +1538,9 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                 cur = None
             changed = bool(cur and cur != lk.get("sha256"))
         if not changed:
+            continue
+        if lk.get("pinned"):
+            pinned += 1
             continue
         if scopes.stranded(lk):
             # Its repo is gone, and refreshing it would recreate that
@@ -1578,7 +1583,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
         out.ok(_refresh_line("%s %s" % (kind, name), old_v,
                              str(entry.get("version") or ""), edited, bumped))
         n += 1
-    return n, held
+    return n, held, pinned
 
 
 def _resync_vectors(moved: list[str]) -> None:
@@ -1736,8 +1741,8 @@ def _ingest_shards(args) -> int:
 
 
 def _update_skill(name: str, lk: dict, scope: str, pbase, results,
-                  args) -> tuple[int, int]:
-    """Refresh one installed skill from a refreshed tap: ``(upgraded, held)``.
+                  args) -> tuple[int, int, int]:
+    """Refresh one installed skill from a refreshed tap: ``(upgraded, held, pinned)``.
 
     ``scope``/``pbase`` say which install this row is: a project row is judged
     against its copy in the repo and reinstalled there (``--local --force``),
@@ -1745,13 +1750,13 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     """
     label = name + (" (project)" if scope == scopes.SCOPE_PROJECT else "")
     tapname: str = lk.get("tap") or "local"
-    if (lk.get("pinned") or lk.get("quarantined")
+    if (lk.get("quarantined")
             or tapname == "local" or tapname not in results):
-        return 0, 0
+        return 0, 0, 0
     matches = [e for e in catalog.find(name) if e["tap"] == tapname]
     if not matches:
         out.warn("%s is no longer in tap %s — leaving as-is" % (label, tapname))
-        return 0, 0
+        return 0, 0, 0
     entry = matches[0]
     old_v = str(lk.get("version", "0.0.0"))
     new_v = str(entry.get("version", "0.0.0"))
@@ -1762,30 +1767,34 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
             try:
                 src_sha = util.sha256_dir(store.source_dir_for(entry))
             except BoostError:
-                return 0, 0
+                return 0, 0, 0
     reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
                                        head, lk.get("sha256", ""), src_sha)
     if reason is None:
-        return 0, 0
+        return 0, 0, 0
+    if lk.get("pinned"):
+        # Skipped, as `pin` promised — but counted, because `outdated`
+        # names this same item and the summary must not contradict it.
+        return 0, 0, 1
     hold, edited = _hold_update(label, name, lk, "skill", old_v,
                                 str(entry.get("version") or ""),
                                 args.discard_edits, args.allow_downgrade,
                                 base=pbase)
     if hold:
-        return 0, 1
+        return 0, 1, 0
     if not _confirm_risky_update(name, entry, base=pbase, lk=lk):
         out.warn("%s: update skipped — review the diff, then `boost update "
                  "--yes` to apply" % label)
-        return 0, 0
+        return 0, 0, 0
     try:
         _warn_unwritable(store.install(entry, force=True, via="update",
                                        scope=scope, base=pbase))
     except BoostError as err:
         out.warn("%s: %s" % (label, err.message))
-        return 0, 0
+        return 0, 0, 0
     out.ok(_refresh_line(label, old_v, str(entry.get("version") or ""),
                          edited, reason == staleness.VERSION))
-    return 1, 0
+    return 1, 0, 0
 
 
 def cmd_update(argv: list[str]) -> int:
@@ -1869,30 +1878,39 @@ def cmd_update(argv: list[str]) -> int:
         # `boost update --taps-only` exists precisely to notice that morning.
         return 1 if failures and not results else 0
 
-    upgraded = held = 0
+    upgraded = held = pinned_held = 0
     # Both locks, so a `--local` skill is refreshed in the repo it lives in —
     # the user lock alone left it at its old version under "everything up to
     # date" while `boost info` said it had an update.
     for name, lk, scope, pbase in integrity.installed_skill_rows():
-        n, h = _update_skill(name, lk, scope, pbase, results, args)
+        n, h, p = _update_skill(name, lk, scope, pbase, results, args)
         upgraded += n
         held += h
+        pinned_held += p
     # Rules and workflows refresh from the same tap update.
     # Skills installed before boost dated them, so a plugin's copy of the
     # same name can be weighed against them (store.serving_plugin).
     store.backfill_source_dates(results)
     for kind, section in (("rule", lockfile.installed_rules()),
                           ("workflow", lockfile.installed_workflows())):
-        n, h = _update_materialized(kind, section, results,
-                                    discard_edits=args.discard_edits,
-                                    allow_downgrade=args.allow_downgrade)
+        n, h, p = _update_materialized(kind, section, results,
+                                       discard_edits=args.discard_edits,
+                                       allow_downgrade=args.allow_downgrade)
         upgraded += n
         held += h
+        pinned_held += p
     if held:
         # Never "everything up to date" over items it just declined to touch.
         out.info(out.role("%d item%s held back — see above"
                           % (held, "s" if held != 1 else ""), "muted"))
-    elif not upgraded:
+    if pinned_held:
+        out.info(out.role(
+            "%d pinned item%s ha%s an update held back — `boost outdated` "
+            "lists %s, `boost unpin <name>` lets one update"
+            % (pinned_held, "s" if pinned_held != 1 else "",
+               "ve" if pinned_held != 1 else "s",
+               "them" if pinned_held != 1 else "it"), "muted"))
+    if not (held or pinned_held or upgraded):
         if pinned_skips and pinned_skips == len(results) and not failures:
             # Every tap was a pinned skip: nothing was actually checked over
             # the network, which "everything up to date" would misreport as
@@ -1912,6 +1930,21 @@ def cmd_update(argv: list[str]) -> int:
 
 
 # ── reinstall ────────────────────────────────────────────────────────────
+
+def _reinstall_held(kind: str, name: str, lk: dict, **source) -> bool:
+    """Say so and return True when a pin forbids reinstalling ``name``.
+
+    The decision is `store.reinstall_pin_hold`'s; this only words it, with the
+    one command that releases the hold.
+    """
+    why = store.reinstall_pin_hold(kind, lk, **source)
+    if why is None:
+        return False
+    label = name if kind == "skill" else "%s %s" % (kind, name)
+    out.warn("%s: not reinstalled — %s; `boost unpin %s` first to take the "
+             "new content" % (label, why, name), wrap=True)
+    return True
+
 
 def cmd_reinstall(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost reinstall",
@@ -1966,6 +1999,9 @@ def cmd_reinstall(argv: list[str]) -> int:
             entry = cast(dict, entry)         # matches is non-empty above
             if warning:
                 out.warn(warning)
+            if _reinstall_held(kind, name, lk, cat_entry=entry):
+                failed += 1
+                continue
             try:
                 res = store.install(entry, force=True,
                                     scope=lk.get("scope", "user"),
@@ -1998,6 +2034,9 @@ def cmd_reinstall(argv: list[str]) -> int:
             if src is None and not url:
                 out.warn("%s: local source %s is gone — skipped"
                          % (name, _tilde(str(lk.get("source_dir") or ""))))
+                failed += 1
+                continue
+            if src is not None and _reinstall_held("skill", name, lk, src=src):
                 failed += 1
                 continue
             # force=True to match the tap branch's `install(..., force=True)`:
@@ -2035,10 +2074,15 @@ def cmd_reinstall(argv: list[str]) -> int:
         entry = cast(dict, entry)             # matches is non-empty above
         if warning:
             out.warn(warning)
+        if _reinstall_held("skill", name, lk, cat_entry=entry):
+            failed += 1
+            continue
         try:
             res = store.install(entry, force=True, via="reinstall")
         except BoostError as err:
-            out.warn("%s: %s" % (name, err.message))
+            out.warn("%s: %s%s" % (name, err.message,
+                                   " — %s" % err.hint if err.hint else ""),
+                     wrap=True)
             failed += 1
             continue
         out.ok("reinstalled %s v%s" % (name, entry.get("version", "0.0.0")))

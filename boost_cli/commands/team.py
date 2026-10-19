@@ -360,7 +360,9 @@ def cmd_profile(argv) -> int:
         return 0
 
     if args.action == "save":
-        installed = lockfile.installed()
+        # The active set only: a sidelined skill left out here is an "extra"
+        # to `profile use`, which sidelines it again — the saved state, exactly.
+        installed, set_aside = lockfile.split_sidelined(lockfile.installed())
         path = _profile_path(args.name)
         was = None
         if path.exists():
@@ -380,6 +382,7 @@ def cmd_profile(argv) -> int:
         if args.json:
             print(json.dumps({"name": args.name, "updated": was is not None,
                               "was_skills": was, "skills": len(installed),
+                              "sidelined_not_captured": set_aside,
                               "rules_not_captured": n_rules,
                               "workflows_not_captured": n_workflows}, indent=2))
             return 0
@@ -389,6 +392,12 @@ def cmd_profile(argv) -> int:
         else:
             out.ok("saved profile %s (%d skill%s)"
                    % (args.name, len(installed), _s(len(installed))))
+        if set_aside:
+            out.info("not captured: %d sidelined skill%s (%s) — `profile use "
+                     "%s` keeps %s off" % (len(set_aside), _s(len(set_aside)),
+                                           ", ".join(set_aside), args.name,
+                                           "them" if len(set_aside) != 1
+                                           else "it"), wrap=True)
         if n_rules or n_workflows:
             out.warn("%d rule%s and %d workflow%s not captured — profiles "
                      "carry skills only"
