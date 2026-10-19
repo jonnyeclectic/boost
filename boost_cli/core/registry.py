@@ -250,9 +250,14 @@ def get(name: str) -> Tap:
     Raises BoostError (with a did-you-mean hint) if none match.
     """
     taps = list_taps()
-    for key in (lambda t: t.name, lambda t: t.safe_name,
-                lambda t: t.name.split("/")[-1]):
-        hits = [t for t in taps if key(t) == name]
+    # The case-folded tier comes last, so an exact spelling always wins: it is
+    # what lets `boost untap Obra/Superpowers` find `obra/superpowers`, whose
+    # clone is the same directory on a case-insensitive filesystem anyway.
+    for key, want in ((lambda t: t.name, name),
+                      (lambda t: t.safe_name, name),
+                      (lambda t: t.name.split("/")[-1], name),
+                      (lambda t: name_key(t.name), name_key(name))):
+        hits = [t for t in taps if key(t) == want]
         if len(hits) == 1:
             return hits[0]
         if len(hits) > 1:
@@ -277,9 +282,26 @@ def same_source(a: str, b: str) -> bool:
     by another of its names stays the harmless no-op it was. Local paths
     compare exactly (`parse_spec` has already resolved them); a remote's host
     compares case-blind, and its path only on github.com, the one forge boost
-    can say that of.
+    can say that of. Two local spellings of one directory — `~/x` and `~/X`
+    on APFS or NTFS, where `resolve()` keeps the case it was given — match
+    by asking the filesystem, not by comparing the strings.
     """
-    return _source_key(a) == _source_key(b)
+    if _source_key(a) == _source_key(b):
+        return True
+    return _is_local(a) and _is_local(b) and _same_file(a, b)
+
+
+def _is_local(url: str) -> bool:
+    return not (url.startswith("git@") or _SCHEME.match(url))
+
+
+def _same_file(a: str, b: str) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        # A clone source that has since moved or vanished is not evidence
+        # that two spellings are one directory.
+        return False
 
 
 def _source_key(url: str) -> str:
@@ -300,6 +322,18 @@ def _source_key(url: str) -> str:
     if host.split(":", 1)[0] == "github.com":
         path = path.lower()
     return host + "/" + path
+
+
+def name_key(name: str) -> str:
+    """The form of a tap name that decides whether two taps are one.
+
+    Case-folded, because a tap's clone and cache live at paths built from its
+    name: on APFS and NTFS `repos/foo` and `repos/FOO` are one directory, so
+    two config rows `foo` and `FOO` share one clone, and untapping either
+    deletes the other's. Folding everywhere — not only where the filesystem
+    happens to — keeps a config written on Linux valid on a Mac.
+    """
+    return name.casefold()
 
 
 def _taken(name: str, url: str, existing: str) -> BoostError:
@@ -334,11 +368,10 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     """
     name, url = parse_spec(spec)
     for existing in list_taps():
-        if existing.name == name:
+        if name_key(existing.name) == name_key(name):
             if not same_source(existing.url, url):
-                raise _taken(name, url, existing.url)
-            raise BoostError("tap %s is already configured" % name,
-                            hint="`boost update %s` to refresh it" % name)
+                raise _taken(existing.name, url, existing.url)
+            raise _already_configured(existing.name, spec, at)
     # Validated here, before the clone, not only inside `checkout_commit`:
     # that check runs after `clone_shallow` below, so a malformed --at used to
     # cost one full clone (~1.6s) before reporting a typo.
@@ -375,6 +408,22 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     start_refresh_clock()
     tap.pin = at or ""
     return tap
+
+
+def _already_configured(name: str, spec: str, at: str | None) -> BoostError:
+    """The error for re-tapping a configured tap, with a hint that works.
+
+    With ``at`` the user wants another commit, and `boost update` cannot give
+    them one: it skips a pinned tap, and ``--force`` moves to branch HEAD and
+    drops the pin. Only a fresh tap at that commit lands there.
+    """
+    if at:
+        return BoostError(
+            "tap %s is already configured" % name,
+            hint="`boost untap %s`, then `boost tap %s --at %s` to move it "
+                 "to that commit" % (name, spec, at))
+    return BoostError("tap %s is already configured" % name,
+                      hint="`boost update %s` to refresh it" % name)
 
 
 #: Marks a ★ the user asked for (`--curated`, the defaults), as opposed to one
@@ -547,7 +596,7 @@ def add_many(specs: list[str], curated: bool = False,
         return []
     paths.ensure_dirs()
     pins = pins or {}
-    existing = {t.name: t.url for t in list_taps()}
+    existing = {name_key(t.name): t for t in list_taps()}
     batch: dict[str, str] = {}
     results: list[dict] = []
     todo: list[str] = []
@@ -560,30 +609,32 @@ def add_many(specs: list[str], curated: bool = False,
             continue
         # A different repository under a taken name is a failure, not a skip:
         # "already tapped" with nothing tapped is the answer that hid it.
-        if name in existing and not same_source(existing[name], url):
+        key = name_key(name)
+        held = existing.get(key)
+        if held is not None and not same_source(held.url, url):
             results.append({"spec": spec, "name": name, "ok": False,
-                            "error": _taken(name, url, existing[name]).message})
+                            "error": _taken(held.name, url, held.url).message})
             continue
-        if name in existing:
+        if held is not None:
             results.append({"spec": spec, "name": name, "ok": False,
                             "skipped": True, "error": "already tapped"})
             continue
         # Two specs of this one run claiming a name is not "already used by":
         # nothing holds the name yet, and `boost untap` would not help.
-        if name in batch and not same_source(batch[name], url):
+        if key in batch and not same_source(batch[key], url):
             results.append({
                 "spec": spec, "name": name, "ok": False,
                 "error": "two specs in this batch both name %s: %s and %s"
-                         % (name, batch[name], url)})
+                         % (name, batch[key], url)})
             continue
-        if name in batch:
+        if key in batch:
             results.append({"spec": spec, "name": name, "ok": False,
                             "skipped": True, "error": "already tapped"})
             continue
         # Guard against the same registry appearing twice in one selection:
         # two threads cloning into one directory is a corrupt clone, not a race
         # anyone would enjoy debugging.
-        batch[name] = url
+        batch[key] = url
         todo.append(spec)
 
     def work(spec: str) -> dict:
@@ -749,6 +800,23 @@ def dependents(tap_name: str) -> list[tuple[str, str]]:
             if e.get("tap") == tap_name]
 
 
+def _shared(path: Path, others: list[Path]) -> bool:
+    """True if `path` names the same file as one of `others`.
+
+    Asked of the filesystem, not of the spelling: `repos/foo` and `repos/FOO`
+    are one directory on APFS and two on ext4, and only the first must be kept.
+    """
+    for other in others:
+        if other == path:
+            return True
+        try:
+            if os.path.samefile(path, other):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def remove(name: str) -> Tap:
     """Deregister a tap and delete its clone and cache file.
 
@@ -756,8 +824,31 @@ def remove(name: str) -> Tap:
     """
     tap = get(name)
     cfg = config.load()
-    cfg["taps"] = [t for t in cfg.get("taps", []) if t["name"] != tap.name]
+    rows = cfg.get("taps") or []
+    # Drop only the row this is, and keep every other row as it was — a
+    # malformed one included. `list_taps` reads a nameless or non-dict row as
+    # no tap, so indexing `t["name"]` here crashed the one command that could
+    # take the real tap out, and untap has no business deleting data it does
+    # not own.
+    if isinstance(rows, list):
+        cfg["taps"] = [t for t in rows
+                       if not (isinstance(t, dict)
+                               and t.get("name") == tap.name)]
     config.save(cfg)
+    # A config written before names were case-folded can hold `foo` and
+    # `FOO`, which on a case-insensitive filesystem share one clone and one
+    # cache. Deleting either would strip the tap that stays configured.
+    others = list_taps()
+    if not _shared(tap.path, [t.path for t in others]):
+        _remove_clone(tap)
+    if (tap.cache_file.exists()
+            and not _shared(tap.cache_file, [t.cache_file for t in others])):
+        _remove_cache(tap)
+    return tap
+
+
+def _remove_clone(tap: Tap) -> None:
+    """Delete `tap`'s clone, warning rather than raising if it cannot."""
     try:
         util.remove_path(tap.path)
     except OSError as e:
@@ -770,19 +861,21 @@ def remove(name: str) -> Tap:
                     "hand" % (tap.name, e.strerror or e,
                               paths.tilde(tap.path)),
                     stream=sys.stderr, wrap=True)
-    if tap.cache_file.exists():
-        try:
-            tap.cache_file.unlink()
-        except OSError as e:
-            # A cache dir boost cannot write (doctor flags it) made untap exit
-            # 70 here with the tap already deregistered. The file left behind
-            # names no configured tap, which is what `boost clean` sweeps.
-            output.warn("could not remove the catalog cache for %s (%s) — "
-                        "make %s writable, then run `boost clean`"
-                        % (tap.name, e.strerror or e,
-                           paths.tilde(tap.cache_file.parent)),
-                        stream=sys.stderr, wrap=True)
-    return tap
+
+
+def _remove_cache(tap: Tap) -> None:
+    """Delete `tap`'s catalog cache, warning rather than raising if it cannot."""
+    try:
+        tap.cache_file.unlink()
+    except OSError as e:
+        # A cache dir boost cannot write (doctor flags it) made untap exit
+        # 70 here with the tap already deregistered. The file left behind
+        # names no configured tap, which is what `boost clean` sweeps.
+        output.warn("could not remove the catalog cache for %s (%s) — "
+                    "make %s writable, then run `boost clean`"
+                    % (tap.name, e.strerror or e,
+                       paths.tilde(tap.cache_file.parent)),
+                    stream=sys.stderr, wrap=True)
 
 
 #: URL scheme marking a tap that ships inside the wheel rather than living on

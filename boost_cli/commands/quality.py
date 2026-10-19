@@ -197,10 +197,12 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
 
     Two things this deliberately does NOT do.
 
-    **It does not look in a native-store agent's dir.** `linking_agents`, not
-    `enabled_agents`: boost never links into `~/.gemini/skills`, so anything
+    **It does not look in a native-store agent's dir.** `unlinking_agents`,
+    not `known_agents`: boost never links into `~/.gemini/skills`, so anything
     dangling there belongs to someone else and is none of this command's
-    business. The rest of `cmd_heal` already had this right.
+    business. A *disabled* agent's dir is looked in: boost linked there while
+    it was enabled, and a link it left behind still dangles where that agent
+    reads.
 
     **It does not report a link boost did not create as ours.** `heal` deletes
     what this returns first, and a broken link is not necessarily garbage — a
@@ -210,7 +212,7 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
     """
     ours: list[Path] = []
     theirs: list[Path] = []
-    for adir in agents.linking_agents().values():
+    for adir in agents.unlinking_agents().values():
         # ``os.path``: ``Path.is_dir`` raises under a dotdir with no search
         # bit on Python 3.12 and 3.13, and doctor and heal exited 70 there.
         if not os.path.isdir(adir):  # noqa: FURB146
@@ -544,6 +546,13 @@ def cmd_doctor(argv):
     # skipped check that printed nothing would read as a passed one.
     agent_errs = agents.check()
     agents_ok = not agent_errs
+    # A row with no dir is skipped rather than refused, so it leaves the other
+    # checks on; it is still a broken config, and nothing else names it.
+    for aname in agents.dirless(claim=True):
+        bad("agent-config", "agents.%s has no dir, so boost skips it — set one "
+            "with `boost config set agents.%s.dir <dir>`, or remove the row "
+            "with `boost config unset agents.%s`" % (aname, aname, aname),
+            wrap=True)
     for aname, err in agent_errs:
         key = "agents.%s.dir" % aname
         bad("agent-config", "%s: %s — %s, or set a path with `boost config set "
@@ -1020,7 +1029,13 @@ def cmd_doctor(argv):
     # read may have recorded is in none of them.
     if unrec is not None:
         mine = unrec["adoptable_store"]
-        if mine:
+        backup = lockfile.unrestored_corrupt() if mine else None
+        if backup:
+            # A rollback restores the lock as it was before its last change,
+            # so these may be what that change installed, not strays.
+            bad("unrecorded-skills", lockfile.unrestored_line(
+                len(mine), _first(mine), backup), wrap=True)
+        elif mine:
             bad("unrecorded-skills", "%d skill%s added outside boost (%s) — "
                 "`boost sync` records %s" % (len(mine), _s(len(mine)),
                                              _first(mine),
@@ -1397,7 +1412,8 @@ def cmd_lint(argv):
     else:
         names = args.names or []
         path_names = [n for n in names if catalog.is_path_target(n)]
-        other_names = [n for n in names if n not in path_names]
+        other_names = [store.installed_name(n) for n in names
+                       if n not in path_names]
         for n in path_names:
             p = catalog.resolve_path_target(n)
             targets.append((p.name, p))
@@ -1471,7 +1487,8 @@ def cmd_drift(argv):
     _require_lock_integrity()
 
     rows = []
-    for kind, name, entry in _iter_installed_all(args.names or None):
+    names = [store.installed_name(n) for n in args.names]
+    for kind, name, entry in _iter_installed_all(names or None):
         status = (_drift_status(name, entry) if kind == "skill"
                   else _drift_status_materialized(kind, name, entry))
         rows.append({"name": name, "kind": kind, "status": status,
@@ -1510,7 +1527,8 @@ def cmd_test(argv):
     # escapes for the table, which is display, not data — a consumer parsing
     # those would be parsing our palette.
     results: list[dict] = []
-    for name, entry in _iter_installed(args.names or None):
+    names = [store.installed_name(n) for n in args.names]
+    for name, entry in _iter_installed(names or None):
         sdir = store.skill_store_dir(name)
         md = sdir / "SKILL.md"
         meta, body = _read_skill(sdir)

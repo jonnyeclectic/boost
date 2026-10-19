@@ -393,14 +393,69 @@ def _depth(repo: Path) -> list[str]:
     return ["--depth", "1"] if is_shallow(repo) else []
 
 
+_HEADS = "refs/heads/"
+_WILDCARD_REFSPEC = "+refs/heads/*:refs/remotes/origin/*"
+
+
+def remote_default_branch(repo: Path) -> str:
+    """The branch the remote's HEAD points at *now*, or "" when it won't say.
+
+    Asks the remote (``ls-remote --symref origin HEAD``) rather than reading
+    ``origin/HEAD``, which git sets once at clone time and never refreshes. An
+    old server, a dumb transport or a detached remote HEAD prints no symref
+    line; that, and any failure, is "" — the caller keeps today's behaviour.
+    """
+    proc = run(["-C", str(repo), "ls-remote", "--symref", "origin", "HEAD"],
+               check=False)
+    if proc.returncode != 0:
+        return ""
+    for line in (proc.stdout or "").splitlines():
+        ref, _, name = line.partition("\t")
+        if name.strip() == "HEAD" and ref.startswith("ref: " + _HEADS):
+            return ref[len("ref: " + _HEADS):].strip()
+    return ""
+
+
+def follow_default_branch(repo: Path) -> str:
+    """Point `repo`'s fetch refspec at the remote's current default branch.
+
+    A tap is cloned ``--depth 1``, which implies ``--single-branch``: the
+    refspec names the branch that was default *at clone time*. When upstream
+    renames ``master`` to ``main`` or switches HEAD to a new branch, a plain
+    ``fetch origin`` keeps fetching the old one — so `boost update` reported a
+    stale clone "already up to date", and once the old branch was deleted it
+    failed on every run with "couldn't find remote ref" until the tap was
+    re-cloned. Returns the branch followed, or "" when the remote would not
+    name one (the refspec is then left alone). A wildcard refspec already
+    covers every branch and is kept.
+    """
+    branch = remote_default_branch(repo)
+    if not branch:
+        return ""
+    spec = "+%s%s:refs/remotes/origin/%s" % (_HEADS, branch, branch)
+    have = run(["-C", str(repo), "config", "--get-all", "remote.origin.fetch"],
+               check=False).stdout.split()
+    if spec not in have and _WILDCARD_REFSPEC not in have:
+        run(["-C", str(repo), "config", "--replace-all",
+             "remote.origin.fetch", spec])
+    return branch
+
+
 def pull(repo: Path) -> str:
-    """Update a clone, keeping it as shallow as it is. Returns a one-line summary."""
+    """Update a clone to the remote's current default branch, keeping it as
+    shallow as it is. Returns a one-line summary."""
     before = head_commit(repo)
+    branch = follow_default_branch(repo)
     proc = run(["-C", str(repo), "fetch", *_depth(repo), "--quiet", "origin"],
               check=False)
     if proc.returncode != 0:
         stderr = (proc.stderr or "") + (proc.stdout or "")
         _raise_git_error("git fetch failed", remote_url(repo) or str(repo), stderr)
+    if branch:
+        # `origin/HEAD` is a clone-time symref; move it with the branch so the
+        # reset below lands on what was just fetched, not on the old branch.
+        run(["-C", str(repo), "symbolic-ref", "refs/remotes/origin/HEAD",
+             "refs/remotes/origin/" + branch], check=False)
     run(["-C", str(repo), "reset", "--hard", "--quiet", "origin/HEAD"], check=False)
     # origin/HEAD may be unset on old git; fall back to the fetched head
     if head_commit(repo) == before:

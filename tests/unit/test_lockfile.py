@@ -69,15 +69,18 @@ class TestRead:
         assert not p.with_name(p.name + ".corrupt").exists()
 
     def test_corrupt_read_does_not_lose_prior_records(self, sandbox):
-        # A corrupt lock followed by a new install must not silently erase the
-        # only surviving copy of the earlier records — they live on in .corrupt.
+        # A corrupt lock followed by a new install must not erase the only
+        # record of the earlier ones: the write refuses, and the bytes stay
+        # both in place and in .corrupt.
         paths.ensure_dirs()
         p = paths.lockfile_path()
         p.write_text('{"skills": {"old": {"version": "1.0"}}, TRAILING GARBAGE', encoding="utf-8")
-        lockfile.set_skill("new", {"version": "2.0"})
-        assert set(lockfile.installed()) == {"new"}      # skeleton took over
+        raw = p.read_bytes()
+        with pytest.raises(BoostError):
+            lockfile.set_skill("new", {"version": "2.0"})
+        assert p.read_bytes() == raw
         backup = p.with_name(p.name + ".corrupt")
-        assert '"old"' in backup.read_text(encoding="utf-8")             # but old bytes survive
+        assert '"old"' in backup.read_text(encoding="utf-8")
 
     def test_missing_keys_defaulted(self, sandbox):
         paths.ensure_dirs()
@@ -395,17 +398,19 @@ class TestHistory:
         assert ei.value.hint == "list other entries with `boost replay`"
 
     @pytest.mark.parametrize("raw", [b"\xff\xfe", b"[]"])
-    def test_writing_over_an_unusable_lock_archives_it(self, sandbox, raw):
-        # write() stamps the outgoing lock's history name from its `updated`
-        # field, which meant parsing it: either shape crashed the very write
-        # that would have replaced it.
+    def test_writing_over_an_unusable_lock_refuses_cleanly(self, sandbox, raw):
+        # Either shape once crashed write() while it parsed the outgoing lock
+        # for its history stamp. It is now refused as a BoostError before any
+        # snapshot, and the stamp still copes with the shape on its own.
         paths.ensure_dirs()
-        paths.lockfile_path().write_bytes(raw)
-        lockfile.write({"skills": {}})
-        assert json.loads(paths.lockfile_path().read_text(
-            encoding="utf-8"))["skills"] == {}
-        [snap] = paths.lock_history_dir().glob("lock-*.json")
-        assert snap.read_bytes() == raw
+        p = paths.lockfile_path()
+        p.write_bytes(raw)
+        with pytest.raises(BoostError):
+            lockfile.write({"skills": {}})
+        assert p.read_bytes() == raw
+        assert not paths.lock_history_dir().exists() or not list(
+            paths.lock_history_dir().glob("lock-*.json"))
+        assert re.fullmatch(r"\d{8}T\d{6}Z", lockfile._archive_stamp(p))
 
     def test_history_list_skips_corrupt_without_stopping(self, sandbox):
         # a corrupt snapshot that sorts BEFORE a valid one must be skipped, not

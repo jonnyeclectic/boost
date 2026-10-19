@@ -13,7 +13,6 @@ import sys
 import tarfile
 import zipfile
 from datetime import UTC, datetime
-from itertools import chain
 from pathlib import Path
 from typing import cast
 
@@ -469,17 +468,23 @@ def _report_prerequisites(entries: list[dict], *, pbase=None,
                  % prereq.install_hint(rows), wrap=True)
 
 
-def _expand_dependencies(entries: list[dict]) -> tuple[list[dict], resolve.Resolution]:
+def _expand_dependencies(entries: list[dict], pbase=None
+                         ) -> tuple[list[dict], resolve.Resolution]:
     """Grow the requested entries into their full `requires:` closure.
 
     Returns ``(ordered_entries, resolution)`` — the entries to install in
     dependency-first order (roots plus any pulled-in dependencies that are not
     already installed), and the :class:`resolve.Resolution` carrying what was
     added, any advisory conflicts, and unresolved (dangling) requirements.
+
+    ``pbase`` is the project a ``--local`` install targets. Its lock counts as
+    installed too: without it, ``install --local needy`` re-planned a ``helper``
+    already in the repo, the forced-off reinstall refused it, and the command
+    exited 1 over a requirement that was met.
     """
     # All three lock sections, not just skills: a rule or workflow already
     # installed under a required name must not be re-added to the plan.
-    installed = frozenset(chain.from_iterable(lockfile.all_installed().values()))
+    installed = prereq.installed_names(pbase)
     res = resolve.resolve(
         [e["name"] for e in entries],
         lambda n: _skill_relations(n, "requires"),
@@ -626,7 +631,7 @@ def cmd_install(argv: list[str]) -> int:
     # unless the caller opted out. Only skills carry dependency frontmatter;
     # rules/workflows pass through unchanged.
     if not args.no_deps and entries:
-        entries, dep_res = _expand_dependencies(entries)
+        entries, dep_res = _expand_dependencies(entries, pbase=pbase)
         if dep_res.added:
             out.info("pulling in %s required by your selection: %s"
                      % (_plural(len(dep_res.added), "dependency"),
@@ -704,7 +709,10 @@ def cmd_install(argv: list[str]) -> int:
             # raise `multi` on a `requires:` closure.
             try:
                 if args.scope == scopes.SCOPE_PROJECT and e.get("kind", "skill") == "skill":
-                    seen = projectlock.get_skill(pbase, e["name"])
+                    # The run's own refusal, ahead of the header: a preview
+                    # must not promise a reinstall the run declines.
+                    seen = store.check_existing(e, force=args.force,
+                                                scope=args.scope)
                     # agents_for_scope(pbase), not enabled_agents(): project scope
                     # copies into each agent's *repo-local* dotdir, which excludes
                     # Antigravity CLI (its layout is two levels under ~/.gemini and
@@ -734,11 +742,12 @@ def cmd_install(argv: list[str]) -> int:
                     continue
                 if e.get("kind") in ("rule", "workflow"):
                     k = e["kind"]
-                    seen = (lockfile.get_rule if k == "rule"
-                            else lockfile.get_workflow)(e["name"])
-                    # Same verb the real run's summary uses ("Upgraded 1 rule");
-                    # the skill preview below already says "upgrade".
-                    verb = "upgrade" if seen else "install"
+                    # The run's refusals first ("already installed" without
+                    # --force, a cross-scope clash even with it), so a record
+                    # that is seen here is one --force replaces: a reinstall.
+                    seen = store.check_existing(e, force=args.force,
+                                                scope=args.scope)
+                    verb = "reinstall" if seen else "install"
                     where = "into this repo" if args.scope == "project" else "user config"
                     # The real run's two steps, in its order: replay the lock's
                     # recorded scope, then narrow — so the preview refuses in the
@@ -759,8 +768,11 @@ def cmd_install(argv: list[str]) -> int:
                         _preview_skill_copy(e, seen, args.as_skill,
                                             args.scope)
                     continue
-                seen = lockfile.get_skill(e["name"])
-                verb = "upgrade" if seen else "install"
+                # Same refusal as the run ("already installed", "is pinned");
+                # past it, a seen record is one --force overwrites.
+                seen = store.check_existing(e, force=args.force,
+                                            scope=args.scope)
+                verb = "reinstall" if seen else "install"
                 # The lock's recorded scope, replayed exactly as `store.install`
                 # replays it before calling `link_agents` — the same two steps
                 # the rule/workflow branch above takes, and left out here for
@@ -884,6 +896,7 @@ def cmd_uninstall(argv: list[str]) -> int:
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     args = ap.parse_args(argv)
+    args.names = [store.installed_name(n) for n in args.names]
     # Ask only when someone is there to answer. out.confirm() returns its
     # `default` on a non-TTY, so gating on it unconditionally would turn every
     # scripted `boost uninstall x` — CI step, Makefile, Dockerfile — into a
@@ -1365,7 +1378,8 @@ def _show_and_confirm(label: str, diff, name: str) -> bool:
     return out.confirm("Apply this update to %s?" % name)
 
 
-def _confirm_risky_update(name: str, entry: dict) -> bool:
+def _confirm_risky_update(name: str, entry: dict, base=None,
+                          lk: dict | None = None) -> bool:
     """Gate an in-place update behind a visible diff when it is risky.
 
     Diffs the installed skill against the incoming source. If the change adds
@@ -1374,13 +1388,19 @@ def _confirm_risky_update(name: str, entry: dict) -> bool:
     update is *seen* before it lands. Routine edits apply silently. If the
     source can't be read we fail open and let ``store.install`` surface the real
     error rather than blocking on a phantom diff.
+
+    ``base`` (with its project lock row ``lk``) diffs a project skill's copy in
+    the repo instead of the user store, which holds no such skill — or a
+    different install that only shares the name.
     """
     try:
         new_tree = updatediff.read_tree(store.source_dir_for(entry))
     except BoostError:
         return True
-    diff = updatediff.diff_tree(updatediff.read_tree(store.skill_store_dir(name)),
-                                new_tree)
+    current = (store.skill_store_dir(name) if base is None
+               else integrity.project_skill_dir(lk or {}, base))
+    diff = updatediff.diff_tree(
+        updatediff.read_tree(current) if current is not None else {}, new_tree)
     if not diff.risky:
         return True
     return _show_and_confirm(name, diff, name)
@@ -1442,22 +1462,26 @@ def _confirm_risky_materialized(kind: str, name: str, lk: dict,
 
 def _hold_update(label: str, name: str, lk: dict, kind: str, old_v: str,
                  new_v: str, discard_edits: bool,
-                 allow_downgrade: bool) -> tuple[bool, bool]:
+                 allow_downgrade: bool, base=None) -> tuple[bool, bool]:
     """Apply `staleness.update_hold` for one item: ``(held, edited)``.
 
     A held item is named with the way past it, because each remedy is a
     deliberate act: `boost reinstall` discards one item's edits,
     `--discard-edits` every edited item's this run, and `--allow-downgrade`
     follows a rewound tap. `--force` releases neither; it moves pinned taps.
-    ``edited`` lets a released refresh say what it threw away.
+    ``edited`` lets a released refresh say what it threw away. ``base`` is a
+    project skill's repo: its edits are judged there, and the one-item remedy
+    is a forced ``--local`` install, since ``reinstall`` reads the user lock.
     """
-    edited = integrity.locally_edited(kind, name, lk)
+    edited = integrity.locally_edited(kind, name, lk, base=base)
+    redo = ("boost install %s --local --force" % name if base is not None
+            else "boost reinstall %s" % name)
     hold = staleness.update_hold(edited, old_v, new_v, discard_edits,
                                  allow_downgrade)
     if hold == staleness.HOLD_LOCAL_EDITS:
-        out.warn("%s has local edits — update skipped; `boost reinstall %s` "
+        out.warn("%s has local edits — update skipped; `%s` "
                  "discards them, or `boost update --discard-edits` for every "
-                 "edited item" % (label, name), wrap=True)
+                 "edited item" % (label, redo), wrap=True)
     elif hold == staleness.HOLD_DOWNGRADE:
         out.warn("%s: upstream is at v%s, behind your v%s — update skipped; "
                  "`boost update --allow-downgrade` downgrades"
@@ -1479,7 +1503,7 @@ def _refresh_line(label: str, old_v: str, new_v: str, edited: bool,
 
 def _update_materialized(kind: str, installed: dict[str, dict], results,
                          discard_edits: bool = False,
-                         allow_downgrade: bool = False) -> tuple[int, int]:
+                         allow_downgrade: bool = False) -> tuple[int, int, int]:
     """Re-materialize installed rules/workflows whose tap source moved.
 
     Mirrors the skill upgrade loop: for each installed item from a refreshed
@@ -1489,13 +1513,15 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
     quarantined one would re-materialize the very content quarantine removed.
     An edited or downgraded item is held unless its flag releases it
     (`_hold_update`).
-    Returns ``(refreshed, held)``.
+    Returns ``(refreshed, held, pinned)`` — the last counts pinned items whose
+    source did move, so the caller can say they were held rather than that
+    everything is up to date.
     """
     import hashlib
-    n = held = 0
+    n = held = pinned = 0
     for name, lk in sorted(installed.items()):
         tapname = lk.get("tap")
-        if lk.get("pinned") or lk.get("quarantined"):
+        if lk.get("quarantined"):
             continue
         if tapname in (None, "local") or tapname not in results:
             continue
@@ -1520,6 +1546,9 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                 cur = None
             changed = bool(cur and cur != lk.get("sha256"))
         if not changed:
+            continue
+        if lk.get("pinned"):
+            pinned += 1
             continue
         if scopes.stranded(lk):
             # Its repo is gone, and refreshing it would recreate that
@@ -1562,7 +1591,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
         out.ok(_refresh_line("%s %s" % (kind, name), old_v,
                              str(entry.get("version") or ""), edited, bumped))
         n += 1
-    return n, held
+    return n, held, pinned
 
 
 def _resync_vectors(moved: list[str]) -> None:
@@ -1719,6 +1748,63 @@ def _ingest_shards(args) -> int:
     return rc
 
 
+def _update_skill(name: str, lk: dict, scope: str, pbase, results,
+                  args) -> tuple[int, int, int]:
+    """Refresh one installed skill from a refreshed tap: ``(upgraded, held, pinned)``.
+
+    ``scope``/``pbase`` say which install this row is: a project row is judged
+    against its copy in the repo and reinstalled there (``--local --force``),
+    and recorded in that repo's lock rather than the user's.
+    """
+    label = name + (" (project)" if scope == scopes.SCOPE_PROJECT else "")
+    tapname: str = lk.get("tap") or "local"
+    if (lk.get("quarantined")
+            or tapname == "local" or tapname not in results):
+        return 0, 0, 0
+    matches = [e for e in catalog.find(name) if e["tap"] == tapname]
+    if not matches:
+        out.warn("%s is no longer in tap %s — leaving as-is" % (label, tapname))
+        return 0, 0, 0
+    entry = matches[0]
+    old_v = str(lk.get("version", "0.0.0"))
+    new_v = str(entry.get("version", "0.0.0"))
+    head, src_sha = "", None
+    if not util.semver_gt(new_v, old_v):
+        head = gitutil.head_commit(registry.get(tapname).path)
+        if head and head != lk.get("commit"):
+            try:
+                src_sha = util.sha256_dir(store.source_dir_for(entry))
+            except BoostError:
+                return 0, 0, 0
+    reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
+                                       head, lk.get("sha256", ""), src_sha)
+    if reason is None:
+        return 0, 0, 0
+    if lk.get("pinned"):
+        # Skipped, as `pin` promised — but counted, because `outdated`
+        # names this same item and the summary must not contradict it.
+        return 0, 0, 1
+    hold, edited = _hold_update(label, name, lk, "skill", old_v,
+                                str(entry.get("version") or ""),
+                                args.discard_edits, args.allow_downgrade,
+                                base=pbase)
+    if hold:
+        return 0, 1, 0
+    if not _confirm_risky_update(name, entry, base=pbase, lk=lk):
+        out.warn("%s: update skipped — review the diff, then `boost update "
+                 "--yes` to apply" % label)
+        return 0, 0, 0
+    try:
+        _warn_unwritable(store.install(entry, force=True, via="update",
+                                       scope=scope, base=pbase))
+    except BoostError as err:
+        out.warn("%s: %s" % (label, err.message))
+        return 0, 0, 0
+    out.ok(_refresh_line(label, old_v, str(entry.get("version") or ""),
+                         edited, reason == staleness.VERSION))
+    return 1, 0, 0
+
+
 def cmd_update(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost update",
                                  description="Sync taps or update installed skills")
@@ -1800,65 +1886,39 @@ def cmd_update(argv: list[str]) -> int:
         # `boost update --taps-only` exists precisely to notice that morning.
         return 1 if failures and not results else 0
 
-    upgraded = held = 0
-    for name, lk in sorted(lockfile.installed().items()):
-        tapname = lk.get("tap")
-        if (lk.get("pinned") or lk.get("quarantined")
-                or tapname == "local" or tapname not in results):
-            continue
-        matches = [e for e in catalog.find(name) if e["tap"] == tapname]
-        if not matches:
-            out.warn("%s is no longer in tap %s — leaving as-is" % (name, tapname))
-            continue
-        entry = matches[0]
-        old_v = str(lk.get("version", "0.0.0"))
-        new_v = str(entry.get("version", "0.0.0"))
-        head, src_sha = "", None
-        if not util.semver_gt(new_v, old_v):
-            head = gitutil.head_commit(registry.get(tapname).path)
-            if head and head != lk.get("commit"):
-                try:
-                    src_sha = util.sha256_dir(store.source_dir_for(entry))
-                except BoostError:
-                    continue
-        reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
-                                           head, lk.get("sha256", ""), src_sha)
-        if reason is None:
-            continue
-        hold, edited = _hold_update(name, name, lk, "skill", old_v,
-                                    str(entry.get("version") or ""),
-                                    args.discard_edits, args.allow_downgrade)
-        if hold:
-            held += 1
-            continue
-        if not _confirm_risky_update(name, entry):
-            out.warn("%s: update skipped — review the diff, then `boost update "
-                     "--yes` to apply" % name)
-            continue
-        try:
-            _warn_unwritable(store.install(entry, force=True, via="update"))
-        except BoostError as err:
-            out.warn("%s: %s" % (name, err.message))
-            continue
-        out.ok(_refresh_line(name, old_v, str(entry.get("version") or ""),
-                             edited, reason == staleness.VERSION))
-        upgraded += 1
+    upgraded = held = pinned_held = 0
+    # Both locks, so a `--local` skill is refreshed in the repo it lives in —
+    # the user lock alone left it at its old version under "everything up to
+    # date" while `boost info` said it had an update.
+    for name, lk, scope, pbase in integrity.installed_skill_rows():
+        n, h, p = _update_skill(name, lk, scope, pbase, results, args)
+        upgraded += n
+        held += h
+        pinned_held += p
     # Rules and workflows refresh from the same tap update.
     # Skills installed before boost dated them, so a plugin's copy of the
     # same name can be weighed against them (store.serving_plugin).
     store.backfill_source_dates(results)
     for kind, section in (("rule", lockfile.installed_rules()),
                           ("workflow", lockfile.installed_workflows())):
-        n, h = _update_materialized(kind, section, results,
-                                    discard_edits=args.discard_edits,
-                                    allow_downgrade=args.allow_downgrade)
+        n, h, p = _update_materialized(kind, section, results,
+                                       discard_edits=args.discard_edits,
+                                       allow_downgrade=args.allow_downgrade)
         upgraded += n
         held += h
+        pinned_held += p
     if held:
         # Never "everything up to date" over items it just declined to touch.
         out.info(out.role("%d item%s held back — see above"
                           % (held, "s" if held != 1 else ""), "muted"))
-    elif not upgraded:
+    if pinned_held:
+        out.info(out.role(
+            "%d pinned item%s ha%s an update held back — `boost outdated` "
+            "lists %s, `boost unpin <name>` lets one update"
+            % (pinned_held, "s" if pinned_held != 1 else "",
+               "ve" if pinned_held != 1 else "s",
+               "them" if pinned_held != 1 else "it"), "muted"))
+    if not (held or pinned_held or upgraded):
         if pinned_skips and pinned_skips == len(results) and not failures:
             # Every tap was a pinned skip: nothing was actually checked over
             # the network, which "everything up to date" would misreport as
@@ -1879,6 +1939,21 @@ def cmd_update(argv: list[str]) -> int:
 
 # ── reinstall ────────────────────────────────────────────────────────────
 
+def _reinstall_held(kind: str, name: str, lk: dict, **source) -> bool:
+    """Say so and return True when a pin forbids reinstalling ``name``.
+
+    The decision is `store.reinstall_pin_hold`'s; this only words it, with the
+    one command that releases the hold.
+    """
+    why = store.reinstall_pin_hold(kind, lk, **source)
+    if why is None:
+        return False
+    label = name if kind == "skill" else "%s %s" % (kind, name)
+    out.warn("%s: not reinstalled — %s; `boost unpin %s` first to take the "
+             "new content" % (label, why, name), wrap=True)
+    return True
+
+
 def cmd_reinstall(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost reinstall",
                                  description="Reinstall an installed skill, "
@@ -1888,6 +1963,7 @@ def cmd_reinstall(argv: list[str]) -> int:
     ap.add_argument("--all", action="store_true",
                     help="reinstall every installed skill, rule and workflow")
     args = ap.parse_args(argv)
+    args.names = [store.installed_name(n) for n in args.names]
     done, failed = 0, 0
     done_kinds: set[str] = set()
     items: list[tuple] = []
@@ -1932,6 +2008,9 @@ def cmd_reinstall(argv: list[str]) -> int:
             entry = cast(dict, entry)         # matches is non-empty above
             if warning:
                 out.warn(warning)
+            if _reinstall_held(kind, name, lk, cat_entry=entry):
+                failed += 1
+                continue
             try:
                 res = store.install(entry, force=True,
                                     scope=lk.get("scope", "user"),
@@ -1964,6 +2043,9 @@ def cmd_reinstall(argv: list[str]) -> int:
             if src is None and not url:
                 out.warn("%s: local source %s is gone — skipped"
                          % (name, _tilde(str(lk.get("source_dir") or ""))))
+                failed += 1
+                continue
+            if src is not None and _reinstall_held("skill", name, lk, src=src):
                 failed += 1
                 continue
             # force=True to match the tap branch's `install(..., force=True)`:
@@ -2001,10 +2083,15 @@ def cmd_reinstall(argv: list[str]) -> int:
         entry = cast(dict, entry)             # matches is non-empty above
         if warning:
             out.warn(warning)
+        if _reinstall_held("skill", name, lk, cat_entry=entry):
+            failed += 1
+            continue
         try:
             res = store.install(entry, force=True, via="reinstall")
         except BoostError as err:
-            out.warn("%s: %s" % (name, err.message))
+            out.warn("%s: %s%s" % (name, err.message,
+                                   " — %s" % err.hint if err.hint else ""),
+                     wrap=True)
             failed += 1
             continue
         out.ok("reinstalled %s v%s" % (name, entry.get("version", "0.0.0")))
@@ -2433,6 +2520,7 @@ def cmd_pin(argv: list[str]) -> int:
     ap.add_argument("--commit", action="store_true",
                     help="also freeze the exact source commit (integrity pin)")
     args = ap.parse_args(argv)
+    args.name = store.installed_name(args.name)
     rc = _set_pin(args.name, True)
     found = lockfile.find_any(args.name)
     if rc == 0 and args.commit and found is not None:
@@ -2456,6 +2544,7 @@ def cmd_unpin(argv: list[str]) -> int:
     # trailer prints after — it qualifies `_set_pin`'s own "unpinned" line, so
     # printing it first would leave the trailer describing a line that has
     # not appeared yet (mirrors `cmd_pin`'s ok-line-then-trailer order).
+    args.name = store.installed_name(args.name)
     found = lockfile.find_any(args.name)
     cleared_commit_pin = bool(
         found and integrity.clear_commit_pin(args.name, found[1], kind=found[0]))

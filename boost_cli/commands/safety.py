@@ -396,6 +396,7 @@ def cmd_verify(argv):
     # schema lock over a populated store must be reported, not read as "no
     # skills installed" — that is the failure this command exists to catch.
     _require_lock_integrity()
+    args.names = [store.installed_name(n) for n in args.names]
 
     # A named item may be installed at user OR project scope. Validate against
     # both up front so `boost verify <vendored-skill>` doesn't wrongly error
@@ -564,7 +565,7 @@ def cmd_quarantine(argv):
         return 0
 
     if args.release:
-        name = args.release
+        name = store.installed_name(args.release)
         found = lockfile.find_any(name)
         if not found:
             raise BoostError("%s is not installed" % name,
@@ -603,7 +604,7 @@ def cmd_quarantine(argv):
                          "else — left alone" % paths.tilde(d), wrap=True)
         return 0
 
-    name = args.name
+    name = store.installed_name(args.name)
     found = lockfile.find_any(name)
     if not found:
         raise BoostError("%s is not installed" % name,
@@ -664,7 +665,8 @@ def cmd_attest(argv):
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
-    targets = _iter_installed_all([args.name] if args.name else None)
+    targets = _iter_installed_all([store.installed_name(args.name)]
+                                  if args.name else None)
     first_install: dict = {}
     for e in journal.events():  # most-recent-first; oldest wins by overwrite
         if e.get("action") in ("install", "import") and e.get("subject"):

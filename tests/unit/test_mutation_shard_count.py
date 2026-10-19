@@ -340,7 +340,7 @@ PLANNED_TOTAL_MS = 66_708_651
 
 #: The shard count `PLANNED_TOTAL_MS` and the median prediction are anchored
 #: to: what main actually ran for the three runs the 24 jobs come from. It is
-#: deliberately NOT `ms.SHARDS` -- that is the width CI uses *now* (twelve),
+#: deliberately NOT `ms.SHARDS` -- that is the width CI uses *now* (sixteen),
 #: and re-pointing a historical measurement at it would silently restate what
 #: was observed.
 SHARDS_FOR_FIT = 8
@@ -377,7 +377,14 @@ TWELVE_SHARDS = 12
 #: rather than a measurement: `test_the_committed_width_has_actually_run`
 #: refuses an `ms.SHARDS` above it. This is the constant to raise after
 #: running a wider matrix; `TWELVE_SHARDS` above is the one to leave alone.
-SHARDS_OBSERVED = 12
+#:
+#: Raised to sixteen on 2026-10-19 by the PR that widened the matrix, because
+#: the weights refresh that day packed twelve at 95% of the cap and two
+#: consecutive runs lost a shard to the 75-minute timeout. That PR's own CI
+#: run is the first sixteen-wide observation; its p50 and worst job are
+#: recorded in the PR body rather than frozen here, since no second run at
+#: this width exists yet to say whether it reproduces.
+SHARDS_OBSERVED = 16
 
 #: The eight-shard p50 the fit was re-checked against, named so the two
 #: widths can be compared in one assertion instead of one of them being a

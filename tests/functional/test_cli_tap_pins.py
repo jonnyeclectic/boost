@@ -274,3 +274,69 @@ class TestStaleTapHint:
         # The hint says it; it does not do it. Refreshing here would turn a
         # sub-second command into minutes and would strand imported shards.
         assert "taps last refreshed" in boost("search", "alpha").out
+
+
+@pytest.fixture()
+def moved_default_tap(tmp_path):
+    """A fixture repo tapped at its first commit, then upstream moves its
+    default branch to `trunk` (one new skill) and deletes the old branch —
+    the shape of a GitHub `master` -> `main` rename."""
+    import sys
+    from pathlib import Path
+
+    src = tmp_path / "regdefault"
+    subprocess.run([sys.executable,
+                    str(Path(__file__).resolve().parents[1] / "make_fixture.py"),
+                    str(src)], check=True, capture_output=True)
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(src), "-c", "user.email=t@t",
+                               "-c", "user.name=t", *args], check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    first = git("rev-parse", "HEAD")
+    old = git("symbolic-ref", "--short", "HEAD")
+
+    def move():
+        git("checkout", "-qb", "trunk")
+        skill = src / "skills" / "trunk-only"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: trunk-only\ndescription: zebracorn trunk branch skill\n"
+            "---\nbody\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-qm", "trunk")
+        git("branch", "-qD", old)
+        return git("rev-parse", "HEAD")
+    return src, first, move
+
+
+class TestUpdateFollowsTheDefaultBranch:
+    def test_an_unpinned_tap_follows_a_renamed_default_branch(
+            self, boost, moved_default_tap):
+        from boost_cli.core import gitutil, registry
+        src, _first, move = moved_default_tap
+        boost("tap", str(src))
+        new = move()
+        res = boost("update", "--taps-only")
+        assert "already up to date" not in res.out
+        assert gitutil.head_commit(registry.list_taps()[0].path) == new
+        assert "trunk-only" in boost("search", "zebracorn").out
+        # and it stays healthy: the next update is a clean no-op, not an error
+        assert "already up to date" in boost("update", "--taps-only").out
+
+    def test_a_pinned_tap_still_holds_still(self, boost, moved_default_tap):
+        from boost_cli.core import gitutil, registry
+        src, first, move = moved_default_tap
+        boost("tap", str(src), "--at", first)
+        new = move()
+        res = boost("update", "--taps-only")
+        assert "pinned" in res.out
+        tap = registry.list_taps()[0]
+        assert gitutil.head_commit(tap.path) == first
+        assert tap.pin == first
+        # --force is still the one way past, and it lands on the new branch
+        boost("update", "--taps-only", "--force")
+        tap = registry.list_taps()[0]
+        assert gitutil.head_commit(tap.path) == new
+        assert tap.pin == ""

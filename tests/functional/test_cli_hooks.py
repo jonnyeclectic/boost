@@ -237,3 +237,72 @@ class TestListColumnOrder:
         # The band where one column fits beside the command is the one that
         # printed `host` alone before.
         assert name_and_command_only, "name never survived alone"
+
+
+class TestHooksRobustness:
+    """`--name` padding, foreign entry shapes, and the project root."""
+
+    def test_a_padded_name_is_added_once_and_removed_by_the_same_name(
+            self, boost, sandbox):
+        for _ in range(2):
+            r = boost("hooks", "add", "Stop", "-c", "echo a",
+                      "-n", "my hook ", "-s", "global")
+            assert "hook 'my hook' (global)" in r.out
+        assert len(cs.list_hooks("global")) == 1
+        r = boost("hooks", "remove", "-n", "my hook ", "-s", "global")
+        assert "removed 1 hook(s) named 'my hook' (global)" in r.out
+
+    def test_an_all_whitespace_name_is_refused(self, boost, sandbox):
+        r = boost("hooks", "add", "Stop", "-c", "x", "-n", "   ",
+                  "-s", "global", expect=None)
+        assert r.rc != 0
+        assert "needs --name" in r.out + r.err
+        assert not cs.settings_path("global").exists()
+
+    def test_doctor_list_and_remove_survive_a_string_hook_entry(
+            self, boost, sandbox):
+        p = cs.settings_path("global")
+        p.parent.mkdir(parents=True)
+        p.write_text('{"hooks": {"Stop": [{"hooks": ["echo hi"]}]}}',
+                     encoding="utf-8")
+        before = p.read_text(encoding="utf-8")
+        for argv in (("doctor",), ("hooks", "list"),
+                     ("hooks", "remove", "-n", "a", "-s", "global")):
+            r = boost(*argv, expect=None)
+            assert "unexpected error" not in r.out + r.err, argv
+            assert r.rc in (0, 1), argv
+        assert p.read_text(encoding="utf-8") == before
+
+    def test_add_names_a_non_object_hooks_key_instead_of_crashing(
+            self, boost, sandbox):
+        p = cs.settings_path("global")
+        p.parent.mkdir(parents=True)
+        p.write_text('{"hooks": []}', encoding="utf-8")
+        r = boost("hooks", "add", "SessionStart", "-c", "x", "-n", "a",
+                  "-s", "global", expect=None)
+        assert r.rc == 1
+        assert "'hooks' must be an object" in r.out + r.err
+        assert "unexpected error" not in r.out + r.err
+        assert p.read_text(encoding="utf-8") == '{"hooks": []}'
+
+    def test_a_subdirectory_add_lands_at_the_repo_root(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        repo = tmp_path / "proj-cli-subdir"
+        deep = repo / "src" / "deep"
+        deep.mkdir(parents=True)
+        (repo / ".git").mkdir()
+        monkeypatch.chdir(deep)
+        boost("hooks", "add", "SessionStart", "-c", "echo hi", "-n", "h5")
+        assert (repo / ".claude" / "settings.json").is_file()
+        assert not (deep / ".claude").exists()
+        monkeypatch.chdir(repo)
+        assert "h5" in boost("hooks", "list").out
+
+    def test_a_project_add_from_home_is_refused(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.chdir(sandbox)
+        r = boost("hooks", "add", "SessionStart", "-c", "echo", "-n", "h2",
+                  expect=None)
+        assert r.rc == 1
+        assert "no project here" in r.out + r.err
+        assert not (sandbox / ".claude" / "settings.json").exists()

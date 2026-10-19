@@ -138,7 +138,7 @@ WEIGHTS = Path("scripts/mutation_weights.json")
 #: spelled in two workflows, pinned against them by
 #: ``tests/unit/test_mutation_shard_count.py`` — ``timeout-minutes`` cannot be
 #: read through ``${{ }}``, so the agreement is asserted rather than derived.
-SHARDS = 12
+SHARDS = 16
 
 #: ``mutmut``'s worker count on the runner. It defaults to ``os.cpu_count()``
 #: and ``setup.cfg`` sets no ``max_children``, so on ``ubuntu-latest`` — 4 vCPU

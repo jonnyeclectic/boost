@@ -1684,10 +1684,17 @@ def _tool_doctor(args: dict):
                 "`boost replay` restores the lock that knows whose they are"
                 % (n, "" if n == 1 else "s", ", ".join(names))]
 
+    # Right after `boost replay rollback` over a corrupt lock, an unrecorded
+    # store dir may be what the lock's last change installed, so `boost sync`
+    # adopting it as `local` is the wrong fix (lockfile.unrestored_corrupt).
+    backup = (lockfile.unrestored_corrupt() if plan.get("adoptable_store")
+              else None)
     worded = {
-        "adoptable_store": lambda names: [
-            "%s was added outside boost — `boost sync` records it as a local "
-            "skill and links it" % n for n in names],
+        "adoptable_store": lambda names: (
+            [lockfile.unrestored_line(len(names), ", ".join(names), backup)]
+            if backup else
+            ["%s was added outside boost — `boost sync` records it as a local "
+             "skill and links it" % n for n in names]),
         "unreadable_store": lambda rows: [store.unreadable_line(rows)],
         "foreign_store": store.foreign_store_lines,
         "plugin_duplicates": lambda rows: (store.plugin_duplicate_lines(rows)
@@ -1780,12 +1787,13 @@ def _tool_doctor(args: dict):
         # Not `boost sync`: an unresolvable agent dir makes sync refuse too.
         lines.append("%d issue(s) — run `boost doctor` for details" % total)
     else:
-        lines.append(_doctor_verdict(plan, total, lock_bad, lost))
+        lines.append(_doctor_verdict(plan, total, lock_bad, lost,
+                                     unrestored=backup is not None))
     return "\n".join(lines), total > 0
 
 
 def _doctor_verdict(plan: dict[str, list], total: int, lock_bad: bool,
-                    lost: bool) -> str:
+                    lost: bool, *, unrestored: bool = False) -> str:
     """The MCP doctor's last line: which issues `boost sync` fixes.
 
     It said "run `boost sync` to fix" over a lock only `boost replay` restores
@@ -1793,12 +1801,15 @@ def _doctor_verdict(plan: dict[str, list], total: int, lock_bad: bool,
     saw nothing change, and was told the same again. Three kinds, and the
     line names each one present: what sync fixes, what only `--prune` does
     (the user's call, since it deletes or unlinks), and what is the user's
-    to change.
+    to change. ``unrestored`` moves the skills added outside boost into the
+    user's share: the lock was just rolled back, and the record of what they
+    are is in the ``.corrupt`` backup, which sync cannot read.
     """
     repos = sum(1 for r in plan.get("foreign_store", ()) if store.is_repo_copy(r))
     user = (lock_bad + len(plan.get("blocked_links", ()))
             + len(plan.get("unreadable_store", ())) + repos
-            + (0 if lost else len(plan.get("unrecorded_store", ()))))
+            + (0 if lost else len(plan.get("unrecorded_store", ())))
+            + (len(plan.get("adoptable_store", ())) if unrestored else 0))
     prune = (len(plan.get("foreign_store", ())) - repos
              + len(plan.get("out_of_scope_links", ()))
              + sum(1 for r in plan.get("plugin_duplicates", ())

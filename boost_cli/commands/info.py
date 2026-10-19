@@ -14,7 +14,6 @@ import shlex
 import subprocess
 import sys
 import webbrowser
-from itertools import chain
 from pathlib import Path
 
 from .. import cliparse
@@ -35,6 +34,7 @@ from ..core import (
     logs,
     mcpdecl,
     paths,
+    prereq,
     projectlock,
     registry,
     rules,
@@ -197,9 +197,17 @@ def _as_list(v) -> list:
     return [s.strip() for s in str(v).split(",") if s.strip()]
 
 
-def _skill_meta(name: str):
-    """Frontmatter for a named skill — installed store preferred, else tap."""
+def _skill_meta(name: str, project: dict | None = None, pbase=None):
+    """Frontmatter for a named skill — installed copy preferred, else tap.
+
+    ``project``/``pbase`` are the current repo's lock and base: a project-only
+    skill has no store dir, so its copy in the repo is the installed one.
+    """
     p = store.skill_store_dir(name) / "SKILL.md"
+    if not p.exists() and project and name in project:
+        pdir = integrity.project_skill_dir(project[name], pbase)
+        if pdir is not None:
+            p = pdir / "SKILL.md"
     if not p.exists():
         matches = catalog.find(name)
         if not matches:
@@ -548,11 +556,7 @@ def cmd_info(argv):
     sdir = store.skill_store_dir(name)
     skill_dir = sdir if lock and sdir.is_dir() else None
     if skill_dir is None and plock:
-        for m in plock.get("materializations") or []:
-            cand = scopes.resolve_in_base(pbase, m.get("path"))
-            if cand is not None and cand.is_dir():
-                skill_dir = cand
-                break
+        skill_dir = integrity.project_skill_dir(plock, pbase)
     if skill_dir is None and cat:
         try:
             skill_dir = store.source_dir_for(cat)
@@ -1237,7 +1241,11 @@ def cmd_deps(argv):
     # `requires:`/`conflicts:` name an installed item, not a kind — a
     # requirement met by an installed rule or workflow is met, and denying it
     # ("✗ not installed" while `boost list` shows it) was the section-blind lie.
-    have = set(chain.from_iterable(lockfile.all_installed().values()))
+    # The repo's own lock counts too: a requirement installed `--local` beside
+    # its dependent is met, and the old hint to `boost install` it again would
+    # have added a second, user-scope copy.
+    pbase, project = integrity.project_skills()
+    have = set(prereq.installed_names(pbase))
 
     if args.name:
         text, _kind, _lock, _cat = _resolve_text(args.name)
@@ -1245,7 +1253,8 @@ def cmd_deps(argv):
         requires = deps.requirement_names(meta)
         conflicts = deps.conflict_names(meta)
         req_rows = [deps.requirement_row(
-                        r, have, deps.requirement_names(_skill_meta(r) or {}))
+                        r, have, deps.requirement_names(
+                            _skill_meta(r, project, pbase) or {}))
                     for r in requires]
         conflict_rows = [deps.conflict_row(c, have) for c in conflicts]
         _qualifier, bare = catalog.split_name(args.name)
@@ -1289,8 +1298,9 @@ def cmd_deps(argv):
     unmet: list[dict] = []
     pairs: list[dict] = []
     seen: set = set()
-    for name in sorted(inst):
-        meta = _skill_meta(name) or {}
+    names = sorted(set(inst) | set(project))
+    for name in names:
+        meta = _skill_meta(name, project, pbase) or {}
         unmet.extend(
             {"skill": name, "requires": deps.requirement_row(r, have)}
             for r in deps.requirement_names(meta)
@@ -1305,7 +1315,7 @@ def cmd_deps(argv):
     if args.json:
         print(json.dumps({"unmet": unmet, "conflicts": pairs}, indent=2))
         return 1 if unmet or pairs else 0
-    if not inst:
+    if not names:
         print(out.empty_state("no skills installed",
                               hint="boost install <skill> to start"))
         return 0
@@ -1318,7 +1328,7 @@ def cmd_deps(argv):
                                out.role("conflicts with", "danger"), out.c(pair["b"], out.BOLD)))
     if not unmet and not pairs:
         out.ok("no unmet requirements or conflicts across %d skill%s"
-               % (len(inst), "" if len(inst) == 1 else "s"))
+               % (len(names), "" if len(names) == 1 else "s"))
         return 0
     if unmet:
         missing = sorted({u["requires"]["name"] for u in unmet})
