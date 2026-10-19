@@ -171,3 +171,39 @@ class TestCatalogRelation:
 
     def test_unknown_installed_version_is_behind_a_real_one(self):
         assert staleness.catalog_relation("?", "1.0.0") == staleness.BEHIND
+
+
+class TestUpdateHold:
+    """Why `boost update` must leave an installed copy alone, else None."""
+
+    def test_constant_values(self):
+        assert staleness.HOLD_LOCAL_EDITS == "local-edits"
+        assert staleness.HOLD_DOWNGRADE == "downgrade"
+
+    def test_clean_upgrade_is_not_held(self):
+        assert staleness.update_hold(False, "1.0.0", "1.1.0", False) is None
+
+    def test_same_version_content_refresh_is_not_held(self):
+        assert staleness.update_hold(False, "1.0.0", "1.0.0", False) is None
+
+    def test_local_edits_hold(self):
+        assert staleness.update_hold(True, "1.0.0", "1.1.0", False) \
+            == staleness.HOLD_LOCAL_EDITS
+
+    def test_lower_upstream_version_holds(self):
+        assert staleness.update_hold(False, "1.5.0", "1.4.0", False) \
+            == staleness.HOLD_DOWNGRADE
+
+    def test_local_edits_outrank_a_downgrade(self):
+        # The edits are what cannot be recovered; name them first.
+        assert staleness.update_hold(True, "1.5.0", "1.4.0", False) \
+            == staleness.HOLD_LOCAL_EDITS
+
+    def test_an_undeclared_upstream_version_is_not_a_downgrade(self):
+        # No version in the catalog is no signal, not "v0.0.0".
+        assert staleness.update_hold(False, "1.5.0", "", False) is None
+
+    def test_force_releases_both_holds(self):
+        assert staleness.update_hold(True, "1.5.0", "1.4.0", True) is None
+        assert staleness.update_hold(True, "1.0.0", "1.0.0", True) is None
+        assert staleness.update_hold(False, "1.5.0", "1.4.0", True) is None

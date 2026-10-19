@@ -1094,6 +1094,148 @@ class TestUpdatePinnedMessaging:
         assert "1 tap pinned and left alone" in r.out
 
 
+
+class TestUpdateKeepsWhatItCannotGetBack:
+    """`boost update` must not overwrite a local edit or walk a version back.
+
+    Both happened silently: `boost drift` listed an edited skill, rule and
+    workflow as local-edits and suggested `boost reinstall X`, and the next
+    routine `boost update` overwrote all three with a green "refreshed" line,
+    no prompt and no backup. A tap rewound to an older release was followed
+    the same way and reported as "refreshed v1.4.0" over an installed v1.5.0.
+    """
+
+    def _kinds_tap(self, fixture_tap_src, tmp_path, slug):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / slug)
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.0.0\n---\n\n"
+                        "Use two-space indents.\n", "add rule")
+        _add_and_commit(tap_dir, "commands/review-diff.md",
+                        "---\ndescription: Review the diff\nversion: 1.0.0\n"
+                        "---\nReview the diff carefully.\n", "add workflow")
+        return tap_dir
+
+    def _edit_all(self):
+        home = paths.home()
+        skill = paths.store_dir() / "brainstorming" / "SKILL.md"
+        skill.write_text(skill.read_text(encoding="utf-8") + "MY EDIT\n",
+                         encoding="utf-8")
+        claude = home / ".claude" / "CLAUDE.md"
+        claude.write_text(claude.read_text(encoding="utf-8").replace(
+            "Use two-space indents.", "Use two-space indents. MY EDIT"),
+            encoding="utf-8")
+        cmd = home / ".claude" / "commands" / "review-diff.md"
+        cmd.write_text(cmd.read_text(encoding="utf-8") + "MY EDIT\n",
+                       encoding="utf-8")
+        return skill, claude, cmd
+
+    def _move_upstream(self, tap_dir):
+        for rel in ("skills/brainstorming/SKILL.md", "rules/house.mdc",
+                    "commands/review-diff.md"):
+            p = tap_dir / rel
+            p.write_text(p.read_text(encoding="utf-8") + "upstream v2\n",
+                         encoding="utf-8")
+        subprocess.run(["git", "-C", str(tap_dir), "commit", "-aqm", "v2"],
+                       check=True, capture_output=True)
+
+    def test_local_edits_survive_an_update_and_are_named(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = self._kinds_tap(fixture_tap_src, tmp_path, "edit-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming", "house-style", "review-diff")
+        files = self._edit_all()
+        self._move_upstream(tap_dir)
+
+        r = boost("update")
+        for f in files:
+            assert "MY EDIT" in f.read_text(encoding="utf-8"), f
+        assert "refreshed" not in r.out
+        assert "brainstorming has local edits" in r.out
+        assert "rule house-style has local edits" in r.out
+        assert "workflow review-diff has local edits" in r.out
+        assert "`boost reinstall brainstorming`" in r.out
+        assert "`boost update --force`" in r.out
+        # held back is not "up to date"
+        assert "everything up to date" not in r.out
+        assert "3 items held back" in r.out
+
+    def test_force_discards_them_and_says_so(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = self._kinds_tap(fixture_tap_src, tmp_path, "edit-tap2")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming", "house-style", "review-diff")
+        files = self._edit_all()
+        self._move_upstream(tap_dir)
+
+        r = boost("update", "--force")
+        for f in files:
+            text = f.read_text(encoding="utf-8")
+            assert "MY EDIT" not in text, f
+            assert "upstream v2" in text, f
+        assert r.out.count("local edits discarded") == 3
+
+    def test_an_unedited_item_still_refreshes(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = self._kinds_tap(fixture_tap_src, tmp_path, "edit-tap3")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming", "house-style", "review-diff")
+        self._move_upstream(tap_dir)
+        r = boost("update")
+        assert "refreshed brainstorming" in r.out
+        assert "refreshed rule house-style" in r.out
+        assert "refreshed workflow review-diff" in r.out
+        assert "local edits" not in r.out
+
+    def _rewound(self, fixture_tap_src, tmp_path, slug, boost):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / slug)
+        boost("tap", tap_dir)
+        _bump(tap_dir, "brainstorming", "1.4.0", "1.5.0")
+        boost("update")
+        boost("install", "brainstorming")
+        assert _lock()["brainstorming"]["version"] == "1.5.0"
+        subprocess.run(["git", "-C", str(tap_dir), "reset", "-q", "--hard",
+                        "HEAD~1"], check=True, capture_output=True)
+        _add_and_commit(tap_dir, "README.md", "rewound\n", "rewind")
+        return tap_dir
+
+    def test_a_rewound_tap_does_not_downgrade(
+            self, boost, fixture_tap_src, tmp_path):
+        self._rewound(fixture_tap_src, tmp_path, "rewind-tap", boost)
+        r = boost("update")
+        assert _lock()["brainstorming"]["version"] == "1.5.0"
+        assert "refreshed brainstorming" not in r.out
+        assert ("brainstorming: upstream is at v1.4.0, behind your v1.5.0"
+                in r.out)
+        assert "`boost update --force` downgrades" in r.out
+
+    def test_force_downgrades_and_says_which_way(
+            self, boost, fixture_tap_src, tmp_path):
+        self._rewound(fixture_tap_src, tmp_path, "rewind-tap2", boost)
+        r = boost("update", "--force")
+        assert _lock()["brainstorming"]["version"] == "1.4.0"
+        assert "downgraded brainstorming v1.5.0 → v1.4.0" in r.out
+
+    def test_a_rewound_rule_does_not_downgrade(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = self._kinds_tap(fixture_tap_src, tmp_path, "rewind-rule")
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.1.0\n---\n\n"
+                        "Use tabs.\n", "v1.1")
+        boost("tap", tap_dir)
+        boost("install", "house-style")
+        subprocess.run(["git", "-C", str(tap_dir), "reset", "-q", "--hard",
+                        "HEAD~1"], check=True, capture_output=True)
+        _add_and_commit(tap_dir, "README.md", "rewound\n", "rewind")
+        claude = paths.home() / ".claude" / "CLAUDE.md"
+        r = boost("update")
+        assert "Use tabs." in claude.read_text(encoding="utf-8")
+        assert ("rule house-style: upstream is at v1.0.0, behind your v1.1.0"
+                in r.out)
+        r = boost("update", "--force")
+        assert "downgraded rule house-style v1.1.0 → v1.0.0" in r.out
+        assert "two-space" in claude.read_text(encoding="utf-8")
+
+
 def _poison(tap_dir, skill, old, new):
     """Bump a skill's version *and* append an executable-looking line."""
     md = tap_dir / "skills" / skill / "SKILL.md"
