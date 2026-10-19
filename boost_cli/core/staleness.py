@@ -70,7 +70,8 @@ HOLD_DOWNGRADE = "downgrade"      # the tap now advertises an older version
 
 
 def update_hold(locally_modified: bool, installed_version: str,
-                latest_version: str, force: bool) -> str | None:
+                latest_version: str, discard_edits: bool,
+                allow_downgrade: bool) -> str | None:
     """Why an otherwise-due refresh must be skipped, else ``None``.
 
     Both holds guard something an overwrite cannot give back. A local edit is
@@ -80,14 +81,15 @@ def update_hold(locally_modified: bool, installed_version: str,
     was followed silently, version and all. Edits outrank the downgrade
     because they are the part that is unrecoverable. An empty
     ``latest_version`` declares nothing and is not a downgrade
-    (`catalog_relation`). ``force`` releases both: the caller then says what
-    it discarded rather than refusing.
+    (`catalog_relation`). Each hold has its own release -- ``discard_edits``
+    and ``allow_downgrade`` -- because consenting to lose an edit is not
+    consenting to walk a version back, and neither is what `--force` (move
+    pinned taps) asked for. The caller then says what it did.
     """
-    if force:
-        return None
-    if locally_modified:
+    if locally_modified and not discard_edits:
         return HOLD_LOCAL_EDITS
-    if catalog_relation(installed_version, latest_version) == AHEAD:
+    if (not allow_downgrade
+            and catalog_relation(installed_version, latest_version) == AHEAD):
         return HOLD_DOWNGRADE
     return None
 

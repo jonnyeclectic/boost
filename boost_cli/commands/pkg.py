@@ -1441,24 +1441,27 @@ def _confirm_risky_materialized(kind: str, name: str, lk: dict,
 
 
 def _hold_update(label: str, name: str, lk: dict, kind: str, old_v: str,
-                 new_v: str, force: bool) -> tuple[bool, bool]:
+                 new_v: str, discard_edits: bool,
+                 allow_downgrade: bool) -> tuple[bool, bool]:
     """Apply `staleness.update_hold` for one item: ``(held, edited)``.
 
-    A held item is named with the way past it, because both remedies are
-    deliberate acts: `boost reinstall` discards one item's edits, and
-    `--force` releases every hold this run (and moves pinned taps).
-    ``edited`` lets a forced refresh say what it threw away.
+    A held item is named with the way past it, because each remedy is a
+    deliberate act: `boost reinstall` discards one item's edits,
+    `--discard-edits` every edited item's this run, and `--allow-downgrade`
+    follows a rewound tap. `--force` releases neither; it moves pinned taps.
+    ``edited`` lets a released refresh say what it threw away.
     """
     edited = integrity.locally_edited(kind, name, lk)
-    hold = staleness.update_hold(edited, old_v, new_v, force)
+    hold = staleness.update_hold(edited, old_v, new_v, discard_edits,
+                                 allow_downgrade)
     if hold == staleness.HOLD_LOCAL_EDITS:
         out.warn("%s has local edits — update skipped; `boost reinstall %s` "
-                 "discards them, or `boost update --force` for every held "
-                 "item" % (label, name), wrap=True)
+                 "discards them, or `boost update --discard-edits` for every "
+                 "edited item" % (label, name), wrap=True)
     elif hold == staleness.HOLD_DOWNGRADE:
         out.warn("%s: upstream is at v%s, behind your v%s — update skipped; "
-                 "`boost update --force` downgrades" % (label, new_v, old_v),
-                 wrap=True)
+                 "`boost update --allow-downgrade` downgrades"
+                 % (label, new_v, old_v), wrap=True)
     return hold is not None, edited
 
 
@@ -1475,7 +1478,8 @@ def _refresh_line(label: str, old_v: str, new_v: str, edited: bool,
 
 
 def _update_materialized(kind: str, installed: dict[str, dict], results,
-                         force: bool = False) -> tuple[int, int]:
+                         discard_edits: bool = False,
+                         allow_downgrade: bool = False) -> tuple[int, int]:
     """Re-materialize installed rules/workflows whose tap source moved.
 
     Mirrors the skill upgrade loop: for each installed item from a refreshed
@@ -1483,7 +1487,8 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
     changed — behind the same risky-diff gate the skill loop uses, and behind
     the same pin/quarantine skips: a pinned rule stays put, and refreshing a
     quarantined one would re-materialize the very content quarantine removed.
-    An edited or downgraded item is held unless ``force`` (`_hold_update`).
+    An edited or downgraded item is held unless its flag releases it
+    (`_hold_update`).
     Returns ``(refreshed, held)``.
     """
     import hashlib
@@ -1530,7 +1535,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
             continue
         hold, edited = _hold_update("%s %s" % (kind, name), name, lk, kind,
                                     old_v, str(entry.get("version") or ""),
-                                    force)
+                                    discard_edits, allow_downgrade)
         if hold:
             held += 1
             continue
@@ -1728,9 +1733,13 @@ def cmd_update(argv: list[str]) -> int:
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     ap.add_argument("--force", action="store_true",
-                    help="move pinned taps too (clearing their pin), and "
-                         "refresh items with local edits or an older "
-                         "upstream version (discarding / downgrading)")
+                    help="move pinned taps too, clearing their pin")
+    ap.add_argument("--discard-edits", action="store_true",
+                    help="refresh locally edited skills, rules and workflows "
+                         "too, overwriting the edits")
+    ap.add_argument("--allow-downgrade", action="store_true",
+                    help="follow a tap whose upstream version is now older "
+                         "than the installed one")
     ap.add_argument("--shards", action="store_true",
                     help="refresh prebuilt vectors from the published "
                          "manifest, moving taps to the commits it names")
@@ -1816,7 +1825,8 @@ def cmd_update(argv: list[str]) -> int:
         if reason is None:
             continue
         hold, edited = _hold_update(name, name, lk, "skill", old_v,
-                                    str(entry.get("version") or ""), args.force)
+                                    str(entry.get("version") or ""),
+                                    args.discard_edits, args.allow_downgrade)
         if hold:
             held += 1
             continue
@@ -1838,7 +1848,9 @@ def cmd_update(argv: list[str]) -> int:
     store.backfill_source_dates(results)
     for kind, section in (("rule", lockfile.installed_rules()),
                           ("workflow", lockfile.installed_workflows())):
-        n, h = _update_materialized(kind, section, results, force=args.force)
+        n, h = _update_materialized(kind, section, results,
+                                    discard_edits=args.discard_edits,
+                                    allow_downgrade=args.allow_downgrade)
         upgraded += n
         held += h
     if held:

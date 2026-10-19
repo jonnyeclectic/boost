@@ -7,7 +7,7 @@ category: Security · Supply chain
 complexity: M
 impact: High
 wow: 3
-note: edits and versions held unless --force
+note: edits and versions held unless --discard-edits / --allow-downgrade
 order: 5
 owner: fix/update-guards
 pr:
@@ -25,8 +25,10 @@ copy no longer hashes to its lock (<code>integrity.locally_edited</code>,
 which checks <em>every</em> written rule/workflow artifact rather than
 stopping at the first fault the way <code>materialized_status</code> does) or
 whose upstream advertises a lower version is skipped with a warning naming
-<code>boost reinstall X</code> / <code>boost update --force</code>, and the run
-ends "N items held back" instead of "everything up to date".
-<code>--force</code> (which already moved pinned taps) releases the holds and
-says what it did: <code>downgraded brainstorming v1.5.0 → v1.4.0</code>,
-<code>… — local edits discarded</code>.
+<code>boost reinstall X</code> / <code>boost update --discard-edits</code> or
+<code>boost update --allow-downgrade</code>, and the run ends "N items held
+back" instead of "everything up to date". Each hold has its own release, and
+neither is <code>--force</code>: that flag still means only "move pinned
+taps", so <code>update --force</code> on a pinned tap keeps an edited skill's
+edits. A released refresh says what it did: <code>downgraded brainstorming
+v1.5.0 → v1.4.0</code>, <code>… — local edits discarded</code>.

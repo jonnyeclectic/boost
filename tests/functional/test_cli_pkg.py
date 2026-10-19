@@ -1154,12 +1154,13 @@ class TestUpdateKeepsWhatItCannotGetBack:
         assert "rule house-style has local edits" in r.out
         assert "workflow review-diff has local edits" in r.out
         assert "`boost reinstall brainstorming`" in r.out
-        assert "`boost update --force`" in r.out
+        assert "`boost update --discard-edits`" in r.out
+        assert "--force" not in r.out
         # held back is not "up to date"
         assert "everything up to date" not in r.out
         assert "3 items held back" in r.out
 
-    def test_force_discards_them_and_says_so(
+    def test_discard_edits_discards_them_and_says_so(
             self, boost, fixture_tap_src, tmp_path):
         tap_dir = self._kinds_tap(fixture_tap_src, tmp_path, "edit-tap2")
         boost("tap", tap_dir)
@@ -1167,12 +1168,49 @@ class TestUpdateKeepsWhatItCannotGetBack:
         files = self._edit_all()
         self._move_upstream(tap_dir)
 
-        r = boost("update", "--force")
+        r = boost("update", "--discard-edits")
         for f in files:
             text = f.read_text(encoding="utf-8")
             assert "MY EDIT" not in text, f
             assert "upstream v2" in text, f
         assert r.out.count("local edits discarded") == 3
+
+    def test_force_on_a_pinned_tap_keeps_edits(
+            self, boost, fixture_tap_src, tmp_path):
+        # --force means "move pinned taps"; it must not also mean "throw away
+        # my edits" -- that consent is --discard-edits, asked for by name.
+        tap_dir = self._kinds_tap(fixture_tap_src, tmp_path, "edit-tap-pin")
+        sha = subprocess.run(["git", "-C", str(tap_dir), "rev-parse", "HEAD"],
+                             check=True, capture_output=True,
+                             text=True).stdout.strip()
+        boost("tap", tap_dir, "--at", sha)
+        boost("install", "brainstorming", "house-style", "review-diff")
+        files = self._edit_all()
+        self._move_upstream(tap_dir)
+
+        r = boost("update", "--force")
+        assert "(pin cleared)" in r.out
+        for f in files:
+            text = f.read_text(encoding="utf-8")
+            assert "MY EDIT" in text, f
+            assert "upstream v2" not in text, f
+        assert "local edits discarded" not in r.out
+        assert "3 items held back" in r.out
+
+    def test_force_does_not_downgrade(
+            self, boost, fixture_tap_src, tmp_path):
+        self._rewound(fixture_tap_src, tmp_path, "rewind-tap-force", boost)
+        r = boost("update", "--force")
+        assert _lock()["brainstorming"]["version"] == "1.5.0"
+        assert "downgraded" not in r.out
+        assert "1 item held back" in r.out
+
+    def test_discard_edits_still_refuses_a_downgrade(
+            self, boost, fixture_tap_src, tmp_path):
+        self._rewound(fixture_tap_src, tmp_path, "rewind-tap-de", boost)
+        r = boost("update", "--discard-edits")
+        assert _lock()["brainstorming"]["version"] == "1.5.0"
+        assert "`boost update --allow-downgrade` downgrades" in r.out
 
     def test_an_unedited_item_still_refreshes(
             self, boost, fixture_tap_src, tmp_path):
@@ -1206,12 +1244,13 @@ class TestUpdateKeepsWhatItCannotGetBack:
         assert "refreshed brainstorming" not in r.out
         assert ("brainstorming: upstream is at v1.4.0, behind your v1.5.0"
                 in r.out)
-        assert "`boost update --force` downgrades" in r.out
+        assert "`boost update --allow-downgrade` downgrades" in r.out
+        assert "--force" not in r.out
 
-    def test_force_downgrades_and_says_which_way(
+    def test_allow_downgrade_downgrades_and_says_which_way(
             self, boost, fixture_tap_src, tmp_path):
         self._rewound(fixture_tap_src, tmp_path, "rewind-tap2", boost)
-        r = boost("update", "--force")
+        r = boost("update", "--allow-downgrade")
         assert _lock()["brainstorming"]["version"] == "1.4.0"
         assert "downgraded brainstorming v1.5.0 → v1.4.0" in r.out
 
@@ -1231,7 +1270,7 @@ class TestUpdateKeepsWhatItCannotGetBack:
         assert "Use tabs." in claude.read_text(encoding="utf-8")
         assert ("rule house-style: upstream is at v1.0.0, behind your v1.1.0"
                 in r.out)
-        r = boost("update", "--force")
+        r = boost("update", "--allow-downgrade")
         assert "downgraded rule house-style v1.1.0 → v1.0.0" in r.out
         assert "two-space" in claude.read_text(encoding="utf-8")
 

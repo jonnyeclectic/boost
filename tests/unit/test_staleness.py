@@ -181,29 +181,45 @@ class TestUpdateHold:
         assert staleness.HOLD_DOWNGRADE == "downgrade"
 
     def test_clean_upgrade_is_not_held(self):
-        assert staleness.update_hold(False, "1.0.0", "1.1.0", False) is None
+        assert staleness.update_hold(False, "1.0.0", "1.1.0", False, False) is None
 
     def test_same_version_content_refresh_is_not_held(self):
-        assert staleness.update_hold(False, "1.0.0", "1.0.0", False) is None
+        assert staleness.update_hold(False, "1.0.0", "1.0.0", False, False) is None
 
     def test_local_edits_hold(self):
-        assert staleness.update_hold(True, "1.0.0", "1.1.0", False) \
+        assert staleness.update_hold(True, "1.0.0", "1.1.0", False, False) \
             == staleness.HOLD_LOCAL_EDITS
 
     def test_lower_upstream_version_holds(self):
-        assert staleness.update_hold(False, "1.5.0", "1.4.0", False) \
+        assert staleness.update_hold(False, "1.5.0", "1.4.0", False, False) \
             == staleness.HOLD_DOWNGRADE
 
     def test_local_edits_outrank_a_downgrade(self):
         # The edits are what cannot be recovered; name them first.
-        assert staleness.update_hold(True, "1.5.0", "1.4.0", False) \
+        assert staleness.update_hold(True, "1.5.0", "1.4.0", False, False) \
             == staleness.HOLD_LOCAL_EDITS
 
     def test_an_undeclared_upstream_version_is_not_a_downgrade(self):
         # No version in the catalog is no signal, not "v0.0.0".
-        assert staleness.update_hold(False, "1.5.0", "", False) is None
+        assert staleness.update_hold(False, "1.5.0", "", False, False) is None
 
-    def test_force_releases_both_holds(self):
-        assert staleness.update_hold(True, "1.5.0", "1.4.0", True) is None
-        assert staleness.update_hold(True, "1.0.0", "1.0.0", True) is None
-        assert staleness.update_hold(False, "1.5.0", "1.4.0", True) is None
+    def test_discard_edits_releases_only_the_edit_hold(self):
+        assert staleness.update_hold(True, "1.0.0", "1.1.0", True, False) \
+            is None
+        # Consenting to lose edits is not consenting to walk a version back.
+        assert staleness.update_hold(True, "1.5.0", "1.4.0", True, False) \
+            == staleness.HOLD_DOWNGRADE
+        assert staleness.update_hold(False, "1.5.0", "1.4.0", True, False) \
+            == staleness.HOLD_DOWNGRADE
+
+    def test_allow_downgrade_releases_only_the_downgrade_hold(self):
+        assert staleness.update_hold(False, "1.5.0", "1.4.0", False, True) \
+            is None
+        assert staleness.update_hold(True, "1.5.0", "1.4.0", False, True) \
+            == staleness.HOLD_LOCAL_EDITS
+        assert staleness.update_hold(True, "1.0.0", "1.1.0", False, True) \
+            == staleness.HOLD_LOCAL_EDITS
+
+    def test_both_flags_release_both_holds(self):
+        assert staleness.update_hold(True, "1.5.0", "1.4.0", True, True) \
+            is None
