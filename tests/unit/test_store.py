@@ -1137,6 +1137,7 @@ class TestImportProvenance:
             "declined", msg, msg)
         actions = store.sync_apply(store.sync_plan())
         assert msg in actions
+        assert store.is_unrepaired(msg)    # a ✓ here would claim a repair
         assert lockfile.get_skill("alpha")["source_url"] == self.URL
 
 
@@ -1568,6 +1569,18 @@ class TestSyncApply:
                   in a for a in actions)
         assert not (paths.store_dir() / "local-skill").is_dir()
         assert lockfile.get_skill("local-skill") is not None
+        # A repair it did not make: heal and sync print it as a warning and
+        # heal exits 1, rather than a ✓ over a skill still missing.
+        declined = [a for a in actions if "repair declined" in a]
+        assert declined and all(store.is_unrepaired(a) for a in declined)
+
+    def test_is_unrepaired_names_each_declined_repair_and_nothing_else(self):
+        assert store.is_unrepaired(store._declined("alpha", "tap", "alpha"))
+        assert store.is_unrepaired(
+            store._declined("rule r", "tap", "r"))
+        assert not store.is_unrepaired(
+            "reinstalled missing alpha from fixture-tap")
+        assert not store.is_unrepaired(store._DROPPED % "alpha")
 
 
 class TestCopySkillAtomic:

@@ -815,6 +815,96 @@ class TestDoctor:
         assert ("workflow gone missing its claude-code file — "
                 "run `boost reinstall gone`") in r.out
 
+    # ── content drift in a rule or workflow, as `verify` sees it ──────────
+    def _seed_hashed(self, rule_text="rule body", wf_text="workflow body"):
+        import hashlib
+        rp = paths.home() / ".cursor" / "rules" / "r.mdc"
+        rp.parent.mkdir(parents=True)
+        rp.write_text(rule_text, encoding="utf-8")
+        lockfile.set_rule("r", {"kind": "rule", "materializations": [
+            {"agent": "cursor", "mode": "file", "path": str(rp),
+             "sha256": hashlib.sha256(b"rule body").hexdigest()}]})
+        wp = paths.home() / ".claude" / "commands" / "w.md"
+        wp.parent.mkdir(parents=True)
+        wp.write_text(wf_text, encoding="utf-8")
+        lockfile.set_workflow("w", {"kind": "workflow", "slot": "commands",
+                                    "materializations": [
+                                        {"agent": "claude-code", "path": str(wp),
+                                         "sha256": hashlib.sha256(
+                                             b"workflow body").hexdigest()}]})
+
+    def test_hashed_rule_and_workflow_untouched_rc0(self, boost, sandbox):
+        self._seed_hashed()
+        r = boost("doctor")
+        assert "modified since install" not in r.out
+        assert "1 rule and 1 workflow fully materialized" in r.out
+
+    def test_hand_edited_rule_and_workflow_rc1(self, boost, sandbox):
+        # `verify` failed both and `drift` called them local edits while
+        # doctor, which checked only that each file existed, said healthy.
+        self._seed_hashed(rule_text="rule body\nTAMPERED\n",
+                          wf_text="workflow body\nTAMPERED\n")
+        r = boost("doctor", expect=1)
+        assert "rule r modified since install — run `boost verify`" in r.out
+        assert "workflow w modified since install — run `boost verify`" in r.out
+        assert "fully materialized" not in r.out
+        assert "2 issues need attention" in r.out
+        assert boost("verify", expect=1)
+
+    def test_hand_edited_claude_block_rc1(self, boost, sandbox):
+        import hashlib
+        cm = paths.home() / ".claude" / "CLAUDE.md"
+        cm.parent.mkdir(parents=True)
+        cm.write_text("# notes\n\n<!-- boost:rule:blk start -->\nedited\n"
+                      "<!-- boost:rule:blk end -->\n", encoding="utf-8")
+        lockfile.set_rule("blk", {"kind": "rule", "materializations": [
+            {"agent": "claude-code", "mode": "claude", "path": str(cm),
+             "sha256": hashlib.sha256(b"original").hexdigest()}]})
+        r = boost("doctor", expect=1)
+        assert "rule blk modified since install — run `boost verify`" in r.out
+
+    def test_claude_block_with_no_end_marker_is_malformed_rc1(
+            self, boost, sandbox):
+        # The start marker alone used to count as present. `verify` reads the
+        # block as absent, and the next write appends a second block after
+        # the orphaned marker rather than replacing it.
+        cm = paths.home() / ".claude" / "CLAUDE.md"
+        cm.parent.mkdir(parents=True)
+        cm.write_text("# notes\n\n<!-- boost:rule:blk start -->\nbody\n",
+                      encoding="utf-8")
+        lockfile.set_rule("blk", {"kind": "rule", "materializations": [
+            {"agent": "claude-code", "mode": "claude", "path": str(cm)}]})
+        r = _flat(boost("doctor", expect=1).out)
+        assert ("rule blk's block in ~/.claude/CLAUDE.md has a start marker "
+                "and no end marker") in r
+        assert "missing its claude-code materialization" not in r
+        assert "1 issue needs attention" in r
+
+    def test_pinned_skill_with_a_moved_source_names_the_real_choices(
+            self, boost, fixture_tap_src, tmp_path):
+        # `boost heal` declines this repair, so prescribing it sent the user
+        # round in a loop: doctor -> heal (declined) -> doctor.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "pinned-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        boost("pin", "brainstorming")
+        _bump(tap_dir, "brainstorming", "1.4.0", "1.5.0")
+        boost("update", "--taps-only")
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+        r = _flat(boost("doctor", expect=1).out)
+        assert ("skill brainstorming missing from store — brainstorming is "
+                "pinned and its tap source has moved — repair declined "
+                "(unpin, or `boost reinstall brainstorming` to accept the new "
+                "content)") in r
+        assert "missing from store — run `boost heal`" not in r
+
+        h = boost("heal", expect=1)
+        line = next(ln for ln in h.out.splitlines() if "repair declined" in ln)
+        assert "✓" not in line
+        assert "nothing to heal" not in h.out
+        p = boost("heal", "--dry-run", expect=1)
+        assert "repair declined" in p.out and "nothing to heal" not in p.out
+
 
 
 class TestDoctorSeesTheOtherTenant:

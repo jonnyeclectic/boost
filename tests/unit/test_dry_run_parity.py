@@ -545,7 +545,9 @@ class TestHealPreviewsTheBranchItWillTake:
             "---\nname: local-skill\nversion: 2.0.0\n---\n\nBody v2\n",
             encoding="utf-8")
 
-        preview, applied = _heal_both(boost)
+        # Both exit 1: the repair is one heal will not make, so neither run
+        # may report success over it.
+        preview, applied = _heal_both(boost, expect=1)
 
         declined = "local-skill is pinned and its local source has moved"
         assert declined in preview

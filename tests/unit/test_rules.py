@@ -361,3 +361,27 @@ class TestReadBlock:
         text = rules.merge_block("my own notes\n", "r", "managed")
         assert rules.read_block(text, "r") == "managed"
         assert "my own notes" not in (rules.read_block(text, "r") or "")
+
+
+class TestUnclosedBlock:
+    """The half of `read_block`'s None that doctor must tell apart: a start
+    marker left with no end, which only a hand edit repairs."""
+
+    def test_a_start_marker_with_no_end_is_unclosed(self):
+        start, _end = rules.markers("x")
+        assert rules.unclosed_block("notes\n" + start + "\nbody\n", "x")
+
+    def test_a_whole_block_is_not(self):
+        assert not rules.unclosed_block(rules.merge_block("", "x", "b"), "x")
+
+    def test_no_block_at_all_is_not(self):
+        assert not rules.unclosed_block("just notes\n", "x")
+
+    def test_an_end_marker_before_the_start_does_not_close_it(self):
+        start, end = rules.markers("x")
+        assert rules.unclosed_block(end + "\n" + start + "\nbody\n", "x")
+
+    def test_another_rules_end_marker_does_not_close_it(self):
+        start, _end = rules.markers("x")
+        _s, other_end = rules.markers("y")
+        assert rules.unclosed_block(start + "\nbody\n" + other_end, "x")
