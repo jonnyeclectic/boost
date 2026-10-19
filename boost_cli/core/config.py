@@ -473,7 +473,7 @@ def unknown_key_warning(dotted: str) -> str | None:
 
     `set_value` stores keys DEFAULTS does not describe, on purpose:
     integrations write their own top-level sections. But a typo under a
-    section boost owns — ``agents.claude-code.enabeld`` — was stored the same
+    section boost owns — ``agents.claude-code.enable`` — was stored the same
     way, reported with a check mark, and changed nothing. So this stays
     silent for an invented top-level key and speaks up only below a section
     boost reads. ``agents`` is the one open section — a user may add an agent

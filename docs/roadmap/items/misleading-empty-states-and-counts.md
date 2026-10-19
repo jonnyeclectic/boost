@@ -47,7 +47,7 @@ for those rows too, so the row and the footer name one state. Re-tap advice is g
 untapped rows; the JSON is unchanged.
 
 <b><code>boost config set</code> with a typo printed a check mark and changed nothing.</b>
-<code>agents.claude-code.enabeld false</code> and <code>agents.claud-code.enabled false</code> both
+<code>agents.claude-code.enable false</code> and <code>agents.claud-code.enabled false</code> both
 reported <i>✓ set</i> while <code>agents.claude-code.enabled</code> stayed true — and the second
 invented a phantom agent with no dir. Unknown keys are still saved (integrations invent their own
 top-level sections, a documented decision), but <code>config.unknown_key_warning</code> now warns on
