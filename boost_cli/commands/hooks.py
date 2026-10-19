@@ -66,6 +66,10 @@ def cmd_hooks(argv) -> int:
     p.add_argument("--force", action="store_true",
                    help="write even when $CODEX_HOME points outside this $HOME")
     args = p.parse_args(argv)
+    # Trimmed once, here, so the name this command echoes back is the one
+    # stored and compared (`cs.clean_name` trims again as the core backstop);
+    # an all-whitespace name then meets the "needs --name" refusal below.
+    args.name = (args.name or "").strip()
 
     if args.action == "list":
         return _list(args.scope, args.host, args.event, args.as_json)
