@@ -31,6 +31,10 @@ _WARNED_UNSAVED = False
 # Once per process too: every read of a corrupt lock finds the same fault, and
 # `boost list` reads it several times before it prints "no skills installed".
 _WARNED_CORRUPT = False
+#: What a refused write tells the user. History snapshots the lock *before*
+#: each write, so the newest snapshot predates the last change.
+ROLLBACK_HINT = ("`boost replay rollback <id>` restores the lock as it was "
+                 "before its last change; the newest record is only in %s")
 
 # One section per installable kind, in lookup-precedence order. `find_any`
 # resolves a bare name through these left to right, so a skill shadows a rule
@@ -98,8 +102,9 @@ def _preserve_corrupt(p) -> None:
     if not _WARNED_CORRUPT:
         _WARNED_CORRUPT = True
         output.warn("the lock file %s is corrupt, so boost sees nothing "
-                    "installed%s — restore it with `boost replay rollback <id>`"
-                    % (paths.tilde(p), "; its bytes are kept at %s"
+                    "installed — `boost replay rollback <id>` restores it as "
+                    "it was before its last change%s"
+                    % (paths.tilde(p), "; the newest record is only in %s"
                        % paths.tilde(backup) if backup else ""),
                     stream=sys.stderr, wrap=True)
 
@@ -117,8 +122,7 @@ def refuse_corrupt() -> None:
     if jsonstate.read_object(p)[1] is None:
         return
     raise BoostError("lock file is corrupt — boost will not write over it",
-                     hint="restore with `boost replay rollback <id>`; its "
-                          "bytes are kept at %s" % paths.tilde(corrupt_backup(p)),
+                     hint=ROLLBACK_HINT % paths.tilde(corrupt_backup(p)),
                      wrap=True)
 
 
@@ -138,6 +142,43 @@ def restore(hist_id: str) -> dict:
     src = paths.lock_history_dir() / ("lock-%s.json" % hist_id)
     util.atomic_write_text(p, src.read_text(encoding="utf-8"))
     return snapshot
+
+
+def unrestored_corrupt():
+    """The ``.corrupt`` backup while it is newer than every history snapshot.
+
+    A snapshot is taken *before* each write, so none holds the lock's newest
+    state: `boost replay rollback` to the newest one restores the lock as it
+    was before its last change, and what that change recorded is only in the
+    backup. Until boost writes the lock again (which snapshots the restored
+    one, newer than the backup), a store dir the lock does not record may be
+    a skill that change installed — not one added outside boost — and
+    `boost sync` would re-file it as a ``local`` skill linked everywhere.
+    An equal mtime counts as newer: a coarse clock must not hide the backup.
+    Returns ``None`` when there is no backup or a later write superseded it.
+    """
+    backup = corrupt_backup()
+    try:
+        mtime = backup.stat().st_mtime_ns
+    except OSError:
+        return None
+    newest = -1
+    for snap in paths.lock_history_dir().glob("lock-*.json"):
+        with suppress(OSError):
+            newest = max(newest, snap.stat().st_mtime_ns)
+    return backup if mtime >= newest else None
+
+
+def unrestored_line(n: int, shown: str, backup) -> str:
+    """Doctor's line for ``n`` store dirs (named in ``shown``) that a lock
+    restored by `boost replay rollback` does not record; see
+    :func:`unrestored_corrupt`."""
+    one = n == 1
+    return ("%d skill%s the restored lock file does not record (%s) — its "
+            "newest record is only in %s; `boost sync` would re-file %s"
+            % (n, "" if one else "s", shown,
+               paths.tilde(backup),
+               "it as a local skill" if one else "them as local skills"))
 
 
 class Integrity(NamedTuple):

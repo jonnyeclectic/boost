@@ -1020,7 +1020,13 @@ def cmd_doctor(argv):
     # read may have recorded is in none of them.
     if unrec is not None:
         mine = unrec["adoptable_store"]
-        if mine:
+        backup = lockfile.unrestored_corrupt() if mine else None
+        if backup:
+            # A rollback restores the lock as it was before its last change,
+            # so these may be what that change installed, not strays.
+            bad("unrecorded-skills", lockfile.unrestored_line(
+                len(mine), _first(mine), backup), wrap=True)
+        elif mine:
             bad("unrecorded-skills", "%d skill%s added outside boost (%s) — "
                 "`boost sync` records %s" % (len(mine), _s(len(mine)),
                                              _first(mine),

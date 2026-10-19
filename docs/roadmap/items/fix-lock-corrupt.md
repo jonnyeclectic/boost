@@ -7,7 +7,7 @@ category: Bug
 complexity: S
 impact: Medium
 wow: 3
-note: a corrupt lock was reported only in boost.log, and the next fresh install replaced every record with one
+note: a corrupt lock was reported only in boost.log, the next fresh install replaced every record with one, and doctor sent a rolled-back lock's newest skill to sync
 order: 374
 owner:
 pr:
@@ -31,7 +31,15 @@ skills linked to every agent, losing both their tap and their agent scope.
 copy anything, so a refused install leaves nothing behind in the store. A missing lock (a fresh
 install) and a lock in an older schema still write.
 
-<b><code>boost replay rollback &lt;id&gt;</code> is the way back.</b> On a corrupt lock it asks
-first, then makes the snapshot the lock byte for byte (<code>lockfile.restore</code>). The
-corrupt bytes stay in <code>.corrupt</code>, and the usual skill diff runs against the restored
-lock.
+<b><code>boost replay rollback &lt;id&gt;</code> is the way back, but not all the way.</b> On a
+corrupt lock it asks first, then makes the snapshot the lock byte for byte
+(<code>lockfile.restore</code>). The corrupt bytes stay in <code>.corrupt</code>, and the usual skill
+diff runs against the restored lock. History is snapshotted <i>before</i> each write, so no
+snapshot holds the newest state: rolling back to the newest one restores the lock as it was
+before its last change. The warning, the refusal's hint and the rollback's own lines now say so,
+and that the newest record is only in <code>.corrupt</code>. Doctor (CLI and MCP) used to call the
+skill that last change installed "added outside boost" and offer <code>boost sync</code>, which
+re-filed it as a <code>local</code> skill linked to every agent. While the <code>.corrupt</code> file
+is at least as new as every snapshot (<code>lockfile.unrestored_corrupt</code>), doctor names that
+file instead, and MCP doctor counts the skill as the user's to resolve rather than sync's. The next
+lock write snapshots the restored lock, and the usual <code>boost sync</code> line comes back.

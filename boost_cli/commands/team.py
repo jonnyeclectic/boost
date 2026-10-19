@@ -826,8 +826,9 @@ def cmd_replay(argv) -> int:
         # snapshot itself becoming the lock; the corrupt bytes stay aside.
         backup = paths.tilde(lockfile.corrupt_backup())
         if not out.confirm("the lock file is corrupt — make snapshot %s the "
-                           "lock file (its bytes are kept at %s)?"
-                           % (args.id, backup), quiet=args.json):
+                           "lock file? It is the lock as it was before the "
+                           "change after it; the newest record stays only in "
+                           "%s" % (args.id, backup), quiet=args.json):
             if args.json:
                 print(json.dumps({"id": args.id, "cancelled": True}, indent=2))
             else:
@@ -835,8 +836,9 @@ def cmd_replay(argv) -> int:
             return 1
         lockfile.restore(args.id)
         if not args.json:
-            out.ok("restored the lock file from %s — the corrupt one is at %s"
-                   % (args.id, backup))
+            out.ok("restored the lock file from %s, as it was before the "
+                   "change after it — anything that change recorded is only "
+                   "in %s" % (args.id, backup))
     now_all = lockfile.all_installed()
     # Per-kind diff: snapshots carry all three sections, so a rule that
     # appeared since the snapshot is a real difference, labeled as one.

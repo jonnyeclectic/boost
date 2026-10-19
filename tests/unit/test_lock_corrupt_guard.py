@@ -12,6 +12,7 @@ then re-filed the survivors as `local` skills linked to every agent.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 
 import pytest
@@ -53,7 +54,9 @@ class TestReadWarns:
         assert cap.out == ""
         assert "lock file" in cap.err and "is corrupt" in cap.err
         assert ".skill-lock.json.corrupt" in cap.err
-        assert "boost replay" in cap.err
+        assert ("`boost replay rollback <id>` restores it as it was before "
+                "its last change; the newest record is only in ") in " ".join(
+                    cap.err.split())
 
     def test_it_warns_once_per_process(self, sandbox, capsys):
         _corrupt()
@@ -78,7 +81,10 @@ class TestWriteRefuses:
             lockfile.set_skill("new", {"version": "2.0"})
         assert paths.lockfile_path().read_bytes() == raw
         assert "lock file is corrupt" in str(ei.value)
-        assert "boost replay" in ei.value.hint
+        assert ei.value.hint == (
+            "`boost replay rollback <id>` restores the lock as it was before "
+            "its last change; the newest record is only in "
+            + paths.tilde(lockfile.corrupt_backup()))
         assert ".skill-lock.json.corrupt" in ei.value.hint
         assert lockfile.corrupt_backup().read_bytes() == raw
         assert _history() == []           # refused before the snapshot
@@ -174,10 +180,33 @@ class TestCli:
         assert paths.lockfile_path().read_bytes() == raw
         assert not store.skill_store_dir("tdd-workflow").exists()
 
-        boost("replay", "rollback", newest)
+        res = boost("replay", "rollback", newest)
+        assert "as it was before the change after it" in res.out
         assert lockfile.check().ok
         assert set(lockfile.installed()) == {"brainstorming", "commit-messages"}
         assert lockfile.corrupt_backup().read_bytes() == raw
+
+        # The rollback lost jira-integration's record, and doctor must not
+        # send the user to `boost sync`, which re-files it as `local`.
+        res = boost("doctor", expect=None)
+        flat = " ".join(res.out.split())
+        assert ("1 skill the restored lock file does not record "
+                "(jira-integration)") in flat
+        assert ".skill-lock.json.corrupt" in flat
+        assert "added outside boost" not in flat
+
+    def test_once_a_snapshot_is_newer_doctor_offers_sync_again(self, tap, boost):
+        for name in ("brainstorming", "commit-messages"):
+            boost("install", name)
+        newest = lockfile.history_list()[-1]["id"]
+        _corrupt()
+        boost("replay", "rollback", newest)
+        # Same-second clocks must not decide the test: age the backup.
+        backup = lockfile.corrupt_backup()
+        os.utime(backup, (1_000_000_000, 1_000_000_000))
+        res = boost("doctor", expect=None)
+        assert "1 skill added outside boost (commit-messages)" in res.out
+        assert "restored lock file" not in res.out
 
     def test_rollback_json_restores_quietly(self, tap, boost):
         boost("install", "brainstorming")
@@ -199,3 +228,105 @@ class TestCli:
         res = boost("replay", "rollback", hid, expect=1)
         assert "cancelled" in res.out
         assert paths.lockfile_path().read_bytes() == raw
+
+
+def _snap(name: str, mtime: int):
+    d = paths.lock_history_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / name
+    f.write_text("{}", encoding="utf-8")
+    os.utime(f, (mtime, mtime))
+    return f
+
+
+def _backup(mtime: int):
+    paths.ensure_dirs()
+    b = lockfile.corrupt_backup()
+    b.write_text(GARBAGE, encoding="utf-8")
+    os.utime(b, (mtime, mtime))
+    return b
+
+
+class TestUnrestoredCorrupt:
+    """The backup outranks history only while it is newer than every snapshot."""
+
+    def test_no_backup_is_none(self, sandbox):
+        _snap("lock-a.json", 2_000_000_000)
+        assert lockfile.unrestored_corrupt() is None
+
+    def test_a_backup_with_no_history_is_returned(self, sandbox):
+        b = _backup(1_000_000_000)
+        assert str(lockfile.unrestored_corrupt()) == str(b)
+
+    def test_newer_than_every_snapshot_is_returned(self, sandbox):
+        _snap("lock-a.json", 1_000_000_000)
+        _snap("lock-b.json", 1_500_000_000)
+        b = _backup(1_500_000_001)
+        assert str(lockfile.unrestored_corrupt()) == str(b)
+
+    def test_older_than_the_newest_snapshot_is_none(self, sandbox):
+        _snap("lock-a.json", 1_000_000_000)
+        _snap("lock-b.json", 1_500_000_000)
+        _backup(1_499_999_999)
+        assert lockfile.unrestored_corrupt() is None
+
+    def test_an_equal_mtime_counts_as_newer(self, sandbox):
+        _snap("lock-a.json", 1_500_000_000)
+        b = _backup(1_500_000_000)
+        assert str(lockfile.unrestored_corrupt()) == str(b)
+
+    def test_other_files_in_history_are_ignored(self, sandbox):
+        _snap("notes.json", 2_000_000_000)
+        b = _backup(1_500_000_000)
+        assert str(lockfile.unrestored_corrupt()) == str(b)
+
+    def test_a_write_after_restore_supersedes_it(self, sandbox):
+        lockfile.set_skill("a", {"version": "1"})
+        lockfile.set_skill("b", {"version": "1"})
+        [hid] = [h["id"] for h in lockfile.history_list()]
+        _corrupt()
+        lockfile.restore(hid)
+        os.utime(lockfile.corrupt_backup(), (1_000_000_000, 1_000_000_000))
+        lockfile.set_skill("c", {"version": "1"})   # snapshots the restored lock
+        assert lockfile.unrestored_corrupt() is None
+
+    def test_the_line_names_the_backup_and_what_sync_would_do(self, sandbox):
+        b = lockfile.corrupt_backup()
+        assert lockfile.unrestored_line(1, "jira", b) == (
+            "1 skill the restored lock file does not record (jira) — its "
+            "newest record is only in %s; `boost sync` would re-file it as a "
+            "local skill" % paths.tilde(b))
+        assert lockfile.unrestored_line(2, "x, y", b) == (
+            "2 skills the restored lock file does not record (x, y) — its "
+            "newest record is only in %s; `boost sync` would re-file them as "
+            "local skills" % paths.tilde(b))
+
+
+class TestMcpDoctor:
+    def test_after_a_rollback_it_is_the_users_not_syncs(self, tap):
+        from boost_cli.commands import configuration
+        for name in ("brainstorming", "commit-messages"):
+            store.install(catalog.resolve_one(name))
+        newest = lockfile.history_list()[-1]["id"]
+        _corrupt()
+        lockfile.restore(newest)
+        text, is_error = configuration._tool_doctor({})
+        assert ("1 skill the restored lock file does not record "
+                "(commit-messages)") in text
+        assert "added outside boost" not in text
+        assert ("1 issue(s) — 1 is the user's to change, and `boost sync` "
+                "leaves it") in text
+        assert is_error is True
+
+    def test_once_superseded_sync_records_it_again(self, tap):
+        from boost_cli.commands import configuration
+        for name in ("brainstorming", "commit-messages"):
+            store.install(catalog.resolve_one(name))
+        newest = lockfile.history_list()[-1]["id"]
+        _corrupt()
+        lockfile.restore(newest)
+        os.utime(lockfile.corrupt_backup(), (1_000_000_000, 1_000_000_000))
+        text, _ = configuration._tool_doctor({})
+        assert ("commit-messages was added outside boost — `boost sync` "
+                "records it as a local skill and links it") in text
+        assert "1 issue(s) — run `boost sync` to fix" in text
