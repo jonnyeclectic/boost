@@ -14,7 +14,6 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta
-from itertools import chain
 from pathlib import Path
 
 from .. import __version__, cliparse
@@ -1474,7 +1473,9 @@ def _tool_search(args: dict):
     # and re-parses the file on every call, so the obvious `find_any(name)`
     # inside this comprehension is ten reads of the same bytes. The union of
     # the three sections is that same predicate, once.
-    installed_names = set(chain.from_iterable(lockfile.all_installed().values()))
+    # A skill installed `--local` into this repo is installed too: leaving the
+    # project lock out told an agent its active project skill was missing.
+    installed_names = integrity.installed_names()
     marks = [e.get("name", "") in installed_names for e in entries]
     lines = [mcp.hit_line(e, installed=m)
              for e, m in zip(entries, marks, strict=True)]
@@ -1487,15 +1488,19 @@ def _tool_search(args: dict):
 
 def _tool_list(args: dict):
     # All three lock sections: "no skills installed" while `boost list` shows
-    # a rule is the exact disagreement this surface must not have.
+    # a rule is the exact disagreement this surface must not have. The same
+    # goes for the project lock `boost list` reads alongside the user's.
     everything = lockfile.all_installed()
+    pbase, project = integrity.project_skills()
     # The footer reads the lock file and the tap list and nothing else — no
     # catalog scan — so boost_list stays the instant, threshold-free tool that
     # INSTRUCTIONS and its own description both promise. It lands in the empty
     # state too: a machine with nothing installed is exactly where "what do I
-    # have" is least useful on its own.
-    footer = mcp.coverage_line(everything, tapped=builtin.configured_tap_count())
-    if not any(everything.values()):
+    # have" is least useful on its own. A name installed in both scopes is
+    # two installs, so the skill count takes both.
+    counted = everything | {"skill": [*everything["skill"], *project]}
+    footer = mcp.coverage_line(counted, tapped=builtin.configured_tap_count())
+    if not any(everything.values()) and not project:
         return "nothing installed\n" + footer, False
     lines = []
     for kind, section in everything.items():
@@ -1504,18 +1509,36 @@ def _tool_list(args: dict):
                          % (n, e.get("version", "?"), e.get("tap", "?"),
                             "" if kind == "skill" else " [%s]" % kind,
                             " [pinned]" if e.get("pinned") else ""))
+    if project:
+        lines.append("project skills (%s):" % _tilde(pbase))
+        lines.extend("%s v%s (%s) [project]%s"
+                     % (n, e.get("version", "?"), e.get("tap", "?"),
+                        " [pinned]" if e.get("pinned") else "")
+                     for n, e in sorted(project.items()))
     lines.append(footer)
     return "\n".join(lines), False
 
 
 def _tool_info(args: dict):
     name = str(args.get("name", ""))
-    found = lockfile.find_any(name)
-    kind, entry = found if found is not None else ("skill", None)
-    matches = catalog.find(name)
-    if not entry and not matches:
+    # The resolver `boost info` uses: split a `tap:name`, hold the qualifier
+    # against the installed record, and ask the project lock too. The unsplit
+    # name never matched the bare-keyed lock, so `fix2:x` read "installed: no"
+    # right after boost_install had installed it.
+    found = integrity.find_installed(name)
+    kind, entry, pbase = found if found is not None else ("skill", None, None)
+    if entry:
+        # The installed copy's own catalog row, never another tap's: version
+        # and tap came from the lock while the description came from
+        # whichever tap sorted first, one reply describing two items.
+        src = next((e for e in catalog.find(name)
+                    if e["tap"] == entry.get("tap")), {})
+    elif not catalog.find(name):
         return "no skill named %r (installed or in any tap)" % name, True
-    src = matches[0] if matches else {}
+    else:
+        # Raises the same "exists in multiple taps" error boost_read and
+        # boost_install give, rather than silently describing the first.
+        src = catalog.resolve_one(name)
     kind_label = kind if entry else src.get("kind", "skill")
     lines = ["name: " + name]
     if kind_label != "skill":
@@ -1531,6 +1554,8 @@ def _tool_info(args: dict):
             integrity.written_agent_names(kind, entry)) or "none"
         lines.extend(("installed: yes (%s)" % entry.get("installed_at", "?"),
                       "agents: %s" % agents_s))
+        if pbase is not None:
+            lines.append("scope: project (%s)" % _tilde(pbase))
         if entry.get("pinned"):
             lines.append("pinned: yes")
         if entry.get("quarantined"):
@@ -1748,12 +1773,20 @@ def _tool_doctor(args: dict):
                 else integrity.materialized_status(n, e, kind))
         in _MAT_ISSUE_LABEL]
     lines.extend(mat_issues)
+    # Skills too, by the test CLI `boost doctor` asks: without it a skill
+    # edited in place left this reply "healthy" while the CLI flagged it.
+    skill_drift = [
+        "skill %s: modified since install (run `boost verify`)" % n
+        for n, e in sorted(everything["skill"].items())
+        if integrity.skill_modified(n, e)]
+    lines.extend(skill_drift)
     agent_lines = ["agents.%s.dir: %s — ask the user to fix it with `boost "
                    "config set agents.%s.dir <dir>`; link and materialization "
                    "checks were skipped" % (n, e.message, n)
                    for n, e in agent_errs]
     lines.extend(agent_lines)
-    total = issues + len(mat_issues) + len(agent_lines) + lock_bad
+    total = (issues + len(mat_issues) + len(skill_drift) + len(agent_lines)
+             + lock_bad)
     # A machine with no taps has nothing to disagree about, so every check
     # above passes and the old reply called it "healthy" — directly under the
     # line saying `taps: 0 (0 items available)`. That is the one state where
@@ -1783,7 +1816,7 @@ def _tool_doctor(args: dict):
     if total == 0:
         if tapped:
             lines.append("healthy — no issues found")
-    elif mat_issues or cfg_err or agent_lines:
+    elif mat_issues or skill_drift or cfg_err or agent_lines:
         # Not `boost sync`: an unresolvable agent dir makes sync refuse too.
         lines.append("%d issue(s) — run `boost doctor` for details" % total)
     else:

@@ -583,6 +583,20 @@ def tap_matches(tap_name: str, qualifier: str) -> bool:
     return bool(tap_name) and qualifier in (tap_name, tap_name.split("/")[-1])
 
 
+def for_tap(entry: dict | None, qualifier: str | None) -> dict | None:
+    """``entry`` unless a ``tap:`` qualifier was given that it does not satisfy.
+
+    A qualifier has to be honored against the *installed* record, not only the
+    catalog: with one skill installed from tap A and asked about via
+    ``tap-b:skill``, tap A's lock entry is the wrong answer, and reporting it
+    would describe another tap's install as this one's.
+    """
+    if entry and qualifier and not tap_matches(
+            str(entry.get("tap") or ""), qualifier):
+        return None
+    return entry
+
+
 def find(name: str, tap: str | None = None,
          entries: list[dict] | None = None) -> list[dict]:
     """Exact-name lookup. Supports 'owner/repo:skill' qualified form.

@@ -24,10 +24,11 @@ to trust it.
 from __future__ import annotations
 
 import os
+from itertools import chain
 from pathlib import Path
 
 from ..errors import BoostError
-from . import agents, config, lockfile, paths, projectlock, scopes, util
+from . import agents, catalog, config, lockfile, paths, projectlock, scopes, util
 
 STATUS_OK = "ok"
 STATUS_MODIFIED = "modified"     # on-disk content no longer matches the lock
@@ -95,6 +96,21 @@ def status(name: str, entry: dict | None = None) -> str:
     if self_sourced(name, entry):
         return STATUS_OK
     return STATUS_OK if util.sha256_dir(sdir) == recorded else STATUS_MODIFIED
+
+
+def skill_modified(name: str, entry: dict | None) -> bool:
+    """Whether installed skill ``name`` has drifted from its locked digest.
+
+    The one test both doctors ask, so the CLI and the MCP surface cannot
+    disagree about it again: ``boost_doctor`` once checked rules and
+    workflows only, and called a hand-edited skill "healthy" while ``boost
+    doctor`` flagged it on the same machine. A quarantined skill is not
+    asked — quarantine is its own report — and :func:`status` already keeps
+    a self-sourced skill, a missing store dir and an unlocked row out.
+    """
+    if not entry or entry.get("quarantined"):
+        return False
+    return status(name, entry) == STATUS_MODIFIED
 
 
 def reaches_no_agent(kind: str | None, entry: dict) -> bool:
@@ -374,6 +390,39 @@ def installed_skill_rows() -> list[tuple[str, dict, str, Path | None]]:
     rows += [(name, entry, scopes.SCOPE_PROJECT, base)
              for name, entry in project.items()]
     return sorted(rows, key=lambda r: (r[0], r[2] != scopes.SCOPE_USER))
+
+
+def find_installed(name: str) -> tuple[str, dict, Path | None] | None:
+    """``(kind, entry, base)`` for an installed item, or None.
+
+    ``name`` may be tap-qualified: the locks are keyed by the bare name, so it
+    is split first and the qualifier is held against the installed record
+    (:func:`catalog.for_tap`), exactly as ``boost info`` does. The user lock
+    answers first (``base`` None); a skill installed ``--local`` into the
+    current project answers next, with that project's ``base``. Asking only
+    the user lock with the unsplit name is what had ``boost_info`` say
+    "installed: no" for ``tap:name`` and for every project skill.
+    """
+    qualifier, bare = catalog.split_name(name)
+    found = lockfile.find_any(bare)
+    if found is not None:
+        entry = catalog.for_tap(found[1], qualifier)
+        if entry is not None:
+            return found[0], entry, None
+    base, project = project_skills()
+    entry = catalog.for_tap(project.get(bare), qualifier)
+    if entry is not None:
+        return "skill", entry, base
+    return None
+
+
+def installed_names() -> set[str]:
+    """Every installed name, all three kinds, user lock and current project.
+
+    One read of each lock, for a caller marking many names at once.
+    """
+    names = set(chain.from_iterable(lockfile.all_installed().values()))
+    return names | set(project_skills()[1])
 
 
 def commit_status(name: str, entry: dict | None = None) -> str | None:
