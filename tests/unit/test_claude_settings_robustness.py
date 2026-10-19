@@ -229,3 +229,41 @@ class TestProjectScopeResolvesTheProjectRoot:
         cs.add_hook("project", "Stop", "p", "echo")
         assert [(r["scope"], r["name"]) for r in cs.list_hooks()] == [
             ("global", "g"), ("project", "p")]
+
+
+class TestReadingProjectScopeWithNoProject:
+    """A read of project scope from ``$HOME`` is empty, never an error.
+
+    ``bmad doctor`` and ``bmad status`` read project scope unasked; when
+    ``settings_path("project")`` started refusing ``$HOME``, both died with
+    "there is no project here" on the global row's heels. The global hook must
+    not leak through under the project label either — that was the
+    double-listing the refusal was added for.
+    """
+
+    @pytest.fixture()
+    def at_home(self, sandbox, monkeypatch):
+        monkeypatch.chdir(sandbox)
+        cs.add_hook("global", "SessionStart", "home-read", "echo g")
+        return sandbox
+
+    def test_load_is_empty(self, at_home):
+        assert cs.load("project") == {}
+        assert cs.load("global") != {}
+
+    def test_has_hook_is_false(self, at_home):
+        assert cs.has_hook("project", "SessionStart", "home-read") is False
+        assert cs.has_hook("global", "SessionStart", "home-read") is True
+
+    def test_explicit_project_lists_nothing(self, at_home):
+        assert cs.list_hooks("project") == []
+        assert cs.foreign_hooks("project") == []
+
+    def test_remove_finds_nothing_and_leaves_global(self, at_home):
+        assert cs.remove_hook("project", "SessionStart", "home-read") == 0
+        assert cs.remove_hook_by_name("project", "home-read") == 0
+        assert cs.has_hook("global", "SessionStart", "home-read") is True
+
+    def test_a_write_still_refuses(self, at_home):
+        with pytest.raises(BoostError, match="no project here"):
+            cs.add_hook("project", "SessionStart", "home-write", "echo")

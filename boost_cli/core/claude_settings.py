@@ -84,10 +84,11 @@ def settings_path(scope: str, project_dir: Path | None = None,
 
     Project scope resolves through :func:`project_base`, exactly as
     ``install --local`` does, and raises when there is no project — standing
-    in ``$HOME``, where the "project" file would *be* the global one. Every
-    caller is a write or a scope the user named, so refusing here is the
-    write's refusal arriving early; readers that walk both scopes unasked
-    skip project through :func:`_readable_scopes` instead. The global branch
+    in ``$HOME``, where the "project" file would *be* the global one. That
+    refusal is for writes and for the paths they print; :func:`load` answers
+    ``{}`` for a project that is not there before it gets here, because
+    ``bmad doctor`` and ``bmad status`` read project scope unasked and a read
+    of nothing is empty, not an error. The global branch
     stays a pure path computation, deliberately: `bmad._hook_hosts` probes
     `settings_path(...).parent.is_dir()` to decide whether a host is in use,
     so the ``$CODEX_HOME`` refusal belongs at the write (see
@@ -128,10 +129,10 @@ def _readable_scopes(scope: str | None,
                      project_dir: Path | None) -> tuple[str, ...]:
     """The scopes a reader walks: the one asked for, or every one that exists.
 
-    An explicit ``project`` with no project raises in :func:`settings_path`,
-    like a write does. With no scope named, a missing project is simply not
-    there to read — reading the global file a second time under the project
-    label is the double-listing this guards against.
+    With no scope named, a missing project is simply not there to read and
+    gets no row at all; an explicit ``project`` reads as empty through
+    :func:`load`. Either way the global file is never read a second time
+    under the project label, the double-listing this guards against.
     """
     if scope:
         return (scope,)
@@ -197,7 +198,15 @@ def load(scope: str, project_dir: Path | None = None,
     scope's *whole* settings from here on, so silently swallowing the error
     is how a hooks-only settings.json used to eat the user's `permissions`
     and `model` keys on the next `hooks add`.
+
+    Project scope with no project (standing in ``$HOME``) reads as ``{}``
+    rather than raising from :func:`settings_path`: the only file there is the
+    global one, and reading it under the project label is how one hook was
+    listed twice. A write still refuses — ``add_hook`` asks
+    :func:`settings_path` itself.
     """
+    if scope == "project" and project_base(project_dir) is None:
+        return {}
     p = settings_path(scope, project_dir, host)
     data, err = jsonstate.read_object(p)
     if err:

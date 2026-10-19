@@ -35,4 +35,12 @@ root never read. Run from <code>$HOME</code>, it went into <code>~/.claude/setti
 the global file, while reporting "(project)", and the list then showed it twice. Project scope now
 resolves through <code>scopes.resolve_base</code>, as <code>install --local</code> does. It walks
 up to the repo root and refuses with "there is no project here" when <code>$HOME</code> is the
-only candidate. A listing with no scope skips the project row in that case.
+only candidate. A listing with no scope skips the project row in that case. A read of project scope with no project is empty rather than an
+error, so <code>bmad doctor</code> and <code>bmad status</code>, which read it unasked, still exit 0
+from <code>$HOME</code>, and <code>bmad on --scope project</code> there refuses before it writes a
+persona. <code>bmad</code> puts its project personas and state at the same root as its hooks, so
+<code>doctor</code> gives one answer from the root and from a subdirectory. BMAD's skills stay
+where <code>npx bmad-method</code> installs them, the cwd. A project hook written into a
+subdirectory before this change is no longer read: project scope now names one file per repo, as
+it does for <code>install --local</code>, and reading a second location would bring back the
+ambiguity this fixes.

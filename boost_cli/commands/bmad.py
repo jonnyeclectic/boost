@@ -163,9 +163,26 @@ def _on_off(value) -> str:
     return "on" if value else "off"
 
 
+def _project_root() -> Path:
+    """The directory project-scope personas, hooks and state all belong to.
+
+    The same root ``cs.settings_path("project")`` writes hooks under: the
+    enclosing repo when there is one. Personas and state used to follow the
+    raw cwd while hooks followed the repo root, so ``bmad on --scope project``
+    from ``src/deep`` split one install across two directories and ``doctor``
+    at the root and in the subdirectory disagreed about it. The cwd fallback
+    only answers in ``$HOME``, where a project write refuses anyway.
+
+    BMAD's skills and ``_bmad/`` are not routed here: ``npx bmad-method
+    install`` lays them out under the cwd it is given, and ``_skills_dir``
+    has to look where the installer put them.
+    """
+    return cs.project_base() or Path.cwd()
+
+
 def _agents_dir(scope) -> Path:
     """Where Claude Code reads subagent definitions for a scope."""
-    base = paths.home() if scope == "global" else Path.cwd()
+    base = paths.home() if scope == "global" else _project_root()
     return base / ".claude" / "agents"
 
 
@@ -219,6 +236,12 @@ def _hook_hosts(scope: str, requested=None, force: bool = False) -> list[str]:
     `on` installs two hooks, and a host list that decided itself twice said
     "skipping Codex CLI" twice for one decision.
     """
+    # A path computation that refuses project scope with no project, asked
+    # for Claude because every branch below writes somewhere: the other hosts
+    # are only probed when they are candidates, and an explicit `--host`
+    # never probed at all, so `on --scope project` from $HOME wrote personas
+    # into ~/.claude/agents before `add_hook` refused.
+    cs.settings_path(scope, host=hookhost.CLAUDE)
     if requested not in (None, "auto"):
         cs.refuse_escape(scope, str(requested), force=force)
         return [str(requested)]
@@ -845,7 +868,7 @@ def _doctor() -> int:
                % (_on_off(live), personas, _where(router_hosts), briefing))
         out.kv("  workflows", "skills=%d  installed=%s"
                % (_count_skills(_skills_dir(scope)), _on_off(st.get("installed"))))
-    out.dim("  project = %s" % Path.cwd())
+    out.dim("  project = %s" % _project_root())
     if not any(_get_scope_state(s).get("autopilot") for s in ("global", "project")):
         out.dim("  turn it on with `boost bmad on`", wrap=True)
     return 0
@@ -969,7 +992,7 @@ def _sessions_write(sessions: dict) -> None:
 
 
 def _proj_key(project=None) -> str:
-    return str(Path(project or Path.cwd()).resolve())
+    return str(Path(project or _project_root()).resolve())
 
 
 def _get_scope_state(scope, project=None) -> dict:
