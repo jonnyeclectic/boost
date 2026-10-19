@@ -158,10 +158,10 @@ def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
                 "(pinned items stay put)" % total)
     updatable = total - source_missing
     untapped = source_missing - removed
-    if updatable == 0 and removed == 0:
+    if updatable == removed == 0:
         return ("%d outdated · source missing — `boost update` can't "
                 "restore a deleted tap; re-tap or `boost uninstall`" % total)
-    if updatable == 0 and untapped == 0:
+    if updatable == untapped == 0:
         them, copies = (("them", "these copies") if total > 1
                         else ("it", "this copy"))
         return ("%d outdated · %s — `boost update` can't bring %s back; "
