@@ -811,8 +811,12 @@ class TestAReadOnlyStore:
         assert ("~/.agents/skills is not writable — heal does not change "
                 "permissions") in dry
 
-    def test_heal_does_not_tick_a_repair_it_did_not_make(self, boost, tap,
-                                                         installed, cursor):
+    # `entry`, not `installed`: `installed` taps the session fixture, a second
+    # repo also named `fixture-tap`, which `tap` already claimed — and a name
+    # taken by a different repo is refused rather than silently skipped.
+    def test_heal_does_not_tick_a_repair_it_did_not_make(self, boost, entry,
+                                                         tap, cursor):
+        store.install(entry)
         store.install(_rule(tap))
         (cursor / "rules" / "house.mdc").unlink()
         store_dir = paths.store_dir()
@@ -827,8 +831,8 @@ class TestAReadOnlyStore:
                         if "was not re-materialized" in ln)
             assert "✓" not in line and "!" in line
 
-    def test_a_real_repair_is_still_ticked(self, boost, tap, installed,
-                                           cursor):
+    def test_a_real_repair_is_still_ticked(self, boost, entry, tap, cursor):
+        store.install(entry)
         store.install(_rule(tap))
         (cursor / "rules" / "house.mdc").unlink()
         line = next(ln for ln in boost("heal").out.splitlines()
