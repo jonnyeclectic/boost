@@ -1755,10 +1755,11 @@ def cmd_heal(argv):
     # missing agents, never re-copying over a teammate's edit in the others.
     pplan = store.project_sync_plan()
     if dry:
-        for name, agent in pplan["missing"]:
-            out.info("would re-materialize project skill %s → %s"
-                     % (name, agent))
-            actions.append("project %s %s" % (name, agent))
+        # Worded by the same source check the run uses, so a copy whose tap
+        # is gone is warned about here rather than promised.
+        for msg in store.project_sync_preview(pplan):
+            (out.warn if store.is_unrepaired(msg) else out.info)(msg)
+            actions.append(msg)
     else:
         for msg in store.project_sync_apply({"missing": pplan["missing"]}):
             (out.warn if store.is_unrepaired(msg) else out.ok)(msg)

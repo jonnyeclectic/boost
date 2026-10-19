@@ -1226,3 +1226,20 @@ def test_heal_exits_1_when_a_project_copy_cannot_be_restored(boost, tapped, repo
                           entry | {"tap": "no-such-tap-heal"})
     res = boost("heal", expect=1)
     assert "is missing from the project but its source is gone" in res.out + res.err
+
+
+def test_heal_dry_run_warns_and_exits_1_over_an_unrestorable_copy(boost, tapped,
+                                                                  repo):
+    """A preview must not promise a repair the run then reports as gone."""
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    shutil.rmtree(repo / rows[0])
+    entry = projectlock.get_skill(repo, "brainstorming")
+    projectlock.set_skill(repo, "brainstorming",
+                          entry | {"tap": "no-such-tap-dry"})
+    res = boost("heal", "--dry-run", expect=1)
+    text = res.out + res.err
+    assert "would re-materialize project skill brainstorming" not in text
+    assert "brainstorming is missing from the project but its source is gone" in text
+    real = boost("heal", expect=1)
+    assert "is missing from the project but its source is gone" in real.out + real.err

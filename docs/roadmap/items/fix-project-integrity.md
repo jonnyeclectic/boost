@@ -26,4 +26,6 @@ that is gone, or that escapes the repo, is <code>missing</code>: the same rows
 <code>project_sync_plan</code> repairs. <code>doctor</code> names the missing copies, and
 <code>heal</code> re-materializes them through <code>project_sync_apply</code>, which writes only
 the missing agents and never copies over an edit in another one. A copy it cannot restore is
-a warning, and heal exits 1.
+a warning, and heal exits 1. <code>heal --dry-run</code> asks the same source question
+through <code>project_sync_preview</code>, so it warns and exits 1 over that copy instead of
+promising a repair the run then reports as impossible.
