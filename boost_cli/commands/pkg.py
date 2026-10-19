@@ -2718,8 +2718,9 @@ def cmd_export(argv: list[str]) -> int:
     if format_warning:
         out.warn(format_warning)
     ext = ".zip" if use_zip else ".tar.gz"
-    dest = paths.expand(args.out) if args.out else Path(
-        "boost-skills-%s%s" % (stamp, ext))
+    dest = util.check_path_length(
+        paths.expand(args.out) if args.out else Path(
+            "boost-skills-%s%s" % (stamp, ext)), what="-o path")
     if dest.exists() and not args.force:
         raise BoostError("%s already exists" % _tilde(dest),
                         hint="pass --force to overwrite, or choose a "

@@ -263,7 +263,11 @@ def cmd_cohort(argv) -> int:
 # ---------------------------------------------------------------- profile
 
 def _profile_path(name: str):
-    return paths.profiles_dir() / (util.resolve_slug(name, what="profile name") + ".json")
+    # The file name is checked, not just the slug: a 251-255 byte slug is a
+    # legal name until ".json" pushes the component past the limit.
+    slug = util.resolve_slug(name, what="profile name")
+    return util.check_path_length(paths.profiles_dir() / (slug + ".json"),
+                                  what="profile file name")
 
 
 def _load_profile(name: str) -> dict:

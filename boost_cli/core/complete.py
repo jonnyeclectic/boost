@@ -351,7 +351,8 @@ def _source_for(command: str, position: int, prior: tuple[str, ...],
     return None
 
 
-def candidates(words: list[str], commands: Registry) -> list[str]:
+def candidates(words: list[str], commands: Registry,
+               global_flags: frozenset[str] = frozenset()) -> list[str]:
     """Completions for ``words``, where the last element is the partial word.
 
     ``words`` is the command line as the shell split it, including ``boost``
@@ -360,15 +361,31 @@ def candidates(words: list[str], commands: Registry) -> list[str]:
 
     ``commands`` is ``cli.COMMANDS``, passed in rather than imported: ``core``
     is the bottom layer and must not reach up into ``cli`` (the import-linter
-    contract enforces it), so the registry arrives as data.
+    contract enforces it), so the registry arrives as data. ``global_flags``
+    is ``cli._GLOBAL_FLAGS`` for the same reason: ``cli.main`` peels those off
+    before the command name, so ``boost --debug install <TAB>`` is a real line
+    and completion has to peel them the same way.
     """
     try:
         if len(words) < 2:
             return []
+        # Only leading flags, and never the word being typed: `--debug<TAB>`
+        # is a partial word, not a flag already given.
+        lead = 1
+        while lead < len(words) - 1 and words[lead] in global_flags:
+            lead += 1
+        words = [words[0], *words[lead:]]
         current = words[-1]
         if len(words) == 2:                     # completing the command itself
             return [c for c in _command_names(commands) if c.startswith(current)]
         command = words[1]
+        if command in ("help", "-h", "--help"):
+            # The help pseudo-command is not a COMMANDS row, so no source
+            # knows it, yet the top-level usage line advertises it — and
+            # `cli._route` sends `--help <cmd>` / `-h <cmd>` the same way.
+            if len(words) != 3:
+                return []
+            return [c for c in _command_names(commands) if c.startswith(current)]
         if current.startswith("-"):
             return [f for f in _flags_for(command, commands) if f.startswith(current)]
         prior = tuple(words[2:-1])

@@ -58,6 +58,87 @@ class TestCommandNames:
         assert "tap" in got and "untap" not in got
 
 
+class TestLeadingGlobalFlagsAndHelp:
+    """`boost --debug install <TAB>` is a line `cli.main` runs — it peels the
+    global flags off before dispatch — so completion must peel them too, or it
+    reads `--debug` as the command and offers nothing. And `boost help <TAB>`
+    is the documented way to get help, so it offers command names."""
+
+    GLOBALS = frozenset({"--debug", "-v", "--verbose", "-q", "--quiet"})
+
+    def test_a_leading_global_flag_still_completes_the_command(self, sandbox):
+        got = complete.candidates(["boost", "--debug", "ins"], COMMANDS,
+                                  global_flags=self.GLOBALS)
+        assert "install" in got and "search" not in got
+
+    def test_several_leading_globals_are_all_skipped(self, sandbox):
+        _tap("t", ["brainstorming", "code-reviewer"])
+        got = complete.candidates(["boost", "-q", "--debug", "install", "br"],
+                                  COMMANDS, global_flags=self.GLOBALS)
+        assert got == ["brainstorming"]
+
+    def test_the_word_being_typed_is_never_peeled(self, sandbox):
+        # `boost --debug<TAB>` is a partial word, not a flag already given:
+        # peeling it would turn the line into `boost <TAB>` and offer every
+        # command as a replacement for what the user typed.
+        got = complete.candidates(["boost", "--debug"], COMMANDS,
+                                  global_flags=self.GLOBALS)
+        assert "install" not in got
+        # No real command starts with `-`, so the line above answers [] even
+        # if the last word were peeled. A flag set holding a command *prefix*
+        # tells the two apart: kept, `ins` completes; peeled, nothing does.
+        got = complete.candidates(["boost", "ins"], COMMANDS,
+                                  global_flags=frozenset({"ins"}))
+        assert got == [c for c in complete._command_names(COMMANDS)
+                       if c.startswith("ins")]
+        assert "install" in got
+
+    def test_a_global_after_the_command_is_the_command_s_own(self, sandbox):
+        # `cli._extract_globals` only peels flags *before* the command, so a
+        # `-v` after it belongs to the subcommand and must stay where it is.
+        _tap("t", ["brainstorming"])
+        got = complete.candidates(["boost", "install", "-v", "br"], COMMANDS,
+                                  global_flags=self.GLOBALS)
+        assert got == complete.candidates(["boost", "install", "-v", "br"],
+                                          COMMANDS)
+
+    def test_without_the_flag_set_nothing_is_peeled(self, sandbox):
+        assert complete.candidates(["boost", "--debug", "ins"], COMMANDS) == []
+
+    def test_help_offers_command_names(self, sandbox):
+        got = complete.candidates(["boost", "help", "ins"], COMMANDS)
+        assert "install" in got and "search" not in got
+
+    def test_help_offers_every_command_for_an_empty_word(self, sandbox):
+        got = complete.candidates(["boost", "help", ""], COMMANDS)
+        assert set(got) == {n for n, _g, _m, _s in COMMANDS}
+
+    def test_help_takes_one_command_only(self, sandbox):
+        assert complete.candidates(["boost", "help", "install", ""],
+                                   COMMANDS) == []
+
+    @pytest.mark.parametrize("word", ["help", "--help", "-h"])
+    def test_every_spelling_of_help_offers_command_names(self, sandbox, word):
+        # `boost --help install` routes like `boost help install`, so TAB
+        # after either flag must offer what TAB after `help` does.
+        got = complete.candidates(["boost", word, "ins"], COMMANDS)
+        assert got == [c for c in complete._command_names(COMMANDS)
+                       if c.startswith("ins")]
+        assert "install" in got and "search" not in got
+        assert complete.candidates(["boost", word, "install", ""],
+                                   COMMANDS) == []
+
+    def test_help_after_a_global_flag(self, sandbox):
+        got = complete.candidates(["boost", "--debug", "help", "ins"], COMMANDS,
+                                  global_flags=self.GLOBALS)
+        assert "install" in got
+
+    def test_the_plumbing_passes_the_cli_s_own_flag_set(self, sandbox, capsys):
+        from boost_cli import cli
+        assert cli.main(["__complete", "boost", "--debug", "ins"]) == 0
+        assert "install" in capsys.readouterr().out.split()
+
+
 class TestArgumentsAreContextual:
     """The whole point: `boost install <TAB>` must offer skills, not commands.
 

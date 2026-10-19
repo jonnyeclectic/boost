@@ -221,6 +221,20 @@ class TestMainDispatch:
         assert out.startswith(
             "boost install — Install a skill from a tap registry\n")
 
+    @pytest.mark.parametrize("flag", ["--help", "-h"])
+    def test_help_flag_before_a_command_is_that_command_s_help(
+            self, sandbox, capsys, flag):
+        # `boost --help install` used to print the 81-command index and drop
+        # `install` without a word; git and brew both treat it as `help X`.
+        rc = run_main([flag, "install"])
+        assert rc == 0
+        assert capsys.readouterr().out.startswith(
+            "boost install — Install a skill from a tap registry\n")
+
+    def test_help_flag_before_an_unknown_command(self, sandbox, capsys):
+        assert cli.main(["--help", "nope-cmd"]) == 2
+        assert "unknown command: nope-cmd" in capsys.readouterr().err
+
     def test_help_for_unknown_command(self, sandbox, capsys):
         assert cli.main(["help", "nope-cmd"]) == 2
         assert "unknown command: nope-cmd" in capsys.readouterr().err

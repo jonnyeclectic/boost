@@ -243,6 +243,20 @@ class TestResolveSlug:
             util.resolve_slug("!!!", what="profile name")
         assert "profile name" in exc.value.message
 
+    def test_a_slug_longer_than_one_path_component_is_refused(self):
+        # The slug becomes a directory or file name; past 255 bytes the OS
+        # raises ENAMETOOLONG from the first `exists()` that touches it.
+        with pytest.raises(BoostError) as exc:
+            util.resolve_slug("a" * 256, what="skill name")
+        assert "skill name is too long (256 bytes, limit 255)" in exc.value.message
+
+    def test_a_slug_at_the_limit_is_accepted(self):
+        assert util.resolve_slug("a" * 255) == "a" * 255
+
+    def test_the_limit_is_on_the_slug_not_the_raw_input(self):
+        # Punctuation slugify drops does not count against the limit.
+        assert util.resolve_slug("a" * 255 + "!" * 10) == "a" * 255
+
     def test_empty_raises_instead_of_falling_back_to_skill(self):
         with pytest.raises(BoostError) as exc:
             util.resolve_slug("")
@@ -1322,3 +1336,50 @@ class TestRemoveItemsUsesRemovePath:
         assert (removed, freed) == (1, 7)
         assert [p for p, _ in failures] == [stuck]
         assert not ok.exists()
+
+
+class TestCheckPathLength:
+    """Every component of a path must fit the 255-byte ceiling, or the OS
+    refuses to stat it and `Path.exists()` raises instead of answering."""
+
+    def test_a_normal_path_is_returned_unchanged(self, tmp_path):
+        p = tmp_path / "out.md"
+        assert util.check_path_length(p) is p
+
+    def test_the_last_component_is_checked(self, tmp_path):
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("a" * 256), what="output path")
+        assert exc.value.message.startswith(
+            "output path is too long (256 bytes, limit 255)")
+
+    def test_a_parent_component_is_checked(self, tmp_path):
+        with pytest.raises(BoostError):
+            util.check_path_length(tmp_path / ("a" * 300) / "x.md")
+
+    def test_exactly_255_bytes_is_fine(self, tmp_path):
+        util.check_path_length(tmp_path / ("a" * 255))
+
+    def test_bytes_not_characters_are_counted(self, tmp_path):
+        # 128 two-byte characters are 256 bytes, which APFS and ext4 refuse.
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("é" * 128))
+        assert "256 bytes" in exc.value.message
+
+    def test_the_echo_is_exactly_forty_characters_and_an_ellipsis(self, tmp_path):
+        # Any component over 255 bytes is at least 64 characters (UTF-8 is at
+        # most 4 bytes a character), so the echo is always truncated; pin
+        # where, so the cut cannot drift a character either way.
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("a" * 256))
+        assert exc.value.message.endswith(": %r" % ("a" * 40 + "…"))
+
+    def test_the_hint_names_the_filesystems_it_is_true_of(self, tmp_path):
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("a" * 256))
+        assert exc.value.hint == ("APFS and ext4 refuse a file or directory "
+                                  "name over 255 bytes")
+
+    def test_the_message_does_not_echo_the_whole_component(self, tmp_path):
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("a" * 1000))
+        assert len(exc.value.message) < 200

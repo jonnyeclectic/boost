@@ -307,7 +307,8 @@ def _complete_candidates(argv: list[str]) -> int:
     errors and a traceback here would land in the line the user is typing.
     """
     from .core import complete
-    for candidate in complete.candidates(argv.copy(), COMMANDS):
+    for candidate in complete.candidates(argv.copy(), COMMANDS,
+                                         frozenset(_GLOBAL_FLAGS)):
         print(candidate)
     return 0
 
@@ -368,6 +369,10 @@ def _seal_broken_stdout() -> None:
 def _route(argv: list[str]) -> int:
     try:
         if not argv or argv[0] in ("-h", "--help"):
+            # `boost --help install` is `boost help install`, as in git and
+            # brew — it used to print the index and drop the command unsaid.
+            if len(argv) > 1:
+                return print_command_help(argv[1])
             print_help()
             return 0
         if argv[0] in ("-V", "--version", "version"):

@@ -442,6 +442,39 @@ def slugify(name: str) -> str:
     return _slug_or_none(name) or "skill"
 
 
+#: The longest single path component APFS and ext4 will take, in bytes.
+#: (NTFS counts 255 UTF-16 units instead, so it takes some names this refuses;
+#: refusing them everywhere keeps the answer the same on every OS.)
+#: Past it the OS refuses even to *stat* the path, and `Path.exists()` is not
+#: total: pathlib swallows ENOENT, ENOTDIR, EBADF and ELOOP, but ENAMETOOLONG
+#: raises straight out as a bare OSError that the CLI frames as a crash.
+MAX_COMPONENT_BYTES = 255
+
+
+def _check_component(part: str, what: str) -> None:
+    size = len(part.encode("utf-8", "surrogateescape"))
+    if size > MAX_COMPONENT_BYTES:
+        # Over 255 bytes is at least 64 characters (UTF-8 is at most four
+        # bytes a character), so the echo is always a truncation.
+        raise BoostError(
+            "%s is too long (%d bytes, limit %d): %r"
+            % (what, size, MAX_COMPONENT_BYTES, part[:40] + "…"),
+            hint="APFS and ext4 refuse a file or directory name over %d "
+                 "bytes" % MAX_COMPONENT_BYTES)
+
+
+def check_path_length(path: Path, *, what: str = "path") -> Path:
+    """Return ``path``, or raise a BoostError if any component is too long.
+
+    Call it on a user-supplied path *before* the first ``exists()`` — a pure
+    string check, so it answers the same on every OS rather than depending on
+    which errno a given filesystem raises.
+    """
+    for part in Path(path).parts:
+        _check_component(part, what)
+    return path
+
+
 def resolve_slug(raw: str, *, what: str = "name") -> str:
     """Slugify a user-typed ``raw``, refusing one with nothing to slug.
 
@@ -458,6 +491,7 @@ def resolve_slug(raw: str, *, what: str = "name") -> str:
     slug = _slug_or_none(raw)
     if slug is None:
         raise BoostError("%s has no letters or digits: %r" % (what, raw))
+    _check_component(slug, what)
     if slug != raw:
         out.info("using %s %r (from %r)" % (what, slug, raw))
     return slug
