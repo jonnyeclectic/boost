@@ -86,10 +86,12 @@ def _skip_if_already_tapped(spec: str) -> bool:
         name, url = registry.parse_spec(spec)
     except BoostError:
         return False
-    if not any(t.name == name and registry.same_source(t.url, url)
-               for t in registry.list_taps()):
+    hit = next((t for t in registry.list_taps()
+                if registry.name_key(t.name) == registry.name_key(name)
+                and registry.same_source(t.url, url)), None)
+    if hit is None:
         return False
-    out.info(out.role("%s already tapped" % name, "muted"))
+    out.info(out.role("%s already tapped" % hit.name, "muted"))
     return True
 
 

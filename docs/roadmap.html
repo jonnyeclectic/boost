@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>76</b><span>Planned</span></div>
-      <div class="stat"><b>537</b><span>Loop finds</span></div>
+      <div class="stat"><b>538</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2740,6 +2740,18 @@ NOT ALREADY CARDED, but read the existing card first.
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">a corrupt lock was reported only in boost.log, the next fresh install replaced every record with one, and doctor sent a rolled-back lock's newest skill to sync</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-tap-name-identity">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Tap names are case-blind, untap keeps what it does not own, and <code>--at</code> hints honestly</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-tap-name-identity.md">Write-up &middot; fix-tap-name-identity.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">on a case-insensitive filesystem, untapping a case variant deleted the clone of the tap that stayed configured</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
