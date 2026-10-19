@@ -302,7 +302,7 @@ class TestUnknownKeyWarning:
         assert "did you mean" not in w
 
     def test_a_typo_in_an_agent_setting(self, sandbox):
-        w = config.unknown_key_warning("agents.claude-code.enabeld")
+        w = config.unknown_key_warning("agents.claude-code.enable")
         assert w is not None
         assert "did you mean 'agents.claude-code.enabled'?" in w
 

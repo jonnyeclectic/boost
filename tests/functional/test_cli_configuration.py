@@ -96,8 +96,8 @@ class TestConfig:
         # It used to print only "✓ set ..." and exit 0 while
         # agents.claude-code.enabled stayed true. The write is kept — unknown
         # keys are accepted on purpose — but no longer reads as the fix.
-        r = boost("config", "set", "agents.claude-code.enabeld", "false")
-        assert "set agents.claude-code.enabeld = false" in r.out
+        r = boost("config", "set", "agents.claude-code.enable", "false")
+        assert "set agents.claude-code.enable = false" in r.out
         assert ("did you mean 'agents.claude-code.enabled'?"
                 in " ".join(r.err.split()))
         assert boost("config", "get", "agents.claude-code.enabled").out.strip() == "true"
