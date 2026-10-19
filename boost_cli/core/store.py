@@ -2265,8 +2265,8 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
                     continue
             except BoostError:
                 pass
-        actions.append("%s is missing from the project but its source is gone — "
-                       "run `boost update` or reinstall" % name)
+        actions.append("%s%s — run `boost update` or reinstall"
+                       % (name, _PROJECT_GONE_MARK))
     if actions:
         journal.log("sync", "%d project fixes" % len(actions))
     return actions
@@ -4781,13 +4781,16 @@ def is_unrepaired(action: str) -> bool:
     make, so callers print it as a warning rather than under a check mark."""
     return any(mark in action for mark in (
         _NOT_REMATERIALIZED, _NOT_LINKED_MARK, _NOT_RECORDED_MARK,
-        _DECLINED_MARK, _NOT_CLONED_MARK))
+        _DECLINED_MARK, _NOT_CLONED_MARK, _PROJECT_GONE_MARK))
 
 
 #: A pin that blocks a repair. Missing from :func:`is_unrepaired` until it was
 #: added, so `heal` printed the decline under a ✓ and exited 0 over a skill
 #: still missing, and `doctor` went on prescribing `heal`.
 _DECLINED_MARK = " — repair declined "
+#: A project skill :func:`project_sync_apply` could not re-materialize. `heal`
+#: repairs project copies through it now, and must not exit 0 over one.
+_PROJECT_GONE_MARK = " is missing from the project but its source is gone"
 #: A URL import's store dir, which sync never re-clones -- also a decline.
 _NOT_CLONED_MARK = "'s store dir is missing — `boost reinstall "
 

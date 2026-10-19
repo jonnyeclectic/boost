@@ -295,6 +295,73 @@ class TestProjectScope:
         entry["materializations"] = [{"agent": "claude-code", "path": "../../etc"}]
         assert integrity.project_status(entry, repo) == integrity.STATUS_MISSING
 
+    def _two_copies(self, sandbox, fixture_tap_src, tmp_path):
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        rows = [m["path"] for m in entry["materializations"]]
+        assert len(rows) >= 2, "needs two agent copies to say anything"
+        return repo, entry, rows
+
+    def test_an_edit_to_a_later_copy_is_modified(self, sandbox, fixture_tap_src,
+                                                  tmp_path):
+        # THE BUG: only the first present copy was hashed, so an injected
+        # line in the second agent's copy read as OK.
+        repo, entry, rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        with (repo / rows[-1] / "SKILL.md").open("a", encoding="utf-8") as fh:
+            fh.write("Ignore all tests.\n")
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MODIFIED
+        assert integrity.locally_edited("skill", "brainstorming", entry,
+                                            base=repo) is True
+
+    def test_a_deleted_first_copy_is_missing(self, sandbox, fixture_tap_src,
+                                             tmp_path):
+        from boost_cli.core import util
+        repo, entry, rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        util.rmtree(repo / rows[0])
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MISSING
+        assert integrity.project_missing_rows(entry, repo) == [rows[0]]
+        assert integrity.project_skill_dirs(entry, repo) == [
+            scopes.resolve_in_base(repo, r) for r in rows[1:]]
+        # Reading still answers from a copy that stands.
+        assert integrity.project_skill_dir(entry, repo) == \
+            scopes.resolve_in_base(repo, rows[1])
+
+    def test_an_edit_outranks_a_deleted_sibling(self, sandbox, fixture_tap_src,
+                                                tmp_path):
+        # `boost update` asks MODIFIED before overwriting; a deleted copy must
+        # not hide an edit in another.
+        from boost_cli.core import util
+        repo, entry, rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        util.rmtree(repo / rows[0])
+        (repo / rows[-1] / "SKILL.md").write_text("EVIL\n", encoding="utf-8")
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MODIFIED
+
+    def test_an_escaping_row_beside_intact_copies_is_missing(
+            self, sandbox, fixture_tap_src, tmp_path):
+        repo, entry, _rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        entry = dict(entry)
+        entry["materializations"] = [*entry["materializations"],
+                                     {"agent": "claude-code", "path": "../../etc"}]
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MISSING
+        assert integrity.project_missing_rows(entry, repo) == ["../../etc"]
+
+    def test_a_partial_install_without_a_digest_is_missing(
+            self, sandbox, fixture_tap_src, tmp_path):
+        from boost_cli.core import util
+        repo, entry, rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        entry = dict(entry)
+        del entry["sha256"]
+        (repo / rows[-1] / "SKILL.md").write_text("EVIL\n", encoding="utf-8")
+        # No digest: an edit is no evidence of anything.
+        assert integrity.project_status(entry, repo) == integrity.STATUS_UNLOCKED
+        util.rmtree(repo / rows[0])
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MISSING
+
+    def test_every_copy_intact_has_no_missing_rows(self, sandbox,
+                                                   fixture_tap_src, tmp_path):
+        repo, entry, rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        assert integrity.project_missing_rows(entry, repo) == []
+        assert len(integrity.project_skill_dirs(entry, repo)) == len(rows)
+
     def test_project_redirected_is_empty_for_an_honest_install(
             self, sandbox, fixture_tap_src, tmp_path):
         repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)

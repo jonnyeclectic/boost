@@ -806,8 +806,15 @@ def cmd_doctor(argv):
     for name, entry in sorted(pskills.items()):
         st = integrity.project_status(entry, pbase)
         if st == integrity.STATUS_MISSING:
-            bad("project-skill", "project skill %s is in .boost but its files are gone — "
-                "run `boost sync`" % name)
+            gone = integrity.project_missing_rows(entry, pbase)
+            if integrity.project_skill_dirs(entry, pbase):
+                # Some copies stand: name the agents' copies that do not, or
+                # "its files are gone" reads false over an intact .claude/.
+                bad("project-skill", "project skill %s is missing %s — run "
+                    "`boost heal`" % (name, ", ".join(gone)), wrap=True)
+            else:
+                bad("project-skill", "project skill %s is in .boost but its "
+                    "files are gone — run `boost sync`" % name)
             proj_issues += 1
         elif st == integrity.STATUS_MODIFIED:
             bad("project-skill", "project skill %s modified since install — "
@@ -1742,6 +1749,19 @@ def cmd_heal(argv):
         for msg in store.sync_apply(plan):
             (out.warn if store.is_unrepaired(msg) else out.ok)(
                 msg.replace(str(paths.home()), "~"))
+            actions.append(msg)
+    # A project skill's agent copy deleted from the repo: doctor and verify
+    # report it, so heal repairs it the way `boost sync` does -- only the
+    # missing agents, never re-copying over a teammate's edit in the others.
+    pplan = store.project_sync_plan()
+    if dry:
+        for name, agent in pplan["missing"]:
+            out.info("would re-materialize project skill %s → %s"
+                     % (name, agent))
+            actions.append("project %s %s" % (name, agent))
+    else:
+        for msg in store.project_sync_apply({"missing": pplan["missing"]}):
+            (out.warn if store.is_unrepaired(msg) else out.ok)(msg)
             actions.append(msg)
     # A repair heal will not make (a pin over a moved source, a URL import it
     # cannot re-clone) fails the run like any other thing it left: exiting 0

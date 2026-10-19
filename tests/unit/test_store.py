@@ -3431,6 +3431,10 @@ class TestProjectSkills:
         actions = store.project_sync_apply(
             store.project_sync_plan(base=str(repo)), base=str(repo))
         assert any("source is gone" in a for a in actions)
+        # heal and sync print it as a warning, and heal exits 1 over it.
+        gone = [a for a in actions if "source is gone" in a]
+        assert gone and all(store.is_unrepaired(a) for a in gone)
+        assert not store.is_unrepaired("re-materialized brainstorming from t")
 
     # ── the committed-lock contract ──────────────────────────────────────
 
