@@ -227,6 +227,7 @@ def clone_shallow(url: str, dest: Path, sparse: bool = True) -> None:
     tail = ["--", url, str(dest)]
     if not sparse:
         _clone_or_translate([*base, *tail], url)
+        _refuse_empty(dest, url)
         return
 
     proc = run([*base, "--filter=blob:none", "--sparse", *tail],
@@ -238,8 +239,27 @@ def clone_shallow(url: str, dest: Path, sparse: bool = True) -> None:
         # Too old for --sparse/--filter: a full clone still works, just larger.
         shutil.rmtree(dest, ignore_errors=True)
         _clone_or_translate([*base, *tail], url)
+    else:
+        set_sparse_cone(dest)
+    _refuse_empty(dest, url)
+
+
+def _refuse_empty(dest: Path, url: str) -> None:
+    """Raise, removing `dest`, when the clone has no commit at all.
+
+    git clones a repo with no commits without complaint, so `boost tap` of a
+    freshly `git init`ed directory reported "tapped (0 items)" over skills
+    sitting uncommitted in its working tree — and the next `boost update` died
+    on git's own "ambiguous argument 'FETCH_HEAD'". A tap is a clone, and a
+    clone carries only what was committed.
+    """
+    if run(["-C", str(dest), "rev-parse", "--verify", "--quiet", "HEAD"],
+           check=False).returncode == 0:
         return
-    set_sparse_cone(dest)
+    shutil.rmtree(dest, ignore_errors=True)
+    raise BoostError("%s has no commits" % url,
+                     hint="commit your skills first — a tap indexes committed "
+                          "content only")
 
 
 def _clone_or_translate(argv: list[str], url: str) -> None:
@@ -384,9 +404,19 @@ def pull(repo: Path) -> str:
     run(["-C", str(repo), "reset", "--hard", "--quiet", "origin/HEAD"], check=False)
     # origin/HEAD may be unset on old git; fall back to the fetched head
     if head_commit(repo) == before:
+        # An upstream with no commits fetches nothing, and resetting to the
+        # FETCH_HEAD it never wrote surfaced as git's "ambiguous argument
+        # 'FETCH_HEAD'" — true, and no help to anyone holding a tap.
+        if not before and run(["-C", str(repo), "rev-parse", "--verify",
+                               "--quiet", "FETCH_HEAD"],
+                              check=False).returncode != 0:
+            raise BoostError(
+                "%s has no commits" % (remote_url(repo) or repo),
+                hint="commit to it first — a tap indexes committed content only")
         run(["-C", str(repo), "reset", "--hard", "--quiet", "FETCH_HEAD"])
     after = head_commit(repo)
-    return "already up to date" if before == after else "%s → %s" % (before[:7], after[:7])
+    return "already up to date" if before == after else "%s → %s" % (
+        before[:7] or "(no commits)", after[:7])
 
 
 def head_commit(repo: Path) -> str:
