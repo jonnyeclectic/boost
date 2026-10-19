@@ -820,6 +820,23 @@ def cmd_replay(argv) -> int:
     if not args.id:
         p.error("%s needs a history ID" % args.action)
     snapshot = lockfile.history_read(args.id)
+    if args.action == "rollback" and lockfile.check().problem == "corrupt":
+        # Every other write refuses a corrupt lock, and the diff below would
+        # read it as empty and reinstall each skill over it. Restoring is the
+        # snapshot itself becoming the lock; the corrupt bytes stay aside.
+        backup = paths.tilde(lockfile.corrupt_backup())
+        if not out.confirm("the lock file is corrupt — make snapshot %s the "
+                           "lock file (its bytes are kept at %s)?"
+                           % (args.id, backup), quiet=args.json):
+            if args.json:
+                print(json.dumps({"id": args.id, "cancelled": True}, indent=2))
+            else:
+                out.info("cancelled")
+            return 1
+        lockfile.restore(args.id)
+        if not args.json:
+            out.ok("restored the lock file from %s — the corrupt one is at %s"
+                   % (args.id, backup))
     now_all = lockfile.all_installed()
     # Per-kind diff: snapshots carry all three sections, so a rule that
     # appeared since the snapshot is a real difference, labeled as one.

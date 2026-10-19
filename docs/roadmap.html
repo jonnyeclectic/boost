@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>76</b><span>Planned</span></div>
-      <div class="stat"><b>535</b><span>Loop finds</span></div>
+      <div class="stat"><b>536</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2716,6 +2716,18 @@ NOT ALREADY CARDED, but read the existing card first.
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">the tap fix for an over-long name covered one command, and four others still crashed on the same input</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-lock-corrupt">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>A corrupt lock file is reported, and never written over</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-lock-corrupt.md">Write-up &middot; fix-lock-corrupt.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">a corrupt lock was reported only in boost.log, and the next fresh install replaced every record with one</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

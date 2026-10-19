@@ -1350,15 +1350,25 @@ class TestInstallingOverAStoreDir:
             store.install(catalog.resolve_one("tdd-workflow"))
         assert _leads_to(link, paths.home() / "gone")
 
-    @pytest.mark.parametrize("text", ["{not json", '{"version": 99}'])
-    def test_over_an_unreadable_lock_it_names_replay(self, installed, text):
+    def test_over_another_schema_it_names_replay(self, installed):
         _mine("tdd-workflow")
-        paths.lockfile_path().write_text(text, encoding="utf-8")
+        paths.lockfile_path().write_text('{"version": 99}', encoding="utf-8")
         with pytest.raises(BoostError) as exc:
             store.install(catalog.resolve_one("tdd-workflow"))
         assert exc.value.hint == (
             "the lock file cannot be read — `boost replay` restores the lock "
             "that knows whose it is")
+
+    def test_over_a_corrupt_lock_it_refuses_before_looking(self, installed):
+        # A corrupt lock is refused for every install, store dir or not, so
+        # the refusal names the backup rather than the dir.
+        _mine("tdd-workflow")
+        paths.lockfile_path().write_text("{not json", encoding="utf-8")
+        with pytest.raises(BoostError) as exc:
+            store.install(catalog.resolve_one("tdd-workflow"))
+        assert exc.value.message.startswith("lock file is corrupt")
+        assert "`boost replay rollback <id>`" in exc.value.hint
+        assert ".skill-lock.json.corrupt" in exc.value.hint
 
     def test_import_leaves_one_too(self, installed):
         mine = _mine("pr-me", "# mine\n")
