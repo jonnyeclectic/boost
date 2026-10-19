@@ -16,10 +16,12 @@ from ..core import (
     complete,
     config,
     gitutil,
+    integrity,
     journal,
     lockfile,
     paths,
     registry,
+    scopes,
     staleness,
     store,
     util,
@@ -442,6 +444,18 @@ def _outdated_display(r: dict, configured: frozenset[str] = frozenset()) -> str:
     return latest
 
 
+def _outdated_qualifier(r: dict) -> str:
+    """NAME-column suffix for a non-skill kind and for a project install.
+
+    The project mark is what tells two rows of one name apart when a skill is
+    installed in both scopes, and it says which command refreshes it.
+    """
+    tags = [r["kind"]] if r["kind"] != "skill" else []
+    if r.get("scope") == scopes.SCOPE_PROJECT:
+        tags.append(scopes.SCOPE_PROJECT)
+    return " (%s)" % ", ".join(tags) if tags else ""
+
+
 def cmd_outdated(argv) -> int:
     """boost outdated [--json]"""
     p = cliparse.parser(
@@ -453,7 +467,10 @@ def cmd_outdated(argv) -> int:
 
     results = []
     heads = {}  # tap name -> HEAD commit ("" when unknown)
-    for name, lk in sorted(lockfile.installed().items()):
+    # Both locks: a `--local` skill is recorded only in the repo's own, and
+    # walking the user lock alone answered "everything up to date" in the
+    # directory where `boost info` said the same skill had an update.
+    for name, lk, scope, _base in integrity.installed_skill_rows():
         tap_name = lk.get("tap", "local")
         if tap_name == "local":
             continue
@@ -467,7 +484,8 @@ def cmd_outdated(argv) -> int:
                             "latest": None,
                             "reason": staleness.SOURCE_MISSING,
                             "latest_commit": None,
-                            "tap": tap_name, "pinned": bool(lk.get("pinned"))})
+                            "tap": tap_name, "pinned": bool(lk.get("pinned")),
+                            "scope": scope})
             continue
         entry, _warning = catalog.select_lock_source(matches, lk)
         entry = cast(dict, entry)             # matches is non-empty above
@@ -489,7 +507,8 @@ def cmd_outdated(argv) -> int:
                 except BoostError:
                     src_missing = True
         base = {"name": name, "kind": "skill", "installed": installed_v,
-                "tap": tap_name, "pinned": bool(lk.get("pinned"))}
+                "tap": tap_name, "pinned": bool(lk.get("pinned")),
+                "scope": scope}
         if src_missing:
             results.append(base | {"latest": None,
                                    "reason": staleness.SOURCE_MISSING,
@@ -518,7 +537,8 @@ def cmd_outdated(argv) -> int:
                 continue
             installed_v = str(lk.get("version") or "0.0.0")
             base = {"name": name, "kind": kind, "installed": installed_v,
-                    "tap": tap_name, "pinned": bool(lk.get("pinned"))}
+                    "tap": tap_name, "pinned": bool(lk.get("pinned")),
+                    "scope": lk.get("scope") or scopes.SCOPE_USER}
             try:
                 raw = (registry.get(tap_name).path / lk.get("source_file", "")
                        ).read_text(encoding="utf-8", errors="replace")
@@ -554,7 +574,7 @@ def cmd_outdated(argv) -> int:
     # A missing row whose tap is still configured lost the item upstream;
     # re-tapping it would restore nothing, so it is worded and counted apart.
     configured = frozenset(t.name for t in registry.list_taps())
-    rows = [(r["name"] + ("" if r["kind"] == "skill" else " (%s)" % r["kind"]),
+    rows = [(r["name"] + _outdated_qualifier(r),
              r["installed"] + (" (pinned)" if r["pinned"] else ""),
              _outdated_display(r, configured), r["tap"]) for r in results]
     # NAME is what `boost update`/`upgrade` take.

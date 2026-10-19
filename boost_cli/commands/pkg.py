@@ -13,7 +13,6 @@ import sys
 import tarfile
 import zipfile
 from datetime import UTC, datetime
-from itertools import chain
 from pathlib import Path
 from typing import cast
 
@@ -469,17 +468,23 @@ def _report_prerequisites(entries: list[dict], *, pbase=None,
                  % prereq.install_hint(rows), wrap=True)
 
 
-def _expand_dependencies(entries: list[dict]) -> tuple[list[dict], resolve.Resolution]:
+def _expand_dependencies(entries: list[dict], pbase=None
+                         ) -> tuple[list[dict], resolve.Resolution]:
     """Grow the requested entries into their full `requires:` closure.
 
     Returns ``(ordered_entries, resolution)`` — the entries to install in
     dependency-first order (roots plus any pulled-in dependencies that are not
     already installed), and the :class:`resolve.Resolution` carrying what was
     added, any advisory conflicts, and unresolved (dangling) requirements.
+
+    ``pbase`` is the project a ``--local`` install targets. Its lock counts as
+    installed too: without it, ``install --local needy`` re-planned a ``helper``
+    already in the repo, the forced-off reinstall refused it, and the command
+    exited 1 over a requirement that was met.
     """
     # All three lock sections, not just skills: a rule or workflow already
     # installed under a required name must not be re-added to the plan.
-    installed = frozenset(chain.from_iterable(lockfile.all_installed().values()))
+    installed = prereq.installed_names(pbase)
     res = resolve.resolve(
         [e["name"] for e in entries],
         lambda n: _skill_relations(n, "requires"),
@@ -626,7 +631,7 @@ def cmd_install(argv: list[str]) -> int:
     # unless the caller opted out. Only skills carry dependency frontmatter;
     # rules/workflows pass through unchanged.
     if not args.no_deps and entries:
-        entries, dep_res = _expand_dependencies(entries)
+        entries, dep_res = _expand_dependencies(entries, pbase=pbase)
         if dep_res.added:
             out.info("pulling in %s required by your selection: %s"
                      % (_plural(len(dep_res.added), "dependency"),
@@ -1365,7 +1370,8 @@ def _show_and_confirm(label: str, diff, name: str) -> bool:
     return out.confirm("Apply this update to %s?" % name)
 
 
-def _confirm_risky_update(name: str, entry: dict) -> bool:
+def _confirm_risky_update(name: str, entry: dict, base=None,
+                          lk: dict | None = None) -> bool:
     """Gate an in-place update behind a visible diff when it is risky.
 
     Diffs the installed skill against the incoming source. If the change adds
@@ -1374,13 +1380,19 @@ def _confirm_risky_update(name: str, entry: dict) -> bool:
     update is *seen* before it lands. Routine edits apply silently. If the
     source can't be read we fail open and let ``store.install`` surface the real
     error rather than blocking on a phantom diff.
+
+    ``base`` (with its project lock row ``lk``) diffs a project skill's copy in
+    the repo instead of the user store, which holds no such skill — or a
+    different install that only shares the name.
     """
     try:
         new_tree = updatediff.read_tree(store.source_dir_for(entry))
     except BoostError:
         return True
-    diff = updatediff.diff_tree(updatediff.read_tree(store.skill_store_dir(name)),
-                                new_tree)
+    current = (store.skill_store_dir(name) if base is None
+               else integrity.project_skill_dir(lk or {}, base))
+    diff = updatediff.diff_tree(
+        updatediff.read_tree(current) if current is not None else {}, new_tree)
     if not diff.risky:
         return True
     return _show_and_confirm(name, diff, name)
@@ -1442,22 +1454,26 @@ def _confirm_risky_materialized(kind: str, name: str, lk: dict,
 
 def _hold_update(label: str, name: str, lk: dict, kind: str, old_v: str,
                  new_v: str, discard_edits: bool,
-                 allow_downgrade: bool) -> tuple[bool, bool]:
+                 allow_downgrade: bool, base=None) -> tuple[bool, bool]:
     """Apply `staleness.update_hold` for one item: ``(held, edited)``.
 
     A held item is named with the way past it, because each remedy is a
     deliberate act: `boost reinstall` discards one item's edits,
     `--discard-edits` every edited item's this run, and `--allow-downgrade`
     follows a rewound tap. `--force` releases neither; it moves pinned taps.
-    ``edited`` lets a released refresh say what it threw away.
+    ``edited`` lets a released refresh say what it threw away. ``base`` is a
+    project skill's repo: its edits are judged there, and the one-item remedy
+    is a forced ``--local`` install, since ``reinstall`` reads the user lock.
     """
-    edited = integrity.locally_edited(kind, name, lk)
+    edited = integrity.locally_edited(kind, name, lk, base=base)
+    redo = ("boost install %s --local --force" % name if base is not None
+            else "boost reinstall %s" % name)
     hold = staleness.update_hold(edited, old_v, new_v, discard_edits,
                                  allow_downgrade)
     if hold == staleness.HOLD_LOCAL_EDITS:
-        out.warn("%s has local edits — update skipped; `boost reinstall %s` "
+        out.warn("%s has local edits — update skipped; `%s` "
                  "discards them, or `boost update --discard-edits` for every "
-                 "edited item" % (label, name), wrap=True)
+                 "edited item" % (label, redo), wrap=True)
     elif hold == staleness.HOLD_DOWNGRADE:
         out.warn("%s: upstream is at v%s, behind your v%s — update skipped; "
                  "`boost update --allow-downgrade` downgrades"
@@ -1719,6 +1735,59 @@ def _ingest_shards(args) -> int:
     return rc
 
 
+def _update_skill(name: str, lk: dict, scope: str, pbase, results,
+                  args) -> tuple[int, int]:
+    """Refresh one installed skill from a refreshed tap: ``(upgraded, held)``.
+
+    ``scope``/``pbase`` say which install this row is: a project row is judged
+    against its copy in the repo and reinstalled there (``--local --force``),
+    and recorded in that repo's lock rather than the user's.
+    """
+    label = name + (" (project)" if scope == scopes.SCOPE_PROJECT else "")
+    tapname: str = lk.get("tap") or "local"
+    if (lk.get("pinned") or lk.get("quarantined")
+            or tapname == "local" or tapname not in results):
+        return 0, 0
+    matches = [e for e in catalog.find(name) if e["tap"] == tapname]
+    if not matches:
+        out.warn("%s is no longer in tap %s — leaving as-is" % (label, tapname))
+        return 0, 0
+    entry = matches[0]
+    old_v = str(lk.get("version", "0.0.0"))
+    new_v = str(entry.get("version", "0.0.0"))
+    head, src_sha = "", None
+    if not util.semver_gt(new_v, old_v):
+        head = gitutil.head_commit(registry.get(tapname).path)
+        if head and head != lk.get("commit"):
+            try:
+                src_sha = util.sha256_dir(store.source_dir_for(entry))
+            except BoostError:
+                return 0, 0
+    reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
+                                       head, lk.get("sha256", ""), src_sha)
+    if reason is None:
+        return 0, 0
+    hold, edited = _hold_update(label, name, lk, "skill", old_v,
+                                str(entry.get("version") or ""),
+                                args.discard_edits, args.allow_downgrade,
+                                base=pbase)
+    if hold:
+        return 0, 1
+    if not _confirm_risky_update(name, entry, base=pbase, lk=lk):
+        out.warn("%s: update skipped — review the diff, then `boost update "
+                 "--yes` to apply" % label)
+        return 0, 0
+    try:
+        _warn_unwritable(store.install(entry, force=True, via="update",
+                                       scope=scope, base=pbase))
+    except BoostError as err:
+        out.warn("%s: %s" % (label, err.message))
+        return 0, 0
+    out.ok(_refresh_line(label, old_v, str(entry.get("version") or ""),
+                         edited, reason == staleness.VERSION))
+    return 1, 0
+
+
 def cmd_update(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost update",
                                  description="Sync taps or update installed skills")
@@ -1801,48 +1870,13 @@ def cmd_update(argv: list[str]) -> int:
         return 1 if failures and not results else 0
 
     upgraded = held = 0
-    for name, lk in sorted(lockfile.installed().items()):
-        tapname = lk.get("tap")
-        if (lk.get("pinned") or lk.get("quarantined")
-                or tapname == "local" or tapname not in results):
-            continue
-        matches = [e for e in catalog.find(name) if e["tap"] == tapname]
-        if not matches:
-            out.warn("%s is no longer in tap %s — leaving as-is" % (name, tapname))
-            continue
-        entry = matches[0]
-        old_v = str(lk.get("version", "0.0.0"))
-        new_v = str(entry.get("version", "0.0.0"))
-        head, src_sha = "", None
-        if not util.semver_gt(new_v, old_v):
-            head = gitutil.head_commit(registry.get(tapname).path)
-            if head and head != lk.get("commit"):
-                try:
-                    src_sha = util.sha256_dir(store.source_dir_for(entry))
-                except BoostError:
-                    continue
-        reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
-                                           head, lk.get("sha256", ""), src_sha)
-        if reason is None:
-            continue
-        hold, edited = _hold_update(name, name, lk, "skill", old_v,
-                                    str(entry.get("version") or ""),
-                                    args.discard_edits, args.allow_downgrade)
-        if hold:
-            held += 1
-            continue
-        if not _confirm_risky_update(name, entry):
-            out.warn("%s: update skipped — review the diff, then `boost update "
-                     "--yes` to apply" % name)
-            continue
-        try:
-            _warn_unwritable(store.install(entry, force=True, via="update"))
-        except BoostError as err:
-            out.warn("%s: %s" % (name, err.message))
-            continue
-        out.ok(_refresh_line(name, old_v, str(entry.get("version") or ""),
-                             edited, reason == staleness.VERSION))
-        upgraded += 1
+    # Both locks, so a `--local` skill is refreshed in the repo it lives in —
+    # the user lock alone left it at its old version under "everything up to
+    # date" while `boost info` said it had an update.
+    for name, lk, scope, pbase in integrity.installed_skill_rows():
+        n, h = _update_skill(name, lk, scope, pbase, results, args)
+        upgraded += n
+        held += h
     # Rules and workflows refresh from the same tap update.
     # Skills installed before boost dated them, so a plugin's copy of the
     # same name can be weighed against them (store.serving_plugin).

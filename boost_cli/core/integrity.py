@@ -235,8 +235,13 @@ def materialized_status(name: str, entry: dict,
 
 
 
-def locally_edited(kind: str, name: str, entry: dict) -> bool:
+def locally_edited(kind: str, name: str, entry: dict, base=None) -> bool:
     """Whether any installed copy of ``name`` was edited since boost wrote it.
+
+    ``base`` names the project a *skill* row came from: a project skill has no
+    store dir, so asking :func:`status` about it would judge whatever user-scope
+    copy shares its name (or report it missing) instead of the files in the
+    repo. Rules and workflows carry their own ``base`` in the row.
 
     The question `boost update` asks before overwriting: a skill's store dir,
     or any written rule/workflow artifact, no longer hashing to its recorded
@@ -253,6 +258,8 @@ def locally_edited(kind: str, name: str, entry: dict) -> bool:
 
     from . import rules, workflows
     if kind == "skill":
+        if base is not None:
+            return project_status(entry, base) == STATUS_MODIFIED
         return status(name, entry) == STATUS_MODIFIED
     if entry.get("quarantined"):
         return False
@@ -287,17 +294,27 @@ def project_status(entry: dict, base) -> str:
     and ``verify`` need to see drift here the same way they do at user scope.
     """
     recorded = entry.get("sha256")
-    present = None
-    for m in entry.get("materializations") or []:
-        path = scopes.resolve_in_base(base, m.get("path"))
-        if path is not None and path.is_dir():
-            present = path
-            break
+    present = project_skill_dir(entry, base)
     if present is None:
         return STATUS_MISSING
     if not recorded:
         return STATUS_UNLOCKED
     return STATUS_OK if util.sha256_dir(present) == recorded else STATUS_MODIFIED
+
+
+def project_skill_dir(entry: dict, base) -> Path | None:
+    """The first materialized copy of a project skill that is on disk, or None.
+
+    Each row's path is re-derived under ``base`` through
+    :func:`scopes.resolve_in_base`, so a committed path that escapes the repo
+    is never answered. A project skill is a real directory per agent, all
+    written from one source, so the first present one stands for the install.
+    """
+    for m in entry.get("materializations") or []:
+        path = scopes.resolve_in_base(base, m.get("path"))
+        if path is not None and path.is_dir():
+            return path
+    return None
 
 
 def project_redirected(entry: dict, base) -> list[str]:
@@ -338,6 +355,25 @@ def project_skills():
     if base is None:
         return None, {}
     return base, projectlock.installed(base)
+
+
+def installed_skill_rows() -> list[tuple[str, dict, str, Path | None]]:
+    """Every installed skill as ``(name, entry, scope, base)``, both scopes.
+
+    The user lock's rows (``base`` None) and the current project's
+    (:func:`project_skills`), sorted by name with user scope first. A command
+    that walks "installed skills" walks this, because the project lock is a
+    different file: walking ``lockfile.installed()`` alone is what had
+    ``outdated`` and ``update`` call a stale ``--local`` skill current while
+    ``info`` said it had an update. A name installed in both scopes is two
+    rows — they are two installs, and either can be the stale one.
+    """
+    rows = [(name, entry, scopes.SCOPE_USER, None)
+            for name, entry in lockfile.installed().items()]
+    base, project = project_skills()
+    rows += [(name, entry, scopes.SCOPE_PROJECT, base)
+             for name, entry in project.items()]
+    return sorted(rows, key=lambda r: (r[0], r[2] != scopes.SCOPE_USER))
 
 
 def commit_status(name: str, entry: dict | None = None) -> str | None:
