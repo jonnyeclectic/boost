@@ -143,7 +143,7 @@
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>76</b><span>Planned</span></div>
-      <div class="stat"><b>538</b><span>Loop finds</span></div>
+      <div class="stat"><b>539</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2752,6 +2752,18 @@ NOT ALREADY CARDED, but read the existing card first.
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">on a case-insensitive filesystem, untapping a case variant deleted the clone of the tap that stayed configured</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-update-default-branch">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3><code>boost update</code> follows an upstream change of default branch</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-update-default-branch.md">Write-up &middot; fix-update-default-branch.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">a tap cloned --depth 1 stayed on the branch that was default at clone time, so an upstream rename read as up to date and then broke every update</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
