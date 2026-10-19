@@ -838,6 +838,25 @@ class TestLocallyEdited:
             "rule", "r", {"quarantined": True,
                           "materializations": [row]}) is False
 
+    def test_a_workflows_edited_skill_store_copy_is_not_an_edit(
+            self, sandbox):
+        # The as-skill copy is preserved by install itself ("left the edited
+        # ... in place"), so holding the workflow for it would block the
+        # workflow's own files for an edit the refresh never overwrites.
+        from boost_cli.core import workflows
+        copy = paths.store_dir() / "reviewer" / "SKILL.md"
+        row = self._row(copy, "a\n") | {"agent": None,
+                                        "slot": workflows.SLOT_SKILL}
+        copy.write_text("a\nmy notes\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "workflow", "reviewer", {"materializations": [row]}) is False
+        cmd = paths.home() / ".claude" / "agents" / "reviewer.md"
+        other = self._row(cmd, "b\n")
+        cmd.write_text("b!\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "workflow", "reviewer",
+            {"materializations": [row, other]}) is True
+
     def test_a_row_for_an_agent_boost_no_longer_writes_is_skipped(
             self, sandbox):
         p = paths.home() / ".cursor" / "rules" / "r.mdc"

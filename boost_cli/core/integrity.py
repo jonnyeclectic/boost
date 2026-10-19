@@ -245,17 +245,21 @@ def locally_edited(kind: str, name: str, entry: dict) -> bool:
     there however its CLAUDE.md block was edited, and the refresh would
     overwrite the edit it never looked at. A missing artifact, a row without a
     digest and a quarantined item are no evidence of an edit, and a row for an
-    agent boost no longer writes is skipped as everywhere else.
+    agent boost no longer writes is skipped as everywhere else. Neither is a
+    workflow's skill-store copy: install already keeps an edited one in place
+    rather than overwriting it, so it must not hold the workflow's own files.
     """
     import hashlib
 
-    from . import rules
+    from . import rules, workflows
     if kind == "skill":
         return status(name, entry) == STATUS_MODIFIED
     if entry.get("quarantined"):
         return False
     for m in entry.get("materializations") or []:
         recorded = m.get("sha256")
+        if m.get("slot") == workflows.SLOT_SKILL:
+            continue
         if not recorded or not agents.materialization_is_written(
                 kind, entry.get("base"), m.get("agent")):
             continue
