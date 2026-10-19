@@ -310,6 +310,10 @@ class TestMalformedBlock:
         assert rules.block_span(self.ORPHAN, "r") is None
         assert rules.block_span(self.DOUBLED, "r") is None
 
+    def test_a_second_clean_block_does_not_make_the_first_malformed(self):
+        one = rules.merge_block("", "r", "A")
+        assert rules.block_span(one + one, "r") == (0, len(one) - 1)
+
     def test_another_rules_start_between_does_not_count(self):
         t = rules.merge_block("", "r", "A").replace(
             "A\n", "A\n<!-- boost:rule:other start -->\n")
