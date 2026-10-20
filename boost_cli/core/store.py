@@ -1349,8 +1349,11 @@ def _copy_skill(src: Path, dest: Path, *, within: Path | None = None
     # report for it. Name the directory instead: that is the whole diagnosis.
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
+        # util.TEMP_PREFIX, not ``.<name>.tmp``: the name embedded made the
+        # staging dir 13 bytes longer than the skill's own, so a name that
+        # fits as a store dir could not be staged.
         staged = Path(tempfile.mkdtemp(dir=str(dest.parent),
-                                       prefix="." + dest.name + ".tmp"))
+                                       prefix=util.TEMP_PREFIX))
     except PermissionError as exc:
         raise BoostError(
             "cannot write to the skill store at %s" % dest.parent,
@@ -1474,7 +1477,7 @@ def _remove_backup(backup: Path) -> None:
 
     ``shutil.rmtree`` on a symlink raises, and with ``ignore_errors=True`` it
     fails silently — so when the displaced ``dest`` was a symlink rather than a
-    real directory, the ``.<name>.tmpXXXX.old`` staging link was left behind
+    real directory, the ``.boost-XXXXXXXX.old`` staging link was left behind
     forever. Harmless-looking, but it accumulates in the user's agent dirs and
     every one of them is a dangling pointer.
     """
@@ -1823,7 +1826,7 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
     fresh install); a returned record therefore means ``force`` let it through.
     """
     kind = kind or entry.get("kind", "skill")
-    name = entry["name"]
+    name = util.check_item_name(entry["name"], kind)
     if kind in ("rule", "workflow"):
         resolved_base = _require_project_base(scope, base, "%s %s" % (kind, name))
         _refuse_stranded_base(scope, base, kind, name)
@@ -4346,7 +4349,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
         raise BoostError("%s has no SKILL.md" % src_dir)
     lockfile.refuse_corrupt()       # before the copy, as in `install`
     meta = _import_meta(src_dir)
-    name = name or str(meta.get("name") or src_dir.name)
+    name = util.check_item_name(name or str(meta.get("name") or src_dir.name))
     existing = lockfile.get_skill(name)
     # Refuse before `dest` is touched, so a rejected install leaves nothing
     # half-copied over an existing skill.
