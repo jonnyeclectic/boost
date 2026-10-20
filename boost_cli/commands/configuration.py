@@ -686,7 +686,7 @@ def cmd_policy(argv) -> int:
             total += 1
             label = name if kind == "skill" else "%s (%s)" % (name, kind)
             tap = entry.get("tap", "local")
-            if name in pol["blocked_skills"]:
+            if policy.is_blocked(name, tap, pol["blocked_skills"]):
                 violations.append((name, kind, label, "on the blocklist"))
             if tap in pol["blocked_taps"]:
                 violations.append((name, kind, label, "tap %s is blocked" % tap))

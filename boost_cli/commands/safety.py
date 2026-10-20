@@ -108,8 +108,8 @@ def cmd_audit(argv):
             "snippet": snippet})
 
     min_score = int(pol.get("min_quality_score") or 0)
-    for name, _entry in installed:
-        if name in pol.get("blocked_skills", []):
+    for name, item in installed:
+        if policy.is_blocked(name, item.get("tap"), pol.get("blocked_skills")):
             add(name, "HIGH", "policy-blocked", "policy.json",
                 "skill is on the policy blocklist")
         sdir = store.skill_store_dir(name)
@@ -156,7 +156,8 @@ def cmd_audit(argv):
             if entry.get("quarantined"):
                 continue
             mat_scanned += 1
-            if name in pol.get("blocked_skills", []):
+            if policy.is_blocked(name, entry.get("tap"),
+                                 pol.get("blocked_skills")):
                 add(name, "HIGH", "policy-blocked", "policy.json",
                     "%s is on the policy blocklist" % kind)
             for m in entry.get("materializations") or []:

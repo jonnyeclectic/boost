@@ -86,6 +86,24 @@ class TestCheckInstall:
         assert policy.check_install(
             {**GOOD_ENTRY, "name": "other"}, 0) == []
 
+    def test_blocked_skills_tap_qualified(self, sandbox):
+        # `install` takes `tap:name`; a blocklist entry written that way used
+        # to be stored with a check mark and never match.
+        set_policy(blocked_skills=["acme/skills:brainstorming"])
+        assert policy.check_install(GOOD_ENTRY, 0) == [
+            "skill 'brainstorming' is on the blocklist"]
+        assert policy.check_install(
+            {**GOOD_ENTRY, "tap": "other/tap"}, 0) == []
+
+    def test_is_blocked(self):
+        assert policy.is_blocked("x", "fx", ["x"]) is True
+        assert policy.is_blocked("x", "fx", ["fx:x"]) is True
+        assert policy.is_blocked("x", "gx", ["fx:x"]) is False
+        assert policy.is_blocked("x", "fx", ["fx:y", "y"]) is False
+        assert policy.is_blocked("x", None, [":x"]) is False
+        assert policy.is_blocked("x", "", [":x"]) is False
+        assert policy.is_blocked("x", "fx", None) is False
+
     def test_blocked_taps(self, sandbox):
         set_policy(blocked_taps=["acme/skills"])
         assert policy.check_install(GOOD_ENTRY, 0) == [
