@@ -15,7 +15,7 @@ here instead of silently degrading to the generic fallback in front of a user.
 """
 import pytest
 
-from boost_cli.core import dense
+from boost_cli.core import dense, selfupdate
 
 
 def _table(reason: str) -> str:
@@ -716,6 +716,32 @@ class TestFitsANarrowTerminal:
     # The narrowest pane the search output is tested against.
     NARROW = 60
 
+    # The install methods whose command is fixed text. A pip or source-checkout
+    # install is told *this* interpreter's absolute path, which is data: it is
+    # as long as the machine makes it, and it overflows whole rather than
+    # folding (see test_an_interpreter_path_is_one_atomic_token).
+    FIXED = (selfupdate.PIPX, selfupdate.UV_TOOL, selfupdate.UNKNOWN)
+
+    @pytest.fixture(params=FIXED)
+    def fixed_install(self, request, monkeypatch):
+        monkeypatch.setattr(selfupdate, "detect",
+                            lambda *a, **k: request.param)
+
+    @pytest.mark.parametrize("method", [selfupdate.PIP, selfupdate.GIT])
+    def test_an_interpreter_path_is_one_atomic_token(self, method,
+                                                     monkeypatch):
+        exe = "/" + "very-long-dir/" * 8 + "python3"
+        monkeypatch.setattr(dense.sys, "executable", exe)
+        monkeypatch.setattr(selfupdate, "detect", lambda *a, **k: method)
+        from boost_cli.core import output
+        hint = dense.fix_hint("no-backend")
+        cmd = dense.install_extra()
+        assert cmd.startswith("%s -m pip install " % exe)
+        # Folded to the narrow pane, the whole command is still one line.
+        lines = output.wrap(hint, self.NARROW)
+        assert "`%s`" % cmd in lines, lines
+
+    @pytest.mark.usefixtures("fixed_install")
     @pytest.mark.parametrize("reason", ALL_REASONS)
     def test_no_token_is_wider_than_a_narrow_pane(self, reason):
         prefix = "semantic search is off — "
@@ -727,6 +753,7 @@ class TestFitsANarrowTerminal:
         # The prefix shares the first line, so it must not crowd out the text.
         assert len(prefix) < self.NARROW
 
+    @pytest.mark.usefixtures("fixed_install")
     @pytest.mark.parametrize("reason", ALL_REASONS)
     def test_every_hint_wraps_within_a_narrow_pane(self, reason):
         import textwrap
