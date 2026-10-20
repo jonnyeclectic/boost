@@ -205,7 +205,7 @@ class TestDistill:
         r = boost("distill", "fixture-tap:tdd-workflow",
                   "fixture-tap:commit-messages")
         assert "install it with `boost import ./tdd-workflow-distilled`" in r.out
-        assert not list(tmp_path.glob("*:*"))
+        assert not [p for p in tmp_path.iterdir() if ":" in p.name]
         skill = tmp_path / "tdd-workflow-distilled" / "SKILL.md"
         assert frontmatter.parse(skill.read_text(encoding="utf-8"))[0]["name"] \
             == "tdd-workflow-distilled"
