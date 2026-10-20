@@ -112,3 +112,61 @@ class TestLongNames:
         assert exc.value.message.startswith(
             "skill name is too long (256 bytes, limit 255)")
         assert not store.skill_store_dir("x").exists()
+
+
+def _entry(tap, name):
+    return next(e for e in catalog.load_tap(tap) if e["name"] == name)
+
+
+class TestCaseCollisions:
+    @pytest.fixture()
+    def two(self, sandbox, tmp_path):
+        a = make_tap(tmp_path / "tapa", skills={"Foo": "Foo"})
+        b = make_tap(tmp_path / "tapb", skills={"foo": "foo"})
+        store.install(_entry(a, "Foo"))
+        return a, b
+
+    MESSAGE = ("foo differs only by case from Foo, which is already "
+               "installed; on a case-insensitive filesystem they would share "
+               "one store dir")
+
+    @pytest.mark.parametrize("force", [False, True])
+    def test_a_name_differing_only_by_case_is_refused(self, two, force):
+        with pytest.raises(BoostError) as exc:
+            store.install(_entry(two[1], "foo"), force=force)
+        assert exc.value.message == self.MESSAGE
+        assert exc.value.hint == ("`boost uninstall Foo` first if foo should "
+                                  "replace it")
+        assert list(lockfile.installed()) == ["Foo"]
+        body = (store.skill_store_dir("Foo") / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert "Foo body" in body
+
+    def test_the_same_name_still_reinstalls(self, two):
+        res = store.install(_entry(two[0], "Foo"), force=True)
+        assert res.upgraded is True
+
+    def test_the_cli_refuses_without_offering_force(self, two, boost):
+        res = boost("install", "foo", "--force", expect=1)
+        assert "differs only by case from Foo" in res.err
+        assert "--force" not in res.err
+        assert "does not record it" not in res.err
+
+    def test_an_import_differing_only_by_case_is_refused(self, two, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("---\nname: foo\n---\n", encoding="utf-8")
+        with pytest.raises(BoostError) as exc:
+            store.install_from_path(src, force=True)
+        assert exc.value.message == self.MESSAGE
+
+    def test_no_collision_with_an_unrelated_name(self):
+        store.refuse_case_collision("foo", {"foo": {}, "bar": {}})
+
+    def test_the_project_names_where_it_is_installed(self):
+        with pytest.raises(BoostError) as exc:
+            store.refuse_case_collision("foo", {"FOO": {}}, " in this project")
+        assert exc.value.message.startswith(
+            "foo differs only by case from FOO, which is already installed "
+            "in this project; ")
+        assert exc.value.wrap is True

@@ -1811,6 +1811,31 @@ def _count_others(installed: dict, name: str) -> int:
     return len(installed) - (1 if name in installed else 0)
 
 
+def refuse_case_collision(name: str, recorded: dict, where: str = "") -> None:
+    """Refuse ``name`` when ``recorded`` holds a skill it differs from only
+    by case.
+
+    On a case-insensitive filesystem (macOS, Windows) ``Foo`` and ``foo`` are
+    one store dir and one link per agent, so installing the second wrote over
+    the first: ``--force`` replaced Foo's files with foo's, the lock recorded
+    both as healthy, and uninstalling either deleted the dir both rows name.
+    Refused on every filesystem, and whatever ``force`` says, so the answer
+    does not depend on which machine asks — and ``--force`` is never the hint,
+    because what it would replace is a different skill.
+    """
+    folded = name.casefold()
+    other = next((k for k in recorded if k != name and k.casefold() == folded),
+                 None)
+    if other is not None:
+        raise BoostError(
+            "%s differs only by case from %s, which is already installed%s; "
+            "on a case-insensitive filesystem they would share one store dir"
+            % (name, other, where),
+            hint="`boost uninstall %s` first if %s should replace it"
+                 % (other, name),
+            wrap=True)
+
+
 def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                    base=None, kind: str | None = None) -> dict | None:
     """The lock record an install of ``entry`` would replace, or its refusal.
@@ -1838,6 +1863,8 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
         resolved_base = _require_project_base(scope, base, name)
         if resolved_base is None:         # _require_project_base already raised
             raise BoostError("there is no project here to install %s into" % name)
+        refuse_case_collision(name, projectlock.installed(resolved_base),
+                              " in this project")
         existing = projectlock.get_skill(resolved_base, name)
         if existing and not force:
             raise BoostError(
@@ -1848,6 +1875,7 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                 # so it answers "not installed" for the very skill this is about.
                 hint="`boost install %s --local --force` to force" % name)
         return existing
+    refuse_case_collision(name, lockfile.installed())
     existing = lockfile.get_skill(name)
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
@@ -4350,6 +4378,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
     lockfile.refuse_corrupt()       # before the copy, as in `install`
     meta = _import_meta(src_dir)
     name = util.check_item_name(name or str(meta.get("name") or src_dir.name))
+    refuse_case_collision(name, lockfile.installed())
     existing = lockfile.get_skill(name)
     # Refuse before `dest` is touched, so a rejected install leaves nothing
     # half-copied over an existing skill.
