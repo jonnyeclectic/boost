@@ -6441,7 +6441,7 @@ class TestAnAgentEnabledLaterGetsRulesAndWorkflows:
         from boost_cli.commands import quality
         self._install_without_cursor(tap, "rule")
         assert quality.cmd_doctor([]) == 1
-        out = capsys.readouterr().out
+        out = " ".join(capsys.readouterr().out.split())
         assert ("rule team-conventions was never written for cursor — run "
                 "`boost sync`") in out
         assert "fully materialized" not in out
