@@ -1274,7 +1274,9 @@ def occupied_targets() -> list[Path]:
 
 def _refused_materializations(existing: dict | None, linked: list[str],
                               refused: list[dict],
-                              source_sha: str | None = None) -> list[dict]:
+                              source_sha: str | None = None,
+                              declared: list[str] | None = None
+                              ) -> list[dict]:
     """The rows to record beside this run's writes: refused, then untouched.
 
     An agent whose directory refused the write is still recorded, as a row
@@ -1294,13 +1296,27 @@ def _refused_materializations(existing: dict | None, linked: list[str],
     disabled recorded v2 over windsurf's v1 copy, and after re-enabling it
     doctor, verify, drift and sync all said in sync. A stale row stays stale
     until a run writes that agent.
+
+    Only within ``declared``, the ``--agent`` narrowing in force: a row for an
+    agent outside it is kept so uninstall can remove its file, but no `sync`
+    will ever write that agent, so a ``stale`` flag there was a remedy that
+    never converged -- doctor said "run `boost sync`", sync re-wrote only the
+    narrowed agents, and doctor said it again. Such a row loses the flag.
     """
     done = linked + [r["agent"] for r in refused]
     kept = _untouched_materializations(existing, done)
-    if (existing and source_sha is not None
-            and existing.get("sha256") != source_sha):
-        kept = [{**m, "stale": True} for m in kept]
-    return refused + kept
+    changed = bool(existing and source_sha is not None
+                   and existing.get("sha256") != source_sha)
+    out: list[dict] = []
+    for m in kept:
+        row = {k: v for k, v in m.items() if k != "stale"}
+        if declared and m.get("agent") not in declared:
+            out.append(row)
+        elif changed or m.get("stale"):
+            out.append({**row, "stale": True})
+        else:
+            out.append(row)
+    return refused + out
 
 
 def _copy_skill(src: Path, dest: Path, *, within: Path | None = None
@@ -2852,7 +2868,9 @@ def _install_rule(entry: dict, force: bool = False,
     # could never be removed by any boost command again.
     materializations.extend(_refused_materializations(
         existing, linked, refused,
-        source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest()))
+        source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        declared=declared_agent_scope(
+            only_agents if explicit_agents else None, existing)))
 
     now = util.now_iso()
     lockfile.set_rule(name, {
@@ -3426,7 +3444,9 @@ def _install_workflow(entry: dict, force: bool = False,
     # `_uninstall_workflow` — driven by this list — can never remove.
     materializations.extend(_refused_materializations(
         existing, linked, refused,
-        source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest()))
+        source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        declared=declared_agent_scope(
+            only_agents if explicit_agents else None, existing)))
     # An agent this run did not try (a narrowed `--agent`) keeps its foreign
     # row, as it keeps its materialization; one it tried is decided afresh.
     tried = {*linked, *(r["agent"] for r in refused),

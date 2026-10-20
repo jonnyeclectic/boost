@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, output, paths
+from . import config, output, paths, util
 
 DISPLAY = {"claude-code": "Claude Code", "windsurf": "Windsurf",
            "cursor": "Cursor", "gemini": "Gemini CLI",
@@ -226,8 +226,10 @@ def remember_link_dir(agent: str, adir: Path) -> None:
     try:
         f = link_dirs_path()
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(seen, indent=2, sort_keys=True) + "\n",
-                     encoding="utf-8")
+        # Atomic: a torn file reads back as empty and the next write would
+        # drop every dir recorded before it.
+        util.atomic_write_text(
+            f, json.dumps(seen, indent=2, sort_keys=True) + "\n")
     except OSError:
         return
 

@@ -6531,6 +6531,29 @@ class TestAnUpgradeThatSkipsAnAgentMarksItsCopyStale:
         store.install(entry, force=True)
         assert "stale" not in self._row("rule", "windsurf")
 
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_row_outside_a_declared_narrowing_is_never_stale(self, tap,
+                                                               kind):
+        # Sync writes only the narrowed agents, so a stale flag on windsurf
+        # here was a "run `boost sync`" that sync could never satisfy.
+        store.install(self._entry(tap, kind))
+        store.install(self._entry(tap, kind), force=True,
+                      only_agents=["claude-code"])
+        title = "Team Conventions" if kind == "rule" else "ship-it"
+        store.install(self._entry(
+            tap, kind, body="---\nname: %s\n---\n\nV2 body.\n" % title),
+            force=True)
+        assert "stale" not in self._row(kind, "windsurf")
+        assert store.sync_plan()["missing_materializations"] == []
+
+    def test_narrowing_away_from_a_stale_row_clears_it(self, tap):
+        _old, v2 = self._upgrade_without_windsurf(tap, "rule")
+        assert self._row("rule", "windsurf")["stale"] is True
+        store.install(v2, force=True, only_agents=["claude-code"])
+        _set_enabled("windsurf", True)
+        assert "stale" not in self._row("rule", "windsurf")
+        assert store.sync_plan()["missing_materializations"] == []
+
     def test_a_stale_row_stays_stale_until_written(self, tap):
         _old, v2 = self._upgrade_without_windsurf(tap, "rule")
         store.install(v2, force=True)        # same source, windsurf still off
