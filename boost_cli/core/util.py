@@ -622,14 +622,14 @@ def dir_size(path: Path) -> int:
 def copied_files(path: Path) -> list[Path]:
     """The files ``install`` will copy out of ``path``, in walk order.
 
-    ``store`` installs with ``shutil.copytree(symlinks=False, ignore=
-    ignore_patterns(*IGNORED))``: every link is copied as what it points at,
-    a linked *directory* included, and an ``IGNORED`` name is skipped at any
-    depth. ``Path.rglob`` does not descend through a directory link, so sizing
-    a skill from the tap that way said 61 B and 1 file for a skill that
-    installs as 861 B and 2. A dangling link copies nothing (copytree fails on
-    it, and the failure belongs to install, not to a size estimate). Two
-    paths to one directory are two copies, as they are to copytree; only a
+    Every link counts as what it points at, a linked *directory* included,
+    and an ``IGNORED`` name is skipped at any depth. ``store._copy_tree``
+    keeps a link inside the skill as a link and skips one out of the tap, so
+    this is what the skill *reaches*, an upper bound on the copy's bytes.
+    ``Path.rglob`` does not descend through a directory link, so sizing a
+    skill from the tap that way said 61 B and 1 file for a skill that
+    installs as 861 B and 2. A dangling link copies nothing (install skips
+    it and says so). Two paths to one directory are two copies; only a
     directory that resolves to one of its own ancestors — a link cycle — is
     not descended, so the walk cannot hang.
     """

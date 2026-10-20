@@ -104,6 +104,10 @@ class InstallResult:
     # it.
     skill_copy: Path | None = None
     skill_note: str | None = None
+    # Symlinks in the skill's source the copy left out (:func:`_copy_tree`):
+    # one leading to nothing, or out of the tap. Core words each; the command
+    # prints them.
+    skipped_links: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -448,7 +452,41 @@ def source_dir_for(entry: dict) -> Path:
     if not (src / "SKILL.md").exists():
         raise BoostError("source for %s vanished from tap %s" % (entry["name"], tap.name),
                         hint="run `boost update %s`" % tap.name)
+    missing = link_targets_to_fetch(tap.path, src)
+    if missing:
+        gitutil.materialize_paths(tap.path, missing)
     return src
+
+
+def _inside(path: str, root: str) -> bool:
+    """Whether ``path`` is ``root`` or under it (both already normalized)."""
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:      # different drives on Windows
+        return False
+
+
+def link_targets_to_fetch(repo: Path, src: Path) -> list[str]:
+    """Repo-relative paths ``src``'s symlinks lead to that are not on disk.
+
+    A tap checks out Markdown and each installed skill's own dir, so a link
+    from the skill to a file elsewhere in the tap (``../../shared/helper.py``)
+    dangles in the clone though the file exists upstream; copying it then
+    fails. Only targets inside ``repo`` are named — a link out of the tap is
+    never followed, so there is nothing to fetch for it.
+    """
+    root = os.path.abspath(repo)
+    found: list[str] = []
+    for here, dirs, names in os.walk(src):
+        dirs[:] = [d for d in dirs if d not in util.IGNORED]
+        for n in (*dirs, *names):
+            p = Path(here, n)
+            if not p.is_symlink():
+                continue
+            target = os.path.normpath(os.path.join(here, os.readlink(p)))
+            if _inside(target, root) and not Path(target).exists():
+                found.append(Path(os.path.relpath(target, root)).as_posix())
+    return found
 
 
 #: :func:`link_agents`' default ``updated_at``: read the date from the lock.
@@ -1173,8 +1211,15 @@ def _refused_materializations(existing: dict | None, linked: list[str],
     return refused + _untouched_materializations(existing, done)
 
 
-def _copy_skill(src: Path, dest: Path) -> None:
-    """Copy a skill tree into ``dest`` atomically.
+def _copy_skill(src: Path, dest: Path, *, within: Path | None = None
+                ) -> list[str]:
+    """Copy a skill tree into ``dest`` atomically; return the links skipped.
+
+    Symlinks follow :func:`_copy_tree`: one that stays inside the skill is
+    copied as a link, one out of it is copied as what it points at only when
+    that is inside ``within`` (the tap clone; anywhere when None, as for a
+    local import), and anything else is skipped and named in the returned
+    lines.
 
     The old rmtree-then-copytree left a window where a crash destroyed the
     previous good copy before the new one finished — on a reinstall/upgrade the
@@ -1209,10 +1254,22 @@ def _copy_skill(src: Path, dest: Path) -> None:
             % (dest.parent, exc.strerror or exc),
             hint="free space or fix the mount, then re-run") from exc
     backup = None
+    skipped: list[str] = []
     try:
-        shutil.copytree(
-            src, staged, dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns(".git", "__pycache__", ".DS_Store"))
+        try:
+            skipped = _copy_tree(Path(src), staged,
+                                 None if within is None else Path(within))
+        except shutil.Error as exc:
+            # A file that vanished or could not be read mid-copy. It reached
+            # the crash handler as a repr of every failing path; one path is
+            # the diagnosis.
+            rows = exc.args[0] if exc.args and isinstance(exc.args[0], list) else []
+            first = rows[0][0] if rows and rows[0] else str(exc)
+            n = max(len(rows), 1)
+            raise BoostError(
+                "could not copy %s into the skill store: %d file%s failed"
+                % (dest.name, n, "" if n == 1 else "s"),
+                hint="first: %s" % first) from None
         # is_symlink() as well as exists(): a dangling symlink is still
         # something in the way that has to be moved aside.
         if dest.exists() or dest.is_symlink():
@@ -1228,6 +1285,77 @@ def _copy_skill(src: Path, dest: Path) -> None:
         raise
     if backup is not None:
         _remove_backup(backup)
+    return skipped
+
+
+#: The names a skill copy never takes, at any depth (:data:`util.IGNORED`).
+_COPY_IGNORE = shutil.ignore_patterns(*sorted(util.IGNORED))
+
+
+def _copy_tree(src: Path, dst: Path, within: Path | None) -> list[str]:
+    """Copy ``src`` to ``dst`` without following a link out of ``within``.
+
+    ``copytree`` with its default ``symlinks=False`` follows every link, so a
+    skill's link to ``../../shared/helper.py`` — a file the sparse tap clone
+    may not hold — failed the whole install with a raw ``shutil.Error``, and
+    a link to ``/etc/passwd`` or ``~/.ssh`` would have copied that into the
+    store. Instead:
+
+    * a link that resolves to something inside ``src`` is copied as the link
+      it is, so the copy's relative links lead into the copy;
+    * one that resolves elsewhere inside ``within`` is copied as its target,
+      a file or a directory (whose own links obey the same test);
+    * one that leads nowhere, or out of ``within``, is skipped, and the line
+      returned says which and why. With ``within`` None there is no bound:
+      a local import copies what the user's own links lead to, as it always
+      did.
+    """
+    src_real = os.path.realpath(src)
+    root = None if within is None else os.path.realpath(within)
+    escaping: list[Path] = []
+
+    def ignore(d: str, names: list[str]) -> set[str]:
+        skip = _COPY_IGNORE(d, names).copy()
+        for n in names:
+            p = Path(d, n)
+            if n in skip or not p.is_symlink():
+                continue
+            # copytree copies a link verbatim, so it stays one only when its
+            # spelling leads into the copy too: not absolute (that points back
+            # at the tap) and not via the skill dir's own name (``../x/f``),
+            # which the store may spell differently.
+            spelled = os.readlink(p)
+            lexical = os.path.normpath(os.path.join(
+                os.path.relpath(d, src), spelled))
+            if (Path(spelled).is_absolute()
+                    or lexical.split(os.sep)[0] == os.pardir
+                    or not p.exists()
+                    or not _inside(os.path.realpath(p), src_real)):
+                skip.add(n)
+                escaping.append(p)
+        return skip
+
+    shutil.copytree(src, dst, symlinks=True, ignore=ignore, dirs_exist_ok=True)
+    skipped: list[str] = []
+    for p in escaping:
+        rel = Path(os.path.relpath(p, src)).as_posix()
+        target = os.path.realpath(p)
+        shown = "%s → %s" % (rel, os.readlink(p))
+        if not Path(target).exists():
+            skipped.append("%s leads to nothing" % shown)
+        elif root is not None and not _inside(target, root):
+            skipped.append("%s leads outside the tap" % shown)
+        elif Path(target).is_dir():
+            if _inside(src_real, target):
+                # A link to an ancestor of the skill: copying it copies the
+                # skill into itself, without end.
+                skipped.append("%s loops back over the skill" % shown)
+            else:
+                skipped += ["%s/%s" % (rel, s) for s in
+                            _copy_tree(Path(target), dst / rel, within)]
+        else:
+            shutil.copy2(target, dst / rel)
+    return skipped
 
 
 def _remove_backup(backup: Path) -> None:
@@ -1691,14 +1819,15 @@ def install(entry: dict, force: bool = False,
     _require_writable(name)
     if disowned:
         _drop_skill_copy_row(disowned)
-    _copy_skill(src, dest)
+    tap = registry.get(entry["tap"])
+    skipped = _copy_skill(src, dest, within=tap.path)
 
     # Dated before linking: it is what decides whether a plugin's copy of the
     # same name is newer, and so whether Claude Code gets boost's link.
-    tap = registry.get(entry["tap"])
     dated = source_updated_at(entry["tap"], entry.get("rel_dir", "."))
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
                       updated_at=dated)
+    res.skipped_links = skipped
     res.upgraded = existing is not None
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
@@ -1822,8 +1951,10 @@ def _install_project_skill(entry: dict, force: bool = False,
     # first target — the result fields below (`sha256`, `dest`, the score, the
     # MCP scan) all read one real directory and used to be reachable with None.
     first: Path = targets[0][1]
+    within = registry.get(entry["tap"]).path
+    skipped: list[str] = []
     for agent, dest in targets:
-        _copy_skill(src, dest)
+        skipped = _copy_skill(src, dest, within=within)
         # Relative, because this record is committed and read on machines where
         # the absolute path does not exist.
         materializations.append(
@@ -1858,6 +1989,7 @@ def _install_project_skill(entry: dict, force: bool = False,
                 scope=scopes.SCOPE_PROJECT, via=via)
 
     res = InstallResult(name=name, dest=first, kind="skill")
+    res.skipped_links = skipped
     res.linked = linked
     res.upgraded = existing is not None
     res.scope = scopes.SCOPE_PROJECT
@@ -3176,9 +3308,12 @@ def _install_workflow(entry: dict, force: bool = False,
 # a real dir per agent (`_install_project_skill`) — so the equivalent would be
 # a per-agent design of its own, and is not attempted.
 #
-# Known limit: the dir is recognised as the workflow's through the lock. With
-# the lock file lost there is no workflow entry either, and `boost sync`
-# treats the dir like any unrecorded store skill.
+# Recognised through the lock, and with the lock lost through the disk
+# (:func:`workflow_copy_evidence`): a store dir whose SKILL.md is exactly what
+# a workflow file in an agent's dir renders to. Without that, a lost lock made
+# `boost heal` adopt the copy as a local skill and link it into every agent,
+# beside the workflow's own file. Known limit: a Gemini-only workflow's TOML
+# command cannot be rendered back, so it is no evidence.
 
 
 def _copy_row(entry: dict | None) -> dict | None:
@@ -3194,10 +3329,104 @@ def workflow_owned_store_names() -> set[str]:
     that asks "does the lock record this store dir?" with the skills section
     alone would call it a hand-added skill — and `boost sync` would adopt it
     and link it into every agent, the duplicate the copy exists to avoid.
+    This reads the lock; :func:`workflow_copy_evidence` asks the disk, for
+    when the lock is gone.
     """
     return {Path(m["path"]).parent.name
             for entry in lockfile.installed_workflows().values()
             if (m := _copy_row(entry)) is not None and m.get("path")}
+
+
+def workflow_copy_evidence(name: str) -> Path | None:
+    """The workflow file store/``name`` is the skill copy of, or None.
+
+    The on-disk answer to :func:`workflow_owned_store_names`, for a lock that
+    no longer records the workflow: an agent's ``agents/<name>.md`` or
+    ``commands/<name>.md`` that renders (:func:`workflows.render`, the skill
+    slot) to exactly the store dir's ``SKILL.md``. Exactly, not by name: a
+    real skill named like a workflow is the user's, and is recorded as one.
+    """
+    from . import workflows
+    if not util.is_safe_component(name):
+        return None
+    try:
+        have = (skill_store_dir(name) / "SKILL.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    for agent, skills_dir in agents.enabled_agents().items():
+        for slot in (workflows.SLOT_AGENTS, workflows.SLOT_COMMANDS):
+            target = workflows.workflow_target(skills_dir, slot, name,
+                                               agent=agent)
+            if target.suffix != workflows.DEFAULT_EXT:
+                continue
+            try:
+                raw = target.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if workflows.render(None, workflows.SLOT_SKILL, name, raw) == have:
+                return target
+    return None
+
+
+def orphaned_workflow_copies(lock: dict) -> list[tuple[str, str]]:
+    """``(name, workflow file)`` for each store dir that is a workflow's
+    skill copy no lock entry records (:func:`workflow_copy_evidence`)."""
+    owned = workflow_owned_store_names()
+    return [(n, str(p)) for n in _store_dirs()
+            if n not in lock and n not in owned
+            and (p := workflow_copy_evidence(n)) is not None]
+
+
+def workflow_copy_lines(rows: list[tuple[str, str]]) -> list[str]:
+    """One line per :func:`orphaned_workflow_copies` row, with its remedy."""
+    return ["%s is the skill copy of the workflow at %s, which the lock does "
+            "not record — `boost install %s` re-records both; it is not "
+            "adopted as a skill" % (paths.tilde(skill_store_dir(n)),
+                                    paths.tilde(p), n) for n, p in rows]
+
+
+def orphaned_rule_blocks(recorded: dict | None = None
+                         ) -> list[tuple[str, str]]:
+    """``(rule, context file)`` for each managed rule block in an enabled
+    agent's user-scope context file (``~/.claude/CLAUDE.md`` and the like)
+    that no rule lock entry by that name records.
+
+    The marker is boost's own (:data:`rules.BLOCK_START`), so a block is
+    evidence on disk the way a workflow's skill copy is
+    (:func:`orphaned_workflow_copies`). Without a record no command removes
+    it — `boost uninstall` answers "not installed" — and the agent reads it
+    every session, so an all-clear over one is false. ``recorded`` is the
+    rules half of the lock; a file drop into a rules dir carries no marker
+    and is not looked for.
+    """
+    from . import rules
+    if recorded is None:
+        recorded = lockfile.installed_rules()
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for agent, skills_dir in agents.enabled_agents().items():
+        if agent not in rules.CONTEXT_FILES:
+            continue
+        target = rules.rule_target(agent, skills_dir, "x")[1]
+        key = os.path.realpath(target)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            text = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        found.extend((n, str(target)) for n in rules.block_names(text)
+                     if n not in recorded)
+    return found
+
+
+def rule_block_lines(rows: list[tuple[str, str]]) -> list[str]:
+    """One line per :func:`orphaned_rule_blocks` row, with its remedy."""
+    return ["%s carries the block of rule %s, which the lock does not record "
+            "— no boost command removes it until `boost install %s` "
+            "re-records it, or delete the block by hand"
+            % (paths.tilde(Path(p)), n, n) for n, p in rows]
 
 
 def skill_copy_owner(name: str) -> str | None:
@@ -3267,12 +3496,18 @@ def _file_sha(path: Path) -> str | None:
         return None
 
 
-def skill_copy_blocker(name: str, existing: dict | None) -> str | None:
+def skill_copy_blocker(name: str, existing: dict | None,
+                       text: str | None = None) -> str | None:
     """Why the store dir ``name`` cannot take this workflow's copy, or None.
 
     A skill the lock records by that name, or anything else already there
     that is not this workflow's own copy, wins: the copy is a convenience and
     is never worth a file the user or another tool put there.
+
+    ``text`` is the copy about to be written. A dir holding only a SKILL.md
+    that is already exactly that is this workflow's copy whatever the lock
+    says — the one a lost lock left behind — and is claimed, so the
+    `boost install` doctor names for it re-records it.
     """
     if not util.is_safe_component(name):
         return "%r is not a name the skill store can hold" % name
@@ -3282,10 +3517,21 @@ def skill_copy_blocker(name: str, existing: dict | None) -> str | None:
     dest = skill_store_dir(name)
     own = _copy_row(existing)
     if (os.path.lexists(dest)
-            and (own is None or Path(own.get("path", "")).parent != dest)):
+            and (own is None or Path(own.get("path", "")).parent != dest)
+            and not (text is not None and _holds_only(dest, text))):
         return ("%s is already in the skill store and is not this workflow's "
                 "— left alone" % paths.tilde(dest))
     return None
+
+
+def _holds_only(sdir: Path, text: str) -> bool:
+    """Whether ``sdir`` is a real dir holding one file, a SKILL.md of ``text``."""
+    try:
+        if sdir.is_symlink() or os.listdir(sdir) != ["SKILL.md"]:
+            return False
+        return (sdir / "SKILL.md").read_text(encoding="utf-8") == text
+    except (OSError, UnicodeDecodeError):
+        return False
 
 
 def _remove_skill_copy(m: dict) -> tuple[bool, str | None]:
@@ -3351,10 +3597,10 @@ def _skill_copy(name: str, slot: str, raw: str, existing: dict | None,
                 return own, "%s; left the edited %s in place" % (
                     no_desc, paths.tilde(kept))
         return None, no_desc
-    blocker = skill_copy_blocker(name, existing)
+    text = workflows.render_skill(name, desc, raw)
+    blocker = skill_copy_blocker(name, existing, text)
     if blocker:
         return None, blocker
-    text = workflows.render_skill(name, desc, raw)
     dest = skill_store_dir(name) / "SKILL.md"
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -3641,11 +3887,15 @@ def install_from_path(src_dir: Path, name: str | None = None,
     _require_writable(name)
     if disowned:
         _drop_skill_copy_row(disowned)
-    _copy_skill(src_dir, dest)
+    # A URL import is bounded by its clone, as a tap install is by its tap; a
+    # path import copies what the user's own links lead to.
+    skipped = _copy_skill(src_dir, dest,
+                          within=remote.root if remote else None)
     # An import records no date, so the one a tap install left in the lock
     # must not stand for these files.
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
                       updated_at=None)
+    res.skipped_links = skipped
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
     prior_tap = (existing or {}).get("tap")
@@ -4103,11 +4353,14 @@ def unrecorded_store_dirs(lock: dict) -> list[str]:
     could not record is :func:`misnamed_store_dirs`'s, not this list's.
 
     A workflow's skill copy is recorded too, on the workflow
-    (:func:`workflow_owned_store_names`), and is not a candidate.
+    (:func:`workflow_owned_store_names`), and is not a candidate; nor is one
+    the lock has lost, told by the workflow file beside it
+    (:func:`workflow_copy_evidence`, :func:`orphaned_workflow_copies`).
     """
     owned = workflow_owned_store_names()
     return [n for n in _store_dirs()
-            if n not in lock and n not in owned and util.is_safe_component(n)]
+            if n not in lock and n not in owned and util.is_safe_component(n)
+            and workflow_copy_evidence(n) is None]
 
 
 def misnamed_store_dirs() -> list[str]:
@@ -4442,7 +4695,8 @@ def sort_unrecorded(lock: dict, integ: lockfile.Integrity | None = None
       every dir is ``unrecorded_store``, which sync never writes over.
 
     ``misnamed_store`` (:func:`misnamed_store_dirs`) is answered whatever the
-    lock says.
+    lock says. ``rule_blocks`` (:func:`orphaned_rule_blocks`) is answered
+    unless the lock is unreadable, when every block would look unrecorded.
     """
     if integ is None:
         integ = lockfile.check()
@@ -4450,10 +4704,13 @@ def sort_unrecorded(lock: dict, integ: lockfile.Integrity | None = None
     out: dict[str, list] = {"adoptable_store": [], "older_copies": [],
                             "foreign_store": [], "not_skill_store": [],
                             "unreadable_store": [], "unrecorded_store": [],
-                            "misnamed_store": misnamed_store_dirs()}
+                            "misnamed_store": misnamed_store_dirs(),
+                            "workflow_copies": orphaned_workflow_copies(lock),
+                            "rule_blocks": []}
     if not integ.ok and integ.problem != "missing":
         out["unrecorded_store"] = names
         return out
+    out["rule_blocks"] = orphaned_rule_blocks()
     out.update(classify_unrecorded(names))
     if integ.ok:
         return out
@@ -4507,6 +4764,12 @@ def sync_plan() -> dict[str, list]:
                       they are (:func:`classify_unrecorded`)
       misnamed_store: store dirs whose name boost cannot record a skill under
                       (:func:`misnamed_store_dirs`) — reported, never touched
+      workflow_copies: (name, workflow file) for a workflow's skill copy no
+                      lock entry records (:func:`orphaned_workflow_copies`) —
+                      never adopted as a skill; `boost install` re-records
+      rule_blocks:    (rule, context file) for a managed rule block no lock
+                      entry records (:func:`orphaned_rule_blocks`) — never
+                      stripped; `boost install` re-records
       plugin_duplicates: skills boost links into Claude Code that an enabled
                       plugin also loads (:func:`plugin_duplicates`)
       unrecorded_store: store dirs the lock file has lost, or cannot be read
@@ -4544,6 +4807,7 @@ def sync_plan() -> dict[str, list]:
             "blocked_links": [], "stale_links": [], "adoptable_store": [],
             "older_copies": [], "foreign_store": [], "not_skill_store": [],
             "unreadable_store": [], "misnamed_store": [],
+            "workflow_copies": [], "rule_blocks": [],
             "plugin_duplicates": [], "unrecorded_store": [],
             "missing_materializations": [], "out_of_scope_links": []}
     for name, entry in lock.items():
@@ -5092,8 +5356,11 @@ def recover_unrecorded(name: str) -> str | None:
     its links, the defect this function exists to close.
 
     A dir holding a file boost may not read is left unrecorded, and the line
-    returned says which file (:func:`is_unrepaired`).
+    returned says which file (:func:`is_unrepaired`). So is a workflow's skill
+    copy (:func:`workflow_copy_evidence`): it is the workflow's, not a skill.
     """
+    if (wf := workflow_copy_evidence(name)) is not None:
+        return _workflow_copy_refusal(name, wf)
     try:
         how = _record_unrecorded(name, "recover")
     except OSError as err:
@@ -5125,6 +5392,8 @@ def adopt_unrecorded(name: str) -> list[str]:
     """
     if lockfile.get_skill(name) is not None:
         return []
+    if (wf := workflow_copy_evidence(name)) is not None:
+        return [_workflow_copy_refusal(name, wf)]
     try:
         how = _record_unrecorded(name, "adopt")
     except OSError as err:
@@ -5156,6 +5425,13 @@ _NOT_LINKED = ("%s" + _NOT_LINKED_MARK + "%s is in the way and is not boost's "
 
 #: A store dir sync could not record, worded the same way.
 _NOT_RECORDED_MARK = " was not recorded: "
+
+
+def _workflow_copy_refusal(name: str, wf: Path) -> str:
+    """The line for a store dir left unrecorded as a workflow's skill copy."""
+    return ("%s%sit is the skill copy of the workflow at %s — `boost install "
+            "%s` re-records both" % (name, _NOT_RECORDED_MARK, paths.tilde(wf),
+                                    name))
 
 
 def _not_recorded(name: str, err: OSError) -> str:

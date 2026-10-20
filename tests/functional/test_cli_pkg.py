@@ -2319,7 +2319,7 @@ class TestSyncJson:
                         "blocked_links": [], "stale_links": [],
                         "adoptable_store": [], "older_copies": [],
                         "foreign_store": [], "not_skill_store": [],
-                        "unreadable_store": [], "misnamed_store": [],
+                        "unreadable_store": [], "misnamed_store": [], "workflow_copies": [],
                         "plugin_duplicates": [], "unrecorded_store": [],
                         "missing_materializations": [], "out_of_scope_links": [],
                         "project": {"missing": [], "orphaned": []}, "lock": None}
@@ -2327,7 +2327,7 @@ class TestSyncJson:
         assert data == {"actions": [], "pruned": [], "kept": [],
                         "foreign_store": [], "plugin_duplicates": [],
                         "older_copies": [], "not_skill_store": [],
-                        "unreadable_store": [], "misnamed_store": [],
+                        "unreadable_store": [], "misnamed_store": [], "workflow_copies": [],
                         "unrecorded_store": [], "out_of_scope_links": [],
                         "blocked_links": [], "lock": None}
 

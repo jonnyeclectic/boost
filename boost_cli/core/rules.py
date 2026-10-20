@@ -136,6 +136,27 @@ def render_claude_body(title: str, body: str) -> str:
     return "# %s" % title
 
 
+def block_names(text: str) -> list[str]:
+    """The rule names whose start marker ``text`` carries, in order, once each.
+
+    Only names a rule could be installed under (:func:`util.is_safe_component`):
+    a marker naming anything else is no block boost wrote.
+    """
+    head, tail = BLOCK_START.split("%s")
+    found: list[str] = []
+    at = text.find(head)
+    while at != -1:
+        end = text.find(tail, at + len(head))
+        if end == -1:
+            break
+        name = text[at + len(head):end]
+        if (util.is_safe_component(name) and "\n" not in name
+                and name not in found):
+            found.append(name)
+        at = text.find(head, at + len(head))
+    return found
+
+
 def block_span(text: str, name: str) -> tuple[int, int] | None:
     """``(i, j)`` such that ``text[i:j]`` is rule ``name``'s managed block.
 

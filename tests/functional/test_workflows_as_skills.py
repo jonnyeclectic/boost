@@ -238,8 +238,14 @@ class TestCollision:
         store._drop_skill_copy_row(
             store._refuse_unrecorded("reviewer", None, True))
         assert not any(m["slot"] == "skill" for m in _rows())
-        # Disowned, the dir is just a dir: the workflow's next install will
-        # not write over it. Cleared, it is the workflow's again.
+        # Disowned but still byte for byte the workflow's copy, the dir is
+        # claimed back by the workflow's next install (`skill_copy_blocker`).
+        r = boost("install", "reviewer", "--force")
+        assert "is not this workflow's" not in _flat(r.out)
+        assert any(m["slot"] == "skill" for m in _rows())
+        # Once it holds anything else it is just a dir, and is left alone.
+        store._drop_skill_copy_row("reviewer")
+        _copy().write_text(WANT + "edited\n", encoding="utf-8")
         r = boost("install", "reviewer", "--force")
         assert "is not this workflow's" in _flat(r.out)
         shutil.rmtree(paths.store_dir() / "reviewer")
@@ -499,3 +505,100 @@ class TestReviewFindings:
         boost("install", "reviewer")
         r = boost("install", "reviewer", "--force", "--no-as-skill")
         assert _flat(r.out).count("removed its copy from the skill store") == 1
+
+
+class TestLostLock:
+    """With the lock file gone, the copy is told apart by the workflow file
+    beside it. `heal` used to re-record it as a local skill, the next run
+    linked it into every agent beside the workflow's own file, and `doctor`
+    then called the machine healthy."""
+
+    def _lose_lock(self, boost):
+        boost("install", "reviewer")
+        boost("install", "brainstorming")
+        paths.lockfile_path().unlink()
+
+    def test_heal_does_not_adopt_it_and_says_so(self, boost, wf_tap):
+        self._lose_lock(boost)
+        assert store.workflow_copy_evidence("reviewer") == (
+            paths.home() / ".claude" / "agents" / "reviewer.md")
+        assert "reviewer" not in store.unrecorded_store_dirs({})
+        r = boost("heal", expect=1)
+        flat = _flat(r.out + r.err)
+        assert "re-recorded brainstorming from wf-tap" in flat
+        assert "reviewer as a local skill" not in flat
+        assert ("~/.agents/skills/reviewer is the skill copy of the workflow "
+                "at ~/.claude/agents/reviewer.md, which the lock does not "
+                "record — `boost install reviewer` re-records both") in flat
+        assert lockfile.get_skill("reviewer") is None
+        assert lockfile.get_skill("brainstorming") is not None
+        # A second pass changes nothing: still not adopted, never linked.
+        boost("heal", expect=1)
+        assert lockfile.get_skill("reviewer") is None
+        assert not os.path.lexists(paths.home() / ".claude" / "skills"
+                                   / "reviewer")
+        assert _copy().read_text(encoding="utf-8") == WANT
+
+    def test_doctor_names_it_and_does_not_prescribe_sync(self, boost, wf_tap):
+        self._lose_lock(boost)
+        r = boost("doctor", expect=1)
+        flat = _flat(r.out)
+        assert "1 store dir unrecorded" in flat          # brainstorming only
+        assert "`boost install reviewer` re-records both" in flat
+        boost("heal", expect=1)
+        r = boost("doctor", expect=1)
+        flat = _flat(r.out)
+        assert "`boost install reviewer` re-records both" in flat
+        assert "added outside boost" not in flat
+        assert "● healthy" not in flat
+        assert "1 issue needs attention" in flat
+        plan = store.sync_plan()
+        assert plan["workflow_copies"] == [
+            ("reviewer", str(paths.home() / ".claude" / "agents"
+                             / "reviewer.md"))]
+        assert plan["adoptable_store"] == []
+        assert store.plan_issues(plan) == 1
+
+    def test_the_named_install_reclaims_the_copy_and_converges(self, boost,
+                                                               wf_tap):
+        self._lose_lock(boost)
+        boost("heal", expect=1)
+        r = boost("install", "reviewer")
+        assert "not this workflow's" not in _flat(r.out)
+        assert _rows()[-1] == {"agent": None, "slot": "skill",
+                               "path": str(_copy()), "sha256": _sha(WANT)}
+        assert store.sync_plan()["workflow_copies"] == []
+        boost("heal")
+        boost("doctor")
+
+    def test_a_skill_named_like_the_workflow_is_still_adopted(self, boost,
+                                                              wf_tap):
+        """Evidence is content, not name: the user's own skill by the same
+        name, with other text, is a skill to record."""
+        self._lose_lock(boost)
+        _copy().write_text(WANT + "\nMine now.\n", encoding="utf-8")
+        assert store.workflow_copy_evidence("reviewer") is None
+        assert "reviewer" in store.unrecorded_store_dirs({})
+        assert store.sync_plan()["workflow_copies"] == []
+
+    def test_recover_refuses_it_when_asked_directly(self, boost, wf_tap):
+        self._lose_lock(boost)
+        line = store.recover_unrecorded("reviewer")
+        assert line == ("reviewer was not recorded: it is the skill copy of "
+                        "the workflow at ~/.claude/agents/reviewer.md — "
+                        "`boost install reviewer` re-records both")
+        assert store.is_unrepaired(line)
+        assert store.adopt_unrecorded("reviewer") == [line]
+        assert lockfile.get_skill("reviewer") is None
+
+
+class TestBlockerClaimsAnIdenticalCopy:
+    def test_only_an_exact_lone_skill_md_is_claimed(self, sandbox):
+        d = paths.store_dir() / "wf"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text("T", encoding="utf-8")
+        assert store.skill_copy_blocker("wf", None, "T") is None
+        assert store.skill_copy_blocker("wf", None, "U") is not None
+        assert store.skill_copy_blocker("wf", None) is not None
+        (d / "extra.txt").write_text("x", encoding="utf-8")
+        assert store.skill_copy_blocker("wf", None, "T") is not None

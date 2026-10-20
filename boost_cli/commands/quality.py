@@ -1074,6 +1074,14 @@ def cmd_doctor(argv):
         if unrec["misnamed_store"]:
             rep.note("misnamed", store.misnamed_line(unrec["misnamed_store"]),
                      wrap=True)
+        # An issue, not a note: the workflow it belongs to has no record, so
+        # no command updates or uninstalls it until `boost install` re-records.
+        for line in store.workflow_copy_lines(unrec["workflow_copies"]):
+            bad("workflow-copies", line, wrap=True)
+        # The same for a rule's block in a context file: the agent reads it
+        # every session and `boost uninstall` answers "not installed".
+        for line in store.rule_block_lines(unrec["rule_blocks"]):
+            bad("rule-blocks", line, wrap=True)
     dups = store.plugin_duplicates(skills, coverage) if agents_ok else []
     same = [r[0] for r in dups if r[3] == foreign.IDENTICAL]
     if same:
@@ -1927,6 +1935,18 @@ def cmd_heal(argv):
     if plan["unreadable_store"]:
         stuck.extend(Path(where) for _name, where in plan["unreadable_store"])
         out.warn(store.unreadable_line(plan["unreadable_store"]), wrap=True)
+    # A workflow's skill copy the lock lost. Not heal's to re-record — which
+    # tap the workflow came from is in the lock that is gone — and never
+    # adopted as a skill; named, and heal does not exit 0 over it.
+    if plan["workflow_copies"]:
+        stuck.extend(store.skill_store_dir(n) for n, _wf in plan["workflow_copies"])
+        for line in store.workflow_copy_lines(plan["workflow_copies"]):
+            out.warn(line, wrap=True)
+    # A rule's block the lock lost: the same, in the file it sits in.
+    if plan["rule_blocks"]:
+        stuck.extend(Path(p) for _n, p in plan["rule_blocks"])
+        for line in store.rule_block_lines(plan["rule_blocks"]):
+            out.warn(line, wrap=True)
     # A lock that cannot be read is `boost replay`'s to restore. heal answered
     # "nothing to heal" over it, with every store dir it could not record.
     if not integ.ok and integ.problem != "missing":

@@ -33,6 +33,7 @@ import subprocess
 import pytest
 
 from boost_cli.core import catalog, gitutil
+from boost_cli.errors import BoostError
 
 
 def _repo_with_asset(dest, extra: str | None = None):
@@ -293,3 +294,56 @@ class TestSparseCloneAgainstARealRepo:
 
         assert gitutil.is_sparse(clone)
         assert list(clone.rglob("SKILL.md")), "update must not empty the checkout"
+
+
+class TestMaterializePaths:
+    """A skill's links into the rest of the tap: each target, as a file and
+    as a dir, in one `add`."""
+
+    def _repo(self, tmp_path, have=""):
+        repo = tmp_path / "repo"
+        (repo / ".git" / "info").mkdir(parents=True)
+        (repo / ".git" / "info" / "sparse-checkout").write_text(
+            have, encoding="utf-8")
+        return repo
+
+    def test_adds_each_path_as_file_and_dir_in_one_call(self, monkeypatch,
+                                                        tmp_path):
+        seen = _clone_argv(monkeypatch)
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        repo = self._repo(tmp_path)
+        gitutil.materialize_paths(repo, ["/shared/helper.py", "lib", ".", ""])
+        assert seen["calls"] == [[
+            "git", "-C", str(repo), "sparse-checkout", "add",
+            "/shared/helper.py", "/shared/helper.py/*", "/lib", "/lib/*"]]
+
+    def test_patterns_already_present_are_not_added_again(self, monkeypatch,
+                                                          tmp_path):
+        seen = _clone_argv(monkeypatch)
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        repo = self._repo(tmp_path, "*.md\n/lib\n/lib/*\n")
+        gitutil.materialize_paths(repo, ["lib"])
+        assert "calls" not in seen
+        gitutil.materialize_paths(repo, ["lib", "x"])
+        assert seen["calls"][0][-2:] == ["/x", "/x/*"]
+        assert "/lib" not in seen["calls"][0]
+
+    def test_a_full_clone_is_left_alone(self, monkeypatch, tmp_path):
+        seen = _clone_argv(monkeypatch)
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: False)
+        gitutil.materialize_paths(self._repo(tmp_path), ["x"])
+        assert "calls" not in seen
+
+    def test_a_failed_fetch_names_the_paths_and_the_network(self, monkeypatch,
+                                                            tmp_path):
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+
+        def boom(*_a, **_k):
+            raise BoostError("unable to access")
+        monkeypatch.setattr(gitutil, "run", boom)
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize_paths(self._repo(tmp_path), ["a", "b"])
+        assert err.value.message == ("could not fetch a, b from the repo tap: "
+                                     "unable to access")
+        assert err.value.hint == ("this needs network — the tap stores only "
+                                  "Markdown locally")
