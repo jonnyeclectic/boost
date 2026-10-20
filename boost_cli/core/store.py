@@ -1648,7 +1648,12 @@ def forget_project_mcp(base, skill: str) -> tuple[list[str], str | None]:
     if not complete:
         return [], None
     doc, removed = _decl.strip_owned(existing, skill, keep)
-    if doc != existing and not _write_sidecar(path, doc):
+    # Compare the servers, not the documents: ``strip_owned`` always sets the
+    # key, so a file with no (or a null) ``mcpServers`` would otherwise be
+    # rewritten — and reformatted — by an uninstall that owns nothing in it.
+    if doc[_decl.SERVERS_KEY] == (existing.get(_decl.SERVERS_KEY) or {}):
+        return removed, None
+    if not _write_sidecar(path, doc):
         return [], "%s: could not be written" % path
     return removed, None
 

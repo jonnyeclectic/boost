@@ -145,6 +145,13 @@ class TestUnregister:
         assert (tmp_path / mcpdecl.SIDECAR).read_text(encoding="utf-8") == original, \
             "removing nothing must not rewrite the file"
 
+    @pytest.mark.parametrize("original", ['{"other": 1}', "{}",
+                                          '{"mcpServers": null}'])
+    def test_no_servers_key_is_not_given_one(self, tmp_path, original):
+        (tmp_path / mcpdecl.SIDECAR).write_text(original, encoding="utf-8")
+        assert store.forget_project_mcp(tmp_path, "sk") == ([], None)
+        assert (tmp_path / mcpdecl.SIDECAR).read_text(encoding="utf-8") == original
+
     def test_register_then_unregister_round_trips(self, tmp_path):
         store.register_project_mcp(tmp_path, _rows("a", "b"), "sk")
         assert sorted(_servers(tmp_path)) == ["a", "b"]
