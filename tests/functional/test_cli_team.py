@@ -186,6 +186,18 @@ class TestCohort:
         assert "tdd-workflow already installed" in r.out
         assert "applied: 0 installed, 2 already present" in r.out
 
+    def test_a_mismatched_qualifier_skips_that_member_only(self, boost,
+                                                           tapped):
+        # `othertap:brainstorming` while brainstorming is installed from
+        # fixture-tap: installed_name raises, which must not abort the apply.
+        boost("install", "brainstorming")
+        boost("cohort", "create", "pilot", "--percent", "100",
+             "--skills", "othertap:brainstorming,tdd-workflow")
+        r = boost("cohort", "apply")
+        assert "othertap:brainstorming not found in any tap" in r.out
+        assert "installed tdd-workflow" in r.out
+        assert "applied: 1 installed, 0 already present, 1 not found" in r.out
+
     def test_apply_reports_missing_members_and_exits_nonzero_when_nothing_landed(
             self, boost, tapped):
         # The bug: a cohort whose only member is nowhere to be found reported
