@@ -532,8 +532,13 @@ def cmd_info(argv):
     if lock:
         matches = catalog.find(args.name)
         same_tap = [e for e in matches if e["tap"] == lock.get("tap")]
-        candidates = same_tap or matches
-        cat = candidates[0] if candidates else None
+        # Describe the copy that is installed: a tap can ship one name twice,
+        # and `same_tap[0]` showed the other copy's description beside this
+        # one's `source`.
+        if same_tap:
+            cat, _ = catalog.select_lock_source(same_tap, lock)
+        else:
+            cat = matches[0] if matches else None
     else:
         cat = catalog.resolve_one(args.name)   # raises if unknown anywhere
     # `lock`/`plock` only ever hold a *skill* lock entry (they read the

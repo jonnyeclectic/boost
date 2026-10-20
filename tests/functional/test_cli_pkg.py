@@ -2437,6 +2437,109 @@ class TestUpdateEdges:
                 "(try `boost update`)") in r.out
 
 
+class TestUpdateKeepsTheChosenCopy:
+    """`boost update` must refresh the copy the lock records, not the first.
+
+    One tap can ship a name twice; `install --path` picks one and the lock
+    records which (`source_dir` for a skill, `source_file` for a rule). Update
+    took `matches[0]` by scan order, so it "refreshed" the user's pick into
+    the other copy and the real upstream change never landed.
+    """
+
+    @staticmethod
+    def _skill(desc, body, version=None):
+        ver = "version: %s\n" % version if version else ""
+        return ("---\nname: dupname\ndescription: %s\n%s---\n\n%s\n"
+                % (desc, ver, body))
+
+    def test_update_refreshes_the_installed_skill_copy(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "dup-skill-upd-tap")
+        (tap_dir / "skills" / "dup-a" / "x").mkdir(parents=True)
+        (tap_dir / "skills" / "dup-a" / "x" / "SKILL.md").write_text(
+            self._skill("first dup", "body a"), encoding="utf-8")
+        _add_and_commit(tap_dir, "skills/dup-b/SKILL.md",
+                        self._skill("second dup", "body b"), "two copies")
+        boost("tap", tap_dir)
+        boost("install", "dupname", expect=1)          # ambiguous, refused
+        boost("install", "dupname", "--path", "skills/dup-b")
+        assert _lock()["dupname"]["source_dir"] == "skills/dup-b"
+
+        _add_and_commit(tap_dir, "skills/dup-b/SKILL.md",
+                        self._skill("second dup", "body b v1", "1.0.0"),
+                        "bump dup-b")
+        r = boost("update")
+        assert "upgraded dupname v0.0.0 → v1.0.0" in r.out
+        lk = _lock()["dupname"]
+        assert lk["source_dir"] == "skills/dup-b"
+        assert lk["version"] == "1.0.0"
+        md = (paths.home() / ".agents" / "skills" / "dupname" / "SKILL.md"
+              ).read_text(encoding="utf-8")
+        assert "description: second dup" in md and "body b v1" in md
+        assert "first dup" not in md
+        # And a second run has nothing to do: the lock matches its source.
+        assert "everything up to date" in boost("update").out
+
+    def test_info_describes_the_installed_copy(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "dup-skill-info-tap")
+        (tap_dir / "skills" / "dup-a" / "x").mkdir(parents=True)
+        (tap_dir / "skills" / "dup-a" / "x" / "SKILL.md").write_text(
+            self._skill("first dup", "body a"), encoding="utf-8")
+        _add_and_commit(tap_dir, "skills/dup-b/SKILL.md",
+                        self._skill("second dup", "body b"), "two copies")
+        boost("tap", tap_dir)
+        boost("install", "dupname", "--path", "skills/dup-b")
+        info = boost("info", "dupname").out
+        assert "description   second dup" in info
+        assert "first dup" not in info
+
+    def test_update_warns_when_the_recorded_copy_is_gone(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "dup-skill-gone-tap")
+        (tap_dir / "skills" / "dup-a" / "x").mkdir(parents=True)
+        (tap_dir / "skills" / "dup-a" / "x" / "SKILL.md").write_text(
+            self._skill("first dup", "body a"), encoding="utf-8")
+        _add_and_commit(tap_dir, "skills/dup-b/SKILL.md",
+                        self._skill("second dup", "body b"), "two copies")
+        boost("tap", tap_dir)
+        boost("install", "dupname", "--path", "skills/dup-b")
+        shutil.rmtree(tap_dir / "skills" / "dup-b")
+        subprocess.run(["git", "-C", str(tap_dir), "commit", "-aqm", "drop b"],
+                       check=True, capture_output=True)
+        r = boost("update")
+        assert ("dupname: dupname no longer at its installed source "
+                "(skills/dup-b) — using skills/dup-a/x") in r.out
+
+    def test_update_refreshes_the_installed_rule_copy(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "dup-rule-upd-tap")
+        (tap_dir / "rules" / "a").mkdir(parents=True)
+        (tap_dir / "rules" / "a" / "house.mdc").write_text(
+            "---\nname: dup-house\nversion: 1.0.0\n---\n\nUse tabs.\n",
+            encoding="utf-8")
+        _add_and_commit(tap_dir, "rules/b/house.mdc",
+                        "---\nname: dup-house\nversion: 1.0.0\n---\n\n"
+                        "Use spaces.\n", "two rules")
+        boost("tap", tap_dir)
+        boost("install", "dup-house", "--path", "rules/b")
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        assert lock["rules"]["dup-house"]["source_file"] == "rules/b/house.mdc"
+
+        _add_and_commit(tap_dir, "rules/b/house.mdc",
+                        "---\nname: dup-house\nversion: 1.1.0\n---\n\n"
+                        "Use four spaces.\n", "bump b")
+        r = boost("update")
+        assert "dup-house" in r.out and "1.1.0" in r.out
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        row = lock["rules"]["dup-house"]
+        assert row["source_file"] == "rules/b/house.mdc"
+        assert row["version"] == "1.1.0"
+        claude = (paths.home() / ".claude" / "CLAUDE.md").read_text(
+            encoding="utf-8")
+        assert "Use four spaces." in claude and "Use tabs." not in claude
+
+
 class TestReinstallEdges:
     def test_multi_skips_missing(self, boost, installed):
         r = boost("reinstall", "brainstorming", "ghost", expect=1)
