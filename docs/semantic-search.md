@@ -26,7 +26,8 @@ other. `boost search` prints `hybrid RRF` when that is what happened.
 
 ```bash
 pipx inject boost-skill-cli "boost-skill-cli[rag]"   # if you installed with pipx
-# pip install "boost-skill-cli[rag]"                 # if you installed with pip
+# uv tool install "boost-skill-cli[rag]"             # if you installed with uv tool
+# python3 -m pip install "boost-skill-cli[rag]"      # if you installed with pip
 boost quickstart                                     # taps + downloads prebuilt vectors
 ```
 
@@ -188,7 +189,7 @@ deliberately no vectors, for the same reason.
 
 | What doctor says | What to do |
 |---|---|
-| no backend | `pip install "boost-skill-cli[rag]"` (`pipx inject boost-skill-cli "boost-skill-cli[rag]"` under pipx) |
+| no backend | the command doctor prints for your install: `pipx inject boost-skill-cli "boost-skill-cli[rag]"` under pipx, `uv tool install "boost-skill-cli[rag]"` under uv tool, `<python> -m pip install "boost-skill-cli[rag]"` under pip |
 | no store | `boost reindex --dense` |
 | store is empty | `boost reindex --dense --force` |
 | version, model or dimension changed | `boost reindex --dense --force` |

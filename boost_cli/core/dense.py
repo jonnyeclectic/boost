@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
 from ..errors import BoostError
@@ -532,11 +533,38 @@ def install_extra() -> str:
     Double quotes, as README and docs/semantic-search.md print it: they stop
     the glob in every POSIX shell and PowerShell, and cmd.exe strips them where
     it would pass single quotes through to pip.
+
+    The same holds for every manager :func:`selfupdate.detect` can name: a uv
+    tool venv has no pip at all, so it is reinstalled with the extra; a pip
+    install is told ``<this python> -m pip``, never a bare ``pip`` that can
+    belong to another interpreter (as :func:`selfupdate.upgrade_command`
+    does); and a source checkout installs its *own* extra, editable, rather
+    than a PyPI copy beside it. Only an install nobody recorded falls back to
+    a plain ``pip install``.
     """
     from . import selfupdate
-    if selfupdate.detect() == selfupdate.PIPX:
+    method = selfupdate.detect()
+    if method == selfupdate.PIPX:
         return 'pipx inject %s "%s"' % (selfupdate.DIST, EXTRA_SPEC)
+    if method == selfupdate.UV_TOOL:
+        return 'uv tool install "%s"' % EXTRA_SPEC
+    if method == selfupdate.PIP:
+        return '%s -m pip install "%s"' % (_shell_word(sys.executable),
+                                           EXTRA_SPEC)
+    if method == selfupdate.GIT:
+        extra = EXTRA_SPEC[len(selfupdate.DIST):]
+        return '%s -m pip install -e "%s%s"' % (
+            _shell_word(sys.executable), paths.repo_root(), extra)
     return 'pip install "%s"' % EXTRA_SPEC
+
+
+def _shell_word(word: str) -> str:
+    """``word`` as one shell word: double-quoted only when it needs to be.
+
+    Double quotes for the reason the docstring above gives — they mean the
+    same thing to POSIX shells, PowerShell and cmd.exe.
+    """
+    return '"%s"' % word if any(ch.isspace() for ch in word) else word
 
 
 # Why dense retrieval isn't serving, keyed by the `reason` status() returns.

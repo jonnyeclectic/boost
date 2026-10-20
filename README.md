@@ -144,7 +144,7 @@ skill you want. Semantic search fixes that and needs no API key — only the
 extra:
 
 ```bash
-pipx inject boost-skill-cli "boost-skill-cli[rag]"   # pip install "boost-skill-cli[rag]" if you used pip
+pipx inject boost-skill-cli "boost-skill-cli[rag]"   # or: uv tool install "boost-skill-cli[rag]"
 boost quickstart                                     # downloads prebuilt vectors
 ```
 
