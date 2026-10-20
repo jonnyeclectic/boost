@@ -465,6 +465,36 @@ class TestSparseLock:
                               r"held the repo tap's checkout for over 0s$"):
             gitutil.materialize(repo, "skills/a")
 
+    def test_set_cone_takes_the_same_lock(self, monkeypatch, tmp_path):
+        # `_sparse_add` deletes a sparse-checkout.lock it finds while holding
+        # boost's lock, so a `set` (boost compact) outside it could lose its
+        # live git lock to a concurrent install.
+        from boost_cli.core import util
+        repo = self._repo(tmp_path)
+        calls = self._git(monkeypatch)
+        monkeypatch.setattr(gitutil, "SPARSE_LOCK_TIMEOUT", 0)
+        with util.file_lock(repo / ".git" / "boost-sparse.lock"), \
+                pytest.raises(BoostError, match=r"^another boost process has "
+                              r"held the repo tap's checkout for over 0s$"):
+            gitutil.set_sparse_cone(repo, ("*.md",))
+        assert calls == []
+        gitutil.set_sparse_cone(repo, ("*.md",))
+        assert calls == [["-C", str(repo), "sparse-checkout", "set",
+                          "--no-cone", "*.md"]]
+
+    def test_a_gitfile_clone_gets_git_s_error_not_a_lock_crash(
+            self, monkeypatch, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").write_text("gitdir: /nowhere\n", encoding="utf-8")
+        monkeypatch.setattr(gitutil, "_sparse_list", lambda r: set())
+        calls = self._git(monkeypatch, "fatal: not a git repository")
+        with pytest.raises(BoostError) as err:
+            gitutil._sparse_add(repo, ["/skills/a/*"], "skills/a")
+        assert len(calls) == 1
+        assert err.value.message == ("could not fetch skills/a from the repo "
+                                     "tap: fatal: not a git repository")
+
     def test_against_real_git_a_leftover_lock_no_longer_blocks(self, tmp_path):
         src = _repo_with_asset(tmp_path / "src")
         clone = tmp_path / "c"

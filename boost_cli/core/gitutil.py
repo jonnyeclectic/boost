@@ -293,7 +293,11 @@ def set_sparse_cone(repo: Path, patterns=SPARSE_PATTERNS) -> None:
     `--no-cone` because cone mode matches directory prefixes only, and boost
     needs `*.md` at any depth.
     """
-    run(["-C", str(repo), "sparse-checkout", "set", "--no-cone", *patterns])
+    # Under the same lock as :func:`_sparse_add`, which deletes a
+    # sparse-checkout.lock it finds while holding it: a `boost compact`
+    # running `set` beside an install must not have its live lock taken.
+    with _sparse_guard(Path(repo)):
+        run(["-C", str(repo), "sparse-checkout", "set", "--no-cone", *patterns])
     _SPARSE[str(repo)] = True
 
 
@@ -425,6 +429,19 @@ def _sparse_hint(err: BoostError, git_lock: Path) -> str | None:
     return None
 
 
+def _sparse_guard(repo: Path):
+    """Boost's own lock on ``repo``'s sparse cone (see :func:`_sparse_add`).
+
+    Not strict: where the sidecar cannot be made — ``.git`` is a gitfile, or
+    read-only — git's own error about that clone is the one worth reading,
+    not a FileExistsError from boost's lock.
+    """
+    return util.file_lock(repo / ".git" / "boost-sparse.lock",
+                          SPARSE_LOCK_TIMEOUT,
+                          what="the %s tap's checkout" % repo.name,
+                          strict=False)
+
+
 def _sparse_add(repo: Path, patterns: list[str], what: str) -> None:
     """`git sparse-checkout add` ``patterns``, one boost process at a time.
 
@@ -443,9 +460,7 @@ def _sparse_add(repo: Path, patterns: list[str], what: str) -> None:
     just added the very pattern this one is waiting to add.
     """
     git_lock = repo / ".git" / "info" / "sparse-checkout.lock"
-    with util.file_lock(repo / ".git" / "boost-sparse.lock",
-                        SPARSE_LOCK_TIMEOUT,
-                        what="the %s tap's checkout" % repo.name):
+    with _sparse_guard(repo):
         have = _sparse_list(repo) or set()
         todo = [p for p in patterns if p not in have]
         if not todo:
