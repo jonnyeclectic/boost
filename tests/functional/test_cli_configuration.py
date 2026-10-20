@@ -467,6 +467,36 @@ class TestPolicy:
             {"name": "brainstorming", "kind": "skill",
              "skill": "brainstorming", "violation": "on the blocklist"}]
 
+    def test_a_corrupt_policy_fails_closed(self, boost, tapped):
+        # A truncated write of a blocklist used to read as no policy at all:
+        # the blocked skill installed, check passed, doctor said healthy.
+        boost("policy", "set", "blocked_skills", "brainstorming")
+        p = paths.policy_path()
+        p.write_text('{"blocked_skills": ["brainstorming"]', encoding="utf-8")
+        err = policy.check()
+        r = boost("install", "brainstorming", expect=1)
+        assert ("policy blocks installing brainstorming: %s — boost cannot "
+                "read the policy, so it will not install until the file is "
+                "repaired" % err) in " ".join(r.err.split())
+        r = boost("policy", "check", "--json", expect=1)
+        assert json.loads(r.out)["violations"] == [
+            {"name": None, "kind": None, "skill": "(policy)",
+             "violation": "%s — boost cannot read the policy, so it will not "
+                          "install until the file is repaired" % err}]
+        r = boost("policy", "check", expect=1)
+        assert "1 policy violation(s) across 0 installed item(s)" in r.err
+        r = boost("doctor", "--json", expect=None)
+        assert r.rc == 1
+        rows = [c for c in json.loads(r.out)["checks"] if c["name"] == "policy"]
+        assert [c["message"] for c in rows] == [
+            "%s — every install is refused until it is repaired; the next "
+            "`boost policy set` moves it aside to policy.json.corrupt" % err]
+        # `set` keeps the bytes it cannot read, rather than writing over them.
+        boost("policy", "set", "require_description", "true")
+        assert (p.parent / "policy.json.corrupt").read_text(
+            encoding="utf-8") == '{"blocked_skills": ["brainstorming"]'
+        assert policy.check() is None
+
     def test_check_min_quality_and_pin_only_note(self, boost, installed):
         from boost_cli.core import store
         score, _ = util.score_skill(store.skill_store_dir("brainstorming"))

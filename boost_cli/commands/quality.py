@@ -38,7 +38,9 @@ from ..core import (
     lockfile,
     logs,
     paths,
+    policy,
     prereq,
+    projectlock,
     provenance,
     registry,
     report,
@@ -554,6 +556,14 @@ def cmd_doctor(argv):
                     "is" if len(clones) == 1 else "are"))
                 if clones else "no taps or settings are read"), wrap=True)
 
+    # Same for policy.json: unreadable, it reads as defaults, and the
+    # verdict was "healthy" while every rule in it went unenforced.
+    pol_err = policy.check()
+    if pol_err:
+        bad("policy", "%s — every install is refused until it is repaired; "
+            "the next `boost policy set` moves it aside to policy.json.corrupt"
+            % pol_err, wrap=True)
+
     # One agent whose `dir` names an unset `${VAR}` makes `known_agents` raise,
     # and a dozen checks below reach it — the link loop, the materialization
     # checks, the broken-link sweep, duplicate discovery, the agent-dir checks.
@@ -822,6 +832,15 @@ def cmd_doctor(argv):
     # digest is exactly what a health check should surface.
     pbase, pskills = integrity.project_skills()
     proj_issues = 0
+    plock_err = projectlock.check(pbase) if pbase is not None else None
+    if plock_err:
+        # It reads as no project skills, so the loop below finds nothing
+        # wrong with copies nothing records any more.
+        bad("project-lock", "%s — boost sees no project skills here and "
+            "refuses to install or uninstall any until it is repaired; %s"
+            % (plock_err, projectlock.RECOVER_HINT % projectlock.LOCK_REL),
+            wrap=True)
+        proj_issues += 1
     for name, entry in sorted(pskills.items()):
         st = integrity.project_status(entry, pbase)
         if st == integrity.STATUS_MISSING:

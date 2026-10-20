@@ -2075,6 +2075,9 @@ def _install_project_skill(entry: dict, force: bool = False,
     resolved_base = _require_project_base(scopes.SCOPE_PROJECT, base, name)
     if resolved_base is None:             # _require_project_base already raised
         raise BoostError("there is no project here to install %s into" % name)
+    # Before anything is copied: projectlock.write refuses a corrupt lock too,
+    # but by then the copies would be on disk unrecorded.
+    projectlock.refuse_corrupt(resolved_base)
 
     existing = check_existing(entry, force=force, scope=scopes.SCOPE_PROJECT,
                               base=resolved_base, kind="skill")
@@ -2390,6 +2393,9 @@ def uninstall_project(name: str, base=None) -> dict:
     not undo it, and said something false while refusing.
     """
     resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
+    if resolved_base is not None:
+        # A corrupt lock reads as empty: say so, not "not installed here".
+        projectlock.refuse_corrupt(resolved_base)
     entry = projectlock.get_skill(resolved_base, name) if resolved_base else None
     if not entry:
         owned = project_materialized(name, resolved_base)
