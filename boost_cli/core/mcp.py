@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from ..errors import BoostError
 
@@ -308,7 +308,8 @@ def instructions(*, ai_available: bool) -> str:
                              gate, _INSTRUCTIONS_TAIL)
 
 
-def hit_line(entry: dict, *, installed: bool = False) -> str:
+def hit_line(entry: dict, *, installed: bool = False,
+             path: str | None = None) -> str:
     """One search hit rendered for an agent: name, kind, description, tap.
 
     The kind marker is the load-bearing part. ``boost_install``'s description
@@ -338,14 +339,38 @@ def hit_line(entry: dict, *, installed: bool = False) -> str:
     hit marked "not installed" that ``boost_install <name>`` then resolves to
     the item already in the lock. One notion of identity per reply, plus the
     field that resolves it, beats two that contradict each other.
+
+    ``path`` is set only when the hit's tap ships its name more than once.
+    Those copies resolve by name+tap to an ambiguity error, so the line names
+    the ``path`` argument boost_read, boost_info and boost_install take to
+    pick one — the only way to reach either copy over this surface.
     """
     kind = entry.get("kind") or "skill"
     marker = "" if kind == "skill" else " [%s]" % kind
     if installed:
         marker += " [installed]"
-    return "%s%s — %s (%s)" % (entry.get("name", "?"), marker,
+    line = "%s%s — %s (%s)" % (entry.get("name", "?"), marker,
                                entry.get("description", ""),
                                entry.get("tap", "?"))
+    return line + (" [path: %s]" % path if path else "")
+
+
+def str_arg(args: Mapping, key: str) -> str | None:
+    """``args[key]`` when it is a string, None when absent; else refuse.
+
+    Every tool's inputSchema says its fields are strings, and the handlers
+    used to ``str()`` whatever arrived: ``{"name": null}`` looked up a skill
+    called ``'None'`` and a list query was searched as its own repr. A
+    schema-violating value is the caller's mistake, so it is named — the
+    same treatment ``handle_request`` gives a non-object ``arguments``.
+    """
+    val = args.get(key)
+    if val is None and key not in args:
+        return None
+    if not isinstance(val, str):
+        raise BoostError("invalid argument: \"%s\" must be a string, got %s"
+                         % (key, "null" if val is None else type(val).__name__))
+    return val
 
 
 # `boost_read`'s budget, and it is a measured number rather than a round one.

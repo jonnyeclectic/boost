@@ -854,6 +854,21 @@ def distinct_candidates(matches: list[dict]) -> list[dict]:
     return [best] if best is not None else matches.copy()
 
 
+class SameTapAmbiguity(BoostError):
+    """One tap ships a name more than once, as genuinely different items.
+
+    A subclass so a caller whose grammar is not the CLI's can re-word the
+    hint: ``--path`` is a flag, and the MCP tools take a ``path`` argument
+    instead. ``paths`` are the candidates' ``rel_dir`` values, sorted.
+    """
+
+    def __init__(self, message: str, hint: str, *, bare: str,
+                 paths: list[str]):
+        super().__init__(message, hint=hint)
+        self.bare = bare
+        self.paths = paths
+
+
 def resolve_one(name: str, path: str | None = None) -> dict:
     """Find exactly one entry or raise with a helpful hint.
 
@@ -962,12 +977,14 @@ def resolve_one(name: str, path: str | None = None) -> dict:
             # `_resolve_skill`), so installing one clears the ambiguity for
             # every command that would otherwise hit it again.
             kind = str(matches[0].get("kind") or "skill")
-            raise BoostError(
+            raise SameTapAmbiguity(
                 "%r matches %d different %ss in %s: %s"
                 % (bare, len(matches), kind, taps[0], paths),
                 hint="that registry ships one name twice — install one with "
                      "`boost install %s --path <one of the above>`, then "
-                     "retry; raise it with the tap" % bare)
+                     "retry; raise it with the tap" % bare,
+                bare=bare,
+                paths=sorted(str(e.get("rel_dir", "?")) for e in matches))
         # Several taps, one thing. Registries mirror each other constantly, so
         # the common cross-tap collision is N byte-identical copies of one
         # skill — and the within-tap branch above already decided that
