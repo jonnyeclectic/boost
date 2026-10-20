@@ -1392,8 +1392,14 @@ class TestPostingsAndKept:
     def test_postings_missing_key_is_empty(self):
         assert dict(rag._postings_to_doc_tf({})) == {}
 
-    def test_kept_docs_empty_when_no_docs(self):
+    def test_kept_docs_empty_when_no_docs(self, sandbox, monkeypatch):
+        # No docs means no store read at all, so a missing store cannot turn
+        # an empty index into "unreadable".
+        def boom():
+            raise AssertionError("read the postings store")
+        monkeypatch.setattr(rag, "_all_postings", boom)
         assert rag._kept_docs({}, set()) == []
+        assert rag._kept_docs({"docs": []}, {"x__y"}) == []
 
     def test_kept_docs_recovers_tf_and_defaults_empty(self):
         raw = {"docs": [{"t": "x/y", "n": "a", "f": "a/SKILL.md", "k": "skill",
@@ -2043,7 +2049,9 @@ class TestPostingsBlobLayout:
     def test_a_corrupt_blob_degrades_read_postings_to_empty(self, sandbox):
         self._corrupt_store(b"\x01\x80")
         assert rag.read_postings(["good", "bad"]) == {}
-        assert rag._all_postings() == {}
+        # None, not {}: "unreadable" must not read as "holds no postings",
+        # or an incremental build keeps docs with no term frequencies.
+        assert rag._all_postings() is None
 
     def test_an_intact_store_still_reads(self, sandbox):
         self._corrupt_store(rag._encode_plist([[2, 1]]))

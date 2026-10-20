@@ -272,6 +272,34 @@ class TestDistill:
         assert not (tmp_path / "Bad Name!!").exists()
         assert "install it with `boost import ./bad-name`" in r.out
 
+    @pytest.mark.parametrize("flag", ["--name", "-o", "--output"])
+    def test_name_flag_and_its_older_spellings(self, boost, tapped, tmp_path,
+                                               monkeypatch, flag):
+        monkeypatch.chdir(tmp_path)
+        boost("distill", "tdd-workflow", "cowboy-coding", flag, "combo")
+        text = (tmp_path / "combo" / "SKILL.md").read_text(encoding="utf-8")
+        assert frontmatter.parse(text)[0]["name"] == "combo"
+
+    @pytest.mark.parametrize("value", ["out/merged", "merged.md", "MERGED.MD"])
+    def test_a_path_for_the_name_is_refused_not_slugified(
+            self, boost, tapped, tmp_path, monkeypatch, value):
+        # Every sibling's -o is a FILE; distill's is a NAME. `-o /abs/x.md`
+        # used to exit 0 having written ./abs-x-md/SKILL.md in the cwd.
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        r = boost("distill", "tdd-workflow", "cowboy-coding", "-o", value,
+                  expect=1)
+        assert ("distill takes a name for the merged skill, not a path: %s"
+                % value) in r.err
+        assert "pass `--name NEWNAME`" in r.err
+        assert not list(work.rglob("*"))
+
+    def test_name_and_o_together_is_a_usage_error(self, boost, tapped):
+        r = boost("distill", "tdd-workflow", "cowboy-coding", "--name", "a",
+                  "-o", "b", expect=2)
+        assert "not allowed with argument" in r.err
+
     def test_output_name_with_nothing_to_slug_is_refused(
             self, boost, tapped, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

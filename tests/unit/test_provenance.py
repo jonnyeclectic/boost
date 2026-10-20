@@ -25,6 +25,20 @@ def test_adding_same_name_replaces_not_duplicates(sandbox, signer):
     assert len(provenance.trusted_keys()) == 1
 
 
+def test_parses_as_public_key_accepts_keys_with_a_slash(signer):
+    import base64
+    slashed = base64.b64encode(b"Ed" + b"\xff" * 8 + b"\x01" * 32).decode()
+    assert "/" in slashed
+    assert provenance.parses_as_public_key(slashed) is True
+    assert provenance.parses_as_public_key(signer.public_key_text()) is True
+
+
+def test_parses_as_public_key_rejects_paths_and_garbage():
+    assert provenance.parses_as_public_key("keys/acme.pub") is False
+    assert provenance.parses_as_public_key("") is False
+    assert provenance.parses_as_public_key("not-a-key") is False
+
+
 def test_add_rejects_garbage_key(sandbox):
     from boost_cli.errors import BoostError
     try:
@@ -144,3 +158,27 @@ def test_invalid_when_signature_malformed(sandbox, tmp_path):
     (clone / provenance.SIGNED_FILE).write_bytes(b"x\n")
     (clone / provenance.SIGNATURE_FILE).write_text("garbage", encoding="utf-8")
     assert provenance.verify_dir(clone).status == provenance.INVALID
+
+
+def test_add_over_a_corrupt_store_quarantines_it(sandbox, signer, capsys):
+    # The reader sees a truncated store as empty, so `trust add` used to
+    # write one key over every key still sitting in the damaged file.
+    paths.ensure_dirs()
+    p = paths.trusted_keys_path()
+    p.write_text('[{"name": "old", "key": "k"}', encoding="utf-8")
+    provenance.add_trusted_key("acme", signer.public_key_text())
+    moved = p.with_name(p.name + ".corrupt")
+    assert moved.read_text(encoding="utf-8") == '[{"name": "old", "key": "k"}'
+    assert [k["name"] for k in provenance.trusted_keys()] == ["acme"]
+    err = capsys.readouterr().err
+    assert "%s was corrupt and has been moved to %s" % (p, moved) in err
+
+
+def test_add_over_a_valid_store_keeps_no_quarantine(sandbox, signer, capsys):
+    provenance.add_trusted_key("acme", signer.public_key_text())
+    provenance.add_trusted_key("beta", signer.public_key_text())
+    p = paths.trusted_keys_path()
+    assert not p.with_name(p.name + ".corrupt").exists()
+    assert sorted(k["name"] for k in provenance.trusted_keys()) == [
+        "acme", "beta"]
+    assert "corrupt" not in capsys.readouterr().err

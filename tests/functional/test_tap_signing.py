@@ -95,6 +95,23 @@ def test_trust_add_of_a_missing_relative_pub_path_is_also_named(boost):
     assert "base64" not in r.err
 
 
+def test_trust_add_accepts_an_inline_key_containing_a_slash(boost):
+    # '/' is in the base64 alphabet, so most minisign keys contain one; the
+    # path heuristic used to reject every such key as "no such key file".
+    import base64
+    key = base64.b64encode(b"Ed" + b"\xff" * 8 + b"\x01" * 32).decode()
+    assert "/" in key
+    r = boost("trust", "add", "bob", key)
+    assert "trusted key bob (FFFFFFFFFFFFFFFF)" in r.out
+    assert "bob" in boost("trust").out
+
+
+def test_trust_add_of_a_slashed_non_key_still_names_the_path(boost):
+    r = boost("trust", "add", "bob", "keys/acme", expect=1)
+    assert "no such key file: keys/acme" in r.err
+    assert "does not parse as a minisign public key" in r.err
+
+
 def test_trust_remove_unknown_errors(boost):
     boost("trust", "remove", "ghost", expect=1)
 

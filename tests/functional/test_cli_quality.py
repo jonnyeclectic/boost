@@ -1435,7 +1435,7 @@ class TestDrift:
         assert "boost update" in r.out
         data = json.loads(boost("drift", "--json").out)
         assert data == {"skills": [{"name": "brainstorming", "kind": "skill",
-                                    "status": "upstream-moved",
+                                    "scope": "user", "status": "upstream-moved",
                                     "hint": "boost update"}]}
 
     def test_source_missing_after_untap_hints_retap_not_update(self, boost,
@@ -1452,7 +1452,7 @@ class TestDrift:
         want = "boost tap %s" % str(tapped.resolve())
         data = json.loads(boost("drift", "--json").out)
         assert data == {"skills": [{"name": "brainstorming", "kind": "skill",
-                                    "status": "source-missing",
+                                    "scope": "user", "status": "source-missing",
                                     "hint": want}]}
 
     def test_no_lock_file_but_nothing_ever_installed_rc0(self, boost, tapped):
@@ -1600,6 +1600,18 @@ class TestQuarantine:
         assert entry["quarantined"] is False
         assert entry["agents"] == ["claude-code", "windsurf", "cursor",
                                    "antigravity"]
+
+    def test_focus_on_a_quarantined_skill_hints_a_command_that_runs(
+            self, boost, installed):
+        # The hint used to be a bare `boost quarantine`, which errors with
+        # "specify a skill to quarantine". The hint must be the release.
+        boost("quarantine", "brainstorming")
+        r = boost("focus", "brainstorming", expect=1)
+        assert "brainstorming is quarantined" in r.err
+        assert ("release it first with `boost quarantine --release "
+                "brainstorming`") in r.err
+        boost("quarantine", "--release", "brainstorming")
+        boost("focus", "brainstorming")
 
     def test_doctor_separates_active_from_quarantined_skills(self, boost, tapped):
         boost("install", "brainstorming")
@@ -2466,9 +2478,13 @@ class TestStateFilesThatAreNotUtf8:
     """One bad byte in a file boost keeps for itself is a corrupt file, never
     a traceback: each of these took a command down at exit 70."""
 
-    def test_a_policy_file_reads_as_defaults(self, boost, tapped):
+    def test_a_policy_file_fails_closed_not_a_crash(self, boost, tapped):
+        # A refusal naming the file (rc 1), not exit 70 — and not an install
+        # either: a policy boost cannot read may hold a blocklist.
         paths.policy_path().write_bytes(b"\xff\xfe")
-        boost("install", "brainstorming")
+        r = boost("install", "brainstorming", expect=1)
+        assert ("policy blocks installing brainstorming: %s: not valid UTF-8"
+                % paths.policy_path()) in " ".join(r.err.split())
 
     @pytest.mark.parametrize("which", ["tap", "index"])
     def test_a_search_cache_is_rebuilt(self, boost, tapped, which):

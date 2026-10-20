@@ -646,6 +646,21 @@ class TestSearchCategoryFilter:
         assert "in category 'no-such-category'" in r.out
         assert "not searched: 'R'" in r.out
 
+    def test_uncategorized_selects_the_rows_browse_files_there(
+            self, boost, crowded_tap):
+        # `boost browse --categories` lists "uncategorized" for entries with
+        # no category; the same name must work here, not answer "no matches
+        # ... in category 'uncategorized'" for three categoryless hits.
+        r = boost("search", "kubernetes", "--category", "uncategorized",
+                  "--json")
+        assert sorted(e["name"] for e in json.loads(r.out)) == [
+            "kubernetes-alpha", "kubernetes-beta", "kubernetes-gamma"]
+
+    def test_uncategorized_excludes_categorised_rows(self, boost, tapped):
+        r = boost("search", "workflow", "--category", "UNCATEGORIZED")
+        assert ("○ no matches for 'workflow' in category 'UNCATEGORIZED'"
+                in r.out)
+
 
 # ---------------------------------------------------------------- index
 
@@ -1443,6 +1458,20 @@ class TestRecommend:
         r = boost("recommend", "--path", proj, "--category", "no-such-category",
                   expect=1)
         assert "no entries in category 'no-such-category'" in r.err
+
+    def test_category_uncategorized_is_the_categoryless_rows(
+            self, boost, fixture_tap_src, tmp_path):
+        # `browse --categories` lists "uncategorized"; recommend used to
+        # answer "no entries in category 'uncategorized'" for the same rows.
+        boost("tap", fixture_tap_src, "--curated")
+        boost("tap", _make_crowded_tap(tmp_path / "crowded-tap"), "--curated")
+        proj = tmp_path / "empty-proj"
+        proj.mkdir()
+        r = boost("recommend", "--path", proj, "--category", "uncategorized",
+                  "--json")
+        names = sorted(rec["name"] for rec in json.loads(r.out)["recommendations"])
+        assert names == ["kubernetes-alpha", "kubernetes-beta",
+                         "kubernetes-gamma"]
 
     def test_ai_picks(self, boost, stack_tap, react_project, monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)

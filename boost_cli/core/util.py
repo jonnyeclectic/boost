@@ -387,6 +387,19 @@ def user_file_target(path: Path, base=None) -> Path:
     return target
 
 
+def read_user_text(path: Path) -> str:
+    """Read a file the *user* owns exactly as it is on disk.
+
+    The reading half of :func:`write_user_file`. ``read_text`` opens in
+    universal-newline mode, which folds every CRLF to LF, so a rule install
+    that read ``AGENTS.md`` that way and wrote it back turned a Windows
+    checkout's committed file into a whole-file diff. ``newline=""`` keeps
+    the line endings, and the writer emits the text unchanged.
+    """
+    with Path(path).open(encoding="utf-8", newline="") as f:
+        return f.read()
+
+
 def write_user_file(path: Path, text: str, base=None) -> Path:
     """Atomically rewrite a file the *user* owns, keeping its link and mode.
 

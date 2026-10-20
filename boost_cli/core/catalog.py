@@ -31,6 +31,7 @@ from pathlib import Path
 
 from ..errors import BoostError
 from . import (
+    browse,
     builtin,
     config,
     frontmatter,
@@ -1154,19 +1155,24 @@ def search(query: str, entries: list[dict] | None = None):
     return scored
 
 
-def matches_category(entry: dict, category: str) -> bool:
-    """True when `entry`'s stamped category equals `category`, case-insensitively.
+def matches_category(entry: dict, category: str, categories=None) -> bool:
+    """True when `entry` is filed under `category`, case-insensitively.
+
+    The same test `boost browse --category` applies (`browse.in_category`), so
+    every `--category` flag accepts what `boost browse --categories` lists:
+    an entry with no category at all is filed as `browse.UNCATEGORIZED`, and
+    `categories` (tap -> category, from the bundled registry catalogue) is the
+    fallback for an entry whose cache predates a stamped `category`. Comparing
+    the raw string instead made `--category uncategorized` match nothing in
+    `search` and `recommend` while `browse` listed those very rows.
 
     An empty `category` always matches — the no-filter case — so callers can
     apply this unconditionally instead of branching on "was --category given".
-    A missing/empty `entry["category"]` (an old cache predating `CACHE_FORMAT`
-    2, or a synthesised entry) only matches an equally empty `category`.
     """
-    if not category:
-        return True
-    return (entry.get("category") or "").strip().lower() == category.strip().lower()
+    return browse.in_category(entry, category, categories)
 
 
-def filter_by_category(entries: list[dict], category: str) -> list[dict]:
+def filter_by_category(entries: list[dict], category: str,
+                       categories=None) -> list[dict]:
     """`entries` narrowed to those matching `category` (see `matches_category`)."""
-    return [e for e in entries if matches_category(e, category)]
+    return [e for e in entries if matches_category(e, category, categories)]

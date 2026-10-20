@@ -578,16 +578,11 @@ def cmd_install(argv: list[str]) -> int:
                          "lists); may be a trailing path segment")
     ap.add_argument("--agent", action="append", metavar="A",
                     help="link only into this agent (repeatable)")
-    scope_g = ap.add_mutually_exclusive_group()
-    scope_g.add_argument("--scope", choices=scopes.SCOPES, default=None,
-                         help="install into your user config (default) or the "
-                              "current repo (project)")
-    scope_g.add_argument("--local", dest="scope", action="store_const",
-                         const=scopes.SCOPE_PROJECT,
-                         help="into this repo, committable (= --scope project)")
-    scope_g.add_argument("--global", dest="scope", action="store_const",
-                         const=scopes.SCOPE_USER,
-                         help="into your user config (= --scope user, default)")
+    cliparse.add_scope_flags(
+        ap, scope_help="install into your user config (default) or the "
+                       "current repo (project)",
+        local_help="into this repo, committable (= --scope project)",
+        global_help="into your user config (= --scope user, default)")
     ap.add_argument("--dry-run", action="store_true",
                     help="show what would happen without changing anything")
     ap.add_argument("--no-deps", action="store_true",
@@ -929,9 +924,11 @@ def cmd_uninstall(argv: list[str]) -> int:
         description="Remove an installed skill, rule, or workflow")
     ap.add_argument("names", nargs="+", metavar="NAME",
                     help="installed skill, rule or workflow (several allowed)")
-    ap.add_argument("--local", dest="scope", action="store_const",
-                    const=scopes.SCOPE_PROJECT, default=None,
-                    help="remove from this repo rather than your user config")
+    cliparse.add_scope_flags(
+        ap, scope_help="remove from your user config or this repo (default: "
+                       "user config, then this repo for a name only it has)",
+        local_help="remove from this repo (= --scope project)",
+        global_help="remove from your user config only (= --scope user)")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     args = ap.parse_args(argv)
@@ -947,6 +944,8 @@ def cmd_uninstall(argv: list[str]) -> int:
         if args.scope == scopes.SCOPE_PROJECT:
             from_repo, where = list(args.names), scopes.resolve_base(
                 scopes.SCOPE_PROJECT)
+        elif args.scope == scopes.SCOPE_USER:
+            from_repo, where = [], None
         else:
             from_repo, where = _project_fallback(args.names)
         if where is None:
@@ -979,7 +978,11 @@ def cmd_uninstall(argv: list[str]) -> int:
             if args.scope == scopes.SCOPE_PROJECT:
                 info = store.uninstall_project(name)
             else:
-                info = store.uninstall(name)
+                # An explicit --global means the user config and nothing
+                # else: falling back to the repo would remove what the
+                # flag said to leave alone.
+                info = store.uninstall(
+                    name, project_fallback=args.scope != scopes.SCOPE_USER)
         except BoostError as err:
             if len(args.names) == 1:
                 raise
@@ -2046,6 +2049,34 @@ def _reinstall_held(kind: str, name: str, lk: dict, **source) -> bool:
     return True
 
 
+def _reinstall_project_skill(name: str, lk: dict, pbase: Path) -> bool:
+    """Reinstall one project-scope skill from its tap; True on success."""
+    matches = [e for e in catalog.find(name)
+               if e["tap"] == lk.get("tap") and e.get("kind", "skill") == "skill"]
+    if not matches:
+        out.warn("%s not found in tap %s — skipped (try `boost update`)"
+                 % (name, lk.get("tap")))
+        return False
+    entry, warning = catalog.select_lock_source(matches, lk)
+    entry = cast(dict, entry)                 # matches is non-empty above
+    if warning:
+        out.warn(warning)
+    if _reinstall_held("skill", name, lk, cat_entry=entry):
+        return False
+    try:
+        res = store.install(entry, force=True, scope=scopes.SCOPE_PROJECT,
+                            base=pbase, via="reinstall")
+    except BoostError as err:
+        out.warn("%s: %s%s" % (name, err.message,
+                               " — %s" % err.hint if err.hint else ""),
+                 wrap=True)
+        return False
+    out.ok("reinstalled %s v%s (this repo)"
+           % (name, entry.get("version", "0.0.0")))
+    _warn_unwritable(res)
+    return True
+
+
 def cmd_reinstall(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost reinstall",
                                  description="Reinstall an installed skill, "
@@ -2054,15 +2085,27 @@ def cmd_reinstall(argv: list[str]) -> int:
                     help="installed skill, rule or workflow (or pass --all)")
     ap.add_argument("--all", action="store_true",
                     help="reinstall every installed skill, rule and workflow")
+    cliparse.add_scope_flags(
+        ap, scope_help="reinstall only what is installed in your user config "
+                       "or in this repo (default: the user lock as recorded)",
+        local_help="what is installed in this repo (= --scope project)",
+        global_help="what is installed in your user config (= --scope user)")
     args = ap.parse_args(argv)
     args.names = [store.installed_name(n) for n in args.names]
+    pbase = None
+    if args.scope == scopes.SCOPE_PROJECT:
+        pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        if pbase is None:
+            raise BoostError("not in a project — --local reinstalls what this "
+                             "repo has installed",
+                             hint="cd into the repo, or drop --local")
+    pool = store.reinstall_candidates(args.scope, pbase)
+    by_name = {name: (kind, name, entry) for kind, name, entry in reversed(pool)}
     done, failed = 0, 0
     done_kinds: set[str] = set()
     items: list[tuple] = []
     if args.all:
-        items = [(kind, name, entry)
-                 for kind, section in lockfile.all_installed().items()
-                 for name, entry in sorted(section.items())]
+        items = pool
         if not items:
             raise BoostError("nothing to reinstall",
                             hint="nothing installed yet — see `boost list`")
@@ -2071,12 +2114,27 @@ def cmd_reinstall(argv: list[str]) -> int:
                         hint="name a skill or pass --all")
     else:
         for name in args.names:
-            found = lockfile.find_any(name)
+            if args.scope is None:
+                found = lockfile.find_any(name)
+                prow = _project_row(name) if found is None else None
+                if prow is not None:
+                    # Its scope and base ride on the row, so the install below
+                    # rewrites the repo's copy rather than adding a user one.
+                    items.append(("skill", name, prow.entry
+                                  | {"scope": scopes.SCOPE_PROJECT,
+                                     "base": str(prow.base)}))
+                    continue
+            else:
+                hit = by_name.get(name)
+                found = (hit[0], hit[2]) if hit else None
             if found is None:
+                where = {scopes.SCOPE_PROJECT: " in this repo",
+                         scopes.SCOPE_USER: " in your user config"}.get(
+                             args.scope or "", "")
                 if len(args.names) == 1:
-                    raise BoostError("%s is not installed" % name,
+                    raise BoostError("%s is not installed%s" % (name, where),
                                     hint="see what is with `boost list`")
-                out.warn("%s is not installed — skipped" % name)
+                out.warn("%s is not installed%s — skipped" % (name, where))
                 failed += 1
                 continue
             items.append((found[0], name, found[1]))
@@ -2122,6 +2180,16 @@ def cmd_reinstall(argv: list[str]) -> int:
             _warn_unwritable(res)
             done += 1
             done_kinds.add(kind)
+            continue
+        row_base = pbase if pbase is not None else lk.get("base")
+        if lk.get("scope") == scopes.SCOPE_PROJECT and row_base:
+            # A repo's skill: real directories in the repo, recorded in its
+            # own lock, so it goes back the way `install --local` put it.
+            if not _reinstall_project_skill(name, lk, Path(row_base)):
+                failed += 1
+                continue
+            done += 1
+            done_kinds.add("skill")
             continue
         if lk.get("tap") == "local":
             if integrity.self_sourced(name, lk):
@@ -2671,7 +2739,15 @@ def cmd_pin(argv: list[str]) -> int:
                     help="also freeze the exact source commit (integrity pin)")
     args = ap.parse_args(argv)
     args.name = store.installed_name(args.name)
+    if (args.commit and lockfile.find_any(args.name) is None
+            and _project_row(args.name) is not None):
+        # `verify` never grades a project row's commit pin, so writing one
+        # would promise a check that does not exist.
+        raise BoostError("%s is installed at project scope — --commit applies "
+                         "to user-scope installs" % args.name,
+                         hint="`boost pin %s` holds it at its version" % args.name)
     rc = _set_pin(args.name, True)
+    # Read after the pin: `set_commit_pin` writes back the row it is given.
     found = lockfile.find_any(args.name)
     if rc == 0 and args.commit and found is not None:
         kind, entry = found
@@ -2704,12 +2780,44 @@ def cmd_unpin(argv: list[str]) -> int:
     return rc
 
 
+def _project_row(name: str) -> integrity.InstalledSkill | None:
+    """The current project's skill row for ``name`` — None if it is not one."""
+    row = integrity.resolve_skill(name)
+    return row if row is not None and row.is_project else None
+
+
+def _set_project_pin(row: integrity.InstalledSkill, pinned: bool) -> int:
+    """:func:`_set_pin` for a skill only the current project's lock holds.
+
+    The flag goes into ``<repo>/.boost/skill-lock.json``, the row
+    ``_update_skill`` reads its ``pinned`` from for a project skill.
+    """
+    label = "%s (project)" % row.name
+    version = row.entry.get("version", "0.0.0")
+    if bool(row.entry.get("pinned")) == pinned:
+        out.info("%s is already %s" % (label, "pinned at v%s" % version
+                                       if pinned else "unpinned"))
+        return 0
+    store.set_project_pin(row.base, row.name, pinned)
+    journal.log("pin" if pinned else "unpin", row.name,
+                scope=scopes.SCOPE_PROJECT)
+    if pinned:
+        out.ok("pinned %s at v%s — `boost update` will skip it" % (label, version))
+    else:
+        out.ok("unpinned %s (v%s) — updates apply again" % (label, version))
+    return 0
+
+
 def _set_pin(name: str, pinned: bool) -> int:
     # All three kinds pin: the flag is persisted on any lock entry and the
     # update loops (skills at cmd_update, rules/workflows at
-    # _update_materialized) each honour it.
+    # _update_materialized) each honour it. A skill installed `--local` lives
+    # in the project lock instead, which the same update loop also reads.
     found = lockfile.find_any(name)
     if not found:
+        row = _project_row(name)
+        if row is not None:
+            return _set_project_pin(row, pinned)
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     kind, entry = found
@@ -2898,7 +3006,8 @@ def cmd_export(argv: list[str]) -> int:
         description="Package skills as shareable zip/tar archives")
     ap.add_argument("names", nargs="*", metavar="NAME",
                     help="skills to export (default: all installed)")
-    ap.add_argument("-o", "--out", metavar="OUT", help="output archive path")
+    ap.add_argument("-o", "--output", "--out", dest="out", metavar="OUT",
+                    help="output archive path")
     ap.add_argument("--zip", action="store_true",
                     help="build a .zip instead of .tar.gz")
     ap.add_argument("--force", action="store_true",
@@ -3066,7 +3175,7 @@ def cmd_adapt(argv: list[str]) -> int:
     ap.add_argument("--model", metavar="M", default=None,
                     help="LLM the exported agent runs on (default: boost's "
                          "ai.model; pass 'none' for the framework's own default)")
-    ap.add_argument("-o", "--out", metavar="FILE",
+    ap.add_argument("-o", "--output", "--out", dest="out", metavar="FILE",
                     help="write to FILE instead of stdout")
     args = ap.parse_args(argv)
     if args.to not in adapters.FORMATS:

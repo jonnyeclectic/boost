@@ -1420,3 +1420,161 @@ class TestWho:
         r = boost("who")
         for ln in r.out.split("\n"):
             assert len(ln) <= 60, ln
+
+
+# ------------------------------------------------- unusable team state files
+
+_UNUSABLE = [
+    pytest.param(b"[]", "expected a JSON object, found list", id="list"),
+    pytest.param(b'{"a": "\xff\xfe"}', "not valid UTF-8", id="non-utf8"),
+    pytest.param(b'{"a": 1,}', "invalid JSON", id="garbage"),
+]
+
+
+class TestUnusableTeamState:
+    """Each reader refuses with rc 1 naming the file; each writer quarantines.
+
+    These used to be rc 70 (AttributeError / UnicodeDecodeError / TypeError),
+    and `cohort create` silently wrote one cohort over all of them.
+    """
+
+    @pytest.mark.parametrize("raw, why", [*_UNUSABLE,
+        pytest.param(b'{"skills": {"a": "b"}}',
+                     "'skills' entry 'a' is a str, not an object",
+                     id="non-object-record")])
+    @pytest.mark.parametrize("action", ["show", "diff", "use"])
+    def test_profile_readers_refuse_cleanly(self, boost, sandbox, action,
+                                            raw, why):
+        paths.ensure_dirs()
+        p = paths.profiles_dir() / "p1.json"
+        p.write_bytes(raw)
+        r = boost("profile", action, "p1", expect=1)
+        assert r.err.startswith("Error: profile p1 is unreadable: %s: " % p)
+        assert why in r.err
+        assert "boost profile save p1" in r.err
+        assert p.read_bytes() == raw
+
+    @pytest.mark.parametrize("raw, why", [*_UNUSABLE,
+        pytest.param(b'{"skills": 3}', "'skills' is a int, not an object",
+                     id="non-object-skills")])
+    def test_profile_save_replaces_and_keeps_the_bad_bytes(
+            self, boost, installed, raw, why):
+        paths.ensure_dirs()
+        p = paths.profiles_dir() / "p1.json"
+        p.write_bytes(raw)
+        assert "unreadable" in boost("profile", "list").out
+        r = boost("profile", "save", "p1")
+        assert "saved profile p1 (1 skill)" in r.out
+        assert "was corrupt and has been moved to" in r.err
+        assert p.with_name("p1.json.corrupt").read_bytes() == raw
+        assert list(json.loads(p.read_text(encoding="utf-8"))["skills"]) == [
+            "brainstorming"]
+
+    def test_profile_save_json_over_a_corrupt_profile_is_not_an_update(
+            self, boost, installed):
+        paths.ensure_dirs()
+        (paths.profiles_dir() / "p1.json").write_bytes(b"[]")
+        r = boost("profile", "save", "p1", "--json")
+        data = json.loads(r.out)
+        assert data["updated"] is False
+        assert data["was_skills"] is None
+
+    @pytest.mark.parametrize("raw, why", [*_UNUSABLE,
+        pytest.param(b'{"c1": "x"}', "cohort 'c1' is a str, not an object",
+                     id="non-object-cohort"),
+        pytest.param(b'{"c1": {"skills": ["a"]}}',
+                     "cohort 'c1' has no integer percent", id="no-percent")])
+    @pytest.mark.parametrize("argv", [["list"], ["status"], ["apply"],
+                                      ["delete", "c1"]])
+    def test_cohort_readers_refuse_cleanly(self, boost, sandbox, argv, raw,
+                                           why):
+        paths.ensure_dirs()
+        p = paths.state_dir() / "cohorts.json"
+        p.write_bytes(raw)
+        r = boost("cohort", *argv, expect=1)
+        assert r.err.startswith("Error: cohorts are unreadable: %s: " % p)
+        assert why in r.err
+        assert p.read_bytes() == raw
+
+    @pytest.mark.parametrize("raw, why", _UNUSABLE)
+    def test_cohort_create_quarantines_instead_of_overwriting(
+            self, boost, tapped, raw, why):
+        paths.ensure_dirs()
+        p = paths.state_dir() / "cohorts.json"
+        p.write_bytes(raw)
+        r = boost("cohort", "create", "c3", "--skills", "brainstorming")
+        assert "created cohort c3" in r.out
+        assert ("~/.boost/state/cohorts.json was corrupt and has been moved "
+                "to ~/.boost/state/cohorts.json.corrupt before writing the "
+                "new file") in r.err
+        assert p.with_name("cohorts.json.corrupt").read_bytes() == raw
+        assert list(json.loads(p.read_text(encoding="utf-8"))) == ["c3"]
+
+    def test_cohort_create_over_a_good_file_keeps_the_rest(self, boost, tapped):
+        boost("cohort", "create", "c1", "--skills", "brainstorming")
+        r = boost("cohort", "create", "c2", "--skills", "brainstorming")
+        assert "corrupt" not in r.err
+        assert not (paths.state_dir() / "cohorts.json.corrupt").exists()
+        assert sorted(json.loads((paths.state_dir() / "cohorts.json")
+                                 .read_text(encoding="utf-8"))) == ["c1", "c2"]
+
+    @pytest.mark.parametrize("snap", [{"version": 3, "skills": {"a": "b"}},
+                                      {"version": 3, "skills": "x"}])
+    @pytest.mark.parametrize("action", ["show", "rollback"])
+    def test_replay_refuses_a_malformed_entry_before_acting(
+            self, boost, installed, action, snap):
+        paths.ensure_dirs()
+        h = paths.lock_history_dir() / "lock-20200101T000000Z.json"
+        h.write_text(json.dumps(snap), encoding="utf-8")
+        before = paths.lockfile_path().read_bytes()
+        r = boost("replay", action, "20200101T000000Z", expect=1)
+        assert r.err.startswith(
+            "Error: lock history entry 20200101T000000Z is unreadable: %s: "
+            % h)
+        assert paths.lockfile_path().read_bytes() == before
+
+
+# ------------------------------------------- -y on every confirming action
+
+class TestYesFlag:
+    """The decline hint says "pass -y"; each of these used to reject it rc 2."""
+
+    @pytest.fixture()
+    def no_answer(self, monkeypatch):
+        # No env bypass, and a non-tty stdin: confirm() alone would decline.
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
+
+    @pytest.mark.parametrize("flag", ["-y", "--yes"])
+    def test_cohort_delete(self, boost, tapped, no_answer, flag):
+        boost("cohort", "create", "c1", "--skills", "brainstorming")
+        r = boost("cohort", "delete", "c1", expect=1)
+        assert "pass -y" in r.out + r.err
+        r = boost("cohort", "delete", "c1", flag)
+        assert "deleted cohort c1" in r.out
+        assert "pass -y" not in r.out + r.err
+
+    @pytest.mark.parametrize("flag", ["-y", "--yes"])
+    def test_profile_delete(self, boost, installed, no_answer, flag):
+        boost("profile", "save", "p1")
+        boost("profile", "delete", "p1", expect=1)
+        r = boost("profile", "delete", "p1", flag)
+        assert "deleted profile p1" in r.out
+        assert not (paths.profiles_dir() / "p1.json").exists()
+
+    def test_profile_use_prune(self, boost, tapped, no_answer):
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("install", "cowboy-coding")
+        r = boost("profile", "use", "solo", "--prune", "-y")
+        assert "uninstalled cowboy-coding" in r.out
+        assert not (paths.store_dir() / "cowboy-coding").exists()
+
+    def test_replay_rollback(self, boost, tapped, tick_clock, no_answer):
+        _history_ops(boost)
+        snap_id = lockfile.history_list()[1]["id"]
+        boost("replay", "rollback", snap_id, expect=1)
+        r = boost("replay", "rollback", snap_id, "-y")
+        assert "rollback to %s complete" % snap_id in r.out
+        assert "cowboy-coding" not in json.loads(
+            paths.lockfile_path().read_text(encoding="utf-8"))["skills"]

@@ -22,14 +22,23 @@ someone's diff.
 from __future__ import annotations
 
 import json
-from contextlib import suppress
+import sys
 from pathlib import Path
 
-from . import jsonstate, util
+from ..errors import BoostError
+from . import jsonstate, output, util
 
 SCHEMA_VERSION = 1
 LOCK_DIRNAME = ".boost"
 LOCK_FILENAME = "skill-lock.json"
+LOCK_REL = LOCK_DIRNAME + "/" + LOCK_FILENAME
+
+# Lock paths already warned about, so one command that reads a corrupt lock
+# several times says so once — per repo, since one process can visit several.
+_WARNED_CORRUPT: set[str] = set()
+#: How a corrupt project lock is recovered: it is committed, so git has it.
+RECOVER_HINT = ("it is tracked by the repo, so `git checkout -- %s` restores "
+                "the committed copy; or repair the JSON by hand")
 
 
 def lock_path(base) -> Path:
@@ -49,18 +58,18 @@ def _skeleton() -> dict:
 def read(base) -> dict:
     """Load the project lock, guaranteeing a ``skills`` key.
 
-    A missing file is simply an empty project. A corrupt one is preserved beside
-    itself as ``skill-lock.json.corrupt`` before falling back to the skeleton,
-    for the same reason the user lock does it: an unparseable file is not an
-    empty one, and the next write would otherwise erase the only record of what
-    the project had installed.
+    A missing file is simply an empty project. A corrupt one reads as the
+    skeleton too, with a warning, and is left exactly where it is: an
+    unparseable file is not an empty one, so :func:`write` refuses to replace
+    it (:func:`refuse_corrupt`) rather than let the next install record that
+    one skill and drop every other.
     """
     p = lock_path(base)
     if not p.is_file():
         return _skeleton()
-    lock, _err = jsonstate.read_object(p)
+    lock, err = jsonstate.read_object(p)
     if lock is None:
-        _preserve_corrupt(p)
+        _warn_corrupt(p, err or str(p))
         return _skeleton()
     lock.setdefault("version", SCHEMA_VERSION)
     skills = lock.get("skills")
@@ -68,15 +77,45 @@ def read(base) -> dict:
     return lock
 
 
-def _preserve_corrupt(p: Path) -> None:
-    """Copy an unparseable lock aside as ``.corrupt``; never raise."""
-    with suppress(OSError):
-        import shutil
-        shutil.copy(p, p.with_name(p.name + ".corrupt"))
+def _warn_corrupt(p: Path, err: str) -> None:
+    """Say once, on stderr, that this project lock reads as empty."""
+    if str(p) in _WARNED_CORRUPT:
+        return
+    _WARNED_CORRUPT.add(str(p))
+    output.warn("%s — boost sees no project skills here and will not write "
+                "over it; %s" % (err, RECOVER_HINT % LOCK_REL),
+                stream=sys.stderr, wrap=True)
+
+
+def check(base) -> str | None:
+    """Why the project lock cannot be read, or None when it reads or is absent.
+
+    Never prints: `boost doctor` reports it.
+    """
+    return jsonstate.read_object(lock_path(base))[1]
+
+
+def refuse_corrupt(base) -> None:
+    """Raise while the project lock on disk is corrupt, so nothing writes over it.
+
+    :func:`read` hands its callers an empty skeleton, so a write would replace
+    every record with whatever one change added — `install --scope project`
+    did exactly that, and left the other skills' copies on disk unrecorded.
+    """
+    err = check(base)
+    if err is None:
+        return
+    raise BoostError("project lock is corrupt — boost will not write over it "
+                     "(%s)" % err,
+                     hint=RECOVER_HINT % LOCK_REL, wrap=True)
 
 
 def write(base, lock: dict) -> None:
-    """Stamp version/updated onto ``lock`` and write it atomically."""
+    """Stamp version/updated onto ``lock`` and write it atomically.
+
+    Refuses over a corrupt lock (:func:`refuse_corrupt`).
+    """
+    refuse_corrupt(base)
     p = lock_path(base)
     p.parent.mkdir(parents=True, exist_ok=True)
     lock["version"] = SCHEMA_VERSION
@@ -107,7 +146,11 @@ def remove_skill(base, name: str) -> bool:
     When the last skill goes the file is left in place (empty) rather than
     deleted — it is a tracked file in someone's repo, and removing it would show
     up as a spurious deletion in their next ``git status``.
+
+    Refuses over a corrupt lock even though it reads as holding nothing:
+    "not present" would be a false answer about a record boost cannot read.
     """
+    refuse_corrupt(base)
     lock = read(base)
     if name in lock["skills"]:
         del lock["skills"][name]

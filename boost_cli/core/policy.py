@@ -8,8 +8,13 @@ Consulted by store.install() (when config policy_enforce is true) and by
 from __future__ import annotations
 
 import json
+import sys
 
-from . import config, jsonstate, paths, typedvalue
+from . import config, jsonstate, output, paths, typedvalue
+
+# Once per process: install consults the policy several times, and the fault
+# is the same each time.
+_WARNED_CORRUPT = False
 
 DEFAULTS = {
     "blocked_skills": [],      # names never allowed
@@ -92,15 +97,51 @@ def _read_stored(key: str, value):
     return _in_range(key, typedvalue.adapt(key, value, spec_for(key)), value)
 
 
+def check() -> str | None:
+    """Why policy.json cannot be read, or None when it reads or is absent.
+
+    Never prints: `boost doctor` reports it as an issue, and the enforcement
+    checks turn it into a violation (:func:`corrupt_violation`).
+    """
+    return jsonstate.read_object(paths.policy_path())[1]
+
+
+def corrupt_violation(action: str = "install") -> str | None:
+    """The violation a policy.json that exists but does not parse amounts to.
+
+    A policy that cannot be read is not "no policy": a truncated write of a
+    blocklist used to read as an empty one, so the blocked skill installed
+    and `boost policy check` passed. Enforcement fails closed instead.
+    """
+    err = check()
+    if err is None:
+        return None
+    return ("%s — boost cannot read the policy, so it will not %s until "
+            "the file is repaired" % (err, action))
+
+
 def _read_file() -> dict:
-    """The raw contents of policy.json; ``{}`` when missing or unusable."""
-    return jsonstate.read_object(paths.policy_path())[0] or {}
+    """The raw contents of policy.json; ``{}`` when missing or unusable.
+
+    Unusable is warned about once per process on stderr, never silently
+    folded into "missing".
+    """
+    global _WARNED_CORRUPT
+    data, err = jsonstate.read_object(paths.policy_path())
+    if err is not None and not _WARNED_CORRUPT:
+        _WARNED_CORRUPT = True
+        output.warn("%s — reading the policy as defaults; installs are "
+                    "refused until it is repaired, and the next `boost policy "
+                    "set` moves it aside to policy.json.corrupt" % err,
+                    stream=sys.stderr, wrap=True)
+    return data or {}
 
 
 def load() -> dict:
     """Return the effective policy: DEFAULTS overlaid with policy.json.
 
-    A missing or unparseable file silently yields the defaults. Every stored
+    A missing file yields the defaults; an unparseable one does too, with a
+    warning, and :func:`check_install` refuses while it stays so. Every stored
     value is read at its declared type, so a hand-edited (or older-boost)
     ``"pin_only": "no"`` is the boolean the user meant and not a truthy string
     that freezes the machine. A value that cannot be read at its type falls
@@ -141,11 +182,19 @@ def invalid_values() -> list[tuple[str, object, str]]:
 def save(pol: dict) -> None:
     """Write `pol` to policy.json, restricted to the known DEFAULTS keys.
 
-    Missing keys are filled from DEFAULTS; unknown keys are dropped.
+    Missing keys are filled from DEFAULTS; unknown keys are dropped. A
+    policy.json that does not parse is moved aside with
+    :func:`jsonstate.quarantine` first, so the rules it still held are kept
+    rather than overwritten by a file built from the defaults.
     """
     paths.ensure_dirs()
+    p = paths.policy_path()
+    if jsonstate.is_corrupt(p):
+        dest = jsonstate.quarantine(p)
+        output.warn("%s was corrupt and has been moved to %s before writing "
+                    "the new policy" % (p, dest), stream=sys.stderr, wrap=True)
     known = {k: pol.get(k, DEFAULTS[k]) for k in DEFAULTS}
-    paths.policy_path().write_text(json.dumps(known, indent=2) + "\n", encoding="utf-8")
+    p.write_text(json.dumps(known, indent=2) + "\n", encoding="utf-8")
 
 
 def is_blocked(name: str, tap: str | None, blocked) -> bool:
@@ -164,6 +213,9 @@ def check_install(entry: dict, installed_count: int) -> list[str]:
     """Return a list of violation strings (empty = allowed)."""
     if not config.get("policy_enforce", True):
         return []
+    corrupt = corrupt_violation()
+    if corrupt is not None:
+        return [corrupt]
     pol = load()
     v: list[str] = []
     name, tap = entry.get("name", ""), entry.get("tap", "")
@@ -264,6 +316,11 @@ def check_tap_signing(clone_dir) -> list[str]:
     """
     if not config.get("policy_enforce", True):
         return []
+    # Fail closed like check_install: a truncated policy.json reads
+    # require_signed_taps as its default, False, and would admit any tap.
+    corrupt = corrupt_violation("tap")
+    if corrupt is not None:
+        return [corrupt]
     pol = load()
     if not pol["require_signed_taps"]:
         return []

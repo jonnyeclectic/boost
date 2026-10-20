@@ -743,6 +743,11 @@ def cmd_policy(argv) -> int:
                 violations.append(
                     (name, kind, label,
                      "quality score %d < required %d" % (score, min_score)))
+    # A policy.json that does not parse read as defaults above, so every row
+    # passed; that is a failed check, whatever policy_enforce says.
+    corrupt_msg = policy.corrupt_violation()
+    if corrupt_msg:
+        violations.append((None, None, "(policy)", corrupt_msg))
     max_skills_msg = policy.max_skills_violation(skill_count)
     if max_skills_msg:
         # Not an installed item — this one is about the environment as a

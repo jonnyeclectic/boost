@@ -473,20 +473,31 @@ def _postings_to_doc_tf(raw: dict) -> dict[int, dict[str, int]]:
     return doc_tf
 
 
-def _kept_docs(raw: dict, keep_safe: set) -> list[dict]:
+def _kept_docs(raw: dict, keep_safe: set) -> list[dict] | None:
     """Recover cached docs (with term freqs) for taps that did not change.
 
     Term frequencies live in the SQLite postings store since they left the JSON
     index, so an index without an inline ``postings`` key is normal rather than
     empty — this is the caller that reaches for the store, explicitly.
     """
+    docs = raw.get("docs", [])
+    if not docs:
+        # Nothing to reuse, so nothing to ask the store: reading it here would
+        # turn a missing store into "unreadable" for an index with no docs.
+        return []
     # Key ABSENCE, not falsiness: an index carrying an explicit empty
     # `postings` is stating it has none, and must not be answered from the
     # store. Only an index with no such key predates the SQLite move.
-    doc_tf = _postings_to_doc_tf(
-        raw if "postings" in raw else {"postings": _all_postings()})
+    stored = raw if "postings" in raw else {"postings": _all_postings()}
+    if stored["postings"] is None:
+        # Unreadable store (or a corrupt blob the one-row readiness probe
+        # cannot see): reusing these docs would keep them with no term
+        # frequencies, i.e. searchable by nothing. None tells `build` to
+        # re-index those taps instead.
+        return None
+    doc_tf = _postings_to_doc_tf(stored)
     return [{**meta, "tf": doc_tf.get(doc_id, {})}
-            for doc_id, meta in enumerate(raw.get("docs", []))
+            for doc_id, meta in enumerate(docs)
             if meta["t"].replace("/", "__") in keep_safe]
 
 
@@ -501,17 +512,26 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
 
     old = _load_raw()
     reused_safe: set = set()
+    # Reuse needs the old docs' term frequencies, which live in the SQLite
+    # store unless the index predates it. A corrupt or missing store used to
+    # read as "no postings", so the kept docs came back with empty `tf` and a
+    # plain `boost reindex` reported "reused N unchanged taps" over an index
+    # that matched nothing; only `--force` recovered. Rebuild everything.
+    if old is not None and "postings" not in old and not postings_readable():
+        old = None
     if old is not None and not force:
         old_commits = old.get("commits", {})
         for safe, commit in commits.items():
             if commit and old_commits.get(safe) == commit:
                 reused_safe.add(safe)
 
+    kept = _kept_docs(old, reused_safe) if old is not None and reused_safe else []
+    if kept is None:
+        reused_safe = set()
+        kept = []
     fresh = [e for e in entries
              if e["tap"].replace("/", "__") not in reused_safe]
-    docs = _make_docs(fresh, tap_paths)
-    if old is not None and reused_safe:
-        docs = _kept_docs(old, reused_safe) + docs
+    docs = kept + _make_docs(fresh, tap_paths)
 
     saved = _save(docs, commits)
     reindexed = sorted({e["tap"] for e in fresh})
@@ -540,6 +560,19 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
 
 def postings_path() -> Path:
     return paths.cache_dir() / "rag_postings.sqlite"
+
+
+def _postings_ro_uri() -> str:
+    """A read-only SQLite URI for the postings store, percent-encoded.
+
+    ``"file:%s?mode=ro" % path`` breaks on a home directory containing ``#``,
+    ``?`` or ``%``: SQLite cuts the path at the first ``#``/``?``, drops
+    ``mode=ro`` with it, and opens (creating) some other file — so
+    ``postings_readable`` would read a healthy store as corrupt and every
+    search would rebuild the index. ``as_uri`` escapes those and spells a
+    Windows drive path as ``file:///C:/...``.
+    """
+    return postings_path().absolute().as_uri() + "?mode=ro"
 
 
 def _encode_plist(plist: Sequence[Sequence[int]]) -> bytes:
@@ -697,7 +730,7 @@ def read_postings(terms: Sequence[str]) -> dict[str, list[list[int]]]:
     if not uniq:
         return {}
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
     except sqlite3.Error:
         return {}
     out: dict[str, list[list[int]]] = {}
@@ -755,7 +788,7 @@ def stem_expansions(terms: Sequence[str]) -> dict[str, str]:
     if not missing:
         return {}
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
     except sqlite3.Error:
         return {}
     out: dict[str, str] = {}
@@ -781,12 +814,17 @@ def stem_expansions(terms: Sequence[str]) -> dict[str, str]:
     return out
 
 
-def _all_postings() -> dict[str, list[list[int]]]:
-    """Every posting — only the incremental rebuild path needs this."""
+def _all_postings() -> dict[str, list[list[int]]] | None:
+    """Every posting — only the incremental rebuild path needs this.
+
+    ``None`` when the store cannot be read, never ``{}``: "unreadable" and
+    "holds no postings" are different answers, and conflating them is how an
+    incremental build kept docs with no term frequencies.
+    """
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
     except sqlite3.Error:
-        return {}
+        return None
     out: dict[str, list[list[int]]] = {}
     try:
         for term, blob in con.execute(
@@ -794,10 +832,47 @@ def _all_postings() -> dict[str, list[list[int]]]:
                 "JOIN terms t ON p.term_id = t.id"):
             out[term] = _decode_plist(blob)
     except (sqlite3.Error, ValueError):
-        return {}
+        return None
     finally:
         con.close()
     return out
+
+
+def postings_readable() -> bool:
+    """True when the postings store opens and answers a one-row probe.
+
+    ``postings_path().exists()`` was the old test, and a file full of garbage
+    exists: every search then read ``{}`` from it and answered "no matches"
+    for an exact skill name, rc 0, while doctor said healthy. ``connect``
+    succeeds lazily on a non-database, so only a query proves the file is one.
+    Cheap enough for the search path: one indexed probe, no scan.
+    """
+    try:
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
+    except sqlite3.Error:
+        return False
+    try:
+        con.execute("SELECT t.term FROM postings p "
+                    "JOIN terms t ON p.term_id = t.id LIMIT 1").fetchall()
+    except sqlite3.Error:
+        return False
+    finally:
+        con.close()
+    return True
+
+
+def postings_fault() -> str | None:
+    """Why an index that has documents cannot score them, or ``None``.
+
+    For ``boost doctor``: a docs index over an unreadable postings store is a
+    search that matches nothing, which no other check would notice.
+    """
+    raw = _load_raw()
+    if not (raw and raw.get("docs")) or postings_readable():
+        return None
+    if not postings_path().exists():
+        return "the BM25 postings store is missing"
+    return "the BM25 postings store is unreadable"
 
 
 def _save(docs: list[dict], commits: dict[str, str]) -> dict:
@@ -1044,7 +1119,14 @@ def import_shards(batch: Sequence[tuple[dict, str]]
         commits = {k: v for k, v in (old.get("commits") or {}).items()
                    if k not in new_safe}
         keep = {d["t"].replace("/", "__") for d in old.get("docs", [])}
-        docs = _kept_docs(old, keep - new_safe)
+        kept = _kept_docs(old, keep - new_safe)
+        if kept is None:
+            # The other taps' term frequencies are unreadable, so keeping
+            # their docs would keep rows no query can reach. Drop them with
+            # their commits: `stale()` then sees those taps missing and the
+            # next search re-indexes them.
+            commits, kept = {}, []
+        docs = kept
     for tap, shard in accepted.items():
         commits[tap.replace("/", "__")] = str(shard["commit"])
         docs.extend({**d, "c": 0} for d in shard["docs"])
@@ -1119,11 +1201,13 @@ def ready() -> bool:
     """True when a usable index exists on disk.
 
     Both halves are required: the JSON carries the documents, the SQLite file
-    carries the postings, and scoring needs both. A docs-only index reports not
-    ready rather than silently returning zero hits for every query.
+    carries the postings, and scoring needs both. A docs-only index — or one
+    whose store exists but is not a readable database — reports not ready
+    rather than silently returning zero hits for every query, so ``ensure``
+    rebuilds it.
     """
     raw = _load_raw()
-    return bool(raw and raw.get("docs") and postings_path().exists())
+    return bool(raw and raw.get("docs") and postings_readable())
 
 
 def index_completeness() -> dict | None:
@@ -1724,11 +1808,28 @@ def rerank(query: str, hits: list[Hit], limit: int = 10,
             return hits[:limit], engine
         if caching:
             _rerank_cache_put(cache_key, [str(n) for n in order])
-    by_name = {h["entry"]["name"]: h for h in hits}
-    picked = [by_name[str(n)] for n in order if str(n) in by_name]
-    rest = [h for h in hits if h["entry"]["name"]
-            not in {str(n) for n in order}]
-    return (picked + rest)[:limit], LLM_RANKER
+    return (reorder_by_names(hits, order, lambda h: h["entry"]["name"])[:limit],
+            LLM_RANKER)
+
+
+def reorder_by_names(items: list, order: Sequence, name_of) -> list:
+    """``items`` reordered by an LLM's name ``order``, losing none of them.
+
+    The model answers with names, but a name is not an identity: two taps can
+    ship different skills both called ``brainstorming``, and a rule and a skill
+    can share one. Mapping each name to a *single* item kept the last homonym
+    and dropped the others, so a rerank meant to reorder the shortlist shrank
+    it. Each name therefore selects every item carrying it, in their incoming
+    (retrieval) order; a name the model repeats or invents selects nothing new;
+    items it did not name follow in their incoming order. The output is always
+    a permutation of the input.
+    """
+    groups: dict[str, list] = {}
+    for it in items:
+        groups.setdefault(str(name_of(it)), []).append(it)
+    named = list(dict.fromkeys(str(n) for n in order))
+    picked = [it for n in named for it in groups.pop(n, [])]
+    return picked + [it for it in items if str(name_of(it)) in groups]
 
 
 # The damping constant from the original reciprocal-rank-fusion paper. It is

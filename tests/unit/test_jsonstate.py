@@ -114,3 +114,72 @@ class TestQuarantine:
                 assert dest.name == "f.json.corrupt"
             else:
                 assert dest.name == "f.json.corrupt.%d" % i
+
+
+class TestReadList:
+    def test_missing_file_is_none_none(self, tmp_path):
+        assert jsonstate.read_list(tmp_path / "nope.json") == (None, None)
+
+    def test_valid_array_round_trips(self, tmp_path):
+        p = tmp_path / "f.json"
+        p.write_text('[{"a": 1}]', encoding="utf-8")
+        assert jsonstate.read_list(p) == ([{"a": 1}], None)
+
+    def test_empty_array_is_data_not_missing(self, tmp_path):
+        p = tmp_path / "f.json"
+        p.write_text("[]", encoding="utf-8")
+        assert jsonstate.read_list(p) == ([], None)
+
+    def test_invalid_json_is_error(self, tmp_path):
+        p = tmp_path / "f.json"
+        p.write_text("[{", encoding="utf-8")
+        data, err = jsonstate.read_list(p)
+        assert data is None
+        assert err.startswith("%s: invalid JSON (" % p)
+
+    def test_object_is_error(self, tmp_path):
+        p = tmp_path / "f.json"
+        p.write_text("{}", encoding="utf-8")
+        assert jsonstate.read_list(p) == (
+            None, "%s: expected a JSON array, found dict" % p)
+
+    def test_non_utf8_is_error_not_a_crash(self, tmp_path):
+        p = tmp_path / "f.json"
+        p.write_bytes(b"[\xff\xfe]")
+        data, err = jsonstate.read_list(p)
+        assert data is None
+        assert err.startswith("%s: not valid UTF-8 (" % p)
+
+    def test_unreadable_path_is_error(self, tmp_path):
+        p = tmp_path / "dir.json"
+        p.mkdir()
+        data, err = jsonstate.read_list(p)
+        assert data is None
+        assert err.startswith("%s: " % p)
+
+
+class TestObjectMapError:
+    def test_absent_key_is_fine(self):
+        assert jsonstate.object_map_error({}, "skills") is None
+
+    def test_map_of_objects_is_fine(self):
+        assert jsonstate.object_map_error(
+            {"skills": {"a": {}, "b": {"v": 1}}}, "skills") is None
+
+    def test_empty_map_is_fine(self):
+        assert jsonstate.object_map_error({"skills": {}}, "skills") is None
+
+    def test_non_object_value_names_key_and_type(self):
+        assert jsonstate.object_map_error({"skills": "x"}, "skills") == (
+            "'skills' is a str, not an object")
+        assert jsonstate.object_map_error({"skills": []}, "skills") == (
+            "'skills' is a list, not an object")
+
+    def test_non_object_record_names_the_record(self):
+        assert jsonstate.object_map_error(
+            {"skills": {"ok": {}, "a": "b"}}, "skills") == (
+            "'skills' entry 'a' is a str, not an object")
+
+    def test_only_the_named_key_is_checked(self):
+        assert jsonstate.object_map_error(
+            {"skills": {}, "rules": "x"}, "skills") is None

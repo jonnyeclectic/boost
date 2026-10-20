@@ -1706,6 +1706,20 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
             raise BoostError("%s is already installed" % name,
                             hint="`boost reinstall %s` to force" % name)
         return
+    if existing.get("scope", "user") == scope == scopes.SCOPE_PROJECT:
+        # Same scope, another repo. Calling that "a different scope" sent the
+        # user looking for a scope mismatch that was not there: the limit is
+        # the one-row-per-name lock, so a rule or workflow can be --local in
+        # one repo per machine (a skill, with a lock in each repo, cannot hit
+        # this).
+        raise BoostError(
+            "%s is already installed --local in %s, and a %s can be installed "
+            "--local into only one repo per machine"
+            % (name, paths.tilde(Path(existing["base"]))
+               if existing.get("base") else "another repo",
+               existing.get("kind") or "rule or workflow"),
+            hint="`boost uninstall %s` from that repo first; --force cannot "
+                 "move it" % name, wrap=True)
     raise BoostError(
         "%s is already installed at %s" % (name, _lock_location(existing)),
         hint="uninstall it there first — a different scope cannot force-overwrite it")
@@ -1873,6 +1887,38 @@ def carried_user_state(existing: dict | None) -> dict:
     """
     pin = (existing or {}).get("commit_pin")
     return {"commit_pin": pin} if pin else {}
+
+
+def project_carried_state(existing: dict | None) -> dict:
+    """The user-set fields a project skill's rebuilt lock row must carry.
+
+    :func:`carried_user_state` for the project lock: ``pinned`` (which
+    ``boost pin`` writes there) plus a ``commit_pin``. Only set flags are
+    carried, so an unpinned row stays free of a ``pinned: false`` key.
+    """
+    carried = carried_user_state(existing)
+    if (existing or {}).get("pinned"):
+        carried["pinned"] = True
+    return carried
+
+
+def set_project_pin(base, name: str, pinned: bool) -> dict | None:
+    """Set or clear ``pinned`` on ``name``'s row in ``base``'s project lock.
+
+    Returns the row as written, or ``None`` when the project lock has no
+    such skill. Releasing a version pin releases a commit pin with it, the
+    same rule ``boost unpin`` applies at user scope.
+    """
+    entry = projectlock.get_skill(base, name)
+    if entry is None:
+        return None
+    if pinned:
+        entry["pinned"] = True
+    else:
+        entry.pop("pinned", None)
+        entry.pop("commit_pin", None)
+    projectlock.set_skill(base, name, entry)
+    return entry
 
 
 def project_skills(start=None) -> tuple[Path | None, dict]:
@@ -2075,6 +2121,9 @@ def _install_project_skill(entry: dict, force: bool = False,
     resolved_base = _require_project_base(scopes.SCOPE_PROJECT, base, name)
     if resolved_base is None:             # _require_project_base already raised
         raise BoostError("there is no project here to install %s into" % name)
+    # Before anything is copied: projectlock.write refuses a corrupt lock too,
+    # but by then the copies would be on disk unrecorded.
+    projectlock.refuse_corrupt(resolved_base)
 
     existing = check_existing(entry, force=force, scope=scopes.SCOPE_PROJECT,
                               base=resolved_base, kind="skill")
@@ -2173,7 +2222,10 @@ def _install_project_skill(entry: dict, force: bool = False,
         "updated_at": now,
         "agents": all_agents,
         "materializations": materializations,
-    })
+    # A forced re-install (`boost reinstall`) of a pinned project skill must
+    # leave it pinned: the row is rebuilt from scratch, and a flag it does not
+    # name is a pin `boost update` silently stops honouring.
+    } | project_carried_state(existing))
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"),
                 scope=scopes.SCOPE_PROJECT, via=via)
 
@@ -2390,6 +2442,9 @@ def uninstall_project(name: str, base=None) -> dict:
     not undo it, and said something false while refusing.
     """
     resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
+    if resolved_base is not None:
+        # A corrupt lock reads as empty: say so, not "not installed here".
+        projectlock.refuse_corrupt(resolved_base)
     entry = projectlock.get_skill(resolved_base, name) if resolved_base else None
     if not entry:
         owned = project_materialized(name, resolved_base)
@@ -2586,10 +2641,13 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
         cat_entry, warning = _project_source(name, entry)
         if warning:
             actions.append(warning)
+        if cat_entry and not _project_restorable(entry, cat_entry):
+            actions.append(_project_moved(name))
+            continue
         if cat_entry:
             try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
-                install(cat_entry, force=True, scope=scopes.SCOPE_PROJECT,
-                        base=resolved_base, only_agents=wanted[name])
+                _restore_project_copies(resolved_base, name, entry, cat_entry,
+                                        wanted[name])
                 actions.append("re-materialized %s from %s" % (name, tap_name))
                 continue
             except BoostError:
@@ -2598,6 +2656,80 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
     if actions:
         journal.log("sync", "%d project fixes" % len(actions))
     return actions
+
+
+def _project_moved(name: str) -> str:
+    return ("%s's tap source has moved since the project lock was written%s"
+            "(`boost install --local %s --force` takes the new content and "
+            "updates the lock)" % (name, _DECLINED_MARK, name))
+
+
+def _project_restorable(entry: dict, cat_entry: dict) -> bool:
+    """Whether the tap can still hand back what the project lock records.
+
+    A repair restores the committed lock; it never moves it. Re-installing
+    from the tap's HEAD did: one missing ``.cursor`` copy came back at the
+    new version beside an untouched ``.claude`` copy at the old one, the lock
+    was rewritten to the new commit, and `boost verify` then failed the copy
+    nobody had touched. True when the tap still sits on the locked commit,
+    or its source for this skill hashes to the locked ``sha256`` (the tap
+    moved, this skill did not). The commit check comes first because it
+    costs no materialize.
+    """
+    from . import gitutil
+    locked_commit = entry.get("commit")
+    if locked_commit and gitutil.head_commit(
+            registry.get(cat_entry["tap"]).path) == locked_commit:
+        return True
+    locked_sha = entry.get("sha256")
+    return bool(locked_sha) and _skill_source_sha(cat_entry) == locked_sha
+
+
+def _project_policy_violations(resolved_base: Path, name: str,
+                               cat_entry: dict) -> list[str]:
+    """The install policy gate, applied to a sync repair.
+
+    The install a repair replaced applied it, so a skill or tap blocklisted
+    since the lock was written must not come back through `boost sync` — and
+    the dry run asks the same question, so it does not promise a restore the
+    run then refuses.
+    """
+    return policy.check_install(
+        cat_entry, _count_others(projectlock.installed(resolved_base), name))
+
+
+def _restore_project_copies(resolved_base: Path, name: str, entry: dict,
+                            cat_entry: dict, missing: list) -> None:
+    """Copy ``cat_entry``'s source back to the recorded paths ``missing``.
+
+    Writes the directories and nothing else: no lock row (it already says
+    what is there), no ``.mcp.json`` (the install registered it), and only
+    the agents named, because the other copies are committed files a team
+    edits in place. Every destination is checked before the first copy, the
+    same two checks a project install makes. Raises :class:`BoostError`
+    when there is nothing it may write.
+    """
+    violations = _project_policy_violations(resolved_base, name, cat_entry)
+    if violations:
+        raise BoostError("policy blocks restoring %s: %s"
+                         % (name, "; ".join(violations)))
+    src = source_dir_for(cat_entry)
+    _enforce_capability_policy(name, src / "SKILL.md")
+    dests: list[Path] = []
+    for m in entry.get("materializations") or []:
+        if m.get("agent", "?") not in missing:
+            continue
+        dest = scopes.resolve_in_base(resolved_base, m.get("path"))
+        if dest is None or dest.is_dir():
+            continue
+        scopes.ensure_in_base(resolved_base, dest)
+        scopes.ensure_spelled(resolved_base, dest)
+        dests.append(dest)
+    if not dests:
+        raise BoostError("no recorded copy of %s to restore" % name)
+    within = registry.get(cat_entry["tap"]).path
+    for dest in dests:
+        _copy_skill(src, dest, within=within)
 
 
 def _project_gone(name: str) -> str:
@@ -2642,7 +2774,10 @@ def project_sync_preview(plan: dict[str, list], base=None) -> list[str]:
         cat_entry, warning = _project_source(name, entry)
         if warning:
             lines.append(warning)
-        if cat_entry:
+        if cat_entry and not _project_restorable(entry, cat_entry):
+            lines.append(_project_moved(name))
+        elif cat_entry and not _project_policy_violations(
+                resolved_base, name, cat_entry):
             lines.append("would re-materialize project skill %s → %s from %s"
                          % (name, ", ".join(wanted[name]), entry.get("tap")))
         else:
@@ -2843,7 +2978,7 @@ def _install_rule(entry: dict, force: bool = False,
             scopes.ensure_in_base(resolved_base, path)
         if mode == rules.MODE_CLAUDE:
             try:
-                text = path.read_text(encoding="utf-8")
+                text = util.read_user_text(path)
             except OSError:
                 continue  # absent, or refused: the write loop handles both
             rules.require_well_formed(text, name, path)
@@ -2859,7 +2994,7 @@ def _install_rule(entry: dict, force: bool = False,
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             if mode == rules.MODE_CLAUDE:
-                current = path.read_text(encoding="utf-8") if path.exists() else ""
+                current = util.read_user_text(path) if path.exists() else ""
                 # A context file is the user's: write through a symlink to
                 # it and keep its mode (see util.write_user_file).
                 util.write_user_file(
@@ -3039,7 +3174,7 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
         with _refused_removal(name, path):
             if m.get("mode") == rules.MODE_CLAUDE:
                 if _present(path) and path.exists():
-                    text = path.read_text(encoding="utf-8")
+                    text = util.read_user_text(path)
                     # A damaged block refuses the whole uninstall, before the
                     # lock is touched: strip_block declines to guess, and
                     # dropping the row anyway reported the rule removed while
@@ -3144,7 +3279,7 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
                 # The whole file, not just the block: release_materialized
                 # needs it to restore the block at its original position
                 # rather than re-appending at end-of-file.
-                full_text = path.read_text(encoding="utf-8")
+                full_text = util.read_user_text(path)
                 content = rules.read_block(full_text, name)
                 if content is not None:
                     # A file the removal will rewrite is checked against the
@@ -3172,7 +3307,7 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
         path = Path(m.get("path", ""))
         if m.get("mode") == rules.MODE_CLAUDE:
             if path.exists():
-                text = path.read_text(encoding="utf-8")
+                text = util.read_user_text(path)
                 if rules.read_block(text, name) is not None:
                     stripped = rules.strip_block(text, name)
                     if stripped or path.is_symlink():
@@ -3237,7 +3372,7 @@ def release_materialized(kind: str, name: str, entry: dict,
         # late.
         util.user_file_target(path, entry.get("base"))
         try:
-            text = path.read_text(encoding="utf-8")
+            text = util.read_user_text(path)
         except OSError:
             continue  # absent: the restore writes it fresh
         rules.require_well_formed(text, name, path)
@@ -3261,7 +3396,7 @@ def release_materialized(kind: str, name: str, entry: dict,
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         if m.get("mode") == rules.MODE_CLAUDE:
-            current = path.read_text(encoding="utf-8") if path.exists() else ""
+            current = util.read_user_text(path) if path.exists() else ""
             full_text = m.get("full_text")
             # Byte-for-byte only holds when the surrounding text is exactly
             # what quarantine left behind — write the stashed file back
@@ -4277,7 +4412,7 @@ def _check_links_removable(name: str, entry: dict) -> None:
             raise _removal_refused(name, link)
 
 
-def uninstall(name: str) -> dict:
+def uninstall(name: str, *, project_fallback: bool = True) -> dict:
     """Uninstall ``name`` whatever its kind (skill, rule, workflow).
 
     Reverses everything the install wrote and drops the lock entry;
@@ -4288,15 +4423,29 @@ def uninstall(name: str) -> dict:
     caller that assumes "skill" for all three narrates a store directory that
     a rule or workflow never had.
 
-    ``name`` may be tap-qualified (:func:`installed_name`).
+    ``name`` may be tap-qualified (:func:`installed_name`). With
+    ``project_fallback=False`` (``uninstall --global``) nothing in a repo is
+    removed: a skill only the current repo has, and a rule or workflow the
+    user lock records at project scope, are refused rather than removed.
     """
     name = installed_name(name)
     entry = lockfile.get_skill(name)
     if not entry:
         rule = lockfile.get_rule(name)
+        workflow = None if rule else lockfile.get_workflow(name)
+        rec = rule or workflow
+        if (rec and not project_fallback
+                and rec.get("scope") == scopes.SCOPE_PROJECT):
+            # A rule or workflow `install --local` put in a repo is recorded
+            # in the *user* lock, so the lookup above finds it — but its files
+            # are in that repo, which `--global` said to leave alone.
+            raise BoostError(
+                "%s is not installed in your user config" % name,
+                hint="it was installed into %s — `boost uninstall --local %s` "
+                     "from there" % (paths.tilde(Path(str(rec.get("base") or
+                                                          "a repo"))), name))
         if rule:
             return _uninstall_rule(name, rule)
-        workflow = lockfile.get_workflow(name)
         if workflow:
             return _uninstall_workflow(name, workflow)
         # Nothing at user scope — but the caller may be standing in a repo that
@@ -4306,10 +4455,13 @@ def uninstall(name: str) -> dict:
         # former, so asking the latter here refused to remove what install had
         # just put in an unmarked directory.
         pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
-        if pbase is not None and projectlock.get_skill(pbase, name):
+        in_repo = pbase is not None and bool(projectlock.get_skill(pbase, name))
+        if in_repo and project_fallback:
             return uninstall_project(name, base=pbase)
         raise BoostError("%s is not installed" % name,
-                        hint="see what is with `boost list`")
+                        hint=("only this repo has it — `boost uninstall "
+                              "--local %s`" % name) if in_repo
+                        else "see what is with `boost list`")
     _check_links_removable(name, entry)
     removed_links = unlink_agents(name)
     util.remove_path(skill_store_dir(name))
@@ -5385,6 +5537,40 @@ def moved_off_commit_pin(entry: dict, tap_name: str | None) -> str | None:
     except BoostError:
         head = ""
     return None if head == pin else head
+
+
+def reinstall_candidates(scope: str | None,
+                         base=None) -> list[tuple[str, str, dict]]:
+    """What ``boost reinstall`` addresses at ``scope``, as ``(kind, name, entry)``.
+
+    ``None`` is the user lock as recorded, whatever scope each row names (the
+    behaviour before ``reinstall`` took a scope flag). ``"user"`` keeps only
+    the rows recorded at user scope. ``"project"`` is the repo at ``base``: its
+    own lock's skills, plus the rules and workflows the user lock records as
+    installed into that repo. Kinds come in lock-section order and names
+    sorted within each, so ``--all`` output is stable.
+    """
+    found: list[tuple[str, str, dict]] = []
+    for kind, section in lockfile.all_installed().items():
+        if kind == "skill" and scope == scopes.SCOPE_PROJECT:
+            # A repo's skills live in its own lock, never in the user one.
+            if base is not None:
+                found.extend(("skill", name, {**entry,
+                                              "scope": scopes.SCOPE_PROJECT})
+                             for name, entry in sorted(
+                                 projectlock.installed(base).items()))
+            continue
+        for name, entry in sorted(section.items()):
+            at = entry.get("scope", scopes.SCOPE_USER)
+            # scopes.owns, not a local resolve(): it is the predicate
+            # `uninstall --local` and `list --local` use, and it refuses a
+            # relative `base`, which resolve() would read against the cwd and
+            # so hand every repo the same row.
+            if (scope is None or scope == at == scopes.SCOPE_USER
+                    or (scope == scopes.SCOPE_PROJECT
+                        and scopes.owns(entry, base))):
+                found.append((kind, name, entry))
+    return found
 
 
 def reinstall_pin_hold(kind: str, lk: dict, cat_entry: dict | None = None,

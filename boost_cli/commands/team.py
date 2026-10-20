@@ -54,19 +54,19 @@ def _cohorts_path():
     return paths.state_dir() / "cohorts.json"
 
 
-def _load_cohorts() -> dict:
-    p = _cohorts_path()
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
 def _save_cohorts(cohorts: dict) -> None:
+    """Write ``cohorts.json``, moving a corrupt one aside first.
+
+    `create` over a file with a trailing comma used to read it as empty and
+    write the one new cohort over every existing one, with no warning.
+    """
     paths.ensure_dirs()
-    _cohorts_path().write_text(json.dumps(cohorts, indent=2) + "\n", encoding="utf-8")
+    p = _cohorts_path()
+    if cohort.load(p)[1] is not None:
+        dest = jsonstate.quarantine(p)
+        out.warn("%s was corrupt and has been moved to %s before writing "
+                 "the new file" % (_tilde(p), _tilde(dest)), stream=sys.stderr)
+    p.write_text(json.dumps(cohorts, indent=2) + "\n", encoding="utf-8")
 
 
 def _is_member(user: str, cohort_name: str, percent: int) -> bool:
@@ -91,10 +91,19 @@ def cmd_cohort(argv) -> int:
                    help="comma-separated skill names (repeatable)")
     p.add_argument("--percent", type=int, default=100,
                    help="rollout percentage (default 100)")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="`delete` without the confirmation prompt")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
-    cohorts = _load_cohorts()
+    cohorts, bad = cohort.load(_cohorts_path())
+    # `create` replaces the file, so a corrupt one is quarantined by the
+    # write; every other action reads cohorts that are not there to read.
+    if bad is not None and args.action != "create":
+        raise BoostError("cohorts are unreadable: %s" % bad,
+                         hint="fix or remove %s — `boost cohort create` "
+                              "moves it aside and starts a new one"
+                              % _tilde(_cohorts_path()))
     user = util.user()
 
     if args.action == "create":
@@ -142,7 +151,8 @@ def cmd_cohort(argv) -> int:
         if args.name not in cohorts:
             raise BoostError("no cohort named %s" % args.name,
                             hint="list cohorts with `boost cohort list`")
-        if not out.confirm("delete cohort %s?" % args.name, quiet=args.json):
+        if not (args.yes or out.confirm("delete cohort %s?" % args.name,
+                                        quiet=args.json)):
             if args.json:
                 print(json.dumps({"name": args.name, "deleted": False,
                                   "cancelled": True}, indent=2))
@@ -282,15 +292,34 @@ def _profile_path(name: str):
                                   what="profile file name")
 
 
+def _read_profile(path) -> tuple[dict | None, str | None]:
+    """:func:`jsonstate.read_object`, plus a ``skills`` map of objects.
+
+    ``show``/``diff``/``use`` and the ``save`` probe all walk ``skills`` and
+    call ``.get`` on each record, so ``[]``, ``{"skills": 3}`` or a record
+    that is a string crashed them at exit 70 while ``list`` already showed
+    the same file as unreadable. One check, shared, keeps them agreeing.
+    """
+    data, err = jsonstate.read_object(path)
+    if data is not None:
+        bad = jsonstate.object_map_error(data, "skills")
+        if bad is not None:
+            return None, "%s: %s" % (path, bad)
+    return data, err
+
+
 def _load_profile(name: str) -> dict:
     p = _profile_path(name)
-    if not p.exists():
+    data, err = _read_profile(p)
+    if err is not None:
+        raise BoostError("profile %s is unreadable: %s" % (name, err),
+                         hint="replace it with `boost profile save %s`, or "
+                              "remove it with `boost profile delete %s`"
+                              % (name, name))
+    if data is None:
         raise BoostError("no profile named %s" % name,
                         hint="list profiles with `boost profile list`")
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
-        raise BoostError("profile %s is unreadable: %s" % (name, e)) from e
+    return data
 
 
 def _profile_diff(profile: dict):
@@ -328,6 +357,9 @@ def cmd_profile(argv) -> int:
     p.add_argument("name", nargs="?", help="profile name")
     p.add_argument("--prune", action="store_true",
                    help="with `use`: fully uninstall skills not in the profile")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="`delete` and `use --prune` without the confirmation "
+                        "prompt")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
@@ -337,7 +369,7 @@ def cmd_profile(argv) -> int:
     if args.action == "list":
         profiles: list[dict[str, Any]] = []
         for f in sorted(paths.profiles_dir().glob("*.json")):
-            data, _err = jsonstate.read_object(f)
+            data, _err = _read_profile(f)
             if data is None:
                 # Surfaced rather than skipped: a corrupt profile used to be
                 # invisible here yet still block `profile delete` (it parsed
@@ -376,12 +408,15 @@ def cmd_profile(argv) -> int:
         # to `profile use`, which sidelines it again — the saved state, exactly.
         installed, set_aside = lockfile.split_sidelined(lockfile.installed())
         path = _profile_path(args.name)
-        was = None
-        if path.exists():
-            try:
-                was = len(json.loads(path.read_text(encoding="utf-8")).get("skills", {}))
-            except (json.JSONDecodeError, OSError):
-                was = None   # unreadable old profile: still fine to replace
+        old, bad = _read_profile(path)
+        was = len(old.get("skills", {})) if old is not None else None
+        if bad is not None:
+            # Still fine to replace — but not to destroy: the bad bytes go
+            # aside, the way every other corrupt state file's writer does.
+            dest = jsonstate.quarantine(path)
+            out.warn("%s was corrupt and has been moved to %s before writing "
+                     "the new profile" % (_tilde(path), _tilde(dest)),
+                     stream=sys.stderr)
         profile = {"name": args.name, "saved": util.now_iso(), "user": util.user(),
                    "skills": {n: {"tap": e.get("tap", "local"),
                                   "version": e.get("version", "0.0.0")}
@@ -460,7 +495,8 @@ def cmd_profile(argv) -> int:
         if not path.exists():
             raise BoostError("no profile named %s" % args.name,
                             hint="list profiles with `boost profile list`")
-        if not out.confirm("delete profile %s?" % args.name, quiet=args.json):
+        if not (args.yes or out.confirm("delete profile %s?" % args.name,
+                                        quiet=args.json)):
             if args.json:
                 print(json.dumps({"name": args.name, "deleted": False,
                                   "cancelled": True}, indent=2))
@@ -531,10 +567,10 @@ def cmd_profile(argv) -> int:
         # the same sideline extras get without --prune keeps that claim true
         # either way, without a second prompt. `and` short-circuits, so no
         # prompt is raised when --prune was not asked for.
-        pruned = args.prune and bool(doomed) and out.confirm(
+        pruned = args.prune and bool(doomed) and (args.yes or out.confirm(
             "uninstall %d skill%s not in the profile (%s)?"
             % (len(doomed), _s(len(doomed)), ", ".join(doomed)),
-            quiet=args.json)
+            quiet=args.json))
         if pruned:
             for n in doomed:
                 store.uninstall(n)
@@ -840,6 +876,8 @@ def cmd_replay(argv) -> int:
                    help="what to do (default: list; rollback restores skills "
                         "only)")
     p.add_argument("id", nargs="?", help="history entry id (from `boost replay list`)")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="`rollback` without the confirmation prompt")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
@@ -898,10 +936,11 @@ def cmd_replay(argv) -> int:
         # read it as empty and reinstall each skill over it. Restoring is the
         # snapshot itself becoming the lock; the corrupt bytes stay aside.
         backup = paths.tilde(lockfile.corrupt_backup())
-        if not out.confirm("the lock file is corrupt — make snapshot %s the "
-                           "lock file? It is the lock as it was before the "
-                           "change after it; the newest record stays only in "
-                           "%s" % (args.id, backup), quiet=args.json):
+        if not (args.yes or out.confirm(
+                "the lock file is corrupt — make snapshot %s the lock file? "
+                "It is the lock as it was before the change after it; the "
+                "newest record stays only in %s" % (args.id, backup),
+                quiet=args.json)):
             if args.json:
                 print(json.dumps({"id": args.id, "cancelled": True}, indent=2))
             else:
@@ -1007,7 +1046,7 @@ def cmd_replay(argv) -> int:
     if not args.json:
         out.info("rollback to %s will: uninstall %d, install %d, revisit %d version change(s)"
                  % (args.id, len(added), len(restorable), len(changed)))
-    if not out.confirm("proceed?", quiet=args.json):
+    if not (args.yes or out.confirm("proceed?", quiet=args.json)):
         if args.json:
             print(json.dumps({"id": args.id, "cancelled": True}, indent=2))
             return 1

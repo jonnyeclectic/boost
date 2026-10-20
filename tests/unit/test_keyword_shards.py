@@ -178,6 +178,21 @@ class TestImport:
         assert _hits("otter") == ["keep"]     # its postings came through
         assert _hits("narwhal") == ["new"]
 
+    def test_an_unreadable_store_drops_other_taps_rather_than_emptying_them(
+            self, sandbox):
+        # Their term frequencies live in the store; keeping their docs
+        # without them would keep rows no query can reach. Dropping them
+        # (commits too) is what lets `stale()` re-index them next search.
+        rag.import_shards([
+            (_shard("o/b", B, [_doc("o/b", "keep", ("otter",))]), B)])
+        rag.postings_path().write_bytes(b"garbage\n")
+        rag.import_shards(
+            [(_shard("o/a", A, [_doc("o/a", "new", ("narwhal",))]), A)])
+        raw = rag._load_raw()
+        assert [d["n"] for d in raw["docs"]] == ["new"]
+        assert raw["commits"] == {"o__a": A}
+        assert _hits("narwhal") == ["new"]
+
     def test_a_refused_shard_writes_nothing(self, sandbox):
         rag.import_shards([(_shard(docs=[_doc("o/a", "one", ("zebra",))]), A)])
         before = rag.index_path().read_bytes()

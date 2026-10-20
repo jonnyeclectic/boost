@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from boost_cli.core import config, paths, policy, typedvalue
+from boost_cli.core import config, jsonstate, paths, policy, typedvalue
 
 GOOD_ENTRY = {"name": "brainstorming", "tap": "acme/skills",
               "description": "Structured ideation", "version": "1.4.0"}
@@ -320,6 +320,28 @@ class TestCheckTapSigning:
         clone.mkdir()
         assert policy.check_tap_signing(clone) == []
 
+    def test_corrupt_policy_refuses_the_tap(self, sandbox, tmp_path):
+        p = paths.policy_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"require_signed_taps": true', encoding="utf-8")
+        clone = tmp_path / "c"
+        clone.mkdir()
+        err = jsonstate.read_object(p)[1]
+        assert policy.check_tap_signing(clone) == [
+            "%s — boost cannot read the policy, so it will not tap until the "
+            "file is repaired" % err]
+
+    def test_corrupt_policy_tap_honours_enforce_switch(self, sandbox, tmp_path):
+        p = paths.policy_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"require_signed_taps": true', encoding="utf-8")
+        cfg = config.load()
+        cfg["policy_enforce"] = False
+        config.save(cfg)
+        clone = tmp_path / "c"
+        clone.mkdir()
+        assert policy.check_tap_signing(clone) == []
+
     def test_required_but_unsigned_violates(self, sandbox, tmp_path):
         set_policy(require_signed_taps=True)
         clone = tmp_path / "c"
@@ -523,3 +545,94 @@ class TestInvalidValues:
     def test_unknown_keys_are_not_reported_as_invalid(self, sandbox):
         write_policy_json({"rogue": "anything"})
         assert policy.invalid_values() == []
+
+
+TRUNCATED = '{"blocked_skills": ["tdd-workflow"]'
+TRAILING_COMMA = '{"blocked_skills": ["tdd-workflow"], "allowed_taps": ["fx"],}'
+
+
+def _corrupt(raw: str):
+    paths.ensure_dirs()
+    p = paths.policy_path()
+    p.write_text(raw, encoding="utf-8")
+    return p
+
+
+def _err(capsys) -> str:
+    return " ".join(capsys.readouterr().err.split())
+
+
+class TestCorruptPolicy:
+    """A policy.json that does not parse is not "no policy": fail closed."""
+
+    @pytest.mark.parametrize("raw", [TRUNCATED, TRAILING_COMMA])
+    def test_check_names_the_parse_error(self, sandbox, raw):
+        p = _corrupt(raw)
+        err = policy.check()
+        assert err is not None
+        assert err.startswith("%s: invalid JSON (" % p)
+
+    def test_check_is_none_when_missing_or_valid(self, sandbox):
+        assert policy.check() is None
+        set_policy(pin_only=True)
+        assert policy.check() is None
+        assert policy.corrupt_violation() is None
+
+    @pytest.mark.parametrize("raw", [TRUNCATED, TRAILING_COMMA])
+    def test_install_is_refused(self, sandbox, raw):
+        _corrupt(raw)
+        assert policy.check_install(GOOD_ENTRY, 0) == [
+            "%s — boost cannot read the policy, so it will not install until "
+            "the file is repaired" % policy.check()]
+
+    def test_policy_enforce_false_still_bypasses(self, sandbox):
+        cfg = config.load()
+        cfg["policy_enforce"] = False
+        config.save(cfg)
+        _corrupt(TRUNCATED)
+        assert policy.check_install(GOOD_ENTRY, 0) == []
+        # The violation itself does not depend on the switch.
+        assert policy.corrupt_violation() is not None
+
+    def test_load_warns_once_per_process(self, sandbox, capsys):
+        p = _corrupt(TRUNCATED)
+        assert policy.load() == policy.DEFAULTS
+        policy.load()
+        policy.invalid_values()
+        err = _err(capsys)
+        assert err.count("reading the policy as defaults") == 1
+        assert ("%s: invalid JSON" % p) in err
+        assert ("installs are refused until it is repaired, and the next "
+                "`boost policy set` moves it aside to policy.json.corrupt") in err
+
+    def test_a_valid_file_does_not_warn(self, sandbox, capsys):
+        set_policy(pin_only=True)
+        policy.load()
+        assert capsys.readouterr().err == ""
+
+    def test_save_quarantines_the_corrupt_file(self, sandbox, capsys):
+        p = _corrupt(TRAILING_COMMA)
+        policy.save({"require_description": True})
+        assert (p.parent / "policy.json.corrupt").read_text(
+            encoding="utf-8") == TRAILING_COMMA
+        assert json.loads(p.read_text(encoding="utf-8"))[
+            "require_description"] is True
+        assert ("%s was corrupt and has been moved to %s before writing the "
+                "new policy" % (p, p.parent / "policy.json.corrupt")) \
+            in _err(capsys)
+
+    def test_save_never_overwrites_an_earlier_quarantine(self, sandbox):
+        p = _corrupt(TRUNCATED)
+        policy.save({})
+        _corrupt(TRAILING_COMMA)
+        policy.save({})
+        assert (p.parent / "policy.json.corrupt").read_text(
+            encoding="utf-8") == TRUNCATED
+        assert (p.parent / "policy.json.corrupt.2").read_text(
+            encoding="utf-8") == TRAILING_COMMA
+
+    def test_save_over_a_valid_file_quarantines_nothing(self, sandbox):
+        set_policy(pin_only=True)
+        set_policy(pin_only=False)
+        assert sorted(q.name for q in paths.policy_path().parent.iterdir()
+                      if q.name.startswith("policy")) == ["policy.json"]
