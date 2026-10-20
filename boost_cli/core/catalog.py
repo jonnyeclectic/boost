@@ -26,6 +26,7 @@ import operator
 import os
 import re
 import sys
+import threading
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -690,6 +691,9 @@ def events_for_tap(events: list, qualifier: str | None,
 #: linear scans — a single slot would thrash into a regression.
 _NAME_INDEX: dict[int, tuple[list[dict], int, dict[str, list[dict]]]] = {}
 _NAME_INDEX_SLOTS = 4
+#: ``boost serve`` resolves names from a ``ThreadingHTTPServer``; unlocked,
+#: two threads evicting the same oldest slot raise ``KeyError`` out of a GET.
+_NAME_INDEX_LOCK = threading.Lock()
 
 
 def _name_index(pool: list[dict]) -> dict[str, list[dict]]:
@@ -701,17 +705,18 @@ def _name_index(pool: list[dict]) -> dict[str, list[dict]]:
     corpus here is one :func:`all_entries` or :func:`cached_entries` answer.
     """
     key = id(pool)
-    hit = _NAME_INDEX.get(key)
-    if hit is not None and hit[0] is pool and hit[1] == len(pool):
-        return hit[2]
-    index: dict[str, list[dict]] = {}
-    for e in pool:
-        index.setdefault(e["name"], []).append(e)
-    _NAME_INDEX.pop(key, None)
-    while len(_NAME_INDEX) >= _NAME_INDEX_SLOTS:
-        del _NAME_INDEX[next(iter(_NAME_INDEX))]
-    _NAME_INDEX[key] = (pool, len(pool), index)
-    return index
+    with _NAME_INDEX_LOCK:
+        hit = _NAME_INDEX.get(key)
+        if hit is not None and hit[0] is pool and hit[1] == len(pool):
+            return hit[2]
+        index: dict[str, list[dict]] = {}
+        for e in pool:
+            index.setdefault(e["name"], []).append(e)
+        _NAME_INDEX.pop(key, None)
+        while len(_NAME_INDEX) >= _NAME_INDEX_SLOTS:
+            del _NAME_INDEX[next(iter(_NAME_INDEX))]
+        _NAME_INDEX[key] = (pool, len(pool), index)
+        return index
 
 
 def find(name: str, tap: str | None = None,

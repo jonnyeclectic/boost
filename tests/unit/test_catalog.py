@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -1969,3 +1970,33 @@ class TestCatalogueLookupIndex:
         held = catalog._name_index(pools[5])
         assert catalog._name_index(pools[5]) is held
         assert len(catalog._NAME_INDEX) == 4
+
+    def test_concurrent_eviction_does_not_raise(self, monkeypatch):
+        # `boost serve` answers from a ThreadingHTTPServer, so two requests
+        # can evict the same oldest slot at once; unlocked, one of them got a
+        # KeyError instead of its skill.
+        monkeypatch.setattr(catalog, "_NAME_INDEX", {})
+        old = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        pools = [[_entry("n%d" % i, "t")] for i in range(12)]
+        errors: list[str] = []
+
+        def hammer():
+            try:
+                for _ in range(400):
+                    for i, pool in enumerate(pools):
+                        got = catalog._name_index(pool)
+                        assert list(got) == ["n%d" % i]
+            except Exception as exc:
+                errors.append(repr(exc))
+
+        threads = [threading.Thread(target=hammer) for _ in range(8)]
+        try:
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        finally:
+            sys.setswitchinterval(old)
+        assert errors == []
+        assert len(catalog._NAME_INDEX) == catalog._NAME_INDEX_SLOTS
