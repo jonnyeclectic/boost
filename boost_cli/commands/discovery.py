@@ -1129,7 +1129,13 @@ def cmd_discover(argv):
     except (json.JSONDecodeError, OSError):
         raise BoostError("the discovery index is corrupt",
                         hint="rebuild it with `boost index`") from None
-    all_items = data.get("items") or []
+    # A row that is not an object is not an index row: such a file reached
+    # here through `catalog --import` and crashed every lookup at rc 70.
+    all_items = (data.get("items") or []) if isinstance(data, dict) else None
+    if (not isinstance(all_items, list)
+            or not all(isinstance(it, dict) for it in all_items)):
+        raise BoostError("the discovery index is corrupt",
+                        hint="rebuild it with `boost index`")
     query_tokens = [t.lower() for t in args.query if t.strip()]
     items = [it for it in all_items
              if all(t in ("%s %s %s" % (it.get("repo", ""), it.get("path", ""),
@@ -2444,12 +2450,13 @@ def cmd_stats(argv):
         if prow is not None:
             kind, lock = "skill", prow.entry
     kind = kind or "skill"
-    matches = catalog.find(args.name)
-    cat = matches[0] if matches else None
+    qualifier, _bare = catalog.split_name(args.name)
+    cat = catalog.for_lock(catalog.find(args.name), lock)
     if not lock and not cat:
         raise BoostError("no skill named %r installed or in any tap" % args.name,
                         hint="try `boost search %s`" % name)
-    acts = {a: len(journal.events(action=a, subject=name))
+    acts = {a: len(catalog.events_for_tap(
+                journal.events(action=a, subject=name), qualifier, lock))
             for a in ("install", "update", "uninstall")}
     latest = cat["version"] if cat else None
     upstream = None
