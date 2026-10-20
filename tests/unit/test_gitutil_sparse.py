@@ -403,6 +403,16 @@ class TestSparseLock:
             "another git process is working in this tap's clone; if none is, "
             "remove %s" % (repo / ".git" / "info" / "sparse-checkout.lock"))
 
+    def test_a_lock_named_without_file_exists_is_not_retried(self, monkeypatch,
+                                                              tmp_path):
+        repo = self._repo(tmp_path)
+        calls = self._git(monkeypatch, "fatal: could not open "
+                          "'/x/.git/info/sparse-checkout.lock': Permission denied")
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize(repo, "skills/a")
+        assert len(calls) == 1
+        assert err.value.hint is None
+
     def test_another_failure_is_not_retried(self, monkeypatch, tmp_path):
         repo = self._repo(tmp_path)
         calls = self._git(monkeypatch, "git sparse-checkout failed: fatal: "

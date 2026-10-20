@@ -86,3 +86,17 @@ class TestInterruptedInstall:
         with pytest.raises(OSError, match=r"^disk full$"):
             store.install(catalog.resolve_one("tdd-workflow"))
         assert not store.skill_store_dir("tdd-workflow").exists()
+
+    def test_a_recorded_skill_whose_dir_vanished_is_not_rolled_back(
+            self, tap, monkeypatch):
+        # dest is absent (a "fresh" copy) but the lock still records the
+        # skill: the row is the user's record, and the copy it now points at
+        # is left for `boost doctor` rather than deleted.
+        store.install(catalog.resolve_one("tdd-workflow"))
+        before = lockfile.get_skill("tdd-workflow")
+        shutil.rmtree(store.skill_store_dir("tdd-workflow"))
+        _interrupt(monkeypatch, "linked_agents")
+        with pytest.raises(KeyboardInterrupt):
+            store.install(catalog.resolve_one("tdd-workflow"), force=True)
+        assert store.skill_store_dir("tdd-workflow").is_dir()
+        assert lockfile.get_skill("tdd-workflow") == before
