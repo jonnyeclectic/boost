@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import pytest
 
-from boost_cli.core import output
+from boost_cli.core import output, selfupdate
 
 
 def _widest(text: str) -> int:
@@ -43,7 +43,15 @@ def pane(monkeypatch):
     Through ``COLUMNS`` rather than a patched `term_width`, because that is
     the pane a caller declares: tables fit only when there is a pane to fit
     (`output.pane_width`), and pytest's captured stdout is not a TTY.
+
+    The install method is pinned too. `dense.fix_hint` names the command for
+    *this* install, and from a source checkout that is ``<python> -m pip
+    install -e "<checkout>[rag]"`` — one backtick token as long as the paths,
+    which overflows whole by design. Left unpinned, these sweeps measured how
+    deep the test venv sits rather than whether boost fits its own prose.
     """
+    monkeypatch.setattr(selfupdate, "detect", lambda *a, **k: selfupdate.UNKNOWN)
+
     def use(cols):
         monkeypatch.setenv("COLUMNS", str(cols))
         return cols
