@@ -467,6 +467,10 @@ def cmd_outdated(argv) -> int:
 
     results = []
     heads = {}  # tap name -> HEAD commit ("" when unknown)
+    # Read once and passed to every lookup: `find(name)` alone re-validates
+    # every tap's cache per call, which over 308 installed skills and 460
+    # taps was a third of this command.
+    entries = catalog.all_entries()
     # Both locks: a `--local` skill is recorded only in the repo's own, and
     # walking the user lock alone answered "everything up to date" in the
     # directory where `boost info` said the same skill had an update.
@@ -474,7 +478,7 @@ def cmd_outdated(argv) -> int:
         tap_name = lk.get("tap", "local")
         if tap_name == "local":
             continue
-        matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
+        matches = [e for e in catalog.find(name, entries=entries) if e["tap"] == tap_name]
         if not matches:
             # The tap is untapped, or dropped this entry entirely — same
             # condition the rule/workflow loop below reports honestly, so a
@@ -549,7 +553,7 @@ def cmd_outdated(argv) -> int:
                 continue
             if hashlib.sha256(raw.encode("utf-8")).hexdigest() == lk.get("sha256"):
                 continue
-            matches = [e for e in catalog.find(name)
+            matches = [e for e in catalog.find(name, entries=entries)
                        if e["tap"] == tap_name
                        and e.get("kind", "skill") == kind]
             entry, _warning = catalog.select_lock_source(matches, lk)
