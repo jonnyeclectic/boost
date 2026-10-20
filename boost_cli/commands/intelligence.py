@@ -953,7 +953,11 @@ def cmd_context(argv: list[str]) -> int:
         return _context_status(state,
                                getattr(args, "json", False) or args.top_json)
     if action == "map":
-        skills = [s.strip() for s in args.skills.split(",") if s.strip()]
+        # Stored bare: the lock keys by the bare name, and `apply`/`disable`
+        # look rules up in it, so a `tap:name` rule never matched anything.
+        skills = list(dict.fromkeys(
+            store.installed_name(s.strip())
+            for s in args.skills.split(",") if s.strip()))
         if not skills:
             raise BoostError("no skills given",
                             hint="e.g. `boost context map 'feature/*' tdd-workflow`")
@@ -1026,8 +1030,22 @@ def cmd_context(argv: list[str]) -> int:
     return _context_apply(state)
 
 
+def _rule_skill(name: str) -> str:
+    """The lock key a saved context rule's ``name`` refers to.
+
+    Rules saved before `map` stored bare names may hold ``tap:name``; one
+    whose qualifier no longer matches what is installed stays as written, so
+    it reports as not installed rather than aborting the whole apply.
+    """
+    try:
+        return store.installed_name(name)
+    except BoostError:
+        return name
+
+
 def _mentioned_skills(state: dict) -> set:
-    return {s for r in state.get("rules", []) for s in r.get("skills", [])}
+    return {_rule_skill(s) for r in state.get("rules", [])
+            for s in r.get("skills", [])}
 
 
 def _context_status(state: dict, as_json: bool) -> int:
@@ -1068,7 +1086,7 @@ def _context_apply(state: dict) -> int:
         return 0
     rules = state.get("rules", [])
     matched = [r for r in rules if fnmatch.fnmatch(branch, r.get("pattern", ""))]
-    active = {s for r in matched for s in r.get("skills", [])}
+    active = {_rule_skill(s) for r in matched for s in r.get("skills", [])}
     inst = lockfile.installed()
     linked, unlinked, missing, unswitchable = [], [], [], []
     for name in sorted(_mentioned_skills(state)):
@@ -1198,6 +1216,11 @@ def cmd_focus(argv: list[str]) -> int:
     sidelined = 0
     for name, entry in sorted(inst.items()):
         if name in names or entry.get("quarantined"):
+            continue
+        # Already set aside by context or a profile: leave its flag alone.
+        # Restamping it "focus" made `--clear` relink it, undoing that
+        # mechanism, and count a restore this session never sidelined.
+        if entry.get("sidelined_by") not in (None, "focus"):
             continue
         if store.sideline(name, "focus"):
             sidelined += 1

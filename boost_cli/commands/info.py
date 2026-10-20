@@ -1101,15 +1101,23 @@ def cmd_log(argv):
         else:
             entry = catalog.resolve_one(args.name)
             tap_name, rel = entry["tap"], entry["rel_dir"]
-        try:
-            tap = registry.get(tap_name)
-        except BoostError:
+        if tap_name == "local":
             if args.as_json:
                 print(json.dumps({"kind": "history", "name": bare,
                                   "tap": None, "commits": []}, indent=2))
                 return 0
             out.info("no upstream history (imported locally)")
             return 0
+        # Only `local` is an import. Any other failure here is a recorded tap
+        # that has since been untapped, and calling that a local import hid
+        # the one fact the user needs (`changelog` already says it).
+        try:
+            tap = registry.get(tap_name)
+        except BoostError:
+            raise BoostError(
+                "%s comes from tap %s, which is no longer tapped"
+                % (bare, tap_name),
+                hint="re-tap it with `boost tap`, or see `boost taps`") from None
         if not tap.is_cloned:
             raise BoostError("tap %s is not cloned" % tap.name,
                             hint="run `boost update %s`" % tap.name)

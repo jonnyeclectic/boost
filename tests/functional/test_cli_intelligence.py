@@ -841,6 +841,41 @@ class TestContext:
         r = boost("context", "unmap", "feature/*", expect=1)
         assert "no rule for pattern 'feature/*'" in r.err
 
+    def test_map_resolves_a_tap_qualified_installed_skill(
+            self, boost, tapped, tmp_path, monkeypatch):
+        boost("install", "commit-messages")
+        boost("install", "tdd-workflow")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        r = boost("context", "map", "main", "fixture-tap:commit-messages")
+        assert "mapped main → commit-messages" in r.out
+        assert "not installed" not in r.out
+        r = boost("context", "status", "--json")
+        assert json.loads(r.out)["rules"] == [
+            {"pattern": "main", "skills": ["commit-messages"]}]
+        boost("context", "map", "feature/*", "tdd-workflow")
+        r = boost("context", "apply")
+        assert "sidelined: tdd-workflow" in r.out
+        assert "not installed" not in r.out
+        assert (paths.home() / ".claude" / "skills" / "commit-messages").is_symlink()
+
+    def test_apply_resolves_a_rule_saved_tap_qualified(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # Rules written before `map` stored bare names keep working.
+        boost("install", "commit-messages")
+        boost("install", "tdd-workflow")
+        paths.state_dir().mkdir(parents=True, exist_ok=True)
+        (paths.state_dir() / "context.json").write_text(json.dumps(
+            {"enabled": True, "rules": [
+                {"pattern": "main", "skills": ["fixture-tap:commit-messages"]},
+                {"pattern": "feature/*", "skills": ["tdd-workflow"]}]}))
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        r = boost("context", "apply")
+        assert "sidelined: tdd-workflow" in r.out
+        assert "not installed" not in r.out
+        assert (paths.home() / ".claude" / "skills" / "commit-messages").is_symlink()
+
     def test_map_requires_skills(self, boost, sandbox):
         r = boost("context", "map", "feature/*", " , ", expect=1)
         assert "no skills given" in r.err
@@ -1008,6 +1043,27 @@ class TestFocus:
         r = boost("focus", "--clear")
         assert "no focus session" in r.out
         assert "restored" not in r.out
+
+    def test_clear_leaves_a_context_sidelined_skill_alone(
+            self, boost, tapped, tmp_path, monkeypatch):
+        from boost_cli.core import lockfile
+
+        for n in ("brainstorming", "commit-messages", "tdd-workflow"):
+            boost("install", n, "--no-deps")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        boost("context", "map", "feature/*", "tdd-workflow")
+        r = boost("context", "enable")
+        assert "sidelined: tdd-workflow" in r.out
+        r = boost("focus", "brainstorming")
+        assert "(other 1 skill sidelined)" in r.out
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
+        r = boost("focus", "--clear")
+        assert "focus cleared — 1 skill(s) restored" in r.out
+        skills = paths.home() / ".claude" / "skills"
+        assert (skills / "commit-messages").is_symlink()
+        assert not (skills / "tdd-workflow").exists()
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
 
     def test_focus_set_and_clear_json(self, boost, tapped):
         boost("install", "brainstorming")
