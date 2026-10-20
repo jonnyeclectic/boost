@@ -21,7 +21,12 @@ import pytest
 from boost_cli.core import lockfile, paths, util
 from boost_cli.errors import BoostError
 
-ROOT = Path(__file__).resolve().parents[2]
+# The tree `boost_cli` is imported from, and every child's cwd. Under the
+# mutation gate the child's import is mutmut's trampoline, which reads
+# `[mutmut]` from the `setup.cfg` in the *current directory* only, so a child
+# started in the sandbox dies with "Could not figure out where the code to
+# mutate is" (see test_first_run_pointer.py).
+ROOT = Path(lockfile.__file__).resolve().parents[2]
 
 
 def _env() -> dict:
@@ -32,7 +37,7 @@ def _env() -> dict:
 
 def _spawn(code: str) -> subprocess.Popen:
     return subprocess.Popen([sys.executable, "-c", textwrap.dedent(code)],
-                            env=_env(), stdout=subprocess.PIPE,
+                            env=_env(), cwd=ROOT, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
 
 
@@ -51,7 +56,7 @@ class TestConcurrentWriters:
         """ % str(go)
         procs = [subprocess.Popen(
             [sys.executable, "-c", textwrap.dedent(code), "%02d" % i],
-            env=_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            env=_env(), cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             for i in range(n)]
         go.write_text("", encoding="utf-8")
         for p in procs:
@@ -77,7 +82,7 @@ class TestConcurrentWriters:
         """ % str(go)
         procs = [subprocess.Popen(
             [sys.executable, "-c", textwrap.dedent(code), "%02d" % i],
-            env=_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            env=_env(), cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             for i in range(n)]
         go.write_text("", encoding="utf-8")
         for p in procs:
