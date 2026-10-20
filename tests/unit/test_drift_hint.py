@@ -183,8 +183,7 @@ class TestDriftHintUsesRecordedSource:
         monkeypatch.setattr(quality.registry, "is_tapped", lambda name: False)
         hint = quality._drift_hint("brainstorming", "source-missing", "acme/fix",
                                    tap_url="https://gitlab.example.com/acme/fix")
-        assert "gitlab.example.com" in hint
-        assert "github.com" not in hint
+        assert hint == "boost tap https://gitlab.example.com/acme/fix"
 
     def test_still_tapped_ignores_the_url(self, monkeypatch):
         monkeypatch.setattr(quality.registry, "is_tapped", lambda name: True)
