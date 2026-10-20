@@ -4277,7 +4277,7 @@ def _check_links_removable(name: str, entry: dict) -> None:
             raise _removal_refused(name, link)
 
 
-def uninstall(name: str) -> dict:
+def uninstall(name: str, *, project_fallback: bool = True) -> dict:
     """Uninstall ``name`` whatever its kind (skill, rule, workflow).
 
     Reverses everything the install wrote and drops the lock entry;
@@ -4288,7 +4288,9 @@ def uninstall(name: str) -> dict:
     caller that assumes "skill" for all three narrates a store directory that
     a rule or workflow never had.
 
-    ``name`` may be tap-qualified (:func:`installed_name`).
+    ``name`` may be tap-qualified (:func:`installed_name`). With
+    ``project_fallback=False`` (``uninstall --global``) a name only the
+    current repo has is reported as not installed rather than removed there.
     """
     name = installed_name(name)
     entry = lockfile.get_skill(name)
@@ -4306,10 +4308,13 @@ def uninstall(name: str) -> dict:
         # former, so asking the latter here refused to remove what install had
         # just put in an unmarked directory.
         pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
-        if pbase is not None and projectlock.get_skill(pbase, name):
+        in_repo = pbase is not None and bool(projectlock.get_skill(pbase, name))
+        if in_repo and project_fallback:
             return uninstall_project(name, base=pbase)
         raise BoostError("%s is not installed" % name,
-                        hint="see what is with `boost list`")
+                        hint=("only this repo has it — `boost uninstall "
+                              "--local %s`" % name) if in_repo
+                        else "see what is with `boost list`")
     _check_links_removable(name, entry)
     removed_links = unlink_agents(name)
     util.remove_path(skill_store_dir(name))
@@ -5385,6 +5390,38 @@ def moved_off_commit_pin(entry: dict, tap_name: str | None) -> str | None:
     except BoostError:
         head = ""
     return None if head == pin else head
+
+
+def reinstall_candidates(scope: str | None,
+                         base=None) -> list[tuple[str, str, dict]]:
+    """What ``boost reinstall`` addresses at ``scope``, as ``(kind, name, entry)``.
+
+    ``None`` is the user lock as recorded, whatever scope each row names (the
+    behaviour before ``reinstall`` took a scope flag). ``"user"`` keeps only
+    the rows recorded at user scope. ``"project"`` is the repo at ``base``: its
+    own lock's skills, plus the rules and workflows the user lock records as
+    installed into that repo. Kinds come in lock-section order and names
+    sorted within each, so ``--all`` output is stable.
+    """
+    found: list[tuple[str, str, dict]] = []
+    for kind, section in lockfile.all_installed().items():
+        if kind == "skill" and scope == scopes.SCOPE_PROJECT:
+            # A repo's skills live in its own lock, never in the user one.
+            if base is not None:
+                found.extend(("skill", name, {**entry,
+                                              "scope": scopes.SCOPE_PROJECT})
+                             for name, entry in sorted(
+                                 projectlock.installed(base).items()))
+            continue
+        for name, entry in sorted(section.items()):
+            at = entry.get("scope", scopes.SCOPE_USER)
+            in_repo = (base is not None and bool(entry.get("base"))
+                       and Path(str(entry["base"])).resolve()
+                       == Path(base).resolve())
+            if (scope is None or scope == at == scopes.SCOPE_USER
+                    or (scope == at == scopes.SCOPE_PROJECT and in_repo)):
+                found.append((kind, name, entry))
+    return found
 
 
 def reinstall_pin_hold(kind: str, lk: dict, cat_entry: dict | None = None,

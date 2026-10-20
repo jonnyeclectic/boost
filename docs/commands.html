@@ -103,10 +103,10 @@
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp --as-skill --no-as-skill name">install</a>
-      <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --local -y, --yes name">uninstall</a>
+      <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --scope {user,project} --local --global -y, --yes name">uninstall</a>
       <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes">sync</a>
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --discard-edits --allow-downgrade --shards --json tap">update</a>
-      <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all name">reinstall</a>
+      <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all --scope {user,project} --local --global name">reinstall</a>
       <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  --dry-run {dump,install} file">bundle</a>
       <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a -y, --yes url_or_path">import</a>
       <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit name">pin</a>
@@ -235,17 +235,19 @@
           <div class="arg"><code>--no-as-skill</code><span>don&#x27;t put a workflow in the skill store; remembered</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --local -y, --yes name">
+      <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --scope {user,project} --local --global -y, --yes name">
         <h3><span class="cname">uninstall</span><span class="gtag">pkg</span></h3>
         <p class="summary">Remove an installed skill, rule, or workflow</p>
-        <pre class="syn">boost uninstall [--local] [-y] NAME [NAME ...]</pre>
+        <pre class="syn">boost uninstall [--scope {user,project} | --local | --global] [-y] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>installed skill, rule or workflow (several allowed)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--local</code><span>remove from this repo rather than your user config</span></div>
+          <div class="arg"><code>--scope {user,project}</code><span>remove from your user config or this repo (default: user config, then this repo for a name only it has)</span></div>
+          <div class="arg"><code>--local</code><span>remove from this repo (= --scope project)</span></div>
+          <div class="arg"><code>--global</code><span>remove from your user config only (= --scope user)</span></div>
           <div class="arg"><code>-y, --yes</code><span>skip the confirmation prompt</span></div>
         </div>
       </section>
@@ -280,10 +282,10 @@
           <div class="arg"><code>--json</code><span>with --shards: print the per-tap result as JSON</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all name">
+      <section class="cmd" id="cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all --scope {user,project} --local --global name">
         <h3><span class="cname">reinstall</span><span class="gtag">pkg</span></h3>
         <p class="summary">Reinstall a skill, rule or workflow (force)</p>
-        <pre class="syn">boost reinstall [--all] [NAME ...]</pre>
+        <pre class="syn">boost reinstall [--all] [--scope {user,project} | --local | --global] [NAME ...]</pre>
         <p class="desc">Reinstall an installed skill, rule or workflow (force)</p>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -292,6 +294,9 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--all</code><span>reinstall every installed skill, rule and workflow</span></div>
+          <div class="arg"><code>--scope {user,project}</code><span>reinstall only what is installed in your user config or in this repo (default: the user lock as recorded)</span></div>
+          <div class="arg"><code>--local</code><span>what is installed in this repo (= --scope project)</span></div>
+          <div class="arg"><code>--global</code><span>what is installed in your user config (= --scope user)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-bundle" data-search="bundle export/install skill sets via a boostfile  --dry-run {dump,install} file">

@@ -6579,3 +6579,67 @@ class TestAnUpgradeThatSkipsAnAgentMarksItsCopyStale:
         assert ("rule team-conventions for windsurf is older than the "
                 "installed v1.0.0 — run `boost sync`") in out
         assert "fully materialized" not in out
+
+
+# ── reinstall_candidates / uninstall(project_fallback=) ──────────────────
+
+class TestReinstallCandidates:
+    """Which rows `boost reinstall --scope/--local/--global` addresses."""
+
+    def _seed(self, repo: Path, other: Path) -> None:
+        from boost_cli.core import projectlock
+        lockfile.set_skill("user-skill", {"tap": "t"})
+        lockfile.set_rule("user-rule", {"tap": "t", "scope": "user"})
+        lockfile.set_rule("repo-rule", {"tap": "t", "scope": "project",
+                                        "base": str(repo)})
+        lockfile.set_workflow("other-wf", {"tap": "t", "scope": "project",
+                                           "base": str(other)})
+        lockfile.set_workflow("nobase-wf", {"tap": "t", "scope": "project"})
+        projectlock.set_skill(repo, "repo-skill", {"tap": "t"})
+
+    def test_none_is_the_whole_user_lock_in_section_order(self, sandbox,
+                                                          tmp_path):
+        self._seed(tmp_path / "repo", tmp_path / "other")
+        got = [(k, n) for k, n, _ in store.reinstall_candidates(None)]
+        assert got == [("skill", "user-skill"), ("rule", "repo-rule"),
+                       ("rule", "user-rule"), ("workflow", "nobase-wf"),
+                       ("workflow", "other-wf")]
+
+    def test_user_keeps_only_rows_recorded_at_user_scope(self, sandbox,
+                                                         tmp_path):
+        self._seed(tmp_path / "repo", tmp_path / "other")
+        got = [(k, n) for k, n, _ in store.reinstall_candidates("user")]
+        assert got == [("skill", "user-skill"), ("rule", "user-rule")]
+
+    def test_project_is_that_repo_only(self, sandbox, tmp_path):
+        repo = tmp_path / "repo"
+        self._seed(repo, tmp_path / "other")
+        got = store.reinstall_candidates("project", repo)
+        assert [(k, n) for k, n, _ in got] == [("skill", "repo-skill"),
+                                               ("rule", "repo-rule")]
+        # A project skill's row is stamped with its scope so the caller can
+        # route it to a project reinstall.
+        assert got[0][2] == {"tap": "t", "scope": "project"}
+
+    def test_project_without_a_base_is_empty(self, sandbox, tmp_path):
+        self._seed(tmp_path / "repo", tmp_path / "other")
+        assert store.reinstall_candidates("project", None) == []
+
+
+def test_uninstall_without_project_fallback_names_the_local_flag(
+        sandbox, tmp_path, monkeypatch):
+    from boost_cli.core import projectlock
+    from boost_cli.errors import BoostError
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    monkeypatch.chdir(repo)
+    projectlock.set_skill(repo, "only-here", {"tap": "t"})
+    with pytest.raises(BoostError) as exc:
+        store.uninstall("only-here", project_fallback=False)
+    assert exc.value.message == "only-here is not installed"
+    assert exc.value.hint == ("only this repo has it — `boost uninstall "
+                              "--local only-here`")
+    assert projectlock.get_skill(repo, "only-here") == {"tap": "t"}
+    with pytest.raises(BoostError) as exc:
+        store.uninstall("nowhere", project_fallback=False)
+    assert exc.value.hint == "see what is with `boost list`"

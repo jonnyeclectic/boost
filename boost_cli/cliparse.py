@@ -82,3 +82,23 @@ class BoostArgumentParser(argparse.ArgumentParser):
 def parser(*args, **kwargs) -> BoostArgumentParser:
     """Drop-in replacement for ``argparse.ArgumentParser(...)``."""
     return BoostArgumentParser(*args, **kwargs)
+
+
+def add_scope_flags(ap: argparse.ArgumentParser, *, scope_help: str,
+                    local_help: str, global_help: str) -> None:
+    """The ``--scope {user,project} | --local | --global`` selector, one shape.
+
+    ``install``, ``uninstall`` and ``reinstall`` all address the same two
+    scopes, and a user who installed with one spelling reaches for the same
+    spelling to undo it — so they share this group rather than each declaring
+    whichever subset it happened to grow. ``args.scope`` is ``None`` when no
+    flag is given, so each command keeps its own default.
+    """
+    from .core import scopes
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument("--scope", choices=scopes.SCOPES, default=None,
+                       help=scope_help)
+    group.add_argument("--local", dest="scope", action="store_const",
+                       const=scopes.SCOPE_PROJECT, help=local_help)
+    group.add_argument("--global", dest="scope", action="store_const",
+                       const=scopes.SCOPE_USER, help=global_help)
