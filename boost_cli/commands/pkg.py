@@ -422,7 +422,7 @@ def _others_installed() -> str:
 def _rel_list(meta: dict, key: str) -> list[str]:
     """A skill's `requires:`/`conflicts:` frontmatter as a clean name list."""
     val = meta.get(key)
-    if val in (None, "", False):
+    if val in (None, "", False) or isinstance(val, dict):
         return []
     if isinstance(val, list):
         return [str(x).strip() for x in val if str(x).strip()]
@@ -2232,6 +2232,11 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             text, label = path.read_text(encoding="utf-8"), str(path)
         except OSError as e:
             raise BoostError("cannot read %s: %s" % (shown, e.strerror or e)) from e
+    # A Boostfile saved by a Windows editor opens with a BOM, which glued itself
+    # to the first directive ("\ufeffskill") and failed it as "unrecognised"
+    # with the culprit invisible in the message. Stripped after both branches,
+    # since stdin carries it just the same.
+    text = text.removeprefix(frontmatter.BOM)
     taps_added = installed_n = present = drifted = unresolved = failed = 0
     directives = 0
     installed_kinds: set[str] = set()

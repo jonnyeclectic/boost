@@ -17,14 +17,18 @@ Two declaration forms, both deliberately **flat**:
   (``{"mcpServers": {name: {command, args, env}}}``), carrying full specs.
 
 Why flat, and not the nested ``mcp:`` mapping the roadmap card sketched:
-:mod:`boost_cli.core.frontmatter` is a stdlib-only YAML *subset* with no nested
-mapping support, and it does not fail loudly on one — it hoists the inner keys to
-top level and clobbers their siblings. A nested block parses to
-``{'mcp': '', 'servers': [...], 'command': 'npx'}``, silently corrupting the
-entry's metadata. Teaching the parser nested mappings would change the shape of
-every catalog entry's ``meta`` (and every consumer of it), so the declaration
-meets the parser where it already works and the full specs live in the standard
-sidecar file that needs no parser at all.
+:mod:`boost_cli.core.frontmatter` is a stdlib-only YAML *subset* that models one
+level of nested mapping and no more. ``mcp: {servers: [{name, command}]}`` is
+deeper than that, so it parses to ``{'mcp': {'servers': ['name: github']}}`` —
+not a server spec — and is read as declaring nothing. The declaration meets the
+parser where it works and the full specs live in the standard sidecar file that
+needs no parser at all.
+
+One nested shape *is* read: ``requires: {mcp: [rube]}``, which shipped skills
+use. It is one level deep, so the parser keeps it as a dict under
+``requires``, and :func:`declared_names` takes its ``mcp`` entry when there is
+no top-level ``mcp:``. (The parser used to hoist ``mcp`` out of that block to
+the top level by accident, which is how this shape came to work at all.)
 
 Everything here is pure and I/O-free, like :mod:`boost_cli.core.resolve` and
 :mod:`boost_cli.core.staleness`: callers read the files and pass text in, so
@@ -60,10 +64,16 @@ def declared_names(meta: dict | None) -> list[str]:
 
     Accepts a YAML list or a comma-separated string and drops blanks — the same
     contract ``requires:``/``conflicts:`` use, so an author who knows one knows
-    this one. A missing/empty/``False`` value means "declares nothing".
+    this one. A missing/empty/``False`` value means "declares nothing", and so
+    does a nested map at ``mcp:`` (see the module docstring). With no top-level
+    ``mcp:``, a ``requires: {mcp: ...}`` block is read instead.
     """
-    val = (meta or {}).get(DECL_KEY)
-    if val in (None, "", False):
+    meta = meta or {}
+    val = meta.get(DECL_KEY)
+    req = meta.get("requires")
+    if DECL_KEY not in meta and isinstance(req, dict):
+        val = req.get(DECL_KEY)
+    if val in (None, "", False) or isinstance(val, dict):
         return []
     raw = ([str(x) for x in val] if isinstance(val, list)
            else str(val).split(","))

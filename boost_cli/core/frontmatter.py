@@ -17,9 +17,21 @@ from __future__ import annotations
 
 from contextlib import suppress
 
+BOM = "\ufeff"
+
 
 def split(text: str) -> tuple[str, str]:
-    """Return (frontmatter_block, body). Frontmatter block may be ""."""
+    """Return (frontmatter_block, body). Frontmatter block may be "".
+
+    A leading UTF-8 byte-order mark is dropped first. Windows editors
+    (Notepad among them) write one, and left in place it hides the opening
+    ``---`` from the check below, so a file with a valid fence read as having
+    no frontmatter at all: its description became ``\\ufeff---`` and its
+    version 0.0.0. Stripping it here, rather than in each reader, keeps
+    ``catalog`` and ``rag`` assembling the same body, so the content digest
+    stays in parity (tests/unit/test_content_identity.py).
+    """
+    text = text.removeprefix(BOM)
     if not text.startswith("---"):
         return "", text
     lines = text.splitlines()
@@ -48,6 +60,7 @@ def unclosed(text: str) -> bool:
     `---`) is legitimately frontmatter-less, but one that opens and never
     closes is broken and should say so once, not by omission three times over.
     """
+    text = text.removeprefix(BOM)
     if not text.startswith("---"):
         return False
     lines = text.splitlines()
@@ -193,12 +206,51 @@ def _split_commas(s: str):
     return parts
 
 
+def _value(v: str):
+    """A `key: value` line's value: flow list, block-scalar opener or scalar.
+
+    Returns ``_BLOCK`` for a ``|``/``>`` opener, whose content the caller
+    collects (or skips) from the indented lines that follow.
+    """
+    v = v.strip()
+    # strip trailing comments on unquoted scalars
+    if v and not v.startswith(("'", '"', "[")) and " #" in v:
+        v = v.split(" #", 1)[0].strip()
+    if v.startswith("[") and v.endswith("]"):
+        return _flow_list(v)
+    if v in _BLOCK_SCALAR_TOKENS:
+        return _BLOCK
+    return _scalar(v)
+
+
+_BLOCK = object()
+
+
+def _is_item(line: str) -> bool:
+    return line.startswith("- ") or line == "-"
+
+
 def parse_block(block: str) -> dict:
-    """Parse a frontmatter block into a dict. Best-effort, never raises."""
+    """Parse a frontmatter block into a dict. Best-effort, never raises.
+
+    Top-level keys sit at the indent of the first key line (column 0 in any
+    real file). A `k: v` line deeper than that is never a top-level field:
+    reading it as one let `author: {name: Jane Doe}` rename the skill to
+    jane-doe and `metadata: {version: "2.0"}` set its version. Under a key with
+    no value of its own it is one entry of a nested map, kept as a dict under
+    that key (`meta["author"] == {"name": "Jane Doe"}`): a scalar, a flow list
+    or a block list per entry. Anything deeper than that one level, and an
+    indented `k: v` under a key that already has a value, is skipped.
+    """
     meta: dict = {}
     key = None
     in_block = False       # inside a | / > block scalar
     block_indent = 0       # indent of the key line that opened it
+    top_indent: int | None = None
+    nest: dict | None = None   # the nested map being filled, under `key`
+    nest_indent = 0            # column of that map's own keys
+    nest_key: str | None = None
+    skipping = False       # inside an indented subtree that is not modelled
     for raw in block.splitlines():
         if not raw.strip():
             continue
@@ -214,8 +266,35 @@ def parse_block(block: str) -> dict:
             in_block = False
         if line.startswith("#"):
             continue
+        if top_indent is not None and indent > top_indent:
+            if skipping:
+                continue
+            if nest is None and not _is_item(line) and ":" in line:
+                if meta.get(key) not in ("", None):
+                    skipping = True
+                    continue
+                nest = meta[key] = {}
+                nest_indent, nest_key = indent, None
+            if nest is not None:
+                if indent == nest_indent and not _is_item(line) and ":" in line:
+                    nk, _, nv = line.partition(":")
+                    nest_key = nk.strip()
+                    val = _value(nv)
+                    if val is _BLOCK:   # nested block scalar: not modelled
+                        nest[nest_key], nest_key = "", None
+                    else:
+                        nest[nest_key] = val
+                elif (_is_item(line) and indent >= nest_indent
+                      and nest_key is not None):
+                    prev = nest.get(nest_key)
+                    if not isinstance(prev, list):
+                        prev = nest[nest_key] = [] if prev in ("", None) else [prev]
+                    prev.append(_scalar(line[1:].strip()))
+                continue
+        else:
+            nest, skipping = None, False
         # block-list item under the current key
-        if line.startswith("- ") or line == "-":
+        if _is_item(line):
             if key is None:
                 continue
             if not isinstance(meta.get(key), list):
@@ -230,19 +309,16 @@ def parse_block(block: str) -> dict:
             continue
         if ":" not in line:
             continue
+        if top_indent is None:
+            top_indent = indent
         k, _, v = line.partition(":")
         key = k.strip()
-        v = v.strip()
-        # strip trailing comments on unquoted scalars
-        if v and not v.startswith(("'", '"', "[")) and " #" in v:
-            v = v.split(" #", 1)[0].strip()
-        if v.startswith("[") and v.endswith("]"):
-            meta[key] = _flow_list(v)
-        elif v in ("|", "|-", "|+", ">", ">-", ">+"):
+        val = _value(v)
+        if val is _BLOCK:
             meta[key] = ""  # block scalar: folded from the indented lines below
             in_block, block_indent = True, indent
         else:
-            meta[key] = _scalar(v)
+            meta[key] = val
     return meta
 
 
@@ -269,17 +345,27 @@ def dump(meta: dict) -> str:
     """
     lines = ["---"]
     for k, v in meta.items():
-        if isinstance(v, list):
+        if isinstance(v, dict):
+            # the one level of nested map `parse_block` models
             lines.append("%s:" % k)
-            lines.extend("  - %s" % _dump_item(item) for item in v)
-        elif isinstance(v, bool):
-            lines.append("%s: %s" % (k, "true" if v else "false"))
-        elif v is None:
-            lines.append("%s:" % k)
+            for nk, nv in v.items():
+                _dump_field(lines, nk, nv, "  ")
         else:
-            lines.append("%s: %s" % (k, _dump_item(v)))
+            _dump_field(lines, k, v, "")
     lines.append("---")
     return "\n".join(lines)
+
+
+def _dump_field(lines: list[str], k, v, pad: str) -> None:
+    if isinstance(v, list):
+        lines.append("%s%s:" % (pad, k))
+        lines.extend("%s  - %s" % (pad, _dump_item(item)) for item in v)
+    elif isinstance(v, bool):
+        lines.append("%s%s: %s" % (pad, k, "true" if v else "false"))
+    elif v is None:
+        lines.append("%s%s:" % (pad, k))
+    else:
+        lines.append("%s%s: %s" % (pad, k, _dump_item(v)))
 
 
 def set_field(text: str, key: str, value) -> str:

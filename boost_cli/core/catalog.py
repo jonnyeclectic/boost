@@ -49,7 +49,11 @@ from . import (
 # without it there was no way to ship a new entry field at all.
 #   1 -- entries carry `content` (see `_content_digest`)
 #   2 -- entries carry `category` (see `_entry_category`)
-CACHE_FORMAT = 2
+#   3 -- `frontmatter` strips a leading BOM and keeps a nested map as a dict
+#        under its parent key instead of hoisting its keys to the top level,
+#        so a BOM file's meta/description/digest and a nested `author:` /
+#        `metadata:` file's name/version both change on rescan
+CACHE_FORMAT = 3
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -75,8 +79,20 @@ def _read(path: Path) -> tuple[dict, str] | None:
         return None
 
 
+def _text(meta: dict, key: str) -> str:
+    """A scalar frontmatter field as stripped text; a nested map reads as "".
+
+    `frontmatter.parse_block` keeps `author:`/`metadata:`-style maps as dicts,
+    and `str()` of one would put a Python repr into a name or description.
+    """
+    val = meta.get(key)
+    if isinstance(val, dict):
+        return ""
+    return str(val or "").strip()
+
+
 def _description(meta: dict, body: str) -> str:
-    desc = str(meta.get("description") or "").strip()
+    desc = _text(meta, "description")
     if desc:
         return desc
     for line in body.splitlines():
@@ -170,7 +186,7 @@ def _entry_category(meta: dict, tap_category: str) -> str:
     bundled registry catalog, never per item — is everything an un-annotated
     item has, and is itself often empty for a tap outside the bundled 487.
     """
-    own = str(meta.get("category") or "").strip()
+    own = _text(meta, "category")
     if own:
         return own
     tags = meta.get("tags")
@@ -185,7 +201,7 @@ def _entry_category(meta: dict, tap_category: str) -> str:
 def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
                 tap_name: str, curated: bool, meta: dict, body: str,
                 tap_category: str = "") -> dict:
-    name = str(meta.get("name") or "").strip() or default_name
+    name = _text(meta, "name") or default_name
     # Slugify anything that is not already a safe path component, not just names
     # containing a space: this name becomes a rule/workflow filename, so
     # `../../..` has to be neutralized at index time too, not only at the sinks.
@@ -195,7 +211,7 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
     return {
         "name": slug,
         "description": description,
-        "version": str(meta.get("version") or "0.0.0"),
+        "version": _text(meta, "version") or "0.0.0",
         "tap": tap_name,
         "curated": curated,
         "kind": kind,

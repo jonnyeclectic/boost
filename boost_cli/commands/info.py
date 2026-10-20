@@ -180,7 +180,7 @@ def _resolve_text(name: str):
 
 def _as_list(v) -> list:
     """Normalize a frontmatter value to a list of non-empty strings."""
-    if v in (None, "", False):
+    if v in (None, "", False) or isinstance(v, dict):
         return []
     if isinstance(v, list):
         return [str(x).strip() for x in v if str(x).strip()]

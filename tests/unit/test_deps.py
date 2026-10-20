@@ -17,6 +17,11 @@ class TestAsList:
         assert deps.as_list("") == []
         assert deps.as_list(False) == []
 
+    def test_nested_map_names_nothing(self):
+        # `requires: {mcp: [rube]}` parses to a dict; its repr is not a name.
+        assert deps.as_list({"mcp": ["rube"]}) == []
+        assert deps.requirement_names({"requires": {"mcp": ["rube"]}}) == []
+
     def test_yaml_list_strips_blanks(self):
         assert deps.as_list(["a", " b ", "", "  "]) == ["a", "b"]
 
