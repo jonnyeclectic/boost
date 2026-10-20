@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import catalog, lockfile, registry, store, util
+from boost_cli.core import agents, catalog, lockfile, paths, registry, store, util
 from boost_cli.errors import BoostError
 
 
@@ -201,43 +201,64 @@ class TestNoSymlinks:
         tap = make_tap(tmp_path / "t", skills={"lone": "lone"})
         return _entry(tap, "lone")
 
-    def test_an_install_refuses_and_leaves_nothing(self, entry, monkeypatch,
-                                                   sandbox):
+    def test_an_install_skips_every_linking_agent_and_says_why(
+            self, entry, monkeypatch, sandbox):
         _no_symlinks(monkeypatch, PRIVILEGE)
-        with pytest.raises(BoostError) as exc:
-            store.install(entry)
-        assert exc.value.message == (
-            "cannot link lone into ~/.claude/skills: this system refused to "
-            "create a symlink (A required privilege is not held by the client)")
-        assert exc.value.hint.startswith(
-            "boost installs a skill as a symlink into each agent's dir. On "
-            "Windows, turn on Developer Mode")
-        assert exc.value.wrap is True
-        assert not os.path.lexists(store.skill_store_dir("lone"))
-        assert lockfile.get_skill("lone") is None
+        res = store.install(entry)
+        linking = list(agents.linking_agents())
+        assert res.linked == []
+        assert res.refused == linking
+        assert res.unlinkable == [str(d) for d in
+                                  agents.linking_agents().values()]
+        assert res.unwritable == [] and res.blocked == []
+        # The store copy stays: agents that read it directly still get it,
+        # and the lock records the refused agents so `boost sync` retries.
+        assert (store.skill_store_dir("lone") / "SKILL.md").is_file()
+        assert lockfile.get_skill("lone")["refused_agents"] == linking
         assert not os.path.lexists(sandbox / ".claude" / "skills" / "lone")
 
-    def test_the_cli_exits_1_not_70(self, entry, monkeypatch, boost):
+    def test_the_refusal_names_the_dir_and_the_remedy(self):
+        assert store.symlink_refusal(str(paths.home() / ".claude" / "skills")) \
+            == ("this system refused to create a symlink in ~/.claude/skills",
+                "on Windows turn on Developer Mode (Settings > System > For "
+                "developers) or use an administrator shell; on a FAT or exFAT "
+                "drive keep your home on a filesystem with symlinks")
+
+    def test_the_cli_exits_0_and_warns_not_70(self, entry, monkeypatch, boost):
         _no_symlinks(monkeypatch, PRIVILEGE)
-        res = boost("install", "lone", expect=1)
-        err = " ".join(res.err.split())
-        assert "this system refused to create a symlink" in err
+        res = boost("install", "lone")
+        err = " ".join((res.out + res.err).split())
+        assert ("not linked: this system refused to create a symlink in "
+                "~/.claude/skills") in err
         assert "Developer Mode" in err
+        assert "then `boost sync` adds the link" in err
         assert "unexpected error" not in err
 
-    def test_an_import_refuses_and_leaves_nothing(self, sandbox, tmp_path,
-                                                  monkeypatch):
+    def test_an_import_skips_the_agents_and_keeps_the_copy(
+            self, sandbox, tmp_path, monkeypatch):
         src = tmp_path / "src"
         src.mkdir()
         (src / "SKILL.md").write_text("---\nname: imp\n---\n", encoding="utf-8")
         _no_symlinks(monkeypatch, PRIVILEGE)
-        with pytest.raises(BoostError):
+        res = store.install_from_path(src)
+        assert res.linked == []
+        assert res.refused == list(agents.linking_agents())
+        assert (store.skill_store_dir("imp") / "SKILL.md").is_file()
+        assert lockfile.get_skill("imp") is not None
+
+    def test_a_failed_import_link_leaves_no_fresh_copy(self, sandbox, tmp_path,
+                                                       monkeypatch):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("---\nname: imp\n---\n", encoding="utf-8")
+        _no_symlinks(monkeypatch, OSError(errno.ENOSPC, "No space left"))
+        with pytest.raises(OSError):
             store.install_from_path(src)
         assert not os.path.lexists(store.skill_store_dir("imp"))
         assert lockfile.get_skill("imp") is None
 
-    def test_an_import_over_an_existing_dir_keeps_it(self, sandbox, tmp_path,
-                                                     monkeypatch):
+    def test_a_failed_import_over_an_existing_dir_keeps_it(
+            self, sandbox, tmp_path, monkeypatch):
         # Not fresh: the rollback must not delete a copy that was there.
         src = tmp_path / "src"
         src.mkdir()
@@ -245,8 +266,8 @@ class TestNoSymlinks:
         dest = store.skill_store_dir("imp")
         dest.mkdir(parents=True)
         (dest / "SKILL.md").write_text("---\nname: imp\n---\n", encoding="utf-8")
-        _no_symlinks(monkeypatch, PRIVILEGE)
-        with pytest.raises(BoostError):
+        _no_symlinks(monkeypatch, OSError(errno.ENOSPC, "No space left"))
+        with pytest.raises(OSError):
             store.install_from_path(src, force=True)
         assert (dest / "SKILL.md").is_file()
 

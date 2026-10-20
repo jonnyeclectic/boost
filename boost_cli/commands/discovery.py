@@ -2398,6 +2398,9 @@ def cmd_browse(argv):
             out.warn("not %s: %s — %s, then `boost sync`"
                      % ("linked" if res.kind == "skill" else "written",
                         *store.link_refusal(adir, block)), wrap=True)
+        for adir in res.unlinkable:
+            out.warn("not linked: %s — %s, then `boost sync`"
+                     % store.symlink_refusal(adir), wrap=True)
     return 0
 
 

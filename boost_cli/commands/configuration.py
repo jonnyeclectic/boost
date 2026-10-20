@@ -1830,6 +1830,8 @@ def _install_lines(res: store.InstallResult, entry: dict) -> list[str]:
         lines.append("not %s: %s — ask the user to %s, then `boost sync`"
                      % ("linked" if res.kind == "skill" else "written",
                         *store.link_refusal(adir, block)))
+    lines.extend("not linked: %s — ask the user to %s, then `boost sync`"
+                 % store.symlink_refusal(adir) for adir in res.unlinkable)
     # The same prompt-injection and secret scan `boost install` runs. This path
     # needs it more, not less: nobody is watching a terminal here, and the skill
     # was chosen and installed by an agent acting on its own. The install still

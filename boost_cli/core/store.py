@@ -54,7 +54,11 @@ class InstallResult:
     # clears that, so it is kept apart from `unwritable` and worded with
     # `link_refusal`.
     blocked: list[tuple[str, str]] = field(default_factory=list)
-    # The agents behind `unwritable` and `blocked` for a skill: the ones whose
+    # Agent dirs where the OS refused to make any symlink at all (Windows
+    # without Developer Mode, a FAT or exFAT mount): no chmod or move clears
+    # it, so it is worded apart, with :func:`symlink_refusal`.
+    unlinkable: list[str] = field(default_factory=list)
+    # The agents behind `unwritable`, `blocked` and `unlinkable` for a skill: the ones whose
     # dir refused the link. Recorded in the lock as ``refused_agents`` so a
     # later re-install retries them (:func:`preserved_agent_scope`).
     refused: list[str] = field(default_factory=list)
@@ -568,7 +572,7 @@ def link_agents(name: str, only: list[str] | None = None, *,
             elif link.exists():
                 res.conflicts.append(str(link))
                 continue
-            _symlink(link, target)
+            link.symlink_to(target)
         except PermissionError:
             # One unwritable agent dir used to abort the whole install at
             # exit 70 — after the store copy and the other agents' links, so
@@ -583,7 +587,15 @@ def link_agents(name: str, only: list[str] | None = None, *,
             res.unwritable.append(str(paths.refuses_writes(adir) or adir))
             res.refused.append(agent)
             continue
-        except OSError:
+        except OSError as exc:
+            # No symlink can be made here at all: every install used to exit
+            # 70 from the line above. Skip the agent, as for an unwritable
+            # dir; the store copy still reaches the agents that read it
+            # directly, and `boost sync` links the rest once links work.
+            if symlinks_unsupported(exc):
+                res.unlinkable.append(str(adir))
+                res.refused.append(agent)
+                continue
             # A dangling symlink or a file where the agent dir belongs: the
             # mkdir raises FileExistsError or NotADirectoryError. It escaped
             # here after `_copy_skill` had run, so the install exited 70 with
@@ -620,29 +632,12 @@ def symlinks_unsupported(exc: OSError) -> bool:
             and exc.errno in _NO_SYMLINK_ERRNOS)
 
 
-def _symlink(link: Path, target: Path) -> None:
-    """``link.symlink_to(target)``, or a BoostError when no symlink can be made.
-
-    boost has no copy mode: every user-scope skill reaches its agents as a
-    link into the store. Where the OS refuses links outright, every install
-    used to exit 70 with a crash report from this line. The install's own
-    rollback undoes the store copy and any link already made, so the skill
-    is left not installed rather than half installed.
-    """
-    try:
-        link.symlink_to(target)
-    except OSError as exc:
-        if not symlinks_unsupported(exc):
-            raise
-        raise BoostError(
-            "cannot link %s into %s: this system refused to create a "
-            "symlink (%s)" % (target.name, paths.tilde(link.parent),
-                              exc.strerror or exc),
-            hint="boost installs a skill as a symlink into each agent's dir. "
-                 "On Windows, turn on Developer Mode (Settings > System > For "
-                 "developers) or run from an administrator shell; on a FAT or "
-                 "exFAT drive, keep your home on a filesystem with symlinks",
-            wrap=True) from exc
+def symlink_refusal(adir: str) -> tuple[str, str]:
+    """Why a dir from ``res.unlinkable`` refused, and what clears it."""
+    return ("this system refused to create a symlink in %s" % paths.tilde(adir),
+            "on Windows turn on Developer Mode (Settings > System > For "
+            "developers) or use an administrator shell; on a FAT or exFAT "
+            "drive keep your home on a filesystem with symlinks")
 
 
 def _lock_date(name: str, updated_at: str | None) -> str | None:
