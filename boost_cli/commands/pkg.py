@@ -1034,7 +1034,8 @@ def cmd_sync(argv: list[str]) -> int:
     # still lists every skill, so no store dir looked unrecorded and sync
     # said "everything in sync" while doctor and heal exited 1. Both
     # `--json` shapes carry it as ``lock``: None, or the problem
-    # (``missing``, ``corrupt``, ``schema``) sync found.
+    # (``missing``, ``corrupt``, ``schema``) sync found — or ``older``, a
+    # lock with no or an earlier schema version, which sync migrates.
     integ = lockfile.check()
     lock_bad = not integ.ok and integ.problem != "missing"
 

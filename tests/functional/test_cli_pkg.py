@@ -716,8 +716,8 @@ class TestSync:
         # sync said "everything in sync" while doctor and heal exited 1.
         lock = paths.lockfile_path()
         data = json.loads(lock.read_text(encoding="utf-8"))
-        lock.write_text(json.dumps(data | {"version": 2}), encoding="utf-8")
-        line = ("the lock file is schema v2, not v3, so sync %s nothing — "
+        lock.write_text(json.dumps(data | {"version": 4}), encoding="utf-8")
+        line = ("the lock file is schema v4, not v3, so sync %s nothing — "
                 "restore it with `boost replay`")
         r = boost("sync", expect=1)
         assert line % "records" in _flat(r.out + r.err)
@@ -726,7 +726,49 @@ class TestSync:
         assert "everything in sync" not in r.out + diff.out
         assert json.loads(boost("sync", "--json", expect=1).out)["lock"] == "schema"
         assert json.loads(boost("sync", "--diff", "--json").out)["lock"] == "schema"
-        assert json.loads(lock.read_text(encoding="utf-8"))["version"] == 2
+        assert json.loads(lock.read_text(encoding="utf-8"))["version"] == 4
+
+    @pytest.mark.parametrize(("version", "was"), [
+        (None, "had no schema version"), (2, "was schema v2")])
+    def test_an_older_lock_is_graded_and_migrated_not_sent_to_replay(
+            self, boost, installed, version, was):
+        # verify, drift, sync and heal pointed at `boost replay`, whose
+        # rollback uninstalled the last skill, over a lock the next install
+        # migrated without a word.
+        lock = paths.lockfile_path()
+        data = json.loads(lock.read_text(encoding="utf-8"))
+        data.pop("version")
+        if version is not None:
+            data["version"] = version
+        data["someday"] = {"kept": True}
+        data["skills"]["brainstorming"]["extra"] = "kept too"
+        lock.write_text(json.dumps(data), encoding="utf-8")
+        seen = ""
+        doc = boost("doctor", expect=None)
+        seen += doc.out + doc.err
+        assert ("lock file parses, but %s — `boost sync` records it as v3"
+                % ("has no schema version" if version is None
+                   else "is schema v2, not v3")) in _flat(doc.out)
+        r = boost("verify")
+        assert "brainstorming" in r.out
+        seen += r.out + r.err
+        heal = boost("heal", "--dry-run")
+        assert ("would record the lock file, which %s, as schema v3" % was
+                ) in _flat(heal.out)
+        seen += heal.out + heal.err
+        assert json.loads(boost("sync", "--diff", "--json").out)["lock"] == (
+            "older")
+        r = boost("sync")
+        assert ("recorded the lock file, which %s, as schema v3" % was
+                ) in _flat(r.out)
+        assert "everything in sync" not in r.out
+        seen += r.out + r.err
+        assert "replay" not in seen and "vNone" not in seen
+        after = json.loads(lock.read_text(encoding="utf-8"))
+        assert after["version"] == 3
+        assert after["someday"] == {"kept": True}
+        assert after["skills"]["brainstorming"]["extra"] == "kept too"
+        assert "everything in sync" in boost("sync").out
 
     def test_a_corrupt_lock_over_an_empty_store_is_named_too(self, boost):
         paths.ensure_dirs()

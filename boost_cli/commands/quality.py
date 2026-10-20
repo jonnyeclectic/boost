@@ -696,7 +696,14 @@ def cmd_doctor(argv):
     # sync` re-records, and the store-dirs block below names the rest. Not
     # without agents, whose dirs are what say whose a store dir is.
     unrec = store.sort_unrecorded(skills, integ) if agents_ok else None
-    if integ.ok:
+    if integ.problem == "older":
+        # Readable, and every record in it counts: only the schema stamp is
+        # behind, and the next write — `boost sync` makes one — records it.
+        rep.note("lockfile", "lock file parses, but %s — `boost sync` records "
+                 "it as v%d" % (lockfile.fault(integ), lockfile.SCHEMA_VERSION),
+                 wrap=True)
+        lock_ok = True
+    elif integ.ok:
         rep.ok("lockfile", "lock file parses (v%d)" % lockfile.SCHEMA_VERSION)
         lock_ok = True
     elif integ.problem == "missing":

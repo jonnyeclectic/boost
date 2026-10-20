@@ -5837,6 +5837,9 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
     which filters them against the links it has already reported.
     """
     lines = []
+    integ = lockfile.check()
+    if integ.problem == "older":
+        lines.append(lockfile.older_line(integ, dry=True))
     # `sync_apply` re-records only while the lock file is *missing* — a corrupt
     # one is left for `boost replay` — and only a dir that still has a
     # SKILL.md. The preview used to say "would re-record" either way.
@@ -6408,6 +6411,12 @@ def not_skill_line(names: list[str]) -> str:
 def sync_apply(plan: dict[str, list]) -> list[str]:
     """Fix what sync_plan found. Returns human-readable actions taken."""
     actions = []
+    # A lock with no schema version, or an earlier one, still says what is
+    # installed: it is recorded as the current schema here, so the command
+    # doctor prescribes for it is the one that clears it.
+    migrated = lockfile.migrate()
+    if migrated:
+        actions.append(migrated)
     # First, so every re-recorded skill is in the lock before anything else
     # runs; and only when the lock is *missing* — a corrupt or other-schema
     # lock is left for `boost replay`, never overwritten.
