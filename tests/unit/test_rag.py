@@ -2043,7 +2043,9 @@ class TestPostingsBlobLayout:
     def test_a_corrupt_blob_degrades_read_postings_to_empty(self, sandbox):
         self._corrupt_store(b"\x01\x80")
         assert rag.read_postings(["good", "bad"]) == {}
-        assert rag._all_postings() == {}
+        # None, not {}: "unreadable" must not read as "holds no postings",
+        # or an incremental build keeps docs with no term frequencies.
+        assert rag._all_postings() is None
 
     def test_an_intact_store_still_reads(self, sandbox):
         self._corrupt_store(rag._encode_plist([[2, 1]]))

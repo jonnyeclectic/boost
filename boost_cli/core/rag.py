@@ -473,7 +473,7 @@ def _postings_to_doc_tf(raw: dict) -> dict[int, dict[str, int]]:
     return doc_tf
 
 
-def _kept_docs(raw: dict, keep_safe: set) -> list[dict]:
+def _kept_docs(raw: dict, keep_safe: set) -> list[dict] | None:
     """Recover cached docs (with term freqs) for taps that did not change.
 
     Term frequencies live in the SQLite postings store since they left the JSON
@@ -485,12 +485,11 @@ def _kept_docs(raw: dict, keep_safe: set) -> list[dict]:
     # store. Only an index with no such key predates the SQLite move.
     stored = raw if "postings" in raw else {"postings": _all_postings()}
     if stored["postings"] is None:
-        # Unreadable store: reusing these docs would keep them with no term
-        # frequencies, i.e. searchable by nothing. `build` gates on
-        # `postings_readable()` first, so this only fires if the store went
-        # bad mid-build — and then failing the reuse beats faking it.
-        raise BoostError("the BM25 postings store became unreadable mid-build",
-                         hint="run `boost reindex --force`")
+        # Unreadable store (or a corrupt blob the one-row readiness probe
+        # cannot see): reusing these docs would keep them with no term
+        # frequencies, i.e. searchable by nothing. None tells `build` to
+        # re-index those taps instead.
+        return None
     doc_tf = _postings_to_doc_tf(stored)
     return [{**meta, "tf": doc_tf.get(doc_id, {})}
             for doc_id, meta in enumerate(raw.get("docs", []))
@@ -521,11 +520,13 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
             if commit and old_commits.get(safe) == commit:
                 reused_safe.add(safe)
 
+    kept = _kept_docs(old, reused_safe) if old is not None and reused_safe else []
+    if kept is None:
+        reused_safe = set()
+        kept = []
     fresh = [e for e in entries
              if e["tap"].replace("/", "__") not in reused_safe]
-    docs = _make_docs(fresh, tap_paths)
-    if old is not None and reused_safe:
-        docs = _kept_docs(old, reused_safe) + docs
+    docs = kept + _make_docs(fresh, tap_paths)
 
     saved = _save(docs, commits)
     reindexed = sorted({e["tap"] for e in fresh})
@@ -1100,7 +1101,14 @@ def import_shards(batch: Sequence[tuple[dict, str]]
         commits = {k: v for k, v in (old.get("commits") or {}).items()
                    if k not in new_safe}
         keep = {d["t"].replace("/", "__") for d in old.get("docs", [])}
-        docs = _kept_docs(old, keep - new_safe)
+        kept = _kept_docs(old, keep - new_safe)
+        if kept is None:
+            # The other taps' term frequencies are unreadable, so keeping
+            # their docs would keep rows no query can reach. Drop them with
+            # their commits: `stale()` then sees those taps missing and the
+            # next search re-indexes them.
+            commits, kept = {}, []
+        docs = kept
     for tap, shard in accepted.items():
         commits[tap.replace("/", "__")] = str(shard["commit"])
         docs.extend({**d, "c": 0} for d in shard["docs"])

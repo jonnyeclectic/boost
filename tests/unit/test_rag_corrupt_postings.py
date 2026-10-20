@@ -14,7 +14,6 @@ import pytest
 
 from boost_cli.commands import quality
 from boost_cli.core import rag, report
-from boost_cli.errors import BoostError
 
 
 def _entry(name, skill_md):
@@ -108,11 +107,25 @@ class TestRecovery:
         assert stats["reused"] == ["acme/skills"]
         assert stats["reindexed"] == []
 
-    def test_kept_docs_refuses_a_store_that_went_bad_mid_build(self, corpus):
+    def test_kept_docs_refuses_an_unreadable_store(self, corpus):
         raw = rag._load_raw()
         _corrupt()
-        with pytest.raises(BoostError, match="unreadable mid-build"):
-            rag._kept_docs(raw, {"acme__skills"})
+        assert rag._kept_docs(raw, {"acme__skills"}) is None
+
+    def test_a_corrupt_blob_the_probe_misses_still_rebuilds(self, corpus):
+        # The readiness probe reads one row and decodes nothing, so a bad
+        # blob gets past it; the reuse path must still not keep empty docs.
+        import sqlite3
+        con = sqlite3.connect(str(rag.postings_path()))
+        con.execute("UPDATE postings SET plist = ?", (b"\x01\x80",))
+        con.commit()
+        con.close()
+        assert rag.postings_readable() is True
+        stats = rag.build(entries=corpus)
+        assert stats["reused"] == []
+        assert stats["reindexed"] == ["acme/skills"]
+        assert [h["entry"]["name"] for h in rag.retrieve("jest", entries=corpus)] \
+            == ["jest-runner"]
 
 
 class TestDoctor:
