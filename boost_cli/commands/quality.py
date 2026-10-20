@@ -722,9 +722,8 @@ def cmd_doctor(argv):
             continue
         # tamper detection: the lock file records a sha256 at install time, but
         # only `boost verify` ever re-checked it — surface content drift here too.
-        locked = entry.get("sha256")
-        if (locked and not integrity.self_sourced(name, entry)
-                and util.sha256_dir(sdir) != locked):
+        # `integrity.skill_modified` is the test `boost_doctor` asks too.
+        if integrity.skill_modified(name, entry):
             bad("skill", "skill %s modified since install — run `boost verify`" % name)
             skill_issues += 1
         # A deliberate sideline (`focus`, `profile use`, `context apply`)
