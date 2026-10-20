@@ -2289,6 +2289,54 @@ class TestStats:
             "Keep dependency manifests in sync with lockfiles."
         assert data["size"] is None          # no store dir for a rule
 
+    @staticmethod
+    def _homonym_tap(boost, tmp_path):
+        """A second tap shipping its own `brainstorming` at 9.0.0."""
+        tap = tmp_path / "other-tap"
+        (tap / "skills" / "brainstorming").mkdir(parents=True)
+        (tap / "skills" / "brainstorming" / "SKILL.md").write_text(
+            "---\nname: brainstorming\ndescription: OTHER tap brainstorm\n"
+            "version: 9.0.0\n---\nbody\n", encoding="utf-8")
+        for cmd in (["init", "-q"], ["add", "-A"],
+                    ["-c", "user.name=t", "-c", "user.email=t@t",
+                     "commit", "-qm", "other subject"]):
+            subprocess.run(["git", "-C", str(tap), *cmd],
+                           check=True, capture_output=True)
+        boost("tap", str(tap))
+
+    def test_catalog_facts_come_from_the_installed_tap(
+            self, boost, tapped, tmp_path):
+        # The fixture tap sorts first and ships brainstorming 1.4.0; the
+        # install is the other tap's 9.0.0. matches[0] put the fixture's
+        # description and "1.4.0 (up to date)" next to a 9.0.0 lock.
+        self._homonym_tap(boost, tmp_path)
+        boost("install", "other-tap:brainstorming")
+        data = json.loads(boost("stats", "brainstorming", "--json").out)
+        assert data["lock"]["version"] == "9.0.0"
+        assert data["catalog"] == {
+            "latest": "9.0.0", "tap": data["lock"]["tap"],
+            "description": "OTHER tap brainstorm",
+            "upstream": data["catalog"]["upstream"]}
+        assert "other subject" in data["catalog"]["upstream"]
+        r = boost("stats", "brainstorming")
+        lines = {l.split()[0]: l for l in r.out.splitlines() if l.strip()}
+        assert "9.0.0 (up to date)" in lines["latest"]
+        assert "OTHER tap brainstorm" in lines["description"]
+
+    def test_a_qualifier_does_not_count_another_taps_installs(
+            self, boost, tapped, tmp_path):
+        self._homonym_tap(boost, tmp_path)
+        boost("install", "other-tap:brainstorming")
+        data = json.loads(
+            boost("stats", "fixture-tap:brainstorming", "--json").out)
+        assert data["installed"] is False
+        assert data["activity"] == {"install": 0, "update": 0, "uninstall": 0}
+        assert data["catalog"]["latest"] == "1.4.0"
+        own = json.loads(
+            boost("stats", "other-tap:brainstorming", "--json").out)
+        assert own["installed"] is True
+        assert own["activity"] == {"install": 1, "update": 0, "uninstall": 0}
+
     def test_json_purity(self, boost, installed):
         r = boost("stats", "brainstorming", "--json")
         data = json.loads(r.out)

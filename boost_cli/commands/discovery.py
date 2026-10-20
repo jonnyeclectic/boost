@@ -2435,12 +2435,13 @@ def cmd_stats(argv):
     # qualifier still narrows a not-yet-installed lookup.
     name, kind, lock = store.resolve_lock_entry(args.name)
     kind = kind or "skill"
-    matches = catalog.find(args.name)
-    cat = matches[0] if matches else None
+    qualifier, _bare = catalog.split_name(args.name)
+    cat = catalog.for_lock(catalog.find(args.name), lock)
     if not lock and not cat:
         raise BoostError("no skill named %r installed or in any tap" % args.name,
                         hint="try `boost search %s`" % name)
-    acts = {a: len(journal.events(action=a, subject=name))
+    acts = {a: len(catalog.events_for_tap(
+                journal.events(action=a, subject=name), qualifier, lock))
             for a in ("install", "update", "uninstall")}
     latest = cat["version"] if cat else None
     upstream = None
