@@ -2920,7 +2920,10 @@ class TestBundleAuditFindings:
         bf = tmp_path / "Boostfile"
         bf.write_text("tap acme/other https://example.invalid/other\n"
                       "skill other:thing\n"      # the pending tap, by its tail
-                      "skill acme/other:thing2\n"  # ...and by its full name
+                      # ...and by its full name — the one derived from the
+                      # URL, which the real run taps it under; `acme/other`
+                      # is only this line's NAME, and a line using it misses.
+                      "skill example.invalid/other:thing2\n"
                       "skill thing3\n",          # unqualified: could be there
                       encoding="utf-8")
         r = boost("bundle", "install", bf, "--dry-run")
@@ -2951,6 +2954,24 @@ class TestBundleAuditFindings:
         assert "installed brainstorming" in real.out
         assert "failed" not in real.out
         assert lockfile.installed()["brainstorming"]["tap"] == "newtap-src"
+
+    def test_dry_run_misses_a_line_naming_the_tap_by_its_boostfile_name(
+            self, boost, sandbox, fixture_tap_src, tmp_path):
+        # `tap myalias <dir>` is tapped as the dir's basename, so a `skill
+        # myalias:…` line misses in the real run (exit 1). The preview
+        # deferred it under NAME as well and exited 0.
+        src = _copy_tap(fixture_tap_src, tmp_path / "newtap-src")
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap myalias %s\nskill myalias:brainstorming\n"
+                      % src.as_posix(), encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run", expect=1)
+        assert "would tap myalias (as newtap-src)" in dry.out
+        assert "brainstorming not found in tap myalias — skipped" in dry.out
+        assert "cannot resolve yet" not in dry.out
+        assert "would install 0 skills, add 1 tap, 1 would fail" in dry.out
+        real = boost("bundle", "install", bf, expect=1)
+        assert "tapped newtap-src" in real.out
+        assert "brainstorming not found in tap myalias — skipped" in real.out
 
     def test_dry_run_resolves_a_line_whose_derived_tap_is_already_there(
             self, boost, sandbox, fixture_tap_src, tmp_path):

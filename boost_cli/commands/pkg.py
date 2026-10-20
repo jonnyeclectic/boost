@@ -4,7 +4,6 @@
 reinstall, bundle, import, pin, unpin, snapshot, export."""
 from __future__ import annotations
 
-import contextlib
 import io
 import json
 import os
@@ -2287,20 +2286,26 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             if dry_run:
                 # Nothing is cloned, so any skill line naming this tap cannot
                 # be resolved below — said plainly there rather than guessed.
-                # Under both names: the real run names the tap from its URL
-                # (`registry.add` -> `parse_spec`), not from this line's NAME,
-                # so `tap myalias ./x` is tapped as `x`, and a `skill x:…`
-                # line must defer here as it will install there.
-                would_tap.add(tname)
-                # no derivable name: NAME is then all there is to match
-                with contextlib.suppress(BoostError):
+                # Under the name the real run will use: it names the tap from
+                # its URL (`registry.add` -> `parse_spec`), not from this
+                # line's NAME, so `tap myalias ./x` is tapped as `x`. A `skill
+                # x:…` line defers here as it will install there, and a `skill
+                # myalias:…` line misses here as it will miss there — deferring
+                # it too exited 0 on a file whose real run exits 1.
+                derived = tname
+                try:
                     derived = registry.parse_spec(turl or tname)[0]
+                except BoostError:
+                    # no derivable name: NAME is then all there is to match
+                    would_tap.add(tname)
+                else:
                     # Already configured under that name, a skill line naming
                     # it resolves now and misses the way the real run will,
                     # so it must not be deferred as "cannot resolve yet".
                     if derived not in have_taps:
                         would_tap.add(derived)
-                out.info("would tap %s" % tname)
+                out.info("would tap %s%s" % (tname, "" if derived == tname
+                                             else " (as %s)" % derived))
                 taps_added += 1
                 continue
             try:
