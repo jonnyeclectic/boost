@@ -412,6 +412,28 @@ class TestHistory:
             paths.lock_history_dir().glob("lock-*.json"))
         assert re.fullmatch(r"\d{8}T\d{6}Z", lockfile._archive_stamp(p))
 
+    @pytest.mark.parametrize("snap, why", [
+        ({"skills": "x"}, "'skills' is a str, not an object"),
+        ({"skills": {"a": "b"}}, "'skills' entry 'a' is a str, not an object"),
+        ({"skills": {}, "rules": []}, "'rules' is a list, not an object"),
+        ({"workflows": {"w": 1}},
+         "'workflows' entry 'w' is a int, not an object"),
+    ])
+    def test_history_read_refuses_a_section_it_cannot_walk(
+            self, sandbox, snap, why):
+        # `replay rollback` called `.get` on each record and crashed at exit
+        # 70; dropping the section instead would read as "no skills" and have
+        # rollback uninstall everything installed now.
+        paths.ensure_dirs()
+        p = paths.lock_history_dir() / "lock-20200101T000000Z.json"
+        p.write_text(json.dumps(snap), encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            lockfile.history_read("20200101T000000Z")
+        assert ei.value.message == (
+            "lock history entry 20200101T000000Z is unreadable: %s: %s"
+            % (p, why))
+        assert ei.value.hint == "list other entries with `boost replay`"
+
     def test_history_list_skips_corrupt_without_stopping(self, sandbox):
         # a corrupt snapshot that sorts BEFORE a valid one must be skipped, not
         # halt the scan — pins the `continue` (a `break` would drop the later
