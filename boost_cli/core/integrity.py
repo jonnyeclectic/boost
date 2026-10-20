@@ -304,18 +304,60 @@ def project_status(entry: dict, base) -> str:
     into the repo, recorded (relative, committable) in the project lock with one
     ``sha256`` taken at install. The check re-derives each materialization path
     under ``base`` (refusing any that escapes, via
-    :func:`scopes.resolve_in_base`), hashes the first that is present, and
-    compares. Vendored third-party skills are exactly the ones a review should
-    watch — they arrive by PR and run on every teammate's machine — so ``doctor``
-    and ``verify`` need to see drift here the same way they do at user scope.
+    :func:`scopes.resolve_in_base`) and hashes **every** copy that is present.
+    Vendored third-party skills are exactly the ones a review should watch —
+    they arrive by PR and run on every teammate's machine — so ``doctor`` and
+    ``verify`` need to see drift here the same way they do at user scope.
+
+    Every row, not the first present one: each agent loads its own copy, so an
+    edit to ``.cursor/skills/x`` is what Cursor runs however intact the Claude
+    copy is, and hashing only the first let that edit through as ``OK``. A
+    modified copy outranks a missing one — `boost update` asks this before
+    overwriting, and a deleted sibling must not hide an edit from it. A row
+    that is gone (or whose path escapes ``base``) is ``MISSING``, the same
+    rows `boost sync` (:func:`store.project_sync_plan`) re-materializes, so
+    doctor, verify, heal and sync agree about one state.
     """
     recorded = entry.get("sha256")
-    present = project_skill_dir(entry, base)
-    if present is None:
+    rows = project_missing_rows(entry, base)
+    present = project_skill_dirs(entry, base)
+    if not present:
+        return STATUS_MISSING
+    if recorded and any(util.sha256_dir(p) != recorded for p in present):
+        return STATUS_MODIFIED
+    if rows:
         return STATUS_MISSING
     if not recorded:
         return STATUS_UNLOCKED
-    return STATUS_OK if util.sha256_dir(present) == recorded else STATUS_MODIFIED
+    return STATUS_OK
+
+
+def project_skill_dirs(entry: dict, base) -> list[Path]:
+    """Every materialized copy of a project skill that is on disk, in row order.
+
+    A row whose path escapes ``base`` is never answered
+    (:func:`scopes.resolve_in_base`).
+    """
+    found = []
+    for m in entry.get("materializations") or []:
+        path = scopes.resolve_in_base(base, m.get("path"))
+        if path is not None and path.is_dir():
+            found.append(path)
+    return found
+
+
+def project_missing_rows(entry: dict, base) -> list[str]:
+    """The recorded paths of a project skill with no copy on disk.
+
+    The rows :func:`store.project_sync_plan` calls missing: gone, not a
+    directory, or escaping ``base`` (which no repair will write either).
+    """
+    rows = []
+    for m in entry.get("materializations") or []:
+        path = scopes.resolve_in_base(base, m.get("path"))
+        if path is None or not path.is_dir():
+            rows.append(str(m.get("path")))
+    return rows
 
 
 def project_skill_dir(entry: dict, base) -> Path | None:
@@ -324,13 +366,12 @@ def project_skill_dir(entry: dict, base) -> Path | None:
     Each row's path is re-derived under ``base`` through
     :func:`scopes.resolve_in_base`, so a committed path that escapes the repo
     is never answered. A project skill is a real directory per agent, all
-    written from one source, so the first present one stands for the install.
+    written from one source, so for *reading* it (info, pkg) the first present
+    one stands for the install; *judging* it is :func:`project_status`'s, which
+    hashes every copy.
     """
-    for m in entry.get("materializations") or []:
-        path = scopes.resolve_in_base(base, m.get("path"))
-        if path is not None and path.is_dir():
-            return path
-    return None
+    dirs = project_skill_dirs(entry, base)
+    return dirs[0] if dirs else None
 
 
 def project_redirected(entry: dict, base) -> list[str]:

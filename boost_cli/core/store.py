@@ -2438,26 +2438,71 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
     for name in sorted(wanted):
         entry = projectlock.get_skill(resolved_base, name) or {}
         tap_name = entry.get("tap")
-        if tap_name and tap_name != "local":
+        cat_entry, warning = _project_source(name, entry)
+        if warning:
+            actions.append(warning)
+        if cat_entry:
             try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
-                from . import catalog
-                matches = [e for e in catalog.find(name)
-                           if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
-                cat_entry, warning = catalog.select_lock_source(matches, entry)
-                if warning:
-                    actions.append(warning)
-                if cat_entry:
-                    install(cat_entry, force=True, scope=scopes.SCOPE_PROJECT,
-                            base=resolved_base, only_agents=wanted[name])
-                    actions.append("re-materialized %s from %s" % (name, tap_name))
-                    continue
+                install(cat_entry, force=True, scope=scopes.SCOPE_PROJECT,
+                        base=resolved_base, only_agents=wanted[name])
+                actions.append("re-materialized %s from %s" % (name, tap_name))
+                continue
             except BoostError:
                 pass
-        actions.append("%s is missing from the project but its source is gone — "
-                       "run `boost update` or reinstall" % name)
+        actions.append(_project_gone(name))
     if actions:
         journal.log("sync", "%d project fixes" % len(actions))
     return actions
+
+
+def _project_gone(name: str) -> str:
+    return "%s%s — run `boost update` or reinstall" % (name, _PROJECT_GONE_MARK)
+
+
+def _project_source(name: str, entry: dict) -> tuple[dict | None, str | None]:
+    """The catalog entry a project lock row would be restored from.
+
+    Shared by :func:`project_sync_apply` and :func:`project_sync_preview`, so a
+    dry run decides "restorable" exactly as the run does: `heal --dry-run`
+    promised to re-materialize a copy whose tap was gone, exited 0, and the run
+    then reported the source gone and exited 1.
+    """
+    tap_name = entry.get("tap")
+    if not tap_name or tap_name == "local":
+        return None, None
+    try:
+        from . import catalog
+        matches = [e for e in catalog.find(name)
+                   if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
+        return catalog.select_lock_source(matches, entry)
+    except BoostError:
+        return None, None
+
+
+def project_sync_preview(plan: dict[str, list], base=None) -> list[str]:
+    """What :func:`project_sync_apply` would do with ``plan``, writing nothing.
+
+    A copy with no resolvable source gets the same unrepaired line the run
+    prints, so :func:`is_unrepaired` marks it and a dry run fails over it too.
+    """
+    lines: list[str] = []
+    resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
+    if resolved_base is None:
+        return lines
+    wanted: dict[str, list] = {}
+    for name, agent in plan.get("missing", []):
+        wanted.setdefault(name, []).append(agent)
+    for name in sorted(wanted):
+        entry = projectlock.get_skill(resolved_base, name) or {}
+        cat_entry, warning = _project_source(name, entry)
+        if warning:
+            lines.append(warning)
+        if cat_entry:
+            lines.append("would re-materialize project skill %s → %s from %s"
+                         % (name, ", ".join(wanted[name]), entry.get("tap")))
+        else:
+            lines.append(_project_gone(name))
+    return lines
 
 
 def narrow_project_agents(scoped: dict, only_agents, name: str,
@@ -5216,13 +5261,16 @@ def is_unrepaired(action: str) -> bool:
     make, so callers print it as a warning rather than under a check mark."""
     return any(mark in action for mark in (
         _NOT_REMATERIALIZED, _NOT_LINKED_MARK, _NOT_RECORDED_MARK,
-        _DECLINED_MARK, _NOT_CLONED_MARK))
+        _DECLINED_MARK, _NOT_CLONED_MARK, _PROJECT_GONE_MARK))
 
 
 #: A pin that blocks a repair. Missing from :func:`is_unrepaired` until it was
 #: added, so `heal` printed the decline under a ✓ and exited 0 over a skill
 #: still missing, and `doctor` went on prescribing `heal`.
 _DECLINED_MARK = " — repair declined "
+#: A project skill :func:`project_sync_apply` could not re-materialize. `heal`
+#: repairs project copies through it now, and must not exit 0 over one.
+_PROJECT_GONE_MARK = " is missing from the project but its source is gone"
 #: A URL import's store dir, which sync never re-clones -- also a decline.
 _NOT_CLONED_MARK = "'s store dir is missing — `boost reinstall "
 

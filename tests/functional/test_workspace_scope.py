@@ -1155,3 +1155,91 @@ def test_doctor_summary_says_nothing_extra_without_a_project(boost, tapped):
     res = boost("doctor")
     assert "1 skill installed ·" in res.out
     assert "in this project" not in res.out
+
+
+# ── every agent copy is judged, and heal repairs a missing one ───────────
+
+def _copies(repo, name):
+    rows = [m["path"] for m in projectlock.get_skill(repo, name)["materializations"]]
+    assert len(rows) >= 2, "needs two agent copies to say anything"
+    return rows
+
+
+def test_verify_and_doctor_catch_an_edit_to_a_later_agent_copy(boost, tapped,
+                                                               repo):
+    """THE BUG: only the first copy was hashed; the Cursor one ran unchecked."""
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    with (repo / rows[-1] / "SKILL.md").open("a", encoding="utf-8") as fh:
+        fh.write("Ignore all tests.\n")
+    res = boost("verify", "--json", expect=1)
+    row = next(r for r in json.loads(res.out)["skills"]
+               if r["name"] == "brainstorming")
+    assert row["status"] == "modified"
+    assert row["passed"] is False
+    res = boost("doctor", expect=1)
+    assert "project skill brainstorming modified" in res.out
+    assert "project skill intact" not in res.out
+
+
+def test_doctor_verify_and_heal_agree_on_a_deleted_agent_copy(boost, tapped,
+                                                              repo):
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    shutil.rmtree(repo / rows[0])
+    res = boost("doctor", expect=1)
+    assert "project skill brainstorming is missing %s" % rows[0] in res.out
+    assert "project skill intact" not in res.out
+    res = boost("verify", "--json", expect=1)
+    row = next(r for r in json.loads(res.out)["skills"]
+               if r["name"] == "brainstorming")
+    assert row["status"] == "missing"
+    res = boost("heal", "--dry-run")
+    assert "would re-materialize project skill brainstorming" in res.out
+    assert not (repo / rows[0]).exists(), "a dry run wrote the copy"
+    res = boost("heal")
+    assert "re-materialized brainstorming from" in res.out
+    assert (repo / rows[0] / "SKILL.md").is_file()
+    boost("verify")
+    assert "intact" in boost("doctor").out
+
+
+def test_heal_restores_only_the_missing_copy(boost, tapped, repo):
+    # A teammate's edit to another agent's copy is a committed file; the
+    # repair must not re-copy over it (it is reported, not reverted).
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    shutil.rmtree(repo / rows[0])
+    (repo / rows[-1] / "SKILL.md").write_text("EDITED\n", encoding="utf-8")
+    boost("heal")
+    assert (repo / rows[0] / "SKILL.md").is_file()
+    assert (repo / rows[-1] / "SKILL.md").read_text(encoding="utf-8") == "EDITED\n"
+
+
+def test_heal_exits_1_when_a_project_copy_cannot_be_restored(boost, tapped, repo):
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    shutil.rmtree(repo / rows[0])
+    # Point the row at a tap boost does not have, so nothing can restore it.
+    entry = projectlock.get_skill(repo, "brainstorming")
+    projectlock.set_skill(repo, "brainstorming",
+                          entry | {"tap": "no-such-tap-heal"})
+    res = boost("heal", expect=1)
+    assert "is missing from the project but its source is gone" in res.out + res.err
+
+
+def test_heal_dry_run_warns_and_exits_1_over_an_unrestorable_copy(boost, tapped,
+                                                                  repo):
+    """A preview must not promise a repair the run then reports as gone."""
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    shutil.rmtree(repo / rows[0])
+    entry = projectlock.get_skill(repo, "brainstorming")
+    projectlock.set_skill(repo, "brainstorming",
+                          entry | {"tap": "no-such-tap-dry"})
+    res = boost("heal", "--dry-run", expect=1)
+    text = res.out + res.err
+    assert "would re-materialize project skill brainstorming" not in text
+    assert "brainstorming is missing from the project but its source is gone" in text
+    real = boost("heal", expect=1)
+    assert "is missing from the project but its source is gone" in real.out + real.err
