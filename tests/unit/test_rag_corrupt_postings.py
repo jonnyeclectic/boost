@@ -163,3 +163,32 @@ class TestDoctor:
         assert [c for c in rep.payload()["checks"]
                 if c["name"] == "search-index"] == []
         assert rep.issues == 0
+
+
+class TestReadOnlyUri:
+    def test_a_home_with_uri_metacharacters_still_reads_the_store(
+            self, tmp_path, monkeypatch, sandbox):
+        odd = sandbox / "a#b?c%20d"
+        odd.mkdir()
+        monkeypatch.setattr(rag.paths, "cache_dir", lambda: odd)
+        root = tmp_path / "repo" / "jest-runner"
+        root.mkdir(parents=True)
+        (root / "SKILL.md").write_text(
+            "---\nname: jest-runner\n---\n\njest testing\n", encoding="utf-8")
+        monkeypatch.setattr(rag, "_tap_paths",
+                            lambda: {"acme/skills": root.parent})
+        monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
+        rag.build(entries=[_entry("jest-runner", "jest-runner/SKILL.md")],
+                  force=True)
+        rag._CACHE.clear()
+        assert rag.postings_readable() is True
+        assert rag.postings_fault() is None
+        assert rag._all_postings() is not None
+        # Nothing was opened (and so created) at the truncated path.
+        assert not (sandbox / "a").exists()
+
+    def test_the_uri_is_read_only_and_escaped(self, sandbox, monkeypatch):
+        monkeypatch.setattr(rag.paths, "cache_dir", lambda: sandbox / "x#y")
+        uri = rag._postings_ro_uri()
+        assert uri.startswith("file:///")
+        assert uri.endswith("/x%23y/rag_postings.sqlite?mode=ro")

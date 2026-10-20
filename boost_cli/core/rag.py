@@ -557,6 +557,19 @@ def postings_path() -> Path:
     return paths.cache_dir() / "rag_postings.sqlite"
 
 
+def _postings_ro_uri() -> str:
+    """A read-only SQLite URI for the postings store, percent-encoded.
+
+    ``"file:%s?mode=ro" % path`` breaks on a home directory containing ``#``,
+    ``?`` or ``%``: SQLite cuts the path at the first ``#``/``?``, drops
+    ``mode=ro`` with it, and opens (creating) some other file — so
+    ``postings_readable`` would read a healthy store as corrupt and every
+    search would rebuild the index. ``as_uri`` escapes those and spells a
+    Windows drive path as ``file:///C:/...``.
+    """
+    return postings_path().absolute().as_uri() + "?mode=ro"
+
+
 def _encode_plist(plist: Sequence[Sequence[int]]) -> bytes:
     """One term's ``[[doc, tf], ...]`` as delta+varint bytes.
 
@@ -712,7 +725,7 @@ def read_postings(terms: Sequence[str]) -> dict[str, list[list[int]]]:
     if not uniq:
         return {}
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
     except sqlite3.Error:
         return {}
     out: dict[str, list[list[int]]] = {}
@@ -770,7 +783,7 @@ def stem_expansions(terms: Sequence[str]) -> dict[str, str]:
     if not missing:
         return {}
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
     except sqlite3.Error:
         return {}
     out: dict[str, str] = {}
@@ -804,7 +817,7 @@ def _all_postings() -> dict[str, list[list[int]]] | None:
     incremental build kept docs with no term frequencies.
     """
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
     except sqlite3.Error:
         return None
     out: dict[str, list[list[int]]] = {}
@@ -830,7 +843,7 @@ def postings_readable() -> bool:
     Cheap enough for the search path: one indexed probe, no scan.
     """
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
     except sqlite3.Error:
         return False
     try:
