@@ -2246,6 +2246,29 @@ def _bundle_dump(file: str | None) -> int:
     return 0
 
 
+def _read_stdin_utf8() -> str:
+    """Standard input as UTF-8 text, the way a Boostfile path is read.
+
+    The bytes underneath, not ``sys.stdin.read()``: the text layer decodes
+    with the inherited locale codec, so under ``PYTHONIOENCODING=ascii`` a
+    Boostfile with one accented comment crashed from stdin while the same
+    file by path installed. A closed fd 0 (``<&-``, where Python sets
+    ``sys.stdin`` to None) reads as empty — there is nothing there.
+    """
+    stream = sys.stdin
+    if stream is None:
+        return ""
+    raw = getattr(stream, "buffer", None)
+    if raw is None:
+        return stream.read()
+    data = raw.read()
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise BoostError("<stdin> is not UTF-8 text (byte %d)" % e.start,
+                         hint="save the Boostfile as UTF-8") from None
+
+
 def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     """Apply a Boostfile, or with ``dry_run`` report what applying it would do.
 
@@ -2257,7 +2280,7 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     walks the same lines in the same order the real run would.
     """
     if file == "-":
-        text, label = sys.stdin.read(), "<stdin>"
+        text, label = _read_stdin_utf8(), "<stdin>"
         shown = label  # one spelling, in the warning and the journal alike
     else:
         path = paths.expand(file or "./Boostfile")
@@ -2277,6 +2300,9 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             text, label = path.read_text(encoding="utf-8"), str(path)
         except OSError as e:
             raise BoostError("cannot read %s: %s" % (shown, e.strerror or e)) from e
+        except UnicodeDecodeError as e:
+            raise BoostError("%s is not UTF-8 text (byte %d)" % (shown, e.start),
+                             hint="save the Boostfile as UTF-8") from None
     # A Boostfile saved by a Windows editor opens with a BOM, which glued itself
     # to the first directive ("\ufeffskill") and failed it as "unrecognised"
     # with the culprit invisible in the message. Stripped after both branches,
