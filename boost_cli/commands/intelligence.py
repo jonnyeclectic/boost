@@ -1261,7 +1261,7 @@ def cmd_impact(argv: list[str]) -> int:
 
     # The current project's `--local` skills count as installed — `boost
     # list` shows them. A name in both scopes is the user row, as everywhere.
-    inst = dict(lockfile.installed())
+    inst = lockfile.installed().copy()
     for pname, pentry in integrity.project_skills()[1].items():
         inst.setdefault(pname, pentry)
     if args.name:
