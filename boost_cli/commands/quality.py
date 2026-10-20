@@ -1976,9 +1976,9 @@ def cmd_heal(argv):
                      % _tilde(dup.path))
 
     # A ★ the catalogue no longer gives. Cleared before the cache loop below,
-    # which rebuilds a cache whose stamped ★ no longer matches: the flag is stamped onto each
-    # entry at scan time, so flipping config alone would leave browse and the
-    # curated fallback reading the old star. One line, not one per tap — a
+    # which rebuilds a cache whose stamped ★ no longer matches: the flag is
+    # stamped onto each entry at scan time, so flipping config alone would
+    # leave browse and the curated fallback reading the old star. One line, not one per tap — a
     # catalogue machine has ~420 of them.
     stars = registry.overstarred()
     if stars:

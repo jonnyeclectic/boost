@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from boost_cli.core import catalog, gitutil, registry
+from boost_cli.core import catalog, gitutil, registry, util
 
 
 def _tap(boost, tapped):
@@ -129,3 +129,16 @@ def test_name_index_groups_in_order():
     assert idx == {"a": [a1, a2], "b": [b]}
     assert idx["a"][0] is a1 and idx["a"][1] is a2
     assert catalog.name_index([]) == {}
+
+
+def test_a_tap_whose_clone_is_gone_is_not_fresh(boost, tapped, monkeypatch):
+    # No clone means no HEAD to compare against, and git must not be asked
+    # about a directory that is not there.
+    tap = _tap(boost, tapped)
+    calls = []
+    monkeypatch.setattr(gitutil, "head_commit",
+                        lambda p: calls.append(p) or "x")
+    util.rmtree(tap.path)            # read-only git objects on Windows
+    assert tap.is_cloned is False
+    assert catalog.cache_is_fresh(tap) is False
+    assert calls == []
