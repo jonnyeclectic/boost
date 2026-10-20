@@ -1313,7 +1313,7 @@ def _refused_materializations(existing: dict | None, linked: list[str],
         if declared and m.get("agent") not in declared:
             out.append(row)
         elif changed or m.get("stale"):
-            out.append({**row, "stale": True})
+            out.append(row | {"stale": True})
         else:
             out.append(row)
     return refused + out
