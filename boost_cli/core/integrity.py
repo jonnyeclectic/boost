@@ -39,6 +39,7 @@ STATUS_QUARANTINED = "quarantined"  # artifacts removed on purpose; stash holds 
 STATUS_UNREACHABLE = "unreachable"  # rows exist and boost writes none of the
                                     # agents they name: the item reached nothing
 STATUS_STRANDED = "stranded"  # installed --local into a repo that is gone
+STATUS_OUTDATED = "outdated"  # an agent's copy predates the locked version
 
 ENFORCE_KEY = "security.enforce_digest"
 COMMIT_KEY = "security.enforce_commit"
@@ -220,6 +221,7 @@ def materialized_status(name: str, entry: dict,
     if reaches_no_agent(kind, entry):
         return STATUS_UNREACHABLE
     unlocked = False
+    outdated = False
     for m in entry.get("materializations") or []:
         # A row naming an agent boost no longer writes is a record, not an
         # artifact: nothing wrote that file and nothing ever will, so reading
@@ -248,6 +250,13 @@ def materialized_status(name: str, entry: dict,
             unlocked = True
         elif hashlib.sha256(content.encode("utf-8")).hexdigest() != recorded:
             return STATUS_MODIFIED
+        # Carried past an upgrade that did not write this agent (it was
+        # disabled, say): the file is intact and hashes to its own digest,
+        # which is the old version's. After MODIFIED, so a hand edit is
+        # still named as one rather than overwritten as merely behind.
+        outdated = outdated or bool(m.get("stale"))
+    if outdated:
+        return STATUS_OUTDATED
     return STATUS_UNLOCKED if unlocked else STATUS_OK
 
 
@@ -599,6 +608,7 @@ _VERIFY_ROLE_BY_STATUS = {
     STATUS_OK: "success", STATUS_MODIFIED: "warn", STATUS_MISSING: "danger",
     STATUS_UNLOCKED: "warn", STATUS_QUARANTINED: "muted",
     STATUS_UNREACHABLE: "warn", STATUS_STRANDED: "warn",
+    STATUS_OUTDATED: "warn",
 }
 
 

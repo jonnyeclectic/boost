@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, output, paths
+from . import config, output, paths, util
 
 DISPLAY = {"claude-code": "Claude Code", "windsurf": "Windsurf",
            "cursor": "Cursor", "gemini": "Gemini CLI",
@@ -200,6 +200,82 @@ def unlinking_agents() -> dict[str, Path]:
     :func:`linking_agents` gives — boost never linked there.
     """
     return {n: s["dir"] for n, s in known_agents().items() if s["links_skills"]}
+
+
+def link_dirs_path() -> Path:
+    """Where boost records every skills dir it has linked into."""
+    return paths.state_dir() / "link-dirs.json"
+
+
+def remember_link_dir(agent: str, adir: Path) -> None:
+    """Record that boost linked into ``adir`` for ``agent``.
+
+    The lock records a skill's agents by name, and every removal walks each
+    agent's *current* dir. Repoint ``agents.cursor.dir`` and the links made
+    under the old one were reachable by nothing: uninstall reported cursor
+    unlinked over a link left dangling in ``~/.cursor/skills``, and doctor,
+    heal, sync and clean all looked only in the new dir. Best effort: a state
+    dir that refuses the write costs only this record.
+    """
+    import json
+    seen = _remembered_link_dirs()
+    key = str(adir)
+    if key in seen.get(agent, ()):
+        return
+    seen.setdefault(agent, []).append(key)
+    try:
+        f = link_dirs_path()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic: a torn file reads back as empty and the next write would
+        # drop every dir recorded before it.
+        util.atomic_write_text(
+            f, json.dumps(seen, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        return
+
+
+def _remembered_link_dirs() -> dict[str, list[str]]:
+    import json
+    try:
+        data = json.loads(link_dirs_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(a): [str(d) for d in ds if isinstance(d, str)]
+            for a, ds in data.items() if isinstance(ds, list)}
+
+
+def former_link_dirs() -> list[tuple[str, Path]]:
+    """``(agent, dir)`` for skills dirs boost may have linked into before.
+
+    The dirs :func:`remember_link_dir` recorded, and each linking agent's
+    default dir from ``config.DEFAULTS`` (links made before the record
+    existed), less every dir :func:`unlinking_agents` already walks. A dir
+    that is now a native-store agent's is left out, for the reason
+    :func:`linking_agents` gives: boost never links there, so what it holds
+    belongs to someone else.
+    """
+    known = known_agents()
+    current = {str(d) for d in unlinking_agents().values()}
+    native = {str(s["dir"]) for s in known.values() if not s["links_skills"]}
+    found: dict[str, str] = {}
+    defaults: dict[str, dict] = config.DEFAULTS["agents"]  # type: ignore[assignment]
+    for agent, spec in defaults.items():
+        if spec.get("links_skills", True) and spec.get("dir"):
+            found.setdefault(str(paths.expand(spec["dir"])), agent)
+    for agent, dirs in _remembered_link_dirs().items():
+        for d in dirs:
+            found.setdefault(d, agent)
+    return [(agent, Path(d)) for d, agent in found.items()
+            if d not in current and d not in native]
+
+
+def sweep_dirs() -> list[Path]:
+    """Every skills dir a broken-link sweep walks: each linking agent's
+    current dir, enabled or not, then :func:`former_link_dirs`."""
+    return [*unlinking_agents().values(),
+            *(d for _agent, d in former_link_dirs())]
 
 
 def project_agents() -> dict[str, Path]:

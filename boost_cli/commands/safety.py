@@ -713,7 +713,8 @@ def cmd_attest(argv):
             rec["sha_ok"] = st not in (integrity.STATUS_MODIFIED,
                                        integrity.STATUS_MISSING,
                                        integrity.STATUS_UNREACHABLE,
-                                       integrity.STATUS_STRANDED)
+                                       integrity.STATUS_STRANDED,
+                                       integrity.STATUS_OUTDATED)
             rec["journal"] = ev is not None
             if not rec["sha_ok"]:
                 # A missing store dir / materialized artifact is not a content
@@ -726,6 +727,7 @@ def cmd_attest(argv):
                 # Stranded is a fourth: the artifacts went with the repo.
                 rec["reason"] = (
                     "stranded" if st == integrity.STATUS_STRANDED
+                    else "outdated" if st == integrity.STATUS_OUTDATED
                     else "unreachable" if st == integrity.STATUS_UNREACHABLE
                     else "missing" if st == integrity.STATUS_MISSING
                     else "modified")
