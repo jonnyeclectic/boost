@@ -793,6 +793,46 @@ class TestInstallFromPath:
         store.install_from_path(src)
         assert lockfile.get_skill("no-pin")["pinned"] is False
 
+    # ── a rename reaches the frontmatter: agents list a skill by its
+    # frontmatter name, so renaming only the dir and lock key left the agent
+    # calling it by the old name and `boost adapt` printing a banner for it.
+
+    def test_a_rename_rewrites_only_the_name_line_of_the_store_copy(
+            self, sandbox, tmp_path):
+        fm = "---\nname: alpha\ndescription: \"Use it: now\"\nversion: 1.0.0\n---"
+        src = self._src(tmp_path, fm, extras=False)
+        before = (src / "SKILL.md").read_text(encoding="utf-8")
+        res = store.install_from_path(src, name="beta")
+        copy = (res.dest / "SKILL.md").read_text(encoding="utf-8")
+        assert copy == before.replace("name: alpha", "name: beta", 1)
+        assert (src / "SKILL.md").read_text(encoding="utf-8") == before
+        # The lock hash describes the rewritten copy, not the source.
+        assert lockfile.get_skill("beta")["sha256"] == util.sha256_dir(res.dest)
+
+    def test_an_unrenamed_import_copies_the_file_byte_for_byte(
+            self, sandbox, tmp_path):
+        src = self._src(tmp_path, "---\nname: alpha\n---", extras=False)
+        res = store.install_from_path(src, name="alpha")
+        assert ((res.dest / "SKILL.md").read_bytes()
+                == (src / "SKILL.md").read_bytes())
+
+    def test_rename_frontmatter_reports_whether_it_wrote(self, tmp_path):
+        md = tmp_path / "SKILL.md"
+        md.write_text("---\nname: alpha\n---\n\nbody\n", encoding="utf-8")
+        assert store._rename_frontmatter(md, "alpha", {"name": "alpha"}) is False
+        assert store._rename_frontmatter(md, "beta", {"name": "alpha"}) is True
+        assert md.read_text(encoding="utf-8") == "---\nname: beta\n---\n\nbody\n"
+        # No name field yet: one is added, since the agent would otherwise
+        # fall back to a dir name boost no longer uses.
+        md.write_text("---\nversion: 1\n---\n\nbody", encoding="utf-8")
+        assert store._rename_frontmatter(md, "beta", {"version": 1}) is True
+        assert md.read_text(encoding="utf-8") == (
+            "---\nversion: 1\nname: beta\n---\n\nbody")
+        # No frontmatter block to carry a name: left exactly as it was.
+        md.write_text("# just a heading\n", encoding="utf-8")
+        assert store._rename_frontmatter(md, "beta", {}) is False
+        assert md.read_text(encoding="utf-8") == "# just a heading\n"
+
     def test_blocklist_policy_refuses(self, sandbox, tmp_path):
         policy.save({"blocked_skills": ["blocked-one"]})
         src = self._src(tmp_path, "---\nname: blocked-one\nversion: 1.0.0\n---")

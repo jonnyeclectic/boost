@@ -2966,6 +2966,7 @@ def _resolve_skill(name: str):
         candidate = store.skill_store_dir(bare) / "SKILL.md"
         if candidate.exists():
             p = candidate
+    from_store = p is not None
     if p is None:
         entry = catalog.resolve_one(name)   # raises BoostError if unknown
         p = registry.get(entry["tap"]).path / entry["skill_md"]
@@ -2973,7 +2974,11 @@ def _resolve_skill(name: str):
             raise BoostError("SKILL.md missing for %s" % bare,
                             hint="refresh the tap with `boost update`")
     meta, body = frontmatter.parse(p.read_text(encoding="utf-8", errors="replace"))
-    display = str(meta.get("name") or bare).strip() or bare
+    # Installed, the lock name is the one boost answers to: an import renamed
+    # with `--name` may predate the frontmatter rewrite, and the adapt banner
+    # (`boost adapt <display> …`) must name something this boost can find.
+    display = (bare if from_store
+               else str(meta.get("name") or bare).strip() or bare)
     return display, str(meta.get("description") or "").strip(), body, p, meta
 
 
