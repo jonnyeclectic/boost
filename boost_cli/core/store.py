@@ -4419,18 +4419,16 @@ def restore_preserve_newer_lock_sections(
     section, so the caller can report what changed; writes the lock only when
     there is something to add back.
     """
-    lock = lockfile.read()
     kept: dict[str, list[str]] = {"rules": [], "workflows": []}
-    for name, entry in pre_rules.items():
-        if name not in lock["rules"]:
-            lock["rules"][name] = entry
-            kept["rules"].append(name)
-    for name, entry in pre_workflows.items():
-        if name not in lock["workflows"]:
-            lock["workflows"][name] = entry
-            kept["workflows"].append(name)
-    if kept["rules"] or kept["workflows"]:
-        lockfile.write(lock)
+
+    def keep(lock: dict) -> bool:
+        for section, pre in (("rules", pre_rules), ("workflows", pre_workflows)):
+            for name, entry in pre.items():
+                if name not in lock[section]:
+                    lock[section][name] = entry
+                    kept[section].append(name)
+        return bool(kept["rules"] or kept["workflows"])
+    lockfile.mutate(keep)
     return kept
 
 

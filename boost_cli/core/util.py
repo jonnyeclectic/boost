@@ -210,6 +210,95 @@ def try_lock(path, stale_after: float = 300.0):
             path.unlink()
 
 
+#: How long :func:`file_lock` waits before giving up, in seconds. What it
+#: guards is a read-modify-write of one small file (or one `git
+#: sparse-checkout add`), so a wait this long means a stuck process.
+FILE_LOCK_TIMEOUT = 30.0
+_FILE_LOCK_POLL = 0.05
+
+
+def _os_lock(fd: int) -> bool:
+    """Try once to take an exclusive lock on ``fd``; True when taken."""
+    if sys.platform == "win32":
+        import msvcrt
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    import fcntl
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _os_unlock(fd: int) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def file_lock(path, timeout: float | None = None, *, what: str = "it",
+              strict: bool = True):
+    """Hold an exclusive advisory lock on ``path`` for the ``with`` body.
+
+    Unlike :func:`try_lock` this **waits**, up to ``timeout`` seconds
+    (:data:`FILE_LOCK_TIMEOUT` by default), and then raises a BoostError
+    naming ``what``: its callers are read-modify-writes that must not be
+    skipped, where two boost processes overlapping used to drop one update
+    while both reported success.
+
+    The lock is the OS's — ``flock`` on POSIX, ``msvcrt.locking`` on
+    Windows — so it dies with its process and a killed boost can never leave
+    it wedged. ``path`` is a dedicated sidecar, never the file being
+    guarded: that one is swapped by ``os.replace``, which would leave the
+    lock on an orphaned inode. The sidecar is never deleted either; unlinking
+    it while another process waits on it would hand the next process a
+    fresh, unlocked file. Not re-entrant: a nested ``file_lock`` on the same
+    path in one process waits on itself.
+
+    ``strict=False`` runs the body unlocked when the sidecar cannot be
+    created at all (a read-only dir): the write it guards then fails with
+    its own, better-worded error, and a lock that cannot be taken must not
+    be what reports it.
+    """
+    path = Path(path)
+    wait = FILE_LOCK_TIMEOUT if timeout is None else timeout
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        if strict:
+            raise
+        yield
+        return
+    try:
+        deadline = time.monotonic() + wait
+        while not _os_lock(fd):
+            if time.monotonic() >= deadline:
+                raise BoostError(
+                    "another boost process has held %s for over %gs"
+                    % (what, wait),
+                    hint="wait for the other boost command to finish, then "
+                         "retry (the lock is %s)" % paths.tilde(path))
+            time.sleep(_FILE_LOCK_POLL)
+        try:
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                _os_unlock(fd)
+    finally:
+        os.close(fd)
+
+
 def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     """Write ``text`` to ``path`` so a reader never sees a partial file.
 
