@@ -48,6 +48,31 @@ def harden_console_encoding() -> None:
                 reconfigure(encoding="utf-8", errors="replace")
 
 
+_STDIN = object()   # "read sys.stdin at call time" — None means fd 0 closed
+
+
+def stdin_is_tty(stream: object = _STDIN) -> bool:
+    """True when standard input is an interactive terminal.
+
+    The one test every "is someone there to answer?" check goes through.
+    A bare ``sys.stdin.isatty()`` crashed with AttributeError when fd 0 was
+    closed at launch (``boost uninstall x <&-``), because Python then sets
+    ``sys.stdin`` to None; a stream closed or detached later raises
+    ValueError/OSError instead. Every one of those means nobody is typing,
+    so each answers False — the same as a pipe.
+
+    ``stream`` lets a caller pass the stdin it already holds (a module that
+    reads both streams off its own ``sys``); it defaults to ``sys.stdin``
+    read at call time, not import time, so a swapped stdin is honoured.
+    """
+    if stream is _STDIN:
+        stream = sys.stdin
+    try:
+        return bool(stream.isatty())  # type: ignore[attr-defined]
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
 def use_color(stream=None) -> bool:
     """True when ANSI color should be emitted on `stream` (default stdout).
 
@@ -1265,7 +1290,7 @@ def confirm(prompt: str, default: bool = False, quiet: bool = False) -> bool:
     """
     if os.environ.get("BOOST_ASSUME_YES") or "--yes" in sys.argv or "-y" in sys.argv:
         return True
-    if not sys.stdin.isatty():
+    if not stdin_is_tty():
         if not default and not quiet:
             dim(_CONFIRM_BYPASS_HINT)
         return default

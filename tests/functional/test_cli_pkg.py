@@ -413,6 +413,19 @@ class TestUninstall:
         assert "Uninstalled 1 skill" in r.out
         assert _lock() == {}
 
+    def test_closed_stdin_uninstall_proceeds(self, boost, installed,
+                                             monkeypatch):
+        # `boost uninstall x <&-`: Python sets sys.stdin to None, and the bare
+        # `sys.stdin.isatty()` here crashed with AttributeError (rc 70). Closed
+        # stdin is one more way of having nobody there to answer.
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", None)
+        r = boost("uninstall", "brainstorming")
+        assert r.rc == 0
+        assert "uninstall brainstorming?" not in r.out
+        assert "Uninstalled 1 skill" in r.out
+        assert _lock() == {}
+
     def test_rule_uninstall_says_removed_from_not_unlinked(
             self, boost, fixture_tap_src, tmp_path):
         # Verified live bug: uninstalling a rule used to print "unlinked ←"

@@ -84,6 +84,51 @@ class TestUseColor:
         assert output.use_color(object()) is False
 
 
+class TestStdinIsTty:
+    """`sys.stdin.isatty()` raised AttributeError under `<&-`, where Python
+    sets sys.stdin to None — rc 70 and a crash report from `boost uninstall`.
+    """
+
+    def test_tty(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=True))
+        assert output.stdin_is_tty() is True
+
+    def test_pipe(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        assert output.stdin_is_tty() is False
+
+    def test_closed_at_launch_is_none(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", None)
+        assert output.stdin_is_tty() is False
+
+    def test_closed_stream(self, monkeypatch):
+        s = io.StringIO()
+        s.close()       # isatty() on a closed file raises ValueError
+        monkeypatch.setattr(sys, "stdin", s)
+        assert output.stdin_is_tty() is False
+
+    def test_detached_stream_oserror(self, monkeypatch):
+        class Gone:
+            def isatty(self):
+                raise OSError("bad fd")
+        monkeypatch.setattr(sys, "stdin", Gone())
+        assert output.stdin_is_tty() is False
+
+    def test_an_explicit_stream_beats_sys_stdin(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        assert output.stdin_is_tty(FakeStream(tty=True)) is True
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=True))
+        assert output.stdin_is_tty(None) is False     # passed-in closed stdin
+        assert output.stdin_is_tty() is True
+
+    def test_truthy_non_bool_is_coerced(self, monkeypatch):
+        class Odd:
+            def isatty(self):
+                return 1
+        monkeypatch.setattr(sys, "stdin", Odd())
+        assert output.stdin_is_tty() is True
+
+
 class TestC:
     def test_passthrough_without_color(self, monkeypatch):
         monkeypatch.setenv("NO_COLOR", "1")
@@ -1823,6 +1868,10 @@ class TestTableWidthAware:
         assert line == "a     10"  # left-aligned via numeric column index too
 
 
+def _confirm_hint_line() -> str:
+    return output._CONFIRM_BYPASS_HINT + "\n"
+
+
 class TestConfirm:
     def test_assume_yes_env_wins(self, monkeypatch):
         monkeypatch.setenv("BOOST_ASSUME_YES", "1")
@@ -1847,6 +1896,12 @@ class TestConfirm:
     def test_non_tty_returns_default_false(self, monkeypatch):
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
         assert output.confirm("go?", default=False) is False
+
+    def test_closed_stdin_returns_default_with_hint(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "stdin", None)
+        assert output.confirm("go?", default=False) is False
+        assert capsys.readouterr().out == _confirm_hint_line()
+        assert output.confirm("go?", default=True) is True
 
     def test_default_is_false_when_unspecified(self, monkeypatch):
         # safety: with no explicit default, an unattended (non-tty) confirm must

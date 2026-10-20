@@ -1453,9 +1453,13 @@ def _chat_session(args) -> int:
     # With stdin piped nobody is typing, so the prompt and the typing hint are
     # only chrome in the answers a script captures — the same rule
     # output.confirm applies. A terminal is unchanged.
-    typing = sys.stdin.isatty()
+    typing = out.stdin_is_tty()
     if typing:
         out.info(out.role("ask about skills; blank line or Ctrl-D to exit", "muted"))
+    if sys.stdin is None:
+        # fd 0 closed at launch (`<&-`): input() would raise RuntimeError
+        # ("lost sys.stdin"), but this is just an EOF before the first line.
+        return 0
     history: list[chat_engine.Turn] = []
     while True:
         try:

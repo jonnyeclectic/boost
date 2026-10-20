@@ -444,8 +444,10 @@ def _read_hook_stdin() -> dict:
     prints nothing, which reads like a broken install.)
     """
     try:
-        if sys.stdin.isatty():
-            return {}       # interactive: don't block waiting for an EOF
+        if out.stdin_is_tty() or sys.stdin is None:
+            # Interactive: don't block waiting for an EOF. None: fd 0 was
+            # closed at launch (`<&-`), so there is nothing to read.
+            return {}
         raw = sys.stdin.read().strip()
     except (OSError, ValueError, UnicodeDecodeError):
         return {}

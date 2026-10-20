@@ -934,7 +934,7 @@ def cmd_uninstall(argv: list[str]) -> int:
     # scripted `boost uninstall x` — CI step, Makefile, Dockerfile — into a
     # silent no-op exiting 1. A pipeline that cannot see the prompt keeps the
     # behaviour it has today; the prompt is a speed bump for humans only.
-    if sys.stdin.isatty() and not args.yes:
+    if out.stdin_is_tty() and not args.yes:
         what = (args.names[0] if len(args.names) == 1 else
                 "%d skills: %s" % (len(args.names), ", ".join(args.names)))
         if args.scope == scopes.SCOPE_PROJECT:

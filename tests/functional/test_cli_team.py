@@ -550,6 +550,18 @@ class TestProfile:
         assert lockfile.get_skill("brainstorming") is None
         assert lockfile.get_rule("brainstorming")["version"] == "1.0.0"
 
+    def test_delete_with_closed_stdin_declines_cleanly(self, boost, installed,
+                                                       monkeypatch):
+        # out.confirm() under `<&-` (sys.stdin None) crashed with
+        # AttributeError; it now answers its default, like a pipe.
+        boost("profile", "save", "gone")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", None)
+        r = boost("profile", "delete", "gone", expect=1)
+        assert "unexpected error" not in r.err
+        assert "pass -y or set BOOST_ASSUME_YES=1" in r.out
+        assert "deleted profile gone" not in r.out
+
     def test_delete_and_unknown(self, boost, installed):
         boost("profile", "save", "gone")
         r = boost("profile", "delete", "gone")

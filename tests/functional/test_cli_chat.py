@@ -174,6 +174,15 @@ class TestPipedSession:
         assert "> " not in r.out
         assert not r.out.endswith("\n\n"), "a blank line closing a prompt never shown"
 
+    def test_closed_stdin_is_an_empty_session(self, boost, tapped, monkeypatch):
+        # `boost chat <&-`: sys.stdin is None, and isatty()/input() on it
+        # crashed (rc 70). Nothing to read is an EOF before the first line.
+        monkeypatch.setattr("sys.stdin", None)
+        empty = boost("chat")
+        piped = _session(boost, monkeypatch)
+        assert empty.rc == 0
+        assert (empty.out, empty.err) == (piped.out, piped.err)
+
     def test_a_terminal_still_gets_the_prompt(self, boost, tapped, monkeypatch):
         r = _session(boost, monkeypatch, "brainstorming ideas", tty=True)
         assert r.out.count("> ") == 2, "one prompt per read, including the one hit by EOF"
