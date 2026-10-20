@@ -10,7 +10,10 @@ forever; this pins the parser's answer for every shape that loop depends on.
 from __future__ import annotations
 
 import plistlib
+import sys
 from pathlib import Path
+
+import pytest
 
 from boost_cli.commands.configuration import (
     _cron_entry,
@@ -97,6 +100,10 @@ class TestPlistBody:
         assert _plist_interval_seconds(_plist_body(shim, 86400)) == 86400
 
 
+# The expected lines spell POSIX paths and shell quoting; cron is a POSIX
+# backend, and on Windows str(Path("/x")) is a backslashed path that
+# shlex.quote then wraps.
+@pytest.mark.skipif(sys.platform == "win32", reason="cron entries are POSIX")
 class TestCronEntry:
     def test_env_prefix_and_quoting(self, monkeypatch, tmp_path):
         home = tmp_path / "R&D 50%"
