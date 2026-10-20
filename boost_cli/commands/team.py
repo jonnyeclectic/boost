@@ -7,6 +7,7 @@ import hashlib
 import json
 import operator
 import platform
+import shlex
 import shutil
 import stat
 import sys
@@ -18,6 +19,7 @@ from ..core import (
     catalog,
     cohort,
     complete,
+    dialog,
     journal,
     jsonstate,
     lockfile,
@@ -594,8 +596,34 @@ def _parse_boost_url(url: str):
     return verb, arg
 
 
+#: The flag the registered handler passes. Not a bypass: it moves the question
+#: from a terminal (which an OS-launched handler does not have) to a desktop
+#: dialog. Its presence in the script is how `status` tells a handler written
+#: before it existed — one that could only ever cancel.
+_GUI_FLAG = "--gui"
+
+
+def _protocol_confirm(args, question: str, ok_label: str, system: str) -> bool:
+    """Whether the person approved opening ``args.url``.
+
+    ``--gui`` (the handler's mode) asks only through a dialog and honours
+    neither ``-y`` nor ``BOOST_ASSUME_YES``: the URL came from whatever page
+    the person clicked, so the person must be the one who says yes. Without a
+    dialog to show, it installs nothing and names the command that would.
+    """
+    if not args.gui:
+        return bool(args.yes) or out.confirm(question)
+    answer = dialog.ask("A boost:// link asks to %s" % question, ok_label, system)
+    if answer is None:
+        out.warn("no terminal and no dialog tool to ask with — nothing was "
+                 "changed", wrap=True)
+        out.info("to go ahead, run in a terminal: `boost protocol open %s`"
+                 % shlex.quote(args.url), wrap=True)
+    return bool(answer)
+
+
 def cmd_protocol(argv) -> int:
-    """boost protocol [status|register|unregister|open URL]"""
+    """boost protocol [status|register|unregister|open [-y|--gui] URL]"""
     p = cliparse.parser(
         prog="boost protocol",
         description="Manage the boost:// one-click-install handler")
@@ -603,6 +631,12 @@ def cmd_protocol(argv) -> int:
                    choices=["status", "register", "unregister", "open"],
                    help="what to do (default: status)")
     p.add_argument("url", nargs="?", help="a boost:// URL (for `open`)")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("-y", "--yes", action="store_true",
+                      help="`open` without the confirmation prompt")
+    mode.add_argument(_GUI_FLAG, action="store_true",
+                      help="`open` asks in a desktop dialog instead of the "
+                           "terminal (what the registered handler passes)")
     args = p.parse_args(argv)
     system = platform.system()
 
@@ -612,7 +646,9 @@ def cmd_protocol(argv) -> int:
         verb, arg = _parse_boost_url(args.url)
         if verb == "install":
             entry = catalog.resolve_one(arg)
-            if not out.confirm("install %s from %s?" % (entry["name"], entry["tap"])):
+            if not _protocol_confirm(
+                    args, "install %s from %s?" % (entry["name"], entry["tap"]),
+                    "Install", system):
                 out.info("cancelled")
                 return 1
             res = store.install(entry, via="protocol")
@@ -621,7 +657,7 @@ def cmd_protocol(argv) -> int:
                 out.ok("quality score %d/100" % res.score)
             return 0
         # tap
-        if not out.confirm("tap %s?" % arg):
+        if not _protocol_confirm(args, "tap %s?" % arg, "Tap", system):
             out.info("cancelled")
             return 1
         tap = registry.add(arg)
@@ -649,12 +685,21 @@ def cmd_protocol(argv) -> int:
         # is ruled out — `_parse_boost_url` goes through `urlparse`, which
         # strips CR. What is left is simply that the file is wrong, which is
         # reason enough for a one-keyword pin.
+        #
+        # Never -y, never BOOST_ASSUME_YES: any page can open a boost:// link,
+        # so the handler must ask. With no TTY to ask on, --gui asks in a
+        # dialog; the unset keeps an exported BOOST_ASSUME_YES from leaking
+        # in from the session that launched the browser.
         script.write_text("#!/usr/bin/env bash\n"
                           "# boost:// URL handler — invoked with the URL as $1\n"
-                          'exec "%s" protocol open "$1"\n' % shim,
+                          "unset BOOST_ASSUME_YES\n"
+                          'exec "%s" protocol open %s "$1"\n' % (shim, _GUI_FLAG),
                           encoding="utf-8", newline="\n")
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
         out.ok("wrote handler script %s" % _tilde(script))
+        out.info("a boost:// link asks in a desktop dialog before it installs "
+                 "or taps anything; with no dialog it changes nothing",
+                 wrap=True)
         if system == "Darwin":
             out.info("macOS routes URL schemes through app bundles, so one manual step remains:")
             out.info("  1. Automator → New → Application → 'Run Shell Script'")
@@ -668,6 +713,10 @@ def cmd_protocol(argv) -> int:
                                "Exec=%s %%u\nMimeType=x-scheme-handler/boost;\nNoDisplay=true\n"
                                % script, encoding="utf-8")
             out.ok("wrote %s" % _tilde(desktop))
+            if not (shutil.which("zenity") or shutil.which("kdialog")):
+                out.warn("neither zenity nor kdialog found — the handler "
+                         "cannot ask, so a link will change nothing until one "
+                         "is installed", wrap=True)
             if shutil.which("xdg-mime"):
                 import subprocess
                 proc = subprocess.run(["xdg-mime", "default", "boost-protocol.desktop",
@@ -711,6 +760,11 @@ def cmd_protocol(argv) -> int:
     else:
         out.kv("handler", _tilde(_handler_script())
                if _handler_script().exists() else "not registered")
+    if _handler_script().exists() and _GUI_FLAG not in _handler_script().read_text(
+            encoding="utf-8", errors="replace"):
+        out.warn("the handler script predates its confirmation dialog and "
+                 "cancels every link — re-run `boost protocol register`",
+                 wrap=True)
     if system == "Linux":
         out.kv("desktop", _tilde(_desktop_file())
                if _desktop_file().exists() else "not registered")

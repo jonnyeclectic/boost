@@ -107,6 +107,7 @@ a time, which is what the ``--`` bullet above cost.
 from __future__ import annotations
 
 import os.path
+import re
 import shlex
 from collections.abc import Mapping
 
@@ -549,6 +550,14 @@ _ALREADY = ("already exists", "already registered", "already configured")
 #: against nothing registered would be reported as a removal that happened.
 _NOT_REGISTERED = ("not found", "no mcp server named")
 
+#: Antigravity CLI's "nothing to remove": ``agy mcp remove boost`` against
+#: nothing registered prints ``Error: MCP server "boost" not found`` and exits
+#: **1**, unlike Gemini and Codex which exit 0. The rc-0 rule above therefore
+#: cannot see it, and the generic ``"not found"`` must not be widened to any
+#: rc (a nonzero ``config file not found`` is a real failure). This exact
+#: wording is specific enough to count at any exit code.
+_AGY_NOT_REGISTERED = re.compile(r'mcp server "[^"\n]*" not found')
+
 
 def classify_result(action: str, returncode: int, stdout: str, stderr: str) -> tuple[str, str]:
     """Classify a finished (un)register subprocess into ``(status, detail)``.
@@ -570,6 +579,8 @@ def classify_result(action: str, returncode: int, stdout: str, stderr: str) -> t
     blob = (stderr + stdout).lower()
     if action == "unregister" and returncode == 0 and any(
             k in blob for k in _NOT_REGISTERED):
+        return "not_registered", ""
+    if action == "unregister" and _AGY_NOT_REGISTERED.search(blob):
         return "not_registered", ""
     if returncode == 0:
         return "ran", ""

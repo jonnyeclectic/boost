@@ -628,10 +628,23 @@ class TestEvolve:
         entry = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))[
             "skills"]["brainstorming"]
         assert entry["version"] == "1.4.1"
-        assert entry["sha256"] != old_sha
+        # The lock keeps the tap copy's digest (see the drift test below).
+        assert entry["sha256"] == old_sha
         evs = journal.events(action="evolve")
         assert evs[0]["subject"] == "brainstorming"
         assert evs[0]["version"] == "1.4.1"
+
+    def test_applied_revision_drifts_as_local_edits_not_upstream_moved(
+            self, boost, installed):
+        # Bug: --apply rewrote the lock sha to the store's new hash, so drift
+        # read store == lock != tap as "upstream-moved" with a `boost update`
+        # hint, against a tap with no new commits.
+        boost("evolve", "brainstorming", "--apply", "--feedback", "be shorter")
+        r = boost("drift", "--json")
+        rows = {row["name"]: row for row in json.loads(r.out)["skills"]}
+        assert rows["brainstorming"]["status"] == "local-edits"
+        assert rows["brainstorming"]["hint"] == (
+            "boost reinstall brainstorming to discard local edits")
 
     def test_apply_preserves_untouched_frontmatter_lines_byte_for_byte(
             self, boost, installed):

@@ -551,6 +551,23 @@ class TestClassifyResult:
         assert status == "failed"
         assert detail == "config file not found"
 
+    def test_agy_not_found_at_rc1_is_not_registered(self):
+        # agy exits 1 for "nothing to remove", unlike Gemini/Codex (rc 0).
+        assert mcphost.classify_result(
+            "unregister", 1, "", 'Error: MCP server "boost" not found\n'
+        ) == ("not_registered", "")
+
+    def test_agy_not_found_wording_is_scoped_to_unregister(self):
+        status, detail = mcphost.classify_result(
+            "register", 1, "", 'Error: MCP server "boost" not found')
+        assert (status, detail) == ("failed", 'Error: MCP server "boost" not found')
+
+    def test_agy_marker_needs_the_quoted_server_name(self):
+        # A bare "mcp server not found" is not agy's wording; stays a failure.
+        status, _ = mcphost.classify_result(
+            "unregister", 1, "", "mcp server not found")
+        assert status == "failed"
+
     def test_plain_failure_returns_the_last_stderr_line(self):
         status, detail = mcphost.classify_result(
             "register", 1, "", "line one\nline two\nconnection refused")
