@@ -10,6 +10,8 @@ fail late, overwrite, or crash at rc 70.
 """
 from __future__ import annotations
 
+import errno
+import os
 import subprocess
 from pathlib import Path
 
@@ -170,3 +172,95 @@ class TestCaseCollisions:
             "foo differs only by case from FOO, which is already installed "
             "in this project; ")
         assert exc.value.wrap is True
+
+
+def _no_symlinks(monkeypatch, exc):
+    def refuse(self, target, target_is_directory=False):
+        raise exc
+    monkeypatch.setattr(Path, "symlink_to", refuse)
+
+
+PRIVILEGE = OSError(errno.EINVAL, "A required privilege is not held by the client")
+
+
+class TestNoSymlinks:
+    @pytest.fixture()
+    def entry(self, sandbox, tmp_path):
+        tap = make_tap(tmp_path / "t", skills={"lone": "lone"})
+        return _entry(tap, "lone")
+
+    def test_an_install_refuses_and_leaves_nothing(self, entry, monkeypatch,
+                                                   sandbox):
+        _no_symlinks(monkeypatch, PRIVILEGE)
+        with pytest.raises(BoostError) as exc:
+            store.install(entry)
+        assert exc.value.message == (
+            "cannot link lone into ~/.claude/skills: this system refused to "
+            "create a symlink (A required privilege is not held by the client)")
+        assert exc.value.hint.startswith(
+            "boost installs a skill as a symlink into each agent's dir. On "
+            "Windows, turn on Developer Mode")
+        assert exc.value.wrap is True
+        assert not os.path.lexists(store.skill_store_dir("lone"))
+        assert lockfile.get_skill("lone") is None
+        assert not os.path.lexists(sandbox / ".claude" / "skills" / "lone")
+
+    def test_the_cli_exits_1_not_70(self, entry, monkeypatch, boost):
+        _no_symlinks(monkeypatch, PRIVILEGE)
+        res = boost("install", "lone", expect=1)
+        err = " ".join(res.err.split())
+        assert "this system refused to create a symlink" in err
+        assert "Developer Mode" in err
+        assert "unexpected error" not in err
+
+    def test_an_import_refuses_and_leaves_nothing(self, sandbox, tmp_path,
+                                                  monkeypatch):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("---\nname: imp\n---\n", encoding="utf-8")
+        _no_symlinks(monkeypatch, PRIVILEGE)
+        with pytest.raises(BoostError):
+            store.install_from_path(src)
+        assert not os.path.lexists(store.skill_store_dir("imp"))
+        assert lockfile.get_skill("imp") is None
+
+    def test_an_import_over_an_existing_dir_keeps_it(self, sandbox, tmp_path,
+                                                     monkeypatch):
+        # Not fresh: the rollback must not delete a copy that was there.
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("---\nname: imp\n---\n", encoding="utf-8")
+        dest = store.skill_store_dir("imp")
+        dest.mkdir(parents=True)
+        (dest / "SKILL.md").write_text("---\nname: imp\n---\n", encoding="utf-8")
+        _no_symlinks(monkeypatch, PRIVILEGE)
+        with pytest.raises(BoostError):
+            store.install_from_path(src, force=True)
+        assert (dest / "SKILL.md").is_file()
+
+    def test_any_other_link_failure_stays_loud(self, entry, monkeypatch):
+        _no_symlinks(monkeypatch, OSError(errno.ENOSPC, "No space left"))
+        with pytest.raises(OSError) as exc:
+            store.install(entry)
+        assert not isinstance(exc.value, BoostError)
+        assert not os.path.lexists(store.skill_store_dir("lone"))
+
+    @pytest.mark.parametrize(("exc", "unsupported"), [
+        (OSError(errno.EINVAL, "x"), True),
+        (OSError(errno.ENOTSUP, "x"), True),
+        (OSError(errno.EOPNOTSUPP, "x"), True),
+        (OSError(errno.ENOSYS, "x"), True),
+        (OSError(errno.ENOSPC, "x"), False),
+        (OSError(errno.EEXIST, "x"), False),
+        (PermissionError(errno.EPERM, "x"), False),
+        (PermissionError(errno.EINVAL, "x"), False),
+    ])
+    def test_which_errors_mean_no_symlinks(self, exc, unsupported):
+        assert store.symlinks_unsupported(exc) is unsupported
+
+    def test_windows_privilege_not_held_by_winerror(self):
+        for exc in (OSError(errno.EIO, "x"), PermissionError(errno.EACCES, "x")):
+            exc.winerror = 1314
+            assert store.symlinks_unsupported(exc) is True
+            exc.winerror = 1313
+            assert store.symlinks_unsupported(exc) is False

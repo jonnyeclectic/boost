@@ -568,7 +568,7 @@ def link_agents(name: str, only: list[str] | None = None, *,
             elif link.exists():
                 res.conflicts.append(str(link))
                 continue
-            link.symlink_to(target)
+            _symlink(link, target)
         except PermissionError:
             # One unwritable agent dir used to abort the whole install at
             # exit 70 — after the store copy and the other agents' links, so
@@ -600,6 +600,49 @@ def link_agents(name: str, only: list[str] | None = None, *,
         agents.remember_link_dir(agent, adir)
         res.linked.append(agent)
     return res
+
+
+#: What a filesystem or OS that cannot make a symlink at all raises: EINVAL
+#: from Windows without Developer Mode (ERROR_PRIVILEGE_NOT_HELD arrives as a
+#: plain OSError, not a PermissionError), ENOTSUP/EOPNOTSUPP/ENOSYS from FAT
+#: and exFAT mounts. EPERM is left out on purpose: it is a PermissionError,
+#: and :func:`link_agents` already reads that as an unwritable agent dir.
+_NO_SYMLINK_ERRNOS = frozenset({errno.EINVAL, errno.ENOTSUP,
+                                errno.EOPNOTSUPP, errno.ENOSYS})
+_ERROR_PRIVILEGE_NOT_HELD = 1314
+
+
+def symlinks_unsupported(exc: OSError) -> bool:
+    """Whether ``exc``, raised making a symlink, means none can be made."""
+    if getattr(exc, "winerror", None) == _ERROR_PRIVILEGE_NOT_HELD:
+        return True
+    return (not isinstance(exc, PermissionError)
+            and exc.errno in _NO_SYMLINK_ERRNOS)
+
+
+def _symlink(link: Path, target: Path) -> None:
+    """``link.symlink_to(target)``, or a BoostError when no symlink can be made.
+
+    boost has no copy mode: every user-scope skill reaches its agents as a
+    link into the store. Where the OS refuses links outright, every install
+    used to exit 70 with a crash report from this line. The install's own
+    rollback undoes the store copy and any link already made, so the skill
+    is left not installed rather than half installed.
+    """
+    try:
+        link.symlink_to(target)
+    except OSError as exc:
+        if not symlinks_unsupported(exc):
+            raise
+        raise BoostError(
+            "cannot link %s into %s: this system refused to create a "
+            "symlink (%s)" % (target.name, paths.tilde(link.parent),
+                              exc.strerror or exc),
+            hint="boost installs a skill as a symlink into each agent's dir. "
+                 "On Windows, turn on Developer Mode (Settings > System > For "
+                 "developers) or run from an administrator shell; on a FAT or "
+                 "exFAT drive, keep your home on a filesystem with symlinks",
+            wrap=True) from exc
 
 
 def _lock_date(name: str, updated_at: str | None) -> str | None:
@@ -4409,15 +4452,28 @@ def install_from_path(src_dir: Path, name: str | None = None,
     _require_writable(name)
     if disowned:
         _drop_skill_copy_row(disowned)
-    # A URL import is bounded by its clone, as a tap install is by its tap; a
-    # path import copies what the user's own links lead to.
-    skipped = _copy_skill(src_dir, dest,
-                          within=remote.root if remote else None)
-    _rename_frontmatter(dest / "SKILL.md", name, meta)
-    # An import records no date, so the one a tap install left in the lock
-    # must not stand for these files.
-    res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
-                      updated_at=None)
+    fresh = not os.path.lexists(dest)
+    try:
+        # A URL import is bounded by its clone, as a tap install is by its
+        # tap; a path import copies what the user's own links lead to.
+        skipped = _copy_skill(src_dir, dest,
+                              within=remote.root if remote else None)
+        _rename_frontmatter(dest / "SKILL.md", name, meta)
+        # An import records no date, so the one a tap install left in the
+        # lock must not stand for these files.
+        res = link_agents(name,
+                          only=preserved_agent_scope(only_agents, existing),
+                          updated_at=None)
+    except BaseException:
+        # As in install(): nothing recorded a fresh copy, so nothing else
+        # would ever clean it up — a refused link left an unrecorded store
+        # dir that the rerun then refused to touch.
+        if fresh and lockfile.get_skill(name) is None:
+            with contextlib.suppress(OSError):
+                unlink_agents(name)
+            with contextlib.suppress(OSError):
+                util.rmtree(dest)
+        raise
     res.skipped_links = skipped
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
