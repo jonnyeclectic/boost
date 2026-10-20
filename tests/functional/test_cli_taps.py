@@ -528,7 +528,7 @@ class TestOutdated:
         assert "1.4.0" in r.out and "1.5.0" in r.out
         assert "INSTALLED" in r.out and "LATEST" in r.out
         assert "1 outdated" in r.out
-        assert "pinned items stay put" in r.out
+        assert "pinned and quarantined items stay put" in r.out
 
         boost("pin", "brainstorming")
         r = boost("outdated")

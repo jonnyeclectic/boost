@@ -1549,7 +1549,8 @@ def _refresh_line(label: str, old_v: str, new_v: str, edited: bool,
 
 def _update_materialized(kind: str, installed: dict[str, dict], results,
                          discard_edits: bool = False,
-                         allow_downgrade: bool = False) -> tuple[int, int, int]:
+                         allow_downgrade: bool = False
+                         ) -> tuple[int, int, int, int]:
     """Re-materialize installed rules/workflows whose tap source moved.
 
     Mirrors the skill upgrade loop: for each installed item from a refreshed
@@ -1559,16 +1560,16 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
     quarantined one would re-materialize the very content quarantine removed.
     An edited or downgraded item is held unless its flag releases it
     (`_hold_update`).
-    Returns ``(refreshed, held, pinned)`` — the last counts pinned items whose
-    source did move, so the caller can say they were held rather than that
-    everything is up to date.
+    Returns ``(refreshed, held, pinned, quarantined)`` — the last two count
+    pinned and quarantined items whose source did move, so the caller can say
+    they were held rather than that everything is up to date. ``held`` also
+    counts an update that was attempted and refused (a policy block, a
+    declined diff), which is just as much "not up to date".
     """
     import hashlib
-    n = held = pinned = 0
+    n = held = pinned = quarantined = 0
     for name, lk in sorted(installed.items()):
         tapname = lk.get("tap")
-        if lk.get("quarantined"):
-            continue
         if tapname in (None, "local") or tapname not in results:
             continue
         matches = [e for e in catalog.find(name)
@@ -1597,6 +1598,9 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                 cur = None
             changed = bool(cur and cur != lk.get("sha256"))
         if not changed:
+            continue
+        if lk.get("quarantined"):
+            quarantined += 1
             continue
         if lk.get("pinned"):
             pinned += 1
@@ -1628,6 +1632,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
         if new_raw and not _confirm_risky_materialized(kind, name, lk, new_raw):
             out.warn("%s %s: update skipped — review the diff, then `boost "
                      "update --yes` to apply" % (kind, name))
+            held += 1
             continue
         try:
             # keep the item where it was installed (user vs a specific repo).
@@ -1638,11 +1643,12 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                 via="update"))
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
+            held += 1
             continue
         out.ok(_refresh_line("%s %s" % (kind, name), old_v,
                              str(entry.get("version") or ""), edited, bumped))
         n += 1
-    return n, held, pinned
+    return n, held, pinned, quarantined
 
 
 def _resync_vectors(moved: list[str]) -> None:
@@ -1800,8 +1806,8 @@ def _ingest_shards(args) -> int:
 
 
 def _update_skill(name: str, lk: dict, scope: str, pbase, results,
-                  args) -> tuple[int, int, int]:
-    """Refresh one installed skill from a refreshed tap: ``(upgraded, held, pinned)``.
+                  args) -> tuple[int, int, int, int]:
+    """Refresh one installed skill: ``(upgraded, held, pinned, quarantined)``.
 
     ``scope``/``pbase`` say which install this row is: a project row is judged
     against its copy in the repo and reinstalled there (``--local --force``),
@@ -1809,13 +1815,12 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     """
     label = name + (" (project)" if scope == scopes.SCOPE_PROJECT else "")
     tapname: str = lk.get("tap") or "local"
-    if (lk.get("quarantined")
-            or tapname == "local" or tapname not in results):
-        return 0, 0, 0
+    if tapname == "local" or tapname not in results:
+        return 0, 0, 0, 0
     matches = [e for e in catalog.find(name) if e["tap"] == tapname]
     if not matches:
         out.warn("%s is no longer in tap %s — leaving as-is" % (label, tapname))
-        return 0, 0, 0
+        return 0, 0, 0, 0
     # The lock's `source_dir`, not scan order: with two same-named copies in
     # one tap (`install --path` picked one), `matches[0]` silently swapped the
     # user's choice for whichever copy scanned first.
@@ -1832,34 +1837,41 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
             try:
                 src_sha = util.sha256_dir(store.source_dir_for(entry))
             except BoostError:
-                return 0, 0, 0
+                return 0, 0, 0, 0
     reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
                                        head, lk.get("sha256", ""), src_sha)
     if reason is None:
-        return 0, 0, 0
+        return 0, 0, 0, 0
+    if lk.get("quarantined"):
+        # Never refreshed — that would bring back the content quarantine
+        # removed — but counted, like a pin, so the run doesn't end on
+        # "everything up to date" while `outdated` lists it.
+        return 0, 0, 0, 1
     if lk.get("pinned"):
         # Skipped, as `pin` promised — but counted, because `outdated`
         # names this same item and the summary must not contradict it.
-        return 0, 0, 1
+        return 0, 0, 1, 0
     hold, edited = _hold_update(label, name, lk, "skill", old_v,
                                 str(entry.get("version") or ""),
                                 args.discard_edits, args.allow_downgrade,
                                 base=pbase)
     if hold:
-        return 0, 1, 0
+        return 0, 1, 0, 0
+    # A declined diff or a refused install (a policy block) is held back too:
+    # both used to end the run on "everything up to date".
     if not _confirm_risky_update(name, entry, base=pbase, lk=lk):
         out.warn("%s: update skipped — review the diff, then `boost update "
                  "--yes` to apply" % label)
-        return 0, 0, 0
+        return 0, 1, 0, 0
     try:
         _warn_unwritable(store.install(entry, force=True, via="update",
                                        scope=scope, base=pbase))
     except BoostError as err:
         out.warn("%s: %s" % (label, err.message))
-        return 0, 0, 0
+        return 0, 1, 0, 0
     out.ok(_refresh_line(label, old_v, str(entry.get("version") or ""),
                          edited, reason == staleness.VERSION))
-    return 1, 0, 0
+    return 1, 0, 0, 0
 
 
 def cmd_update(argv: list[str]) -> int:
@@ -1943,27 +1955,29 @@ def cmd_update(argv: list[str]) -> int:
         # `boost update --taps-only` exists precisely to notice that morning.
         return 1 if failures and not results else 0
 
-    upgraded = held = pinned_held = 0
+    upgraded = held = pinned_held = quarantined_held = 0
     # Both locks, so a `--local` skill is refreshed in the repo it lives in —
     # the user lock alone left it at its old version under "everything up to
     # date" while `boost info` said it had an update.
     for name, lk, scope, pbase in integrity.installed_skill_rows():
-        n, h, p = _update_skill(name, lk, scope, pbase, results, args)
+        n, h, p, q = _update_skill(name, lk, scope, pbase, results, args)
         upgraded += n
         held += h
         pinned_held += p
+        quarantined_held += q
     # Rules and workflows refresh from the same tap update.
     # Skills installed before boost dated them, so a plugin's copy of the
     # same name can be weighed against them (store.serving_plugin).
     store.backfill_source_dates(results)
     for kind, section in (("rule", lockfile.installed_rules()),
                           ("workflow", lockfile.installed_workflows())):
-        n, h, p = _update_materialized(kind, section, results,
-                                       discard_edits=args.discard_edits,
-                                       allow_downgrade=args.allow_downgrade)
+        n, h, p, q = _update_materialized(
+            kind, section, results, discard_edits=args.discard_edits,
+            allow_downgrade=args.allow_downgrade)
         upgraded += n
         held += h
         pinned_held += p
+        quarantined_held += q
     if held:
         # Never "everything up to date" over items it just declined to touch.
         out.info(out.role("%d item%s held back — see above"
@@ -1975,7 +1989,13 @@ def cmd_update(argv: list[str]) -> int:
             % (pinned_held, "s" if pinned_held != 1 else "",
                "ve" if pinned_held != 1 else "s",
                "them" if pinned_held != 1 else "it"), "muted"))
-    if not (held or pinned_held or upgraded):
+    if quarantined_held:
+        out.info(out.role(
+            "%d quarantined item%s ha%s an update held back — `boost "
+            "quarantine --release <name>` lets one update"
+            % (quarantined_held, "s" if quarantined_held != 1 else "",
+               "ve" if quarantined_held != 1 else "s"), "muted"))
+    if not (held or pinned_held or quarantined_held or upgraded):
         if pinned_skips and pinned_skips == len(results) and not failures:
             # Every tap was a pinned skip: nothing was actually checked over
             # the network, which "everything up to date" would misreport as
