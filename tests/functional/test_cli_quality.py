@@ -1435,7 +1435,7 @@ class TestDrift:
         assert "boost update" in r.out
         data = json.loads(boost("drift", "--json").out)
         assert data == {"skills": [{"name": "brainstorming", "kind": "skill",
-                                    "status": "upstream-moved",
+                                    "scope": "user", "status": "upstream-moved",
                                     "hint": "boost update"}]}
 
     def test_source_missing_after_untap_hints_retap_not_update(self, boost,
@@ -1452,7 +1452,7 @@ class TestDrift:
         want = "boost tap %s" % str(tapped.resolve())
         data = json.loads(boost("drift", "--json").out)
         assert data == {"skills": [{"name": "brainstorming", "kind": "skill",
-                                    "status": "source-missing",
+                                    "scope": "user", "status": "source-missing",
                                     "hint": want}]}
 
     def test_no_lock_file_but_nothing_ever_installed_rc0(self, boost, tapped):
