@@ -955,6 +955,17 @@ def cmd_onboard(argv) -> int:
         if not shutil.which("gh"):
             raise BoostError("the `gh` CLI is required for --pr",
                             hint="brew install gh, or rerun without --pr")
+        # A branch left by an earlier run whose `gh pr create` failed: without
+        # this, the rerun wrote every file onto the current branch and then
+        # died on `checkout -b`, leaving them untracked with no hint.
+        if gitutil.run(["-C", str(repo), "rev-parse", "--verify", "--quiet",
+                        "refs/heads/" + _PR_BRANCH], check=False).returncode == 0:
+            raise BoostError("branch %s already exists in %s"
+                             % (_PR_BRANCH, _tilde(repo)),
+                             hint="open its PR with `git checkout %s && gh pr "
+                                  "create --fill`, or delete it with `git "
+                                  "branch -D %s` and rerun"
+                                  % (_PR_BRANCH, _PR_BRANCH))
 
     if args.dry_run:
         changes = 0

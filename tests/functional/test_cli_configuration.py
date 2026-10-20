@@ -644,6 +644,33 @@ class TestOnboard:
         assert "gh pr create failed: boom" in r.err
         assert "boost/onboard-skill-tracker" in r.err  # hint names the branch
 
+    def test_pr_rerun_after_gh_failure_refuses_before_writing(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        repo = _mk_repo(tmp_path / "repo")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        real_run = subprocess.run
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.subprocess.run",
+            lambda cmd, **kw: _proc(cmd, 1, err="boom")
+            if cmd and cmd[0] == "gh" else real_run(cmd, **kw))
+        boost("onboard", "--repo", repo, "--pr", expect=1)
+        main = subprocess.run(["git", "rev-parse", "--abbrev-ref", "@{-1}"],
+                              cwd=str(repo), capture_output=True, text=True)
+        subprocess.run(["git", "checkout", "-q", main.stdout.strip()],
+                       cwd=str(repo), check=True)
+        assert not (repo / ".boost").exists()
+        for argv in (("--pr",), ("--pr", "--dry-run")):
+            r = boost("onboard", "--repo", repo, *argv, expect=1)
+            assert ("branch boost/onboard-skill-tracker already exists in"
+                    in r.err)
+            assert "git branch -D boost/onboard-skill-tracker" in r.err
+            status = subprocess.run(["git", "status", "--porcelain"],
+                                    cwd=str(repo), capture_output=True,
+                                    text=True)
+            assert status.stdout == ""
+            assert not (repo / ".boost").exists()
+
     def test_pr_preconditions(self, boost, sandbox, tmp_path):
         r = boost("onboard", "--repo", "/no/such/dir", expect=1)
         assert "is not a directory" in r.err
