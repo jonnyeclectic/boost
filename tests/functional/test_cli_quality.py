@@ -2466,9 +2466,13 @@ class TestStateFilesThatAreNotUtf8:
     """One bad byte in a file boost keeps for itself is a corrupt file, never
     a traceback: each of these took a command down at exit 70."""
 
-    def test_a_policy_file_reads_as_defaults(self, boost, tapped):
+    def test_a_policy_file_fails_closed_not_a_crash(self, boost, tapped):
+        # A refusal naming the file (rc 1), not exit 70 — and not an install
+        # either: a policy boost cannot read may hold a blocklist.
         paths.policy_path().write_bytes(b"\xff\xfe")
-        boost("install", "brainstorming")
+        r = boost("install", "brainstorming", expect=1)
+        assert ("policy blocks installing brainstorming: %s: not valid UTF-8"
+                % paths.policy_path()) in " ".join(r.err.split())
 
     @pytest.mark.parametrize("which", ["tap", "index"])
     def test_a_search_cache_is_rebuilt(self, boost, tapped, which):

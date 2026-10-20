@@ -38,6 +38,7 @@ from ..core import (
     lockfile,
     logs,
     paths,
+    policy,
     prereq,
     provenance,
     registry,
@@ -553,6 +554,14 @@ def cmd_doctor(argv):
                     len(clones), _s(len(clones)),
                     "is" if len(clones) == 1 else "are"))
                 if clones else "no taps or settings are read"), wrap=True)
+
+    # Same for policy.json: unreadable, it reads as defaults, and the
+    # verdict was "healthy" while every rule in it went unenforced.
+    pol_err = policy.check()
+    if pol_err:
+        bad("policy", "%s — every install is refused until it is repaired; "
+            "the next `boost policy set` moves it aside to policy.json.corrupt"
+            % pol_err, wrap=True)
 
     # One agent whose `dir` names an unset `${VAR}` makes `known_agents` raise,
     # and a dozen checks below reach it — the link loop, the materialization

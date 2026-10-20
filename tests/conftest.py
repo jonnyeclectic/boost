@@ -676,9 +676,10 @@ def sandbox(tmp_path, monkeypatch):
     # Once-per-process warnings for a cache boost could not save. A flag one
     # test left set would silence the warning in the next, so an assertion
     # that it is absent would pass for the wrong reason.
-    from boost_cli.core import catalog, complete, lockfile
+    from boost_cli.core import catalog, complete, lockfile, policy
     monkeypatch.setattr(complete, "_WARNED_UNSAVED", False)
     monkeypatch.setattr(lockfile, "_WARNED_CORRUPT", False)
+    monkeypatch.setattr(policy, "_WARNED_CORRUPT", False)
     monkeypatch.setattr(catalog, "_UNSAVED", set())
     return home
 
