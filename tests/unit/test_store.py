@@ -833,6 +833,35 @@ class TestInstallFromPath:
         assert store._rename_frontmatter(md, "beta", {}) is False
         assert md.read_text(encoding="utf-8") == "# just a heading\n"
 
+    def test_a_rename_keeps_every_other_byte_of_the_copy(self, tmp_path):
+        # `set_field` would add a blank line after the fence and fold CRLF;
+        # the copy must differ from its source by the name line alone.
+        md = tmp_path / "SKILL.md"
+        md.write_bytes(b"---\r\nname: alpha\r\nmeta:\r\n  name: inner\r\n"
+                       b"---\r\nbody\r\n")
+        assert store._rename_frontmatter(md, "beta", {"name": "alpha"}) is True
+        assert md.read_bytes() == (b"---\r\nname: beta\r\nmeta:\r\n"
+                                   b"  name: inner\r\n---\r\nbody\r\n")
+
+    def test_rename_frontmatter_leaves_an_unclosed_or_undecodable_file(
+            self, tmp_path):
+        md = tmp_path / "SKILL.md"
+        md.write_bytes(b"---\nname: alpha\nbody\n")
+        assert store._rename_frontmatter(md, "beta", {"name": "alpha"}) is False
+        assert md.read_bytes() == b"---\nname: alpha\nbody\n"
+        md.write_bytes(b"---\nname: alpha\n---\n\xff\n")
+        assert store._rename_frontmatter(md, "beta", {"name": "alpha"}) is False
+        assert md.read_bytes() == b"---\nname: alpha\n---\n\xff\n"
+
+    def test_splice_field_adds_a_missing_key_before_the_fence(self):
+        from boost_cli.core import frontmatter
+        assert (frontmatter.splice_field("\ufeff---\r\nv: 1\r\n---\r\nb",
+                                         "name", "x")
+                == "\ufeff---\r\nv: 1\r\nname: x\r\n---\r\nb")
+        assert (frontmatter.splice_field("---\nv: 1\n...\nb", "name", "x")
+                == "---\nv: 1\nname: x\n...\nb")
+        assert frontmatter.splice_field("# no fence\n", "name", "x") == "# no fence\n"
+
     def test_blocklist_policy_refuses(self, sandbox, tmp_path):
         policy.save({"blocked_skills": ["blocked-one"]})
         src = self._src(tmp_path, "---\nname: blocked-one\nversion: 1.0.0\n---")

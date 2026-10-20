@@ -3931,19 +3931,22 @@ def _rename_frontmatter(skill_md: Path, name: str, meta: dict) -> bool:
     ``name: alpha`` used to rename only the store dir and the lock key: the
     agent still listed it as ``alpha`` (agents go by the frontmatter name) and
     ``boost adapt beta`` printed a banner command for an ``alpha`` that boost
-    had no record of. Only the one line changes (``frontmatter.set_field``),
+    had no record of. Only the one line changes (``frontmatter.splice_field``),
     and only in the copy — the source is the user's. Returns whether it wrote.
     """
     from . import frontmatter
     if str(meta.get("name") or "") == name:
         return False
-    text = skill_md.read_text(encoding="utf-8")
-    revised = frontmatter.set_field(text, "name", name)
+    # bytes, not text: a text read would translate CRLF on the way in
+    raw = skill_md.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    revised = frontmatter.splice_field(text, "name", name)
     if revised == text:     # no frontmatter block to carry a name
         return False
-    if text.endswith("\n") and not revised.endswith("\n"):
-        revised += "\n"    # `split` drops the body's final newline
-    util.atomic_write_text(skill_md, revised)
+    util.atomic_write_text(skill_md, revised)   # newline="\n": verbatim
     return True
 
 
