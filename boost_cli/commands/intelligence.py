@@ -1245,7 +1245,8 @@ def cmd_focus(argv: list[str]) -> int:
                             "skills" % name, hint="see `boost list`")
         if entry.get("quarantined"):
             raise BoostError("%s is quarantined" % name,
-                            hint="release it first with `boost quarantine`")
+                            hint="release it first with `boost quarantine "
+                                 "--release %s`" % name)
     sidelined = 0
     for name, entry in sorted(inst.items()):
         if name in names or entry.get("quarantined"):
