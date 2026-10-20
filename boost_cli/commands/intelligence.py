@@ -991,8 +991,10 @@ def cmd_context(argv: list[str]) -> int:
     sub.add_parser("apply", help="link/unlink mapped skills for this branch")
     args = ap.parse_args(argv)
 
-    state = _load_state(_CONTEXT_STATE, _CONTEXT_DEFAULT)
     action = args.action or "status"
+    if args.top_json and action != "status":
+        ap.error("--json is only supported with `context status`")
+    state = _load_state(_CONTEXT_STATE, _CONTEXT_DEFAULT)
 
     if action == "status":
         # Bare `boost context` means status, so `boost context --json` has to

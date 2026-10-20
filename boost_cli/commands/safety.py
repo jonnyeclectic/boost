@@ -551,6 +551,9 @@ def cmd_quarantine(argv):
     if modes != 1:
         raise BoostError("specify a skill to quarantine, --release NAME, or --list",
                         hint="e.g. `boost quarantine cowboy-coding`")
+    if args.as_json and not args.list_mode:
+        # Accepting it and printing prose would hand `| jq` a parse error.
+        ap.error("--json is only supported with --list")
 
     if args.list_mode:
         rows, items = [], []

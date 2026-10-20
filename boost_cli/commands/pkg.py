@@ -2767,6 +2767,8 @@ def cmd_snapshot(argv: list[str]) -> int:
     args = ap.parse_args(argv)
     if args.action == "list" and args.arg:
         ap.error("snapshot list takes no LABEL|ID")
+    if args.json and args.action != "list":
+        ap.error("--json is only supported with `snapshot list`")
     if args.action == "save":
         return _snapshot_save(args.arg)
     if args.action == "list":

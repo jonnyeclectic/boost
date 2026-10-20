@@ -70,6 +70,8 @@ def cmd_hooks(argv) -> int:
     # stored and compared (`cs.clean_name` trims again as the core backstop);
     # an all-whitespace name then meets the "needs --name" refusal below.
     args.name = (args.name or "").strip()
+    if args.as_json and args.action != "list":
+        p.error("--json is only supported with `hooks list`")
 
     if args.action == "list":
         return _list(args.scope, args.host, args.event, args.as_json)
