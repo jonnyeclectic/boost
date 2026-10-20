@@ -103,6 +103,7 @@ def cmd_audit(argv):
     installed = integrity.installed_skills()
     findings: dict = {}
     missing_store: list[str] = []
+    missing_project: list[str] = []   # project rows with no copy in the repo
 
     def add(name, severity, label, where, snippet):
         findings.setdefault(name, []).append({
@@ -123,7 +124,7 @@ def cmd_audit(argv):
             # an installed skill whose store directory vanished is exactly
             # what `verify` reports as STATUS_MISSING, and silently counting
             # it here as a clean pass would hide that from `audit` output.
-            missing_store.append(name)
+            (missing_project if row.is_project else missing_store).append(name)
             continue
         if min_score > 0:
             score, _n = util.score_skill(sdir)
@@ -198,11 +199,13 @@ def cmd_audit(argv):
         for f in fs:
             counts[f["severity"]] += 1
 
-    scanned = len(installed) - len(missing_store) + mat_scanned
+    missing_n = len(missing_store) + len(missing_project)
+    scanned = len(installed) - missing_n + mat_scanned
     if args.json:
-        print(json.dumps({"skills_scanned": len(installed) - len(missing_store),
+        print(json.dumps({"skills_scanned": len(installed) - missing_n,
                           "materialized_scanned": mat_scanned,
                           "missing_store": sorted(missing_store),
+                          "missing_project": sorted(missing_project),
                           "findings": findings, "counts": counts}))
         return 1 if counts["HIGH"] or counts["MED"] else 0
 
@@ -211,6 +214,13 @@ def cmd_audit(argv):
         out.warn("%d skill%s missing their store directory — nothing to scan: %s"
                  % (len(missing_store), _s(len(missing_store)),
                     ", ".join(sorted(missing_store))))
+    if missing_project:
+        # Not the store: a project skill's copy is in the repo, and the
+        # remedy is `boost sync` from inside it (store.project_sync_plan).
+        out.warn("%d project skill%s missing their copy in the repo — nothing "
+                 "to scan: %s" % (len(missing_project), _s(len(missing_project)),
+                                  ", ".join(sorted(missing_project))),
+                 wrap=True)
     if not findings:
         out.ok("no safety findings across %d item%s" % (scanned, _s(scanned)))
         return 0

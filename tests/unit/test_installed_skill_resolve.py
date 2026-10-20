@@ -165,3 +165,14 @@ class TestEnforceRow:
         assert row is not None and row.dir == d
         with pytest.raises(BoostError, match="no longer matches the lock file"):
             integrity.enforce_row(row)
+
+
+class TestReadSkillMetaAtDir:
+    def test_skill_dir_is_read_instead_of_the_store(self, repo):
+        d, _ = _project_skill(
+            repo, "rm", body="---\nname: rm\ndescription: here\n---\nbody\n")
+        from boost_cli.core import store
+        meta, body = store.read_skill_meta("rm", d)
+        assert (meta["name"], meta["description"], body.strip()) == (
+            "rm", "here", "body")
+        assert store.read_skill_meta("rm") is None   # nothing in the store

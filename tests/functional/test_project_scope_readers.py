@@ -13,6 +13,7 @@ Commands that act on what only a user install has — `tag`, `quarantine`,
 from __future__ import annotations
 
 import json
+import shutil
 
 import pytest
 
@@ -89,6 +90,20 @@ class TestPolicyAndAudit:
         labels = sorted(f["label"] for f in
                         data["findings"]["cowboy-coding (project)"])
         assert labels == ["exfiltration", "policy-blocked"]
+
+
+    def test_audit_names_a_missing_project_copy_apart(self, boost, tapped,
+                                                       repo):
+        boost("install", "--local", "cowboy-coding")
+        for m in projectlock.get_skill(repo, "cowboy-coding")["materializations"]:
+            shutil.rmtree(repo / m["path"], ignore_errors=True)
+        data = json.loads(boost("audit", "--json").out)
+        assert (data["skills_scanned"], data["missing_store"],
+                data["missing_project"]) == (0, [], ["cowboy-coding (project)"])
+        r = boost("audit")
+        assert ("1 project skill missing their copy in the repo — nothing to "
+                "scan: cowboy-coding (project)") in _flat(r.out + r.err)
+        assert "store directory" not in r.out + r.err
 
 
 class TestReaders:
