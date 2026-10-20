@@ -58,7 +58,7 @@ def test_several_targets_share_one_index(monkeypatch):
     warnings = _capture(monkeypatch, entries)
     builds = []
     real = typosquat.build_index
-    monkeypatch.setattr(pkg.typosquat, "build_index",
+    monkeypatch.setattr(typosquat, "build_index",
                         lambda es: builds.append(es) or real(es))
     pkg._warn_confusions([entries[0], entries[2]])
     assert builds == [entries]
@@ -78,7 +78,7 @@ def test_one_target_scans_without_an_index(monkeypatch):
     entries = [{"name": "deploy", "tap": "alice/skills"},
                {"name": "deploy", "tap": "eve/x"}]
     warnings = _capture(monkeypatch, entries)
-    monkeypatch.setattr(pkg.typosquat, "build_index",
+    monkeypatch.setattr(typosquat, "build_index",
                         lambda es: (_ for _ in ()).throw(AssertionError("built")))
     pkg._warn_confusions([entries[0]])
     assert warnings == [
