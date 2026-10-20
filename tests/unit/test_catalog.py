@@ -1761,6 +1761,27 @@ class TestMatchesAndFilterByCategory:
         e = _entry("x", "t")
         assert not catalog.matches_category(e, "ai")
 
+    def test_missing_category_is_filed_as_uncategorized(self):
+        e = _entry("x", "t")
+        assert catalog.matches_category(e, "uncategorized")
+        assert catalog.matches_category(e | {"category": ""}, "Uncategorized")
+
+    def test_a_categorised_entry_is_not_uncategorized(self):
+        e = _entry("x", "t") | {"category": "ai"}
+        assert not catalog.matches_category(e, "uncategorized")
+
+    def test_tap_fallback_files_a_categoryless_entry(self):
+        e = _entry("x", "acme/tap")
+        cats = {"acme/tap": "Testing"}
+        assert catalog.matches_category(e, "testing", cats)
+        assert not catalog.matches_category(e, "uncategorized", cats)
+
+    def test_filter_by_category_passes_the_tap_fallback(self):
+        entries = [_entry("a", "acme/tap"), _entry("b", "other/tap")]
+        got = catalog.filter_by_category(entries, "testing",
+                                         {"acme/tap": "testing"})
+        assert [e["name"] for e in got] == ["a"]
+
     def test_filter_by_category_narrows_the_list(self):
         entries = [_entry("a", "t") | {"category": "ai"},
                   _entry("b", "t") | {"category": "ui"},

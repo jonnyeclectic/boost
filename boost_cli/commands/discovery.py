@@ -94,10 +94,8 @@ def _ai_rank(query: str, scored):
     order = _json_array(reply)
     if not order:
         return None
-    by_name = {e["name"]: (e, s) for e, s in scored}
-    names = [str(n) for n in order if str(n) in by_name]
-    rest = [t for t in scored if t[0]["name"] not in set(names)]
-    return [by_name[n] for n in names] + rest
+    # Homonyms from different taps are different rows; see reorder_by_names.
+    return rag.reorder_by_names(scored, order, lambda t: t[0]["name"])
 
 
 _ENGINE_LABEL = {"BM25 full-content": "full-content BM25"}
@@ -170,8 +168,9 @@ def cmd_search(argv):
     # the filter produced is a different answer from one the query did.
     matched_before_filter = len(scored)
     if args.category:
+        categories = _tap_categories()
         scored = [(e, s) for e, s in scored
-                 if catalog.matches_category(e, args.category)]
+                 if catalog.matches_category(e, args.category, categories)]
     # One measurement, three branches below: the words the index cannot hold.
     # Two gates, and each excludes an engine that did not drop anything.
     # `catalog.search` is a substring match, so the non-RAG path discards
@@ -1224,7 +1223,8 @@ def cmd_recommend(argv):
         raise BoostError("no such directory: %s" % args.path)
     entries = catalog.all_entries()
     if args.category:
-        entries = catalog.filter_by_category(entries, args.category)
+        entries = catalog.filter_by_category(entries, args.category,
+                                             _tap_categories())
         if not entries:
             raise BoostError("no entries in category %r" % args.category,
                             hint="try `boost recommend` with no --category")
@@ -2336,10 +2336,9 @@ def cmd_browse(argv):
         return _print_categories(entries, categories, args.by_count)
     narrowed = entries
     if args.category:
-        # browse.in_category, not catalog.filter_by_category: the browser files
-        # an entry by its stamped category *or* its tap's, and a flag that
-        # disagreed with the chips it opens on would reject a category the
-        # ^G picker lists.
+        # By its stamped category *or* its tap's — the same test search and
+        # recommend apply (catalog.matches_category delegates here), so no
+        # flag rejects a category the ^G picker lists.
         narrowed = [e for e in entries
                     if browse.in_category(e, args.category, categories)]
         if not narrowed:

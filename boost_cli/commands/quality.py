@@ -1365,7 +1365,17 @@ def _report_search_engine(rep) -> None:
     """
     # Local import: the dense/embedding engines are opt-in and stay out of
     # startup for every other command (scripts/import_budget.py enforces it).
-    from ..core import dense
+    from ..core import dense, rag
+    # Before the dense tiers: whatever they say, BM25 is the floor every
+    # search lands on, and a docs index over an unreadable postings store
+    # answers "no matches" for an exact skill name while every other line
+    # here reads healthy.
+    fault = rag.postings_fault()
+    if fault:
+        fix = "`boost reindex --force` rebuilds it"
+        rep.issue("search-index",
+                  "%s, so keyword search matches nothing — %s" % (fault, fix),
+                  hint=fix, wrap=True)
     # count=True: doctor prints the chunk total, and a health check is the one
     # caller that can afford the scan when a legacy store never recorded it.
     # `boost search`'s hint deliberately does not (see `dense._chunk_total`).
