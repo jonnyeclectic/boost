@@ -51,6 +51,13 @@ class TestInferOutput:
         assert dest.is_file()
 
 
+    @pytest.mark.parametrize("flag", ["--output", "--out"])
+    def test_both_long_spellings_of_o_write(self, boost, sandbox, flag):
+        (sandbox / "proj").mkdir()
+        dest = sandbox / "good.md"
+        boost("infer", "--path", str(sandbox / "proj"), flag, str(dest))
+        assert dest.is_file()
+
 class TestCreateDir:
     def test_a_file_as_the_parent_is_refused_cleanly(self, boost, sandbox):
         (sandbox / "afile").write_text("x", encoding="utf-8")

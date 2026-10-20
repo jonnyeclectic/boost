@@ -46,7 +46,7 @@ def cmd_run(argv: list[str]) -> int:
                          "'none' for the SDK's own default)")
     ap.add_argument("--print", dest="print_only", action="store_true",
                     help="print the generated runner script instead of executing it")
-    ap.add_argument("-o", "--out", metavar="FILE",
+    ap.add_argument("-o", "--output", "--out", dest="out", metavar="FILE",
                     help="with --print: write the runner to FILE")
     args = ap.parse_args(argv)
 

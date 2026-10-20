@@ -2957,7 +2957,8 @@ def cmd_export(argv: list[str]) -> int:
         description="Package skills as shareable zip/tar archives")
     ap.add_argument("names", nargs="*", metavar="NAME",
                     help="skills to export (default: all installed)")
-    ap.add_argument("-o", "--out", metavar="OUT", help="output archive path")
+    ap.add_argument("-o", "--output", "--out", dest="out", metavar="OUT",
+                    help="output archive path")
     ap.add_argument("--zip", action="store_true",
                     help="build a .zip instead of .tar.gz")
     ap.add_argument("--force", action="store_true",
@@ -3125,7 +3126,7 @@ def cmd_adapt(argv: list[str]) -> int:
     ap.add_argument("--model", metavar="M", default=None,
                     help="LLM the exported agent runs on (default: boost's "
                          "ai.model; pass 'none' for the framework's own default)")
-    ap.add_argument("-o", "--out", metavar="FILE",
+    ap.add_argument("-o", "--output", "--out", dest="out", metavar="FILE",
                     help="write to FILE instead of stdout")
     args = ap.parse_args(argv)
     if args.to not in adapters.FORMATS:
