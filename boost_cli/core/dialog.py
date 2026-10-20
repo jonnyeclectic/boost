@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import unicodedata
 from collections.abc import Callable, Mapping
 
 #: Longest prompt shown; the rest is cut and marked with an ellipsis.
@@ -40,9 +41,13 @@ _OSASCRIPT_BODY = ('display dialog (item 1 of argv) with title "boost" '
 
 
 def sanitize(prompt: str) -> str:
-    """``prompt`` with markup brackets and control characters removed, capped."""
-    clean = "".join(" " if (ch < " " or ch == "\x7f") else ch
-                    for ch in prompt if ch not in "<>")
+    """``prompt`` with markup brackets, control and format characters removed, capped."""
+    # Cc (C0/C1 controls, DEL) become a space; Cf (bidi overrides such as
+    # U+202E, zero-width joiners) are dropped, or a link could make the
+    # dialog display a name other than the one it installs.
+    clean = "".join(" " if unicodedata.category(ch) == "Cc" else ch
+                    for ch in prompt
+                    if ch not in "<>" and unicodedata.category(ch) != "Cf")
     if len(clean) > MAX_PROMPT:
         clean = clean[:MAX_PROMPT - 1] + "…"
     return clean

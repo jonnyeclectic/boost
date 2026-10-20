@@ -20,6 +20,9 @@ class TestSanitize:
     def test_drops_markup_brackets_and_control_chars(self):
         assert dialog.sanitize('a<b>c\nd\te\x7ff"g') == 'abc d e f"g'
 
+    def test_drops_bidi_and_zero_width_and_blanks_c1_controls(self):
+        assert dialog.sanitize("a\u202eb\u200bc\x85d\u00e9") == "abc d\u00e9"
+
     def test_caps_length_with_an_ellipsis(self):
         out = dialog.sanitize("x" * 400)
         assert len(out) == dialog.MAX_PROMPT
