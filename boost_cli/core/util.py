@@ -346,8 +346,14 @@ def _replace_atomically(path: Path, text: str, encoding: str,
     files boost owns; :func:`write_user_file` passes the mode to keep.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # The temp name is the target's plus 14 bytes ("." + "." + mkstemp's 8
+    # random characters + ".tmp"), so a target at the 255-byte component
+    # limit — a legal name — failed ENAMETOOLONG before the write began. The
+    # prefix only has to be recognisable, so it is cut to leave that room.
+    stem = path.name.encode("utf-8")[:MAX_COMPONENT_BYTES - 14].decode(
+        "utf-8", errors="ignore")
     fd, tmp = tempfile.mkstemp(dir=str(path.parent),
-                               prefix="." + path.name + ".", suffix=".tmp")
+                               prefix="." + stem + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding=encoding, newline="\n") as f:
             f.write(text)

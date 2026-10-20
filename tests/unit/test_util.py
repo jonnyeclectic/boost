@@ -767,6 +767,30 @@ class TestAtomicWriteText:
         leftovers = [q.name for q in tmp_path.iterdir() if q.name != "f.txt"]
         assert leftovers == []
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="a 255-byte name under tmp_path passes MAX_PATH")
+    def test_temp_name_fits_the_component_limit(self, tmp_path, monkeypatch):
+        # A legal 255-byte target used to get a 269-byte temp name and fail
+        # ENAMETOOLONG; the cut must not split a multi-byte character either.
+        import tempfile
+        seen = []
+        real = tempfile.mkstemp
+
+        def spy(*a, **k):
+            fd, tmp = real(*a, **k)
+            seen.append(Path(tmp).name.encode("utf-8"))
+            return fd, tmp
+        monkeypatch.setattr(tempfile, "mkstemp", spy)
+        short, ascii_, wide = "a" * 200, "b" * 255, "\u00e9" * 127 + "x"
+        for name in (short, ascii_, wide):
+            util.atomic_write_text(tmp_path / name, name)
+            assert (tmp_path / name).read_text(encoding="utf-8") == name
+        assert seen[0].startswith(b"." + short.encode() + b".")
+        assert len(seen[1]) == util.MAX_COMPONENT_BYTES
+        assert seen[1].startswith(b"." + b"b" * 241 + b".")
+        assert seen[2].startswith(("." + "\u00e9" * 120 + ".").encode("utf-8"))
+        assert len(seen[2]) == util.MAX_COMPONENT_BYTES - 1
+
     def test_honours_encoding(self, tmp_path):
         p = tmp_path / "f.txt"
         util.atomic_write_text(p, "café", encoding="utf-8")
