@@ -1260,7 +1260,8 @@ def occupied_targets() -> list[Path]:
 
 
 def _refused_materializations(existing: dict | None, linked: list[str],
-                              refused: list[dict]) -> list[dict]:
+                              refused: list[dict],
+                              source_sha: str | None = None) -> list[dict]:
     """The rows to record beside this run's writes: refused, then untouched.
 
     An agent whose directory refused the write is still recorded, as a row
@@ -1273,9 +1274,20 @@ def _refused_materializations(existing: dict | None, linked: list[str],
     A refused row replaces that agent's old one. The old file, if any, is
     still on disk at the same path, and the new row still names that path, so
     uninstall removes it.
+
+    An untouched row is marked ``stale`` when ``source_sha`` says the source
+    changed: its file is the old version, and it still hashes to its own
+    old digest, so every check passed it. `boost update` with windsurf
+    disabled recorded v2 over windsurf's v1 copy, and after re-enabling it
+    doctor, verify, drift and sync all said in sync. A stale row stays stale
+    until a run writes that agent.
     """
     done = linked + [r["agent"] for r in refused]
-    return refused + _untouched_materializations(existing, done)
+    kept = _untouched_materializations(existing, done)
+    if (existing and source_sha is not None
+            and existing.get("sha256") != source_sha):
+        kept = [{**m, "stale": True} for m in kept]
+    return refused + kept
 
 
 def _copy_skill(src: Path, dest: Path, *, within: Path | None = None
@@ -2825,7 +2837,9 @@ def _install_rule(entry: dict, force: bool = False,
     # every session (~/.claude/CLAUDE.md); dropping the record does not drop
     # the block, and `_uninstall_rule` is record-driven, so an unrecorded block
     # could never be removed by any boost command again.
-    materializations.extend(_refused_materializations(existing, linked, refused))
+    materializations.extend(_refused_materializations(
+        existing, linked, refused,
+        source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest()))
 
     now = util.now_iso()
     lockfile.set_rule(name, {
@@ -3397,7 +3411,9 @@ def _install_workflow(entry: dict, force: bool = False,
                                           materializations))
     # As for rules: an unrecorded materialization is a live slash command that
     # `_uninstall_workflow` — driven by this list — can never remove.
-    materializations.extend(_refused_materializations(existing, linked, refused))
+    materializations.extend(_refused_materializations(
+        existing, linked, refused,
+        source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest()))
     # An agent this run did not try (a narrowed `--agent`) keeps its foreign
     # row, as it keeps its materialization; one it tried is decided afresh.
     tried = {*linked, *(r["agent"] for r in refused),
@@ -5146,7 +5162,8 @@ def sync_plan() -> dict[str, list]:
         # `boost sync` into a failure line; doctor names it with its remedy.
         if entry.get("quarantined") or scopes.stranded(entry):
             continue
-        if any(m.get("unwritable") or not _rule_materialization_ok(name, m)
+        if any(m.get("unwritable") or m.get("stale")
+               or not _rule_materialization_ok(name, m)
                for m in entry.get("materializations") or []
                if materialization_is_written("rule", entry, m)) \
                 or unmaterialized_agents("rule", entry):
@@ -5154,7 +5171,8 @@ def sync_plan() -> dict[str, list]:
     for name, entry in lockfile.installed_workflows().items():
         if entry.get("quarantined") or scopes.stranded(entry):
             continue
-        if any(m.get("unwritable") or not os.path.isfile(m.get("path", ""))
+        if any(m.get("unwritable") or m.get("stale")
+               or not os.path.isfile(m.get("path", ""))
                for m in entry.get("materializations") or []
                if materialization_is_written("workflow", entry, m)) \
                 or _freed_foreign(entry) \

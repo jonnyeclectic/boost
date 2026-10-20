@@ -287,6 +287,10 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
         return "store-missing"
     if st == integrity.STATUS_MODIFIED:
         return "local-edits"
+    if st == integrity.STATUS_OUTDATED:
+        # Before the tap comparison, which matches the lock's new digest and
+        # would call an agent still holding the old copy in sync.
+        return "outdated"
     if st == integrity.STATUS_UNREACHABLE:
         # Before the tap comparison below, which would otherwise launder an
         # item that reaches no agent into "in-sync" on the strength of a
@@ -313,7 +317,7 @@ _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
                "upstream-moved": "accent", "source-missing": "danger",
                "store-missing": "danger", "n/a": "muted",
                "quarantined": "muted", "unreachable": "warn",
-               "stranded": "danger"}
+               "stranded": "danger", "outdated": "warn"}
 
 
 def _drift_hint(name: str, status: str, tap: str = "",
@@ -333,6 +337,8 @@ def _drift_hint(name: str, status: str, tap: str = "",
                 else registry.retap_hint(tap, tap_url))
     if status == "store-missing":
         return "boost heal"
+    if status == "outdated":
+        return "boost sync"
     if status == "stranded":
         # The record is the fault: uninstall drives off its rows and creates
         # nothing, where heal/sync/reinstall would recreate the deleted repo.
@@ -905,6 +911,12 @@ def cmd_doctor(argv):
                                "it once it is")
                     bad(kind, "%s %s was not written for %s: %s"
                         % (kind, name, m.get("agent", "?"), why), wrap=True)
+                    mat_issues += 1
+                elif m.get("stale"):
+                    bad(kind, "%s %s for %s is older than the installed v%s — "
+                        "run `boost sync`" % (kind, name, m.get("agent", "?"),
+                                              entry.get("version", "?")),
+                        wrap=True)
                     mat_issues += 1
             # An agent enabled after the install has no row at all, so the
             # loop above never meets it; `boost sync` writes it.

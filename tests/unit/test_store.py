@@ -6445,3 +6445,114 @@ class TestAnAgentEnabledLaterGetsRulesAndWorkflows:
         assert ("rule team-conventions was never written for cursor — run "
                 "`boost sync`") in out
         assert "fully materialized" not in out
+
+
+class TestAnUpgradeThatSkipsAnAgentMarksItsCopyStale:
+    """`boost update` with windsurf disabled carried windsurf's v1 row into
+    the v2 record, old digest and all, so its old file passed every check:
+    after re-enabling windsurf, doctor, verify, drift and sync all said in
+    sync."""
+
+    WINDSURF: ClassVar[dict[str, tuple[str, str]]] = {
+        "rule": ("rules", "team-conventions.md"),
+        "workflow": ("commands", "ship-it.md")}
+    NAME: ClassVar[dict[str, str]] = {"rule": "team-conventions",
+                                      "workflow": "ship-it"}
+
+    def _entry(self, tap, kind, body=None):
+        if kind == "rule":
+            entry = _rule_entry(tap)
+            if body is not None:
+                (tap.path / entry["skill_md"]).write_text(body, encoding="utf-8")
+        else:
+            entry = (_workflow_entry(tap) if body is None
+                     else _workflow_entry(tap, body=body))
+        catalog.rebuild_tap(tap)
+        return entry
+
+    def _locked(self, kind):
+        get = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+        return get(self.NAME[kind])
+
+    def _row(self, kind, agent):
+        return next(m for m in self._locked(kind)["materializations"]
+                    if m.get("agent") == agent)
+
+    def _upgrade_without_windsurf(self, tap, kind):
+        store.install(self._entry(tap, kind))
+        old = self._row(kind, "windsurf")
+        _set_enabled("windsurf", False)
+        title = "Team Conventions" if kind == "rule" else "ship-it"
+        v2 = self._entry(tap, kind,
+                         body="---\nname: %s\n---\n\nV2 body.\n" % title)
+        store.install(v2, force=True)
+        return old, v2
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_the_carried_row_is_stale_and_keeps_its_digest(self, tap, kind):
+        old, _v2 = self._upgrade_without_windsurf(tap, kind)
+        row = self._row(kind, "windsurf")
+        assert row == {**old, "stale": True}
+        assert "stale" not in self._row(kind, "claude-code")
+        # Disabled, so nothing is asked of it yet.
+        assert store.sync_plan()["missing_materializations"] == []
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_re_enabled_every_check_sees_it_and_sync_writes_v2(self, tap, kind):
+        self._upgrade_without_windsurf(tap, kind)
+        _set_enabled("windsurf", True)
+        from boost_cli.core import integrity
+        name = self.NAME[kind]
+        assert integrity.materialized_status(
+            name, self._locked(kind), kind) == integrity.STATUS_OUTDATED
+        assert store.sync_plan()["missing_materializations"] == [(kind, name)]
+        from boost_cli.commands import quality
+        assert quality._drift_status_materialized(
+            kind, name, self._locked(kind)) == "outdated"
+        assert quality._drift_hint(name, "outdated") == "boost sync"
+        assert not integrity.verification_passed(
+            integrity.STATUS_OUTDATED, [], None)
+
+        store.sync_apply(store.sync_plan())
+
+        sub, leaf = self.WINDSURF[kind]
+        text = (paths.home() / ".windsurf" / sub / leaf).read_text(
+            encoding="utf-8")
+        assert "V2 body." in text
+        assert "stale" not in self._row(kind, "windsurf")
+        assert integrity.materialized_status(
+            name, self._locked(kind), kind) == integrity.STATUS_OK
+        assert store.sync_plan()["missing_materializations"] == []
+
+    def test_an_unchanged_source_marks_nothing(self, tap):
+        entry = self._entry(tap, "rule")
+        store.install(entry)
+        _set_enabled("windsurf", False)
+        store.install(entry, force=True)
+        assert "stale" not in self._row("rule", "windsurf")
+
+    def test_a_stale_row_stays_stale_until_written(self, tap):
+        _old, v2 = self._upgrade_without_windsurf(tap, "rule")
+        store.install(v2, force=True)        # same source, windsurf still off
+        assert self._row("rule", "windsurf")["stale"] is True
+
+    def test_a_hand_edit_is_still_modified_not_outdated(self, tap):
+        from boost_cli.core import integrity
+        self._upgrade_without_windsurf(tap, "rule")
+        _set_enabled("windsurf", True)
+        sub, leaf = self.WINDSURF["rule"]
+        (paths.home() / ".windsurf" / sub / leaf).write_text(
+            "mine\n", encoding="utf-8")
+        assert integrity.materialized_status(
+            "team-conventions", self._locked("rule"), "rule") == \
+            integrity.STATUS_MODIFIED
+
+    def test_doctor_names_it(self, tap, capsys):
+        from boost_cli.commands import quality
+        self._upgrade_without_windsurf(tap, "rule")
+        _set_enabled("windsurf", True)
+        assert quality.cmd_doctor([]) == 1
+        out = " ".join(capsys.readouterr().out.split())
+        assert ("rule team-conventions for windsurf is older than the "
+                "installed v1.0.0 — run `boost sync`") in out
+        assert "fully materialized" not in out
