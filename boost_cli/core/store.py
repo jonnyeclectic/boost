@@ -1889,6 +1889,38 @@ def carried_user_state(existing: dict | None) -> dict:
     return {"commit_pin": pin} if pin else {}
 
 
+def project_carried_state(existing: dict | None) -> dict:
+    """The user-set fields a project skill's rebuilt lock row must carry.
+
+    :func:`carried_user_state` for the project lock: ``pinned`` (which
+    ``boost pin`` writes there) plus a ``commit_pin``. Only set flags are
+    carried, so an unpinned row stays free of a ``pinned: false`` key.
+    """
+    carried = carried_user_state(existing)
+    if (existing or {}).get("pinned"):
+        carried["pinned"] = True
+    return carried
+
+
+def set_project_pin(base, name: str, pinned: bool) -> dict | None:
+    """Set or clear ``pinned`` on ``name``'s row in ``base``'s project lock.
+
+    Returns the row as written, or ``None`` when the project lock has no
+    such skill. Releasing a version pin releases a commit pin with it, the
+    same rule ``boost unpin`` applies at user scope.
+    """
+    entry = projectlock.get_skill(base, name)
+    if entry is None:
+        return None
+    if pinned:
+        entry["pinned"] = True
+    else:
+        entry.pop("pinned", None)
+        entry.pop("commit_pin", None)
+    projectlock.set_skill(base, name, entry)
+    return entry
+
+
 def project_skills(start=None) -> tuple[Path | None, dict]:
     """``(base, skills)`` for the project the cwd (or ``start``) is in.
 
@@ -2190,7 +2222,10 @@ def _install_project_skill(entry: dict, force: bool = False,
         "updated_at": now,
         "agents": all_agents,
         "materializations": materializations,
-    })
+    # A forced re-install (`boost reinstall`) of a pinned project skill must
+    # leave it pinned: the row is rebuilt from scratch, and a flag it does not
+    # name is a pin `boost update` silently stops honouring.
+    } | project_carried_state(existing))
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"),
                 scope=scopes.SCOPE_PROJECT, via=via)
 

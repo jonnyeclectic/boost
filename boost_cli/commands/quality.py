@@ -253,10 +253,19 @@ def _drift_status(name: str, entry: dict) -> str:
         # Kept in the store itself: an edit there is the skill, not drift.
         return staleness.NA
     store_sha = util.sha256_dir(sdir) if sdir.is_dir() else None
+    return _drift_from_copy(name, entry, store_sha)
+
+
+def _drift_from_copy(name: str, entry: dict, copy_sha: str | None) -> str:
+    """:func:`staleness.drift_state` for an installed copy hashing to ``copy_sha``.
+
+    The tap source is only read once the copy matches the lock, so a missing
+    or edited copy never costs a materialization.
+    """
     is_local = entry.get("tap") == "local"
     lock_sha = entry.get("sha256", "")
     source_sha = None
-    if store_sha is not None and store_sha == lock_sha and not is_local:
+    if copy_sha is not None and copy_sha == lock_sha and not is_local:
         try:
             src = store.source_dir_for(
                 {"name": name, "tap": entry.get("tap", ""),
@@ -265,7 +274,26 @@ def _drift_status(name: str, entry: dict) -> str:
             source_sha = None
         else:
             source_sha = util.sha256_dir(src)
-    return staleness.drift_state(store_sha, lock_sha, is_local, source_sha)
+    return staleness.drift_state(copy_sha, lock_sha, is_local, source_sha)
+
+
+def _drift_status_project(name: str, entry: dict, base: Path) -> str:
+    """:func:`_drift_status` for a skill installed ``--local`` into ``base``.
+
+    Its copies are judged the way ``verify`` judges them
+    (:func:`integrity.project_status`, every copy hashed), so an edit to any
+    one is local edits and a deleted row is a missing copy; only then is the
+    tap compared, over the same vocabulary as a user-scope row.
+    """
+    st = integrity.project_status(entry, base)
+    if st == integrity.STATUS_MISSING:
+        return staleness.STORE_MISSING
+    if st == integrity.STATUS_MODIFIED:
+        return staleness.LOCAL_EDITS
+    d = integrity.project_skill_dir(entry, base)
+    copy_sha = (entry.get("sha256", "") if st == integrity.STATUS_OK
+                else util.sha256_dir(d) if d is not None else None)
+    return _drift_from_copy(name, entry, copy_sha)
 
 
 def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
@@ -1559,6 +1587,16 @@ def cmd_lint(argv):
     return 0
 
 
+def _drift_label(row: dict) -> str:
+    """A drift row's NAME cell: the kind for a rule/workflow, the scope for a
+    project-lock skill (which can share its name with a user-scope one)."""
+    if row["kind"] != "skill":
+        return "%s (%s)" % (row["name"], row["kind"])
+    if row["scope"] == scopes.SCOPE_PROJECT:
+        return "%s (project)" % row["name"]
+    return row["name"]
+
+
 def cmd_drift(argv):
     ap = cliparse.parser(
         prog="boost drift",
@@ -1574,12 +1612,38 @@ def cmd_drift(argv):
 
     rows = []
     names = [store.installed_name(n) for n in args.names]
-    for kind, name, entry in _iter_installed_all(names or None):
+    # Skills installed `--local` live in the repo's own lock, the rows
+    # `verify` and `doctor` already grade; a name only that lock holds is
+    # resolved there instead of answered "not installed".
+    pbase, pskills = integrity.project_skills()
+    user_names = [n for n in names if lockfile.find_any(n) is not None]
+    unknown = [n for n in names if n not in user_names and n not in pskills]
+    if unknown:
+        _iter_installed_all(unknown)   # raises the usual "not installed"
+    for kind, name, entry in _iter_installed_all(
+            user_names if names else None):
         status = (_drift_status(name, entry) if kind == "skill"
                   else _drift_status_materialized(kind, name, entry))
-        rows.append({"name": name, "kind": kind, "status": status,
+        # A rule or workflow installed `--local` is recorded in the user lock
+        # with its own `scope`, which is the one to report (as verify does).
+        scope = (entry.get("scope") or scopes.SCOPE_USER) if kind != "skill" \
+            else scopes.SCOPE_USER
+        rows.append({"name": name, "kind": kind, "scope": scope,
+                     "status": status,
                      "hint": _drift_hint(name, status, entry.get("tap", ""),
                                          str(entry.get("tap_url") or ""))})
+    for name, entry in sorted(pskills.items()):
+        if pbase is None or (names and name not in names):
+            continue
+        status = _drift_status_project(name, entry, pbase)
+        # A missing project copy is re-materialized by `boost sync`
+        # (`store.project_sync_plan`), not by heal's user-store repair.
+        hint = ("boost sync" if status == staleness.STORE_MISSING
+                else _drift_hint(name, status, entry.get("tap", ""),
+                                 str(entry.get("tap_url") or "")))
+        rows.append({"name": name, "kind": "skill",
+                     "scope": scopes.SCOPE_PROJECT, "status": status,
+                     "hint": hint})
     if args.json:
         print(json.dumps({"skills": rows}))
         return 0
@@ -1587,8 +1651,7 @@ def cmd_drift(argv):
         print(out.empty_state("no skills installed",
                               hint="boost install <skill> to start"))
         return 0
-    out.table([(r["name"] if r["kind"] == "skill"
-                else "%s (%s)" % (r["name"], r["kind"]),
+    out.table([(_drift_label(r),
                 out.role(r["status"], _DRIFT_ROLE[r["status"]]),
                 out.role(r["hint"], "muted")) for r in rows],
               # HINT is a command to paste, and an untapped source's carries
