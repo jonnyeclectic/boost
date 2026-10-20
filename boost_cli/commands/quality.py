@@ -2210,7 +2210,7 @@ def cmd_health(argv):
     installed = by_kind.get("skill", [])
     # The skills line counts what `boost list` shows, the current project's
     # `--local` installs included; the rows below stay user-scope.
-    skill_items = list(installed) + [
+    skill_items = installed.copy() + [
         (n, e) for n, e in integrity.project_skills()[1].items()]
     taps = registry.list_taps()
     cloned = [t for t in taps if t.is_cloned]

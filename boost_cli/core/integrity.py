@@ -24,7 +24,7 @@ to trust it.
 from __future__ import annotations
 
 import os
-from itertools import chain
+from itertools import chain, starmap
 from pathlib import Path
 from typing import NamedTuple
 
@@ -500,7 +500,7 @@ def installed_skills() -> list[InstalledSkill]:
     from the copy in the repo rather than skipped. A name in both scopes is
     two rows: they are two installs, and either can be the blocked one.
     """
-    return [_skill_row(n, e, s, b) for n, e, s, b in installed_skill_rows()]
+    return list(starmap(_skill_row, installed_skill_rows()))
 
 
 def resolve_skill(name: str) -> InstalledSkill | None:
