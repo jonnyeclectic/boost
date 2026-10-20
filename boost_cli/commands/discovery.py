@@ -1127,7 +1127,13 @@ def cmd_discover(argv):
     except (json.JSONDecodeError, OSError):
         raise BoostError("the discovery index is corrupt",
                         hint="rebuild it with `boost index`") from None
-    all_items = data.get("items") or []
+    # A row that is not an object is not an index row: such a file reached
+    # here through `catalog --import` and crashed every lookup at rc 70.
+    all_items = (data.get("items") or []) if isinstance(data, dict) else None
+    if (not isinstance(all_items, list)
+            or not all(isinstance(it, dict) for it in all_items)):
+        raise BoostError("the discovery index is corrupt",
+                        hint="rebuild it with `boost index`")
     query_tokens = [t.lower() for t in args.query if t.strip()]
     items = [it for it in all_items
              if all(t in ("%s %s %s" % (it.get("repo", ""), it.get("path", ""),

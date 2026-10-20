@@ -1058,6 +1058,19 @@ class TestDiscover:
         r = boost("discover", expect=1)
         assert "the discovery index is corrupt" in r.err
 
+    @pytest.mark.parametrize("payload", [
+        {"items": [1, 2, 3]}, {"items": {"a": 1}}, [1, 2]])
+    def test_rows_that_are_not_objects_are_corrupt_not_a_crash(
+            self, boost, sandbox, payload):
+        # What `catalog --import` could plant before it refused internal
+        # files: rc 70 on an int row, from `discover` and `discover --json`.
+        paths.ensure_dirs()
+        (paths.cache_dir() / "discovery.json").write_text(json.dumps(payload), encoding="utf-8")
+        for argv in (("discover", "--local"), ("discover", "--local", "--json")):
+            r = boost(*argv, expect=1)
+            assert "the discovery index is corrupt" in r.err
+            assert "rebuild it with `boost index`" in r.err
+
 
 class TestDiscoverLive:
     """A query asks about GitHub, so it must reach GitHub — no index required.

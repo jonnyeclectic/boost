@@ -182,7 +182,27 @@ def read_manifest(src: Path) -> dict:
         raise BoostError("bundle manifest is malformed: %s" % exc) from exc
 
 
-def _safe_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
+def manifest_files(manifest: dict) -> set[str]:
+    """The catalogue leaves ``manifest`` accounts for: ``<safe_name>.json``.
+
+    Derived from each tap's *name* by the rule `registry.Tap.cache_file`
+    uses, never from the row's own ``file`` field — the manifest is as
+    untrusted as the archive, and trusting it would let a row claim
+    ``discovery.json``. :data:`paths.INTERNAL_CACHE_FILES` are left out
+    even when a tap name produces one.
+    """
+    out: set[str] = set()
+    for row in manifest.get("taps") or []:
+        name = row.get("name") if isinstance(row, dict) else None
+        if isinstance(name, str) and name:
+            leaf = registry.Tap(name=name, url="").safe_name + ".json"
+            if leaf not in paths.INTERNAL_CACHE_FILES:
+                out.add(leaf)
+    return out
+
+
+def _safe_members(tar: tarfile.TarFile,
+                  allowed: set[str] | None = None) -> list[tarfile.TarInfo]:
     """The catalogue members of ``tar``, or raise naming what was rejected.
 
     The archive never chooses a destination. A member is accepted only when it
@@ -191,6 +211,12 @@ def _safe_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
     entry — and the caller then writes it to a path built from that basename.
     Validating the name and *also* discarding it is deliberate: a check that
     feeds its input forward is one refactor away from being decorative.
+
+    A safe name is still not enough: the destination is boost's cache dir,
+    which also holds its own indexes. A leaf in
+    :data:`paths.INTERNAL_CACHE_FILES` is refused outright (a bundle carrying
+    ``discovery.json`` replaced the discovery index and crashed `discover`),
+    and with ``allowed`` given, so is any leaf no manifest tap accounts for.
     """
     members = tar.getmembers()
     if len(members) > MAX_MEMBERS:
@@ -218,6 +244,16 @@ def _safe_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
                 or "/" in leaf or "\\" in leaf or not leaf.endswith(".json")):
             raise BoostError(
                 "bundle contains an unsafe member name: %s" % member.name)
+        if leaf in paths.INTERNAL_CACHE_FILES:
+            raise BoostError(
+                "bundle member %s would overwrite boost's own %s"
+                % (member.name, leaf),
+                hint="a catalogue bundle holds only tap catalogues")
+        if allowed is not None and leaf not in allowed:
+            raise BoostError(
+                "bundle member %s belongs to no tap in its manifest"
+                % member.name,
+                hint="re-export the bundle with `boost catalog --export`")
         if member.size > MAX_MEMBER_BYTES:
             raise BoostError(
                 "bundle member %s is %d bytes, over the %d cap"
@@ -253,7 +289,7 @@ def import_bundle(src: Path) -> dict:
     written = 0
     try:
         with tarfile.open(src, "r:gz") as tar:
-            members = _safe_members(tar)
+            members = _safe_members(tar, manifest_files(manifest))
             for member in members:
                 handle = tar.extractfile(member)
                 if handle is None:
