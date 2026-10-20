@@ -106,7 +106,7 @@ def check() -> str | None:
     return jsonstate.read_object(paths.policy_path())[1]
 
 
-def corrupt_violation() -> str | None:
+def corrupt_violation(action: str = "install") -> str | None:
     """The violation a policy.json that exists but does not parse amounts to.
 
     A policy that cannot be read is not "no policy": a truncated write of a
@@ -116,8 +116,8 @@ def corrupt_violation() -> str | None:
     err = check()
     if err is None:
         return None
-    return ("%s — boost cannot read the policy, so it will not install until "
-            "the file is repaired" % err)
+    return ("%s — boost cannot read the policy, so it will not %s until "
+            "the file is repaired" % (err, action))
 
 
 def _read_file() -> dict:
@@ -316,6 +316,11 @@ def check_tap_signing(clone_dir) -> list[str]:
     """
     if not config.get("policy_enforce", True):
         return []
+    # Fail closed like check_install: a truncated policy.json reads
+    # require_signed_taps as its default, False, and would admit any tap.
+    corrupt = corrupt_violation("tap")
+    if corrupt is not None:
+        return [corrupt]
     pol = load()
     if not pol["require_signed_taps"]:
         return []

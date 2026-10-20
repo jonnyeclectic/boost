@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from boost_cli.core import config, paths, policy, typedvalue
+from boost_cli.core import config, jsonstate, paths, policy, typedvalue
 
 GOOD_ENTRY = {"name": "brainstorming", "tap": "acme/skills",
               "description": "Structured ideation", "version": "1.4.0"}
@@ -316,6 +316,28 @@ class TestCheckCapabilities:
 
 class TestCheckTapSigning:
     def test_off_by_default(self, sandbox, tmp_path):
+        clone = tmp_path / "c"
+        clone.mkdir()
+        assert policy.check_tap_signing(clone) == []
+
+    def test_corrupt_policy_refuses_the_tap(self, sandbox, tmp_path):
+        p = paths.policy_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"require_signed_taps": true', encoding="utf-8")
+        clone = tmp_path / "c"
+        clone.mkdir()
+        err = jsonstate.read_object(p)[1]
+        assert policy.check_tap_signing(clone) == [
+            "%s — boost cannot read the policy, so it will not tap until the "
+            "file is repaired" % err]
+
+    def test_corrupt_policy_tap_honours_enforce_switch(self, sandbox, tmp_path):
+        p = paths.policy_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"require_signed_taps": true', encoding="utf-8")
+        cfg = config.load()
+        cfg["policy_enforce"] = False
+        config.save(cfg)
         clone = tmp_path / "c"
         clone.mkdir()
         assert policy.check_tap_signing(clone) == []
