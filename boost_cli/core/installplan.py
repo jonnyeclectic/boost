@@ -32,10 +32,14 @@ def confusion_lines(entries: list[dict]) -> list[str]:
     if not entries:
         return []
     corpus = catalog.all_entries()
+    # One target scans the catalogue once (~60 ms at 63k entries), which is
+    # cheaper than indexing it (~0.5 s); from two on, index once and look up.
+    index = typosquat.build_index(corpus) if len(entries) > 1 else None
     return ["%s (%s) closely resembles %s (%s) — double-check you meant this "
             "one" % (e["name"], e["tap"], other["name"], other["tap"])
             for e in entries
-            for other in typosquat.find_confusions(e, corpus)[:3]]
+            for other in typosquat.find_confusions(e, corpus,
+                                                   index=index)[:3]]
 
 
 def rel_list(meta: dict, key: str) -> list[str]:

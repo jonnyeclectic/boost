@@ -26,6 +26,7 @@ import operator
 import os
 import re
 import sys
+import threading
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -566,11 +567,45 @@ def resolve_path_target(name: str) -> Path:
     return p
 
 
+#: The last :func:`all_entries` answer and the per-tap lists it was built
+#: from. Holding the parts (not their ids) keeps a freed list's id from being
+#: reused by a different one and mistaken for it.
+_ALL_ENTRIES: tuple[tuple[list[dict], ...], list[dict]] | None = None
+
+
+def _same_part(a: list[dict], b: list[dict]) -> bool:
+    """Whether two per-tap entry lists are known to hold the same rows.
+
+    Identity, which is what :data:`_ENTRY_CACHE` hands back while a tap's
+    cache file is unchanged. Two empty lists also count: :func:`load_tap`
+    returns a fresh ``[]`` for an uncloned tap with no cache, and without this
+    one such tap on a machine would mean the memo never hit.
+    """
+    return a is b or (not a and not b)
+
+
 def all_entries() -> list[dict]:
-    """Return the entries of every configured tap, concatenated."""
+    """Return the entries of every configured tap, concatenated.
+
+    Every call re-validates each tap's cache (one ``stat`` per tap, through
+    :func:`load_tap`), but when every tap hands back the list it handed back
+    last time, the concatenation from last time is returned — the *same*
+    list object. Callers treat it read-only, as they already treat the
+    per-tap lists :data:`_ENTRY_CACHE` shares, and that identity is what lets
+    :func:`find` keep a name index for it rather than scan the whole catalogue
+    once per name: ``boost outdated`` over 308 installed skills spent 1.2 s of
+    1.4 s in those scans.
+    """
+    global _ALL_ENTRIES
+    parts = tuple(load_tap(tap) for tap in registry.list_taps())
+    memo = _ALL_ENTRIES
+    if (memo is not None and len(memo[0]) == len(parts)
+            and all(map(_same_part, memo[0], parts))):
+        return memo[1]
     out: list[dict] = []
-    for tap in registry.list_taps():
-        out.extend(load_tap(tap))
+    for part in parts:
+        out.extend(part)
+    _ALL_ENTRIES = (parts, out)
     return out
 
 
@@ -695,6 +730,42 @@ def events_for_tap(events: list, qualifier: str | None,
                 else lock is not None)]
 
 
+#: Name indexes for the last few corpora :func:`find` searched, keyed by the
+#: corpus's id and holding the corpus itself (so the id cannot be reused) and
+#: its length at build time (so an append is noticed). More than one slot
+#: because ``install`` interleaves lookups in the shared catalogue with
+#: lookups in :func:`cached_entries`, and rebuilding an index costs about ten
+#: linear scans — a single slot would thrash into a regression.
+_NAME_INDEX: dict[int, tuple[list[dict], int, dict[str, list[dict]]]] = {}
+_NAME_INDEX_SLOTS = 4
+#: ``boost serve`` resolves names from a ``ThreadingHTTPServer``; unlocked,
+#: two threads evicting the same oldest slot raise ``KeyError`` out of a GET.
+_NAME_INDEX_LOCK = threading.Lock()
+
+
+def _name_index(pool: list[dict]) -> dict[str, list[dict]]:
+    """``{name: [entries]}`` over ``pool``, each bucket in ``pool`` order.
+
+    Built once per corpus and reused, so resolving k names costs one pass
+    over the catalogue rather than k. A corpus mutated in place without
+    changing length is not noticed; no caller does that, because every
+    corpus here is one :func:`all_entries` or :func:`cached_entries` answer.
+    """
+    key = id(pool)
+    with _NAME_INDEX_LOCK:
+        hit = _NAME_INDEX.get(key)
+        if hit is not None and hit[0] is pool and hit[1] == len(pool):
+            return hit[2]
+        index: dict[str, list[dict]] = {}
+        for e in pool:
+            index.setdefault(e["name"], []).append(e)
+        _NAME_INDEX.pop(key, None)
+        while len(_NAME_INDEX) >= _NAME_INDEX_SLOTS:
+            del _NAME_INDEX[next(iter(_NAME_INDEX))]
+        _NAME_INDEX[key] = (pool, len(pool), index)
+        return index
+
+
 def find(name: str, tap: str | None = None,
          entries: list[dict] | None = None) -> list[dict]:
     """Exact-name lookup. Supports 'owner/repo:skill' qualified form.
@@ -707,7 +778,7 @@ def find(name: str, tap: str | None = None,
     if qualifier is not None:
         tap, name = qualifier, bare
     pool = all_entries() if entries is None else entries
-    matches = [e for e in pool if e["name"] == name]
+    matches = list(_name_index(pool).get(name, ()))
     if tap:
         # Same tiering as registry.get: a qualified owner/repo beats a bare
         # repo tail, so `angular/skills:x` never picks up `microsoft/skills:x`.

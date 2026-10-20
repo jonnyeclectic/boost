@@ -767,6 +767,40 @@ class TestVisibleLenWideChars:
         assert output._char_width("\u0301") == 0
 
 
+class TestVisibleLenAsciiFastPath:
+    """ASCII skips the per-character ``unicodedata`` walk, which was most of a
+    non-TTY ``boost browse`` over a 63k-row catalogue. The width must be what
+    the walk would have said."""
+
+    @staticmethod
+    def _walk(s):
+        return sum(output._char_width(ch) for ch in output._ANSI_RE.sub("", s))
+
+    @pytest.mark.parametrize("s", [
+        "", "hello", "a b\tc", "\033[31mhi\033[0m", "\033[1m\033[0m",
+        "\033[38;2;34;211;238mx\033[0m tail", "bare \033 escape",
+        "\033[31", "名称", "e\u0301", "🎉 ok", "\033[31m名\033[0m",
+        "café",
+    ])
+    def test_agrees_with_the_character_walk(self, s):
+        assert output.visible_len(s) == self._walk(s)
+
+    def test_ascii_never_consults_unicodedata(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(output, "_char_width",
+                            lambda ch: calls.append(ch) or 1)
+        assert output.visible_len("plain ascii") == 11
+        assert output.visible_len("\033[31mred\033[0m") == 3
+        assert calls == []
+
+    def test_non_ascii_still_takes_the_walk(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(output, "_char_width",
+                            lambda ch: calls.append(ch) or 2)
+        assert output.visible_len("\033[31ma名\033[0m") == 4
+        assert calls == ["a", "名"]
+
+
 class TestClipVisibleWideChars:
     def test_never_splits_a_wide_character(self):
         # "名称测试" is 8 display columns; clipping to 5 must not cut a
