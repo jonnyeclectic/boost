@@ -20,6 +20,7 @@ def clean_env(monkeypatch):
     monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
     monkeypatch.delenv("BOOST_COLOR", raising=False)
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+    monkeypatch.delenv("TERM", raising=False)
     monkeypatch.setattr(sys, "argv", ["boost"])
 
 
@@ -82,6 +83,32 @@ class TestUseColor:
 
     def test_stream_without_isatty_false(self):
         assert output.use_color(object()) is False
+
+    def test_term_dumb_tty_is_plain(self, monkeypatch):
+        # Emacs shell buffers and some CI log viewers are a TTY that prints
+        # escapes as junk; TERM=dumb is how they say so.
+        monkeypatch.setenv("TERM", "dumb")
+        assert output.use_color(FakeStream(tty=True)) is False
+        assert output.color_level(FakeStream(tty=True)) == 0
+
+    def test_term_dumb_beats_colorterm(self, monkeypatch):
+        monkeypatch.setenv("TERM", "dumb")
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        assert output.color_level(FakeStream(tty=True)) == 0
+
+    def test_other_term_keeps_color_on_a_tty(self, monkeypatch):
+        monkeypatch.setenv("TERM", "xterm-256color")
+        assert output.use_color(FakeStream(tty=True)) is True
+
+    def test_boost_color_always_beats_term_dumb(self, monkeypatch):
+        monkeypatch.setenv("TERM", "dumb")
+        monkeypatch.setenv("BOOST_COLOR", "always")
+        assert output.use_color(FakeStream(tty=True)) is True
+
+    def test_clicolor_force_beats_term_dumb(self, monkeypatch):
+        monkeypatch.setenv("TERM", "dumb")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        assert output.use_color(FakeStream(tty=True)) is True
 
 
 class TestStdinIsTty:

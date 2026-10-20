@@ -92,6 +92,12 @@ def use_color(stream=None) -> bool:
         return False
     if os.environ.get("CLICOLOR_FORCE"):
         return True
+    # TERM=dumb (Emacs shell/compile buffers, some CI log viewers) is a TTY
+    # that renders escapes as junk: no color, and — since color_level() and
+    # the spinner build on this — no in-place animation either. Checked after
+    # the explicit overrides, so BOOST_COLOR=always / CLICOLOR_FORCE still win.
+    if os.environ.get("TERM") == "dumb":
+        return False
     stream = stream or sys.stdout
     return hasattr(stream, "isatty") and stream.isatty()
 
