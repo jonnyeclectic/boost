@@ -8,6 +8,8 @@ degradation when the framework is absent. They must NOT import/run the SDK.
 """
 from __future__ import annotations
 
+import pytest
+
 
 def test_run_print_emits_a_compilable_runner(boost, installed):
     r = boost("run", installed, "target.py", "--print")
@@ -33,6 +35,14 @@ def test_run_print_writes_file_with_o(boost, installed, tmp_path):
     assert dest.exists()
     compile(dest.read_text(encoding="utf-8"), "<file>", "exec")
     assert "wrote runner" in r.out.lower()
+
+
+@pytest.mark.parametrize("flag", ["--output", "--out"])
+def test_run_print_takes_both_long_spellings_of_o(boost, installed, tmp_path,
+                                                  flag):
+    dest = tmp_path / "runner.py"
+    boost("run", installed, "--print", flag, str(dest))
+    compile(dest.read_text(encoding="utf-8"), "<file>", "exec")
 
 
 def test_run_target_reaches_the_prompt(boost, installed):

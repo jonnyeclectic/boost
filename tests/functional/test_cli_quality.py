@@ -1601,6 +1601,18 @@ class TestQuarantine:
         assert entry["agents"] == ["claude-code", "windsurf", "cursor",
                                    "antigravity"]
 
+    def test_focus_on_a_quarantined_skill_hints_a_command_that_runs(
+            self, boost, installed):
+        # The hint used to be a bare `boost quarantine`, which errors with
+        # "specify a skill to quarantine". The hint must be the release.
+        boost("quarantine", "brainstorming")
+        r = boost("focus", "brainstorming", expect=1)
+        assert "brainstorming is quarantined" in r.err
+        assert ("release it first with `boost quarantine --release "
+                "brainstorming`") in r.err
+        boost("quarantine", "--release", "brainstorming")
+        boost("focus", "brainstorming")
+
     def test_doctor_separates_active_from_quarantined_skills(self, boost, tapped):
         boost("install", "brainstorming")
         boost("install", "commit-messages")

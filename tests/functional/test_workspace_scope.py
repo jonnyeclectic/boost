@@ -245,6 +245,83 @@ def test_uninstall_local_removes_the_dirs_and_the_record(boost, tapped, repo):
     assert projectlock.get_skill(repo, "brainstorming") is None
 
 
+@pytest.mark.parametrize("flags", [["--local"], ["--scope", "project"]])
+def test_uninstall_takes_every_project_spelling_install_does(
+        boost, tapped, repo, flags):
+    # install offers --scope project and --local as equivalents; uninstall
+    # used to reject --scope with "unrecognized arguments" (rc 2).
+    boost("install", "brainstorming", *flags)
+    boost("uninstall", "brainstorming", *flags, "-y")
+    assert projectlock.get_skill(repo, "brainstorming") is None
+    assert not (repo / ".claude" / "skills" / "brainstorming").exists()
+
+
+@pytest.mark.parametrize("flags", [["--global"], ["--scope", "user"]])
+def test_uninstall_global_leaves_the_repo_alone(boost, tapped, repo, flags):
+    # Explicitly user scope: no fallback into the repo, and the miss names
+    # the flag that would reach it.
+    boost("install", "brainstorming", "--local")
+    r = boost("uninstall", "brainstorming", *flags, "-y", expect=1)
+    assert "brainstorming is not installed" in r.err
+    assert "only this repo has it — `boost uninstall --local brainstorming`" \
+        in r.err
+    assert projectlock.get_skill(repo, "brainstorming") is not None
+
+
+@pytest.mark.parametrize("flags", [["--global"], ["--scope", "user"]])
+def test_uninstall_global_removes_the_user_install(boost, tapped, repo, flags):
+    boost("install", "brainstorming")
+    boost("install", "brainstorming", "--local")
+    boost("uninstall", "brainstorming", *flags, "-y")
+    assert lockfile.get_skill("brainstorming") is None
+    assert projectlock.get_skill(repo, "brainstorming") is not None
+
+
+def test_uninstall_scope_flags_are_mutually_exclusive(boost, tapped, repo):
+    r = boost("uninstall", "brainstorming", "--local", "--global", expect=2)
+    assert "not allowed with argument" in r.err
+
+
+# ── reinstall ────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("flags", [["--local"], ["--scope", "project"]])
+def test_reinstall_local_puts_a_project_skill_back(boost, tapped, repo, flags):
+    # reinstall used to reject --scope/--local (rc 2) and, unflagged, call a
+    # project skill "not installed" — it only read the user lock.
+    boost("install", "brainstorming", "--local")
+    skill_md = repo / ".claude" / "skills" / "brainstorming" / "SKILL.md"
+    skill_md.write_text("edited\n", encoding="utf-8")
+    r = boost("reinstall", "brainstorming", *flags)
+    assert "reinstalled brainstorming v1.4.0 (this repo)" in r.out
+    assert "Reinstalled 1 skill" in r.out
+    assert skill_md.read_text(encoding="utf-8") != "edited\n"
+    assert lockfile.get_skill("brainstorming") is None   # never the user lock
+
+
+def test_reinstall_local_all_covers_the_repo_only(boost, tapped, repo):
+    boost("install", "commit-messages")
+    boost("install", "brainstorming", "--local")
+    r = boost("reinstall", "--local", "--all")
+    assert "reinstalled brainstorming v1.4.0 (this repo)" in r.out
+    assert "commit-messages" not in r.out
+    assert "Reinstalled 1 skill" in r.out
+
+
+@pytest.mark.parametrize("flags", [["--global"], ["--scope", "user"]])
+def test_reinstall_global_does_not_reach_the_repo(boost, tapped, repo, flags):
+    boost("install", "brainstorming", "--local")
+    r = boost("reinstall", "brainstorming", *flags, expect=1)
+    assert "brainstorming is not installed in your user config" in r.err
+    boost("install", "commit-messages")
+    r = boost("reinstall", "commit-messages", *flags)
+    assert "reinstalled commit-messages" in r.out
+
+
+def test_reinstall_local_outside_a_project_errors(boost, tapped, plain_dir):
+    r = boost("reinstall", "--local", "--all", expect=1)
+    assert "nothing to reinstall" in r.err
+
+
 def test_plain_uninstall_falls_back_to_the_project(boost, tapped, repo):
     # "not installed" would be a plain falsehood while standing in the repo.
     boost("install", "brainstorming", "--local")

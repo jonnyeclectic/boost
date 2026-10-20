@@ -13,6 +13,7 @@ import contextlib
 import difflib
 import fnmatch
 import json
+import os
 import re
 import shlex
 import sys
@@ -219,14 +220,27 @@ def cmd_distill(argv: list[str]) -> int:
         description="Merge multiple skills into one deduplicated skill")
     ap.add_argument("names", nargs="+", metavar="NAME",
                     help="two or more skills to merge")
-    ap.add_argument("-o", "--output", metavar="NEWNAME",
-                    help="name for the merged skill (default: <first>-distilled)")
+    name_g = ap.add_mutually_exclusive_group()
+    name_g.add_argument("--name", metavar="NEWNAME",
+                        help="name for the merged skill (default: "
+                             "<first>-distilled)")
+    # Every sibling's -o/--output is a FILE; distill's has always been the
+    # skill NAME. Kept, so existing scripts run, but a path is refused rather
+    # than slugified into a directory in the cwd nobody asked for.
+    name_g.add_argument("-o", "--output", dest="name", metavar="NEWNAME",
+                        help="older spelling of --name (a name, not a path)")
     ap.add_argument("--install", action="store_true",
                     help="install the merged skill instead of writing a file")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the overwrite/replace confirmation prompt")
     args = ap.parse_args(argv)
 
+    if args.name and ("/" in args.name or os.sep in args.name
+                      or args.name.lower().endswith(".md")):
+        raise BoostError("distill takes a name for the merged skill, not a "
+                         "path: %s" % args.name,
+                         hint="pass `--name NEWNAME`; the skill is written to "
+                              "./NEWNAME/SKILL.md")
     names = list(dict.fromkeys(args.names))
     if len(names) < 2:
         raise BoostError("distill needs at least two distinct skills",
@@ -241,7 +255,7 @@ def cmd_distill(argv: list[str]) -> int:
     # otherwise name the output `fx:tdd-workflow-distilled`, which the printed
     # `boost import` hint then rejects as an invalid skill name.
     new = util.resolve_slug(
-        args.output or catalog.split_name(names[0])[1] + "-distilled",
+        args.name or catalog.split_name(names[0])[1] + "-distilled",
         what="output name")
 
     out.heading("distilling %s → %s" % (", ".join(names), new))
@@ -412,7 +426,8 @@ def cmd_infer(argv: list[str]) -> int:
                     help="codebase to analyze (default: current directory)")
     ap.add_argument("--name", default="project-conventions", metavar="N",
                     help="skill name (default: project-conventions)")
-    ap.add_argument("-o", "--output", metavar="FILE", help="write to a file")
+    ap.add_argument("-o", "--output", "--out", dest="output", metavar="FILE",
+                    help="write to a file")
     ap.add_argument("--install", action="store_true",
                     help="install the generated skill")
     ap.add_argument("-y", "--yes", action="store_true",
@@ -1245,7 +1260,8 @@ def cmd_focus(argv: list[str]) -> int:
                             "skills" % name, hint="see `boost list`")
         if entry.get("quarantined"):
             raise BoostError("%s is quarantined" % name,
-                            hint="release it first with `boost quarantine`")
+                            hint="release it first with `boost quarantine "
+                                 "--release %s`" % name)
     sidelined = 0
     for name, entry in sorted(inst.items()):
         if name in names or entry.get("quarantined"):
