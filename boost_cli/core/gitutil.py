@@ -3,6 +3,7 @@
 """Thin git wrapper (stdlib subprocess only)."""
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -472,7 +473,10 @@ def _sparse_add(repo: Path, patterns: list[str], what: str) -> None:
             except BoostError as e:
                 if not _git_lock_busy(e):
                     raise
-                git_lock.unlink(missing_ok=True)
+                # Suppressed: on Windows a live git holding it open makes
+                # unlink raise, and the retry's own error then says so.
+                with contextlib.suppress(OSError):
+                    git_lock.unlink(missing_ok=True)
                 run(argv)
         except BoostError as e:
             # The blobs live in the promisor remote, so this is the one step in
