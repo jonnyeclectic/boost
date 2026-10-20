@@ -337,9 +337,9 @@ class TestCreate:
         r = boost("create", "My Fancy Skill", "--description", "Does a thing")
         text = (tmp_path / "my-fancy-skill" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["description"] == "Does a thing"
-        # The slugging is no longer silent: the typed name and its slug both
-        # show up somewhere in the output.
-        assert "My Fancy Skill" in r.out
+        # The slugging is no longer silent: the note names both, on stderr so
+        # it can never land inside output a script parses.
+        assert r.err == "  using skill name 'my-fancy-skill' (from 'My Fancy Skill')\n"
         assert "my-fancy-skill" in r.out
 
     def test_refuses_a_name_with_no_letters_or_digits(self, boost, sandbox,

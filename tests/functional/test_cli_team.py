@@ -585,6 +585,19 @@ class TestProfile:
         assert second["was_skills"] == 1
         assert second["skills"] == 2
 
+    def test_a_name_that_is_not_a_slug_keeps_stdout_pure_json(self, boost,
+                                                              installed):
+        # The slug note used to land on stdout ahead of the object, so
+        # json.loads failed at char 2 for every action but `list`.
+        note = "  using profile name 'my-team' (from 'My Team')\n"
+        r = boost("profile", "save", "My Team", "--json")
+        assert json.loads(r.out)["name"] == "My Team"
+        assert r.err == note
+        for action in ("show", "diff", "use", "delete"):
+            r = boost("profile", action, "My Team", "--json")
+            assert json.loads(r.out), action
+            assert r.err == note, action
+
     def test_use_json_reports_installs_and_sidelines(self, boost, tapped):
         boost("install", "brainstorming")
         boost("profile", "save", "solo")
@@ -666,7 +679,8 @@ class TestProfile:
     def test_save_prints_a_note_when_the_name_is_slugified(self, boost, installed):
         r = boost("profile", "save", "My Daily")
         assert "My Daily" in r.out
-        assert "my-daily" in r.out
+        # On stderr, so the same note cannot corrupt `--json` on stdout.
+        assert r.err == "  using profile name 'my-daily' (from 'My Daily')\n"
         assert (paths.profiles_dir() / "my-daily.json").is_file()
 
     def test_list_sorts_by_the_displayed_name_not_the_slugged_filename(
