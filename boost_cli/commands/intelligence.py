@@ -728,6 +728,10 @@ def _recurring_patterns(files: list[Path], limit: int) -> list[tuple[str, int]]:
     return hits[:limit]
 
 
+_PASTE_PLACEHOLDER = re.compile(
+    r"\[(?:Pasted text|Image|\.\.\.Truncated text) #\d+[^\]]*\]")
+
+
 def _user_texts(obj) -> list[str]:
     """Best-effort user-message text from one history event."""
     if not isinstance(obj, dict):
@@ -737,8 +741,16 @@ def _user_texts(obj) -> list[str]:
     if not role and isinstance(obj.get("display"), str):
         # Claude Code's ~/.claude/history.jsonl: {display, pastedContents,
         # project, sessionId, timestamp} — every row is a typed prompt, and
-        # none carries a role.
-        return [obj["display"]]
+        # none carries a role. Two shapes in it are not requests: a slash
+        # command (`/clear`, `/loop 5m /babysit`) and the placeholder Claude
+        # Code writes for a paste or an image (`[Pasted text #1 +12 lines]`),
+        # which normalises to "pasted text 1 12 lines" and would otherwise
+        # surface as the user's most recurring "instruction".
+        display = obj["display"].strip()
+        if display.startswith("/"):
+            return []
+        display = _PASTE_PLACEHOLDER.sub(" ", display).strip()
+        return [display] if display else []
     if role != "user":
         return []
     content = node.get("content", obj.get("content"))

@@ -577,6 +577,24 @@ class TestAbsorb:
         assert _user_texts({"display": {"text": "x"}}) == []
         assert _user_texts({"project": "/p"}) == []
 
+    def test_display_placeholders_and_slash_commands_are_not_requests(self):
+        from boost_cli.commands.intelligence import _user_texts
+        assert _user_texts({"display": "[Pasted text #1 +12 lines]"}) == []
+        assert _user_texts({"display": "[Image #2]"}) == []
+        assert _user_texts({"display": "/clear"}) == []
+        assert _user_texts({"display": "  /loop 5m /babysit-prs"}) == []
+        assert _user_texts({"display": "fix this [Pasted text #3 +4 lines] "
+                                       "please"}) == ["fix this   please"]
+
+    def test_repeated_paste_placeholder_is_no_pattern(self, boost, sandbox):
+        claude = sandbox / ".claude"
+        claude.mkdir()
+        (claude / "history.jsonl").write_text("\n".join(
+            _display_line("[Pasted text #1 +12 lines]")
+            for _ in range(4)) + "\n", encoding="utf-8")
+        r = boost("absorb")
+        assert "no recurring patterns in 1 history file(s)" in r.out
+
     def test_refused_install_exits_nonzero(self, boost, sandbox, tmp_path,
                                            monkeypatch):
         monkeypatch.chdir(tmp_path)
