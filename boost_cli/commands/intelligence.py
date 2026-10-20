@@ -831,7 +831,13 @@ def cmd_evolve(argv: list[str]) -> int:
     # the generated-skill write above — nothing compares across machines
     # today, and the recorded digest should not depend on one either way.
     skill_md.write_text(new, encoding="utf-8", newline="\n")
-    entry["sha256"] = util.sha256_dir(store.skill_store_dir(args.name))
+    # Deliberately does NOT rewrite entry["sha256"] to the store's new hash,
+    # for the reason `boost edit` does not: drift compares the store against
+    # that field, and only consults the tap once they match. Rewriting it
+    # made store == lock != tap, which `boost drift` reported as
+    # "upstream-moved — boost update" for a tap that had not moved and an
+    # update that did nothing. Left alone, the revision reads as what it is,
+    # a local edit, and the lock keeps the digest of the tap copy it came from.
     entry["updated_at"] = util.now_iso()
     entry["version"] = new_ver
     # Pinned, because this revision exists nowhere but the store: once the
