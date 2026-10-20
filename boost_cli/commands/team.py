@@ -186,7 +186,10 @@ def cmd_cohort(argv) -> int:
             for skill in spec["skills"]:
                 # find_any, not installed(): a cohort item installed as a rule
                 # or workflow would otherwise be re-installed on every apply.
-                found = lockfile.find_any(skill)
+                # The lock keys by the bare name, so a `tap:name` member never
+                # matched and every apply after the first re-installed it —
+                # and the "already installed" error aborted the cohort.
+                found = lockfile.find_any(store.installed_name(skill))
                 if found is not None:
                     label = (skill if found[0] == "skill"
                              else "%s (%s)" % (skill, found[0]))

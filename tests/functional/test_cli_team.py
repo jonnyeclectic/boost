@@ -172,6 +172,20 @@ class TestCohort:
         assert "brainstorming already installed" in r.out
         assert "applied: 0 installed, 1 already present" in r.out
 
+    def test_reapply_sees_a_tap_qualified_member_as_installed(self, boost,
+                                                               tapped):
+        # The lock keys by the bare name, so `fixture-tap:brainstorming` was
+        # never found: the second apply re-installed it, hit "already
+        # installed" and exited 1 with the rest of the cohort unprocessed.
+        boost("cohort", "create", "pilot", "--percent", "100",
+             "--skills", "fixture-tap:brainstorming,tdd-workflow")
+        r = boost("cohort", "apply")
+        assert "applied: 2 installed, 0 already present" in r.out
+        r = boost("cohort", "apply")
+        assert "fixture-tap:brainstorming already installed" in r.out
+        assert "tdd-workflow already installed" in r.out
+        assert "applied: 0 installed, 2 already present" in r.out
+
     def test_apply_reports_missing_members_and_exits_nonzero_when_nothing_landed(
             self, boost, tapped):
         # The bug: a cohort whose only member is nowhere to be found reported
