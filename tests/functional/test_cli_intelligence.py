@@ -881,7 +881,7 @@ class TestContext:
         (paths.state_dir() / "context.json").write_text(json.dumps(
             {"enabled": True, "rules": [
                 {"pattern": "main", "skills": ["fixture-tap:commit-messages"]},
-                {"pattern": "feature/*", "skills": ["tdd-workflow"]}]}))
+                {"pattern": "feature/*", "skills": ["tdd-workflow"]}]}), encoding="utf-8")
         repo = _git_repo(tmp_path / "repo")
         monkeypatch.chdir(repo)
         r = boost("context", "apply")
