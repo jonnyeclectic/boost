@@ -6026,16 +6026,9 @@ All of the above is pure logic in <code>core/browse.py</code> under unit tests a
       </article>
 
       <article class="cap rcard" id="browse-facet-pickers">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3><code>boost browse</code> facet pickers — sorted, searchable category, tap and kind filters</h3>
-        <p><b>Why.</b> The <code>^G</code> picker listed categories largest-first, so finding one by name meant reading the whole list, and typing a letter only jumped to the next row starting with it. Category was also the only list-style filter: a tap or a kind could be searched for as text, never picked.
-
-<b>What changed.</b>
-
-- <b>Sorted</b>: rows run A–Z (case-insensitive) with <code>all</code> pinned first and <code>uncategorized</code> last; <code>^T</code> inside the picker toggles to largest-first.
-- <b>Searchable</b>: typing filters the rows with the browser's own label matcher (<code>browse.token_matches</code>, any subsequence), matched letters lit as in the list; Backspace edits, Esc clears a query before it closes, an empty result says so.
-- <b>Every facet</b>: one picker for category (<code>^G</code>), tap (<code>^R</code>) and kind (<code>^K</code>), Tab or ←/→ to switch. Filters AND with each other and the query and ride in the query row as <code>#testing @acme/quality kind:rule</code>; each facet's counts are taken under the other active filters.
-- The picker's key handling is a pure reducer (<code>browse.picker_step</code>), so it is unit- and mutation-tested rather than buried in the curses loop.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/browse-facet-pickers.md">Write-up &middot; browse-facet-pickers.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Medium</b></span>

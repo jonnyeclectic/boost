@@ -437,7 +437,8 @@ the query, and each rides in the query row as a chip: `#testing
 active filters, so each number is what picking that row would leave; they
 ignore the text query, which would mean re-indexing the catalogue on every
 open. `boost browse --category testing` opens on a category, and `boost
-browse --categories` lists every category with its count.
+browse --categories` lists every category with its count, A–Z
+(`--by-count` for largest first).
 
 Duplicates are collapsed. Registries render one skill into `.claude/`,
 `.cursor/`, `.gemini/` and a plugin root, so on a real 60,047-entry catalogue

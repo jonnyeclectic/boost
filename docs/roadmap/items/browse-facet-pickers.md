@@ -2,7 +2,7 @@
 id: browse-facet-pickers
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · UX
 complexity: M
 impact: Medium

@@ -3113,6 +3113,24 @@ class TestBrowseCategories:
         assert ["uncategorized", "2"] in lines
         assert "boost browse --category <name>" in r.out
 
+    def test_the_categories_flag_lists_a_to_z_or_by_count(
+            self, boost, tapped, monkeypatch):
+        from boost_cli.core import catalog
+        rows = [dict(e, category=c) for e, c in zip(
+            self._entries(), ("Zeta", "zeta", "alpha", "", "Beta"),
+            strict=True)]
+        monkeypatch.setattr(catalog, "all_entries", lambda: rows)
+
+        def names(out):
+            return [ln.split()[0] for ln in out.splitlines()
+                    if len(ln.split()) == 2 and ln.split()[1].isdigit()]
+
+        # A–Z ignores case; uncategorized is pinned last in both orders.
+        assert names(boost("browse", "--categories").out) == [
+            "alpha", "beta", "zeta", "uncategorized"]
+        assert names(boost("browse", "--categories", "--by-count").out) == [
+            "zeta", "alpha", "beta", "uncategorized"]
+
     def test_an_unknown_category_points_at_the_list(self, boost, tapped):
         r = boost("browse", "--category", "nope", expect=1)
         assert "no entries in category 'nope'" in r.err

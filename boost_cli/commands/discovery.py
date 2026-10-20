@@ -2300,15 +2300,16 @@ def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names,
     return dscroll
 
 
-def _print_categories(entries, categories) -> int:
+def _print_categories(entries, categories, by_count=False) -> int:
     """``boost browse --categories``: each category and its item count, over
-    the deduplicated catalogue — the numbers the ^G picker shows."""
+    the deduplicated catalogue — the numbers and the order the ^G picker
+    shows (A–Z, ``uncategorized`` last; ``--by-count`` for largest first)."""
     unique = [e for e, _n in browse.dedupe(entries)]
-    out.heading("%d categories · %s items" % (
-        len(browse.category_counts(unique, categories)),
-        format(len(unique), ",")))
-    out.table([(c, format(n, ",")) for c, n in
-               browse.category_counts(unique, categories)],
+    rows = browse.picker_rows(unique, categories,
+                              order="count" if by_count else "az")[1:]
+    out.heading("%d categories · %s items" % (len(rows),
+                                              format(len(unique), ",")))
+    out.table([(c, format(n, ",")) for c, n in rows],
               headers=("category", "items"), whole=("category",))
     out.info(out.c("open one with `boost browse --category <name>`", out.DIM))
     return 0
@@ -2322,7 +2323,9 @@ def cmd_browse(argv):
     p.add_argument("--category", default="",
                    help="open on one category (case-insensitive); ^G switches")
     p.add_argument("--categories", action="store_true",
-                   help="list the categories and how many items each holds")
+                   help="list the categories and how many items each holds, A–Z")
+    p.add_argument("--by-count", action="store_true",
+                   help="with --categories: largest first instead of A–Z")
     args = p.parse_args(argv)
     entries = sorted(catalog.all_entries(), key=operator.itemgetter("name"))
     if not entries:
@@ -2330,7 +2333,7 @@ def cmd_browse(argv):
                         hint="add registries with `boost tap --defaults`")
     categories = _tap_categories()
     if args.categories:
-        return _print_categories(entries, categories)
+        return _print_categories(entries, categories, args.by_count)
     narrowed = entries
     if args.category:
         # browse.in_category, not catalog.filter_by_category: the browser files
