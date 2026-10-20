@@ -454,7 +454,7 @@ class TestDoctor:
             wf = boost("install", "ship-it").out.replace("\n    ", " ")
             doc = boost("doctor", expect=1).out.replace("\n    ", " ")
             heal = boost("heal", expect=1).out.replace("\n    ", " ")
-            synced = boost("sync").out.replace("\n    ", " ")
+            synced = boost("sync", expect=1).out.replace("\n    ", " ")
         finally:
             for d in dirs:
                 d.chmod(0o700)
@@ -674,7 +674,7 @@ class TestDoctor:
     def test_a_corrupt_lock_leaves_sync_non_destructive(self, boost, installed):
         link = paths.home() / ".claude/skills" / "brainstorming"
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
-        r = boost("sync")
+        r = boost("sync", expect=1)
         assert "removed stale link" not in r.out
         assert ("the lock file is corrupt, so sync records nothing"
                 in " ".join((r.out + r.err).split()))
@@ -2828,7 +2828,7 @@ class TestAnInstallPastSomethingInTheWay:
         blocked = "brainstorming → claude-code (~/.claude/skills in the way)"
         # sync listed the link as missing, link_agents skipped it, and sync
         # printed "everything in sync".
-        r = boost("sync")
+        r = boost("sync", expect=1)
         sync = self._flat(r.out + r.err)
         assert blocked in sync
         assert "everything in sync" not in sync
@@ -2878,7 +2878,7 @@ class TestARulePastSomethingInTheWay:
                 "is in the way — `boost sync` writes it once it is moved" in doc)
         heal = self._flat(boost("heal", "--dry-run", expect=1).out)
         assert heal.count("move ~/.cursor aside") == 1
-        sync = self._flat(boost("sync").out)
+        sync = self._flat(boost("sync", expect=1).out)
         assert "move ~/.cursor aside, then re-run `boost sync`" in sync
         assert "everything in sync" not in sync
         assert "re-materialized" not in sync
@@ -2921,8 +2921,8 @@ class TestSyncSaysWhyARuleWasNotRematerialized:
         # no install error to report: sync claims no repair and names the dir.
         rule_gone.chmod(0o500)
         try:
-            text = self._flat(boost("sync").out)
-            actions = json.loads(boost("sync", "--json").out)["actions"]
+            text = self._flat(boost("sync", expect=1).out)
+            actions = json.loads(boost("sync", "--json", expect=1).out)["actions"]
         finally:
             rule_gone.chmod(0o700)
         assert ("agent dir ~/.cursor/rules is not writable — `chmod u+w "

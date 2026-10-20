@@ -188,7 +188,7 @@ class TestADotdirWithNoSearchBit:
         doc = boost("doctor", expect=1).out
         dry = boost("heal", "--dry-run", expect=1).out
         healed = boost("heal", expect=1).out
-        synced = boost("sync").out
+        synced = boost("sync", expect=1).out
         cursor.chmod(0o700)
         assert "agent dir ~/.cursor is not searchable" in doc
         assert "`chmod u+wx ~/.cursor`" in doc
@@ -209,7 +209,7 @@ class TestADotdirWithNoSearchBit:
         cursor.chmod(0o600)
         health = boost("health", expect=None)
         doc = boost("doctor", expect=1)
-        synced = boost("sync")
+        synced = boost("sync", expect=1)
         cursor.chmod(0o700)
         assert health.rc in (0, 1), health.err
         assert "unexpected error" not in health.err + doc.err + synced.err
@@ -548,7 +548,7 @@ class TestAMissingSkillsDirUnderAReadOnlyDotdir:
         inst = " ".join(boost("install", "brainstorming").out.split())
         doc = " ".join(boost("doctor", expect=1).out.split())
         dry = " ".join(boost("heal", "--dry-run", expect=1).out.split())
-        synced = " ".join(boost("sync").out.split())
+        synced = " ".join(boost("sync", expect=1).out.split())
         cursor.chmod(0o700)
         assert ("not linked: ~/.cursor is not writable — `chmod u+w "
                 "~/.cursor`") in inst
@@ -762,7 +762,7 @@ class TestADirectoryAtARulesFilePath:
         dry = " ".join(boost("heal", "--dry-run", expect=1).out.split())
         assert line in dry
         assert "would re-materialize" not in dry
-        synced = " ".join(boost("sync").out.split())
+        synced = " ".join(boost("sync", expect=1).out.split())
         assert line in synced
         assert "everything in sync" not in synced
 
