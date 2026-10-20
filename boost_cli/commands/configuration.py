@@ -525,6 +525,9 @@ def cmd_create(argv) -> int:
                    help="parent directory (default: current directory)")
     p.add_argument("--install", action="store_true",
                    help="install the new skill immediately")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="with --install, replace an installed skill of the "
+                        "same name without asking")
     args = p.parse_args(argv)
 
     name = util.resolve_slug(args.name, what="skill name")
@@ -561,11 +564,11 @@ def cmd_create(argv) -> int:
     out.ok("created %s" % _tilde(skill_md))
     if args.install:
         owner = store.existing_skill_owner(name)
-        if owner and not out.confirm(
-                "%s is already installed from %s — replace it?" % (name, owner)):
+        if owner and not (args.yes or out.confirm(
+                "%s is already installed from %s — replace it?" % (name, owner))):
             out.warn("not installed: %s is already installed from %s" % (name, owner))
             out.dim("  next: edit it, then `boost import %s`" % _tilde(target), wrap=True)
-            return 0
+            return 1    # declined: the --install half of the request did not happen
         res = store.install_from_path(target, name=name)
         out.ok("%s %s → %s" % ("replaced" if owner else "installed", name, _tilde(res.dest)))
         if res.linked:

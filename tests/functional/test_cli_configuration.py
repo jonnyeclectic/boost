@@ -382,11 +382,24 @@ class TestCreate:
     def test_install_flag_declined_overwrite_leaves_it_installed(
             self, boost, installed, tmp_path, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")
-        r = boost("create", "brainstorming", "--dir", tmp_path, "--install")
+        # Declined, the --install half did not happen: exit 1, as every
+        # command that declines a confirm does.
+        r = boost("create", "brainstorming", "--dir", tmp_path, "--install",
+                  expect=1)
         assert "not installed: brainstorming is already installed from fixture-tap" in r.out
         assert (tmp_path / "brainstorming" / "SKILL.md").is_file()
         lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["brainstorming"]["tap"] == "fixture-tap"
+
+    def test_install_flag_takes_yes_as_its_prompt_says(
+            self, boost, installed, tmp_path, monkeypatch):
+        # The prompt says "pass -y"; argparse used to reject it (rc 2).
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("create", "brainstorming", "--dir", tmp_path, "--install", "-y")
+        assert "replaced brainstorming" in r.out
+        assert "replace it?" not in r.out
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        assert lock["skills"]["brainstorming"]["tap"] == "local"
 
 
 # ---------------------------------------------------------------- policy

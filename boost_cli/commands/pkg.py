@@ -4,7 +4,6 @@
 reinstall, bundle, import, pin, unpin, snapshot, export."""
 from __future__ import annotations
 
-import contextlib
 import io
 import json
 import os
@@ -2307,20 +2306,26 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             if dry_run:
                 # Nothing is cloned, so any skill line naming this tap cannot
                 # be resolved below — said plainly there rather than guessed.
-                # Under both names: the real run names the tap from its URL
-                # (`registry.add` -> `parse_spec`), not from this line's NAME,
-                # so `tap myalias ./x` is tapped as `x`, and a `skill x:…`
-                # line must defer here as it will install there.
-                would_tap.add(tname)
-                # no derivable name: NAME is then all there is to match
-                with contextlib.suppress(BoostError):
+                # Under the name the real run will use: it names the tap from
+                # its URL (`registry.add` -> `parse_spec`), not from this
+                # line's NAME, so `tap myalias ./x` is tapped as `x`. A `skill
+                # x:…` line defers here as it will install there, and a `skill
+                # myalias:…` line misses here as it will miss there — deferring
+                # it too exited 0 on a file whose real run exits 1.
+                derived = tname
+                try:
                     derived = registry.parse_spec(turl or tname)[0]
+                except BoostError:
+                    # no derivable name: NAME is then all there is to match
+                    would_tap.add(tname)
+                else:
                     # Already configured under that name, a skill line naming
                     # it resolves now and misses the way the real run will,
                     # so it must not be deferred as "cannot resolve yet".
                     if derived not in have_taps:
                         would_tap.add(derived)
-                out.info("would tap %s" % tname)
+                out.info("would tap %s%s" % (tname, "" if derived == tname
+                                             else " (as %s)" % derived))
                 taps_added += 1
                 continue
             try:
@@ -2494,18 +2499,21 @@ def cmd_import(argv: list[str]) -> int:
     group.add_argument("--all", action="store_true", help="import every skill found")
     ap.add_argument("--agent", action="append", metavar="A",
                     help="link only into this agent (repeatable)")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the replace-the-only-copy confirmation prompt")
     args = ap.parse_args(argv)
     only = _check_agents(args.agent)
     if args.source.startswith(("http://", "https://", "git@", "ssh://")):
         out.info("cloning %s …" % args.source)
         with store.cloned_source(args.source) as remote:
             return _import_root(remote.root, args.name, args.all, only,
-                                args.source, remote=remote)
+                                args.source, remote=remote, yes=args.yes)
     root = paths.expand(args.source)
     if not root.is_dir():
         raise BoostError("no such directory: %s" % args.source,
                         hint="pass a local path or a git URL")
-    return _import_root(root, args.name, args.all, only, args.source)
+    return _import_root(root, args.name, args.all, only, args.source,
+                        yes=args.yes)
 
 
 def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
@@ -2532,14 +2540,15 @@ def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
 
 def _import_root(root: Path, name: str | None, do_all: bool,
                  only: list[str] | None, display: str,
-                 remote: store.RemoteSource | None = None) -> int:
+                 remote: store.RemoteSource | None = None,
+                 yes: bool = False) -> int:
     def replacing(dirs: list[tuple[Path, str | None]]) -> bool:
         """Ask before an import overwrites a skill that has no other copy."""
         only_copies = [n for d, r in dirs
                        if store.replaces_only_copy(n := store.import_name(d, r), d)]
         if not only_copies:
             return True
-        if out.confirm("the store holds the only copy of %s, and importing "
+        if yes or out.confirm("the store holds the only copy of %s, and importing "
                        "replaces it for good — continue?"
                        % ", ".join(only_copies)):
             return True
@@ -2982,6 +2991,7 @@ def _resolve_skill(name: str):
         candidate = row.dir / "SKILL.md"
         if candidate.exists():
             p = candidate
+    from_store = p is not None
     if p is None:
         entry = catalog.resolve_one(name)   # raises BoostError if unknown
         p = registry.get(entry["tap"]).path / entry["skill_md"]
@@ -2989,7 +2999,11 @@ def _resolve_skill(name: str):
             raise BoostError("SKILL.md missing for %s" % bare,
                             hint="refresh the tap with `boost update`")
     meta, body = frontmatter.parse(p.read_text(encoding="utf-8", errors="replace"))
-    display = str(meta.get("name") or bare).strip() or bare
+    # Installed, the lock name is the one boost answers to: an import renamed
+    # with `--name` may predate the frontmatter rewrite, and the adapt banner
+    # (`boost adapt <display> …`) must name something this boost can find.
+    display = (bare if from_store
+               else str(meta.get("name") or bare).strip() or bare)
     return display, str(meta.get("description") or "").strip(), body, p, meta
 
 

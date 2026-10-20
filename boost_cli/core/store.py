@@ -3939,6 +3939,32 @@ def replaces_only_copy(name: str, src_dir: Path) -> bool:
             and not foreign.same_dir(Path(src_dir), skill_store_dir(name)))
 
 
+def _rename_frontmatter(skill_md: Path, name: str, meta: dict) -> bool:
+    """Make the store copy's frontmatter ``name`` agree with the lock name.
+
+    ``boost import DIR --name beta`` of a skill whose frontmatter says
+    ``name: alpha`` used to rename only the store dir and the lock key: the
+    agent still listed it as ``alpha`` (agents go by the frontmatter name) and
+    ``boost adapt beta`` printed a banner command for an ``alpha`` that boost
+    had no record of. Only the one line changes (``frontmatter.splice_field``),
+    and only in the copy — the source is the user's. Returns whether it wrote.
+    """
+    from . import frontmatter
+    if str(meta.get("name") or "") == name:
+        return False
+    # bytes, not text: a text read would translate CRLF on the way in
+    raw = skill_md.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    revised = frontmatter.splice_field(text, "name", name)
+    if revised == text:     # no frontmatter block to carry a name
+        return False
+    util.atomic_write_text(skill_md, revised)   # newline="\n": verbatim
+    return True
+
+
 def install_from_path(src_dir: Path, name: str | None = None,
                       tap_label: str = "local",
                       only_agents: list[str] | None = None,
@@ -4001,6 +4027,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
     # path import copies what the user's own links lead to.
     skipped = _copy_skill(src_dir, dest,
                           within=remote.root if remote else None)
+    _rename_frontmatter(dest / "SKILL.md", name, meta)
     # An import records no date, so the one a tap install left in the lock
     # must not stand for these files.
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
