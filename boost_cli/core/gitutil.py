@@ -3,6 +3,7 @@
 """Thin git wrapper (stdlib subprocess only)."""
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from ..errors import BoostError
+from . import util
 
 
 def has_git() -> bool:
@@ -292,7 +294,11 @@ def set_sparse_cone(repo: Path, patterns=SPARSE_PATTERNS) -> None:
     `--no-cone` because cone mode matches directory prefixes only, and boost
     needs `*.md` at any depth.
     """
-    run(["-C", str(repo), "sparse-checkout", "set", "--no-cone", *patterns])
+    # Under the same lock as :func:`_sparse_add`, which deletes a
+    # sparse-checkout.lock it finds while holding it: a `boost compact`
+    # running `set` beside an install must not have its live lock taken.
+    with _sparse_guard(Path(repo)):
+        run(["-C", str(repo), "sparse-checkout", "set", "--no-cone", *patterns])
     _SPARSE[str(repo)] = True
 
 
@@ -372,15 +378,7 @@ def materialize(repo: Path, rel_dir: str) -> None:
         return
     if not is_sparse(Path(repo)):
         return
-    try:
-        run(["-C", str(repo), "sparse-checkout", "add", pattern])
-    except BoostError as e:
-        # The blobs live in the promisor remote, so this is the one step in an
-        # install that can need the network. Say that, rather than leaving a
-        # bare transport error to read as a broken tap.
-        raise BoostError(
-            "could not fetch %s from the %s tap: %s" % (rel, Path(repo).name, e),
-            hint="this needs network — the tap stores only Markdown locally") from None
+    _sparse_add(Path(repo), [pattern], rel)
 
 
 def materialize_paths(repo: Path, rels: list[str]) -> None:
@@ -402,13 +400,92 @@ def materialize_paths(repo: Path, rels: list[str]) -> None:
     patterns = [p for p in dict.fromkeys(patterns) if p not in have]
     if not patterns or not is_sparse(Path(repo)):
         return
-    try:
-        run(["-C", str(repo), "sparse-checkout", "add", *patterns])
-    except BoostError as e:
-        raise BoostError(
-            "could not fetch %s from the %s tap: %s"
-            % (", ".join(rels), Path(repo).name, e),
-            hint="this needs network — the tap stores only Markdown locally") from None
+    _sparse_add(Path(repo), patterns, ", ".join(rels))
+
+
+#: Words in a git failure that mean the promisor fetch could not reach the
+#: remote — the one case where "this needs network" is the true cause.
+_TRANSPORT_ERRORS = ("unable to access", "could not resolve", "could not read "
+                     "from remote", "failed to connect", "connection",
+                     "timed out", "network")
+NETWORK_HINT = "this needs network — the tap stores only Markdown locally"
+#: Longer than :func:`run`'s own five minutes: a waiter must outlast the
+#: slowest fetch another install can be making under the same lock.
+SPARSE_LOCK_TIMEOUT = 330.0
+
+
+def _git_lock_busy(err: BoostError) -> bool:
+    """True for git's "Unable to create '...sparse-checkout.lock': File exists"."""
+    text = str(err)
+    return "sparse-checkout.lock" in text and "File exists" in text
+
+
+def _sparse_hint(err: BoostError, git_lock: Path) -> str | None:
+    if _git_lock_busy(err):
+        return ("another git process is working in this tap's clone; if none "
+                "is, remove %s" % git_lock)
+    low = str(err).lower()
+    if any(w in low for w in _TRANSPORT_ERRORS):
+        return NETWORK_HINT
+    return None
+
+
+def _sparse_guard(repo: Path):
+    """Boost's own lock on ``repo``'s sparse cone (see :func:`_sparse_add`).
+
+    Not strict: where the sidecar cannot be made — ``.git`` is a gitfile, or
+    read-only — git's own error about that clone is the one worth reading,
+    not a FileExistsError from boost's lock.
+    """
+    return util.file_lock(repo / ".git" / "boost-sparse.lock",
+                          SPARSE_LOCK_TIMEOUT,
+                          what="the %s tap's checkout" % repo.name,
+                          strict=False)
+
+
+def _sparse_add(repo: Path, patterns: list[str], what: str) -> None:
+    """`git sparse-checkout add` ``patterns``, one boost process at a time.
+
+    git takes ``.git/info/sparse-checkout.lock`` for the duration and fails
+    outright — no wait, no retry — when it is already there, so 40 parallel
+    `boost install`s from one tap lost one to "File exists". And a git that
+    is killed (Ctrl-C, or :func:`run`'s timeout) cannot remove it, which used
+    to fail every later install from that tap for good. So boost serialises on
+    its own OS lock (``.git/boost-sparse.lock``, released when its holder
+    dies), and while holding it treats a leftover git lock as a dead git's:
+    no other boost can be in a sparse checkout of this clone just then. It
+    is removed once and the add retried, the way :func:`unshallow` handles
+    ``shallow.lock``.
+
+    The cone is re-read inside the lock: the install that held it may have
+    just added the very pattern this one is waiting to add.
+    """
+    git_lock = repo / ".git" / "info" / "sparse-checkout.lock"
+    with _sparse_guard(repo):
+        have = _sparse_list(repo) or set()
+        todo = [p for p in patterns if p not in have]
+        if not todo:
+            return
+        argv = ["-C", str(repo), "sparse-checkout", "add", *todo]
+        try:
+            try:
+                run(argv)
+            except BoostError as e:
+                if not _git_lock_busy(e):
+                    raise
+                # Suppressed: on Windows a live git holding it open makes
+                # unlink raise, and the retry's own error then says so.
+                with contextlib.suppress(OSError):
+                    git_lock.unlink(missing_ok=True)
+                run(argv)
+        except BoostError as e:
+            # The blobs live in the promisor remote, so this is the one step in
+            # an install that can need the network — but say so only when the
+            # error is a transport one: a local tap needs none, and blaming
+            # the network for a lock file sent the user nowhere.
+            raise BoostError(
+                "could not fetch %s from the %s tap: %s" % (what, repo.name, e),
+                hint=_sparse_hint(e, git_lock)) from None
 
 
 def _depth(repo: Path) -> list[str]:

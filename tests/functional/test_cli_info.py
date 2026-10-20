@@ -980,6 +980,17 @@ class TestLog:
         r = boost("log", "local-one")
         assert "no upstream history (imported locally)" in r.out
 
+    def test_untapped_source_is_not_called_a_local_import(self, boost,
+                                                           installed):
+        boost("untap", "fixture-tap")
+        r = boost("log", "brainstorming", expect=1)
+        assert ("brainstorming comes from tap fixture-tap, which is no "
+                "longer tapped") in r.err
+        assert "imported locally" not in r.out
+        r = boost("log", "brainstorming", "--json", expect=1)
+        assert r.out == ""
+        assert "no longer tapped" in r.err
+
     def test_name_with_diagnostics_or_crashes_is_a_usage_error(self, boost, installed):
         # `log NAME --diagnostics` used to silently drop NAME and show the
         # unfiltered diagnostic trail instead.
@@ -1330,8 +1341,10 @@ class TestMaterializedKinds:
         # Before find_any, this fell through to the catalog and errored
         # "no skill named 'house' in any tap" — a denial, not an answer.
         self._seed_claude_rule()
-        r = boost("log", "house")
-        assert "no upstream history (imported locally)" in r.out
+        # The seeded rule records `some-tap`, which is not tapped here: the
+        # answer names that, rather than calling a tap install a local import.
+        r = boost("log", "house", expect=1)
+        assert "house comes from tap some-tap, which is no longer tapped" in r.err
 
     def test_home_resolves_an_installed_rule(self, boost, sandbox):
         self._seed_claude_rule()

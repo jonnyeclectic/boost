@@ -622,6 +622,46 @@ class TestTapMatches:
         assert catalog.tap_matches("", "") is False
 
 
+_A = {"name": "x", "tap": "acme/fix", "version": "1.0.2"}
+_B = {"name": "x", "tap": "other", "version": "9.0.0"}
+_FIX = {"action": "install", "tap": "acme/fix"}
+_OTHER = {"action": "install", "tap": "other"}
+_UNTAPPED = {"action": "uninstall"}
+_EVENTS = [_FIX, _OTHER, _UNTAPPED]
+
+
+class TestForLock:
+
+    def test_the_lock_tap_row_wins_over_the_first_match(self):
+        assert catalog.for_lock([_A, _B], {"tap": "other"}) is _B
+
+    def test_no_row_from_the_lock_tap_is_none_not_another_tap(self):
+        assert catalog.for_lock([_A], {"tap": "other"}) is None
+
+    def test_a_tapless_lock_keeps_the_first_match(self):
+        assert catalog.for_lock([_A, _B], {"version": "1"}) is _A
+
+    def test_no_lock_keeps_the_first_match(self):
+        assert catalog.for_lock([_B, _A], None) is _B
+
+    def test_no_matches_is_none(self):
+        assert catalog.for_lock([], {"tap": "other"}) is None
+
+
+class TestEventsForTap:
+    def test_no_qualifier_counts_every_event(self):
+        assert catalog.events_for_tap(_EVENTS, None, None) == _EVENTS
+
+    def test_a_qualifier_keeps_only_its_taps_events(self):
+        assert catalog.events_for_tap(_EVENTS, "fix", None) == [_FIX]
+
+    def test_untapped_events_count_when_the_qualifier_is_the_installed_tap(
+            self):
+        lock = {"tap": "other"}
+        assert catalog.events_for_tap(_EVENTS, "other", lock) == [
+            _OTHER, _UNTAPPED]
+
+
 class TestAllEntriesAndFind:
     def test_all_entries_config_order(self, sandbox):
         _fake_taps(

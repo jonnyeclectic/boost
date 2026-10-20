@@ -50,7 +50,14 @@ from ..core import (
 from ..core import output as out
 from ..core import rules as rule_blocks
 from ..errors import BoostError
-from ._common import _iter_installed, _iter_installed_all, _require_lock_integrity, _s
+from ._common import (
+    _iter_installed,
+    _iter_installed_all,
+    _iter_installed_rows,
+    _require_lock_integrity,
+    _s,
+    row_dir,
+)
 
 # How many rows the unwritten-materializations note spells out before it
 # summarises. The note exists to be read in one glance; a lock with one
@@ -212,7 +219,9 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
     """
     ours: list[Path] = []
     theirs: list[Path] = []
-    for adir in agents.unlinking_agents().values():
+    # Former dirs too (`agents.sweep_dirs`): repointing an agent's dir left
+    # every link made under the old one unreachable by any other check.
+    for adir in agents.sweep_dirs():
         # ``os.path``: ``Path.is_dir`` raises under a dotdir with no search
         # bit on Python 3.12 and 3.13, and doctor and heal exited 70 there.
         if not os.path.isdir(adir):  # noqa: FURB146
@@ -280,6 +289,10 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
         return "store-missing"
     if st == integrity.STATUS_MODIFIED:
         return "local-edits"
+    if st == integrity.STATUS_OUTDATED:
+        # Before the tap comparison, which matches the lock's new digest and
+        # would call an agent still holding the old copy in sync.
+        return "outdated"
     if st == integrity.STATUS_UNREACHABLE:
         # Before the tap comparison below, which would otherwise launder an
         # item that reaches no agent into "in-sync" on the strength of a
@@ -306,7 +319,7 @@ _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
                "upstream-moved": "accent", "source-missing": "danger",
                "store-missing": "danger", "n/a": "muted",
                "quarantined": "muted", "unreachable": "warn",
-               "stranded": "danger"}
+               "stranded": "danger", "outdated": "warn"}
 
 
 def _drift_hint(name: str, status: str, tap: str = "",
@@ -326,6 +339,8 @@ def _drift_hint(name: str, status: str, tap: str = "",
                 else registry.retap_hint(tap, tap_url))
     if status == "store-missing":
         return "boost heal"
+    if status == "outdated":
+        return "boost sync"
     if status == "stranded":
         # The record is the fault: uninstall drives off its rows and creates
         # nothing, where heal/sync/reinstall would recreate the deleted repo.
@@ -899,6 +914,18 @@ def cmd_doctor(argv):
                     bad(kind, "%s %s was not written for %s: %s"
                         % (kind, name, m.get("agent", "?"), why), wrap=True)
                     mat_issues += 1
+                elif m.get("stale"):
+                    bad(kind, "%s %s for %s is older than the installed v%s — "
+                        "run `boost sync`" % (kind, name, m.get("agent", "?"),
+                                              entry.get("version", "?")),
+                        wrap=True)
+                    mat_issues += 1
+            # An agent enabled after the install has no row at all, so the
+            # loop above never meets it; `boost sync` writes it.
+            for agent in store.unmaterialized_agents(kind, entry):
+                bad(kind, "%s %s was never written for %s — run `boost sync`"
+                    % (kind, name, agent), wrap=True)
+                mat_issues += 1
     for name, entry in sorted(rules.items()):
         before = mat_issues
         for m in entry.get("materializations") or []:
@@ -1448,8 +1475,8 @@ def cmd_lint(argv):
             p = catalog.resolve_path_target(n)
             targets.append((p.name, p))
         if not names or other_names:
-            targets += [(n, store.skill_store_dir(n))
-                       for n, _e in _iter_installed(other_names or None)]
+            targets += [(r.name, row_dir(r))
+                        for r in _iter_installed_rows(other_names or None)]
     if not targets:
         if args.json:
             print(json.dumps({"min": args.min_score, "skills": [],
@@ -1562,8 +1589,8 @@ def cmd_test(argv):
     # those would be parsing our palette.
     results: list[dict] = []
     names = [store.installed_name(n) for n in args.names]
-    for name, entry in _iter_installed(names or None):
-        sdir = store.skill_store_dir(name)
+    for row in _iter_installed_rows(names or None):
+        name, entry, sdir = row.name, row.entry, row_dir(row)
         md = sdir / "SKILL.md"
         meta, body = _read_skill(sdir)
         failed = []
@@ -2024,12 +2051,16 @@ def cmd_conflict(argv):
     # nothing live to be contradicted by, so it is excluded from both sides
     # of conflict detection rather than surfacing a conflict finding no
     # `boost quarantine` can ever clear.
-    installed = [(n, e) for n, e in _iter_installed() if not e.get("quarantined")]
+    # Both scopes: a skill installed `--local` is loaded beside the user's
+    # own, so it can contradict one — read from the repo's copy.
+    installed = [r for r in _iter_installed_rows()
+                 if not r.entry.get("quarantined")]
     rules: list[tuple[str, str, str, set]] = []   # skill, line, polarity, stems
     declared: list[tuple[str, str]] = []           # skill, conflicting skill
-    installed_names = {n for n, _e in installed}
-    for name, _entry in installed:
-        meta, body = _read_skill(store.skill_store_dir(name))
+    installed_names = {r.name for r in installed}
+    for row in installed:
+        name = row.name
+        meta, body = _read_skill(row_dir(row))
         conflicts = meta.get("conflicts") or []
         declared.extend(
             (name, str(other))
@@ -2197,6 +2228,10 @@ def cmd_health(argv):
     for kind, name, entry in all_installed:
         by_kind.setdefault(kind, []).append((name, entry))
     installed = by_kind.get("skill", [])
+    # The skills line counts what `boost list` shows, the current project's
+    # `--local` installs included; the rows below stay user-scope.
+    skill_items = installed.copy() + [
+        (n, e) for n, e in integrity.project_skills()[1].items()]
     taps = registry.list_taps()
     cloned = [t for t in taps if t.is_cloned]
 
@@ -2204,7 +2239,7 @@ def cmd_health(argv):
         out.heading("boost health")
     for kind, label in (("skill", "skills"), ("rule", "rules"),
                         ("workflow", "workflows")):
-        items = by_kind.get(kind, [])
+        items = skill_items if kind == "skill" else by_kind.get(kind, [])
         q = sum(1 for _n, e in items if e.get("quarantined"))
         p = sum(1 for _n, e in items if e.get("pinned"))
         kv(label, "%d installed · %d quarantined · %d pinned"

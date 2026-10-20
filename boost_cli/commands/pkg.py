@@ -4,7 +4,6 @@
 reinstall, bundle, import, pin, unpin, snapshot, export."""
 from __future__ import annotations
 
-import contextlib
 import io
 import json
 import os
@@ -881,12 +880,19 @@ def cmd_install(argv: list[str]) -> int:
         else:
             summary = "; ".join(parts)
         lines = [summary]
+        nxt = None
         if len(results) == 1:
             r0 = results[0]
             if r0.linked:
                 lines.append(out.role("%s → %s" % (r0.name, " · ".join(r0.linked)), "muted"))
-            lines.append(out.role("next: boost info %s" % r0.name, "muted"))
+            nxt = "next: boost info %s" % r0.name
         print(out.panel(lines, title="installed", hue="green"))
+        # Below the box, not in it: panel() clips each line to the pane, and a
+        # clipped command (`boost info typescript-react-…`) is one that does
+        # not run. A command is data, so it is printed whole and unwrapped —
+        # overflowing a narrow pane rather than breaking.
+        if nxt:
+            out.dim("  " + nxt)
     return 1 if failed else 0
 
 
@@ -935,7 +941,7 @@ def cmd_uninstall(argv: list[str]) -> int:
     # scripted `boost uninstall x` — CI step, Makefile, Dockerfile — into a
     # silent no-op exiting 1. A pipeline that cannot see the prompt keeps the
     # behaviour it has today; the prompt is a speed bump for humans only.
-    if sys.stdin.isatty() and not args.yes:
+    if out.stdin_is_tty() and not args.yes:
         what = (args.names[0] if len(args.names) == 1 else
                 "%d skills: %s" % (len(args.names), ", ".join(args.names)))
         if args.scope == scopes.SCOPE_PROJECT:
@@ -1273,6 +1279,21 @@ def cmd_sync(argv: list[str]) -> int:
     # left as they were, and the remedy is the lock's.
     unrecorded = plan["unrecorded_store"] if lock_bad else []
     blocked = plan["blocked_links"]
+    # A dir that refused a link or a file: sync wrote what it could and says
+    # what it could not, rather than "everything in sync" over it.
+    stuck = store.unwritable_agent_dirs()
+    # A file or a dangling link where a rules/ or commands/ dir belongs. A
+    # block the line above already names for a skill link is not named twice.
+    named = {Path(p) for _n, _a, p in blocked}
+    in_way = [(d, b) for d, b in store.blocked_agent_dirs() if b not in named]
+    # A directory where a rule's or workflow's file goes: no dir refuses, so
+    # neither line above sees it, and sync said "everything in sync" over it.
+    occupied = store.occupied_targets()
+    # A repair sync set out to make and could not is a failure, the same as
+    # doctor and heal call it: this returned 0 over a blocked link, so a CI
+    # step running `boost sync` could not tell the repair had been refused.
+    # Advisory states (another tool's copies, out-of-scope links) stay 0.
+    rc = 1 if (blocked or stuck or in_way or occupied or lock_bad) else 0
     if args.json:
         # `sync --diff --json` above is indent=2; this printed one unindented
         # line, so the two `--json` shapes of the same command disagreed on
@@ -1288,8 +1309,12 @@ def cmd_sync(argv: list[str]) -> int:
                           "unrecorded_store": unrecorded,
                           "out_of_scope_links": oos,
                           "blocked_links": blocked,
+                          "unwritable_agent_dirs": [str(d) for d in stuck],
+                          "blocked_agent_dirs": [[str(d), str(b)]
+                                                 for d, b in in_way],
+                          "occupied_targets": [str(t) for t in occupied],
                           "lock": integ.problem}, indent=2))
-        return 0
+        return rc
     for a in actions:
         (out.warn if store.is_unrepaired(a) else out.ok)(a)
     for line in kept:
@@ -1354,22 +1379,12 @@ def cmd_sync(argv: list[str]) -> int:
                  % (_plural(len(blocked), "agent link"),
                     ", ".join("%s → %s (%s in the way)"
                               % (n, a, _tilde(Path(p))) for n, a, p in blocked)))
-    # A dir that refused a link or a file: sync wrote what it could and says
-    # what it could not, rather than "everything in sync" over it.
-    stuck = store.unwritable_agent_dirs()
     for adir in stuck:
         out.warn("agent dir %s — %s, then re-run `boost sync`"
                  % store.unwritable_refusal(str(adir)), wrap=True)
-    # A file or a dangling link where a rules/ or commands/ dir belongs. A
-    # block the line above already names for a skill link is not named twice.
-    named = {Path(p) for _n, _a, p in blocked}
-    in_way = [(d, b) for d, b in store.blocked_agent_dirs() if b not in named]
     for adir, block in in_way:
         out.warn("%s — %s, then re-run `boost sync`"
                  % store.link_refusal(str(adir), str(block)), wrap=True)
-    # A directory where a rule's or workflow's file goes: no dir refuses, so
-    # neither line above sees it, and sync said "everything in sync" over it.
-    occupied = store.occupied_targets()
     for path in occupied:
         out.warn("%s, then re-run `boost sync`" % store.occupied_refusal(path),
                  wrap=True)
@@ -1378,7 +1393,7 @@ def cmd_sync(argv: list[str]) -> int:
             and not stuck and not in_way and not occupied and not lock_bad
             and not plan["unreadable_store"]):
         out.ok("everything in sync")
-    return 0
+    return rc
 
 
 def _go(args, prompt: str) -> bool:
@@ -1549,7 +1564,8 @@ def _refresh_line(label: str, old_v: str, new_v: str, edited: bool,
 
 def _update_materialized(kind: str, installed: dict[str, dict], results,
                          discard_edits: bool = False,
-                         allow_downgrade: bool = False) -> tuple[int, int, int]:
+                         allow_downgrade: bool = False
+                         ) -> tuple[int, int, int, int]:
     """Re-materialize installed rules/workflows whose tap source moved.
 
     Mirrors the skill upgrade loop: for each installed item from a refreshed
@@ -1559,16 +1575,16 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
     quarantined one would re-materialize the very content quarantine removed.
     An edited or downgraded item is held unless its flag releases it
     (`_hold_update`).
-    Returns ``(refreshed, held, pinned)`` — the last counts pinned items whose
-    source did move, so the caller can say they were held rather than that
-    everything is up to date.
+    Returns ``(refreshed, held, pinned, quarantined)`` — the last two count
+    pinned and quarantined items whose source did move, so the caller can say
+    they were held rather than that everything is up to date. ``held`` also
+    counts an update that was attempted and refused (a policy block, a
+    declined diff), which is just as much "not up to date".
     """
     import hashlib
-    n = held = pinned = 0
+    n = held = pinned = quarantined = 0
     for name, lk in sorted(installed.items()):
         tapname = lk.get("tap")
-        if lk.get("quarantined"):
-            continue
         if tapname in (None, "local") or tapname not in results:
             continue
         matches = [e for e in catalog.find(name)
@@ -1597,6 +1613,9 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                 cur = None
             changed = bool(cur and cur != lk.get("sha256"))
         if not changed:
+            continue
+        if lk.get("quarantined"):
+            quarantined += 1
             continue
         if lk.get("pinned"):
             pinned += 1
@@ -1628,6 +1647,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
         if new_raw and not _confirm_risky_materialized(kind, name, lk, new_raw):
             out.warn("%s %s: update skipped — review the diff, then `boost "
                      "update --yes` to apply" % (kind, name))
+            held += 1
             continue
         try:
             # keep the item where it was installed (user vs a specific repo).
@@ -1638,11 +1658,12 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                 via="update"))
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
+            held += 1
             continue
         out.ok(_refresh_line("%s %s" % (kind, name), old_v,
                              str(entry.get("version") or ""), edited, bumped))
         n += 1
-    return n, held, pinned
+    return n, held, pinned, quarantined
 
 
 def _resync_vectors(moved: list[str]) -> None:
@@ -1800,8 +1821,8 @@ def _ingest_shards(args) -> int:
 
 
 def _update_skill(name: str, lk: dict, scope: str, pbase, results,
-                  args) -> tuple[int, int, int]:
-    """Refresh one installed skill from a refreshed tap: ``(upgraded, held, pinned)``.
+                  args) -> tuple[int, int, int, int]:
+    """Refresh one installed skill: ``(upgraded, held, pinned, quarantined)``.
 
     ``scope``/``pbase`` say which install this row is: a project row is judged
     against its copy in the repo and reinstalled there (``--local --force``),
@@ -1809,13 +1830,12 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     """
     label = name + (" (project)" if scope == scopes.SCOPE_PROJECT else "")
     tapname: str = lk.get("tap") or "local"
-    if (lk.get("quarantined")
-            or tapname == "local" or tapname not in results):
-        return 0, 0, 0
+    if tapname == "local" or tapname not in results:
+        return 0, 0, 0, 0
     matches = [e for e in catalog.find(name) if e["tap"] == tapname]
     if not matches:
         out.warn("%s is no longer in tap %s — leaving as-is" % (label, tapname))
-        return 0, 0, 0
+        return 0, 0, 0, 0
     # The lock's `source_dir`, not scan order: with two same-named copies in
     # one tap (`install --path` picked one), `matches[0]` silently swapped the
     # user's choice for whichever copy scanned first.
@@ -1832,34 +1852,41 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
             try:
                 src_sha = util.sha256_dir(store.source_dir_for(entry))
             except BoostError:
-                return 0, 0, 0
+                return 0, 0, 0, 0
     reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
                                        head, lk.get("sha256", ""), src_sha)
     if reason is None:
-        return 0, 0, 0
+        return 0, 0, 0, 0
+    if lk.get("quarantined"):
+        # Never refreshed — that would bring back the content quarantine
+        # removed — but counted, like a pin, so the run doesn't end on
+        # "everything up to date" while `outdated` lists it.
+        return 0, 0, 0, 1
     if lk.get("pinned"):
         # Skipped, as `pin` promised — but counted, because `outdated`
         # names this same item and the summary must not contradict it.
-        return 0, 0, 1
+        return 0, 0, 1, 0
     hold, edited = _hold_update(label, name, lk, "skill", old_v,
                                 str(entry.get("version") or ""),
                                 args.discard_edits, args.allow_downgrade,
                                 base=pbase)
     if hold:
-        return 0, 1, 0
+        return 0, 1, 0, 0
+    # A declined diff or a refused install (a policy block) is held back too:
+    # both used to end the run on "everything up to date".
     if not _confirm_risky_update(name, entry, base=pbase, lk=lk):
         out.warn("%s: update skipped — review the diff, then `boost update "
                  "--yes` to apply" % label)
-        return 0, 0, 0
+        return 0, 1, 0, 0
     try:
         _warn_unwritable(store.install(entry, force=True, via="update",
                                        scope=scope, base=pbase))
     except BoostError as err:
         out.warn("%s: %s" % (label, err.message))
-        return 0, 0, 0
+        return 0, 1, 0, 0
     out.ok(_refresh_line(label, old_v, str(entry.get("version") or ""),
                          edited, reason == staleness.VERSION))
-    return 1, 0, 0
+    return 1, 0, 0, 0
 
 
 def cmd_update(argv: list[str]) -> int:
@@ -1943,27 +1970,29 @@ def cmd_update(argv: list[str]) -> int:
         # `boost update --taps-only` exists precisely to notice that morning.
         return 1 if failures and not results else 0
 
-    upgraded = held = pinned_held = 0
+    upgraded = held = pinned_held = quarantined_held = 0
     # Both locks, so a `--local` skill is refreshed in the repo it lives in —
     # the user lock alone left it at its old version under "everything up to
     # date" while `boost info` said it had an update.
     for name, lk, scope, pbase in integrity.installed_skill_rows():
-        n, h, p = _update_skill(name, lk, scope, pbase, results, args)
+        n, h, p, q = _update_skill(name, lk, scope, pbase, results, args)
         upgraded += n
         held += h
         pinned_held += p
+        quarantined_held += q
     # Rules and workflows refresh from the same tap update.
     # Skills installed before boost dated them, so a plugin's copy of the
     # same name can be weighed against them (store.serving_plugin).
     store.backfill_source_dates(results)
     for kind, section in (("rule", lockfile.installed_rules()),
                           ("workflow", lockfile.installed_workflows())):
-        n, h, p = _update_materialized(kind, section, results,
-                                       discard_edits=args.discard_edits,
-                                       allow_downgrade=args.allow_downgrade)
+        n, h, p, q = _update_materialized(
+            kind, section, results, discard_edits=args.discard_edits,
+            allow_downgrade=args.allow_downgrade)
         upgraded += n
         held += h
         pinned_held += p
+        quarantined_held += q
     if held:
         # Never "everything up to date" over items it just declined to touch.
         out.info(out.role("%d item%s held back — see above"
@@ -1975,7 +2004,13 @@ def cmd_update(argv: list[str]) -> int:
             % (pinned_held, "s" if pinned_held != 1 else "",
                "ve" if pinned_held != 1 else "s",
                "them" if pinned_held != 1 else "it"), "muted"))
-    if not (held or pinned_held or upgraded):
+    if quarantined_held:
+        out.info(out.role(
+            "%d quarantined item%s ha%s an update held back — `boost "
+            "quarantine --release <name>` lets one update"
+            % (quarantined_held, "s" if quarantined_held != 1 else "",
+               "ve" if quarantined_held != 1 else "s"), "muted"))
+    if not (held or pinned_held or quarantined_held or upgraded):
         if pinned_skips and pinned_skips == len(results) and not failures:
             # Every tap was a pinned skip: nothing was actually checked over
             # the network, which "everything up to date" would misreport as
@@ -2220,6 +2255,29 @@ def _bundle_dump(file: str | None) -> int:
     return 0
 
 
+def _read_stdin_utf8() -> str:
+    """Standard input as UTF-8 text, the way a Boostfile path is read.
+
+    The bytes underneath, not ``sys.stdin.read()``: the text layer decodes
+    with the inherited locale codec, so under ``PYTHONIOENCODING=ascii`` a
+    Boostfile with one accented comment crashed from stdin while the same
+    file by path installed. A closed fd 0 (``<&-``, where Python sets
+    ``sys.stdin`` to None) reads as empty — there is nothing there.
+    """
+    stream = sys.stdin
+    if stream is None:
+        return ""
+    raw = getattr(stream, "buffer", None)
+    if raw is None:
+        return stream.read()
+    data = raw.read()
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise BoostError("<stdin> is not UTF-8 text (byte %d)" % e.start,
+                         hint="save the Boostfile as UTF-8") from None
+
+
 def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     """Apply a Boostfile, or with ``dry_run`` report what applying it would do.
 
@@ -2231,7 +2289,7 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     walks the same lines in the same order the real run would.
     """
     if file == "-":
-        text, label = sys.stdin.read(), "<stdin>"
+        text, label = _read_stdin_utf8(), "<stdin>"
         shown = label  # one spelling, in the warning and the journal alike
     else:
         path = paths.expand(file or "./Boostfile")
@@ -2251,6 +2309,9 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             text, label = path.read_text(encoding="utf-8"), str(path)
         except OSError as e:
             raise BoostError("cannot read %s: %s" % (shown, e.strerror or e)) from e
+        except UnicodeDecodeError as e:
+            raise BoostError("%s is not UTF-8 text (byte %d)" % (shown, e.start),
+                             hint="save the Boostfile as UTF-8") from None
     # A Boostfile saved by a Windows editor opens with a BOM, which glued itself
     # to the first directive ("\ufeffskill") and failed it as "unrecognised"
     # with the culprit invisible in the message. Stripped after both branches,
@@ -2287,20 +2348,26 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             if dry_run:
                 # Nothing is cloned, so any skill line naming this tap cannot
                 # be resolved below — said plainly there rather than guessed.
-                # Under both names: the real run names the tap from its URL
-                # (`registry.add` -> `parse_spec`), not from this line's NAME,
-                # so `tap myalias ./x` is tapped as `x`, and a `skill x:…`
-                # line must defer here as it will install there.
-                would_tap.add(tname)
-                # no derivable name: NAME is then all there is to match
-                with contextlib.suppress(BoostError):
+                # Under the name the real run will use: it names the tap from
+                # its URL (`registry.add` -> `parse_spec`), not from this
+                # line's NAME, so `tap myalias ./x` is tapped as `x`. A `skill
+                # x:…` line defers here as it will install there, and a `skill
+                # myalias:…` line misses here as it will miss there — deferring
+                # it too exited 0 on a file whose real run exits 1.
+                derived = tname
+                try:
                     derived = registry.parse_spec(turl or tname)[0]
+                except BoostError:
+                    # no derivable name: NAME is then all there is to match
+                    would_tap.add(tname)
+                else:
                     # Already configured under that name, a skill line naming
                     # it resolves now and misses the way the real run will,
                     # so it must not be deferred as "cannot resolve yet".
                     if derived not in have_taps:
                         would_tap.add(derived)
-                out.info("would tap %s" % tname)
+                out.info("would tap %s%s" % (tname, "" if derived == tname
+                                             else " (as %s)" % derived))
                 taps_added += 1
                 continue
             try:
@@ -2474,18 +2541,21 @@ def cmd_import(argv: list[str]) -> int:
     group.add_argument("--all", action="store_true", help="import every skill found")
     ap.add_argument("--agent", action="append", metavar="A",
                     help="link only into this agent (repeatable)")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the replace-the-only-copy confirmation prompt")
     args = ap.parse_args(argv)
     only = _check_agents(args.agent)
     if args.source.startswith(("http://", "https://", "git@", "ssh://")):
         out.info("cloning %s …" % args.source)
         with store.cloned_source(args.source) as remote:
             return _import_root(remote.root, args.name, args.all, only,
-                                args.source, remote=remote)
+                                args.source, remote=remote, yes=args.yes)
     root = paths.expand(args.source)
     if not root.is_dir():
         raise BoostError("no such directory: %s" % args.source,
                         hint="pass a local path or a git URL")
-    return _import_root(root, args.name, args.all, only, args.source)
+    return _import_root(root, args.name, args.all, only, args.source,
+                        yes=args.yes)
 
 
 def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
@@ -2512,14 +2582,15 @@ def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
 
 def _import_root(root: Path, name: str | None, do_all: bool,
                  only: list[str] | None, display: str,
-                 remote: store.RemoteSource | None = None) -> int:
+                 remote: store.RemoteSource | None = None,
+                 yes: bool = False) -> int:
     def replacing(dirs: list[tuple[Path, str | None]]) -> bool:
         """Ask before an import overwrites a skill that has no other copy."""
         only_copies = [n for d, r in dirs
                        if store.replaces_only_copy(n := store.import_name(d, r), d)]
         if not only_copies:
             return True
-        if out.confirm("the store holds the only copy of %s, and importing "
+        if yes or out.confirm("the store holds the only copy of %s, and importing "
                        "replaces it for good — continue?"
                        % ", ".join(only_copies)):
             return True
@@ -2950,13 +3021,19 @@ def _resolve_skill(name: str):
     probed only once ``store.resolve_lock_entry`` confirms the bare name is
     installed *from the named tap*; anything else falls through to
     ``catalog.resolve_one``, which already parses the qualified grammar.
+    A skill installed ``--local`` resolves to its project copy
+    (:func:`integrity.resolve_skill`).
     """
-    bare, kind, _entry = store.resolve_lock_entry(name)
+    # The installed copy either scope holds — a `--local` install's is in
+    # the repo — and only then the tap's.
+    bare = catalog.split_name(name)[1]
+    row = integrity.resolve_skill(name)
     p = None
-    if kind == "skill":
-        candidate = store.skill_store_dir(bare) / "SKILL.md"
+    if row is not None and row.dir is not None:
+        candidate = row.dir / "SKILL.md"
         if candidate.exists():
             p = candidate
+    from_store = p is not None
     if p is None:
         entry = catalog.resolve_one(name)   # raises BoostError if unknown
         p = registry.get(entry["tap"]).path / entry["skill_md"]
@@ -2964,7 +3041,11 @@ def _resolve_skill(name: str):
             raise BoostError("SKILL.md missing for %s" % bare,
                             hint="refresh the tap with `boost update`")
     meta, body = frontmatter.parse(p.read_text(encoding="utf-8", errors="replace"))
-    display = str(meta.get("name") or bare).strip() or bare
+    # Installed, the lock name is the one boost answers to: an import renamed
+    # with `--name` may predate the frontmatter rewrite, and the adapt banner
+    # (`boost adapt <display> …`) must name something this boost can find.
+    display = (bare if from_store
+               else str(meta.get("name") or bare).strip() or bare)
     return display, str(meta.get("description") or "").strip(), body, p, meta
 
 

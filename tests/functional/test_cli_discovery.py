@@ -1058,6 +1058,19 @@ class TestDiscover:
         r = boost("discover", expect=1)
         assert "the discovery index is corrupt" in r.err
 
+    @pytest.mark.parametrize("payload", [
+        {"items": [1, 2, 3]}, {"items": {"a": 1}}, [1, 2]])
+    def test_rows_that_are_not_objects_are_corrupt_not_a_crash(
+            self, boost, sandbox, payload):
+        # What `catalog --import` could plant before it refused internal
+        # files: rc 70 on an int row, from `discover` and `discover --json`.
+        paths.ensure_dirs()
+        (paths.cache_dir() / "discovery.json").write_text(json.dumps(payload), encoding="utf-8")
+        for argv in (("discover", "--local"), ("discover", "--local", "--json")):
+            r = boost(*argv, expect=1)
+            assert "the discovery index is corrupt" in r.err
+            assert "rebuild it with `boost index`" in r.err
+
 
 class TestDiscoverLive:
     """A query asks about GitHub, so it must reach GitHub — no index required.
@@ -2289,6 +2302,54 @@ class TestStats:
             "Keep dependency manifests in sync with lockfiles."
         assert data["size"] is None          # no store dir for a rule
 
+    @staticmethod
+    def _homonym_tap(boost, tmp_path):
+        """A second tap shipping its own `brainstorming` at 9.0.0."""
+        tap = tmp_path / "other-tap"
+        (tap / "skills" / "brainstorming").mkdir(parents=True)
+        (tap / "skills" / "brainstorming" / "SKILL.md").write_text(
+            "---\nname: brainstorming\ndescription: OTHER tap brainstorm\n"
+            "version: 9.0.0\n---\nbody\n", encoding="utf-8")
+        for cmd in (["init", "-q"], ["add", "-A"],
+                    ["-c", "user.name=t", "-c", "user.email=t@t",
+                     "commit", "-qm", "other subject"]):
+            subprocess.run(["git", "-C", str(tap), *cmd],
+                           check=True, capture_output=True)
+        boost("tap", str(tap))
+
+    def test_catalog_facts_come_from_the_installed_tap(
+            self, boost, tapped, tmp_path):
+        # The fixture tap sorts first and ships brainstorming 1.4.0; the
+        # install is the other tap's 9.0.0. matches[0] put the fixture's
+        # description and "1.4.0 (up to date)" next to a 9.0.0 lock.
+        self._homonym_tap(boost, tmp_path)
+        boost("install", "other-tap:brainstorming")
+        data = json.loads(boost("stats", "brainstorming", "--json").out)
+        assert data["lock"]["version"] == "9.0.0"
+        assert data["catalog"] == {
+            "latest": "9.0.0", "tap": data["lock"]["tap"],
+            "description": "OTHER tap brainstorm",
+            "upstream": data["catalog"]["upstream"]}
+        assert "other subject" in data["catalog"]["upstream"]
+        r = boost("stats", "brainstorming")
+        lines = {l.split()[0]: l for l in r.out.splitlines() if l.strip()}
+        assert "9.0.0 (up to date)" in lines["latest"]
+        assert "OTHER tap brainstorm" in lines["description"]
+
+    def test_a_qualifier_does_not_count_another_taps_installs(
+            self, boost, tapped, tmp_path):
+        self._homonym_tap(boost, tmp_path)
+        boost("install", "other-tap:brainstorming")
+        data = json.loads(
+            boost("stats", "fixture-tap:brainstorming", "--json").out)
+        assert data["installed"] is False
+        assert data["activity"] == {"install": 0, "update": 0, "uninstall": 0}
+        assert data["catalog"]["latest"] == "1.4.0"
+        own = json.loads(
+            boost("stats", "other-tap:brainstorming", "--json").out)
+        assert own["installed"] is True
+        assert own["activity"] == {"install": 1, "update": 0, "uninstall": 0}
+
     def test_json_purity(self, boost, installed):
         r = boost("stats", "brainstorming", "--json")
         data = json.loads(r.out)
@@ -2833,8 +2894,9 @@ class TestBrowseCategories:
 
     def test_the_picker_applies_a_category(self, boost, tapped):
         from boost_cli.commands import discovery
-        # Picker rows: all(5), testing(2), uncategorized(2), git(1).
-        fake = _FakeCurses([7, _FakeCurses.KEY_DOWN, 10, 10], size=(30, 120))
+        # Picker rows, A–Z: all(5), git(1), testing(2), uncategorized(2).
+        fake = _FakeCurses([7, _FakeCurses.KEY_DOWN, _FakeCurses.KEY_DOWN,
+                            10, 10], size=(30, 120))
         picked = discovery._browse_tui(fake, self._entries(),
                                        install=self._install)
         assert [e["name"] for e in picked] == ["cowboy-coding"]
@@ -2845,12 +2907,45 @@ class TestBrowseCategories:
         assert any(s.startswith("● all") and s.rstrip().endswith("5")
                    for s in fake.drawn)
 
-    def test_typing_jumps_inside_the_picker(self, boost, tapped):
+    def test_the_picker_lists_a_to_z_with_uncategorized_last(
+            self, boost, tapped):
         from boost_cli.commands import discovery
-        fake = _FakeCurses([7, ord("g"), 10, 10], size=(30, 120))
+        fake = _FakeCurses([7, 27, 27], size=(30, 120))
+        discovery._browse_tui(fake, self._entries(), install=self._install)
+        rows = [s.split()[0] for s in fake.drawn
+                if s.startswith(("● ", "  ")) and s.rstrip()[-1:].isdigit()]
+        assert rows[:4] == ["●", "git", "testing", "uncategorized"]
+
+    def test_typing_filters_the_picker(self, boost, tapped):
+        from boost_cli.commands import discovery
+        fake = _FakeCurses([7, ord("t"), ord("e"), 10, 10], size=(30, 120))
         picked = discovery._browse_tui(fake, self._entries(),
                                        install=self._install)
-        assert [e["name"] for e in picked] == ["commit-messages"]
+        assert [e["name"] for e in picked] == ["cowboy-coding"]
+        assert "te" in fake.drawn                     # the picker's query
+        # `te` also fits uncat-e-gorized (a label takes any subsequence).
+        assert "2/3" in fake.drawn                    # two values of three
+
+    def test_a_query_with_no_match_says_so_and_enter_stays(self, boost,
+                                                           tapped):
+        from boost_cli.commands import discovery
+        # zz matches nothing; Enter is a no-op; Esc clears, Esc closes; the
+        # final Enter installs from the unfiltered list.
+        keys = [7, ord("z"), ord("z"), 10, 27, 27, 10]
+        fake = _FakeCurses(keys, size=(30, 120))
+        picked = discovery._browse_tui(fake, self._entries(),
+                                       install=self._install)
+        assert "○ no match for 'zz'" in fake.drawn
+        assert [e["name"] for e in picked] == ["brainstorming"]
+
+    def test_esc_clears_the_query_before_it_cancels(self, boost, tapped):
+        from boost_cli.commands import discovery
+        # Esc clears "te"; Enter then applies the `all` row the picker is
+        # back on, rather than the browser having closed the picker.
+        keys = [7, ord("t"), ord("e"), 27, _FakeCurses.KEY_DOWN, 10, 10]
+        picked = discovery._browse_tui(_FakeCurses(keys, size=(30, 120)),
+                                       self._entries(), install=self._install)
+        assert [e["name"] for e in picked] == ["commit-messages"]   # git
 
     def test_esc_closes_the_picker_not_the_browser(self, boost, tapped):
         from boost_cli.commands import discovery
@@ -2894,6 +2989,88 @@ class TestBrowseCategories:
         discovery._browse_tui(fake, self._entries(), category="nope")
         assert "○ nothing in #nope" in fake.drawn
 
+    @staticmethod
+    def _faceted():
+        """The fixture with two taps and three kinds, so every facet has
+        something to pick."""
+        kinds = {"tdd-workflow": "rule", "jira-integration": "workflow"}
+        taps = {"jira-integration": "acme/tools", "tdd-workflow": "acme/tools"}
+        return [dict(e, kind=kinds.get(e["name"], "skill"),
+                     tap=taps.get(e["name"], e["tap"]))
+                for e in TestBrowseCategories._entries()]
+
+    def test_ctrl_r_picks_a_tap(self, boost, tapped):
+        from boost_cli.commands import discovery
+        # Taps A–Z: all, acme/tools, fixture's own tap.
+        keys = [18, _FakeCurses.KEY_DOWN, 10, 10]
+        fake = _FakeCurses(keys, size=(30, 120))
+        picked = discovery._browse_tui(fake, self._faceted(),
+                                       install=self._install)
+        assert [e["name"] for e in picked] == ["jira-integration"]
+        assert "@acme/tools" in fake.drawn
+        assert " TAP " in fake.drawn
+        assert "2/2" in fake.drawn
+
+    def test_ctrl_k_picks_a_kind_by_typing(self, boost, tapped):
+        from boost_cli.commands import discovery
+        fake = _FakeCurses([11, ord("r"), ord("u"), 10, 10], size=(30, 120))
+        picked = discovery._browse_tui(fake, self._faceted(),
+                                       install=self._install)
+        assert [e["name"] for e in picked] == ["tdd-workflow"]
+        assert "kind:rule" in fake.drawn
+        assert " KIND " in fake.drawn
+
+    def test_facets_combine_and_each_counts_under_the_others(self, boost,
+                                                             tapped):
+        from boost_cli.commands import discovery
+        # ^G testing (all, git, testing → 2 downs), then ^K: under #testing
+        # the kind rows are rule(1) and skill(1) — cowboy-coding and
+        # tdd-workflow — not the catalogue's skill(3).
+        keys = [7, _FakeCurses.KEY_DOWN, _FakeCurses.KEY_DOWN, 10,
+                11, ord("s"), ord("k"), 10, 10]
+        fake = _FakeCurses(keys, size=(30, 120))
+        picked = discovery._browse_tui(fake, self._faceted(),
+                                       install=self._install)
+        assert [e["name"] for e in picked] == ["cowboy-coding"]
+        assert "#testing" in fake.drawn and "kind:skill" in fake.drawn
+        assert "1/1" in fake.drawn
+        skill_rows = [s for s in fake.drawn
+                      if s.split()[:1] == ["skill"] and len(s.split()) == 2]
+        assert skill_rows and all(s.rstrip().endswith(" 1")
+                                  for s in skill_rows)
+
+    def test_tab_walks_the_facets_inside_the_picker(self, boost, tapped):
+        from boost_cli.commands import discovery
+        # ^G, Tab -> tap, Tab -> kind; type "wor", apply.
+        keys = [7, 9, 9, ord("w"), ord("o"), ord("r"), 10, 10]
+        fake = _FakeCurses(keys, size=(30, 120))
+        picked = discovery._browse_tui(fake, self._faceted(),
+                                       install=self._install)
+        assert [e["name"] for e in picked] == ["jira-integration"]
+        assert {" CATEGORY ", " TAP ", " KIND "} <= set(fake.drawn)
+
+    def test_another_facet_key_or_left_switches_the_open_picker(
+            self, boost, tapped):
+        from boost_cli.commands import discovery
+        # ^G open, ^R switches to tap, ← back to category, Esc, Esc quits.
+        fake = _FakeCurses([7, 18, _FakeCurses.KEY_LEFT, 27, 27],
+                           size=(30, 120))
+        discovery._browse_tui(fake, self._faceted(), install=self._install)
+        pills = [s for s in fake.drawn if s in (" CATEGORY ", " TAP ")]
+        assert pills[:1] == [" CATEGORY "] and " TAP " in pills
+        assert pills[pills.index(" TAP ") + 1:][:1] == [" CATEGORY "]
+
+    def test_ctrl_t_in_the_picker_sorts_by_count(self, boost, tapped):
+        from boost_cli.commands import discovery
+        # By count: all(5), testing(2), uncategorized(2), git(1) — and the
+        # main list's scope must not have cycled.
+        keys = [7, 20, _FakeCurses.KEY_DOWN, 10, 10]
+        fake = _FakeCurses(keys, size=(30, 120))
+        picked = discovery._browse_tui(fake, self._faceted(),
+                                       install=self._install)
+        assert [e["name"] for e in picked] == ["cowboy-coding"]
+        assert "^T by count" in fake.drawn
+
     def test_idle_polls_do_not_refilter(self, boost, tapped, monkeypatch):
         """The loop wakes every 80 ms to redraw; filtering 42,000 rows on each
         tick spent the CPU re-deriving an answer it already had."""
@@ -2935,6 +3112,24 @@ class TestBrowseCategories:
         assert ["testing", "2"] in lines and ["git", "1"] in lines
         assert ["uncategorized", "2"] in lines
         assert "boost browse --category <name>" in r.out
+
+    def test_the_categories_flag_lists_a_to_z_or_by_count(
+            self, boost, tapped, monkeypatch):
+        from boost_cli.core import catalog
+        rows = [dict(e, category=c) for e, c in zip(
+            self._entries(), ("Zeta", "zeta", "alpha", "", "Beta"),
+            strict=True)]
+        monkeypatch.setattr(catalog, "all_entries", lambda: rows)
+
+        def names(out):
+            return [ln.split()[0] for ln in out.splitlines()
+                    if len(ln.split()) == 2 and ln.split()[1].isdigit()]
+
+        # A–Z ignores case; uncategorized is pinned last in both orders.
+        assert names(boost("browse", "--categories").out) == [
+            "alpha", "beta", "zeta", "uncategorized"]
+        assert names(boost("browse", "--categories", "--by-count").out) == [
+            "zeta", "alpha", "beta", "uncategorized"]
 
     def test_an_unknown_category_points_at_the_list(self, boost, tapped):
         r = boost("browse", "--category", "nope", expect=1)

@@ -98,9 +98,12 @@ def cmd_audit(argv):
         return _trust_audit(args.json)
 
     pol = policy.load()
-    installed = _iter_installed()
+    # Both scopes: a skill installed `--local` is loaded by the agent from
+    # the repo's copy, so that copy is what gets scanned.
+    installed = integrity.installed_skills()
     findings: dict = {}
     missing_store: list[str] = []
+    missing_project: list[str] = []   # project rows with no copy in the repo
 
     def add(name, severity, label, where, snippet):
         findings.setdefault(name, []).append({
@@ -108,17 +111,21 @@ def cmd_audit(argv):
             "snippet": snippet})
 
     min_score = int(pol.get("min_quality_score") or 0)
-    for name, _entry in installed:
-        if name in pol.get("blocked_skills", []):
+    for row in installed:
+        # A project row is its own install, so its findings are its own —
+        # labelled, since the same name may also be installed at user scope.
+        name = row.name + (" (project)" if row.is_project else "")
+        if policy.is_blocked(row.name, row.entry.get("tap"),
+                             pol.get("blocked_skills")):
             add(name, "HIGH", "policy-blocked", "policy.json",
                 "skill is on the policy blocklist")
-        sdir = store.skill_store_dir(name)
-        if not sdir.is_dir():
+        sdir = row.dir
+        if sdir is None:
             # Nothing to scan is not the same fact as "scanned and clean" —
             # an installed skill whose store directory vanished is exactly
             # what `verify` reports as STATUS_MISSING, and silently counting
             # it here as a clean pass would hide that from `audit` output.
-            missing_store.append(name)
+            (missing_project if row.is_project else missing_store).append(name)
             continue
         if min_score > 0:
             score, _n = util.score_skill(sdir)
@@ -156,7 +163,8 @@ def cmd_audit(argv):
             if entry.get("quarantined"):
                 continue
             mat_scanned += 1
-            if name in pol.get("blocked_skills", []):
+            if policy.is_blocked(name, entry.get("tap"),
+                                 pol.get("blocked_skills")):
                 add(name, "HIGH", "policy-blocked", "policy.json",
                     "%s is on the policy blocklist" % kind)
             for m in entry.get("materializations") or []:
@@ -193,11 +201,13 @@ def cmd_audit(argv):
         for f in fs:
             counts[f["severity"]] += 1
 
-    scanned = len(installed) - len(missing_store) + mat_scanned
+    missing_n = len(missing_store) + len(missing_project)
+    scanned = len(installed) - missing_n + mat_scanned
     if args.json:
-        print(json.dumps({"skills_scanned": len(installed) - len(missing_store),
+        print(json.dumps({"skills_scanned": len(installed) - missing_n,
                           "materialized_scanned": mat_scanned,
                           "missing_store": sorted(missing_store),
+                          "missing_project": sorted(missing_project),
                           "findings": findings, "counts": counts}))
         return 1 if counts["HIGH"] or counts["MED"] else 0
 
@@ -206,6 +216,13 @@ def cmd_audit(argv):
         out.warn("%d skill%s missing their store directory — nothing to scan: %s"
                  % (len(missing_store), _s(len(missing_store)),
                     ", ".join(sorted(missing_store))))
+    if missing_project:
+        # Not the store: a project skill's copy is in the repo, and the
+        # remedy is `boost sync` from inside it (store.project_sync_plan).
+        out.warn("%d project skill%s missing their copy in the repo — nothing "
+                 "to scan: %s" % (len(missing_project), _s(len(missing_project)),
+                                  ", ".join(sorted(missing_project))),
+                 wrap=True)
     if not findings:
         out.ok("no safety findings across %d item%s" % (scanned, _s(scanned)))
         return 0
@@ -568,6 +585,7 @@ def cmd_quarantine(argv):
         name = store.installed_name(args.release)
         found = lockfile.find_any(name)
         if not found:
+            integrity.refuse_project_only(name, "boost quarantine")
             raise BoostError("%s is not installed" % name,
                             hint="see what is with `boost list`")
         kind, entry = found
@@ -607,6 +625,10 @@ def cmd_quarantine(argv):
     name = store.installed_name(args.name)
     found = lockfile.find_any(name)
     if not found:
+        # A project skill is real directories in the repo, not links boost
+        # can take away and put back; quarantining it would mean deleting
+        # committed files, so say which scope it is in instead.
+        integrity.refuse_project_only(name, "boost quarantine")
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     kind, entry = found
@@ -691,7 +713,8 @@ def cmd_attest(argv):
             rec["sha_ok"] = st not in (integrity.STATUS_MODIFIED,
                                        integrity.STATUS_MISSING,
                                        integrity.STATUS_UNREACHABLE,
-                                       integrity.STATUS_STRANDED)
+                                       integrity.STATUS_STRANDED,
+                                       integrity.STATUS_OUTDATED)
             rec["journal"] = ev is not None
             if not rec["sha_ok"]:
                 # A missing store dir / materialized artifact is not a content
@@ -704,6 +727,7 @@ def cmd_attest(argv):
                 # Stranded is a fourth: the artifacts went with the repo.
                 rec["reason"] = (
                     "stranded" if st == integrity.STATUS_STRANDED
+                    else "outdated" if st == integrity.STATUS_OUTDATED
                     else "unreachable" if st == integrity.STATUS_UNREACHABLE
                     else "missing" if st == integrity.STATUS_MISSING
                     else "modified")

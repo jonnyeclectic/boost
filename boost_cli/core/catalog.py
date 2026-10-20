@@ -613,6 +613,40 @@ def for_tap(entry: dict | None, qualifier: str | None) -> dict | None:
     return entry
 
 
+def for_lock(matches: list, lock: dict | None) -> dict | None:
+    """The catalogue row to describe next to ``lock``: the installed tap's.
+
+    ``matches[0]`` is whichever tap sorted first, so with a homonym in another
+    tap the lock's version sat next to that other tap's description, latest
+    and upstream — and "(up to date)" compared two different skills. When the
+    lock names its tap, only that tap's row is the answer; none is better than
+    another skill's facts. A lock with no tap (older format) keeps the old
+    first-match behaviour, having nothing to narrow by.
+    """
+    lock_tap = str((lock or {}).get("tap") or "")
+    if lock_tap:
+        matches = [m for m in matches
+                   if tap_matches(str(m.get("tap") or ""), lock_tap)]
+    return matches[0] if matches else None
+
+
+def events_for_tap(events: list, qualifier: str | None,
+                   lock: dict | None) -> list:
+    """``events`` that belong to a tap-qualified `stats` lookup.
+
+    The journal keys on the bare name, so `stats fix:x` counted installs made
+    from tap ``other``. With a qualifier, an event that records its tap counts
+    only when that tap matches; one that records none (uninstall rows) counts
+    only when the qualifier selects the installed tap (``lock`` is already
+    narrowed to the qualifier by `store.resolve_lock_entry`).
+    """
+    if not qualifier:
+        return events
+    return [e for e in events
+            if (tap_matches(str(e["tap"]), qualifier) if e.get("tap")
+                else lock is not None)]
+
+
 def find(name: str, tap: str | None = None,
          entries: list[dict] | None = None) -> list[dict]:
     """Exact-name lookup. Supports 'owner/repo:skill' qualified form.

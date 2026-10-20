@@ -16,7 +16,7 @@ import zipfile
 
 import pytest
 
-from boost_cli.core import lockfile, paths
+from boost_cli.core import frontmatter, lockfile, paths
 
 
 def _copy_tap(src, dest):
@@ -130,6 +130,18 @@ class TestInstall:
         assert (repo / ".cursor" / "rules" / "team-rules.mdc").is_file()
         assert not (paths.home() / ".claude" / "CLAUDE.md").exists()  # not global
 
+    def test_next_hint_is_whole_on_a_narrow_pane(self, boost, tapped,
+                                                 monkeypatch):
+        # panel() clips its lines to the pane; inside it the hint became
+        # `next: boost info brainst…`, a command that does not run.
+        from boost_cli.core import output
+        monkeypatch.setattr(output, "pane_width", lambda stream=None: 24)
+        r = boost("install", "brainstorming")
+        assert "\n  next: boost info brainstorming\n" in r.out
+        assert "next: boost info brainst…" not in r.out
+        box = [ln for ln in r.out.splitlines() if ln.startswith(("│", "╭", "╰"))]
+        assert box and all(output.visible_len(ln) <= 24 for ln in box)
+
     def test_exact_report_lines(self, boost, tapped):
         r = boost("install", "brainstorming")
         assert "copied to ~/.agents/skills/brainstorming" in r.out
@@ -143,6 +155,8 @@ class TestInstall:
         # D13: framed success card with a next-step hint
         assert "╭─ installed" in r.out
         assert "next: boost info brainstorming" in r.out
+        # the hint is printed after the box, not clipped inside it
+        assert r.out.rstrip("\n").endswith("╯\n  next: boost info brainstorming")
         entry = _lock()["brainstorming"]
         assert entry["version"] == "1.4.0"
         assert entry["tap"] == "fixture-tap"
@@ -413,6 +427,19 @@ class TestUninstall:
         assert "Uninstalled 1 skill" in r.out
         assert _lock() == {}
 
+    def test_closed_stdin_uninstall_proceeds(self, boost, installed,
+                                             monkeypatch):
+        # `boost uninstall x <&-`: Python sets sys.stdin to None, and the bare
+        # `sys.stdin.isatty()` here crashed with AttributeError (rc 70). Closed
+        # stdin is one more way of having nobody there to answer.
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", None)
+        r = boost("uninstall", "brainstorming")
+        assert r.rc == 0
+        assert "uninstall brainstorming?" not in r.out
+        assert "Uninstalled 1 skill" in r.out
+        assert _lock() == {}
+
     def test_rule_uninstall_says_removed_from_not_unlinked(
             self, boost, fixture_tap_src, tmp_path):
         # Verified live bug: uninstalling a rule used to print "unlinked ←"
@@ -519,7 +546,7 @@ class TestSync:
         link.mkdir()
         shutil.rmtree(paths.store_dir() / "brainstorming")
 
-        r = boost("sync")
+        r = boost("sync", expect=1)
         assert "reinstalled missing brainstorming" in r.out
         assert "could not be created" in r.out
         assert "brainstorming → cursor" in r.out
@@ -665,12 +692,12 @@ class TestSync:
     def test_over_a_corrupt_lock_the_store_dirs_are_named_not_in_sync(
             self, boost, installed):
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
-        r = boost("sync")
+        r = boost("sync", expect=1)
         assert ("the lock file is corrupt, so sync records nothing and leaves 1 "
                 "store dir as it is: brainstorming — restore it with `boost "
                 "replay`") in _flat(r.out + r.err)
         assert "everything in sync" not in r.out
-        data = json.loads(boost("sync", "--json").out)
+        data = json.loads(boost("sync", "--json", expect=1).out)
         assert (data["unrecorded_store"], data["lock"]) == (["brainstorming"],
                                                             "corrupt")
         # The preview words it the same way, not as a lock that was lost.
@@ -692,23 +719,23 @@ class TestSync:
         lock.write_text(json.dumps(data | {"version": 2}), encoding="utf-8")
         line = ("the lock file is schema v2, not v3, so sync %s nothing — "
                 "restore it with `boost replay`")
-        r = boost("sync")
+        r = boost("sync", expect=1)
         assert line % "records" in _flat(r.out + r.err)
         diff = boost("sync", "--diff")
         assert line % "will record" in _flat(diff.out + diff.err)
         assert "everything in sync" not in r.out + diff.out
-        assert json.loads(boost("sync", "--json").out)["lock"] == "schema"
+        assert json.loads(boost("sync", "--json", expect=1).out)["lock"] == "schema"
         assert json.loads(boost("sync", "--diff", "--json").out)["lock"] == "schema"
         assert json.loads(lock.read_text(encoding="utf-8"))["version"] == 2
 
     def test_a_corrupt_lock_over_an_empty_store_is_named_too(self, boost):
         paths.ensure_dirs()
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
-        for argv in (("sync",), ("sync", "--diff")):
-            r = boost(*argv)
+        # The repair is refused, so sync fails; `--diff` only previews it.
+        for argv, rc in ((("sync",), 1), (("sync", "--diff"), 0)):
+            r = boost(*argv, expect=rc)
             assert "the lock file is corrupt" in _flat(r.out + r.err)
             assert "everything in sync" not in r.out
-            assert r.rc == 0
 
     @pytest.mark.skipif(
             sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
@@ -1666,6 +1693,42 @@ class TestBundle:
         assert "installed commit-messages v1.0.2 (fixture-tap)" in r.out
         assert "commit-messages" in _lock()
 
+    def test_install_stdin_is_utf8_whatever_the_locale(self, boost, tapped,
+                                                        monkeypatch):
+        # PYTHONIOENCODING=ascii: the text layer would decode `café` with the
+        # ascii codec and crash; the same bytes by path install fine.
+        data = "# caf\u00e9\nskill fixture-tap:commit-messages@1.0.2\n".encode()
+        monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(data),
+                                                          encoding="ascii"))
+        r = boost("bundle", "install", "-")
+        assert "installed commit-messages v1.0.2 (fixture-tap)" in r.out
+        assert "commit-messages" in _lock()
+
+    def test_install_stdin_not_utf8_is_a_clean_error(self, boost, tapped,
+                                                     monkeypatch):
+        monkeypatch.setattr("sys.stdin", io.TextIOWrapper(
+            io.BytesIO(b"# caf\xe9\n"), encoding="latin-1"))
+        r = boost("bundle", "install", "-", expect=1)
+        assert "Error: <stdin> is not UTF-8 text (byte 5)" in r.err
+        assert "save the Boostfile as UTF-8" in r.err
+
+    def test_install_file_not_utf8_is_a_clean_error(self, boost, tapped,
+                                                    tmp_path):
+        vf = tmp_path / "Boostfile"
+        vf.write_bytes(b"# caf\xe9\n")
+        r = boost("bundle", "install", vf, expect=1)
+        assert "Boostfile is not UTF-8 text (byte 5)" in r.err
+
+    def test_install_closed_stdin_reads_as_empty(self, boost, tapped,
+                                                 monkeypatch):
+        monkeypatch.setattr("sys.stdin", None)
+        empty = boost("bundle", "install", "-", expect=None)
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
+        piped = boost("bundle", "install", "-", expect=None)
+        assert (empty.rc, empty.out, empty.err) == (piped.rc, piped.out,
+                                                    piped.err)
+        assert "unexpected error" not in empty.err
+
     def test_install_already_present(self, boost, installed, tmp_path):
         vf = tmp_path / "Boostfile"
         boost("bundle", "dump", vf)
@@ -1756,6 +1819,51 @@ class TestImport:
         assert "Imported renamed-skill" in r.out
         assert "renamed-skill" in _lock()
         assert "my-skill" not in _lock()
+
+    def test_a_rename_is_the_name_agents_and_adapt_see(self, boost, sandbox,
+                                                        tmp_path):
+        # Only the store dir and lock key used to change: the copy still said
+        # `name: my-skill`, and `adapt` printed a banner command for it that
+        # failed with "no skill named 'my-skill'".
+        d = _skill_dir(tmp_path, "my-skill")
+        boost("import", d, "--name", "renamed-skill")
+        copy = paths.store_dir() / "renamed-skill" / "SKILL.md"
+        meta, _ = frontmatter.parse(copy.read_text(encoding="utf-8"))
+        assert meta["name"] == "renamed-skill"
+        assert "name: my-skill\n" in (d / "SKILL.md").read_text(encoding="utf-8")
+        r = boost("adapt", "renamed-skill", "--to", "crewai", "--model", "none")
+        assert r.out.startswith("# Generated by `boost adapt renamed-skill "
+                                "--to crewai`. Do not edit by hand.\n")
+        assert "my-skill" not in r.out
+
+    def test_adapt_banner_names_the_lock_name_of_an_older_rename(
+            self, boost, sandbox, tmp_path):
+        # A store copy renamed before the frontmatter rewrite still says the
+        # old name; the banner must still name what boost can resolve.
+        d = _skill_dir(tmp_path, "my-skill")
+        boost("import", d, "--name", "renamed-skill")
+        copy = paths.store_dir() / "renamed-skill" / "SKILL.md"
+        copy.write_text(copy.read_text(encoding="utf-8").replace(
+            "name: renamed-skill", "name: my-skill"), encoding="utf-8")
+        r = boost("adapt", "renamed-skill", "--to", "crewai", "--model", "none")
+        assert "`boost adapt renamed-skill --to crewai`" in r.out
+        assert "renamed_skill = Agent(" in r.out
+
+    def test_yes_is_accepted_and_skips_the_only_copy_prompt(
+            self, boost, installed, tmp_path, monkeypatch):
+        # The prompt says "pass -y", and argparse used to reject -y (rc 2)
+        # before the prompt was ever reached.
+        d = paths.store_dir() / "pr-me"
+        d.mkdir()
+        (d / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        boost("sync")
+        src = _skill_dir(tmp_path, "pr-me")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("import", src, "-y")
+        assert "the store holds the only copy" not in r.out
+        assert "Imported pr-me" in r.out
+        assert _lock()["pr-me"]["source_dir"] == str(src)
 
     def test_all_on_multi_skill_dir(self, boost, sandbox, tmp_path):
         root = tmp_path / "many"
@@ -2395,7 +2503,9 @@ class TestSyncJson:
                         "older_copies": [], "not_skill_store": [],
                         "unreadable_store": [], "misnamed_store": [], "workflow_copies": [], "rule_blocks": [],
                         "unrecorded_store": [], "out_of_scope_links": [],
-                        "blocked_links": [], "lock": None}
+                        "blocked_links": [], "unwritable_agent_dirs": [],
+                        "blocked_agent_dirs": [], "occupied_targets": [],
+                        "lock": None}
 
     def test_both_shapes_say_what_the_lock_was(self, boost, installed):
         paths.lockfile_path().unlink()
@@ -2920,7 +3030,10 @@ class TestBundleAuditFindings:
         bf = tmp_path / "Boostfile"
         bf.write_text("tap acme/other https://example.invalid/other\n"
                       "skill other:thing\n"      # the pending tap, by its tail
-                      "skill acme/other:thing2\n"  # ...and by its full name
+                      # ...and by its full name — the one derived from the
+                      # URL, which the real run taps it under; `acme/other`
+                      # is only this line's NAME, and a line using it misses.
+                      "skill example.invalid/other:thing2\n"
                       "skill thing3\n",          # unqualified: could be there
                       encoding="utf-8")
         r = boost("bundle", "install", bf, "--dry-run")
@@ -2951,6 +3064,24 @@ class TestBundleAuditFindings:
         assert "installed brainstorming" in real.out
         assert "failed" not in real.out
         assert lockfile.installed()["brainstorming"]["tap"] == "newtap-src"
+
+    def test_dry_run_misses_a_line_naming_the_tap_by_its_boostfile_name(
+            self, boost, sandbox, fixture_tap_src, tmp_path):
+        # `tap myalias <dir>` is tapped as the dir's basename, so a `skill
+        # myalias:…` line misses in the real run (exit 1). The preview
+        # deferred it under NAME as well and exited 0.
+        src = _copy_tap(fixture_tap_src, tmp_path / "newtap-src")
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap myalias %s\nskill myalias:brainstorming\n"
+                      % src.as_posix(), encoding="utf-8")
+        dry = boost("bundle", "install", bf, "--dry-run", expect=1)
+        assert "would tap myalias (as newtap-src)" in dry.out
+        assert "brainstorming not found in tap myalias — skipped" in dry.out
+        assert "cannot resolve yet" not in dry.out
+        assert "would install 0 skills, add 1 tap, 1 would fail" in dry.out
+        real = boost("bundle", "install", bf, expect=1)
+        assert "tapped newtap-src" in real.out
+        assert "brainstorming not found in tap myalias — skipped" in real.out
 
     def test_dry_run_resolves_a_line_whose_derived_tap_is_already_there(
             self, boost, sandbox, fixture_tap_src, tmp_path):

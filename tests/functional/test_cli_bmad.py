@@ -730,6 +730,13 @@ class TestRoute:
         assert called == ["read"]          # it really did go down that path
         assert r.rc == 0 and r.out == ""
 
+    def test_a_closed_stdin_routes_nothing(self, boost, sandbox, monkeypatch,
+                                           proj):
+        # `<&-` leaves sys.stdin None; the hook reads it as "no payload".
+        monkeypatch.setattr(sys, "stdin", None)
+        r = boost("bmad", "route")
+        assert (r.rc, r.out) == (0, "")
+
     def test_an_interactive_stdin_is_not_read(self, boost, sandbox, monkeypatch,
                                               proj):
         """`boost bmad route` at a prompt must return, not hang on EOF.

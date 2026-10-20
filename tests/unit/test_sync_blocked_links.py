@@ -203,6 +203,59 @@ class TestDoctorNamesAReachableRemedy:
         assert "boost sync" in line
 
 
+class TestSyncExitsNonZeroOverARefusedRepair:
+    """`boost sync` printed its "could not be created" warning and exited 0,
+    so a script or CI step could not tell the repair had been refused while
+    `boost doctor` exited 1 over the same state."""
+
+    def test_a_blocked_link_exits_1_with_the_warning(self, brainstorming, capsys):
+        from boost_cli.commands import pkg
+        link = _agent_path("claude-code")
+        link.unlink()
+        link.write_text("x\n", encoding="utf-8")
+        assert pkg.cmd_sync([]) == 1
+        text = " ".join(capsys.readouterr().out.split())
+        assert "1 agent link could not be created: brainstorming → claude-code" in text
+        assert "everything in sync" not in text
+
+    def test_a_blocked_link_exits_1_under_json_too(self, brainstorming, capsys):
+        import json
+
+        from boost_cli.commands import pkg
+        link = _agent_path("claude-code")
+        link.unlink()
+        link.write_text("x\n", encoding="utf-8")
+        assert pkg.cmd_sync(["--json"]) == 1
+        data = json.loads(capsys.readouterr().out)
+        assert [(n, a) for n, a, _p in data["blocked_links"]] == [
+            ("brainstorming", "claude-code")]
+        assert data["unwritable_agent_dirs"] == []
+        assert data["blocked_agent_dirs"] == []
+        assert data["occupied_targets"] == []
+
+    def test_a_clean_store_still_exits_0(self, brainstorming, capsys):
+        from boost_cli.commands import pkg
+        assert pkg.cmd_sync([]) == 0
+        assert "everything in sync" in capsys.readouterr().out
+        assert pkg.cmd_sync(["--json"]) == 0
+
+    def test_an_ordinary_missing_link_is_repaired_and_exits_0(self, brainstorming,
+                                                              capsys):
+        from boost_cli.commands import pkg
+        link = _agent_path("windsurf")
+        link.unlink()
+        assert pkg.cmd_sync([]) == 0
+        assert link.is_symlink()
+
+    def test_diff_is_a_preview_and_stays_0(self, brainstorming, capsys):
+        from boost_cli.commands import pkg
+        link = _agent_path("claude-code")
+        link.unlink()
+        link.write_text("x\n", encoding="utf-8")
+        assert pkg.cmd_sync(["--diff"]) == 0
+        assert pkg.cmd_sync(["--diff", "--json"]) == 0
+
+
 def _users_link(agent: str, target: Path) -> Path:
     """Put the user's own link where boost's ``agent`` link to brainstorming goes."""
     link = _agent_path(agent)

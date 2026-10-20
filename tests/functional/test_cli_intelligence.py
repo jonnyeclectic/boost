@@ -475,6 +475,13 @@ def _history_line(text):
     return json.dumps({"message": {"role": "user", "content": text}})
 
 
+def _display_line(text):
+    """One row of Claude Code's ~/.claude/history.jsonl (no role, no type)."""
+    return json.dumps({"display": text, "pastedContents": {},
+                       "project": "/work/repo", "sessionId": "s-1",
+                       "timestamp": 1760000000000})
+
+
 class TestAbsorb:
     def test_no_history_found(self, boost, sandbox):
         r = boost("absorb")
@@ -513,6 +520,80 @@ class TestAbsorb:
         assert "recurring patterns from 1 history file(s)" not in r.out
         assert "- Always run the linter before committing. (seen 4x)" in r.out
         assert "name: absorbed-patterns" in r.out
+
+    def test_pattern_surfaced_from_claude_code_history_jsonl(self, boost,
+                                                             sandbox):
+        # Claude Code's ~/.claude/history.jsonl carries no role/type: each row
+        # is one typed prompt under `display`. Every row used to be dropped.
+        claude = sandbox / ".claude"
+        claude.mkdir()
+        (claude / "history.jsonl").write_text("\n".join(
+            _display_line("always run the full test suite before committing")
+            for _ in range(3)) + "\n", encoding="utf-8")
+        r = boost("absorb")
+        assert "recurring patterns from 1 history file(s)" in r.err
+        assert "always run the full test suite before committing" in r.err
+        assert "3x" in r.err
+        assert ("- Always run the full test suite before committing. "
+                "(seen 3x)") in r.out
+
+    def test_history_jsonl_without_patterns_falls_back_to_projects(
+            self, boost, sandbox):
+        claude = sandbox / ".claude"
+        (claude / "projects" / "p").mkdir(parents=True)
+        (claude / "history.jsonl").write_text(
+            _display_line("a one off request nobody repeats") + "\n",
+            encoding="utf-8")
+        (claude / "projects" / "p" / "a.jsonl").write_text("\n".join(
+            _history_line("always run the linter before committing")
+            for _ in range(3)) + "\n", encoding="utf-8")
+        (claude / "projects" / "p" / "b.jsonl").write_text(
+            _history_line("unrelated") + "\n", encoding="utf-8")
+        r = boost("absorb")
+        assert "recurring patterns from 2 history file(s)" in r.err
+        assert "- Always run the linter before committing. (seen 3x)" in r.out
+
+    def test_no_patterns_anywhere_counts_every_file_read(self, boost, sandbox):
+        claude = sandbox / ".claude"
+        (claude / "projects" / "p").mkdir(parents=True)
+        (claude / "history.jsonl").write_text(
+            _display_line("a one off request nobody repeats") + "\n",
+            encoding="utf-8")
+        (claude / "projects" / "p" / "a.jsonl").write_text(
+            _history_line("another one off request here") + "\n",
+            encoding="utf-8")
+        r = boost("absorb")
+        assert ("no recurring patterns in 2 history file(s) — absorb needs "
+                "the same request 3+ times") in r.out
+
+    def test_display_rows_and_role_rows_are_told_apart(self):
+        from boost_cli.commands.intelligence import _user_texts
+        assert _user_texts({"display": "fix it", "project": "/p"}) == ["fix it"]
+        # A row with a role is judged by it, `display` or not.
+        assert _user_texts({"role": "assistant", "display": "x",
+                            "content": "y"}) == []
+        assert _user_texts({"role": "user", "display": "x",
+                            "content": "y"}) == ["y"]
+        assert _user_texts({"display": {"text": "x"}}) == []
+        assert _user_texts({"project": "/p"}) == []
+
+    def test_display_placeholders_and_slash_commands_are_not_requests(self):
+        from boost_cli.commands.intelligence import _user_texts
+        assert _user_texts({"display": "[Pasted text #1 +12 lines]"}) == []
+        assert _user_texts({"display": "[Image #2]"}) == []
+        assert _user_texts({"display": "/clear"}) == []
+        assert _user_texts({"display": "  /loop 5m /babysit-prs"}) == []
+        assert _user_texts({"display": "fix this [Pasted text #3 +4 lines] "
+                                       "please"}) == ["fix this   please"]
+
+    def test_repeated_paste_placeholder_is_no_pattern(self, boost, sandbox):
+        claude = sandbox / ".claude"
+        claude.mkdir()
+        (claude / "history.jsonl").write_text("\n".join(
+            _display_line("[Pasted text #1 +12 lines]")
+            for _ in range(4)) + "\n", encoding="utf-8")
+        r = boost("absorb")
+        assert "no recurring patterns in 1 history file(s)" in r.out
 
     def test_refused_install_exits_nonzero(self, boost, sandbox, tmp_path,
                                            monkeypatch):
@@ -628,10 +709,23 @@ class TestEvolve:
         entry = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))[
             "skills"]["brainstorming"]
         assert entry["version"] == "1.4.1"
-        assert entry["sha256"] != old_sha
+        # The lock keeps the tap copy's digest (see the drift test below).
+        assert entry["sha256"] == old_sha
         evs = journal.events(action="evolve")
         assert evs[0]["subject"] == "brainstorming"
         assert evs[0]["version"] == "1.4.1"
+
+    def test_applied_revision_drifts_as_local_edits_not_upstream_moved(
+            self, boost, installed):
+        # Bug: --apply rewrote the lock sha to the store's new hash, so drift
+        # read store == lock != tap as "upstream-moved" with a `boost update`
+        # hint, against a tap with no new commits.
+        boost("evolve", "brainstorming", "--apply", "--feedback", "be shorter")
+        r = boost("drift", "--json")
+        rows = {row["name"]: row for row in json.loads(r.out)["skills"]}
+        assert rows["brainstorming"]["status"] == "local-edits"
+        assert rows["brainstorming"]["hint"] == (
+            "boost reinstall brainstorming to discard local edits")
 
     def test_apply_preserves_untouched_frontmatter_lines_byte_for_byte(
             self, boost, installed):
@@ -807,7 +901,7 @@ class TestEvolve:
         # outdated still shows the tap moved, marked as held by the pin
         r = boost("outdated")
         assert "1.4.1 (pinned)" in r.out
-        assert "pinned items stay put" in r.out
+        assert "pinned and quarantined items stay put" in r.out
 
     def test_info_after_apply_is_ahead_not_an_update(self, boost, installed):
         boost("evolve", "brainstorming", "--apply", "--feedback", "cap ideas")
@@ -840,6 +934,41 @@ class TestContext:
         assert "unmapped feature/*" in r.out
         r = boost("context", "unmap", "feature/*", expect=1)
         assert "no rule for pattern 'feature/*'" in r.err
+
+    def test_map_resolves_a_tap_qualified_installed_skill(
+            self, boost, tapped, tmp_path, monkeypatch):
+        boost("install", "commit-messages")
+        boost("install", "tdd-workflow")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        r = boost("context", "map", "main", "fixture-tap:commit-messages")
+        assert "mapped main → commit-messages" in r.out
+        assert "not installed" not in r.out
+        r = boost("context", "status", "--json")
+        assert json.loads(r.out)["rules"] == [
+            {"pattern": "main", "skills": ["commit-messages"]}]
+        boost("context", "map", "feature/*", "tdd-workflow")
+        r = boost("context", "apply")
+        assert "sidelined: tdd-workflow" in r.out
+        assert "not installed" not in r.out
+        assert (paths.home() / ".claude" / "skills" / "commit-messages").is_symlink()
+
+    def test_apply_resolves_a_rule_saved_tap_qualified(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # Rules written before `map` stored bare names keep working.
+        boost("install", "commit-messages")
+        boost("install", "tdd-workflow")
+        paths.state_dir().mkdir(parents=True, exist_ok=True)
+        (paths.state_dir() / "context.json").write_text(json.dumps(
+            {"enabled": True, "rules": [
+                {"pattern": "main", "skills": ["fixture-tap:commit-messages"]},
+                {"pattern": "feature/*", "skills": ["tdd-workflow"]}]}), encoding="utf-8")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        r = boost("context", "apply")
+        assert "sidelined: tdd-workflow" in r.out
+        assert "not installed" not in r.out
+        assert (paths.home() / ".claude" / "skills" / "commit-messages").is_symlink()
 
     def test_map_requires_skills(self, boost, sandbox):
         r = boost("context", "map", "feature/*", " , ", expect=1)
@@ -1008,6 +1137,27 @@ class TestFocus:
         r = boost("focus", "--clear")
         assert "no focus session" in r.out
         assert "restored" not in r.out
+
+    def test_clear_leaves_a_context_sidelined_skill_alone(
+            self, boost, tapped, tmp_path, monkeypatch):
+        from boost_cli.core import lockfile
+
+        for n in ("brainstorming", "commit-messages", "tdd-workflow"):
+            boost("install", n, "--no-deps")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        boost("context", "map", "feature/*", "tdd-workflow")
+        r = boost("context", "enable")
+        assert "sidelined: tdd-workflow" in r.out
+        r = boost("focus", "brainstorming")
+        assert "(other 1 skill sidelined)" in r.out
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
+        r = boost("focus", "--clear")
+        assert "focus cleared — 1 skill(s) restored" in r.out
+        skills = paths.home() / ".claude" / "skills"
+        assert (skills / "commit-messages").is_symlink()
+        assert not (skills / "tdd-workflow").exists()
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
 
     def test_focus_set_and_clear_json(self, boost, tapped):
         boost("install", "brainstorming")

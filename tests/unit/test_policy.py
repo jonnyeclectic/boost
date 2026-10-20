@@ -86,6 +86,24 @@ class TestCheckInstall:
         assert policy.check_install(
             {**GOOD_ENTRY, "name": "other"}, 0) == []
 
+    def test_blocked_skills_tap_qualified(self, sandbox):
+        # `install` takes `tap:name`; a blocklist entry written that way used
+        # to be stored with a check mark and never match.
+        set_policy(blocked_skills=["acme/skills:brainstorming"])
+        assert policy.check_install(GOOD_ENTRY, 0) == [
+            "skill 'brainstorming' is on the blocklist"]
+        assert policy.check_install(
+            {**GOOD_ENTRY, "tap": "other/tap"}, 0) == []
+
+    def test_is_blocked(self):
+        assert policy.is_blocked("x", "fx", ["x"]) is True
+        assert policy.is_blocked("x", "fx", ["fx:x"]) is True
+        assert policy.is_blocked("x", "gx", ["fx:x"]) is False
+        assert policy.is_blocked("x", "fx", ["fx:y", "y"]) is False
+        assert policy.is_blocked("x", None, [":x"]) is False
+        assert policy.is_blocked("x", "", [":x"]) is False
+        assert policy.is_blocked("x", "fx", None) is False
+
     def test_blocked_taps(self, sandbox):
         set_policy(blocked_taps=["acme/skills"])
         assert policy.check_install(GOOD_ENTRY, 0) == [
@@ -388,6 +406,64 @@ class TestParseValue:
 
     def test_a_comma_list_still_works(self, sandbox):
         assert policy.parse_value("blocked_skills", "a,b") == ["a", "b"]
+
+
+class TestRanges:
+    """The type alone let `policy set min_quality_score 500` and `max_skills -1`
+    through with rc 0; the next audit or install then failed against a limit
+    nothing could meet."""
+
+    @pytest.mark.parametrize("raw", ["0", "100", "60"])
+    def test_a_score_inside_0_to_100_is_taken(self, sandbox, raw):
+        assert policy.parse_value("min_quality_score", raw) == int(raw)
+
+    @pytest.mark.parametrize("raw", ["-1", "101", "500", "-5"])
+    def test_a_score_outside_0_to_100_is_refused(self, sandbox, raw):
+        with pytest.raises(typedvalue.ValueTypeError) as e:
+            policy.parse_value("min_quality_score", raw)
+        assert e.value.key == "min_quality_score"
+        assert e.value.raw == raw
+        assert e.value.spec == typedvalue.INT
+        assert e.value.expected == "a whole number from 0 to 100"
+        assert str(e.value) == ("min_quality_score expects a whole number "
+                                "from 0 to 100, got %r" % raw)
+
+    @pytest.mark.parametrize("raw, want", [("0", 0), ("1", 1), ("99999", 99999),
+                                           ("null", None)])
+    def test_a_cap_of_zero_or_more_or_null_is_taken(self, sandbox, raw, want):
+        assert policy.parse_value("max_skills", raw) == want
+
+    def test_a_negative_cap_is_refused(self, sandbox):
+        with pytest.raises(typedvalue.ValueTypeError) as e:
+            policy.parse_value("max_skills", "-1")
+        assert e.value.expected == ("a whole number of 0 or more, "
+                                    "or null for no limit")
+
+    def test_an_unbounded_key_is_untouched(self, sandbox):
+        assert policy.parse_value("pin_only", "no") is False
+        assert policy.parse_value("blocked_skills", "-1") == ["-1"]
+
+    def test_a_stored_out_of_range_value_falls_back_and_is_named(self, sandbox):
+        write_policy_json({"min_quality_score": 500, "max_skills": -1})
+        pol = policy.load()
+        assert pol["min_quality_score"] == 0
+        assert pol["max_skills"] is None
+        assert policy.check_install(GOOD_ENTRY, 3) == []
+        assert sorted(policy.invalid_values()) == [
+            ("max_skills", -1, "a whole number of 0 or more, or null for no limit"),
+            ("min_quality_score", 500, "a whole number from 0 to 100")]
+
+    def test_a_stored_string_out_of_range_is_refused_too(self, sandbox):
+        write_policy_json({"min_quality_score": "101"})
+        assert policy.load()["min_quality_score"] == 0
+        assert policy.invalid_values() == [
+            ("min_quality_score", "101", "a whole number from 0 to 100")]
+
+    def test_stored_bounds_themselves_are_kept(self, sandbox):
+        write_policy_json({"min_quality_score": 100, "max_skills": 0})
+        pol = policy.load()
+        assert (pol["min_quality_score"], pol["max_skills"]) == (100, 0)
+        assert policy.invalid_values() == []
 
 
 class TestLoadCoercesStoredValues:

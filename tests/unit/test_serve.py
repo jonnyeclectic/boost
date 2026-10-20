@@ -178,7 +178,8 @@ class TestServePage:
         _patch_catalog(
             monkeypatch,
             installed={"brainstorming": {"version": "1.4.0", "tap": "core"}},
-            entries=[_entry("brainstorming", version="1.4.0"), _entry("other")],
+            entries=[_entry("brainstorming", version="1.4.0", tap="core"),
+                     _entry("other")],
             taps=[_Tap("a")])
         _, _, body = serve.route("/search.json")
         payload = json.loads(body)
@@ -745,6 +746,46 @@ class TestCatalogRows:
         rows = {r["name"]: r for r in serve.catalog_rows()}
         assert rows["r"]["installed"] is True
         assert rows["w"]["installed"] is True
+
+    def test_a_homonym_from_another_tap_is_not_installed(self, monkeypatch):
+        # The lock holds fx's brainstorming; other's 9.0.0 shares only the
+        # name. A name set marked both, and state:installed returned both.
+        _patch_catalog(monkeypatch, entries=[
+            _entry("brainstorming", tap="fx", version="1.4.0"),
+            _entry("brainstorming", tap="other", version="9.0.0")],
+            installed={"brainstorming": {"version": "1.4.0", "tap": "fx"}})
+        got = [(r["tap"], r["installed"], "state:installed" in r["tags"])
+               for r in serve.catalog_rows()]
+        assert got == [("fx", True, True), ("other", False, False)]
+        hits = serve.search_rows(serve.catalog_rows(),
+                                 tags=["state:installed"])
+        assert [(r["tap"], r["version"]) for r in hits] == [("fx", "1.4.0")]
+
+    def test_a_lock_entry_with_no_tap_matches_by_name(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[
+            _entry("a", tap="t1"), _entry("a", tap="t2")],
+            installed={"a": {"version": "1"}})
+        assert [r["installed"] for r in serve.catalog_rows()] == [True, True]
+
+
+class TestInstalledTaps:
+    def test_maps_each_name_to_its_lock_taps_across_kinds(self):
+        lock = {"skills": {"s": {"tap": "a"}, "bare": {}},
+                "rules": {"r": {"tap": "b"}, "s": {"tap": "c"}},
+                "workflows": {"w": "not-a-dict"}}
+        assert serve.installed_taps(lock) == {
+            "s": {"a", "c"}, "bare": {""}, "r": {"b"}, "w": {""}}
+
+    def test_is_installed_needs_the_name_and_the_tap(self):
+        installed = {"s": {"a"}}
+        assert serve.is_installed({"name": "s", "tap": "a"}, installed) is True
+        assert serve.is_installed({"name": "s", "tap": "b"}, installed) is False
+        assert serve.is_installed({"name": "t", "tap": "a"}, installed) is False
+        assert serve.is_installed({"name": "s"}, {"s": {""}}) is True
+
+    def test_a_plain_name_collection_still_matches_by_name(self):
+        assert serve.is_installed({"name": "s", "tap": "x"}, {"s"}) is True
+        assert serve.is_installed({"name": "s", "tap": "x"}, ()) is False
 
 
 class TestFacetCounts:

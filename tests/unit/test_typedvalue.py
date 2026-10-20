@@ -94,6 +94,13 @@ class TestInt:
         assert str(e.value) == "min_quality_score expects a whole number, got 'abc'"
 
 
+    def test_a_caller_can_name_a_narrower_expectation(self):
+        e = tv.ValueTypeError("k", "9", tv.INT, expected="a whole number from 0 to 5")
+        assert e.expected == "a whole number from 0 to 5"
+        assert e.spec == tv.INT
+        assert str(e) == "k expects a whole number from 0 to 5, got '9'"
+
+
 class TestIntOrNone:
     @pytest.mark.parametrize("raw", ["", "null", "none", "NULL", " None "])
     def test_the_no_limit_words(self, raw):

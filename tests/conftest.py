@@ -513,6 +513,22 @@ def _repo_root_guard(request):
 
 
 @pytest.fixture(autouse=True)
+def _no_dumb_term():
+    """TERM=dumb turns color and the spinner off (output.use_color), so a
+    developer running the suite from an Emacs buffer would see every
+    fake-TTY color test fail. A test about TERM sets it itself.
+
+    Its own `MonkeyPatch`, not the `monkeypatch` fixture: requesting that
+    here moves its setup ahead of the test's, so a test's patched
+    `Path.stat` is still live when `_repo_root_guard` fingerprints in
+    teardown, and the guard crashes on it."""
+    with pytest.MonkeyPatch.context() as mp:
+        if os.environ.get("TERM") == "dumb":
+            mp.delenv("TERM")
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_logging():
     """Rebind the diagnostic logger to each test's sandbox HOME."""
     from boost_cli.core import logs

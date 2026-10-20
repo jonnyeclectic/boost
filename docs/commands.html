@@ -108,7 +108,7 @@
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --discard-edits --allow-downgrade --shards --json tap">update</a>
       <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all name">reinstall</a>
       <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  --dry-run {dump,install} file">bundle</a>
-      <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">import</a>
+      <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a -y, --yes url_or_path">import</a>
       <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit name">pin</a>
       <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  name">unpin</a>
       <a class="cmd-link" href="#cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json -y, --yes {save,list,restore} label|id">snapshot</a>
@@ -122,7 +122,7 @@
       <a class="cmd-link" href="#cmd-reindex" data-search="reindex build/refresh the full-content search index  --force --dense --export-shard tap --import-shard file --fetch-shards --fetch-index --json">reindex</a>
       <a class="cmd-link" href="#cmd-discover" data-search="discover search github for skill repos you have not tapped yet search github for skill repositories you have not tapped yet --limit limit --json --local query">discover</a>
       <a class="cmd-link" href="#cmd-recommend" data-search="recommend suggest skills based on your project&#x27;s tech stack  --path path --category category --limit limit --json">recommend</a>
-      <a class="cmd-link" href="#cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category --categories">browse</a>
+      <a class="cmd-link" href="#cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category --categories --by-count">browse</a>
       <a class="cmd-link" href="#cmd-index" data-search="index build the discovery registry via github code search  --limit limit --json query">index</a>
       <a class="cmd-link" href="#cmd-trending" data-search="trending show trending items by install count  --limit limit --json">trending</a>
       <a class="cmd-link" href="#cmd-stats" data-search="stats install statistics &amp; trend for a single skill  --json name">stats</a>
@@ -185,7 +185,7 @@
       <a class="cmd-link" href="#cmd-config" data-search="config display or modify boost configuration  --json {list,get,set,unset} key value">config</a>
       <a class="cmd-link" href="#cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep -y, --yes --json">clean</a>
       <a class="cmd-link" href="#cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone --json tap">compact</a>
-      <a class="cmd-link" href="#cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">create</a>
+      <a class="cmd-link" href="#cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install -y, --yes name">create</a>
       <a class="cmd-link" href="#cmd-policy" data-search="policy manage &amp; enforce skill governance policies  --json {list,set,unset,check} key value">policy</a>
       <a class="cmd-link" href="#cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo (optionally open a pr with --pr)  --repo repo --pr --dry-run -f, --force">onboard</a>
       <a class="cmd-link" href="#cmd-completions" data-search="completions generate shell tab-completion scripts  --eval --dry-run --install --uninstall {bash,zsh,fish}">completions</a>
@@ -200,7 +200,7 @@
       <div class="group-h">Team &amp; sharing</div>
       <a class="cmd-link" href="#cmd-cohort" data-search="cohort controlled skill rollouts &amp; team a/b testing  --skills skills --percent percent --json {list,create,delete,status,apply} name">cohort</a>
       <a class="cmd-link" href="#cmd-profile" data-search="profile named skill profiles for context switching  --prune --json {list,save,use,show,diff,delete} name">profile</a>
-      <a class="cmd-link" href="#cmd-protocol" data-search="protocol manage the boost:// one-click-install handler  {status,register,unregister,open} url">protocol</a>
+      <a class="cmd-link" href="#cmd-protocol" data-search="protocol manage the boost:// one-click-install handler  -y, --yes --gui {status,register,unregister,open} url">protocol</a>
       <a class="cmd-link" href="#cmd-pulse" data-search="pulse team activity feed of skill-management events  -n n --all --action action --json">pulse</a>
       <a class="cmd-link" href="#cmd-replay" data-search="replay view version history &amp; roll back skills  --json {list,show,rollback} id">replay</a>
       <a class="cmd-link" href="#cmd-who" data-search="who discover who on the team has skill expertise  --json skill">who</a>
@@ -308,10 +308,10 @@
           <div class="arg"><code>--dry-run</code><span>show what install would do, touching nothing</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">
+      <section class="cmd" id="cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a -y, --yes url_or_path">
         <h3><span class="cname">import</span><span class="gtag">pkg</span></h3>
         <p class="summary">Import skills from a GitHub URL or local path</p>
-        <pre class="syn">boost import [--name N | --all] [--agent A] URL_OR_PATH</pre>
+        <pre class="syn">boost import [--name N | --all] [--agent A] [-y] URL_OR_PATH</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>URL_OR_PATH</code><span>git URL (http(s)://, git@, ssh://) or a local directory</span></div>
@@ -321,6 +321,7 @@
           <div class="arg"><code>--name N</code><span>skill to pick when several are found (or a rename)</span></div>
           <div class="arg"><code>--all</code><span>import every skill found</span></div>
           <div class="arg"><code>--agent A</code><span>link only into this agent (repeatable)</span></div>
+          <div class="arg"><code>-y, --yes</code><span>skip the replace-the-only-copy confirmation prompt</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit name">
@@ -469,14 +470,15 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category --categories">
+      <section class="cmd" id="cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category --categories --by-count">
         <h3><span class="cname">browse</span><span class="gtag">find</span></h3>
         <p class="summary">Interactive full-screen TUI with fuzzy search</p>
-        <pre class="syn">boost browse [--category CATEGORY] [--categories]</pre>
+        <pre class="syn">boost browse [--category CATEGORY] [--categories] [--by-count]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--category CATEGORY</code><span>open on one category (case-insensitive); ^G switches</span></div>
-          <div class="arg"><code>--categories</code><span>list the categories and how many items each holds</span></div>
+          <div class="arg"><code>--categories</code><span>list the categories and how many items each holds, A–Z</span></div>
+          <div class="arg"><code>--by-count</code><span>with --categories: largest first instead of A–Z</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-index" data-search="index build the discovery registry via github code search  --limit limit --json query">
@@ -1078,10 +1080,10 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">
+      <section class="cmd" id="cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install -y, --yes name">
         <h3><span class="cname">create</span><span class="gtag">cfg</span></h3>
         <p class="summary">Scaffold a new skill from a template</p>
-        <pre class="syn">boost create [--description DESCRIPTION] [--dir DIR] [--install] name</pre>
+        <pre class="syn">boost create [--description DESCRIPTION] [--dir DIR] [--install] [-y] name</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>name</code><span>skill name (slugified)</span></div>
@@ -1091,6 +1093,7 @@
           <div class="arg"><code>--description DESCRIPTION</code><span>one-line trigger description for the frontmatter</span></div>
           <div class="arg"><code>--dir DIR</code><span>parent directory (default: current directory)</span></div>
           <div class="arg"><code>--install</code><span>install the new skill immediately</span></div>
+          <div class="arg"><code>-y, --yes</code><span>with --install, replace an installed skill of the same name without asking</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-policy" data-search="policy manage &amp; enforce skill governance policies  --json {list,set,unset,check} key value">
@@ -1264,14 +1267,19 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-protocol" data-search="protocol manage the boost:// one-click-install handler  {status,register,unregister,open} url">
+      <section class="cmd" id="cmd-protocol" data-search="protocol manage the boost:// one-click-install handler  -y, --yes --gui {status,register,unregister,open} url">
         <h3><span class="cname">protocol</span><span class="gtag">team</span></h3>
         <p class="summary">Manage the boost:// one-click-install handler</p>
-        <pre class="syn">boost protocol [{status,register,unregister,open}] [url]</pre>
+        <pre class="syn">boost protocol [-y | --gui] [{status,register,unregister,open}] [url]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{status,register,unregister,open}</code><span>what to do (default: status)</span></div>
           <div class="arg"><code>url</code><span>a boost:// URL (for `open`)</span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>-y, --yes</code><span>`open` without the confirmation prompt</span></div>
+          <div class="arg"><code>--gui</code><span>`open` asks in a desktop dialog instead of the terminal (what the registered handler passes)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-pulse" data-search="pulse team activity feed of skill-management events  -n n --all --action action --json">

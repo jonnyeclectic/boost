@@ -155,7 +155,7 @@ def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
     """
     if source_missing == 0:
         return ("%d outdated · `boost update` upgrades "
-                "(pinned items stay put)" % total)
+                "(pinned and quarantined items stay put)" % total)
     updatable = total - source_missing
     untapped = source_missing - removed
     if updatable == removed == 0:
@@ -169,8 +169,8 @@ def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
                 % (total, OUTDATED_REMOVED_UPSTREAM, them, them, copies))
     parts = ["%d outdated" % total]
     if updatable:
-        parts.append("%d upstream (`boost update` upgrades, pinned items "
-                     "stay put)" % updatable)
+        parts.append("%d upstream (`boost update` upgrades, pinned and "
+                     "quarantined items stay put)" % updatable)
     if untapped:
         parts.append("%d source missing (re-tap or `boost uninstall`)"
                      % untapped)

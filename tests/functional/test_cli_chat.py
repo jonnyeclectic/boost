@@ -174,6 +174,15 @@ class TestPipedSession:
         assert "> " not in r.out
         assert not r.out.endswith("\n\n"), "a blank line closing a prompt never shown"
 
+    def test_closed_stdin_is_an_empty_session(self, boost, tapped, monkeypatch):
+        # `boost chat <&-`: sys.stdin is None, and isatty()/input() on it
+        # crashed (rc 70). Nothing to read is an EOF before the first line.
+        monkeypatch.setattr("sys.stdin", None)
+        empty = boost("chat")
+        piped = _session(boost, monkeypatch)
+        assert empty.rc == 0
+        assert (empty.out, empty.err) == (piped.out, piped.err)
+
     def test_a_terminal_still_gets_the_prompt(self, boost, tapped, monkeypatch):
         r = _session(boost, monkeypatch, "brainstorming ideas", tty=True)
         assert r.out.count("> ") == 2, "one prompt per read, including the one hit by EOF"
@@ -226,3 +235,39 @@ class TestSessionFollowUps:
     def test_a_blank_line_ends_the_session(self, boost, tapped, monkeypatch):
         r = _session(boost, monkeypatch, "", "how do I write commit messages?")
         assert "sources" not in r.out, "answered a question after the blank line"
+
+
+def _tap_one_rule(boost, root):
+    """Tap a one-rule registry whose body word no other fixture uses."""
+    import subprocess
+    (root / "rules").mkdir(parents=True)
+    (root / "rules" / "kiwi-rule.mdc").write_text(
+        "---\ndescription: Kiwi mango rule\n---\n\nAlways quokkaword.\n",
+        encoding="utf-8")
+    for argv in (("init", "-q"), ("config", "user.email", "t@boost.test"),
+                 ("config", "user.name", "T"), ("add", "-A"),
+                 ("commit", "-qm", "rule")):
+        subprocess.run(("git", *argv), cwd=root, check=True,
+                       capture_output=True)
+    boost("tap", root)
+
+
+class TestIndexFreshness:
+    """chat makes the freshness check `boost search` makes."""
+
+    def test_a_fresh_install_builds_the_index_instead_of_substring_scanning(
+            self, boost, tapped):
+        # The substring scan matched "is", "a" and "for" inside nearly every
+        # entry, so this question cited the whole fixture catalogue.
+        payload = json.loads(boost("chat", "--json",
+                                   "is there a skill for jira").out)
+        assert payload["engine"] == "BM25 full-content"
+        assert payload["skills"][0]["name"] == "jira-integration"
+        assert len(payload["skills"]) < 5
+
+    def test_a_tap_added_after_the_index_was_built_is_searched(
+            self, boost, tapped, tmp_path):
+        boost("chat", "--json", "brainstorming")      # builds the index
+        _tap_one_rule(boost, tmp_path / "kiwi-tap")
+        payload = json.loads(boost("chat", "--json", "quokkaword").out)
+        assert [s["name"] for s in payload["skills"]] == ["kiwi-rule"]

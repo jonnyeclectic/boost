@@ -212,8 +212,12 @@ def skill_store_dir(name: str) -> Path:
     return paths.store_dir() / name
 
 
-def read_skill_meta(name: str) -> tuple[dict, str] | None:
+def read_skill_meta(name: str, skill_dir: Path | None = None
+                    ) -> tuple[dict, str] | None:
     """(frontmatter, body) for an installed skill's store copy, or None.
+
+    ``skill_dir`` reads another copy instead — a project skill's, which is
+    not in the store (:class:`integrity.InstalledSkill` ``.dir``).
 
     None on anything that keeps the content from being read honestly: no
     store dir, no ``SKILL.md``, an unreadable file, or an unclosed
@@ -225,7 +229,8 @@ def read_skill_meta(name: str) -> tuple[dict, str] | None:
     """
     from . import frontmatter
 
-    skill_md = skill_store_dir(name) / "SKILL.md"
+    skill_md = (skill_dir if skill_dir is not None
+                else skill_store_dir(name)) / "SKILL.md"
     if not skill_md.exists():
         return None
     try:
@@ -550,6 +555,7 @@ def link_agents(name: str, only: list[str] | None = None, *,
                     # writes, the unlink raised PermissionError and a reinstall
                     # printed "not linked" over a link still on disk, still
                     # pointing at the store, and still in the lock's `agents`.
+                    agents.remember_link_dir(agent, adir)
                     res.linked.append(agent)
                     continue
                 if keep_theirs and not points_into_store(link):
@@ -586,6 +592,9 @@ def link_agents(name: str, only: list[str] | None = None, *,
             res.blocked.append((str(adir), str(block)))
             res.refused.append(agent)
             continue
+        # So a later uninstall still finds this link after the agent's dir is
+        # repointed (:func:`agents.former_link_dirs`).
+        agents.remember_link_dir(agent, adir)
         res.linked.append(agent)
     return res
 
@@ -712,10 +721,12 @@ def preserved_agent_scope(only_agents: list[str] | None,
 
     An explicit ``only_agents`` still wins, so re-running install with
     ``--agent`` remains the way to widen the scope again. Skills record their
-    scope as ``agents``; rules and workflows record one ``materializations``
-    row per agent. An empty record means "nothing was linked", not "link
-    nothing", so it falls back to every enabled agent — exactly what
-    ``link_agents`` does with ``None``.
+    scope as ``agents``. Rules and workflows replay only a declared
+    ``only_agents``: their ``materializations`` rows record what was written,
+    and an undeclared install fans out to every agent that takes it. An entry
+    written before they recorded the field still replays its rows. An empty
+    record means "nothing was linked", not "link nothing", so it falls back to
+    every enabled agent — exactly what ``link_agents`` does with ``None``.
     """
     if only_agents is not None:
         return only_agents
@@ -731,7 +742,21 @@ def preserved_agent_scope(only_agents: list[str] | None,
     if declared:
         return list(declared)
     recorded = existing.get("agents")
+    if recorded is None and "only_agents" in existing:
+        # A rule or workflow that records its declaration: its rows say which
+        # agents were *written* last time, not which the user asked for.
+        # Replaying them froze an install made with no `--agent` to the agents
+        # enabled that day: enable cursor afterwards and `sync`, `reinstall`,
+        # `update` and `install --force` all skipped it, while doctor called
+        # the rule fully materialized. Undeclared means every agent, as
+        # `scoped_agents` already says for a skill's links. A row for an agent
+        # this run does not write is still carried forward
+        # (:func:`_refused_materializations`), so nothing becomes unremovable.
+        return None
     if recorded is None:
+        # An entry from before rules and workflows recorded ``only_agents``:
+        # its rows are the only trace of an `--agent` narrowing, so they are
+        # still replayed rather than widened on the next `update`.
         recorded = [m.get("agent")
                     for m in existing.get("materializations") or ()]
         # A workflow agent whose path held the user's own file is kept in
@@ -828,6 +853,20 @@ def declared_agent_scope(only_agents: list[str] | None,
     return (existing or {}).get("only_agents")
 
 
+def _declared_field(only_agents: list[str] | None,
+                    existing: dict | None) -> dict:
+    """The ``only_agents`` field a rule or workflow lock write carries.
+
+    Written on a fresh install, an explicit ``--agent`` and any entry that
+    already has it. Left off an entry from before the field existed, whose
+    rows are still the only record of a narrowing: writing ``None`` there
+    would widen it on the next `update` (:func:`preserved_agent_scope`).
+    """
+    if only_agents is None and existing and "only_agents" not in existing:
+        return {}
+    return {"only_agents": declared_agent_scope(only_agents, existing)}
+
+
 def scoped_agents(entry: dict, enabled: dict[str, Path]) -> dict[str, Path]:
     """The enabled agents a locked skill is supposed to be linked into.
 
@@ -862,6 +901,15 @@ def unlink_agents(name: str) -> list[str]:
         if is_boost_link(link):
             link.unlink()
             removed.append(agent)
+    # And the dirs an agent linked into before its dir was repointed: the
+    # lock names agents, not paths, so a link made under `~/.cursor/skills`
+    # was left dangling once `agents.cursor.dir` moved.
+    for agent, adir in agents.former_link_dirs():
+        link = adir / name
+        if is_boost_link(link):
+            link.unlink()
+            if agent not in removed:
+                removed.append(agent)
     return removed
 
 
@@ -997,6 +1045,38 @@ def materialization_is_written(kind: str, entry: dict, m: dict) -> bool:
     """
     return agents.materialization_is_written(kind, entry.get("base"),
                                              m.get("agent"))
+
+
+def unmaterialized_agents(kind: str, entry: dict) -> list[str]:
+    """The agents boost writes ``kind`` into that ``entry`` has no row for.
+
+    Rows record what an install wrote, so an agent enabled afterwards -- or
+    added to the defaults since -- has none, and every check that walks the
+    rows found nothing wrong with it: doctor called the rule fully
+    materialized and `boost sync` linked the skill beside it and left the
+    rule out. An ``unwritable`` row and a workflow's ``foreign`` row count as
+    present: each already names the agent, with its own remedy.
+
+    Within a declared ``--agent`` narrowing only, so this never widens one.
+    Empty for an entry that records no ``only_agents`` at all: it predates
+    the field, its rows are its only record of a narrowing, and reading them
+    as gaps would undo one. Empty for an entry with no rows, which predates rows and has
+    nothing to compare (:func:`integrity.reaches_no_agent` reads it the same
+    way), and for a quarantined or stranded entry, whose artifacts are absent
+    on purpose.
+    """
+    rows = entry.get("materializations") or []
+    if (not rows or "only_agents" not in entry or entry.get("quarantined")
+            or scopes.stranded(entry)):
+        return []
+    base = entry.get("base")
+    writes = (agents.workflow_agents(base) if kind == "workflow"
+              else agents.materializing_agents(base))
+    declared = entry.get("only_agents")
+    have = {m.get("agent") for m in rows} | {
+        r["agent"] for r in foreign_rows(entry)}
+    return [a for a in writes
+            if a not in have and (not declared or a in declared)]
 
 
 def unwritten_materializations() -> list[tuple[str, str, str, str]]:
@@ -1193,7 +1273,10 @@ def occupied_targets() -> list[Path]:
 
 
 def _refused_materializations(existing: dict | None, linked: list[str],
-                              refused: list[dict]) -> list[dict]:
+                              refused: list[dict],
+                              source_sha: str | None = None,
+                              declared: list[str] | None = None
+                              ) -> list[dict]:
     """The rows to record beside this run's writes: refused, then untouched.
 
     An agent whose directory refused the write is still recorded, as a row
@@ -1206,9 +1289,34 @@ def _refused_materializations(existing: dict | None, linked: list[str],
     A refused row replaces that agent's old one. The old file, if any, is
     still on disk at the same path, and the new row still names that path, so
     uninstall removes it.
+
+    An untouched row is marked ``stale`` when ``source_sha`` says the source
+    changed: its file is the old version, and it still hashes to its own
+    old digest, so every check passed it. `boost update` with windsurf
+    disabled recorded v2 over windsurf's v1 copy, and after re-enabling it
+    doctor, verify, drift and sync all said in sync. A stale row stays stale
+    until a run writes that agent.
+
+    Only within ``declared``, the ``--agent`` narrowing in force: a row for an
+    agent outside it is kept so uninstall can remove its file, but no `sync`
+    will ever write that agent, so a ``stale`` flag there was a remedy that
+    never converged -- doctor said "run `boost sync`", sync re-wrote only the
+    narrowed agents, and doctor said it again. Such a row loses the flag.
     """
     done = linked + [r["agent"] for r in refused]
-    return refused + _untouched_materializations(existing, done)
+    kept = _untouched_materializations(existing, done)
+    changed = bool(existing and source_sha is not None
+                   and existing.get("sha256") != source_sha)
+    out: list[dict] = []
+    for m in kept:
+        row = {k: v for k, v in m.items() if k != "stale"}
+        if declared and m.get("agent") not in declared:
+            out.append(row)
+        elif changed or m.get("stale"):
+            out.append(row | {"stale": True})
+        else:
+            out.append(row)
+    return refused + out
 
 
 def _copy_skill(src: Path, dest: Path, *, within: Path | None = None
@@ -1603,6 +1711,12 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
         hint="uninstall it there first — a different scope cannot force-overwrite it")
 
 
+def _count_others(installed: dict, name: str) -> int:
+    """How many skills ``installed`` holds besides ``name``: the count an
+    install of ``name`` is weighed against for ``max_skills``."""
+    return len(installed) - (1 if name in installed else 0)
+
+
 def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                    base=None, kind: str | None = None) -> dict | None:
     """The lock record an install of ``entry`` would replace, or its refusal.
@@ -1850,7 +1964,10 @@ def install(entry: dict, force: bool = False,
     name = entry["name"]
     existing = check_existing(entry, force=force, kind="skill")
 
-    violations = policy.check_install(entry, len(lockfile.installed()))
+    # An upgrade or reinstall replaces a skill already counted, so it adds
+    # none: at exactly max_skills, `boost update` declined every upgrade.
+    violations = policy.check_install(
+        entry, _count_others(lockfile.installed(), name))
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
@@ -1864,11 +1981,35 @@ def install(entry: dict, force: bool = False,
     if disowned:
         _drop_skill_copy_row(disowned)
     tap = registry.get(entry["tap"])
-    skipped = _copy_skill(src, dest, within=tap.path)
-
     # Dated before linking: it is what decides whether a plugin's copy of the
-    # same name is newer, and so whether Claude Code gets boost's link.
+    # same name is newer, and so whether Claude Code gets boost's link. And
+    # dated before copying: on a shallow tap this is a network fetch of up to
+    # a minute, and a Ctrl-C in it used to leave a store copy no lock row
+    # recorded, which the rerun then refused to touch.
     dated = source_updated_at(entry["tap"], entry.get("rel_dir", "."))
+    fresh = not dest.exists()
+    try:
+        res = _copy_link_record(entry, name, src, dest, tap, existing,
+                                only_agents, dated)
+    except BaseException:
+        # Nothing recorded it, so nothing else would ever clean it up: undo a
+        # fresh install whole, so a plain rerun starts from where it began.
+        # An upgrade's old copy is already gone; its lock row still names it.
+        if fresh and lockfile.get_skill(name) is None:
+            with contextlib.suppress(OSError):
+                unlink_agents(name)
+            with contextlib.suppress(OSError):
+                util.rmtree(dest)
+        raise
+    journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
+    return res
+
+
+def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
+                      existing: dict | None, only_agents: list[str] | None,
+                      dated: str | None) -> InstallResult:
+    """:func:`install`'s copy, link and lock-row steps, in that order."""
+    skipped = _copy_skill(src, dest, within=tap.path)
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
                       updated_at=dated)
     res.skipped_links = skipped
@@ -1911,7 +2052,6 @@ def install(entry: dict, force: bool = False,
            else {}),
         **({"source_updated_at": dated} if dated else {}),
     })
-    journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
     return res
 
 
@@ -1939,7 +2079,8 @@ def _install_project_skill(entry: dict, force: bool = False,
     existing = check_existing(entry, force=force, scope=scopes.SCOPE_PROJECT,
                               base=resolved_base, kind="skill")
 
-    violations = policy.check_install(entry, len(projectlock.installed(resolved_base)))
+    violations = policy.check_install(
+        entry, _count_others(projectlock.installed(resolved_base), name))
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
@@ -2748,7 +2889,11 @@ def _install_rule(entry: dict, force: bool = False,
     # every session (~/.claude/CLAUDE.md); dropping the record does not drop
     # the block, and `_uninstall_rule` is record-driven, so an unrecorded block
     # could never be removed by any boost command again.
-    materializations.extend(_refused_materializations(existing, linked, refused))
+    materializations.extend(_refused_materializations(
+        existing, linked, refused,
+        source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        declared=declared_agent_scope(
+            only_agents if explicit_agents else None, existing)))
 
     now = util.now_iso()
     lockfile.set_rule(name, {
@@ -2770,6 +2915,9 @@ def _install_rule(entry: dict, force: bool = False,
         "quarantined": False,
         **carried_user_state(existing),
         "materializations": materializations,
+        # What the user asked for, beside what was written: the rows above
+        # cannot say which, and :func:`preserved_agent_scope` replays this.
+        **_declared_field(only_agents if explicit_agents else None, existing),
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
 
@@ -3317,7 +3465,11 @@ def _install_workflow(entry: dict, force: bool = False,
                                           materializations))
     # As for rules: an unrecorded materialization is a live slash command that
     # `_uninstall_workflow` — driven by this list — can never remove.
-    materializations.extend(_refused_materializations(existing, linked, refused))
+    materializations.extend(_refused_materializations(
+        existing, linked, refused,
+        source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        declared=declared_agent_scope(
+            only_agents if explicit_agents else None, existing)))
     # An agent this run did not try (a narrowed `--agent`) keeps its foreign
     # row, as it keeps its materialization; one it tried is decided afresh.
     tried = {*linked, *(r["agent"] for r in refused),
@@ -3351,6 +3503,9 @@ def _install_workflow(entry: dict, force: bool = False,
         "quarantined": False,
         **carried_user_state(existing),
         "materializations": materializations,
+        # What the user asked for, beside what was written: the rows above
+        # cannot say which, and :func:`preserved_agent_scope` replays this.
+        **_declared_field(only_agents if explicit_agents else None, existing),
         # Only an explicit `--as-skill`/`--no-as-skill` is recorded, and then
         # it sticks through update, reinstall and sync. Absent means "follow
         # `workflows_as_skills`", so turning the config off reaches entries
@@ -3924,6 +4079,32 @@ def replaces_only_copy(name: str, src_dir: Path) -> bool:
             and not foreign.same_dir(Path(src_dir), skill_store_dir(name)))
 
 
+def _rename_frontmatter(skill_md: Path, name: str, meta: dict) -> bool:
+    """Make the store copy's frontmatter ``name`` agree with the lock name.
+
+    ``boost import DIR --name beta`` of a skill whose frontmatter says
+    ``name: alpha`` used to rename only the store dir and the lock key: the
+    agent still listed it as ``alpha`` (agents go by the frontmatter name) and
+    ``boost adapt beta`` printed a banner command for an ``alpha`` that boost
+    had no record of. Only the one line changes (``frontmatter.splice_field``),
+    and only in the copy — the source is the user's. Returns whether it wrote.
+    """
+    from . import frontmatter
+    if str(meta.get("name") or "") == name:
+        return False
+    # bytes, not text: a text read would translate CRLF on the way in
+    raw = skill_md.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    revised = frontmatter.splice_field(text, "name", name)
+    if revised == text:     # no frontmatter block to carry a name
+        return False
+    util.atomic_write_text(skill_md, revised)   # newline="\n": verbatim
+    return True
+
+
 def install_from_path(src_dir: Path, name: str | None = None,
                       tap_label: str = "local",
                       only_agents: list[str] | None = None,
@@ -3973,7 +4154,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
          "version": str(meta.get("version") or "0.0.0"),
          "description": meta.get("description")},
         # Re-importing a skill that is already counted must not trip max_skills.
-        len(lockfile.installed()) - (1 if existing else 0))
+        _count_others(lockfile.installed(), name))
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
@@ -3986,6 +4167,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
     # path import copies what the user's own links lead to.
     skipped = _copy_skill(src_dir, dest,
                           within=remote.root if remote else None)
+    _rename_frontmatter(dest / "SKILL.md", name, meta)
     # An import records no date, so the one a tap install left in the lock
     # must not stand for these files.
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
@@ -4377,18 +4559,16 @@ def restore_preserve_newer_lock_sections(
     section, so the caller can report what changed; writes the lock only when
     there is something to add back.
     """
-    lock = lockfile.read()
     kept: dict[str, list[str]] = {"rules": [], "workflows": []}
-    for name, entry in pre_rules.items():
-        if name not in lock["rules"]:
-            lock["rules"][name] = entry
-            kept["rules"].append(name)
-    for name, entry in pre_workflows.items():
-        if name not in lock["workflows"]:
-            lock["workflows"][name] = entry
-            kept["workflows"].append(name)
-    if kept["rules"] or kept["workflows"]:
-        lockfile.write(lock)
+
+    def keep(lock: dict) -> bool:
+        for section, pre in (("rules", pre_rules), ("workflows", pre_workflows)):
+            for name, entry in pre.items():
+                if name not in lock[section]:
+                    lock[section][name] = entry
+                    kept[section].append(name)
+        return bool(kept["rules"] or kept["workflows"])
+    lockfile.mutate(keep)
     return kept
 
 
@@ -5006,7 +5186,8 @@ def sync_plan() -> dict[str, list]:
     # typed. Same "topology, not ownership" line as duplicate_discovery, which
     # reports those entries and removes nothing. Disabled agents are swept
     # too (`unlinking_agents`): boost linked there while they were enabled.
-    for adir in agents.unlinking_agents().values():
+    # Former dirs too: an agent whose dir was repointed left its old links.
+    for adir in agents.sweep_dirs():
         if not os.path.isdir(adir):  # noqa: FURB146
             continue
         for link in adir.iterdir():
@@ -5036,17 +5217,21 @@ def sync_plan() -> dict[str, list]:
         # `boost sync` into a failure line; doctor names it with its remedy.
         if entry.get("quarantined") or scopes.stranded(entry):
             continue
-        if any(m.get("unwritable") or not _rule_materialization_ok(name, m)
+        if any(m.get("unwritable") or m.get("stale")
+               or not _rule_materialization_ok(name, m)
                for m in entry.get("materializations") or []
-               if materialization_is_written("rule", entry, m)):
+               if materialization_is_written("rule", entry, m)) \
+                or unmaterialized_agents("rule", entry):
             plan["missing_materializations"].append(("rule", name))
     for name, entry in lockfile.installed_workflows().items():
         if entry.get("quarantined") or scopes.stranded(entry):
             continue
-        if any(m.get("unwritable") or not os.path.isfile(m.get("path", ""))
+        if any(m.get("unwritable") or m.get("stale")
+               or not os.path.isfile(m.get("path", ""))
                for m in entry.get("materializations") or []
                if materialization_is_written("workflow", entry, m)) \
-                or _freed_foreign(entry):
+                or _freed_foreign(entry) \
+                or unmaterialized_agents("workflow", entry):
             plan["missing_materializations"].append(("workflow", name))
     return plan
 

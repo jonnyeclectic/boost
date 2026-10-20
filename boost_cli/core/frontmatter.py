@@ -388,6 +388,37 @@ def _dump_field(lines: list[str], k, v, pad: str) -> None:
         lines.append("%s%s: %s" % (pad, k, _dump_item(v)))
 
 
+def splice_field(text: str, key: str, value) -> str:
+    """Return `text` with top-level frontmatter key `key` set to `value`,
+    changing that one line and no other byte.
+
+    :func:`set_field` rebuilds the file around the block it edits: it drops a
+    BOM, turns CRLF into LF, and puts a blank line after the closing fence.
+    That is fine for `evolve`, which writes a revision anyway, and wrong for a
+    copy whose only difference from its source is meant to be one field. Here
+    each line keeps its own ending, and a key the block lacks goes in just
+    before the closing fence with the ending the fence line uses. Returns
+    `text` unchanged when it has no closed frontmatter block.
+    """
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].removeprefix(BOM).strip() != "---":
+        return text
+    close = next((i for i in range(1, len(lines))
+                  if lines[i].strip() in ("---", "...")), None)
+    if close is None:       # unclosed: there is no block to edit
+        return text
+    formatted = "%s: %s" % (key, _dump_item(value))
+    for i in range(1, close):
+        body = lines[i].rstrip("\r\n")
+        if (body[:1] not in (" ", "\t") and ":" in body
+                and body.split(":", 1)[0].strip() == key):
+            lines[i] = formatted + lines[i][len(body):]
+            return "".join(lines)
+    fence = lines[close]
+    lines.insert(close, formatted + (fence[len(fence.rstrip("\r\n")):] or "\n"))
+    return "".join(lines)
+
+
 def set_field(text: str, key: str, value) -> str:
     """Return `text` with top-level frontmatter key `key` set to `value`,
     leaving every other line of the block byte-identical.

@@ -14,6 +14,7 @@ import itertools
 import json
 import os
 import pathlib
+import plistlib
 import shlex
 import socket
 import subprocess
@@ -26,7 +27,7 @@ import urllib.request
 
 import pytest
 
-from boost_cli.core import frontmatter, journal, paths, policy, util
+from boost_cli.core import config, frontmatter, journal, paths, policy, util
 from boost_cli.errors import BoostError
 
 
@@ -120,6 +121,19 @@ class TestConfig:
         r = boost("config", "set", "ai.model.extra", "1", expect=1)
         assert "config key 'model' is not a section" in r.err
         assert "the parent key holds a plain value" in r.err
+
+    def test_set_taps_refused_and_registry_kept(self, boost, sandbox):
+        taps = [{"name": "a/b", "url": "x", "curated": False}]
+        config.save({"taps": taps})
+        r = boost("config", "set", "taps", "foo", expect=1)
+        assert ("config key 'taps' is managed by `boost tap` — `config set` "
+                "would rewrite the tap registry") in r.err
+        assert "`boost untap <name>`" in r.err
+        assert "set taps" not in r.out
+        r = boost("config", "unset", "taps", expect=1)
+        assert "`config unset` would rewrite the tap registry" in r.err
+        assert config.get("taps") == taps
+        assert not journal.events(action="config")
 
     def test_unset_present_and_absent(self, boost, sandbox):
         boost("config", "set", "custom.flag", "true")
@@ -323,9 +337,9 @@ class TestCreate:
         r = boost("create", "My Fancy Skill", "--description", "Does a thing")
         text = (tmp_path / "my-fancy-skill" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["description"] == "Does a thing"
-        # The slugging is no longer silent: the typed name and its slug both
-        # show up somewhere in the output.
-        assert "My Fancy Skill" in r.out
+        # The slugging is no longer silent: the note names both, on stderr so
+        # it can never land inside output a script parses.
+        assert r.err == "  using skill name 'my-fancy-skill' (from 'My Fancy Skill')\n"
         assert "my-fancy-skill" in r.out
 
     def test_refuses_a_name_with_no_letters_or_digits(self, boost, sandbox,
@@ -382,11 +396,24 @@ class TestCreate:
     def test_install_flag_declined_overwrite_leaves_it_installed(
             self, boost, installed, tmp_path, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")
-        r = boost("create", "brainstorming", "--dir", tmp_path, "--install")
+        # Declined, the --install half did not happen: exit 1, as every
+        # command that declines a confirm does.
+        r = boost("create", "brainstorming", "--dir", tmp_path, "--install",
+                  expect=1)
         assert "not installed: brainstorming is already installed from fixture-tap" in r.out
         assert (tmp_path / "brainstorming" / "SKILL.md").is_file()
         lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["brainstorming"]["tap"] == "fixture-tap"
+
+    def test_install_flag_takes_yes_as_its_prompt_says(
+            self, boost, installed, tmp_path, monkeypatch):
+        # The prompt says "pass -y"; argparse used to reject it (rc 2).
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("create", "brainstorming", "--dir", tmp_path, "--install", "-y")
+        assert "replaced brainstorming" in r.out
+        assert "replace it?" not in r.out
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        assert lock["skills"]["brainstorming"]["tap"] == "local"
 
 
 # ---------------------------------------------------------------- policy
@@ -443,12 +470,14 @@ class TestPolicy:
     def test_check_min_quality_and_pin_only_note(self, boost, installed):
         from boost_cli.core import store
         score, _ = util.score_skill(store.skill_store_dir("brainstorming"))
-        boost("policy", "set", "min_quality_score", "101")
+        # One over the skill's own score: 101 is no longer a settable floor.
+        assert score < 100
+        boost("policy", "set", "min_quality_score", str(score + 1))
         boost("policy", "set", "pin_only", "true")
         r = boost("policy", "check", expect=1)
         assert "pin-only mode is on — new installs and skill updates are frozen" in r.out
         assert "1 unpinned item(s): brainstorming" in r.out
-        assert "quality score %d < required 101" % score in r.out
+        assert "quality score %d < required %d" % (score, score + 1) in r.out
 
     def test_check_catches_what_install_would_have_blocked(self, boost, installed):
         """The coverage gap the audit found: require_version, max_skills and
@@ -614,6 +643,33 @@ class TestOnboard:
         r = boost("onboard", "--repo", repo, "--pr", expect=1)
         assert "gh pr create failed: boom" in r.err
         assert "boost/onboard-skill-tracker" in r.err  # hint names the branch
+
+    def test_pr_rerun_after_gh_failure_refuses_before_writing(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        repo = _mk_repo(tmp_path / "repo")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        real_run = subprocess.run
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.subprocess.run",
+            lambda cmd, **kw: _proc(cmd, 1, err="boom")
+            if cmd and cmd[0] == "gh" else real_run(cmd, **kw))
+        boost("onboard", "--repo", repo, "--pr", expect=1)
+        main = subprocess.run(["git", "rev-parse", "--abbrev-ref", "@{-1}"],
+                              cwd=str(repo), capture_output=True, text=True)
+        subprocess.run(["git", "checkout", "-q", main.stdout.strip()],
+                       cwd=str(repo), check=True)
+        assert not (repo / ".boost").exists()
+        for argv in (("--pr",), ("--pr", "--dry-run")):
+            r = boost("onboard", "--repo", repo, *argv, expect=1)
+            assert ("branch boost/onboard-skill-tracker already exists in"
+                    in r.err)
+            assert "git branch -D boost/onboard-skill-tracker" in r.err
+            status = subprocess.run(["git", "status", "--porcelain"],
+                                    cwd=str(repo), capture_output=True,
+                                    text=True)
+            assert status.stdout == ""
+            assert not (repo / ".boost").exists()
 
     def test_pr_preconditions(self, boost, sandbox, tmp_path):
         r = boost("onboard", "--repo", "/no/such/dir", expect=1)
@@ -1075,6 +1131,43 @@ class TestScheduleDarwin:
         r = boost("schedule", "status")
         assert "unknown (plist has no usable StartInterval)" in r.out
 
+    def test_status_invalid_plist_is_not_scheduled(self, boost, sandbox):
+        # launchd will not load a file it cannot parse; status used to say
+        # "scheduled yes" off the file merely existing.
+        plist = sandbox / "Library" / "LaunchAgents" / "com.boost.sync.plist"
+        plist.parent.mkdir(parents=True, exist_ok=True)
+        plist.write_text(
+            "<?xml version=\"1.0\"?><plist><dict>"
+            "<key>StartInterval</key><integer>21600</integer>"
+            "<key>StandardOutPath</key><string>/R&D/log</string>"
+            "</dict></plist>", encoding="utf-8")
+        r = boost("schedule", "status", "--json")
+        assert json.loads(r.out) == {
+            "platform": "darwin", "backend": "launchd", "scheduled": False,
+            "interval": None, "next_run": None,
+            "error": "~/Library/LaunchAgents/com.boost.sync.plist is not a "
+                     "valid property list"}
+        r = boost("schedule", "status")
+        assert "no" in r.out and "yes" not in r.out
+        assert "is not a valid property list" in r.out + r.err
+        assert "rewrite it with `boost schedule enable`" in r.out
+        assert "next run" not in r.out
+
+    def test_enable_records_state_dir(self, boost, sandbox, monkeypatch):
+        monkeypatch.setenv("BOOST_HOME", str(sandbox / "R&D boost"))
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.subprocess.run",
+            lambda cmd, **kw: _proc(cmd, 0))
+        boost("schedule", "enable")
+        plist = sandbox / "Library" / "LaunchAgents" / "com.boost.sync.plist"
+        data = plistlib.loads(plist.read_bytes())
+        assert data["EnvironmentVariables"] == {
+            "BOOST_HOME": str(sandbox / "R&D boost"), "HOME": str(sandbox)}
+        assert data["StandardOutPath"] == str(
+            sandbox / "R&D boost" / "logs" / "schedule.log")
+        assert json.loads(boost("schedule", "status", "--json").out)[
+            "scheduled"] is True
+
 
 class TestScheduleCron:
     """Non-darwin branches, with sys.platform and crontab faked."""
@@ -1127,7 +1220,8 @@ class TestScheduleCron:
         r = boost("schedule", "enable", "--interval", "12h")
         assert "`boost update` scheduled every 12h via cron" in r.out
         assert len(writes) == 1
-        assert writes[0].startswith("0 */12 * * * ")
+        assert writes[0].startswith("0 */12 * * * BOOST_HOME=")
+        assert " HOME=%s " % shlex.quote(str(sandbox)) in writes[0]
         assert writes[0].rstrip().endswith("# boost-sync")
 
     def test_enable_when_crontab_unusable(self, boost, sandbox, monkeypatch):
@@ -2892,6 +2986,22 @@ class TestTypedValues:
         r = boost("policy", "set", "min_quality_score", "high", expect=1)
         assert "min_quality_score expects a whole number" in r.err
         assert "`boost policy set min_quality_score <int>`" in r.err
+
+    @pytest.mark.parametrize("key, raw, expected", [
+        ("min_quality_score", "500", "a whole number from 0 to 100"),
+        ("min_quality_score", "-5", "a whole number from 0 to 100"),
+        ("max_skills", "-1", "a whole number of 0 or more, or null for no limit"),
+    ])
+    def test_policy_set_refuses_a_value_out_of_range(self, boost, tapped, key,
+                                                     raw, expected):
+        # These printed a check mark at rc 0, and the next audit or install
+        # failed against a limit no skill could meet.
+        r = boost("policy", "set", key, raw, expect=1)
+        assert "%s expects %s" % (key, expected) in r.err
+        assert 'got "%s"' % raw in r.err
+        assert not paths.policy_path().exists()
+        boost("install", "brainstorming")
+        assert "policy check passed" in boost("policy", "check").out
 
     def test_policy_set_max_skills_still_takes_a_number_and_null(self, boost,
                                                                  sandbox):

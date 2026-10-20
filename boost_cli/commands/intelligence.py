@@ -28,6 +28,7 @@ from ..core import (
     frontmatter,
     gitutil,
     imperative,
+    integrity,
     journal,
     jsonstate,
     lockfile,
@@ -652,24 +653,34 @@ def cmd_absorb(argv: list[str]) -> int:
         src = paths.expand(args.history)
         if not src.exists():
             raise BoostError("no history at %s" % _tilde(src))
+        sources = [src]
     else:
-        src = paths.home() / ".claude" / "history.jsonl"
-        if not src.exists():
-            src = paths.home() / ".claude" / "projects"
-        if not src.exists():
+        claude = paths.home() / ".claude"
+        # history.jsonl first (one row per typed prompt), then the session
+        # transcripts under projects/ when it yields nothing — a machine with
+        # an unparseable or prompt-free history.jsonl still has transcripts.
+        sources = [p for p in (claude / "history.jsonl", claude / "projects")
+                   if p.exists()]
+        if not sources:
             out.info("no chat history found under ~/.claude — nothing to absorb")
             out.info(out.role("point at a .jsonl file or directory with "
                            "--history PATH", "muted"))
             return 0
-    files = [src] if src.is_file() else sorted(src.rglob("*.jsonl"))
-    if not files:
-        out.info("no .jsonl history files under %s" % _tilde(src))
+    files: list[Path] = []
+    patterns: list[tuple[str, int]] = []
+    read = 0
+    for src in sources:
+        files = [src] if src.is_file() else sorted(src.rglob("*.jsonl"))
+        read += len(files)
+        patterns = _recurring_patterns(files, args.limit)
+        if patterns:
+            break
+    if not read:
+        out.info("no .jsonl history files under %s" % _tilde(sources[-1]))
         return 0
-
-    patterns = _recurring_patterns(files, args.limit)
     if not patterns:
         out.info("no recurring patterns in %d history file(s) — absorb needs "
-                 "the same request 3+ times" % len(files))
+                 "the same request 3+ times" % read)
         return 0
 
     name = "absorbed-patterns"
@@ -717,12 +728,29 @@ def _recurring_patterns(files: list[Path], limit: int) -> list[tuple[str, int]]:
     return hits[:limit]
 
 
+_PASTE_PLACEHOLDER = re.compile(
+    r"\[(?:Pasted text|Image|\.\.\.Truncated text) #\d+[^\]]*\]")
+
+
 def _user_texts(obj) -> list[str]:
     """Best-effort user-message text from one history event."""
     if not isinstance(obj, dict):
         return []
     node = obj["message"] if isinstance(obj.get("message"), dict) else obj
     role = node.get("role") or node.get("type") or obj.get("type") or obj.get("role")
+    if not role and isinstance(obj.get("display"), str):
+        # Claude Code's ~/.claude/history.jsonl: {display, pastedContents,
+        # project, sessionId, timestamp} — every row is a typed prompt, and
+        # none carries a role. Two shapes in it are not requests: a slash
+        # command (`/clear`, `/loop 5m /babysit`) and the placeholder Claude
+        # Code writes for a paste or an image (`[Pasted text #1 +12 lines]`),
+        # which normalises to "pasted text 1 12 lines" and would otherwise
+        # surface as the user's most recurring "instruction".
+        display = obj["display"].strip()
+        if display.startswith("/"):
+            return []
+        display = _PASTE_PLACEHOLDER.sub(" ", display).strip()
+        return [display] if display else []
     if role != "user":
         return []
     content = node.get("content", obj.get("content"))
@@ -799,6 +827,10 @@ def cmd_evolve(argv: list[str]) -> int:
                 % (args.name, found[0]),
                 hint="a %s has no editable store copy; it refreshes from its "
                      "tap via `boost update`" % found[0])
+        # `--apply` writes the store copy and pins the user lock; a project
+        # skill has neither, and the `boost install` hint below would add a
+        # user-scope duplicate of what the repo already holds.
+        integrity.refuse_project_only(args.name, "boost evolve")
         raise BoostError("%s is not installed — evolve works on installed "
                         "skills" % args.name,
                         hint="install it first with `boost install %s`" % args.name)
@@ -831,7 +863,13 @@ def cmd_evolve(argv: list[str]) -> int:
     # the generated-skill write above — nothing compares across machines
     # today, and the recorded digest should not depend on one either way.
     skill_md.write_text(new, encoding="utf-8", newline="\n")
-    entry["sha256"] = util.sha256_dir(store.skill_store_dir(args.name))
+    # Deliberately does NOT rewrite entry["sha256"] to the store's new hash,
+    # for the reason `boost edit` does not: drift compares the store against
+    # that field, and only consults the tap once they match. Rewriting it
+    # made store == lock != tap, which `boost drift` reported as
+    # "upstream-moved — boost update" for a tap that had not moved and an
+    # update that did nothing. Left alone, the revision reads as what it is,
+    # a local edit, and the lock keeps the digest of the tap copy it came from.
     entry["updated_at"] = util.now_iso()
     entry["version"] = new_ver
     # Pinned, because this revision exists nowhere but the store: once the
@@ -948,7 +986,11 @@ def cmd_context(argv: list[str]) -> int:
         return _context_status(state,
                                getattr(args, "json", False) or args.top_json)
     if action == "map":
-        skills = [s.strip() for s in args.skills.split(",") if s.strip()]
+        # Stored bare: the lock keys by the bare name, and `apply`/`disable`
+        # look rules up in it, so a `tap:name` rule never matched anything.
+        skills = list(dict.fromkeys(
+            store.installed_name(s.strip())
+            for s in args.skills.split(",") if s.strip()))
         if not skills:
             raise BoostError("no skills given",
                             hint="e.g. `boost context map 'feature/*' tdd-workflow`")
@@ -1021,8 +1063,22 @@ def cmd_context(argv: list[str]) -> int:
     return _context_apply(state)
 
 
+def _rule_skill(name: str) -> str:
+    """The lock key a saved context rule's ``name`` refers to.
+
+    Rules saved before `map` stored bare names may hold ``tap:name``; one
+    whose qualifier no longer matches what is installed stays as written, so
+    it reports as not installed rather than aborting the whole apply.
+    """
+    try:
+        return store.installed_name(name)
+    except BoostError:
+        return name
+
+
 def _mentioned_skills(state: dict) -> set:
-    return {s for r in state.get("rules", []) for s in r.get("skills", [])}
+    return {_rule_skill(s) for r in state.get("rules", [])
+            for s in r.get("skills", [])}
 
 
 def _context_status(state: dict, as_json: bool) -> int:
@@ -1063,7 +1119,7 @@ def _context_apply(state: dict) -> int:
         return 0
     rules = state.get("rules", [])
     matched = [r for r in rules if fnmatch.fnmatch(branch, r.get("pattern", ""))]
-    active = {s for r in matched for s in r.get("skills", [])}
+    active = {_rule_skill(s) for r in matched for s in r.get("skills", [])}
     inst = lockfile.installed()
     linked, unlinked, missing, unswitchable = [], [], [], []
     for name in sorted(_mentioned_skills(state)):
@@ -1182,6 +1238,9 @@ def cmd_focus(argv: list[str]) -> int:
                     % (name, found[0]),
                     hint="rules and workflows have no links to sideline; "
                          "`boost quarantine` suspends one")
+            # Focus sidelines and restores user-scope links; a project skill
+            # is a real directory in the repo, with no link to restore.
+            integrity.refuse_project_only(name, "boost focus")
             raise BoostError("%s is not installed — focus works on installed "
                             "skills" % name, hint="see `boost list`")
         if entry.get("quarantined"):
@@ -1190,6 +1249,11 @@ def cmd_focus(argv: list[str]) -> int:
     sidelined = 0
     for name, entry in sorted(inst.items()):
         if name in names or entry.get("quarantined"):
+            continue
+        # Already set aside by context or a profile: leave its flag alone.
+        # Restamping it "focus" made `--clear` relink it, undoing that
+        # mechanism, and count a restore this session never sidelined.
+        if entry.get("sidelined_by") not in (None, "focus"):
             continue
         if store.sideline(name, "focus"):
             sidelined += 1
@@ -1222,7 +1286,11 @@ def cmd_impact(argv: list[str]) -> int:
     in_repo = git.in_repo
     note = _IMPACT_NOTE if in_repo else _IMPACT_NOTE_NO_REPO
 
-    inst = lockfile.installed()
+    # The current project's `--local` skills count as installed — `boost
+    # list` shows them. A name in both scopes is the user row, as everywhere.
+    inst = lockfile.installed().copy()
+    for pname, pentry in integrity.project_skills()[1].items():
+        inst.setdefault(pname, pentry)
     if args.name:
         args.name = store.installed_name(args.name)
         if args.name not in inst:
@@ -1412,9 +1480,13 @@ def _chat_session(args) -> int:
     # With stdin piped nobody is typing, so the prompt and the typing hint are
     # only chrome in the answers a script captures — the same rule
     # output.confirm applies. A terminal is unchanged.
-    typing = sys.stdin.isatty()
+    typing = out.stdin_is_tty()
     if typing:
         out.info(out.role("ask about skills; blank line or Ctrl-D to exit", "muted"))
+    if sys.stdin is None:
+        # fd 0 closed at launch (`<&-`): input() would raise RuntimeError
+        # ("lost sys.stdin"), but this is just an EOF before the first line.
+        return 0
     history: list[chat_engine.Turn] = []
     while True:
         try:
