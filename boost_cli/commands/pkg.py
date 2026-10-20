@@ -880,12 +880,19 @@ def cmd_install(argv: list[str]) -> int:
         else:
             summary = "; ".join(parts)
         lines = [summary]
+        nxt = None
         if len(results) == 1:
             r0 = results[0]
             if r0.linked:
                 lines.append(out.role("%s → %s" % (r0.name, " · ".join(r0.linked)), "muted"))
-            lines.append(out.role("next: boost info %s" % r0.name, "muted"))
+            nxt = "next: boost info %s" % r0.name
         print(out.panel(lines, title="installed", hue="green"))
+        # Below the box, not in it: panel() clips each line to the pane, and a
+        # clipped command (`boost info typescript-react-…`) is one that does
+        # not run. A command is data, so it is printed whole and unwrapped —
+        # overflowing a narrow pane rather than breaking.
+        if nxt:
+            out.dim("  " + nxt)
     return 1 if failed else 0
 
 
@@ -934,7 +941,7 @@ def cmd_uninstall(argv: list[str]) -> int:
     # scripted `boost uninstall x` — CI step, Makefile, Dockerfile — into a
     # silent no-op exiting 1. A pipeline that cannot see the prompt keeps the
     # behaviour it has today; the prompt is a speed bump for humans only.
-    if sys.stdin.isatty() and not args.yes:
+    if out.stdin_is_tty() and not args.yes:
         what = (args.names[0] if len(args.names) == 1 else
                 "%d skills: %s" % (len(args.names), ", ".join(args.names)))
         if args.scope == scopes.SCOPE_PROJECT:
@@ -2248,6 +2255,29 @@ def _bundle_dump(file: str | None) -> int:
     return 0
 
 
+def _read_stdin_utf8() -> str:
+    """Standard input as UTF-8 text, the way a Boostfile path is read.
+
+    The bytes underneath, not ``sys.stdin.read()``: the text layer decodes
+    with the inherited locale codec, so under ``PYTHONIOENCODING=ascii`` a
+    Boostfile with one accented comment crashed from stdin while the same
+    file by path installed. A closed fd 0 (``<&-``, where Python sets
+    ``sys.stdin`` to None) reads as empty — there is nothing there.
+    """
+    stream = sys.stdin
+    if stream is None:
+        return ""
+    raw = getattr(stream, "buffer", None)
+    if raw is None:
+        return stream.read()
+    data = raw.read()
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise BoostError("<stdin> is not UTF-8 text (byte %d)" % e.start,
+                         hint="save the Boostfile as UTF-8") from None
+
+
 def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     """Apply a Boostfile, or with ``dry_run`` report what applying it would do.
 
@@ -2259,7 +2289,7 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     walks the same lines in the same order the real run would.
     """
     if file == "-":
-        text, label = sys.stdin.read(), "<stdin>"
+        text, label = _read_stdin_utf8(), "<stdin>"
         shown = label  # one spelling, in the warning and the journal alike
     else:
         path = paths.expand(file or "./Boostfile")
@@ -2279,6 +2309,9 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             text, label = path.read_text(encoding="utf-8"), str(path)
         except OSError as e:
             raise BoostError("cannot read %s: %s" % (shown, e.strerror or e)) from e
+        except UnicodeDecodeError as e:
+            raise BoostError("%s is not UTF-8 text (byte %d)" % (shown, e.start),
+                             hint="save the Boostfile as UTF-8") from None
     # A Boostfile saved by a Windows editor opens with a BOM, which glued itself
     # to the first directive ("\ufeffskill") and failed it as "unrecognised"
     # with the culprit invisible in the message. Stripped after both branches,

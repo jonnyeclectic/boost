@@ -130,6 +130,18 @@ class TestInstall:
         assert (repo / ".cursor" / "rules" / "team-rules.mdc").is_file()
         assert not (paths.home() / ".claude" / "CLAUDE.md").exists()  # not global
 
+    def test_next_hint_is_whole_on_a_narrow_pane(self, boost, tapped,
+                                                 monkeypatch):
+        # panel() clips its lines to the pane; inside it the hint became
+        # `next: boost info brainst…`, a command that does not run.
+        from boost_cli.core import output
+        monkeypatch.setattr(output, "pane_width", lambda stream=None: 24)
+        r = boost("install", "brainstorming")
+        assert "\n  next: boost info brainstorming\n" in r.out
+        assert "next: boost info brainst…" not in r.out
+        box = [ln for ln in r.out.splitlines() if ln.startswith(("│", "╭", "╰"))]
+        assert box and all(output.visible_len(ln) <= 24 for ln in box)
+
     def test_exact_report_lines(self, boost, tapped):
         r = boost("install", "brainstorming")
         assert "copied to ~/.agents/skills/brainstorming" in r.out
@@ -143,6 +155,8 @@ class TestInstall:
         # D13: framed success card with a next-step hint
         assert "╭─ installed" in r.out
         assert "next: boost info brainstorming" in r.out
+        # the hint is printed after the box, not clipped inside it
+        assert r.out.rstrip("\n").endswith("╯\n  next: boost info brainstorming")
         entry = _lock()["brainstorming"]
         assert entry["version"] == "1.4.0"
         assert entry["tap"] == "fixture-tap"
@@ -410,6 +424,19 @@ class TestUninstall:
         r = boost("uninstall", "brainstorming")
         assert "uninstall brainstorming?" not in r.out
         assert "cancelled" not in r.out
+        assert "Uninstalled 1 skill" in r.out
+        assert _lock() == {}
+
+    def test_closed_stdin_uninstall_proceeds(self, boost, installed,
+                                             monkeypatch):
+        # `boost uninstall x <&-`: Python sets sys.stdin to None, and the bare
+        # `sys.stdin.isatty()` here crashed with AttributeError (rc 70). Closed
+        # stdin is one more way of having nobody there to answer.
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", None)
+        r = boost("uninstall", "brainstorming")
+        assert r.rc == 0
+        assert "uninstall brainstorming?" not in r.out
         assert "Uninstalled 1 skill" in r.out
         assert _lock() == {}
 
@@ -1665,6 +1692,42 @@ class TestBundle:
         r = boost("bundle", "install", "-")
         assert "installed commit-messages v1.0.2 (fixture-tap)" in r.out
         assert "commit-messages" in _lock()
+
+    def test_install_stdin_is_utf8_whatever_the_locale(self, boost, tapped,
+                                                        monkeypatch):
+        # PYTHONIOENCODING=ascii: the text layer would decode `café` with the
+        # ascii codec and crash; the same bytes by path install fine.
+        data = "# caf\u00e9\nskill fixture-tap:commit-messages@1.0.2\n".encode()
+        monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(data),
+                                                          encoding="ascii"))
+        r = boost("bundle", "install", "-")
+        assert "installed commit-messages v1.0.2 (fixture-tap)" in r.out
+        assert "commit-messages" in _lock()
+
+    def test_install_stdin_not_utf8_is_a_clean_error(self, boost, tapped,
+                                                     monkeypatch):
+        monkeypatch.setattr("sys.stdin", io.TextIOWrapper(
+            io.BytesIO(b"# caf\xe9\n"), encoding="latin-1"))
+        r = boost("bundle", "install", "-", expect=1)
+        assert "Error: <stdin> is not UTF-8 text (byte 5)" in r.err
+        assert "save the Boostfile as UTF-8" in r.err
+
+    def test_install_file_not_utf8_is_a_clean_error(self, boost, tapped,
+                                                    tmp_path):
+        vf = tmp_path / "Boostfile"
+        vf.write_bytes(b"# caf\xe9\n")
+        r = boost("bundle", "install", vf, expect=1)
+        assert "Boostfile is not UTF-8 text (byte 5)" in r.err
+
+    def test_install_closed_stdin_reads_as_empty(self, boost, tapped,
+                                                 monkeypatch):
+        monkeypatch.setattr("sys.stdin", None)
+        empty = boost("bundle", "install", "-", expect=None)
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
+        piped = boost("bundle", "install", "-", expect=None)
+        assert (empty.rc, empty.out, empty.err) == (piped.rc, piped.out,
+                                                    piped.err)
+        assert "unexpected error" not in empty.err
 
     def test_install_already_present(self, boost, installed, tmp_path):
         vf = tmp_path / "Boostfile"

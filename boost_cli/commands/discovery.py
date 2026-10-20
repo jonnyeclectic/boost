@@ -2345,7 +2345,7 @@ def cmd_browse(argv):
         if not narrowed:
             raise BoostError("no entries in category %r" % args.category,
                             hint="`boost browse --categories` lists them")
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+    if not (out.stdin_is_tty(sys.stdin) and sys.stdout.isatty()):
         return _browse_plain(narrowed, "interactive mode needs a TTY")
     try:
         import curses

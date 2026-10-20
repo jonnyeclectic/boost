@@ -513,6 +513,15 @@ def _repo_root_guard(request):
 
 
 @pytest.fixture(autouse=True)
+def _no_dumb_term(monkeypatch):
+    """TERM=dumb turns color and the spinner off (output.use_color), so a
+    developer running the suite from an Emacs buffer would see every
+    fake-TTY color test fail. A test about TERM sets it itself."""
+    if os.environ.get("TERM") == "dumb":
+        monkeypatch.delenv("TERM")
+
+
+@pytest.fixture(autouse=True)
 def _reset_logging():
     """Rebind the diagnostic logger to each test's sandbox HOME."""
     from boost_cli.core import logs
