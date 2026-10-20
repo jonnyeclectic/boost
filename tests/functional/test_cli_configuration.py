@@ -14,6 +14,7 @@ import itertools
 import json
 import os
 import pathlib
+import plistlib
 import shlex
 import socket
 import subprocess
@@ -26,7 +27,7 @@ import urllib.request
 
 import pytest
 
-from boost_cli.core import frontmatter, journal, paths, policy, util
+from boost_cli.core import config, frontmatter, journal, paths, policy, util
 from boost_cli.errors import BoostError
 
 
@@ -120,6 +121,19 @@ class TestConfig:
         r = boost("config", "set", "ai.model.extra", "1", expect=1)
         assert "config key 'model' is not a section" in r.err
         assert "the parent key holds a plain value" in r.err
+
+    def test_set_taps_refused_and_registry_kept(self, boost, sandbox):
+        taps = [{"name": "a/b", "url": "x", "curated": False}]
+        config.save({"taps": taps})
+        r = boost("config", "set", "taps", "foo", expect=1)
+        assert ("config key 'taps' is managed by `boost tap` — `config set` "
+                "would rewrite the tap registry") in r.err
+        assert "`boost untap <name>`" in r.err
+        assert "set taps" not in r.out
+        r = boost("config", "unset", "taps", expect=1)
+        assert "`config unset` would rewrite the tap registry" in r.err
+        assert config.get("taps") == taps
+        assert not journal.events(action="config")
 
     def test_unset_present_and_absent(self, boost, sandbox):
         boost("config", "set", "custom.flag", "true")
@@ -1088,6 +1102,43 @@ class TestScheduleDarwin:
         r = boost("schedule", "status")
         assert "unknown (plist has no usable StartInterval)" in r.out
 
+    def test_status_invalid_plist_is_not_scheduled(self, boost, sandbox):
+        # launchd will not load a file it cannot parse; status used to say
+        # "scheduled yes" off the file merely existing.
+        plist = sandbox / "Library" / "LaunchAgents" / "com.boost.sync.plist"
+        plist.parent.mkdir(parents=True, exist_ok=True)
+        plist.write_text(
+            "<?xml version=\"1.0\"?><plist><dict>"
+            "<key>StartInterval</key><integer>21600</integer>"
+            "<key>StandardOutPath</key><string>/R&D/log</string>"
+            "</dict></plist>", encoding="utf-8")
+        r = boost("schedule", "status", "--json")
+        assert json.loads(r.out) == {
+            "platform": "darwin", "backend": "launchd", "scheduled": False,
+            "interval": None, "next_run": None,
+            "error": "~/Library/LaunchAgents/com.boost.sync.plist is not a "
+                     "valid property list"}
+        r = boost("schedule", "status")
+        assert "no" in r.out and "yes" not in r.out
+        assert "is not a valid property list" in r.out + r.err
+        assert "rewrite it with `boost schedule enable`" in r.out
+        assert "next run" not in r.out
+
+    def test_enable_records_state_dir(self, boost, sandbox, monkeypatch):
+        monkeypatch.setenv("BOOST_HOME", str(sandbox / "R&D boost"))
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.subprocess.run",
+            lambda cmd, **kw: _proc(cmd, 0))
+        boost("schedule", "enable")
+        plist = sandbox / "Library" / "LaunchAgents" / "com.boost.sync.plist"
+        data = plistlib.loads(plist.read_bytes())
+        assert data["EnvironmentVariables"] == {
+            "BOOST_HOME": str(sandbox / "R&D boost"), "HOME": str(sandbox)}
+        assert data["StandardOutPath"] == str(
+            sandbox / "R&D boost" / "logs" / "schedule.log")
+        assert json.loads(boost("schedule", "status", "--json").out)[
+            "scheduled"] is True
+
 
 class TestScheduleCron:
     """Non-darwin branches, with sys.platform and crontab faked."""
@@ -1140,7 +1191,8 @@ class TestScheduleCron:
         r = boost("schedule", "enable", "--interval", "12h")
         assert "`boost update` scheduled every 12h via cron" in r.out
         assert len(writes) == 1
-        assert writes[0].startswith("0 */12 * * * ")
+        assert writes[0].startswith("0 */12 * * * BOOST_HOME=")
+        assert " HOME=%s " % shlex.quote(str(sandbox)) in writes[0]
         assert writes[0].rstrip().endswith("# boost-sync")
 
     def test_enable_when_crontab_unusable(self, boost, sandbox, monkeypatch):
