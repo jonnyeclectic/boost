@@ -10,6 +10,8 @@ frequencies — so only ``--force`` recovered.
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from boost_cli.commands import quality
@@ -168,7 +170,9 @@ class TestDoctor:
 class TestReadOnlyUri:
     def test_a_home_with_uri_metacharacters_still_reads_the_store(
             self, tmp_path, monkeypatch, sandbox):
-        odd = sandbox / "a#b?c%20d"
+        # `?` cannot appear in a Windows filename, so it is POSIX-only; `#`
+        # and `%` are the metacharacters every platform can hold.
+        odd = sandbox / ("a#b%20d" if sys.platform == "win32" else "a#b?c%20d")
         odd.mkdir()
         monkeypatch.setattr(rag.paths, "cache_dir", lambda: odd)
         root = tmp_path / "repo" / "jest-runner"

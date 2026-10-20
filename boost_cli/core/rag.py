@@ -480,6 +480,11 @@ def _kept_docs(raw: dict, keep_safe: set) -> list[dict] | None:
     index, so an index without an inline ``postings`` key is normal rather than
     empty — this is the caller that reaches for the store, explicitly.
     """
+    docs = raw.get("docs", [])
+    if not docs:
+        # Nothing to reuse, so nothing to ask the store: reading it here would
+        # turn a missing store into "unreadable" for an index with no docs.
+        return []
     # Key ABSENCE, not falsiness: an index carrying an explicit empty
     # `postings` is stating it has none, and must not be answered from the
     # store. Only an index with no such key predates the SQLite move.
@@ -492,7 +497,7 @@ def _kept_docs(raw: dict, keep_safe: set) -> list[dict] | None:
         return None
     doc_tf = _postings_to_doc_tf(stored)
     return [{**meta, "tf": doc_tf.get(doc_id, {})}
-            for doc_id, meta in enumerate(raw.get("docs", []))
+            for doc_id, meta in enumerate(docs)
             if meta["t"].replace("/", "__") in keep_safe]
 
 
