@@ -1035,6 +1035,22 @@ class TestCompletionsInstall:
         assert "no one-shot install for fish yet" in r.err
         assert "boost completions fish" in r.err
 
+    @pytest.mark.parametrize("flag", ["--install", "--uninstall"])
+    def test_fish_hint_keeps_each_command_on_one_line(self, boost, sandbox,
+                                                      monkeypatch, flag):
+        # Unquoted, the wrapper split the command at its `>` and line one was
+        # a redirect with no target; and the redirect alone fails on a HOME
+        # where fish never ran, since nothing has made the directory.
+        monkeypatch.setenv("COLUMNS", "80")
+        r = boost("completions", "fish", flag, expect=1)
+        lines = r.err.splitlines()
+        install = ("`mkdir -p ~/.config/fish/completions && boost completions"
+                   " fish > ~/.config/fish/completions/boost.fish`")
+        remove = "`rm ~/.config/fish/completions/boost.fish`"
+        assert any(install in line for line in lines), r.err
+        assert any(remove in line for line in lines), r.err
+        assert lines[1].strip() == "hint: fish needs none — install:", r.err
+
     def test_install_and_uninstall_are_mutually_exclusive(self, boost, sandbox):
         r = boost("completions", "bash", "--install", "--uninstall", expect=2)
         assert "not allowed with argument" in r.err
