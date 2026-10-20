@@ -475,6 +475,13 @@ def _history_line(text):
     return json.dumps({"message": {"role": "user", "content": text}})
 
 
+def _display_line(text):
+    """One row of Claude Code's ~/.claude/history.jsonl (no role, no type)."""
+    return json.dumps({"display": text, "pastedContents": {},
+                       "project": "/work/repo", "sessionId": "s-1",
+                       "timestamp": 1760000000000})
+
+
 class TestAbsorb:
     def test_no_history_found(self, boost, sandbox):
         r = boost("absorb")
@@ -513,6 +520,62 @@ class TestAbsorb:
         assert "recurring patterns from 1 history file(s)" not in r.out
         assert "- Always run the linter before committing. (seen 4x)" in r.out
         assert "name: absorbed-patterns" in r.out
+
+    def test_pattern_surfaced_from_claude_code_history_jsonl(self, boost,
+                                                             sandbox):
+        # Claude Code's ~/.claude/history.jsonl carries no role/type: each row
+        # is one typed prompt under `display`. Every row used to be dropped.
+        claude = sandbox / ".claude"
+        claude.mkdir()
+        (claude / "history.jsonl").write_text("\n".join(
+            _display_line("always run the full test suite before committing")
+            for _ in range(3)) + "\n", encoding="utf-8")
+        r = boost("absorb")
+        assert "recurring patterns from 1 history file(s)" in r.err
+        assert "always run the full test suite before committing" in r.err
+        assert "3x" in r.err
+        assert ("- Always run the full test suite before committing. "
+                "(seen 3x)") in r.out
+
+    def test_history_jsonl_without_patterns_falls_back_to_projects(
+            self, boost, sandbox):
+        claude = sandbox / ".claude"
+        (claude / "projects" / "p").mkdir(parents=True)
+        (claude / "history.jsonl").write_text(
+            _display_line("a one off request nobody repeats") + "\n",
+            encoding="utf-8")
+        (claude / "projects" / "p" / "a.jsonl").write_text("\n".join(
+            _history_line("always run the linter before committing")
+            for _ in range(3)) + "\n", encoding="utf-8")
+        (claude / "projects" / "p" / "b.jsonl").write_text(
+            _history_line("unrelated") + "\n", encoding="utf-8")
+        r = boost("absorb")
+        assert "recurring patterns from 2 history file(s)" in r.err
+        assert "- Always run the linter before committing. (seen 3x)" in r.out
+
+    def test_no_patterns_anywhere_counts_every_file_read(self, boost, sandbox):
+        claude = sandbox / ".claude"
+        (claude / "projects" / "p").mkdir(parents=True)
+        (claude / "history.jsonl").write_text(
+            _display_line("a one off request nobody repeats") + "\n",
+            encoding="utf-8")
+        (claude / "projects" / "p" / "a.jsonl").write_text(
+            _history_line("another one off request here") + "\n",
+            encoding="utf-8")
+        r = boost("absorb")
+        assert ("no recurring patterns in 2 history file(s) — absorb needs "
+                "the same request 3+ times") in r.out
+
+    def test_display_rows_and_role_rows_are_told_apart(self):
+        from boost_cli.commands.intelligence import _user_texts
+        assert _user_texts({"display": "fix it", "project": "/p"}) == ["fix it"]
+        # A row with a role is judged by it, `display` or not.
+        assert _user_texts({"role": "assistant", "display": "x",
+                            "content": "y"}) == []
+        assert _user_texts({"role": "user", "display": "x",
+                            "content": "y"}) == ["y"]
+        assert _user_texts({"display": {"text": "x"}}) == []
+        assert _user_texts({"project": "/p"}) == []
 
     def test_refused_install_exits_nonzero(self, boost, sandbox, tmp_path,
                                            monkeypatch):

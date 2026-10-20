@@ -653,24 +653,34 @@ def cmd_absorb(argv: list[str]) -> int:
         src = paths.expand(args.history)
         if not src.exists():
             raise BoostError("no history at %s" % _tilde(src))
+        sources = [src]
     else:
-        src = paths.home() / ".claude" / "history.jsonl"
-        if not src.exists():
-            src = paths.home() / ".claude" / "projects"
-        if not src.exists():
+        claude = paths.home() / ".claude"
+        # history.jsonl first (one row per typed prompt), then the session
+        # transcripts under projects/ when it yields nothing — a machine with
+        # an unparseable or prompt-free history.jsonl still has transcripts.
+        sources = [p for p in (claude / "history.jsonl", claude / "projects")
+                   if p.exists()]
+        if not sources:
             out.info("no chat history found under ~/.claude — nothing to absorb")
             out.info(out.role("point at a .jsonl file or directory with "
                            "--history PATH", "muted"))
             return 0
-    files = [src] if src.is_file() else sorted(src.rglob("*.jsonl"))
-    if not files:
-        out.info("no .jsonl history files under %s" % _tilde(src))
+    files: list[Path] = []
+    patterns: list[tuple[str, int]] = []
+    read = 0
+    for src in sources:
+        files = [src] if src.is_file() else sorted(src.rglob("*.jsonl"))
+        read += len(files)
+        patterns = _recurring_patterns(files, args.limit)
+        if patterns:
+            break
+    if not read:
+        out.info("no .jsonl history files under %s" % _tilde(sources[-1]))
         return 0
-
-    patterns = _recurring_patterns(files, args.limit)
     if not patterns:
         out.info("no recurring patterns in %d history file(s) — absorb needs "
-                 "the same request 3+ times" % len(files))
+                 "the same request 3+ times" % read)
         return 0
 
     name = "absorbed-patterns"
@@ -724,6 +734,11 @@ def _user_texts(obj) -> list[str]:
         return []
     node = obj["message"] if isinstance(obj.get("message"), dict) else obj
     role = node.get("role") or node.get("type") or obj.get("type") or obj.get("role")
+    if not role and isinstance(obj.get("display"), str):
+        # Claude Code's ~/.claude/history.jsonl: {display, pastedContents,
+        # project, sessionId, timestamp} — every row is a typed prompt, and
+        # none carries a role.
+        return [obj["display"]]
     if role != "user":
         return []
     content = node.get("content", obj.get("content"))
