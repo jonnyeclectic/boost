@@ -4166,7 +4166,18 @@ class TestPreservedAgentScope:
         assert store.preserved_agent_scope(
             None, {"agents": ["claude-code"]}) == ["claude-code"]
 
-    def test_a_rule_s_scope_comes_from_its_materializations(self):
+    def test_a_rule_s_rows_are_not_its_scope(self):
+        # Rows record what was written, which is the agents enabled at
+        # install time. Replaying them froze an undeclared install out of
+        # every agent enabled afterwards, so only a declaration narrows.
+        existing = {"materializations": [{"agent": "cursor", "path": "/x"},
+                                         {"agent": "windsurf", "path": "/y"}],
+                    "only_agents": None}
+        assert store.preserved_agent_scope(None, existing) is None
+
+    def test_a_legacy_rule_s_scope_comes_from_its_materializations(self):
+        # No `only_agents` key: written before rules recorded one, so the rows
+        # are the only record of a narrowing and are still replayed.
         existing = {"materializations": [{"agent": "cursor", "path": "/x"},
                                          {"agent": "windsurf", "path": "/y"}]}
         assert store.preserved_agent_scope(None, existing) == ["cursor", "windsurf"]
@@ -4174,6 +4185,12 @@ class TestPreservedAgentScope:
     def test_a_materialization_row_with_no_agent_is_dropped(self):
         existing = {"materializations": [{"agent": "cursor"}, {"path": "/y"}]}
         assert store.preserved_agent_scope(None, existing) == ["cursor"]
+
+    def test_a_rule_s_scope_comes_from_its_declaration(self):
+        existing = {"materializations": [{"agent": "cursor", "path": "/x"},
+                                         {"agent": "windsurf", "path": "/y"}],
+                    "only_agents": ["windsurf"]}
+        assert store.preserved_agent_scope(None, existing) == ["windsurf"]
 
     def test_an_empty_record_means_every_agent_not_no_agent(self):
         # Nothing was linked last time (no agents enabled, or all conflicted).
@@ -5641,7 +5658,9 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
         locked = self._locked(kind, entry["name"])
         agents_ = [m["agent"] for m in locked["materializations"]]
         assert agents_.count("cursor") == 1
-        assert "cursor" in store.preserved_agent_scope(None, locked)
+        # Undeclared, so the next install tries every agent, cursor included.
+        assert store.preserved_agent_scope(None, locked) is None
+        assert locked["only_agents"] is None
 
     @pytest.mark.parametrize("kind", ["rule", "workflow"])
     def test_sync_does_not_claim_a_repair_the_dir_still_refuses(self, tap, kind):
@@ -6299,3 +6318,130 @@ class TestARowForADisabledAgentIsNotRot:
         locked = lockfile.get_rule("team-conventions")
         assert store.materialization_is_written(
             "rule", locked, {"mode": "file", "path": "/nope"})
+
+
+def _set_enabled(agent, on):
+    cfg = config.load()
+    cfg["agents"][agent]["enabled"] = on
+    config.save(cfg)
+
+
+class TestAnAgentEnabledLaterGetsRulesAndWorkflows:
+    """A rule or workflow installed while cursor was disabled has no cursor
+    row. Its rows used to be replayed as the re-install scope, so enabling
+    cursor afterwards left it out of `sync`, `reinstall`, `update` and
+    `install --force` for good, while doctor called it fully materialized."""
+
+    CURSOR: ClassVar[dict[str, tuple[str, str]]] = {
+        "rule": ("rules", "team-conventions.mdc"),
+        "workflow": ("commands", "ship-it.md")}
+    NAME: ClassVar[dict[str, str]] = {"rule": "team-conventions",
+                                      "workflow": "ship-it"}
+
+    def _entry(self, tap, kind):
+        entry = _rule_entry(tap) if kind == "rule" else _workflow_entry(tap)
+        catalog.rebuild_tap(tap)          # so sync's repair can find it
+        return entry
+
+    def _locked(self, kind):
+        get = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+        return get(self.NAME[kind])
+
+    def _cursor_file(self, kind):
+        sub, leaf = self.CURSOR[kind]
+        return paths.home() / ".cursor" / sub / leaf
+
+    def _install_without_cursor(self, tap, kind, **kw):
+        entry = self._entry(tap, kind)
+        _set_enabled("cursor", False)
+        store.install(entry, **kw)
+        _set_enabled("cursor", True)
+        return entry
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_the_missing_agent_is_named_and_sync_writes_it(self, tap, kind):
+        self._install_without_cursor(tap, kind)
+        locked = self._locked(kind)
+        assert locked["only_agents"] is None
+        assert store.unmaterialized_agents(kind, locked) == ["cursor"]
+        assert store.sync_plan()["missing_materializations"] == [
+            (kind, self.NAME[kind])]
+
+        store.sync_apply(store.sync_plan())
+
+        assert self._cursor_file(kind).is_file()
+        assert store.unmaterialized_agents(kind, self._locked(kind)) == []
+        assert store.sync_plan()["missing_materializations"] == []
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_bare_force_reinstall_writes_it_too(self, tap, kind):
+        entry = self._install_without_cursor(tap, kind)
+        res = store.install(entry, force=True)
+        assert "cursor" in res.linked
+        assert self._cursor_file(kind).is_file()
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_declared_narrowing_is_not_a_gap(self, tap, kind):
+        entry = self._entry(tap, kind)
+        store.install(entry, only_agents=["claude-code"])
+        locked = self._locked(kind)
+        assert locked["only_agents"] == ["claude-code"]
+        assert store.unmaterialized_agents(kind, locked) == []
+        assert store.sync_plan()["missing_materializations"] == []
+        # And it survives a bare re-install, which writes claude-code alone.
+        res = store.install(entry, force=True)
+        assert res.linked == ["claude-code"]
+        assert self._locked(kind)["only_agents"] == ["claude-code"]
+        assert not self._cursor_file(kind).exists()
+
+    def test_a_declared_agent_enabled_later_is_a_gap(self, tap):
+        entry = self._entry(tap, "rule")
+        _set_enabled("cursor", False)
+        store.install(entry, only_agents=["claude-code", "cursor"])
+        _set_enabled("cursor", True)
+        assert store.unmaterialized_agents(
+            "rule", self._locked("rule")) == ["cursor"]
+
+    def test_quarantined_rowless_and_disabled_are_not_gaps(self, tap):
+        self._install_without_cursor(tap, "rule")
+        locked = self._locked("rule")
+        assert store.unmaterialized_agents(
+            "rule", {**locked, "quarantined": True}) == []
+        assert store.unmaterialized_agents(
+            "rule", {**locked, "materializations": []}) == []
+        _set_enabled("cursor", False)
+        assert store.unmaterialized_agents("rule", locked) == []
+
+    def test_a_legacy_entry_is_not_read_for_gaps(self, tap):
+        self._install_without_cursor(tap, "rule")
+        locked = self._locked("rule")
+        del locked["only_agents"]
+        assert store.unmaterialized_agents("rule", locked) == []
+
+    def test_a_legacy_entry_is_not_given_the_field(self, tap):
+        # Writing `only_agents: None` onto it would widen its narrowing on the
+        # next update, so a re-install leaves the field off.
+        entry = self._entry(tap, "rule")
+        store.install(entry, only_agents=["claude-code"])
+        locked = self._locked("rule")
+        del locked["only_agents"]
+        lockfile.set_rule("team-conventions", locked)
+        res = store.install(entry, force=True)
+        assert res.linked == ["claude-code"]
+        assert "only_agents" not in self._locked("rule")
+
+    def test_a_foreign_row_counts_as_present(self, tap):
+        self._install_without_cursor(tap, "workflow")
+        locked = self._locked("workflow")
+        locked["foreign"] = [{"agent": "cursor", "slot": "commands",
+                              "path": str(self._cursor_file("workflow"))}]
+        assert store.unmaterialized_agents("workflow", locked) == []
+
+    def test_doctor_names_it_instead_of_fully_materialized(self, tap, capsys):
+        from boost_cli.commands import quality
+        self._install_without_cursor(tap, "rule")
+        assert quality.cmd_doctor([]) == 1
+        out = capsys.readouterr().out
+        assert ("rule team-conventions was never written for cursor — run "
+                "`boost sync`") in out
+        assert "fully materialized" not in out

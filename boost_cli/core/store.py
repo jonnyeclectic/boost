@@ -717,10 +717,12 @@ def preserved_agent_scope(only_agents: list[str] | None,
 
     An explicit ``only_agents`` still wins, so re-running install with
     ``--agent`` remains the way to widen the scope again. Skills record their
-    scope as ``agents``; rules and workflows record one ``materializations``
-    row per agent. An empty record means "nothing was linked", not "link
-    nothing", so it falls back to every enabled agent — exactly what
-    ``link_agents`` does with ``None``.
+    scope as ``agents``. Rules and workflows replay only a declared
+    ``only_agents``: their ``materializations`` rows record what was written,
+    and an undeclared install fans out to every agent that takes it. An entry
+    written before they recorded the field still replays its rows. An empty
+    record means "nothing was linked", not "link nothing", so it falls back to
+    every enabled agent — exactly what ``link_agents`` does with ``None``.
     """
     if only_agents is not None:
         return only_agents
@@ -736,7 +738,21 @@ def preserved_agent_scope(only_agents: list[str] | None,
     if declared:
         return list(declared)
     recorded = existing.get("agents")
+    if recorded is None and "only_agents" in existing:
+        # A rule or workflow that records its declaration: its rows say which
+        # agents were *written* last time, not which the user asked for.
+        # Replaying them froze an install made with no `--agent` to the agents
+        # enabled that day: enable cursor afterwards and `sync`, `reinstall`,
+        # `update` and `install --force` all skipped it, while doctor called
+        # the rule fully materialized. Undeclared means every agent, as
+        # `scoped_agents` already says for a skill's links. A row for an agent
+        # this run does not write is still carried forward
+        # (:func:`_refused_materializations`), so nothing becomes unremovable.
+        return None
     if recorded is None:
+        # An entry from before rules and workflows recorded ``only_agents``:
+        # its rows are the only trace of an `--agent` narrowing, so they are
+        # still replayed rather than widened on the next `update`.
         recorded = [m.get("agent")
                     for m in existing.get("materializations") or ()]
         # A workflow agent whose path held the user's own file is kept in
@@ -831,6 +847,20 @@ def declared_agent_scope(only_agents: list[str] | None,
     if only_agents is not None:
         return list(only_agents)
     return (existing or {}).get("only_agents")
+
+
+def _declared_field(only_agents: list[str] | None,
+                    existing: dict | None) -> dict:
+    """The ``only_agents`` field a rule or workflow lock write carries.
+
+    Written on a fresh install, an explicit ``--agent`` and any entry that
+    already has it. Left off an entry from before the field existed, whose
+    rows are still the only record of a narrowing: writing ``None`` there
+    would widen it on the next `update` (:func:`preserved_agent_scope`).
+    """
+    if only_agents is None and existing and "only_agents" not in existing:
+        return {}
+    return {"only_agents": declared_agent_scope(only_agents, existing)}
 
 
 def scoped_agents(entry: dict, enabled: dict[str, Path]) -> dict[str, Path]:
@@ -1002,6 +1032,38 @@ def materialization_is_written(kind: str, entry: dict, m: dict) -> bool:
     """
     return agents.materialization_is_written(kind, entry.get("base"),
                                              m.get("agent"))
+
+
+def unmaterialized_agents(kind: str, entry: dict) -> list[str]:
+    """The agents boost writes ``kind`` into that ``entry`` has no row for.
+
+    Rows record what an install wrote, so an agent enabled afterwards -- or
+    added to the defaults since -- has none, and every check that walks the
+    rows found nothing wrong with it: doctor called the rule fully
+    materialized and `boost sync` linked the skill beside it and left the
+    rule out. An ``unwritable`` row and a workflow's ``foreign`` row count as
+    present: each already names the agent, with its own remedy.
+
+    Within a declared ``--agent`` narrowing only, so this never widens one.
+    Empty for an entry that records no ``only_agents`` at all: it predates
+    the field, its rows are its only record of a narrowing, and reading them
+    as gaps would undo one. Empty for an entry with no rows, which predates rows and has
+    nothing to compare (:func:`integrity.reaches_no_agent` reads it the same
+    way), and for a quarantined or stranded entry, whose artifacts are absent
+    on purpose.
+    """
+    rows = entry.get("materializations") or []
+    if (not rows or "only_agents" not in entry or entry.get("quarantined")
+            or scopes.stranded(entry)):
+        return []
+    base = entry.get("base")
+    writes = (agents.workflow_agents(base) if kind == "workflow"
+              else agents.materializing_agents(base))
+    declared = entry.get("only_agents")
+    have = {m.get("agent") for m in rows} | {
+        r["agent"] for r in foreign_rows(entry)}
+    return [a for a in writes
+            if a not in have and (not declared or a in declared)]
 
 
 def unwritten_materializations() -> list[tuple[str, str, str, str]]:
@@ -2785,6 +2847,9 @@ def _install_rule(entry: dict, force: bool = False,
         "quarantined": False,
         **carried_user_state(existing),
         "materializations": materializations,
+        # What the user asked for, beside what was written: the rows above
+        # cannot say which, and :func:`preserved_agent_scope` replays this.
+        **_declared_field(only_agents if explicit_agents else None, existing),
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
 
@@ -3366,6 +3431,9 @@ def _install_workflow(entry: dict, force: bool = False,
         "quarantined": False,
         **carried_user_state(existing),
         "materializations": materializations,
+        # What the user asked for, beside what was written: the rows above
+        # cannot say which, and :func:`preserved_agent_scope` replays this.
+        **_declared_field(only_agents if explicit_agents else None, existing),
         # Only an explicit `--as-skill`/`--no-as-skill` is recorded, and then
         # it sticks through update, reinstall and sync. Absent means "follow
         # `workflows_as_skills`", so turning the config off reaches entries
@@ -5080,7 +5148,8 @@ def sync_plan() -> dict[str, list]:
             continue
         if any(m.get("unwritable") or not _rule_materialization_ok(name, m)
                for m in entry.get("materializations") or []
-               if materialization_is_written("rule", entry, m)):
+               if materialization_is_written("rule", entry, m)) \
+                or unmaterialized_agents("rule", entry):
             plan["missing_materializations"].append(("rule", name))
     for name, entry in lockfile.installed_workflows().items():
         if entry.get("quarantined") or scopes.stranded(entry):
@@ -5088,7 +5157,8 @@ def sync_plan() -> dict[str, list]:
         if any(m.get("unwritable") or not os.path.isfile(m.get("path", ""))
                for m in entry.get("materializations") or []
                if materialization_is_written("workflow", entry, m)) \
-                or _freed_foreign(entry):
+                or _freed_foreign(entry) \
+                or unmaterialized_agents("workflow", entry):
             plan["missing_materializations"].append(("workflow", name))
     return plan
 

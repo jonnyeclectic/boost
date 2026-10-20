@@ -267,7 +267,8 @@ class TestForeignStaysInScope:
         assert entry["foreign"] == [{"agent": "claude-code",
                                      "slot": "commands", "path": str(mine)}]
         assert str(mine) not in [m["path"] for m in _rows("fa")]
-        assert "claude-code" in store.preserved_agent_scope(None, entry)
+        # Undeclared, so every agent stays in scope, claude-code included.
+        assert store.preserved_agent_scope(None, entry) is None
         # With the file still there, no command writes over it or calls it a
         # fault, and the record survives each re-install.
         assert store.sync_plan()["missing_materializations"] == []
@@ -332,7 +333,19 @@ class TestForeignStaysInScope:
                       only_agents=["cursor"], as_skill=False)
         assert lockfile.get_workflow("fd")["foreign"][0]["path"] == str(mine)
 
-    def test_scope_ignores_foreign_with_nothing_written(self):
+    def test_scope_is_the_declaration_not_the_rows(self):
+        # Foreign or written, a row is not a narrowing: replaying them kept
+        # an agent enabled later out of every re-install.
+        rows = {"materializations": [{"agent": "cursor", "path": "/y"}],
+                "foreign": [{"agent": "claude-code", "path": "/x"}],
+                "only_agents": None}
+        assert store.preserved_agent_scope(None, rows) is None
+        rows["only_agents"] = ["claude-code"]
+        assert store.preserved_agent_scope(None, rows) == ["claude-code"]
+
+    def test_a_legacy_entry_keeps_foreign_in_scope(self):
+        # Written before the declaration was recorded: the rows, foreign
+        # included, are the only record of a narrowing, so they still replay.
         rows = {"materializations": [],
                 "foreign": [{"agent": "claude-code", "path": "/x"}]}
         assert store.preserved_agent_scope(None, rows) is None

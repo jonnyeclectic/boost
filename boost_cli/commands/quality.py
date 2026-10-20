@@ -906,6 +906,12 @@ def cmd_doctor(argv):
                     bad(kind, "%s %s was not written for %s: %s"
                         % (kind, name, m.get("agent", "?"), why), wrap=True)
                     mat_issues += 1
+            # An agent enabled after the install has no row at all, so the
+            # loop above never meets it; `boost sync` writes it.
+            for agent in store.unmaterialized_agents(kind, entry):
+                bad(kind, "%s %s was never written for %s — run `boost sync`"
+                    % (kind, name, agent), wrap=True)
+                mat_issues += 1
     for name, entry in sorted(rules.items()):
         before = mat_issues
         for m in entry.get("materializations") or []:
