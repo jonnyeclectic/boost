@@ -1878,11 +1878,35 @@ def install(entry: dict, force: bool = False,
     if disowned:
         _drop_skill_copy_row(disowned)
     tap = registry.get(entry["tap"])
-    skipped = _copy_skill(src, dest, within=tap.path)
-
     # Dated before linking: it is what decides whether a plugin's copy of the
-    # same name is newer, and so whether Claude Code gets boost's link.
+    # same name is newer, and so whether Claude Code gets boost's link. And
+    # dated before copying: on a shallow tap this is a network fetch of up to
+    # a minute, and a Ctrl-C in it used to leave a store copy no lock row
+    # recorded, which the rerun then refused to touch.
     dated = source_updated_at(entry["tap"], entry.get("rel_dir", "."))
+    fresh = not dest.exists()
+    try:
+        res = _copy_link_record(entry, name, src, dest, tap, existing,
+                                only_agents, dated)
+    except BaseException:
+        # Nothing recorded it, so nothing else would ever clean it up: undo a
+        # fresh install whole, so a plain rerun starts from where it began.
+        # An upgrade's old copy is already gone; its lock row still names it.
+        if fresh and lockfile.get_skill(name) is None:
+            with contextlib.suppress(OSError):
+                unlink_agents(name)
+            with contextlib.suppress(OSError):
+                util.rmtree(dest)
+        raise
+    journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
+    return res
+
+
+def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
+                      existing: dict | None, only_agents: list[str] | None,
+                      dated: str | None) -> InstallResult:
+    """:func:`install`'s copy, link and lock-row steps, in that order."""
+    skipped = _copy_skill(src, dest, within=tap.path)
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
                       updated_at=dated)
     res.skipped_links = skipped
@@ -1925,7 +1949,6 @@ def install(entry: dict, force: bool = False,
            else {}),
         **({"source_updated_at": dated} if dated else {}),
     })
-    journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
     return res
 
 
@@ -4419,18 +4442,16 @@ def restore_preserve_newer_lock_sections(
     section, so the caller can report what changed; writes the lock only when
     there is something to add back.
     """
-    lock = lockfile.read()
     kept: dict[str, list[str]] = {"rules": [], "workflows": []}
-    for name, entry in pre_rules.items():
-        if name not in lock["rules"]:
-            lock["rules"][name] = entry
-            kept["rules"].append(name)
-    for name, entry in pre_workflows.items():
-        if name not in lock["workflows"]:
-            lock["workflows"][name] = entry
-            kept["workflows"].append(name)
-    if kept["rules"] or kept["workflows"]:
-        lockfile.write(lock)
+
+    def keep(lock: dict) -> bool:
+        for section, pre in (("rules", pre_rules), ("workflows", pre_workflows)):
+            for name, entry in pre.items():
+                if name not in lock[section]:
+                    lock[section][name] = entry
+                    kept[section].append(name)
+        return bool(kept["rules"] or kept["workflows"])
+    lockfile.mutate(keep)
     return kept
 
 
