@@ -1724,11 +1724,28 @@ def rerank(query: str, hits: list[Hit], limit: int = 10,
             return hits[:limit], engine
         if caching:
             _rerank_cache_put(cache_key, [str(n) for n in order])
-    by_name = {h["entry"]["name"]: h for h in hits}
-    picked = [by_name[str(n)] for n in order if str(n) in by_name]
-    rest = [h for h in hits if h["entry"]["name"]
-            not in {str(n) for n in order}]
-    return (picked + rest)[:limit], LLM_RANKER
+    return (reorder_by_names(hits, order, lambda h: h["entry"]["name"])[:limit],
+            LLM_RANKER)
+
+
+def reorder_by_names(items: list, order: Sequence, name_of) -> list:
+    """``items`` reordered by an LLM's name ``order``, losing none of them.
+
+    The model answers with names, but a name is not an identity: two taps can
+    ship different skills both called ``brainstorming``, and a rule and a skill
+    can share one. Mapping each name to a *single* item kept the last homonym
+    and dropped the others, so a rerank meant to reorder the shortlist shrank
+    it. Each name therefore selects every item carrying it, in their incoming
+    (retrieval) order; a name the model repeats or invents selects nothing new;
+    items it did not name follow in their incoming order. The output is always
+    a permutation of the input.
+    """
+    groups: dict[str, list] = {}
+    for it in items:
+        groups.setdefault(str(name_of(it)), []).append(it)
+    named = list(dict.fromkeys(str(n) for n in order))
+    picked = [it for n in named for it in groups.pop(n, [])]
+    return picked + [it for it in items if str(name_of(it)) in groups]
 
 
 # The damping constant from the original reciprocal-rank-fusion paper. It is

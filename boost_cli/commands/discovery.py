@@ -94,10 +94,8 @@ def _ai_rank(query: str, scored):
     order = _json_array(reply)
     if not order:
         return None
-    by_name = {e["name"]: (e, s) for e, s in scored}
-    names = [str(n) for n in order if str(n) in by_name]
-    rest = [t for t in scored if t[0]["name"] not in set(names)]
-    return [by_name[n] for n in names] + rest
+    # Homonyms from different taps are different rows; see reorder_by_names.
+    return rag.reorder_by_names(scored, order, lambda t: t[0]["name"])
 
 
 _ENGINE_LABEL = {"BM25 full-content": "full-content BM25"}
