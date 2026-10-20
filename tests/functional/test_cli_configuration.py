@@ -470,12 +470,14 @@ class TestPolicy:
     def test_check_min_quality_and_pin_only_note(self, boost, installed):
         from boost_cli.core import store
         score, _ = util.score_skill(store.skill_store_dir("brainstorming"))
-        boost("policy", "set", "min_quality_score", "101")
+        # One over the skill's own score: 101 is no longer a settable floor.
+        assert score < 100
+        boost("policy", "set", "min_quality_score", str(score + 1))
         boost("policy", "set", "pin_only", "true")
         r = boost("policy", "check", expect=1)
         assert "pin-only mode is on — new installs and skill updates are frozen" in r.out
         assert "1 unpinned item(s): brainstorming" in r.out
-        assert "quality score %d < required 101" % score in r.out
+        assert "quality score %d < required %d" % (score, score + 1) in r.out
 
     def test_check_catches_what_install_would_have_blocked(self, boost, installed):
         """The coverage gap the audit found: require_version, max_skills and
@@ -2957,6 +2959,22 @@ class TestTypedValues:
         r = boost("policy", "set", "min_quality_score", "high", expect=1)
         assert "min_quality_score expects a whole number" in r.err
         assert "`boost policy set min_quality_score <int>`" in r.err
+
+    @pytest.mark.parametrize("key, raw, expected", [
+        ("min_quality_score", "500", "a whole number from 0 to 100"),
+        ("min_quality_score", "-5", "a whole number from 0 to 100"),
+        ("max_skills", "-1", "a whole number of 0 or more, or null for no limit"),
+    ])
+    def test_policy_set_refuses_a_value_out_of_range(self, boost, tapped, key,
+                                                     raw, expected):
+        # These printed a check mark at rc 0, and the next audit or install
+        # failed against a limit no skill could meet.
+        r = boost("policy", "set", key, raw, expect=1)
+        assert "%s expects %s" % (key, expected) in r.err
+        assert 'got "%s"' % raw in r.err
+        assert not paths.policy_path().exists()
+        boost("install", "brainstorming")
+        assert "policy check passed" in boost("policy", "check").out
 
     def test_policy_set_max_skills_still_takes_a_number_and_null(self, boost,
                                                                  sandbox):

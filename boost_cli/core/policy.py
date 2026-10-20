@@ -37,6 +37,16 @@ VALUE_TYPES: dict[str, str] = {k: typedvalue.spec_for(v) for k, v in DEFAULTS.it
 VALUE_TYPES["max_skills"] = typedvalue.INT_OR_NONE
 
 
+# Inclusive (low, high) bounds for the numeric keys; ``high`` None is unbounded.
+# The type alone let `policy set min_quality_score 500` and `max_skills -1`
+# through with a check mark, and the next audit or install then failed against
+# a limit no skill could meet. Scores run 0-100, as `boost lint --min` says.
+RANGES: dict[str, tuple[int, int | None]] = {
+    "min_quality_score": (0, 100),
+    "max_skills": (0, None),
+}
+
+
 def spec_for(key: str) -> str:
     """The value type of a policy key; :data:`typedvalue.ANY` if unknown."""
     return VALUE_TYPES.get(key, typedvalue.ANY)
@@ -49,7 +59,37 @@ def parse_value(key: str, raw: str):
     the key's type — at the setter, where the user can still fix it, rather
     than as a traceback out of the middle of the next install.
     """
-    return typedvalue.coerce(key, raw, spec_for(key))
+    return _in_range(key, typedvalue.coerce(key, raw, spec_for(key)), raw)
+
+
+def _range_phrase(key: str, low: int, high: int | None) -> str:
+    phrase = ("a whole number from %d to %d" % (low, high) if high is not None
+              else "a whole number of %d or more" % low)
+    if spec_for(key) == typedvalue.INT_OR_NONE:
+        phrase += ", or null for no limit"
+    return phrase
+
+
+def _in_range(key: str, value, raw):
+    """``value`` if it is inside the key's :data:`RANGES`, else raise.
+
+    Raises :class:`typedvalue.ValueTypeError` naming the range, so the
+    setter's usage error and :func:`invalid_values` word it the same way.
+    ``None`` (no limit) is never out of range.
+    """
+    bounds = RANGES.get(key)
+    if bounds is None or value is None:
+        return value
+    low, high = bounds
+    if value < low or (high is not None and value > high):
+        raise typedvalue.ValueTypeError(key, raw, spec_for(key),
+                                        expected=_range_phrase(key, low, high))
+    return value
+
+
+def _read_stored(key: str, value):
+    """A stored value at its declared type and range, or raise."""
+    return _in_range(key, typedvalue.adapt(key, value, spec_for(key)), value)
 
 
 def _read_file() -> dict:
@@ -64,7 +104,8 @@ def load() -> dict:
     value is read at its declared type, so a hand-edited (or older-boost)
     ``"pin_only": "no"`` is the boolean the user meant and not a truthy string
     that freezes the machine. A value that cannot be read at its type falls
-    back to the default and is reported by :func:`invalid_values` — never
+    back to the default — as does one outside its :data:`RANGES` — and is
+    reported by :func:`invalid_values` — never
     raised into the middle of an install, and never silently obeyed either.
     """
     base = DEFAULTS.copy()
@@ -73,14 +114,14 @@ def load() -> dict:
             base[key] = value
             continue
         try:
-            base[key] = typedvalue.adapt(key, value, spec_for(key))
+            base[key] = _read_stored(key, value)
         except typedvalue.ValueTypeError:
             base[key] = DEFAULTS[key]
     return base
 
 
 def invalid_values() -> list[tuple[str, object, str]]:
-    """Stored policy values that could not be read at their declared type.
+    """Stored policy values that could not be read at their declared type or range.
 
     Each row is ``(key, stored value, expected phrase)``. :func:`load` has
     already substituted the default for these, so this is what lets `boost
@@ -91,7 +132,7 @@ def invalid_values() -> list[tuple[str, object, str]]:
         if key not in DEFAULTS:
             continue
         try:
-            typedvalue.adapt(key, value, spec_for(key))
+            _read_stored(key, value)
         except typedvalue.ValueTypeError as e:
             bad.append((key, value, e.expected))
     return bad
