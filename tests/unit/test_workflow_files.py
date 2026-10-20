@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from boost_cli.commands import pkg
-from boost_cli.core import lockfile, store, workflows
+from boost_cli.core import lockfile, paths, store, workflows
 
 CMD = "---\ndescription: tap cmd\n---\ntap body\n"
 
@@ -54,7 +54,10 @@ def _rows(name):
 
 
 def _claude(slot, name):
-    return Path.home() / ".claude" / slot / ("%s.md" % name)
+    # paths.home(), not Path.home(): on Windows the latter reads USERPROFILE
+    # and ignores the sandbox's $HOME, so these files landed in the runner's
+    # real profile while boost wrote into the sandbox.
+    return paths.home() / ".claude" / slot / ("%s.md" % name)
 
 
 class TestForeignTarget:
@@ -366,7 +369,7 @@ def test_freed_foreign_skips_an_agent_boost_does_not_write(sandbox, tmp_path):
 
 
 def test_portable_contracts_foreign_paths(sandbox):
-    home = Path.home()
+    home = paths.home()
     lock = {"skills": {}, "rules": {}, "workflows": {"w": {
         "materializations": [{"agent": "cursor",
                               "path": str(home / ".cursor" / "w.md")}],
