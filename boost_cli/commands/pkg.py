@@ -2950,11 +2950,16 @@ def _resolve_skill(name: str):
     probed only once ``store.resolve_lock_entry`` confirms the bare name is
     installed *from the named tap*; anything else falls through to
     ``catalog.resolve_one``, which already parses the qualified grammar.
+    A skill installed ``--local`` resolves to its project copy
+    (:func:`integrity.resolve_skill`).
     """
-    bare, kind, _entry = store.resolve_lock_entry(name)
+    # The installed copy either scope holds — a `--local` install's is in
+    # the repo — and only then the tap's.
+    bare = catalog.split_name(name)[1]
+    row = integrity.resolve_skill(name)
     p = None
-    if kind == "skill":
-        candidate = store.skill_store_dir(bare) / "SKILL.md"
+    if row is not None and row.dir is not None:
+        candidate = row.dir / "SKILL.md"
         if candidate.exists():
             p = candidate
     if p is None:

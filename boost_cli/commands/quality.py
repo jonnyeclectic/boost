@@ -50,7 +50,14 @@ from ..core import (
 from ..core import output as out
 from ..core import rules as rule_blocks
 from ..errors import BoostError
-from ._common import _iter_installed, _iter_installed_all, _require_lock_integrity, _s
+from ._common import (
+    _iter_installed,
+    _iter_installed_all,
+    _iter_installed_rows,
+    _require_lock_integrity,
+    _s,
+    row_dir,
+)
 
 # How many rows the unwritten-materializations note spells out before it
 # summarises. The note exists to be read in one glance; a lock with one
@@ -1448,8 +1455,8 @@ def cmd_lint(argv):
             p = catalog.resolve_path_target(n)
             targets.append((p.name, p))
         if not names or other_names:
-            targets += [(n, store.skill_store_dir(n))
-                       for n, _e in _iter_installed(other_names or None)]
+            targets += [(r.name, row_dir(r))
+                        for r in _iter_installed_rows(other_names or None)]
     if not targets:
         if args.json:
             print(json.dumps({"min": args.min_score, "skills": [],
@@ -1562,8 +1569,8 @@ def cmd_test(argv):
     # those would be parsing our palette.
     results: list[dict] = []
     names = [store.installed_name(n) for n in args.names]
-    for name, entry in _iter_installed(names or None):
-        sdir = store.skill_store_dir(name)
+    for row in _iter_installed_rows(names or None):
+        name, entry, sdir = row.name, row.entry, row_dir(row)
         md = sdir / "SKILL.md"
         meta, body = _read_skill(sdir)
         failed = []
@@ -2024,12 +2031,16 @@ def cmd_conflict(argv):
     # nothing live to be contradicted by, so it is excluded from both sides
     # of conflict detection rather than surfacing a conflict finding no
     # `boost quarantine` can ever clear.
-    installed = [(n, e) for n, e in _iter_installed() if not e.get("quarantined")]
+    # Both scopes: a skill installed `--local` is loaded beside the user's
+    # own, so it can contradict one — read from the repo's copy.
+    installed = [r for r in _iter_installed_rows()
+                 if not r.entry.get("quarantined")]
     rules: list[tuple[str, str, str, set]] = []   # skill, line, polarity, stems
     declared: list[tuple[str, str]] = []           # skill, conflicting skill
-    installed_names = {n for n, _e in installed}
-    for name, _entry in installed:
-        meta, body = _read_skill(store.skill_store_dir(name))
+    installed_names = {r.name for r in installed}
+    for row in installed:
+        name = row.name
+        meta, body = _read_skill(row_dir(row))
         conflicts = meta.get("conflicts") or []
         declared.extend(
             (name, str(other))
@@ -2197,6 +2208,10 @@ def cmd_health(argv):
     for kind, name, entry in all_installed:
         by_kind.setdefault(kind, []).append((name, entry))
     installed = by_kind.get("skill", [])
+    # The skills line counts what `boost list` shows, the current project's
+    # `--local` installs included; the rows below stay user-scope.
+    skill_items = list(installed) + [
+        (n, e) for n, e in integrity.project_skills()[1].items()]
     taps = registry.list_taps()
     cloned = [t for t in taps if t.is_cloned]
 
@@ -2204,7 +2219,7 @@ def cmd_health(argv):
         out.heading("boost health")
     for kind, label in (("skill", "skills"), ("rule", "rules"),
                         ("workflow", "workflows")):
-        items = by_kind.get(kind, [])
+        items = skill_items if kind == "skill" else by_kind.get(kind, [])
         q = sum(1 for _n, e in items if e.get("quarantined"))
         p = sum(1 for _n, e in items if e.get("pinned"))
         kv(label, "%d installed · %d quarantined · %d pinned"

@@ -28,6 +28,7 @@ from ..core import (
     frontmatter,
     gitutil,
     imperative,
+    integrity,
     journal,
     jsonstate,
     lockfile,
@@ -799,6 +800,10 @@ def cmd_evolve(argv: list[str]) -> int:
                 % (args.name, found[0]),
                 hint="a %s has no editable store copy; it refreshes from its "
                      "tap via `boost update`" % found[0])
+        # `--apply` writes the store copy and pins the user lock; a project
+        # skill has neither, and the `boost install` hint below would add a
+        # user-scope duplicate of what the repo already holds.
+        integrity.refuse_project_only(args.name, "boost evolve")
         raise BoostError("%s is not installed — evolve works on installed "
                         "skills" % args.name,
                         hint="install it first with `boost install %s`" % args.name)
@@ -1182,6 +1187,9 @@ def cmd_focus(argv: list[str]) -> int:
                     % (name, found[0]),
                     hint="rules and workflows have no links to sideline; "
                          "`boost quarantine` suspends one")
+            # Focus sidelines and restores user-scope links; a project skill
+            # is a real directory in the repo, with no link to restore.
+            integrity.refuse_project_only(name, "boost focus")
             raise BoostError("%s is not installed — focus works on installed "
                             "skills" % name, hint="see `boost list`")
         if entry.get("quarantined"):
@@ -1222,7 +1230,11 @@ def cmd_impact(argv: list[str]) -> int:
     in_repo = git.in_repo
     note = _IMPACT_NOTE if in_repo else _IMPACT_NOTE_NO_REPO
 
-    inst = lockfile.installed()
+    # The current project's `--local` skills count as installed — `boost
+    # list` shows them. A name in both scopes is the user row, as everywhere.
+    inst = dict(lockfile.installed())
+    for pname, pentry in integrity.project_skills()[1].items():
+        inst.setdefault(pname, pentry)
     if args.name:
         args.name = store.installed_name(args.name)
         if args.name not in inst:
