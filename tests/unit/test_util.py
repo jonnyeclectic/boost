@@ -1093,8 +1093,28 @@ class TestRmtreeRetryHook:
         # The listing reported after it is raised, not retried: the dir keeps
         # its mode rather than losing its search bit to chmod(S_IWRITE).
         assert stat.S_IMODE(stubborn.stat().st_mode) == 0o500
-        assert stat.S_IMODE(target.stat().st_mode) == stat.S_IMODE(
-            stat.S_IWRITE)
+        # The write bit is ORed in, not the whole mode replaced by it.
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+    def test_a_failed_retry_keeps_a_directory_listable(self, tmp_path, sealed):
+        """A dir under a read-only parent keeps its read and search bits.
+
+        Its contents go and its own ``rmdir`` fails on the parent. Setting the
+        mode to exactly ``S_IWRITE`` left it ``d-w-------``, and every later
+        walk of the store (`boost snapshot save`) crashed on it.
+        """
+        parent = tmp_path / "store"
+        child = parent / "skill"
+        child.mkdir(parents=True)
+        (child / "SKILL.md").write_text("x", encoding="utf-8")
+        child.chmod(0o755)
+        sealed(parent)
+
+        with pytest.raises(OSError):
+            util.rmtree(child)
+
+        assert stat.S_IMODE(child.stat().st_mode) == 0o755
+        assert list(child.iterdir()) == []
 
     def test_a_failed_listing_is_raised_not_retried(self, tmp_path):
         """Only a removal is retried.

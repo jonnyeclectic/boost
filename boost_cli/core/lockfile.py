@@ -329,8 +329,21 @@ def write(lock: dict) -> None:
             _snapshot(p)
         lock["version"] = SCHEMA_VERSION
         lock["updated"] = util.now_iso()
-        util.atomic_write_text(
-            p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
+        try:
+            util.atomic_write_text(
+                p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
+        except OSError as e:
+            # A full disk, an immutable lock or a read-only store: say which
+            # file and why, as config.save does, instead of a crash report
+            # naming a temp path.
+            block = paths.refuses_writes(p.parent)
+            raise BoostError(
+                "could not save %s (%s)%s"
+                % (paths.tilde(p), e.strerror or e,
+                   ": " + paths.not_writable(p.parent, block) if block else ""),
+                hint="%s, then re-run" % paths.write_remedy(block)
+                if block else "free space or clear the file's immutable flag, "
+                              "then re-run") from e
 
 
 def _snapshot(p) -> None:

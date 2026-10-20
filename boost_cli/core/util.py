@@ -59,7 +59,10 @@ def _clear_readonly_and_retry(func, path, exc) -> None:
     """
     if os.path.islink(path) or func not in _RETRYABLE:
         raise exc
-    os.chmod(path, stat.S_IWRITE)
+    # OR the bit in: setting the mode to exactly S_IWRITE also stripped read
+    # and search, so a retry that failed anyway (a read-only *parent*) left a
+    # ``d-w-------`` directory behind that every later walk of it crashed on.
+    os.chmod(path, os.lstat(path).st_mode | stat.S_IWRITE)
     func(path)
 
 
