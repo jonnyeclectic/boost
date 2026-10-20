@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from boost_cli.core import projectlock
+from boost_cli.errors import BoostError
 
 
 def _entry(version="1.0.0"):
@@ -103,24 +106,78 @@ def test_removing_the_last_skill_keeps_the_file(tmp_path):
     assert projectlock.installed(tmp_path) == {}
 
 
-def test_a_corrupt_lock_is_preserved_not_silently_emptied(tmp_path):
-    p = projectlock.lock_path(tmp_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("{not json", encoding="utf-8")
-    assert projectlock.read(tmp_path)["skills"] == {}
-    sidecar = p.with_name(p.name + ".corrupt")
-    # Exact name: the recovery instructions point at it.
-    assert sorted(q.name for q in p.parent.iterdir()) == \
-        ["skill-lock.json", "skill-lock.json.corrupt"]
-    assert sidecar.read_text(encoding="utf-8") == "{not json"
+def _err(capsys) -> str:
+    """Captured stderr with the pane wrapping folded back to single spaces."""
+    return " ".join(capsys.readouterr().err.split())
 
 
-def test_a_non_dict_document_is_treated_as_corrupt(tmp_path):
+def _corrupt(tmp_path, raw: bytes):
     p = projectlock.lock_path(tmp_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("[1, 2, 3]", encoding="utf-8")
+    p.write_bytes(raw)
+    return p
+
+
+def test_a_corrupt_lock_is_left_in_place_not_silently_emptied(tmp_path, capsys):
+    p = _corrupt(tmp_path, b"{not json")
     assert projectlock.read(tmp_path)["skills"] == {}
-    assert p.with_name(p.name + ".corrupt").is_file()
+    # Left exactly where it is — no sidecar copy (it is committed; git has
+    # it), and above all nothing written over it.
+    assert sorted(q.name for q in p.parent.iterdir()) == ["skill-lock.json"]
+    assert p.read_bytes() == b"{not json"
+    err = _err(capsys)
+    assert "%s: invalid JSON" % p in err
+    assert "boost sees no project skills here and will not write over it" in err
+    assert "`git checkout -- .boost/skill-lock.json`" in err
+
+
+def test_a_corrupt_lock_warns_once_per_lock(tmp_path, capsys):
+    _corrupt(tmp_path / "a", b"{")
+    _corrupt(tmp_path / "b", b"{")
+    for _ in range(3):
+        projectlock.read(tmp_path / "a")
+    projectlock.installed(tmp_path / "b")
+    assert _err(capsys).count("will not write over it") == 2
+
+
+def test_a_non_dict_document_is_treated_as_corrupt(tmp_path, capsys):
+    p = _corrupt(tmp_path, b"[1, 2, 3]")
+    assert projectlock.read(tmp_path)["skills"] == {}
+    assert projectlock.check(tmp_path) == \
+        "%s: expected a JSON object, found list" % p
+
+
+def test_check_is_none_for_a_missing_or_valid_lock(tmp_path, capsys):
+    assert projectlock.check(tmp_path) is None
+    projectlock.set_skill(tmp_path, "a", _entry())
+    assert projectlock.check(tmp_path) is None
+    assert capsys.readouterr().err == ""
+
+
+def test_write_refuses_over_a_corrupt_lock(tmp_path):
+    # The bug: the next project install recorded only itself and dropped
+    # every other skill's record, leaving their copies orphaned.
+    p = _corrupt(tmp_path, b'{"skills": {"a": {}, "b": {}')
+    with pytest.raises(BoostError) as exc:
+        projectlock.set_skill(tmp_path, "c", _entry())
+    assert exc.value.message == (
+        "project lock is corrupt — boost will not write over it (%s)"
+        % projectlock.check(tmp_path))
+    assert exc.value.hint == (
+        "it is tracked by the repo, so `git checkout -- "
+        ".boost/skill-lock.json` restores the committed copy; or repair the "
+        "JSON by hand")
+    assert p.read_bytes() == b'{"skills": {"a": {}, "b": {}'
+    with pytest.raises(BoostError):
+        projectlock.remove_skill(tmp_path, "a")
+    assert p.read_bytes() == b'{"skills": {"a": {}, "b": {}'
+
+
+def test_refuse_corrupt_passes_a_missing_or_valid_lock(tmp_path):
+    projectlock.refuse_corrupt(tmp_path)
+    projectlock.set_skill(tmp_path, "a", _entry())
+    projectlock.refuse_corrupt(tmp_path)
+    assert list(projectlock.installed(tmp_path)) == ["a"]
 
 
 def test_a_non_dict_skills_key_degrades_to_empty(tmp_path):
@@ -138,9 +195,8 @@ def test_there_is_no_history_directory(tmp_path):
         ["skill-lock.json"]
 
 
-def test_a_lock_that_is_not_utf8_is_preserved_not_a_crash(tmp_path):
-    p = projectlock.lock_path(tmp_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(b"\xff\xfe")
+def test_a_lock_that_is_not_utf8_is_preserved_not_a_crash(tmp_path, capsys):
+    p = _corrupt(tmp_path, b"\xff\xfe")
     assert projectlock.read(tmp_path)["skills"] == {}
-    assert p.with_name(p.name + ".corrupt").read_bytes() == b"\xff\xfe"
+    assert p.read_bytes() == b"\xff\xfe"
+    assert "%s: not valid UTF-8" % p in _err(capsys)

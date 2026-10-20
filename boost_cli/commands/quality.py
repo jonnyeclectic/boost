@@ -40,6 +40,7 @@ from ..core import (
     paths,
     policy,
     prereq,
+    projectlock,
     provenance,
     registry,
     report,
@@ -831,6 +832,15 @@ def cmd_doctor(argv):
     # digest is exactly what a health check should surface.
     pbase, pskills = integrity.project_skills()
     proj_issues = 0
+    plock_err = projectlock.check(pbase) if pbase is not None else None
+    if plock_err:
+        # It reads as no project skills, so the loop below finds nothing
+        # wrong with copies nothing records any more.
+        bad("project-lock", "%s — boost sees no project skills here and "
+            "refuses to install or uninstall any until it is repaired; %s"
+            % (plock_err, projectlock.RECOVER_HINT % projectlock.LOCK_REL),
+            wrap=True)
+        proj_issues += 1
     for name, entry in sorted(pskills.items()):
         st = integrity.project_status(entry, pbase)
         if st == integrity.STATUS_MISSING:
