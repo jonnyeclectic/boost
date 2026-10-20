@@ -483,8 +483,15 @@ def _kept_docs(raw: dict, keep_safe: set) -> list[dict]:
     # Key ABSENCE, not falsiness: an index carrying an explicit empty
     # `postings` is stating it has none, and must not be answered from the
     # store. Only an index with no such key predates the SQLite move.
-    doc_tf = _postings_to_doc_tf(
-        raw if "postings" in raw else {"postings": _all_postings()})
+    stored = raw if "postings" in raw else {"postings": _all_postings()}
+    if stored["postings"] is None:
+        # Unreadable store: reusing these docs would keep them with no term
+        # frequencies, i.e. searchable by nothing. `build` gates on
+        # `postings_readable()` first, so this only fires if the store went
+        # bad mid-build — and then failing the reuse beats faking it.
+        raise BoostError("the BM25 postings store became unreadable mid-build",
+                         hint="run `boost reindex --force`")
+    doc_tf = _postings_to_doc_tf(stored)
     return [{**meta, "tf": doc_tf.get(doc_id, {})}
             for doc_id, meta in enumerate(raw.get("docs", []))
             if meta["t"].replace("/", "__") in keep_safe]
@@ -501,6 +508,13 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
 
     old = _load_raw()
     reused_safe: set = set()
+    # Reuse needs the old docs' term frequencies, which live in the SQLite
+    # store unless the index predates it. A corrupt or missing store used to
+    # read as "no postings", so the kept docs came back with empty `tf` and a
+    # plain `boost reindex` reported "reused N unchanged taps" over an index
+    # that matched nothing; only `--force` recovered. Rebuild everything.
+    if old is not None and "postings" not in old and not postings_readable():
+        old = None
     if old is not None and not force:
         old_commits = old.get("commits", {})
         for safe, commit in commits.items():
@@ -781,12 +795,17 @@ def stem_expansions(terms: Sequence[str]) -> dict[str, str]:
     return out
 
 
-def _all_postings() -> dict[str, list[list[int]]]:
-    """Every posting — only the incremental rebuild path needs this."""
+def _all_postings() -> dict[str, list[list[int]]] | None:
+    """Every posting — only the incremental rebuild path needs this.
+
+    ``None`` when the store cannot be read, never ``{}``: "unreadable" and
+    "holds no postings" are different answers, and conflating them is how an
+    incremental build kept docs with no term frequencies.
+    """
     try:
         con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
     except sqlite3.Error:
-        return {}
+        return None
     out: dict[str, list[list[int]]] = {}
     try:
         for term, blob in con.execute(
@@ -794,10 +813,47 @@ def _all_postings() -> dict[str, list[list[int]]]:
                 "JOIN terms t ON p.term_id = t.id"):
             out[term] = _decode_plist(blob)
     except (sqlite3.Error, ValueError):
-        return {}
+        return None
     finally:
         con.close()
     return out
+
+
+def postings_readable() -> bool:
+    """True when the postings store opens and answers a one-row probe.
+
+    ``postings_path().exists()`` was the old test, and a file full of garbage
+    exists: every search then read ``{}`` from it and answered "no matches"
+    for an exact skill name, rc 0, while doctor said healthy. ``connect``
+    succeeds lazily on a non-database, so only a query proves the file is one.
+    Cheap enough for the search path: one indexed probe, no scan.
+    """
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+    except sqlite3.Error:
+        return False
+    try:
+        con.execute("SELECT t.term FROM postings p "
+                    "JOIN terms t ON p.term_id = t.id LIMIT 1").fetchall()
+    except sqlite3.Error:
+        return False
+    finally:
+        con.close()
+    return True
+
+
+def postings_fault() -> str | None:
+    """Why an index that has documents cannot score them, or ``None``.
+
+    For ``boost doctor``: a docs index over an unreadable postings store is a
+    search that matches nothing, which no other check would notice.
+    """
+    raw = _load_raw()
+    if not (raw and raw.get("docs")) or postings_readable():
+        return None
+    if not postings_path().exists():
+        return "the BM25 postings store is missing"
+    return "the BM25 postings store is unreadable"
 
 
 def _save(docs: list[dict], commits: dict[str, str]) -> dict:
@@ -1119,11 +1175,13 @@ def ready() -> bool:
     """True when a usable index exists on disk.
 
     Both halves are required: the JSON carries the documents, the SQLite file
-    carries the postings, and scoring needs both. A docs-only index reports not
-    ready rather than silently returning zero hits for every query.
+    carries the postings, and scoring needs both. A docs-only index — or one
+    whose store exists but is not a readable database — reports not ready
+    rather than silently returning zero hits for every query, so ``ensure``
+    rebuilds it.
     """
     raw = _load_raw()
-    return bool(raw and raw.get("docs") and postings_path().exists())
+    return bool(raw and raw.get("docs") and postings_readable())
 
 
 def index_completeness() -> dict | None:
