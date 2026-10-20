@@ -1706,6 +1706,19 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
             raise BoostError("%s is already installed" % name,
                             hint="`boost reinstall %s` to force" % name)
         return
+    if existing.get("scope", "user") == scope == scopes.SCOPE_PROJECT:
+        # Same scope, another repo. Calling that "a different scope" sent the
+        # user looking for a scope mismatch that was not there: the limit is
+        # the one-row-per-name lock, so a rule or workflow can be --local in
+        # one repo per machine (a skill, with a lock in each repo, cannot hit
+        # this).
+        raise BoostError(
+            "%s is already installed --local in %s, and a %s can be installed "
+            "--local into only one repo per machine"
+            % (name, existing.get("base") or "another repo",
+               existing.get("kind") or "rule or workflow"),
+            hint="`boost uninstall %s` from that repo first; --force cannot "
+                 "move it" % name, wrap=True)
     raise BoostError(
         "%s is already installed at %s" % (name, _lock_location(existing)),
         hint="uninstall it there first — a different scope cannot force-overwrite it")

@@ -1938,8 +1938,19 @@ class TestRuleInstall:
         repo2.mkdir()
         entry = _rule_entry(tap)
         store.install(entry, scope="project", base=str(repo1))
-        with pytest.raises(BoostError, match="already installed at project scope"):
-            store.install(entry, scope="project", base=str(repo2))
+        for force in (False, True):
+            with pytest.raises(BoostError) as ei:
+                store.install(entry, scope="project", base=str(repo2),
+                              force=force)
+            # The same scope, another repo: the message names the real limit,
+            # not a scope mismatch that is not there.
+            assert ei.value.message == (
+                "team-conventions is already installed --local in %s, and a "
+                "rule can be installed --local into only one repo per machine"
+                % repo1)
+            assert ei.value.hint == ("`boost uninstall team-conventions` from "
+                                     "that repo first; --force cannot move it")
+        assert lockfile.get_rule("team-conventions")["base"] == str(repo1)
 
     def test_only_agents_limits_materialization(self, tap):
         res = store.install(_rule_entry(tap), only_agents=["cursor"])
@@ -2440,7 +2451,9 @@ class TestCheckScopeConflict:
             store._check_scope_conflict(
                 "x", existing, "project", Path("/repo2"), force=True)
         assert ei.value.message == (
-            "x is already installed at project scope (%s)" % tmp_path)
+            "x is already installed --local in %s, and a rule or workflow can "
+            "be installed --local into only one repo per machine" % tmp_path)
+        assert "different scope" not in ei.value.hint
 
     def test_cross_scope_hint_points_at_uninstalling_the_other_location(self):
         existing = {"scope": "user", "base": None}

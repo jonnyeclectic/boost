@@ -284,3 +284,31 @@ class TestProjectSyncKeepsTheLock:
         with pytest.raises(BoostError, match="no recorded copy of brainstorming"):
             store._restore_project_copies(repo, "brainstorming", rec, entry,
                                           ["cursor"])  # present: nothing to do
+
+
+# ── a rule --local in a second repo ──────────────────────────────────────────
+
+class TestSecondRepoRefusal:
+    def test_names_the_repo_and_the_kind(self, tmp_path):
+        existing = {"scope": "project", "base": str(tmp_path), "kind": "workflow"}
+        with pytest.raises(BoostError) as ei:
+            store._check_scope_conflict("w", existing, "project",
+                                        Path("/repo2"), force=False)
+        assert ei.value.message == (
+            "w is already installed --local in %s, and a workflow can be "
+            "installed --local into only one repo per machine" % tmp_path)
+
+    def test_a_row_without_a_base_says_another_repo(self):
+        existing = {"scope": "project", "kind": "rule"}
+        with pytest.raises(BoostError) as ei:
+            store._check_scope_conflict("r", existing, "project",
+                                        Path("/repo2"), force=True)
+        assert ei.value.message.startswith(
+            "r is already installed --local in another repo, and a rule ")
+
+    def test_user_row_against_project_keeps_the_scope_wording(self):
+        with pytest.raises(BoostError) as ei:
+            store._check_scope_conflict("r", {"scope": "user"}, "project",
+                                        Path("/repo2"), force=True)
+        assert ei.value.message == "r is already installed at user scope"
+        assert "different scope" in ei.value.hint
