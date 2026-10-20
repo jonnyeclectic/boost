@@ -8,7 +8,8 @@ import argparse
 import difflib
 import json
 import os
-import re
+import plistlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 from .. import __version__, cliparse
 from ..core import (
@@ -1130,24 +1132,41 @@ def _plist_path() -> Path:
     return paths.home() / "Library" / "LaunchAgents" / (_PLIST_LABEL + ".plist")
 
 
+def _schedule_env() -> dict[str, str]:
+    """The state the scheduled `boost update` must act on.
+
+    launchd and cron start the job with their own environment, so without
+    these the job updated ``~/.boost`` while its log went to the
+    ``$BOOST_HOME`` the user enabled it from.
+    """
+    return {"BOOST_HOME": str(paths.boost_home()), "HOME": str(paths.home())}
+
+
 def _plist_body(shim: Path, seconds: int) -> str:
-    log = paths.logs_dir() / "schedule.log"
-    return """<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>%s</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>%s</string>
-    <string>update</string>
-  </array>
-  <key>StartInterval</key><integer>%d</integer>
-  <key>StandardOutPath</key><string>%s</string>
-  <key>StandardErrorPath</key><string>%s</string>
-</dict>
-</plist>
-""" % (_PLIST_LABEL, shim, seconds, log, log)
+    # plistlib, not string interpolation: an '&' or '<' in a path made the
+    # file invalid XML that launchd will not load.
+    log = str(paths.logs_dir() / "schedule.log")
+    return plistlib.dumps({
+        "Label": _PLIST_LABEL,
+        "ProgramArguments": [str(shim), "update"],
+        "EnvironmentVariables": _schedule_env(),
+        "StartInterval": seconds,
+        "StandardOutPath": log,
+        "StandardErrorPath": log,
+    }).decode("utf-8")
+
+
+def _cron_word(text: str) -> str:
+    # cron turns an unescaped '%' in the command into a newline.
+    return shlex.quote(text).replace("%", "\\%")
+
+
+def _cron_entry(spec: str, shim: Path) -> str:
+    env = " ".join("%s=%s" % (k, _cron_word(v))
+                   for k, v in _schedule_env().items())
+    return "%s %s %s update >> %s 2>&1 %s" % (
+        spec, env, _cron_word(str(shim)),
+        _cron_word(str(paths.logs_dir() / "schedule.log")), _CRON_MARK)
 
 
 def _crontab_lines():
@@ -1196,18 +1215,27 @@ def _interval_label(seconds) -> str:
     return "%ss" % seconds
 
 
+def _read_plist(text: str) -> dict | None:
+    """The plist's top-level dict, or None when launchd could not load it."""
+    try:
+        data = plistlib.loads(text.encode("utf-8"))
+    except (plistlib.InvalidFileException, ExpatError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _plist_interval_seconds(text: str) -> int | None:
     """Parse a usable ``StartInterval`` out of plist ``text``.
 
-    None for both "no ``StartInterval`` key" and "``StartInterval`` present
-    but not positive" — a zero or negative interval can never fire, and
-    treating it as usable is what let the next-run loop in ``cmd_schedule``
-    spin forever advancing ``nxt`` by zero seconds each pass.
+    None for "not a valid plist", "no ``StartInterval`` key" and
+    "``StartInterval`` present but not positive" — a zero or negative
+    interval can never fire, and treating it as usable is what let the
+    next-run loop in ``cmd_schedule`` spin forever advancing ``nxt`` by zero
+    seconds each pass.
     """
-    m = re.search(r"<key>StartInterval</key>\s*<integer>(-?\d+)</integer>", text)
-    if not m:
+    secs = (_read_plist(text) or {}).get("StartInterval")
+    if isinstance(secs, bool) or not isinstance(secs, int):
         return None
-    secs = int(m.group(1))
     return secs if secs > 0 else None
 
 
@@ -1232,11 +1260,18 @@ def cmd_schedule(argv) -> int:
 
     if args.action == "status":
         present, interval, next_run = False, None, None
+        invalid = None
         if darwin:
             plist = _plist_path()
-            if plist.exists():
+            text = (plist.read_text(encoding="utf-8", errors="replace")
+                    if plist.exists() else None)
+            if text is not None and _read_plist(text) is None:
+                # launchd refuses a file it cannot parse, so it is not a
+                # schedule — saying "scheduled yes" here was the lie.
+                invalid = "%s is not a valid property list" % _tilde(plist)
+            elif text is not None:
                 present = True
-                secs = _plist_interval_seconds(plist.read_text(encoding="utf-8"))
+                secs = _plist_interval_seconds(text)
                 if secs is not None:
                     interval = _interval_label(secs)
                     nxt = datetime.fromtimestamp(plist.stat().st_mtime + secs)
@@ -1253,16 +1288,23 @@ def cmd_schedule(argv) -> int:
                                 spec)
                 next_run = _cron_next_run(spec)
         if args.json:
-            print(json.dumps({
+            doc = {
                 "platform": sys.platform,
                 "backend": "launchd" if darwin else "cron",
                 "scheduled": present,
                 "interval": interval,
                 "next_run": next_run.strftime("%Y-%m-%d %H:%M") if next_run else None,
-            }, indent=2))
+            }
+            if invalid:
+                doc["error"] = invalid
+            print(json.dumps(doc, indent=2))
             return 0
         out.kv("platform", "%s (%s)" % (sys.platform, "launchd" if darwin else "cron"))
         out.kv("scheduled", "yes" if present else "no")
+        if invalid:
+            out.warn(invalid, wrap=True)
+            out.dim("  rewrite it with `boost schedule enable`", wrap=True)
+            return 0
         if present:
             out.kv("interval", "every %s" % interval if interval is not None
                    else "unknown (plist has no usable StartInterval)")
@@ -1297,9 +1339,7 @@ def cmd_schedule(argv) -> int:
                 out.warn("launchctl unavailable — the agent loads at next login")
         else:
             lines = _crontab_lines()
-            entry = "%s %s update >> %s 2>&1 %s" % (
-                _CRON_SPECS[args.interval], shim,
-                paths.logs_dir() / "schedule.log", _CRON_MARK)
+            entry = _cron_entry(_CRON_SPECS[args.interval], shim)
             if lines is None:
                 out.warn("crontab is not available — add this line yourself:")
                 out.info(entry)
