@@ -238,8 +238,7 @@ def save(scope: str, data: dict, project_dir: Path | None = None,
     p = settings_path(scope, project_dir, host)
     prior = p.read_bytes() if p.exists() else None
     text = prior.decode("utf-8", "replace") if prior is not None else ""
-    payload = json.dumps(data, indent=_indent_of(text),
-                         ensure_ascii=False) + "\n"
+    payload = _render(data, _indent_of(text))
     # write_text writes os.linesep, so on Windows the file on disk is CRLF.
     if prior is not None and text.replace("\r\n", "\n") == payload:
         return None
@@ -251,6 +250,22 @@ def save(scope: str, data: dict, project_dir: Path | None = None,
         _prune_history()
     p.write_text(payload, encoding="utf-8")
     return dest
+
+
+def _render(data: dict, indent: int | str) -> str:
+    """``data`` as the settings text :func:`save` writes, non-ASCII verbatim.
+
+    Falls back to ``\\u`` escapes when the text cannot be encoded as UTF-8 —
+    a lone surrogate, which JSON's ``"\\ud83d"`` parses to. Writing it raw
+    raises *after* ``write_text`` has truncated the file, which empties the
+    user's settings; the escaped form is what the file already held.
+    """
+    payload = json.dumps(data, indent=indent, ensure_ascii=False) + "\n"
+    try:
+        payload.encode("utf-8")
+    except UnicodeEncodeError:
+        payload = json.dumps(data, indent=indent) + "\n"
+    return payload
 
 
 def _indent_of(text: str) -> int | str:
@@ -304,7 +319,9 @@ def _snapshot(p: Path, prior: bytes, scope: str, host: str) -> Path:
     while dest.exists():
         dest = hist / ("%s%s-%s-%d.json" % (pre, scope, stamp, n))
         n += 1
-    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    # O_BINARY: a Windows fd opens in text mode and would turn \n into \r\n.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    fd = os.open(dest, flags, 0o600)
     with os.fdopen(fd, "wb") as fh:
         fh.write(prior)
     os.chmod(dest, p.stat().st_mode & 0o777)

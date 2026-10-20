@@ -223,3 +223,18 @@ class TestTextFidelity:
         cs.add_hook("global", "SessionStart", "greet", "echo hi")
         assert cs.remove_hook_by_name("global", "greet") == 1
         assert p.read_text(encoding="utf-8") == orig
+
+    def test_lone_surrogate_falls_back_to_escapes(self, sandbox):
+        # A raw surrogate cannot be encoded: writing it would truncate the
+        # file and then raise, emptying the user's settings.
+        p = cs.settings_path("global")
+        p.parent.mkdir(parents=True)
+        p.write_text('{\n  "env": {"X": "\\ud83d", "Y": "café"}\n}\n',
+                     encoding="utf-8")
+        cs.add_hook("global", "SessionStart", "greet", "echo hi")
+        text = p.read_text(encoding="utf-8")
+        assert '"X": "\\ud83d"' in text
+        assert '"Y": "caf\\u00e9"' in text
+        data = json.loads(text)
+        assert data["env"] == {"X": "\ud83d", "Y": "café"}
+        assert "SessionStart" in data["hooks"]
