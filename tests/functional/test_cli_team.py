@@ -922,6 +922,48 @@ class TestReplay:
         r = boost("replay", "rollback", snap_id)
         assert "already at this snapshot — nothing to do" in r.out
 
+    def test_rollback_restores_recorded_scope_and_pins(self, boost, tapped,
+                                                       tick_clock):
+        # Regression: a removed skill came back from its tap with defaults —
+        # linked into every agent, unpinned, and with no commit pin — while
+        # rollback reported "complete" and `boost verify` passed.
+        boost("install", "brainstorming", "--agent", "cursor")
+        boost("pin", "brainstorming", "--commit")
+        recorded = lockfile.get_skill("brainstorming")
+        assert recorded["commit_pin"] == recorded["commit"]
+        boost("install", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]   # {brainstorming, tdd}
+        assert "brainstorming" in lockfile.history_read(snap_id)["skills"]
+        boost("uninstall", "brainstorming")
+
+        r = boost("replay", "rollback", snap_id)
+        assert "restored brainstorming → cursor" in r.out
+        assert "verify` will flag" not in r.out
+        assert "rollback to %s complete" % snap_id in r.out
+        row = lockfile.get_skill("brainstorming")
+        assert row["only_agents"] == ["cursor"]
+        assert row["agents"] == ["cursor"]
+        assert row["pinned"] is True
+        assert row["commit_pin"] == recorded["commit_pin"]
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "brainstorming")
+        assert (paths.home() / ".cursor" / "skills" / "brainstorming").is_symlink()
+        boost("verify")
+
+    def test_rollback_without_holds_restores_none(self, boost, tapped,
+                                                  tick_clock):
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]
+        boost("uninstall", "brainstorming")
+        boost("replay", "rollback", snap_id)
+        row = lockfile.get_skill("brainstorming")
+        assert not row.get("pinned")
+        assert "commit_pin" not in row
+        assert not row.get("only_agents")
+        assert os.path.lexists(
+            paths.home() / ".claude" / "skills" / "brainstorming")
+
     def test_rollback_keeps_a_skill_whose_only_copy_is_the_store(
             self, boost, tapped, tick_clock):
         # Recorded by `boost sync` where it was found, it has nowhere to come

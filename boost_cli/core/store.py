@@ -1761,6 +1761,50 @@ def carried_user_state(existing: dict | None) -> dict:
     return {"commit_pin": pin} if pin else {}
 
 
+def project_skills(start=None) -> tuple[Path | None, dict]:
+    """``(base, skills)`` for the project the cwd (or ``start``) is in.
+
+    The same walk ``boost list`` makes: :func:`scopes.resolve_base` for the
+    project root, then that root's own ``.boost/skill-lock.json``. ``base`` is
+    ``None`` — and ``skills`` empty — where no project directory applies
+    (``$HOME`` is never one), so a caller can tell "no project" from "a
+    project with nothing installed".
+    """
+    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT, start=start)
+    if pbase is None:
+        return None, {}
+    return pbase, projectlock.installed(pbase)
+
+
+def reapply_recorded_holds(name: str, want: dict) -> bool:
+    """Put a recorded skill row's holds back onto its freshly installed row.
+
+    ``replay rollback`` reinstalls a removed skill from its tap, and an
+    install of a name with no lock row starts from nothing: the ``pinned``
+    flag and the ``commit_pin`` the user set are not carried, because there
+    is no existing row to carry them from (:func:`carried_user_state`). This
+    writes both back from ``want`` — the row the snapshot recorded.
+
+    Returns True when the recorded commit pin no longer matches the commit
+    just installed, i.e. ``boost verify`` will now flag the skill; the pin is
+    restored regardless, since dropping it would make ``verify`` pass on a
+    commit the user never accepted.
+    """
+    pinned = bool(want.get("pinned"))
+    commit_pin = want.get("commit_pin")
+    if not (pinned or commit_pin):
+        return False
+    row = lockfile.get_skill(name)
+    if row is None:
+        return False
+    if pinned:
+        row["pinned"] = True
+    if commit_pin:
+        row["commit_pin"] = commit_pin
+    lockfile.set_skill(name, row)
+    return bool(commit_pin) and row.get("commit") != commit_pin
+
+
 def install(entry: dict, force: bool = False,
             only_agents: list[str] | None = None,
             scope: str = "user", base=None,
