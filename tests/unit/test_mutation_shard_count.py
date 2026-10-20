@@ -244,12 +244,15 @@ class TestPlanCliContract:
     @real_tree_only
     def test_a_pack_that_fits_exits_zero_and_one_that_does_not_exits_one(self,
                                                                         capsys):
-        assert ms.cmd_plan(self._args(explain=True, timeout_minutes=75)) == 0
+        # The committed cap, read from ci.yml: a literal here went stale the
+        # day the cap moved off 75.
+        cap = timeout_minutes()
+        assert ms.cmd_plan(self._args(explain=True, timeout_minutes=cap)) == 0
         assert "headroom    : OK" in capsys.readouterr().out
         # Six is the pack that was cancelled; the exit code is what a CI step
         # or a `make` target would act on, so it is asserted, not just the text.
         assert ms.cmd_plan(self._args(shards=6, explain=True,
-                                      timeout_minutes=75)) == 1
+                                      timeout_minutes=cap)) == 1
         assert "TOO TIGHT" in capsys.readouterr().out
 
     def test_minutes_are_printed_only_where_the_weights_are_time(self, tmp_path,
@@ -318,7 +321,23 @@ class TestPlanCliContract:
 #: ratio in those 24 jobs is 1.49 against the committed 1.91, so the committed
 #: value over-estimates the tail, which is the safe direction for a cap check.
 #: Re-fit it when a comparable sample exists at the current shard count.
-FITTED_TOTAL_MS = 63_989_009
+#:
+#: **Re-anchored 2026-10-20 from 63,989,009 to 136,439,539, and this one is
+#: a correction, not drift.** The 2026-10-19 refresh (a3092119) committed a
+#: file with no time for store.py, because `weights` called a record partial
+#: when one mutant had mutmut's exit 33 ("no tests"), which is never run and
+#: so never timed. Rebuilt from CI run 39357937728 (fifteen shards, head
+#: 525611de) with main run 39330392672 filling in its cancelled shard 14,
+#: all 68 files are timed and `load_durations` sums 136,439,539 (the 26
+#: `store._inside` mutants neither run reached are imputed at store.py's own
+#: measured 7.11 s/mutant, 185 s of it). store.py
+#: alone is 53.1M of that, at 7.11 s/mutant. Re-fitted from the job API as
+#: the drift test prescribes: each of those fifteen jobs' own summed
+#: durations / 4 match its `Running mutation testing` phase at a median
+#: 0.970 (0.939-0.989), against the 0.98 committed. So RUNNER_EFFICIENCY
+#: stands and only this anchor moves. TAIL_MULTIPLIER is not re-fitted:
+#: that run's 21.8-73.4 spread was the missing store.py weight, not runners.
+FITTED_TOTAL_MS = 136_439_539
 
 #: What the *planner* totals over the same committed file, which is larger, and
 #: the two are not interchangeable. `load_durations` sums the 63 files with a
@@ -442,8 +461,16 @@ EIGHT_SHARD_FIXED_MIN = 10.02
 TWELVE_SHARD_FIXED_MIN = 12.91
 
 #: The preamble without those tests: the 124 six-shard jobs of 2026-10-01/02,
-#: the last before they reached the baseline. `ms.FIXED_MINUTES` is this.
+#: the last before they reached the baseline. `ms.FIXED_MINUTES` was this
+#: until the re-measure below replaced it.
 PREAMBLE_WITHOUT_PLANNER_TESTS_MIN = 5.49
+
+#: The re-measure FIXED_MINUTES asked for, from the first sixteen-shard run
+#: on a cold cache after the planner tests left the baseline: CI run
+#: 39357937728, head 525611de, 2026-10-20. Median of its fifteen successful
+#: shards' job start to `Running mutation testing`; range 4.36-8.65.
+#: Frozen. `ms.FIXED_MINUTES` is this.
+SIXTEEN_SHARD_COLD_FIXED_MIN = 7.09
 
 #: Mutation-phase minutes per weight-minute, each job graded on its own
 #: run's measured durations (the `mutation-weights` artifact) summed over the
@@ -526,7 +553,10 @@ class TestConversion:
         # planner tests out of mutmut's baseline run, so it is pinned to the
         # last preamble measured without them -- and below what twelve paid
         # with them, which is what this change removes.
-        assert abs(ms.FIXED_MINUTES - PREAMBLE_WITHOUT_PLANNER_TESTS_MIN) < 0.1
+        # Since 2026-10-20 it is the cold-cache re-measure, which came back
+        # above the 5.49 it was predicted from, so it was raised.
+        assert abs(ms.FIXED_MINUTES - SIXTEEN_SHARD_COLD_FIXED_MIN) < 0.1
+        assert PREAMBLE_WITHOUT_PLANNER_TESTS_MIN < ms.FIXED_MINUTES
         assert ms.FIXED_MINUTES < EIGHT_SHARD_FIXED_MIN < TWELVE_SHARD_FIXED_MIN
 
     def test_widening_cannot_go_below_the_preamble(self):
