@@ -228,3 +228,21 @@ class TestInterruptedUpgrade:
         old.mkdir()
         store._restore_old_copy(old, dest)
         assert sorted(p.name for p in tmp_path.iterdir()) == ["x"]
+
+    def test_a_failed_restore_puts_the_new_copy_back(self, tmp_path, monkeypatch):
+        dest = tmp_path / "x"
+        dest.mkdir()
+        (dest / "new").write_text("n", encoding="utf-8")
+        old = tmp_path / ".x.tmpabc.old"
+        old.mkdir()
+        real = os.replace
+
+        def refuse_old(a, b):
+            if os.fspath(a) == os.fspath(old):
+                raise OSError(errno.EACCES, "denied")
+            real(a, b)
+        monkeypatch.setattr(store.os, "replace", refuse_old)
+        with pytest.raises(OSError):
+            store._restore_old_copy(old, dest)
+        assert sorted(p.name for p in tmp_path.iterdir()) == [".x.tmpabc.old", "x"]
+        assert [p.name for p in dest.iterdir()] == ["new"]

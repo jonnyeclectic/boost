@@ -1415,7 +1415,13 @@ def _restore_old_copy(old: Path, dest: Path) -> None:
     if os.path.lexists(dest):
         aside = old.with_name(old.name[:-len(".old")] + ".new")
         os.replace(dest, aside)
-        os.replace(old, dest)
+        try:
+            os.replace(old, dest)
+        except BaseException:
+            # Put the new copy back: install's cleanup deletes ``old`` next,
+            # and an empty ``dest`` would lose both copies.
+            os.replace(aside, dest)
+            raise
         _remove_backup(aside)
     else:
         os.replace(old, dest)
