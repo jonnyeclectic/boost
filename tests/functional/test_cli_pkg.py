@@ -1665,6 +1665,26 @@ class TestBundle:
         assert "Installed 1 skill" in r.out
         assert _lock()["brainstorming"]["version"] == "1.4.0"
 
+    def test_spaced_tap_path_dumps_a_file_that_installs(self, boost, sandbox,
+                                                        fixture_tap_src,
+                                                        tmp_path):
+        # The tap was named `my tap`, and its dumped `tap my tap …` line was
+        # read back as a tap called `my`: rc 1, nothing installed.
+        src = _copy_tap(fixture_tap_src, tmp_path / "my tap")
+        boost("tap", src)
+        boost("install", "my-tap:brainstorming")
+        vf = tmp_path / "Boostfile"
+        boost("bundle", "dump", vf)
+        lines = vf.read_text(encoding="utf-8").splitlines()
+        assert lines[1:] == ["tap my-tap %s" % src.resolve(),
+                             "skill my-tap:brainstorming@1.4.0"]
+        boost("uninstall", "brainstorming")
+        boost("untap", "my-tap")
+        r = boost("bundle", "install", vf)
+        assert "tapped my-tap" in r.out
+        assert "installed brainstorming v1.4.0 (my-tap)" in r.out
+        assert _lock()["brainstorming"]["tap"] == "my-tap"
+
     @pytest.mark.skipif(sys.platform == "win32",
                         reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
