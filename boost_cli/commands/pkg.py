@@ -2479,18 +2479,21 @@ def cmd_import(argv: list[str]) -> int:
     group.add_argument("--all", action="store_true", help="import every skill found")
     ap.add_argument("--agent", action="append", metavar="A",
                     help="link only into this agent (repeatable)")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the replace-the-only-copy confirmation prompt")
     args = ap.parse_args(argv)
     only = _check_agents(args.agent)
     if args.source.startswith(("http://", "https://", "git@", "ssh://")):
         out.info("cloning %s …" % args.source)
         with store.cloned_source(args.source) as remote:
             return _import_root(remote.root, args.name, args.all, only,
-                                args.source, remote=remote)
+                                args.source, remote=remote, yes=args.yes)
     root = paths.expand(args.source)
     if not root.is_dir():
         raise BoostError("no such directory: %s" % args.source,
                         hint="pass a local path or a git URL")
-    return _import_root(root, args.name, args.all, only, args.source)
+    return _import_root(root, args.name, args.all, only, args.source,
+                        yes=args.yes)
 
 
 def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
@@ -2517,14 +2520,15 @@ def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
 
 def _import_root(root: Path, name: str | None, do_all: bool,
                  only: list[str] | None, display: str,
-                 remote: store.RemoteSource | None = None) -> int:
+                 remote: store.RemoteSource | None = None,
+                 yes: bool = False) -> int:
     def replacing(dirs: list[tuple[Path, str | None]]) -> bool:
         """Ask before an import overwrites a skill that has no other copy."""
         only_copies = [n for d, r in dirs
                        if store.replaces_only_copy(n := store.import_name(d, r), d)]
         if not only_copies:
             return True
-        if out.confirm("the store holds the only copy of %s, and importing "
+        if yes or out.confirm("the store holds the only copy of %s, and importing "
                        "replaces it for good — continue?"
                        % ", ".join(only_copies)):
             return True

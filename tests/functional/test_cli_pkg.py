@@ -1757,6 +1757,22 @@ class TestImport:
         assert "renamed-skill" in _lock()
         assert "my-skill" not in _lock()
 
+    def test_yes_is_accepted_and_skips_the_only_copy_prompt(
+            self, boost, installed, tmp_path, monkeypatch):
+        # The prompt says "pass -y", and argparse used to reject -y (rc 2)
+        # before the prompt was ever reached.
+        d = paths.store_dir() / "pr-me"
+        d.mkdir()
+        (d / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        boost("sync")
+        src = _skill_dir(tmp_path, "pr-me")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("import", src, "-y")
+        assert "the store holds the only copy" not in r.out
+        assert "Imported pr-me" in r.out
+        assert _lock()["pr-me"]["source_dir"] == str(src)
+
     def test_all_on_multi_skill_dir(self, boost, sandbox, tmp_path):
         root = tmp_path / "many"
         _skill_dir(root, "alpha")
