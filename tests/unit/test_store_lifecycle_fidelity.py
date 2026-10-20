@@ -13,9 +13,23 @@ Three ways the lifecycle used to change things it had no business changing:
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 
-from boost_cli.core import catalog, lockfile, paths, registry, rules, store, util
+from boost_cli.core import (
+    catalog,
+    lockfile,
+    paths,
+    projectlock,
+    registry,
+    rules,
+    store,
+    util,
+)
+from boost_cli.errors import BoostError
 
 START = "<!-- boost:rule:r start -->"
 END = "<!-- boost:rule:r end -->"
@@ -170,3 +184,103 @@ class TestContextFileRoundTrip:
         f = tmp_path / "x.md"
         f.write_bytes(b"a\r\nb\r\n")
         assert util.read_user_text(f) == "a\r\nb\r\n"
+
+
+# ── project sync restores the locked content, never HEAD ─────────────────────
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t",
+                    "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
+                    *args], check=True, capture_output=True)
+
+
+class TestProjectSyncKeepsTheLock:
+    @staticmethod
+    def _install(entry, tmp_path):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        store.install(entry, scope="project", base=str(repo),
+                      only_agents=["claude-code", "cursor"])
+        return repo
+
+    @staticmethod
+    def _lock_bytes(repo):
+        return (repo / ".boost" / "skill-lock.json").read_bytes()
+
+    @staticmethod
+    def _advance(tap, entry, *, touch_skill: bool):
+        if touch_skill:
+            md = tap.path / entry["rel_dir"] / "SKILL.md"
+            md.write_text(md.read_text(encoding="utf-8") + "\nUPSTREAM CHANGE\n",
+                          encoding="utf-8")
+        else:
+            (tap.path / "UNRELATED.md").write_text("x\n", encoding="utf-8")
+        _git(tap.path, "add", "-A")
+        _git(tap.path, "commit", "-q", "-m", "advance")
+        catalog.rebuild_tap(tap)
+
+    def test_moved_source_is_declined_and_nothing_is_written(
+            self, tap, entry, tmp_path):
+        repo = self._install(entry, tmp_path)
+        before = self._lock_bytes(repo)
+        claude_copy = repo / ".claude" / "skills" / "brainstorming"
+        claude_sha = util.sha256_dir(claude_copy)
+        self._advance(tap, entry, touch_skill=True)
+        shutil.rmtree(repo / ".cursor" / "skills" / "brainstorming")
+
+        plan = store.project_sync_plan(base=str(repo))
+        line = ("brainstorming's tap source has moved since the project lock "
+                "was written — repair declined (`boost install --local "
+                "brainstorming --force` takes the new content and updates "
+                "the lock)")
+        assert store.project_sync_preview(plan, base=str(repo)) == [line]
+        assert store.project_sync_apply(plan, base=str(repo)) == [line]
+        assert store.is_unrepaired(line)
+        assert not (repo / ".cursor" / "skills" / "brainstorming").exists()
+        assert util.sha256_dir(claude_copy) == claude_sha
+        assert self._lock_bytes(repo) == before
+
+    def test_tap_moved_but_skill_unchanged_restores_without_a_lock_write(
+            self, tap, entry, tmp_path):
+        repo = self._install(entry, tmp_path)
+        before = self._lock_bytes(repo)
+        self._advance(tap, entry, touch_skill=False)
+        cursor_copy = repo / ".cursor" / "skills" / "brainstorming"
+        shutil.rmtree(cursor_copy)
+
+        plan = store.project_sync_plan(base=str(repo))
+        assert store.project_sync_apply(plan, base=str(repo)) == [
+            "re-materialized brainstorming from %s" % tap.name]
+        assert util.sha256_dir(cursor_copy) == \
+            projectlock.get_skill(repo, "brainstorming")["sha256"]
+        assert self._lock_bytes(repo) == before
+
+    def test_same_commit_restores_without_a_lock_write(self, tap, entry, tmp_path):
+        repo = self._install(entry, tmp_path)
+        before = self._lock_bytes(repo)
+        cursor_copy = repo / ".cursor" / "skills" / "brainstorming"
+        shutil.rmtree(cursor_copy)
+        plan = store.project_sync_plan(base=str(repo))
+        assert store.project_sync_apply(plan, base=str(repo)) == [
+            "re-materialized brainstorming from %s" % tap.name]
+        assert (cursor_copy / "SKILL.md").is_file()
+        assert self._lock_bytes(repo) == before
+
+    def test_no_recorded_sha_and_a_moved_commit_is_declined(
+            self, tap, entry, tmp_path):
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec.pop("sha256")
+        projectlock.set_skill(repo, "brainstorming", rec)
+        self._advance(tap, entry, touch_skill=False)
+        shutil.rmtree(repo / ".cursor" / "skills" / "brainstorming")
+        actions = store.project_sync_apply(
+            store.project_sync_plan(base=str(repo)), base=str(repo))
+        assert len(actions) == 1 and "repair declined" in actions[0]
+
+    def test_restore_with_nothing_writable_reports_gone(self, tap, entry, tmp_path):
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        with pytest.raises(BoostError, match="no recorded copy of brainstorming"):
+            store._restore_project_copies(repo, "brainstorming", rec, entry,
+                                          ["cursor"])  # present: nothing to do

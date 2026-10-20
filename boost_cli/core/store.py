@@ -2586,10 +2586,13 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
         cat_entry, warning = _project_source(name, entry)
         if warning:
             actions.append(warning)
+        if cat_entry and not _project_restorable(entry, cat_entry):
+            actions.append(_project_moved(name))
+            continue
         if cat_entry:
             try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
-                install(cat_entry, force=True, scope=scopes.SCOPE_PROJECT,
-                        base=resolved_base, only_agents=wanted[name])
+                _restore_project_copies(resolved_base, name, entry, cat_entry,
+                                        wanted[name])
                 actions.append("re-materialized %s from %s" % (name, tap_name))
                 continue
             except BoostError:
@@ -2598,6 +2601,63 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
     if actions:
         journal.log("sync", "%d project fixes" % len(actions))
     return actions
+
+
+def _project_moved(name: str) -> str:
+    return ("%s's tap source has moved since the project lock was written%s"
+            "(`boost install --local %s --force` takes the new content and "
+            "updates the lock)" % (name, _DECLINED_MARK, name))
+
+
+def _project_restorable(entry: dict, cat_entry: dict) -> bool:
+    """Whether the tap can still hand back what the project lock records.
+
+    A repair restores the committed lock; it never moves it. Re-installing
+    from the tap's HEAD did: one missing ``.cursor`` copy came back at the
+    new version beside an untouched ``.claude`` copy at the old one, the lock
+    was rewritten to the new commit, and `boost verify` then failed the copy
+    nobody had touched. True when the tap still sits on the locked commit,
+    or its source for this skill hashes to the locked ``sha256`` (the tap
+    moved, this skill did not). The commit check comes first because it
+    costs no materialize.
+    """
+    from . import gitutil
+    locked_commit = entry.get("commit")
+    if locked_commit and gitutil.head_commit(
+            registry.get(cat_entry["tap"]).path) == locked_commit:
+        return True
+    locked_sha = entry.get("sha256")
+    return bool(locked_sha) and _skill_source_sha(cat_entry) == locked_sha
+
+
+def _restore_project_copies(resolved_base: Path, name: str, entry: dict,
+                            cat_entry: dict, missing: list) -> None:
+    """Copy ``cat_entry``'s source back to the recorded paths ``missing``.
+
+    Writes the directories and nothing else: no lock row (it already says
+    what is there), no ``.mcp.json`` (the install registered it), and only
+    the agents named, because the other copies are committed files a team
+    edits in place. Every destination is checked before the first copy, the
+    same two checks a project install makes. Raises :class:`BoostError`
+    when there is nothing it may write.
+    """
+    src = source_dir_for(cat_entry)
+    _enforce_capability_policy(name, src / "SKILL.md")
+    dests: list[Path] = []
+    for m in entry.get("materializations") or []:
+        if m.get("agent", "?") not in missing:
+            continue
+        dest = scopes.resolve_in_base(resolved_base, m.get("path"))
+        if dest is None or dest.is_dir():
+            continue
+        scopes.ensure_in_base(resolved_base, dest)
+        scopes.ensure_spelled(resolved_base, dest)
+        dests.append(dest)
+    if not dests:
+        raise BoostError("no recorded copy of %s to restore" % name)
+    within = registry.get(cat_entry["tap"]).path
+    for dest in dests:
+        _copy_skill(src, dest, within=within)
 
 
 def _project_gone(name: str) -> str:
@@ -2642,7 +2702,9 @@ def project_sync_preview(plan: dict[str, list], base=None) -> list[str]:
         cat_entry, warning = _project_source(name, entry)
         if warning:
             lines.append(warning)
-        if cat_entry:
+        if cat_entry and not _project_restorable(entry, cat_entry):
+            lines.append(_project_moved(name))
+        elif cat_entry:
             lines.append("would re-materialize project skill %s → %s from %s"
                          % (name, ", ".join(wanted[name]), entry.get("tap")))
         else:
