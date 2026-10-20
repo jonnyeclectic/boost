@@ -414,13 +414,7 @@ def save(cfg: dict) -> None:
         util.atomic_write_text(
             p, json.dumps(cfg, indent=2, sort_keys=False) + "\n")
     except OSError as e:
-        block = paths.refuses_writes(p.parent)
-        raise BoostError(
-            "could not save %s (%s)%s"
-            % (paths.tilde(p), e.strerror or e,
-               ": " + paths.not_writable(p.parent, block) if block else ""),
-            hint="%s, then re-run" % paths.write_remedy(block)
-            if block else None) from e
+        raise paths.save_refused(p, e) from e
 
 
 def get(dotted: str, default=None):

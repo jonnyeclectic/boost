@@ -60,13 +60,9 @@ def _save_cohorts(cohorts: dict) -> None:
     `create` over a file with a trailing comma used to read it as empty and
     write the one new cohort over every existing one, with no warning.
     """
-    paths.ensure_dirs()
     p = _cohorts_path()
-    if cohort.load(p)[1] is not None:
-        dest = jsonstate.quarantine(p)
-        out.warn("%s was corrupt and has been moved to %s before writing "
-                 "the new file" % (_tilde(p), _tilde(dest)), stream=sys.stderr)
-    p.write_text(json.dumps(cohorts, indent=2) + "\n", encoding="utf-8")
+    jsonstate.save(p, json.dumps(cohorts, indent=2) + "\n",
+                   corrupt=cohort.load(p)[1] is not None, show=_tilde)
 
 
 def _is_member(user: str, cohort_name: str, percent: int) -> bool:
@@ -410,19 +406,14 @@ def cmd_profile(argv) -> int:
         path = _profile_path(args.name)
         old, bad = _read_profile(path)
         was = len(old.get("skills", {})) if old is not None else None
-        if bad is not None:
-            # Still fine to replace — but not to destroy: the bad bytes go
-            # aside, the way every other corrupt state file's writer does.
-            dest = jsonstate.quarantine(path)
-            out.warn("%s was corrupt and has been moved to %s before writing "
-                     "the new profile" % (_tilde(path), _tilde(dest)),
-                     stream=sys.stderr)
         profile = {"name": args.name, "saved": util.now_iso(), "user": util.user(),
                    "skills": {n: {"tap": e.get("tap", "local"),
                                   "version": e.get("version", "0.0.0")}
                               for n, e in installed.items()}}
-        paths.ensure_dirs()
-        path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+        # A corrupt one is still fine to replace — but not to destroy: the
+        # bad bytes go aside, the way every other state file's writer does.
+        jsonstate.save(path, json.dumps(profile, indent=2) + "\n",
+                       corrupt=bad is not None, noun="profile", show=_tilde)
         journal.log("profile", args.name, op="save", skills=len(installed))
         n_rules = len(lockfile.installed_rules())
         n_workflows = len(lockfile.installed_workflows())

@@ -187,14 +187,10 @@ def save(pol: dict) -> None:
     :func:`jsonstate.quarantine` first, so the rules it still held are kept
     rather than overwritten by a file built from the defaults.
     """
-    paths.ensure_dirs()
     p = paths.policy_path()
-    if jsonstate.is_corrupt(p):
-        dest = jsonstate.quarantine(p)
-        output.warn("%s was corrupt and has been moved to %s before writing "
-                    "the new policy" % (p, dest), stream=sys.stderr, wrap=True)
     known = {k: pol.get(k, DEFAULTS[k]) for k in DEFAULTS}
-    p.write_text(json.dumps(known, indent=2) + "\n", encoding="utf-8")
+    jsonstate.save(p, json.dumps(known, indent=2) + "\n",
+                   corrupt=jsonstate.is_corrupt(p), noun="policy", wrap=True)
 
 
 def is_blocked(name: str, tap: str | None, blocked) -> bool:
