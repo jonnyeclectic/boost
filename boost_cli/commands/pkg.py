@@ -66,8 +66,12 @@ def _warn_confusions(entries: list[dict]) -> None:
     if not entries:
         return
     all_entries = catalog.all_entries()
+    # One target scans the catalogue once (~60 ms at 63k entries), which is
+    # cheaper than indexing it (~0.5 s); from two on, index once and look up.
+    index = typosquat.build_index(all_entries) if len(entries) > 1 else None
     for e in entries:
-        for other in typosquat.find_confusions(e, all_entries)[:3]:
+        for other in typosquat.find_confusions(e, all_entries,
+                                               index=index)[:3]:
             out.warn("%s (%s) closely resembles %s (%s) — double-check you "
                      "meant this one" % (e["name"], e["tap"],
                                          other["name"], other["tap"]))
