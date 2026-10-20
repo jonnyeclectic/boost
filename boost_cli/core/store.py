@@ -89,6 +89,9 @@ class InstallResult:
     # declared. The two differ when the file could not be written, and the
     # install report must show the former.
     mcp_recorded: list[str] = field(default_factory=list)
+    # Why the project's .mcp.json was left untouched (it exists but does not
+    # parse, its mcpServers is not an object, or the write failed), or None.
+    mcp_error: str | None = None
     # The tap an import just replaced (`install_from_path` only). Importing over
     # a tapped skill rewrites its lock entry to `local` and so drops the only
     # thing `boost update` refreshes it from; the caller says so.
@@ -1515,19 +1518,28 @@ def project_mcp_sidecar(base) -> Path:
     return Path(base) / mcpdecl.SIDECAR
 
 
-def _load_sidecar(path: Path) -> dict | None:
-    """The sidecar document, or None if absent or unreadable.
+def _load_sidecar(path: Path) -> tuple[dict | None, str | None]:
+    """``(doc, None)``, ``(None, None)`` if absent, ``(None, error)`` if unusable.
 
-    Best-effort by design, exactly like :func:`declared_mcp_servers`: by the
-    time this runs the skill is already on disk, so a corrupt ``.mcp.json`` must
-    not turn a completed install into a traceback. ``merge_into`` treats a
-    non-dict as empty, so a damaged file is rebuilt rather than propagated.
+    An existing ``.mcp.json`` that does not parse, is not an object, or holds a
+    non-object ``mcpServers`` is *refused*, not rebuilt: the file is rewritten
+    whole from the parsed view, so rebuilding a trailing-comma file from an
+    empty one silently discarded every server the user had configured. The
+    error names the file and the cause (:func:`jsonstate.read_object`'s
+    contract, which ``settings.json`` and ``config.json`` already follow), and
+    callers write nothing while it is set. Not raising keeps the other half of
+    the old contract: by the time this runs the skill is already on disk, so a
+    damaged file must not turn a completed install into a traceback.
     """
-    import json
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    from . import jsonstate, mcpdecl
+    doc, err = jsonstate.read_object(path)
+    if err is not None:
+        return None, err
+    if doc is not None:
+        problem = mcpdecl.sidecar_problem(doc)
+        if problem is not None:
+            return None, "%s: %s" % (path, problem)
+    return doc, None
 
 
 def _write_sidecar(path: Path, doc: dict) -> bool:
@@ -1550,40 +1562,100 @@ def _write_sidecar(path: Path, doc: dict) -> bool:
         return False
 
 
-def register_project_mcp(base, rows, skill: str) -> list[str]:
-    """Record ``skill``'s declared MCP servers in the repo. Returns names added.
+def record_project_mcp(base, rows, skill: str,
+                       ) -> tuple[list[str], str | None]:
+    """Record ``skill``'s declared MCP servers -> ``(added, error)``.
 
     Never overwrites a server already present — one the user configured by hand,
     or one another skill declared first — and never creates the file for a skill
     that declares nothing registrable, so a repo gains an ``.mcp.json`` only
-    when there is genuinely something in it.
+    when there is genuinely something in it. ``error`` is set, and the file left
+    byte-for-byte as it was, when an existing ``.mcp.json`` cannot be read as
+    one (see :func:`_load_sidecar`), and when the write itself fails. So
+    ``([], None)`` for a registrable declaration means every server was
+    already in the file.
     """
     from . import mcpdecl as _decl
     if not _decl.registrable(rows):
-        return []
+        return [], None
     path = project_mcp_sidecar(base)
-    doc, added = _decl.merge_into(_load_sidecar(path), rows, skill)
+    existing, err = _load_sidecar(path)
+    if err is not None:
+        return [], err
+    doc, added = _decl.merge_into(existing, rows, skill)
     if added and not _write_sidecar(path, doc):
-        return []          # nothing was recorded; do not claim otherwise
-    return added
+        # Nothing was recorded; do not claim otherwise.
+        return [], "%s: could not be written" % path
+    return added, None
 
 
-def unregister_project_mcp(base, skill: str) -> list[str]:
-    """Remove the servers boost recorded for ``skill``. Returns names removed.
+def register_project_mcp(base, rows, skill: str) -> list[str]:
+    """:func:`record_project_mcp`'s names alone."""
+    return record_project_mcp(base, rows, skill)[0]
 
-    Marker-keyed entries only, so a hand-configured server and another skill's
-    server both survive. Writes nothing when it owns nothing, which keeps an
-    uninstall from rewriting — and reformatting — a file it has no claim on.
+
+def _project_declarers(base) -> tuple[dict[str, str], bool]:
+    """``({server: skill}, complete)`` over the skills the project lock holds.
+
+    Each remaining skill's declarations are read from its installed copy —
+    every materialization is tried, and each lock path goes through
+    :func:`scopes.resolve_in_base`, because the lock is committed input. When
+    several skills declare one server the alphabetically first owns it.
+    ``complete`` is False when some entry has no readable copy on this machine
+    (a teammate's clone that never ran ``boost sync``): what it declares is
+    then unknown.
+    """
+    from . import scopes
+    owners: dict[str, str] = {}
+    complete = True
+    for name, entry in sorted(projectlock.installed(base).items()):
+        dirs = [scopes.resolve_in_base(base, m.get("path") or "")
+                for m in (entry or {}).get("materializations") or []
+                if isinstance(m, dict)]
+        found = next((d for d in dirs
+                      if d is not None and (d / "SKILL.md").is_file()), None)
+        if found is None:
+            complete = False
+            continue
+        for row in declared_mcp_servers(found):
+            owners.setdefault(row["name"], name)
+    return owners, complete
+
+
+def forget_project_mcp(base, skill: str) -> tuple[list[str], str | None]:
+    """Remove the servers boost recorded for ``skill`` -> ``(removed, error)``.
+
+    Marker-keyed entries only, so a hand-configured server is never touched,
+    and reference-counted by declaration: a server another skill still in the
+    project lock declares stays, re-marked to that skill, so the last
+    declarer's uninstall is the one that removes it. Call this after the
+    skill's own lock row is gone. When some remaining skill's declarations
+    cannot be read, nothing is removed — a leaked entry is recoverable, and a
+    teammate's server deleted from a committed file is not.
+
+    Writes nothing when nothing changes, which keeps an uninstall from
+    rewriting — and reformatting — a file it has no claim on, and nothing at
+    all over an unreadable file (``error`` says why).
     """
     from . import mcpdecl as _decl
     path = project_mcp_sidecar(base)
-    existing = _load_sidecar(path)
+    existing, err = _load_sidecar(path)
+    if err is not None:
+        return [], err
     if existing is None:
-        return []
-    doc, removed = _decl.strip_owned(existing, skill)
-    if removed and not _write_sidecar(path, doc):
-        return []
-    return removed
+        return [], None
+    keep, complete = _project_declarers(base)
+    if not complete:
+        return [], None
+    doc, removed = _decl.strip_owned(existing, skill, keep)
+    if doc != existing and not _write_sidecar(path, doc):
+        return [], "%s: could not be written" % path
+    return removed, None
+
+
+def unregister_project_mcp(base, skill: str) -> list[str]:
+    """:func:`forget_project_mcp`'s names alone."""
+    return forget_project_mcp(base, skill)[0]
 
 
 def _enforce_capability_policy(name: str, source_md: Path) -> None:
@@ -2240,7 +2312,8 @@ def _install_project_skill(entry: dict, force: bool = False,
     # it to the command layer's `<host> mcp add` offer, which is user-scoped and
     # would put a machine-wide registration behind a --scope project install.
     # Recorded here so it lands with the skill and reverses with it.
-    res.mcp_recorded = register_project_mcp(resolved_base, res.mcp_servers, name)
+    res.mcp_recorded, res.mcp_error = record_project_mcp(
+        resolved_base, res.mcp_servers, name)
     return res
 
 
@@ -2546,7 +2619,7 @@ def uninstall_project(name: str, base=None) -> dict:
     # server the user configured by hand — or one another skill still needs —
     # survives. Without this a skill tried once keeps launching its server for
     # every project that clones the repo.
-    unregistered = unregister_project_mcp(resolved_base, name)
+    unregistered, mcp_error = forget_project_mcp(resolved_base, name)
     journal.log("uninstall", name, scope=scopes.SCOPE_PROJECT)
     return {"name": name, "unlinked": removed, "entry": entry,
             # How many paths actually came off disk, which `unlinked` does not
@@ -2573,7 +2646,8 @@ def uninstall_project(name: str, base=None) -> dict:
             # puts config drift on screen.
             "expected": sorted(scopes.relative_to_base(resolved_base, p)
                                for p in legal),
-            "mcp_unregistered": unregistered, "kind": "skill",
+            "mcp_unregistered": unregistered, "mcp_error": mcp_error,
+            "kind": "skill",
             "scope": scopes.SCOPE_PROJECT, "base": str(resolved_base)}
 
 

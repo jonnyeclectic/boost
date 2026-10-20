@@ -189,6 +189,34 @@ def register_argv(name: str, spec: dict, *, scope: str = "user",
                             env=env if isinstance(env, dict) else None)
 
 
+def sidecar_problem(doc) -> str | None:
+    """Why ``doc`` is not an ``.mcp.json`` boost may rewrite, or None if it is.
+
+    The whole file is rewritten from the parsed document, so anything boost
+    cannot model would be lost on the next write. A non-object document is
+    refused, and so is a ``mcpServers`` that is present but not an object:
+    calling ``dict()`` on a list of ``{name, command}`` objects either raises
+    or, for two-key items, turns each into a garbage ``key: value`` pair and
+    drops the user's server. An absent or ``null`` ``mcpServers`` is simply
+    empty.
+    """
+    if not isinstance(doc, dict):
+        return "expected a JSON object, found %s" % type(doc).__name__
+    servers = doc.get(SERVERS_KEY)
+    if servers is not None and not isinstance(servers, dict):
+        return "expected %r to be an object, found %s" % (
+            SERVERS_KEY, type(servers).__name__)
+    return None
+
+
+def _servers_of(existing) -> tuple[dict, dict] | None:
+    """``(doc copy, servers copy)`` for a rewritable document, else None."""
+    doc = dict(existing) if isinstance(existing, dict) else {}
+    if sidecar_problem(doc) is not None:
+        return None
+    return doc, dict(doc.get(SERVERS_KEY) or {})
+
+
 def merge_into(existing: dict | None, rows, skill: str) -> tuple[dict, list[str]]:
     """Add ``rows``' specs to an ``.mcp.json`` document -> ``(doc, added)``.
 
@@ -197,9 +225,14 @@ def merge_into(existing: dict | None, rows, skill: str) -> tuple[dict, list[str]
     left exactly as-is and omitted from ``added``. Each entry boost does add
     carries a :data:`MARKER_KEY` naming the skill that asked for it, so a later
     uninstall can remove precisely what boost wrote and nothing else.
+
+    A document :func:`sidecar_problem` refuses comes back unchanged with
+    nothing added — the caller must not write it.
     """
-    doc = dict(existing) if isinstance(existing, dict) else {}
-    servers = dict(doc.get(SERVERS_KEY) or {})
+    parts = _servers_of(existing)
+    if parts is None:
+        return dict(existing) if isinstance(existing, dict) else {}, []
+    doc, servers = parts
     added: list[str] = []
     for row in registrable(rows):
         name = row["name"]
@@ -213,18 +246,34 @@ def merge_into(existing: dict | None, rows, skill: str) -> tuple[dict, list[str]
     return doc, added
 
 
-def strip_owned(existing: dict | None, skill: str) -> tuple[dict, list[str]]:
+def strip_owned(existing: dict | None, skill: str,
+                keep: dict[str, str] | None = None) -> tuple[dict, list[str]]:
     """Remove the servers boost registered for ``skill`` -> ``(doc, removed)``.
 
-    Only entries whose :data:`MARKER_KEY` names this skill are removed, so a
-    server the user configured by hand — or one another skill still needs —
-    survives an uninstall untouched.
+    Only entries whose :data:`MARKER_KEY` names this skill are candidates, so a
+    server the user configured by hand is never touched. ``keep`` maps a server
+    name to a remaining skill that still declares it: such an entry stays and
+    its marker moves to that skill, so the server survives this uninstall and
+    is still removed by the last declarer's. The marker names one owner, and
+    reference counting is by *declaration* — a second skill that declared an
+    already-present server never wrote it, so only its declaration says it
+    needs it.
+
+    A document :func:`sidecar_problem` refuses comes back unchanged.
     """
-    doc = dict(existing) if isinstance(existing, dict) else {}
-    servers = dict(doc.get(SERVERS_KEY) or {})
-    removed = [name for name, spec in servers.items()
-               if isinstance(spec, dict) and spec.get(MARKER_KEY) == skill]
-    for name in removed:
-        del servers[name]
+    keep = keep or {}
+    parts = _servers_of(existing)
+    if parts is None:
+        return dict(existing) if isinstance(existing, dict) else {}, []
+    doc, servers = parts
+    removed: list[str] = []
+    for name, spec in list(servers.items()):
+        if not (isinstance(spec, dict) and spec.get(MARKER_KEY) == skill):
+            continue
+        if name in keep:
+            servers[name] = {**spec, MARKER_KEY: keep[name]}
+        else:
+            del servers[name]
+            removed.append(name)
     doc[SERVERS_KEY] = servers
     return doc, sorted(removed)

@@ -153,11 +153,18 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
                       mcpdecl.SIDECAR))
             out.dim("  %s — commit it to share with the team"
                     % ", ".join(res.mcp_recorded))
-        else:
-            out.warn("could not write %s — %s not registered"
+        elif res.mcp_error:
+            # Refused rather than rebuilt: the file is the user's, and
+            # rewriting an unparseable one from an empty view loses every
+            # server in it.
+            out.warn("%s left unchanged — %s not recorded"
                      % (mcpdecl.SIDECAR, ", ".join(wanted)))
-            out.dim("  the skill is installed; fix the file's permissions and "
-                    "reinstall to record them", wrap=True)
+            out.dim("  %s" % res.mcp_error)
+            out.dim("  the skill is installed; fix %s and reinstall to record "
+                    "them" % mcpdecl.SIDECAR, wrap=True)
+        else:
+            # Every server was already there — another skill's or the user's.
+            out.dim("  %s already in %s" % (", ".join(wanted), mcpdecl.SIDECAR))
         return
     out.info("")
     out.warn("%s needs %s to work:" % (res.name, _plural(len(rows), "MCP server")))
@@ -1076,6 +1083,11 @@ def cmd_uninstall(argv: list[str]) -> int:
                 from ..core import mcpdecl
                 out.ok("removed %s from %s"
                        % (_plural(len(unregistered), "MCP server"), mcpdecl.SIDECAR))
+            if info.get("mcp_error"):
+                from ..core import mcpdecl
+                out.warn("%s left unchanged — remove %s's servers by hand"
+                         % (mcpdecl.SIDECAR, name), wrap=True)
+                out.dim("  %s" % info["mcp_error"])
         elif kind == "skill":
             out.ok("removed %s" % _tilde(store.skill_store_dir(name)))
         # A rule/workflow never had a store dir to begin with — the
