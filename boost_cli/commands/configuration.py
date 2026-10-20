@@ -674,54 +674,70 @@ def cmd_policy(argv) -> int:
     # check
     pol = policy.load()
     everything = lockfile.all_installed()
+    # The user lock's skills, plus the current project's: a skill installed
+    # `--local` is as installed as any other — `boost list` shows it — and a
+    # blocklisted one passing the check because it sat in the repo's lock
+    # was a hole in the one command whose job is to catch it.
+    skill_rows = integrity.installed_skills()
+    rows: list[tuple[str, str, dict, Path | None, bool]] = [
+        ("skill", r.name, r.entry, r.dir, r.is_project) for r in skill_rows]
+    rows += [(kind, name, entry, None, False)
+             for kind, section in everything.items() if kind != "skill"
+             for name, entry in sorted(section.items())]
     min_score = int(pol.get("min_quality_score") or 0)
     # name/kind are None for the one environment-level violation below;
     # every per-item row carries both.
     violations: list[tuple[str | None, str | None, str, str]] = []
     not_checked: set[str] = set()
     total = 0
+    # `max_skills` caps what `install` counts, which is the user lock.
     skill_count = len(everything.get("skill", {}))
-    for kind, section in everything.items():
-        for name, entry in sorted(section.items()):
-            total += 1
-            label = name if kind == "skill" else "%s (%s)" % (name, kind)
-            tap = entry.get("tap", "local")
-            if name in pol["blocked_skills"]:
-                violations.append((name, kind, label, "on the blocklist"))
-            if tap in pol["blocked_taps"]:
-                violations.append((name, kind, label, "tap %s is blocked" % tap))
-            if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
-                violations.append((name, kind, label,
-                                   "tap %s is not on the allowlist" % tap))
-            violations.extend(
-                (name, kind, label, msg)
-                for msg in policy.check_installed_version(entry))
-            # require_description and denied_capabilities need the item's
-            # own content, which only a skill has on disk (see
-            # store.read_skill_meta) — a rule or workflow lands in a shared
-            # agent file with no per-item body to check.
-            if kind == "skill" and (pol["require_description"] or pol["denied_capabilities"]):
-                meta_body = store.read_skill_meta(name)
-                if meta_body is None:
-                    not_checked.add(
-                        "require_description/denied_capabilities "
-                        "(store copy unreadable)")
-                else:
-                    meta, body = meta_body
-                    violations.extend(
-                        (name, kind, label, msg)
-                        for msg in policy.check_installed_meta(meta, body))
-            elif kind != "skill" and (pol["require_description"] or pol["denied_capabilities"]):
+    for kind, name, entry, sdir, in_project in rows:
+        total += 1
+        label = name if kind == "skill" else "%s (%s)" % (name, kind)
+        if in_project:
+            label += " (project)"
+        tap = entry.get("tap", "local")
+        if name in pol["blocked_skills"]:
+            violations.append((name, kind, label, "on the blocklist"))
+        if tap in pol["blocked_taps"]:
+            violations.append((name, kind, label, "tap %s is blocked" % tap))
+        if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
+            violations.append((name, kind, label,
+                               "tap %s is not on the allowlist" % tap))
+        violations.extend(
+            (name, kind, label, msg)
+            for msg in policy.check_installed_version(entry))
+        # require_description and denied_capabilities need the item's
+        # own content, which only a skill has on disk (see
+        # store.read_skill_meta) — a rule or workflow lands in a shared
+        # agent file with no per-item body to check.
+        if kind == "skill" and (pol["require_description"] or pol["denied_capabilities"]):
+            meta_body = (store.read_skill_meta(name, sdir)
+                         if sdir is not None else None)
+            if meta_body is None:
                 not_checked.add(
-                    "require_description/denied_capabilities for %s items "
-                    "(no on-disk body to check)" % kind)
-            # Quality scoring reads a store directory, which only skills have.
-            if min_score and kind == "skill":
-                score, _notes = util.score_skill(store.skill_store_dir(name))
-                if score < min_score:
-                    violations.append(
-                        (name, kind, label,
-                         "quality score %d < required %d" % (score, min_score)))
+                    "require_description/denied_capabilities "
+                    "(store copy unreadable)")
+            else:
+                meta, body = meta_body
+                violations.extend(
+                    (name, kind, label, msg)
+                    for msg in policy.check_installed_meta(meta, body))
+        elif kind != "skill" and (pol["require_description"] or pol["denied_capabilities"]):
+            not_checked.add(
+                "require_description/denied_capabilities for %s items "
+                "(no on-disk body to check)" % kind)
+        # Quality scoring reads a skill directory, which only skills have.
+        # A project row with no copy on disk has nothing to score; a user
+        # row keeps scoring its store path, as it always has.
+        if min_score and kind == "skill" and not (in_project and sdir is None):
+            score, _notes = util.score_skill(
+                sdir if sdir is not None else store.skill_store_dir(name))
+            if score < min_score:
+                violations.append(
+                    (name, kind, label,
+                     "quality score %d < required %d" % (score, min_score)))
     max_skills_msg = policy.max_skills_violation(skill_count)
     if max_skills_msg:
         # Not an installed item — this one is about the environment as a
@@ -734,6 +750,7 @@ def cmd_policy(argv) -> int:
         for k, section in everything.items()
         for n, e in section.items() if not e.get("pinned"))
     counts = {kind: len(section) for kind, section in everything.items()}
+    counts["skill"] = len(skill_rows)
     # The breakdown appears exactly when it carries information (same
     # convention as `boost count`): a skills-only environment keeps the exact
     # summary line it always had.

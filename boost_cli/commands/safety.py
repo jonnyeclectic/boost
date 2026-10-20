@@ -98,7 +98,9 @@ def cmd_audit(argv):
         return _trust_audit(args.json)
 
     pol = policy.load()
-    installed = _iter_installed()
+    # Both scopes: a skill installed `--local` is loaded by the agent from
+    # the repo's copy, so that copy is what gets scanned.
+    installed = integrity.installed_skills()
     findings: dict = {}
     missing_store: list[str] = []
 
@@ -108,12 +110,15 @@ def cmd_audit(argv):
             "snippet": snippet})
 
     min_score = int(pol.get("min_quality_score") or 0)
-    for name, _entry in installed:
-        if name in pol.get("blocked_skills", []):
+    for row in installed:
+        # A project row is its own install, so its findings are its own —
+        # labelled, since the same name may also be installed at user scope.
+        name = row.name + (" (project)" if row.is_project else "")
+        if row.name in pol.get("blocked_skills", []):
             add(name, "HIGH", "policy-blocked", "policy.json",
                 "skill is on the policy blocklist")
-        sdir = store.skill_store_dir(name)
-        if not sdir.is_dir():
+        sdir = row.dir
+        if sdir is None:
             # Nothing to scan is not the same fact as "scanned and clean" —
             # an installed skill whose store directory vanished is exactly
             # what `verify` reports as STATUS_MISSING, and silently counting
@@ -568,6 +573,7 @@ def cmd_quarantine(argv):
         name = store.installed_name(args.release)
         found = lockfile.find_any(name)
         if not found:
+            integrity.refuse_project_only(name, "boost quarantine")
             raise BoostError("%s is not installed" % name,
                             hint="see what is with `boost list`")
         kind, entry = found
@@ -607,6 +613,10 @@ def cmd_quarantine(argv):
     name = store.installed_name(args.name)
     found = lockfile.find_any(name)
     if not found:
+        # A project skill is real directories in the repo, not links boost
+        # can take away and put back; quarantining it would mean deleting
+        # committed files, so say which scope it is in instead.
+        integrity.refuse_project_only(name, "boost quarantine")
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     kind, entry = found

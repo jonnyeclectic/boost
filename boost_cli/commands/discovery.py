@@ -37,6 +37,7 @@ from ..core import (
     rag,
     registry,
     rules,
+    scopes,
     store,
     util,
 )
@@ -258,7 +259,8 @@ def cmd_search(argv):
     # problem must never take search down with it.
     installed: set[str] = set()
     with contextlib.suppress(Exception):
-        installed = set(store.installed())
+        # Both scopes: a `--local` install in this project is installed too.
+        installed = set(store.installed()) | set(integrity.project_skills()[1])
     # The meter reads across the whole shown page, so its fractions are one
     # screen-wide decision rather than a per-row division — see
     # out.relevance_fractions for why the top score alone cannot say it.
@@ -2434,6 +2436,13 @@ def cmd_stats(argv):
     # "no skill named X". `catalog.find` keeps the original string so a
     # qualifier still narrows a not-yet-installed lookup.
     name, kind, lock = store.resolve_lock_entry(args.name)
+    # A skill installed `--local` into the current project is installed —
+    # `boost list` shows it — and its copy is in the repo, not the store.
+    prow = None
+    if lock is None:
+        prow = integrity.resolve_skill(args.name)
+        if prow is not None:
+            kind, lock = "skill", prow.entry
     kind = kind or "skill"
     matches = catalog.find(args.name)
     cat = matches[0] if matches else None
@@ -2454,11 +2463,17 @@ def cmd_stats(argv):
     # into shared agent files instead of a directory boost owns, so `sdir`
     # is never even looked up for those and `size` stays None rather than
     # needing its own kind check below.
-    sdir = store.skill_store_dir(name) if kind == "skill" else None
+    if prow is not None:
+        sdir = prow.dir
+    else:
+        sdir = store.skill_store_dir(name) if kind == "skill" else None
     size = util.dir_size(sdir) if sdir and lock and sdir.is_dir() else None
+    scope = (scopes.SCOPE_PROJECT if prow is not None
+             else scopes.SCOPE_USER if lock else None)
     if args.as_json:
         print(json.dumps({
             "name": name, "kind": kind, "installed": bool(lock), "lock": lock,
+            "scope": scope,
             "size": size, "activity": acts,
             "catalog": ({"latest": latest, "tap": cat["tap"],
                          "description": cat["description"],
@@ -2468,6 +2483,8 @@ def cmd_stats(argv):
     if lock:
         out.kv("version", lock.get("version", "?"))
         out.kv("tap", lock.get("tap", "?"))
+        if prow is not None:
+            out.kv("scope", "project (%s)" % paths.tilde(prow.base))
         out.kv("installed", util.rel_time(lock.get("installed_at", "")))
         out.kv("updated", util.rel_time(lock.get("updated_at", "")))
         # Sorted for both kinds — before this, a rule/workflow's agents line
@@ -2513,6 +2530,9 @@ def cmd_count(argv):
     args = p.parse_args(argv)
     by_kind = {kind: len(section)
                for kind, section in lockfile.all_installed().items()}
+    # The current project's `--local` skills are installed too: the count
+    # is of what `boost list` shows, so both scopes' rows add up here.
+    by_kind["skill"] += len(integrity.project_skills()[1])
     installed_n = sum(by_kind.values())
     taps_n = len(registry.list_taps())
     available_n = len(catalog.all_entries())
