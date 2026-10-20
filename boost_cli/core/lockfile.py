@@ -446,8 +446,10 @@ def portable(lock: dict) -> dict:
     projected = json.loads(json.dumps(lock))
     for _kind, section in SECTIONS:
         for entry in projected.get(section, {}).values():
-            for m in entry.get("materializations") or []:
-                if "path" in m:
+            # A workflow's ``foreign`` rows name a path under $HOME too.
+            for m in (*(entry.get("materializations") or ()),
+                      *(entry.get("foreign") or ())):
+                if isinstance(m, dict) and "path" in m:
                     m["path"] = paths.tilde(m["path"])
     return projected
 
