@@ -32,6 +32,8 @@ def fake_clone(monkeypatch):
 
     def clone(url, dest, sparse=True):
         dest.mkdir(parents=True, exist_ok=True)
+        # A real clone has `.git`; without it `update` re-clones the dir.
+        (dest / ".git").mkdir(exist_ok=True)
         (dest / "SKILL.md").write_text("---\nname: x\n---\nb\n", encoding="utf-8")
 
     def checkout(repo, sha):
@@ -126,7 +128,9 @@ class TestUpdateReclonesAMissingPinnedTap:
         assert registry.list_taps()[0].is_cloned
         # The pin survives — this is a reclone onto it, not a move off it.
         assert registry.list_taps()[0].pin == SHA
-        assert fake_clone["checkouts"][-1] == ("o__a", SHA)
+        # Checked out in the staging clone, before it replaces the tap dir,
+        # so an unhonourable pin never costs the tree already there.
+        assert fake_clone["checkouts"][-1] == ("o__a.boost-reclone", SHA)
 
     def test_force_clones_at_head_and_drops_the_pin(self, sandbox, fake_clone):
         registry.add("o/a", at=SHA)

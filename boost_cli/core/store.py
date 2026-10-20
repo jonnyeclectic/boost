@@ -1880,6 +1880,9 @@ def install(entry: dict, force: bool = False,
     lockfile.set_skill(name, {
         "version": entry.get("version", "0.0.0"),
         "tap": entry["tap"],
+        # Where the tap came from, so a drift hint can re-tap it after
+        # `untap` drops the config row: the name alone is not a spec.
+        "tap_url": tap.url,
         "source_dir": entry.get("rel_dir", "."),
         "commit": gitutil.head_commit(tap.path),
         "sha256": util.sha256_dir(dest),
@@ -2020,6 +2023,7 @@ def _install_project_skill(entry: dict, force: bool = False,
         "kind": "skill",
         "version": entry.get("version", "0.0.0"),
         "tap": entry["tap"],
+        "tap_url": tap.url,
         "source_dir": entry.get("rel_dir", "."),
         "commit": gitutil.head_commit(tap.path),
         "sha256": util.sha256_dir(first),
@@ -2751,6 +2755,7 @@ def _install_rule(entry: dict, force: bool = False,
         "kind": "rule",
         "version": entry.get("version", "0.0.0"),
         "tap": entry["tap"],
+        "tap_url": tap.url,
         "source_file": entry.get("skill_md", ""),
         "commit": gitutil.head_commit(tap.path),
         "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
@@ -3332,6 +3337,7 @@ def _install_workflow(entry: dict, force: bool = False,
         "slot": slot,
         "version": entry.get("version", "0.0.0"),
         "tap": entry["tap"],
+        "tap_url": tap.url,
         "source_file": source_rel,
         "commit": gitutil.head_commit(tap.path),
         "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
@@ -5602,6 +5608,7 @@ def _record_unrecorded(name: str, why: str) -> str | None:
         cat = matches[0]
         tap = registry.get(cat["tap"])
         record = {"version": cat.get("version", "0.0.0"), "tap": cat["tap"],
+                  "tap_url": tap.url,
                   "source_dir": cat.get("rel_dir", "."),
                   "commit": gitutil.head_commit(tap.path)}
         # Dated as install dates it: the store copy is that tap's files.

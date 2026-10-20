@@ -309,7 +309,8 @@ _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
                "stranded": "danger"}
 
 
-def _drift_hint(name: str, status: str, tap: str = "") -> str:
+def _drift_hint(name: str, status: str, tap: str = "",
+                tap_url: str = "") -> str:
     if status == "quarantined":
         return "boost quarantine --release %s to restore" % name
     if status == "upstream-moved":
@@ -320,7 +321,9 @@ def _drift_hint(name: str, status: str, tap: str = "") -> str:
         # `boost update` only refreshes configured taps. When the entry's
         # tap has been untapped, that command is a guaranteed no-op — the
         # only remedy that can actually restore the source is re-tapping it.
-        return "boost update" if registry.is_tapped(tap) else "boost tap %s" % tap
+        # The name is not a spec, so the hint re-taps the recorded source.
+        return ("boost update" if registry.is_tapped(tap)
+                else registry.retap_hint(tap, tap_url))
     if status == "store-missing":
         return "boost heal"
     if status == "stranded":
@@ -584,6 +587,8 @@ def cmd_doctor(argv):
     for tap in taps:
         if not tap.is_cloned:
             bad("tap", "tap %s not cloned — run `boost update`" % tap.name)
+        elif tap.is_broken_clone:
+            bad("tap", registry.broken_clone_line(tap.name), wrap=True)
         elif not tap.cache_file.exists():
             bad("tap", "tap %s has no catalog cache — run `boost update %s`%s"
                 % (tap.name, tap.name, " once %s is %s"
@@ -1517,7 +1522,8 @@ def cmd_drift(argv):
         status = (_drift_status(name, entry) if kind == "skill"
                   else _drift_status_materialized(kind, name, entry))
         rows.append({"name": name, "kind": kind, "status": status,
-                     "hint": _drift_hint(name, status, entry.get("tap", ""))})
+                     "hint": _drift_hint(name, status, entry.get("tap", ""),
+                                         str(entry.get("tap_url") or ""))})
     if args.json:
         print(json.dumps({"skills": rows}))
         return 0
@@ -1529,7 +1535,10 @@ def cmd_drift(argv):
                 else "%s (%s)" % (r["name"], r["kind"]),
                 out.role(r["status"], _DRIFT_ROLE[r["status"]]),
                 out.role(r["hint"], "muted")) for r in rows],
-              headers=("NAME", "STATUS", "HINT"), whole=("NAME",))
+              # HINT is a command to paste, and an untapped source's carries
+              # a whole path or URL: clipped, it is a command that fails.
+              headers=("NAME", "STATUS", "HINT"), whole=("NAME",),
+              keep=("HINT",))
     counts: dict = {}
     for r in rows:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
@@ -1872,9 +1881,17 @@ def cmd_heal(argv):
     # run it previews exits 0.
     cache_dir = paths.cache_dir()
     cache_stuck = paths.refuses_writes(cache_dir) is not None
+    broken_taps = []
     for tap in registry.list_taps():
         if not tap.is_cloned:
             out.warn("tap %s not cloned — skipped (run `boost update`)" % tap.name)
+            continue
+        if tap.is_broken_clone:
+            # Not rebuilt: a catalog of a tree git no longer tracks would
+            # certify it. Re-cloning is `update`'s job (network), so heal
+            # names it and does not answer "nothing to heal" beneath it.
+            broken_taps.append(tap.path)
+            out.warn(registry.broken_clone_line(tap.name), wrap=True)
             continue
         had_cache = tap.cache_file.exists()
         if dry:
@@ -1918,6 +1935,7 @@ def cmd_heal(argv):
         out.warn("agent dir %s — heal does not change permissions; run %s, "
                  "then `boost sync`" % store.unwritable_refusal(str(adir)),
                  wrap=True)
+    stuck.extend(broken_taps)
     # The same rule for the cache dir doctor flags, and for any directory a
     # refused mkdir left missing: heal cannot make the parent writable, so it
     # must not answer "nothing to heal" beneath the problem. The preview and

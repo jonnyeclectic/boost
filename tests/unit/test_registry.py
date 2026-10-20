@@ -684,8 +684,9 @@ class TestUpdateConcurrency:
                        for i in range(n)]
         config.save(cfg)
         for i in range(n):
-            registry.Tap(name="tap%d" % i, url="u%d" % i).path.mkdir(
-                parents=True)
+            # `.git` makes it a clone `update` pulls rather than re-clones.
+            (registry.Tap(name="tap%d" % i, url="u%d" % i).path / ".git"
+             ).mkdir(parents=True)
 
     def test_pulls_overlap(self, sandbox, fake_pull):
         self._seed_pinned_taps(4)
