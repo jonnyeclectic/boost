@@ -363,8 +363,8 @@ the repository too — `<repo>/CLAUDE.local.md`, `<repo>/.cursor/rules/`,
 
 After a fresh clone, `boost sync` re-materializes anything the project lock
 records but the checkout is missing. It never deletes a skill directory boost
-didn't write, and won't overwrite a hand-written `.claude/skills/<name>/`
-without `--force`.
+didn't write, and never overwrites a hand-written `.claude/skills/<name>/`;
+`boost install <name> --local --force` is what replaces one.
 
 `boost update` covers user scope only for now. To refresh a vendored skill, use
 `boost install <skill> --local --force`.
