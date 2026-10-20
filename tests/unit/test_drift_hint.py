@@ -113,3 +113,113 @@ _STATUS_WORD = {
     integrity.STATUS_UNREACHABLE: "unreachable",
 }
 
+
+
+class TestRetapHint:
+    """`registry.retap_hint` — the command that restores an untapped source.
+
+    The tap's *name* is not a spec: a local tap is named after its directory's
+    basename (`boost tap fix` cannot parse), and a GitLab tap is named
+    `owner/repo`, which `parse_spec` resolves to GitHub. Only the recorded URL
+    re-taps what was actually installed from.
+    """
+
+    def test_recorded_https_url_is_used_verbatim(self):
+        assert (quality.registry.retap_hint(
+            "acme/fix", "https://gitlab.example.com/acme/fix")
+                == "boost tap https://gitlab.example.com/acme/fix")
+
+    def test_recorded_local_path_is_used(self, tmp_path):
+        src = tmp_path / "fix"
+        hint = quality.registry.retap_hint("fix", str(src))
+        assert hint == "boost tap %s" % str(src)
+
+    def test_a_path_with_a_space_is_quoted_so_it_stays_one_argument(self):
+        hint = quality.registry.retap_hint("fix", "/srv/my taps/fix")
+        assert hint.startswith("boost tap ")
+        arg = hint[len("boost tap "):]
+        assert arg != "/srv/my taps/fix"
+        assert arg[0] in "'\"" and arg[-1] == arg[0]
+        assert "/srv/my taps/fix" in arg
+
+    def test_windows_double_quotes_only_a_path_with_whitespace(self, monkeypatch):
+        """cmd.exe and PowerShell do not take `shlex.quote`'s single quotes."""
+        monkeypatch.setattr(quality.registry.sys, "platform", "win32")
+        assert (quality.registry.retap_hint("fix", r"C:\my taps\fix")
+                == 'boost tap "C:\\my taps\\fix"')
+        assert (quality.registry.retap_hint("fix", r"C:\taps\fix")
+                == r"boost tap C:\taps\fix")
+        assert (quality.registry.retap_hint("fix", "C:\\my\ttab")
+                == 'boost tap "C:\\my\ttab"')
+
+    def test_legacy_entry_with_an_owner_repo_name_falls_back_to_it(self):
+        assert quality.registry.retap_hint("owner/repo") == "boost tap owner/repo"
+        assert quality.registry.retap_hint("owner/repo", "") == "boost tap owner/repo"
+
+    def test_legacy_local_name_prints_no_command(self):
+        hint = quality.registry.retap_hint("fix")
+        assert "boost tap" not in hint
+        assert "fix" in hint
+        assert "not recorded" in hint
+
+    def test_a_name_with_a_space_is_not_offered_as_a_spec(self):
+        assert "boost tap" not in quality.registry.retap_hint("a b/c")
+
+    def test_the_wheel_tap_is_never_offered_as_a_spec(self):
+        hint = quality.registry.retap_hint("boost/builtin", "builtin:boost")
+        assert "builtin:boost" not in hint
+        assert "boost tap" not in hint
+
+
+class TestDriftHintUsesRecordedSource:
+    def test_untapped_local_tap_hints_its_path(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(quality.registry, "is_tapped", lambda name: False)
+        src = str(tmp_path / "fix")
+        assert (quality._drift_hint("brainstorming", "source-missing", "fix",
+                                    tap_url=src)
+                == "boost tap %s" % src)
+
+    def test_untapped_gitlab_tap_hints_its_host(self, monkeypatch):
+        monkeypatch.setattr(quality.registry, "is_tapped", lambda name: False)
+        hint = quality._drift_hint("brainstorming", "source-missing", "acme/fix",
+                                   tap_url="https://gitlab.example.com/acme/fix")
+        assert hint == "boost tap https://gitlab.example.com/acme/fix"
+
+    def test_still_tapped_ignores_the_url(self, monkeypatch):
+        monkeypatch.setattr(quality.registry, "is_tapped", lambda name: True)
+        assert (quality._drift_hint("x", "source-missing", "fix",
+                                    tap_url="/somewhere/fix") == "boost update")
+
+
+class TestDriftEndToEnd:
+    def test_drift_after_untap_names_the_path_that_retaps(
+            self, boost, fixture_tap_src, tmp_path):
+        import json
+        import shutil
+        src = tmp_path / "drift-retap-src"
+        shutil.copytree(fixture_tap_src, src)
+        boost("tap", src)
+        boost("install", "brainstorming")
+        boost("untap", "drift-retap-src", "--force", expect=None)
+        rows = json.loads(boost("drift", "--json").out)["skills"]
+        row = next(r for r in rows if r["name"] == "brainstorming")
+        assert row["status"] == "source-missing"
+        assert row["hint"] == "boost tap %s" % str(src.resolve())
+        # …and the hint actually runs.
+        boost(*row["hint"].split(" ", 2)[1:])
+
+    def test_a_narrow_pane_never_clips_the_hint_command(
+            self, boost, fixture_tap_src, tmp_path, monkeypatch):
+        """The hint is a command with an absolute path in it now; clipped to
+        `boost tap /priv…` it is a command that does not run."""
+        import shutil
+        src = tmp_path / "drift-narrow-src"
+        shutil.copytree(fixture_tap_src, src)
+        boost("tap", src)
+        boost("install", "brainstorming")
+        boost("untap", "drift-narrow-src", "--force", expect=None)
+        monkeypatch.setenv("COLUMNS", "60")
+        text = boost("drift").out
+        assert "source-missing" in text
+        assert "…" not in text
+        assert ("boost tap %s" % str(src.resolve())) in text

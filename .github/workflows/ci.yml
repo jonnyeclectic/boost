@@ -554,7 +554,7 @@ jobs:
     # stood then. The retraction at the end of this block is NOT part of that
     # snapshot and is dated separately. For what the cap is worth against the
     # pack committed today, run `scripts/mutation_shards.py plan --shards 16
-    # --explain --timeout-minutes 75` rather than trust a number restated here.
+    # --explain --timeout-minutes 120` rather than trust a number restated here.
     #
     # The split was never the problem — the runners were. The committed pack
     # balances to within a hundredth of a percent (`--explain` prints each
@@ -684,7 +684,7 @@ jobs:
     #
     # Figures re-derived 2026-10-05 against the pack committed that day, and
     # they go stale on the next weights refresh: run `plan --shards 16
-    # --explain --timeout-minutes 75` for the live ones rather than trusting
+    # --explain --timeout-minutes 120` for the live ones rather than trusting
     # these, and read them next to the observed 34.6 / 55.8 rather than alone.
     #
     # THE FIXED COST WAS MEASURED, AND MOST OF IT WAS A TEST (2026-10-09).
@@ -699,12 +699,46 @@ jobs:
     # that lands. The per-width figures above were computed before it and
     # are kept as the record of what `plan` said then.
     #
+    # 75 -> 120, AND WHY THIS IS NOT THE RAISE THE BLOCK ABOVE FORBIDS
+    # (2026-10-20). Run 39357937728 (head 525611de, cold cache) ran sixteen
+    # shards from 21.8 to 73.4 min, and shard 14 was cancelled at 75 on two
+    # pushes, while `plan` put the pack at a 29.3 median and a 56.0 tail.
+    # The weights were wrong, not the runners: the 2026-10-19 refresh
+    # (a3092119) had dropped store.py's measured time because one untested
+    # mutant (mutmut exit 33, never run, never timed) made the record look
+    # partial. That left 6,592 mutants at the repo mean. `weights` now
+    # exempts exit 33 (NO_TESTS_EXIT in mutation_shards.py), and the
+    # committed weights were rebuilt from that run's fifteen shards, with
+    # main run 39330392672 filling in shard 14. The 26 `store._inside`
+    # mutants are new on the train and sat in the cancelled shard, so neither
+    # run timed them. They are imputed at store.py's own measured 7.11
+    # s/mutant (185 s of 136.4M ms), and that is the one guessed figure in the
+    # file. The next mutation-weights-refresh on main regenerates the whole
+    # file with the fixed `weights`. The model then holds: each
+    # shard's measured mutant time / 4 matches its mutation phase at 0.97.
+    #
+    # Honest weights put the total at 136.8M ms against the 89.9M that was
+    # committed, and two things follow that re-packing cannot fix:
+    #   * one unit, store._copy_tree, is 7,563,494 ms on its own: 120
+    #     mutants at a median 72 s, because 97 of them survive and a
+    #     survivor runs its whole covering test set. That is 32.2 min of
+    #     mutation + 7.1 fixed = 39.3, and x 1.91 is 75.1. Its tail alone
+    #     exceeds a 75-minute cap at any width. Killing those survivors is
+    #     what shrinks it.
+    #   * at sixteen the balanced pack is 41.9 + 1.6 = 43.5 median minutes
+    #     (FIXED_MINUTES re-measured cold at 7.1), and x 1.91 is 83.0.
+    # The argument above against a second raise assumed a split could always
+    # get under the cap. With a single unit whose tail is past it, a split
+    # cannot. 100 would put 83.0 at 83%, past the 80% gate. 120 puts it at
+    # 69%, the same kind of margin the eval floors keep. A ceiling costs
+    # nothing on a shard that finishes early.
+    #
     # tests/unit/test_mutation_shard_count.py pins all of it: that this number
     # and the matrix below and every `--shards` in this repo agree, and that
     # the committed pack passes `plan --timeout-minutes` against this cap with
     # 20% headroom. So the next pack that would be cancelled fails a unit test
     # instead, which is the point.
-    timeout-minutes: 75
+    timeout-minutes: 120
     permissions:
       contents: read
     strategy:

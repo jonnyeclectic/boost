@@ -540,6 +540,28 @@ def check_path_length(path: Path, *, what: str = "path") -> Path:
     return path
 
 
+def write_unclaimed(directory: Path, stem: str, suffix: str, text: str) -> Path:
+    """Write ``text`` to ``directory/<stem><suffix>`` without replacing anything.
+
+    When that name is taken, ``<stem>.1<suffix>``, ``<stem>.2<suffix>``, ... are
+    tried in turn. Each attempt opens with ``"x"``, so a file that appears
+    between the check and the write is skipped rather than clobbered. For a
+    file written on the user's behalf that they never named: the name is
+    boost's guess, so a file already sitting there is theirs, not ours.
+    """
+    n = 0
+    while True:
+        dest = directory / ("%s%s%s" % (stem, ".%d" % n if n else "", suffix))
+        try:
+            with dest.open("x", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+            return dest
+        except FileExistsError:
+            n += 1
+        except OSError as exc:
+            raise BoostError("cannot write %s: %s" % (dest, exc)) from exc
+
+
 def resolve_slug(raw: str, *, what: str = "name") -> str:
     """Slugify a user-typed ``raw``, refusing one with nothing to slug.
 
@@ -622,14 +644,14 @@ def dir_size(path: Path) -> int:
 def copied_files(path: Path) -> list[Path]:
     """The files ``install`` will copy out of ``path``, in walk order.
 
-    ``store`` installs with ``shutil.copytree(symlinks=False, ignore=
-    ignore_patterns(*IGNORED))``: every link is copied as what it points at,
-    a linked *directory* included, and an ``IGNORED`` name is skipped at any
-    depth. ``Path.rglob`` does not descend through a directory link, so sizing
-    a skill from the tap that way said 61 B and 1 file for a skill that
-    installs as 861 B and 2. A dangling link copies nothing (copytree fails on
-    it, and the failure belongs to install, not to a size estimate). Two
-    paths to one directory are two copies, as they are to copytree; only a
+    Every link counts as what it points at, a linked *directory* included,
+    and an ``IGNORED`` name is skipped at any depth. ``store._copy_tree``
+    keeps a link inside the skill as a link and skips one out of the tap, so
+    this is what the skill *reaches*, an upper bound on the copy's bytes.
+    ``Path.rglob`` does not descend through a directory link, so sizing a
+    skill from the tap that way said 61 B and 1 file for a skill that
+    installs as 861 B and 2. A dangling link copies nothing (install skips
+    it and says so). Two paths to one directory are two copies; only a
     directory that resolves to one of its own ancestors — a link cycle — is
     not descended, so the walk cannot hang.
     """

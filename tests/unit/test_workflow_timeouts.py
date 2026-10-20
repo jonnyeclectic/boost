@@ -52,7 +52,7 @@ MAX_REASONABLE = 90
 # runners have no such ceiling; this repo uses none.) Nothing may reach it.
 GITHUB_CEILING = 360
 
-# One job legitimately exceeds MAX_REASONABLE, and it is named here rather than
+# Two jobs legitimately exceed MAX_REASONABLE, and they are named here rather than
 # waved through by loosening the bound for everyone. `shards.yml` / `build`
 # embeds a whole bin-packed group of registries per matrix entry; the worst
 # single tap measured ~75 minutes, and 330 is what fits several of those under
@@ -60,7 +60,16 @@ GITHUB_CEILING = 360
 # how it escaped: the old parser anchored on `(\d+)\s*$`, did not match, and
 # `continue`d — so the one timeout in the repo over the bound was the one
 # timeout the bound never saw.
-JUSTIFIED_LONGER = {("shards.yml", "build"): 330}
+#
+# `ci.yml` / `mutation-shard` is the second. `store._copy_tree` is one
+# unsplittable unit whose slow-runner tail alone is 75.1 minutes (32.2
+# mutating + 7.1 fixed, x 1.91), so no packing fits under 90; at sixteen
+# shards `mutation_shards.py plan --explain` puts the slowest tail at 83.0,
+# 69% of 120. Three train pushes in a row lost shard 14 at the old 75 cap,
+# and `tests/unit/test_mutation_shard_count.py` already fails the build if
+# the pack ever needs more than 80% of this number.
+JUSTIFIED_LONGER = {("shards.yml", "build"): 330,
+                    ("ci.yml", "mutation-shard"): 120}
 
 CI = WORKFLOWS / "ci.yml"
 

@@ -143,7 +143,7 @@ class TestDistill:
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("BOOST_ASSUME_YES")
         r = boost("distill", "tdd-workflow", "commit-messages", "-o",
-                  "brainstorming", "--install")
+                  "brainstorming", "--install", expect=1)
         assert "not installed: brainstorming is already installed from fixture-tap" in r.out
         assert "generated skill saved to" in r.out
         fallback = tmp_path / "brainstorming.SKILL.md"
@@ -163,8 +163,10 @@ class TestDistill:
         """
         monkeypatch.chdir(tmp_path)
         boost("policy", "set", "blocked_skills", "tdd-workflow-distilled")
+        # rc=1: the install the user asked for did not happen, and a script
+        # must be able to tell (it exited 0 here).
         r = boost("distill", "tdd-workflow", "commit-messages", "--install",
-                  expect=0)
+                  expect=1)
 
         assert "not installed" in (r.out + r.err)
         assert "policy blocks" in (r.out + r.err)
@@ -177,6 +179,47 @@ class TestDistill:
         assert meta["name"] == "tdd-workflow-distilled"
         # and it really was refused, not quietly installed anyway
         assert not (paths.store_dir() / "tdd-workflow-distilled").exists()
+
+    def test_declined_install_never_overwrites_an_existing_fallback_file(
+            self, boost, installed, tmp_path, monkeypatch):
+        # Bug: the fallback wrote <name>.SKILL.md unconditionally, destroying a
+        # user's file of that name on the very path where they declined.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        mine = tmp_path / "brainstorming.SKILL.md"
+        mine.write_bytes(b"precious notes\n")
+        for n in (1, 2):
+            r = boost("distill", "tdd-workflow", "commit-messages", "-o",
+                      "brainstorming", "--install", expect=1)
+            saved = tmp_path / ("brainstorming.%d.SKILL.md" % n)
+            assert "generated skill saved to %s" % paths.tilde(saved) in flat(r.out)
+            meta, _ = frontmatter.parse(saved.read_text(encoding="utf-8"))
+            assert meta["name"] == "brainstorming"
+        assert mine.read_bytes() == b"precious notes\n"
+
+    def test_tap_qualified_sources_name_the_output_by_the_bare_name(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # Bug: `fixture-tap:tdd-workflow` produced `fixture-tap:tdd-workflow-
+        # distilled`, whose printed `boost import` hint then failed.
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "fixture-tap:tdd-workflow",
+                  "fixture-tap:commit-messages")
+        assert "install it with `boost import ./tdd-workflow-distilled`" in r.out
+        assert not [p for p in tmp_path.iterdir() if ":" in p.name]
+        skill = tmp_path / "tdd-workflow-distilled" / "SKILL.md"
+        assert frontmatter.parse(skill.read_text(encoding="utf-8"))[0]["name"] \
+            == "tdd-workflow-distilled"
+        boost("import", "./tdd-workflow-distilled")
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        assert lock["skills"]["tdd-workflow-distilled"]["tap"] == "local"
+
+    def test_tap_qualified_install_lands_under_the_bare_name(
+            self, boost, tapped, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "fixture-tap:tdd-workflow",
+                  "fixture-tap:commit-messages", "--install")
+        assert "installed tdd-workflow-distilled" in r.out
+        assert (paths.store_dir() / "tdd-workflow-distilled" / "SKILL.md").is_file()
 
     def test_ai_path_uses_reply(self, boost, tapped, tmp_path, monkeypatch, ai_on):
         monkeypatch.chdir(tmp_path)
@@ -369,6 +412,21 @@ class TestInfer:
         lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["project-conventions"]["tap"] == "local"
 
+    def test_refused_install_exits_nonzero_even_with_yes_and_is_not_journaled(
+            self, boost, sandbox, py_project, tmp_path, monkeypatch):
+        # Bug: a pinned name refused the install, yet `--install -y` exited 0
+        # and journaled the infer as if it had happened.
+        monkeypatch.chdir(tmp_path)
+        boost("infer", "--path", py_project, "--name", "pinme", "--install")
+        boost("pin", "pinme")
+        before = journal.events(action="infer")
+        r = boost("infer", "--path", py_project, "--name", "pinme",
+                  "--install", "-y", expect=1)
+        assert "not installed:" in r.out
+        assert (tmp_path / "pinme.SKILL.md").is_file()
+        after = journal.events(action="infer")
+        assert len(after) == len(before)
+
     @pytest.mark.skipif(sys.platform == "win32",
                         reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
@@ -455,6 +513,20 @@ class TestAbsorb:
         assert "recurring patterns from 1 history file(s)" not in r.out
         assert "- Always run the linter before committing. (seen 4x)" in r.out
         assert "name: absorbed-patterns" in r.out
+
+    def test_refused_install_exits_nonzero(self, boost, sandbox, tmp_path,
+                                           monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        hist = sandbox / ".claude" / "projects" / "proj"
+        hist.mkdir(parents=True)
+        (hist / "chat.jsonl").write_text("\n".join(
+            _history_line("always run the linter before committing")
+            for _ in range(3)) + "\n", encoding="utf-8")
+        boost("policy", "set", "blocked_skills", "absorbed-patterns")
+        r = boost("absorb", "--install", expect=1)
+        assert "not installed" in r.out
+        assert (tmp_path / "absorbed-patterns.SKILL.md").is_file()
+        assert not (paths.store_dir() / "absorbed-patterns").exists()
 
     def test_history_flag_missing_and_empty_dir(self, boost, sandbox, tmp_path):
         r = boost("absorb", "--history", "/no/such/file.jsonl", expect=1)

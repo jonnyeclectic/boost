@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .. import __version__
 from ..errors import BoostError
-from . import catalog, lockfile, logs, paths, registry, store
+from . import catalog, frontmatter, lockfile, logs, paths, registry, store
 from . import output as out
 
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -99,15 +99,7 @@ def _frontmatter_tags(meta) -> list:
     reads as "no tags". This runs inside the page render, so a single item with
     ``tags: {a: 1}`` in one of hundreds of taps must not blank the catalogue.
     """
-    if not isinstance(meta, dict):
-        return []
-    raw = meta.get("tags")
-    if isinstance(raw, str):
-        raw = raw.split(",")
-    if not isinstance(raw, (list, tuple)):
-        return []
-    return [str(t).strip().lower() for t in raw
-            if isinstance(t, (str, int, float)) and str(t).strip()]
+    return [t.lower() for t in frontmatter.tags_of(meta)]
 
 
 def entry_tags(entry: dict, *, installed=(), categories=None) -> list:

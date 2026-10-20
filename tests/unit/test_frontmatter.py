@@ -3,6 +3,8 @@
 """Unit tests: boost_cli/core/frontmatter.py — the SKILL.md YAML-subset parser."""
 from __future__ import annotations
 
+import pytest
+
 from boost_cli.core import frontmatter
 
 
@@ -436,10 +438,11 @@ class TestMutationPrecision:
         meta, _ = frontmatter.parse("---\ndesc: hello\n world\n---\n")
         assert meta["desc"] == "hello world"         # indent > 0, not > 1
 
-    def test_indented_colon_line_is_a_key_not_a_fold(self):
+    def test_indented_colon_line_is_not_a_fold(self):
+        # Not folded into `desc`, and (since `desc` already has a value, so
+        # this cannot open a nested map) not a key anywhere either.
         meta, _ = frontmatter.parse("---\ndesc: hello\n  key: val\n---\n")
-        assert meta["desc"] == "hello"
-        assert meta["key"] == "val"
+        assert meta == {"desc": "hello"}
 
     def test_unindented_colonless_word_is_skipped_not_terminal(self):
         # a bare word at indent 0 is skipped; parsing continues past it
@@ -488,3 +491,131 @@ class TestMutationPrecision:
     def test_dump_escapes_embedded_quote_exact(self):
         # value has a quote AND a colon -> quoted branch escapes the quote
         assert frontmatter.dump({"d": 'a": b'}) == '---\nd: "a\\": b"\n---'
+
+
+class TestByteOrderMark:
+    """A file saved by a Windows editor opens with U+FEFF; it must parse as
+    the same file without one, not as a frontmatter-less body."""
+
+    def test_split_strips_a_leading_bom(self):
+        block, body = frontmatter.split("﻿---\nname: x\n---\n\n# Body")
+        assert block == "name: x"
+        assert body == "# Body"
+
+    def test_split_without_frontmatter_drops_the_bom_from_the_body(self):
+        assert frontmatter.split("﻿# Just markdown") == ("", "# Just markdown")
+
+    def test_parse_reads_bom_frontmatter(self):
+        meta, body = frontmatter.parse(
+            "﻿---\nname: x\ndescription: d\nversion: 1.2.0\n---\nbody")
+        assert meta == {"name": "x", "description": "d", "version": "1.2.0"}
+        assert body == "body"
+
+    def test_unclosed_sees_through_a_bom(self):
+        assert frontmatter.unclosed("﻿---\nname: x\nno close\n") is True
+        assert frontmatter.unclosed("﻿---\nname: x\n---\n") is False
+
+    def test_only_a_leading_bom_is_stripped(self):
+        _meta, body = frontmatter.parse("---\nname: x\n---\na﻿b")
+        assert body == "a﻿b"
+
+
+class TestNestedMaps:
+    """Indented `k: v` lines belong to a nested map, kept as a dict under the
+    parent key; they never override a top-level key (the Agent Skills spec's
+    `metadata:` map, `author:`)."""
+
+    def test_nested_author_name_does_not_rename_the_skill(self):
+        meta = frontmatter.parse_block(
+            "name: author-skill\ndescription: d\nauthor:\n"
+            "  name: Jane Doe\n  email: jane@example.com\n"
+            "metadata:\n  version: \"2.0\"\n")
+        assert meta == {"name": "author-skill", "description": "d",
+                        "author": {"name": "Jane Doe",
+                                   "email": "jane@example.com"},
+                        "metadata": {"version": "2.0"}}
+
+    def test_nested_values_are_typed_like_top_level_ones(self):
+        meta = frontmatter.parse_block(
+            "m:\n  n: 3\n  q: \"3\"\n  f: [a, b]\n  t: true\n"
+            "  c: x # note\n  l:\n    - one\n    - two\n  m2:\n  - compact\n")
+        assert meta == {"m": {"n": 3, "q": "3", "f": ["a", "b"], "t": True,
+                              "c": "x", "l": ["one", "two"],
+                              "m2": ["compact"]}}
+
+    def test_top_level_keys_after_a_nested_map_still_parse(self):
+        meta = frontmatter.parse_block(
+            "name: s\nmetadata:\n  version: \"2.0\"\n  tags:\n    - nested\n"
+            "    - more\nversion: 1.1.0\ntags:\n  - top\n")
+        assert meta == {"name": "s",
+                        "metadata": {"version": "2.0",
+                                     "tags": ["nested", "more"]},
+                        "version": "1.1.0", "tags": ["top"]}
+
+    def test_only_one_level_is_modelled(self):
+        meta = frontmatter.parse_block(
+            "name: s\nmetadata:\n  notes: |\n    description: no\n"
+            "    - not an item\n  deep:\n    k: v\n  plain words\n"
+            "description: yes\n")
+        assert meta == {"name": "s", "metadata": {"notes": "", "deep": ""},
+                        "description": "yes"}
+
+    def test_indented_key_under_a_valued_key_is_skipped_with_its_subtree(self):
+        meta = frontmatter.parse_block(
+            "name: s\n  extra: x\n    - y\n  more\nversion: 2\n")
+        assert meta == {"name": "s", "version": 2}
+
+    def test_a_list_parent_is_not_turned_into_a_map(self):
+        meta = frontmatter.parse_block("tags:\n  - a\n  k: v\nname: s\n")
+        assert meta == {"tags": ["a"], "name": "s"}
+
+    def test_top_level_is_the_first_key_indent(self):
+        # A wholly indented block is still read: its top level is its own
+        # first key's column, and only lines deeper than that are nested.
+        meta = frontmatter.parse_block(
+            "  name: s\n  author:\n    name: other\n  version: 2.0.1\n")
+        assert meta == {"name": "s", "author": {"name": "other"},
+                        "version": "2.0.1"}
+
+    def test_list_items_and_folds_under_top_keys_are_unchanged(self):
+        meta = frontmatter.parse_block(
+            "description: one\n  two\nrequires:\n  - a\n  - b\n")
+        assert meta == {"description": "one two", "requires": ["a", "b"]}
+
+    def test_dump_round_trips_a_nested_map(self):
+        meta = {"name": "a", "author": {"name": "Jane: Doe", "v": "2.0",
+                                        "tags": ["x", "y"], "b": False},
+                "version": "1.0"}
+        text = frontmatter.dump(meta)
+        assert "author:\n  name: \"Jane: Doe\"\n  v: \"2.0\"\n" in text
+        assert "  tags:\n    - x\n    - y\n  b: false\n" in text
+        assert frontmatter.parse(text + "\n")[0] == meta
+
+
+class TestTagsOf:
+    """`tags_of` reads list, comma-string and scalar `tags:` alike."""
+
+    def test_a_scalar_string_is_one_tag_not_its_characters(self):
+        assert frontmatter.tags_of({"tags": "testing"}) == ["testing"]
+
+    def test_a_comma_string_splits_and_strips(self):
+        assert frontmatter.tags_of({"tags": " a, B ,,c "}) == ["a", "B", "c"]
+
+    def test_a_list_keeps_case_and_drops_blanks(self):
+        assert frontmatter.tags_of({"tags": ["Git", " x ", "", 5]}) == ["Git", "x", "5"]
+
+    def test_a_number_is_one_tag(self):
+        assert frontmatter.tags_of({"tags": 5}) == ["5"]
+        assert frontmatter.tags_of({"tags": 1.5}) == ["1.5"]
+
+    @pytest.mark.parametrize("raw", [None, {"a": 1}, True, [True, {"a": 1}, None]])
+    def test_junk_reads_as_no_tags(self, raw):
+        assert frontmatter.tags_of({"tags": raw}) == []
+
+    def test_a_non_dict_meta_or_missing_key_is_no_tags(self):
+        assert frontmatter.tags_of(None) == []
+        assert frontmatter.tags_of({}) == []
+
+    def test_parsed_scalar_frontmatter_round_trip(self):
+        meta, _ = frontmatter.parse("---\nname: x\ntags: testing\n---\nbody\n")
+        assert frontmatter.tags_of(meta) == ["testing"]

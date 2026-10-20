@@ -58,18 +58,8 @@ def _read(p: Path) -> str:
         raise BoostError("cannot read %s: %s" % (_tilde(p), e)) from e
 
 
-def _for_tap(entry, qualifier):
-    """``entry`` unless a ``tap:`` qualifier was given that it does not satisfy.
-
-    A qualifier has to be honored against the *installed* record, not only the
-    catalog: with one skill installed from tap A and asked about via
-    ``tap-b:skill``, tap A's lock entry is the wrong answer, and reporting it
-    would describe another tap's install as this one's.
-    """
-    if entry and qualifier and not catalog.tap_matches(
-            str(entry.get("tap") or ""), qualifier):
-        return None
-    return entry
+# Moved to core so the MCP tools resolve a `tap:name` exactly as these do.
+_for_tap = catalog.for_tap
 
 
 def _resolve_skill_md(name: str):
@@ -190,7 +180,7 @@ def _resolve_text(name: str):
 
 def _as_list(v) -> list:
     """Normalize a frontmatter value to a list of non-empty strings."""
-    if v in (None, "", False):
+    if v in (None, "", False) or isinstance(v, dict):
         return []
     if isinstance(v, list):
         return [str(x).strip() for x in v if str(x).strip()]
@@ -542,8 +532,13 @@ def cmd_info(argv):
     if lock:
         matches = catalog.find(args.name)
         same_tap = [e for e in matches if e["tap"] == lock.get("tap")]
-        candidates = same_tap or matches
-        cat = candidates[0] if candidates else None
+        # Describe the copy that is installed: a tap can ship one name twice,
+        # and `same_tap[0]` showed the other copy's description beside this
+        # one's `source`.
+        if same_tap:
+            cat, _ = catalog.select_lock_source(same_tap, lock)
+        else:
+            cat = matches[0] if matches else None
     else:
         cat = catalog.resolve_one(args.name)   # raises if unknown anywhere
     # `lock`/`plock` only ever hold a *skill* lock entry (they read the

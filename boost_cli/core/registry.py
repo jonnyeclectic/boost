@@ -6,6 +6,7 @@ from __future__ import annotations
 import difflib
 import os
 import re
+import shlex
 import sys
 import time
 import urllib.parse
@@ -52,6 +53,20 @@ class Tap:
     def is_cloned(self) -> bool:
         """True if the tap's clone directory exists on disk."""
         return self.path.is_dir()
+
+    @property
+    def is_broken_clone(self) -> bool:
+        """True if the clone dir exists but is not a git repository.
+
+        `is_cloned` stays `path.is_dir()` — two dozen callers read it as "is
+        there a tree to scan", and the wheel tap is a legitimate tree with no
+        `.git`. But a git-backed tap whose `.git` is gone (a backup or sync
+        tool that skips it, a hand `rm`) answered True there, so doctor said
+        healthy, heal said nothing to heal, and every `boost update` failed
+        with "not a git repository" without ever re-cloning it.
+        """
+        return (self.is_cloned and not self.url.startswith(WHEEL_SCHEME)
+                and not gitutil.is_repo(self.path))
 
 
 # One path component, in BYTES. ext4, APFS and NTFS all stop at 255, and
@@ -355,6 +370,44 @@ def is_tapped(name: str) -> bool:
     return any(t.name == name for t in list_taps())
 
 
+def broken_clone_line(name: str) -> str:
+    """The one line doctor and heal print for a `Tap.is_broken_clone` tap.
+
+    Shared so the two cannot prescribe different fixes. Not `boost untap`,
+    which is what `update`'s own failure line used to suggest: the source is
+    fine, only the local clone is damaged, and `update` re-clones it.
+    """
+    return ("tap %s is not a git repository (its .git is missing) — run "
+            "`boost update %s` to re-clone it" % (name, name))
+
+
+def _shell_arg(arg: str) -> str:
+    """`arg` as one argument a user can paste into their shell."""
+    if sys.platform == "win32":
+        # cmd.exe and PowerShell both take double quotes; neither takes the
+        # single quotes `shlex.quote` emits.
+        return '"%s"' % arg if any(c.isspace() for c in arg) else arg
+    return shlex.quote(arg)
+
+
+def retap_hint(name: str, url: str = "") -> str:
+    """What to run to re-tap `name` once it is no longer configured.
+
+    The *name* is not a spec in general: a local tap is named after its
+    directory's basename (`boost tap fix` does not parse), and a tap from any
+    host other than GitHub is named `owner/repo`, which `parse_spec` resolves
+    to GitHub — a different repository. So the recorded `url` (the lock's
+    `tap_url`) is used when there is one. Without it — a lock entry written
+    before the field existed — only an owner/repo-shaped name is offered as a
+    command, and anything else gets words rather than a command that fails.
+    """
+    if url and not url.startswith(WHEEL_SCHEME):
+        return "boost tap %s" % _shell_arg(url)
+    if url.startswith(WHEEL_SCHEME) or "/" not in name or " " in name:
+        return "re-tap %s from its original source (its URL was not recorded)" % name
+    return "boost tap %s" % name
+
+
 def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     """Parse `spec`, shallow-clone it, and record the tap in config.
 
@@ -539,6 +592,41 @@ def _clear_path(path) -> None:
             "could not clear %s" % paths.tilde(Path(path)),
             hint="something is in the way and cannot be removed; delete it "
                  "by hand, then retry") from exc
+
+
+def _reclone(tap: Tap, pin: str | None) -> None:
+    """Clone ``tap`` afresh (checked out at ``pin`` if given), replacing
+    whatever is at ``tap.path`` **only once the new clone is complete**.
+
+    The clone lands in a staging sibling first. Clearing the old path and
+    then cloning into it lost a broken clone's tree whenever the re-clone
+    failed — offline, an auth error, a remote moved or deleted — and that tree
+    was still scannable and installable from; doctor and heal both point at
+    `boost update <name>`, so their own remedy destroyed it. A failed clone or
+    an unhonourable pin now leaves ``tap.path`` exactly as it was. (A pin that
+    cannot be checked out still never lands as a tree on HEAD with a stale pin
+    beside it: the staging copy is discarded with it.)
+    """
+    staging = tap.path.with_name(tap.path.name + ".boost-reclone")
+    _clear_path(staging)
+    try:
+        gitutil.clone_shallow(tap.url, staging)
+        if pin:
+            gitutil.checkout_commit(staging, pin)
+    except BoostError:
+        with suppress(OSError):
+            util.remove_path(staging)
+        raise
+    # `is_cloned` is `path.is_dir()`, which a *dangling* symlink answers
+    # False to, so a dangling link reaches here too and is cleared like any
+    # other leftover before the finished clone moves into place.
+    _clear_path(tap.path)
+    try:
+        os.replace(staging, tap.path)
+    except OSError as exc:
+        raise BoostError(
+            "could not move the new clone into %s" % paths.tilde(tap.path),
+            hint="retry `boost update %s`" % tap.name) from exc
 
 
 def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
@@ -940,7 +1028,11 @@ def update(name: str | None = None,
             from . import builtin
             builtin.ensure_tap()
             return "refreshed from the installed package", False
-        elif not tap.is_cloned:
+        elif not tap.is_cloned or tap.is_broken_clone:
+            # A clone dir with no `.git` takes this branch too: `pull` can
+            # only fail there ("not a git repository"), forever, and the
+            # remedy is the same re-clone a missing dir gets.
+            #
             # A missing clone has nothing to hold still, so a pin here is
             # a target to land on rather than a reason to skip — skipping
             # used to report "pinned … (skipped)" while leaving nothing on
@@ -953,19 +1045,10 @@ def update(name: str | None = None,
             # create work tree dir ... File exists"). Without the removal the
             # tap can never be recovered: doctor reports it not cloned and
             # points at `update`, and update fails the same way forever.
-            _clear_path(tap.path)
-            gitutil.clone_shallow(tap.url, tap.path)
-            if tap.pin and not force:
-                try:
-                    gitutil.checkout_commit(tap.path, tap.pin)
-                except BoostError:
-                    # A pin that cannot be honoured must not leave a tap
-                    # on HEAD with a stale pin recorded beside it — the
-                    # next sweep would read `is_cloned` true and quietly
-                    # "skip" a tree that was never checked out.
-                    util.rmtree(tap.path)
-                    raise
-                return "cloned at %s" % tap.pin[:7], False
+            pin = tap.pin if not force else None
+            _reclone(tap, pin)
+            if pin:
+                return "cloned at %s" % pin[:7], False
             return "cloned", bool(tap.pin)
         elif tap.pin and not force:
             # A pinned tap is held at one commit on purpose: prebuilt

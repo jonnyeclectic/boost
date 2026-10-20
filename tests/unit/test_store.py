@@ -277,6 +277,15 @@ class TestInstallVia:
         ev = journal.events(action="install")[0]
         assert ev["via"] == "protocol"
 
+    def test_project_skill_install_records_tap_url(self, tap, entry, tmp_path):
+        from boost_cli.core import projectlock
+        repo = tmp_path / "proj-tapurl"
+        (repo / ".git").mkdir(parents=True)
+        store.install(entry, scope="project", base=str(repo))
+        rec = projectlock.get_skill(repo, "brainstorming")
+        assert rec is not None
+        assert rec["tap_url"] == tap.url
+
     def test_project_skill_install_records_via(self, entry, tmp_path):
         repo = tmp_path / "proj"
         (repo / ".git").mkdir(parents=True)
@@ -1215,7 +1224,8 @@ class TestSyncPlan:
     EMPTY: ClassVar[dict] = {"missing_store": [], "missing_links": [],
              "blocked_links": [], "stale_links": [], "adoptable_store": [],
              "older_copies": [], "foreign_store": [], "not_skill_store": [],
-             "unreadable_store": [], "misnamed_store": [],
+             "unreadable_store": [], "misnamed_store": [], "workflow_copies": [],
+             "rule_blocks": [],
              "plugin_duplicates": [], "unrecorded_store": [],
              "missing_materializations": [], "out_of_scope_links": []}
 
@@ -3431,6 +3441,55 @@ class TestProjectSkills:
         actions = store.project_sync_apply(
             store.project_sync_plan(base=str(repo)), base=str(repo))
         assert any("source is gone" in a for a in actions)
+        # heal and sync print it as a warning, and heal exits 1 over it.
+        gone = [a for a in actions if "source is gone" in a]
+        assert gone and all(store.is_unrepaired(a) for a in gone)
+        assert not store.is_unrepaired("re-materialized brainstorming from t")
+
+    def test_sync_preview_names_a_restorable_copy_and_writes_nothing(
+            self, entry, tmp_path):
+        repo, _ = self._install(entry, tmp_path)
+        gone = repo / ".claude" / "skills" / "brainstorming"
+        shutil.rmtree(gone)
+        lines = store.project_sync_preview(
+            store.project_sync_plan(base=str(repo)), base=str(repo))
+        tap_name = entry["tap"]
+        assert lines == ["would re-materialize project skill brainstorming "
+                         "→ claude-code from %s" % tap_name]
+        assert not any(store.is_unrepaired(x) for x in lines)
+        assert not gone.exists()
+
+    def test_sync_preview_warns_where_apply_would_report_gone(
+            self, entry, tmp_path):
+        """The preview and the run must agree on an unrestorable copy."""
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec["tap"] = "no-such-tap-preview"
+        projectlock.set_skill(repo, "brainstorming", rec)
+        plan = store.project_sync_plan(base=str(repo))
+        lines = store.project_sync_preview(plan, base=str(repo))
+        assert lines == ["brainstorming is missing from the project but its "
+                         "source is gone — run `boost update` or reinstall"]
+        assert all(store.is_unrepaired(x) for x in lines)
+        assert store.project_sync_apply(plan, base=str(repo)) == lines
+
+    def test_sync_preview_treats_a_local_row_as_gone(self, entry, tmp_path):
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec["tap"] = "local"
+        projectlock.set_skill(repo, "brainstorming", rec)
+        lines = store.project_sync_preview(
+            store.project_sync_plan(base=str(repo)), base=str(repo))
+        assert len(lines) == 1 and store.is_unrepaired(lines[0])
+
+    def test_sync_preview_is_empty_with_nothing_missing(self, entry, tmp_path):
+        repo, _ = self._install(entry, tmp_path)
+        assert store.project_sync_preview(
+            store.project_sync_plan(base=str(repo)), base=str(repo)) == []
 
     # ── the committed-lock contract ──────────────────────────────────────
 

@@ -6,10 +6,12 @@ Every write snapshots the previous version into ~/.boost/state/lock-history/
 so `boost replay` can show history and roll back.
 
 Skill entry schema (v3):
-  version, tap, source_dir, commit, sha256,
+  version, tap, tap_url, source_dir, commit, sha256,
   installed_at, updated_at, pinned, quarantined, agents[], tags[]
   (+ source_url on a `boost import`: the git URL, or "" for a local path; when
   set, source_dir is the skill's directory inside that repo)
+  (tap_url is the tap's own URL or local path at install time, absent on
+  entries written before it was recorded: `drift` re-taps from it)
 """
 from __future__ import annotations
 
@@ -446,8 +448,10 @@ def portable(lock: dict) -> dict:
     projected = json.loads(json.dumps(lock))
     for _kind, section in SECTIONS:
         for entry in projected.get(section, {}).values():
-            for m in entry.get("materializations") or []:
-                if "path" in m:
+            # A workflow's ``foreign`` rows name a path under $HOME too.
+            for m in (*(entry.get("materializations") or ()),
+                      *(entry.get("foreign") or ())):
+                if isinstance(m, dict) and "path" in m:
                     m["path"] = paths.tilde(m["path"])
     return projected
 

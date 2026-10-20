@@ -83,10 +83,9 @@ class TestRealFrontmatterRoundTrip:
     """The declaration must survive boost's actual frontmatter parser.
 
     This is why the shape is flat. core/frontmatter.py is a stdlib YAML *subset*
-    with no nested-mapping support, and it does not fail loudly on one — it
-    hoists the inner keys to top level and clobbers their siblings. These tests
-    pin both halves: the flat forms work, and the nested form is provably
-    unusable, so nobody "simplifies" the design back into a nested block.
+    that models one level of nested map and no deeper. These tests pin both
+    halves: the flat forms work, and a nested server-spec block is not read as
+    a declaration, so nobody "simplifies" the design back into one.
     """
 
     def _meta(self, body):
@@ -109,14 +108,31 @@ class TestRealFrontmatterRoundTrip:
         assert meta["name"] == "demo"
         assert meta["requires"] == ["a"]
 
-    def test_nested_mapping_is_corrupted_by_the_parser(self):
-        # The exact failure the flat design exists to avoid: `mcp` comes back
-        # empty and the inner keys land at top level.
+    def test_nested_server_block_declares_nothing(self):
+        # Two levels deep: the parser keeps only the first, so `mcp` is a dict
+        # holding no usable spec — and nothing leaks to the top level.
         meta = self._meta("name: demo\nmcp:\n  servers:\n"
                           "    - name: github\n      command: npx\n")
-        assert meta["mcp"] == ""
-        assert "servers" in meta          # hoisted out of the mapping
+        assert meta["name"] == "demo"
+        assert isinstance(meta["mcp"], dict)
+        assert "servers" not in meta and "command" not in meta
         assert mcpdecl.declared_names(meta) == []
+
+    def test_requires_mcp_block_is_read(self):
+        meta = self._meta("name: demo\nrequires:\n  mcp: [rube, github]\n")
+        assert meta["requires"] == {"mcp": ["rube", "github"]}
+        assert mcpdecl.declared_names(meta) == ["rube", "github"]
+
+    def test_top_level_mcp_wins_over_requires_mcp(self):
+        meta = self._meta("mcp: github\nrequires:\n  mcp: [rube]\n")
+        assert mcpdecl.declared_names(meta) == ["github"]
+
+    def test_empty_top_level_mcp_still_shadows_requires_mcp(self):
+        meta = {"mcp": "", "requires": {"mcp": ["rube"]}}
+        assert mcpdecl.declared_names(meta) == []
+
+    def test_requires_dict_without_mcp_declares_nothing(self):
+        assert mcpdecl.declared_names({"requires": {"tools": ["x"]}}) == []
 
 
 class TestParseSidecar:

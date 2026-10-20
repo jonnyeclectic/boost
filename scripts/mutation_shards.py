@@ -211,7 +211,16 @@ RUNNER_EFFICIENCY = 0.98
 #: divides, so the predicted tail approaches ``FIXED_MINUTES x
 #: TAIL_MULTIPLIER`` instead of zero however many shards are added.
 #: ``tests/unit/test_mutation_shard_count.py`` carries the figures.
-FIXED_MINUTES = 5.5
+#:
+#: **Re-measured cold, 2026-10-20: 7.1.** CI run 39357937728 (head
+#: ``525611de``, sixteen shards, a cold cache -- the key hashes ``tests/``, so
+#: every release-train push is cold) logged the preamble, job start to
+#: ``Running mutation testing``, at a median **7.09 min** over its fifteen
+#: successful shards, range 4.36-8.65. That is above 5.5, so it is raised as
+#: the paragraph above asks. The same run confirms the divided term: each
+#: shard's own summed mutmut durations / 4 match its mutation phase at a
+#: median 0.970 of the four workers (0.939-0.989), against the 0.98 committed.
+FIXED_MINUTES = 7.1
 
 #: How much worse the *worst* run of a shard is than that shard's median.
 #:
@@ -267,7 +276,16 @@ FIXED_MINUTES = 5.5
 #: measured at the *previous* width, which is a lag, and the median under the
 #: multiplier did not divide the way a model through the origin said, which
 #: was a shape problem — :data:`FIXED_MINUTES` is the fix for the second.
-#: Neither is this constant. Being over-estimated is what kept the gate as honest as it
+#: Neither is this constant.
+#:
+#: **Not re-fitted on the 2026-10-20 cancellations, deliberately.** Run
+#: 39357937728 spread 21.8 to 73.4 min (shard 14 cancelled at 75) on a pack
+#: whose weights all agreed to 0.01%. That 3.4x was imbalance, not runner
+#: noise: shard 12's mutation phase was 66.7 min against 65.7 of its own
+#: measured mutant time / 4, while ``plan`` had given it ~24. The weights
+#: had lost ``store.py``'s timing (see :data:`NO_TESTS_EXIT`). Re-fitting
+#: the multiplier on that run would launder a weights bug into this constant.
+#: Being over-estimated is what kept the gate as honest as it
 #: stayed while the median came apart, so do not re-fit it downward on the
 #: 1.60-1.63 evidence: two runs is not the 28 samples a shard it was fitted
 #: over, and the margin is currently doing real work.
@@ -747,7 +765,11 @@ def unit_weight(root: Path, unit: Unit) -> int:
     total = sum(shares.values())
     if not total:
         return max(file_weight, 1)
-    return max(file_weight * shares.get(unit.symbol, 1) // total, 1)
+    # Ceiling, not floor: flooring every share drops up to 1 ms per function,
+    # so once every function of a file is timed the units sum to less than the
+    # file they were cut from (store.py: 178 ms short of its 53,114,371) and
+    # the planner under-counts the very file that sets the slowest shard.
+    return max(-(-file_weight * shares.get(unit.symbol, 1) // total), 1)
 
 
 def pack(root: Path, shards: int) -> list[list[Unit]]:
@@ -1494,6 +1516,12 @@ def cmd_drift(args: argparse.Namespace) -> int:
     return _emit_drift(args, "\n".join(lines) + "\n", moved=moved, cost=cost)
 
 
+#: mutmut's exit code for a mutant no test covers. It is assigned without
+#: running anything (``if not tests: exit_code_by_key[...] = 33`` in mutmut's
+#: ``__main__``), so such a mutant never has a duration and costs no time.
+NO_TESTS_EXIT = 33
+
+
 def cmd_weights(args: argparse.Namespace) -> int:
     """Record real mutant counts so the next split balances better.
 
@@ -1520,10 +1548,25 @@ def cmd_weights(args: argparse.Namespace) -> int:
             # ones. A file is only time-weighted when every one of its mutants
             # has a duration, so a partial record cannot understate a file and
             # win itself extra work.
+            #
+            # "Every" means every mutant mutmut RAN. Exit code 33 is "no
+            # tests": mutmut never runs that mutant, so it never gets a
+            # duration, and it costs nothing. Counting it as missing data
+            # threw away the measured time for any file with one untested
+            # mutant. That happened to store.py on the 2026-10-19 refresh
+            # (a3092119): 6,592 mutants fell back to the 2.6 s/mutant repo
+            # mean, and a new `_copy_tree` that really costs 63 s/mutant
+            # (7,563 s over 120 mutants, CI run 39357937728, shard 12) went
+            # unweighted. Shard 12 ran 73.4 min and shard 14 was cancelled
+            # at 75 on a pack that `plan` put at a 56-minute tail. A `None`
+            # code (a mutant that never ran because its shard died) still
+            # blocks.
             durations = data.get("durations_by_key") or {}
-            values = [v for v in durations.values()
-                      if isinstance(v, (int, float)) and v >= 0]
-            if len(values) == len(codes) and values:
+            due = {k for k, c in codes.items() if c != NO_TESTS_EXIT}
+            values = [durations[k] for k in due
+                      if isinstance(durations.get(k), (int, float))
+                      and durations[k] >= 0]
+            if len(values) == len(due) and values:
                 millis[name] = max(round(sum(values) * 1000), 1)
             # Attribute each mutant to the function it belongs to, so a split
             # file balances on measured counts rather than on body size. Keys

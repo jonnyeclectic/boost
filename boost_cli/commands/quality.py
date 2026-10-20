@@ -309,7 +309,8 @@ _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
                "stranded": "danger"}
 
 
-def _drift_hint(name: str, status: str, tap: str = "") -> str:
+def _drift_hint(name: str, status: str, tap: str = "",
+                tap_url: str = "") -> str:
     if status == "quarantined":
         return "boost quarantine --release %s to restore" % name
     if status == "upstream-moved":
@@ -320,7 +321,9 @@ def _drift_hint(name: str, status: str, tap: str = "") -> str:
         # `boost update` only refreshes configured taps. When the entry's
         # tap has been untapped, that command is a guaranteed no-op — the
         # only remedy that can actually restore the source is re-tapping it.
-        return "boost update" if registry.is_tapped(tap) else "boost tap %s" % tap
+        # The name is not a spec, so the hint re-taps the recorded source.
+        return ("boost update" if registry.is_tapped(tap)
+                else registry.retap_hint(tap, tap_url))
     if status == "store-missing":
         return "boost heal"
     if status == "stranded":
@@ -584,6 +587,8 @@ def cmd_doctor(argv):
     for tap in taps:
         if not tap.is_cloned:
             bad("tap", "tap %s not cloned — run `boost update`" % tap.name)
+        elif tap.is_broken_clone:
+            bad("tap", registry.broken_clone_line(tap.name), wrap=True)
         elif not tap.cache_file.exists():
             bad("tap", "tap %s has no catalog cache — run `boost update %s`%s"
                 % (tap.name, tap.name, " once %s is %s"
@@ -722,9 +727,8 @@ def cmd_doctor(argv):
             continue
         # tamper detection: the lock file records a sha256 at install time, but
         # only `boost verify` ever re-checked it — surface content drift here too.
-        locked = entry.get("sha256")
-        if (locked and not integrity.self_sourced(name, entry)
-                and util.sha256_dir(sdir) != locked):
+        # `integrity.skill_modified` is the test `boost_doctor` asks too.
+        if integrity.skill_modified(name, entry):
             bad("skill", "skill %s modified since install — run `boost verify`" % name)
             skill_issues += 1
         # A deliberate sideline (`focus`, `profile use`, `context apply`)
@@ -806,8 +810,15 @@ def cmd_doctor(argv):
     for name, entry in sorted(pskills.items()):
         st = integrity.project_status(entry, pbase)
         if st == integrity.STATUS_MISSING:
-            bad("project-skill", "project skill %s is in .boost but its files are gone — "
-                "run `boost sync`" % name)
+            gone = integrity.project_missing_rows(entry, pbase)
+            if integrity.project_skill_dirs(entry, pbase):
+                # Some copies stand: name the agents' copies that do not, or
+                # "its files are gone" reads false over an intact .claude/.
+                bad("project-skill", "project skill %s is missing %s — run "
+                    "`boost heal`" % (name, ", ".join(gone)), wrap=True)
+            else:
+                bad("project-skill", "project skill %s is in .boost but its "
+                    "files are gone — run `boost sync`" % name)
             proj_issues += 1
         elif st == integrity.STATUS_MODIFIED:
             bad("project-skill", "project skill %s modified since install — "
@@ -938,6 +949,17 @@ def cmd_doctor(argv):
                         "`boost reinstall %s`"
                         % (name, m.get("agent", "?"), name))
                 mat_issues += 1
+        # The user's own file held this path at install. While it is there
+        # that is their choice, not a fault; once it is gone the command is
+        # missing, and `boost sync` writes it (`store.sync_plan` agrees).
+        for r in store.foreign_rows(entry):
+            if (store.materialization_is_written("workflow", entry, r)
+                    and not os.path.lexists(r["path"])):
+                bad("workflow", "workflow %s was not written for %s: a file "
+                    "boost did not write held %s, and it is gone now — run "
+                    "`boost sync`" % (name, r["agent"], _tilde(r["path"])),
+                    wrap=True)
+                mat_issues += 1
         if mat_issues == before:
             mat_issues += _drifted("workflow", name, entry, bad)
     # A note, not an issue: the workflow works for every agent with a workflow
@@ -1064,6 +1086,14 @@ def cmd_doctor(argv):
         if unrec["misnamed_store"]:
             rep.note("misnamed", store.misnamed_line(unrec["misnamed_store"]),
                      wrap=True)
+        # An issue, not a note: the workflow it belongs to has no record, so
+        # no command updates or uninstalls it until `boost install` re-records.
+        for line in store.workflow_copy_lines(unrec["workflow_copies"]):
+            bad("workflow-copies", line, wrap=True)
+        # The same for a rule's block in a context file: the agent reads it
+        # every session and `boost uninstall` answers "not installed".
+        for line in store.rule_block_lines(unrec["rule_blocks"]):
+            bad("rule-blocks", line, wrap=True)
     dups = store.plugin_duplicates(skills, coverage) if agents_ok else []
     same = [r[0] for r in dups if r[3] == foreign.IDENTICAL]
     if same:
@@ -1492,7 +1522,8 @@ def cmd_drift(argv):
         status = (_drift_status(name, entry) if kind == "skill"
                   else _drift_status_materialized(kind, name, entry))
         rows.append({"name": name, "kind": kind, "status": status,
-                     "hint": _drift_hint(name, status, entry.get("tap", ""))})
+                     "hint": _drift_hint(name, status, entry.get("tap", ""),
+                                         str(entry.get("tap_url") or ""))})
     if args.json:
         print(json.dumps({"skills": rows}))
         return 0
@@ -1504,7 +1535,10 @@ def cmd_drift(argv):
                 else "%s (%s)" % (r["name"], r["kind"]),
                 out.role(r["status"], _DRIFT_ROLE[r["status"]]),
                 out.role(r["hint"], "muted")) for r in rows],
-              headers=("NAME", "STATUS", "HINT"), whole=("NAME",))
+              # HINT is a command to paste, and an untapped source's carries
+              # a whole path or URL: clipped, it is a command that fails.
+              headers=("NAME", "STATUS", "HINT"), whole=("NAME",),
+              keep=("HINT",))
     counts: dict = {}
     for r in rows:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
@@ -1743,6 +1777,20 @@ def cmd_heal(argv):
             (out.warn if store.is_unrepaired(msg) else out.ok)(
                 msg.replace(str(paths.home()), "~"))
             actions.append(msg)
+    # A project skill's agent copy deleted from the repo: doctor and verify
+    # report it, so heal repairs it the way `boost sync` does -- only the
+    # missing agents, never re-copying over a teammate's edit in the others.
+    pplan = store.project_sync_plan()
+    if dry:
+        # Worded by the same source check the run uses, so a copy whose tap
+        # is gone is warned about here rather than promised.
+        for msg in store.project_sync_preview(pplan):
+            (out.warn if store.is_unrepaired(msg) else out.info)(msg)
+            actions.append(msg)
+    else:
+        for msg in store.project_sync_apply({"missing": pplan["missing"]}):
+            (out.warn if store.is_unrepaired(msg) else out.ok)(msg)
+            actions.append(msg)
     # A repair heal will not make (a pin over a moved source, a URL import it
     # cannot re-clone) fails the run like any other thing it left: exiting 0
     # over a skill still missing is what kept doctor and heal in a loop.
@@ -1833,9 +1881,17 @@ def cmd_heal(argv):
     # run it previews exits 0.
     cache_dir = paths.cache_dir()
     cache_stuck = paths.refuses_writes(cache_dir) is not None
+    broken_taps = []
     for tap in registry.list_taps():
         if not tap.is_cloned:
             out.warn("tap %s not cloned — skipped (run `boost update`)" % tap.name)
+            continue
+        if tap.is_broken_clone:
+            # Not rebuilt: a catalog of a tree git no longer tracks would
+            # certify it. Re-cloning is `update`'s job (network), so heal
+            # names it and does not answer "nothing to heal" beneath it.
+            broken_taps.append(tap.path)
+            out.warn(registry.broken_clone_line(tap.name), wrap=True)
             continue
         had_cache = tap.cache_file.exists()
         if dry:
@@ -1879,6 +1935,7 @@ def cmd_heal(argv):
         out.warn("agent dir %s — heal does not change permissions; run %s, "
                  "then `boost sync`" % store.unwritable_refusal(str(adir)),
                  wrap=True)
+    stuck.extend(broken_taps)
     # The same rule for the cache dir doctor flags, and for any directory a
     # refused mkdir left missing: heal cannot make the parent writable, so it
     # must not answer "nothing to heal" beneath the problem. The preview and
@@ -1917,6 +1974,18 @@ def cmd_heal(argv):
     if plan["unreadable_store"]:
         stuck.extend(Path(where) for _name, where in plan["unreadable_store"])
         out.warn(store.unreadable_line(plan["unreadable_store"]), wrap=True)
+    # A workflow's skill copy the lock lost. Not heal's to re-record — which
+    # tap the workflow came from is in the lock that is gone — and never
+    # adopted as a skill; named, and heal does not exit 0 over it.
+    if plan["workflow_copies"]:
+        stuck.extend(store.skill_store_dir(n) for n, _wf in plan["workflow_copies"])
+        for line in store.workflow_copy_lines(plan["workflow_copies"]):
+            out.warn(line, wrap=True)
+    # A rule's block the lock lost: the same, in the file it sits in.
+    if plan["rule_blocks"]:
+        stuck.extend(Path(p) for _n, p in plan["rule_blocks"])
+        for line in store.rule_block_lines(plan["rule_blocks"]):
+            out.warn(line, wrap=True)
     # A lock that cannot be read is `boost replay`'s to restore. heal answered
     # "nothing to heal" over it, with every store dir it could not record.
     if not integ.ok and integ.problem != "missing":

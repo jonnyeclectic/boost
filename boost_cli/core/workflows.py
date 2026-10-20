@@ -131,6 +131,11 @@ def _toml_str(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
 
 
+# Claude's whole-input placeholder, not a longer identifier that starts with
+# it, and not the indexed ``$ARGUMENTS[0]`` form, which has no Gemini twin.
+_ARGUMENTS = re.compile(r"\$ARGUMENTS(?![\w\[])")
+
+
 def render_gemini_command(name: str, raw: str) -> str:
     """A Markdown workflow rendered as a Gemini CLI ``.toml`` slash command.
 
@@ -143,13 +148,25 @@ def render_gemini_command(name: str, raw: str) -> str:
     A body that is empty after stripping frontmatter still emits ``prompt = ""``
     — a valid, discoverable (if useless) command — because the alternative is a
     file with no ``prompt`` key at all, which Gemini rejects outright.
+
+    Claude's ``$ARGUMENTS`` becomes Gemini's ``{{args}}``. Source: the
+    ``docs/cli/custom-commands.md`` shipped in Gemini CLI 0.61.0's bundle
+    ("Handling arguments"): a prompt containing ``{{args}}`` has it replaced
+    with what the user typed, and a prompt without one gets the input
+    appended after two newlines, so a literal ``$ARGUMENTS`` left the model
+    reading a placeholder where the input belonged. Claude's positional
+    ``$1``/``$2`` have no Gemini counterpart and are left as written. A
+    ``description`` that is not a string (a YAML list) is dropped rather than
+    emitted as its Python repr.
     """
     meta, body = frontmatter.parse(raw)
     lines = []
-    description = str(meta.get("description") or "").strip()
+    d = meta.get("description")
+    description = d.strip() if isinstance(d, str) else ""
     if description:
         lines.append("description = %s" % _toml_str(description))
-    lines.append("prompt = %s" % _toml_str(body.strip("\n")))
+    prompt = _ARGUMENTS.sub("{{args}}", body.strip("\n"))
+    lines.append("prompt = %s" % _toml_str(prompt))
     return "\n".join(lines) + "\n"
 
 

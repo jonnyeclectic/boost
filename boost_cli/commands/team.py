@@ -961,7 +961,16 @@ def cmd_replay(argv) -> int:
     for n in restorable:  # in snapshot, missing now, resolvable
         want = snap_skills[n]
         entry = resolved[n]
-        res = store.install(entry, force=True)
+        # Restore the row as the snapshot recorded it: its agent scope, then
+        # its version and commit holds — a fresh install carries none of them.
+        res = store.install(entry, force=True,
+                            only_agents=want.get("only_agents") or None)
+        if store.reapply_recorded_holds(n, want) and not args.json:
+            out.warn("%s is commit-pinned at %s, but its tap now serves %s — "
+                     "`boost verify` will flag it"
+                     % (n, str(want.get("commit_pin"))[:12],
+                        str((lockfile.get_skill(n) or {}).get("commit") or "?")[:12]),
+                     wrap=True)
         if str(entry.get("version")) != str(want.get("version")):
             if not args.json:
                 out.warn("restored %s v%s from current tap state (snapshot had v%s)"
