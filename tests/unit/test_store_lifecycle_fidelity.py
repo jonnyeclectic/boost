@@ -293,10 +293,24 @@ class TestProjectSyncKeepsTheLock:
                            "blocklist"):
             store._restore_project_copies(repo, "brainstorming", rec, entry,
                                           ["cursor"])
-        assert store.project_sync_apply(
-            store.project_sync_plan(base=str(repo)), base=str(repo)) == [
-            store._project_gone("brainstorming")]
+        plan = store.project_sync_plan(base=str(repo))
+        gone = [store._project_gone("brainstorming")]
+        assert store.project_sync_preview(plan, base=str(repo)) == gone
+        assert store.project_sync_apply(plan, base=str(repo)) == gone
         assert not cursor_copy.exists()
+
+    def test_an_agent_dir_symlinked_out_of_the_repo_is_not_written(
+            self, tap, entry, tmp_path):
+        repo = self._install(entry, tmp_path)
+        skills = repo / ".cursor" / "skills"
+        shutil.rmtree(skills)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        skills.symlink_to(outside, target_is_directory=True)
+        actions = store.project_sync_apply(
+            store.project_sync_plan(base=str(repo)), base=str(repo))
+        assert actions == [store._project_gone("brainstorming")]
+        assert list(outside.iterdir()) == []
 
     def test_restore_with_nothing_writable_reports_gone(self, tap, entry, tmp_path):
         repo = self._install(entry, tmp_path)
@@ -316,7 +330,8 @@ class TestSecondRepoRefusal:
                                         Path("/repo2"), force=False)
         assert ei.value.message == (
             "w is already installed --local in %s, and a workflow can be "
-            "installed --local into only one repo per machine" % tmp_path)
+            "installed --local into only one repo per machine"
+            % paths.tilde(tmp_path))
 
     def test_a_row_without_a_base_says_another_repo(self):
         existing = {"scope": "project", "kind": "rule"}

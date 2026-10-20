@@ -1715,7 +1715,8 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
         raise BoostError(
             "%s is already installed --local in %s, and a %s can be installed "
             "--local into only one repo per machine"
-            % (name, existing.get("base") or "another repo",
+            % (name, paths.tilde(Path(existing["base"]))
+               if existing.get("base") else "another repo",
                existing.get("kind") or "rule or workflow"),
             hint="`boost uninstall %s` from that repo first; --force cannot "
                  "move it" % name, wrap=True)
@@ -2643,6 +2644,19 @@ def _project_restorable(entry: dict, cat_entry: dict) -> bool:
     return bool(locked_sha) and _skill_source_sha(cat_entry) == locked_sha
 
 
+def _project_policy_violations(resolved_base: Path, name: str,
+                               cat_entry: dict) -> list[str]:
+    """The install policy gate, applied to a sync repair.
+
+    The install a repair replaced applied it, so a skill or tap blocklisted
+    since the lock was written must not come back through `boost sync` — and
+    the dry run asks the same question, so it does not promise a restore the
+    run then refuses.
+    """
+    return policy.check_install(
+        cat_entry, _count_others(projectlock.installed(resolved_base), name))
+
+
 def _restore_project_copies(resolved_base: Path, name: str, entry: dict,
                             cat_entry: dict, missing: list) -> None:
     """Copy ``cat_entry``'s source back to the recorded paths ``missing``.
@@ -2654,10 +2668,7 @@ def _restore_project_copies(resolved_base: Path, name: str, entry: dict,
     same two checks a project install makes. Raises :class:`BoostError`
     when there is nothing it may write.
     """
-    # The same policy gate the install this replaced applied: a skill or tap
-    # blocklisted since the lock was written must not come back through sync.
-    violations = policy.check_install(
-        cat_entry, _count_others(projectlock.installed(resolved_base), name))
+    violations = _project_policy_violations(resolved_base, name, cat_entry)
     if violations:
         raise BoostError("policy blocks restoring %s: %s"
                          % (name, "; ".join(violations)))
@@ -2724,7 +2735,8 @@ def project_sync_preview(plan: dict[str, list], base=None) -> list[str]:
             lines.append(warning)
         if cat_entry and not _project_restorable(entry, cat_entry):
             lines.append(_project_moved(name))
-        elif cat_entry:
+        elif cat_entry and not _project_policy_violations(
+                resolved_base, name, cat_entry):
             lines.append("would re-materialize project skill %s → %s from %s"
                          % (name, ", ".join(wanted[name]), entry.get("tap")))
         else:

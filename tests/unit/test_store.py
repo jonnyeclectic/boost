@@ -1947,7 +1947,7 @@ class TestRuleInstall:
             assert ei.value.message == (
                 "team-conventions is already installed --local in %s, and a "
                 "rule can be installed --local into only one repo per machine"
-                % repo1)
+                % paths.tilde(repo1))
             assert ei.value.hint == ("`boost uninstall team-conventions` from "
                                      "that repo first; --force cannot move it")
         assert lockfile.get_rule("team-conventions")["base"] == str(repo1)
@@ -2452,7 +2452,8 @@ class TestCheckScopeConflict:
                 "x", existing, "project", Path("/repo2"), force=True)
         assert ei.value.message == (
             "x is already installed --local in %s, and a rule or workflow can "
-            "be installed --local into only one repo per machine" % tmp_path)
+            "be installed --local into only one repo per machine"
+            % paths.tilde(tmp_path))
         assert "different scope" not in ei.value.hint
 
     def test_cross_scope_hint_points_at_uninstalling_the_other_location(self):
