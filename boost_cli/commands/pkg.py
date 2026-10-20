@@ -1567,7 +1567,8 @@ def _refresh_line(label: str, old_v: str, new_v: str, edited: bool,
 
 def _update_materialized(kind: str, installed: dict[str, dict], results,
                          discard_edits: bool = False,
-                         allow_downgrade: bool = False
+                         allow_downgrade: bool = False, *,
+                         index: dict[str, list[dict]],
                          ) -> tuple[int, int, int, int]:
     """Re-materialize installed rules/workflows whose tap source moved.
 
@@ -1583,6 +1584,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
     they were held rather than that everything is up to date. ``held`` also
     counts an update that was attempted and refused (a policy block, a
     declined diff), which is just as much "not up to date".
+    ``index`` is the run's :func:`catalog.name_index`, as in ``_update_skill``.
     """
     import hashlib
     n = held = pinned = quarantined = 0
@@ -1590,7 +1592,8 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
         tapname = lk.get("tap")
         if tapname in (None, "local") or tapname not in results:
             continue
-        matches = [e for e in catalog.find(name)
+        pool = index.get(catalog.split_name(name)[1], [])
+        matches = [e for e in catalog.find(name, entries=pool)
                    if e["tap"] == tapname and e.get("kind", "skill") == kind]
         if not matches:
             out.warn("%s %s is no longer in tap %s — leaving as-is"
@@ -1824,18 +1827,26 @@ def _ingest_shards(args) -> int:
 
 
 def _update_skill(name: str, lk: dict, scope: str, pbase, results,
-                  args) -> tuple[int, int, int, int]:
+                  args, *, heads: dict[str, str],
+                  index: dict[str, list[dict]]) -> tuple[int, int, int, int]:
     """Refresh one installed skill: ``(upgraded, held, pinned, quarantined)``.
 
     ``scope``/``pbase`` say which install this row is: a project row is judged
     against its copy in the repo and reinstalled there (``--local --force``),
     and recorded in that repo's lock rather than the user's.
+
+    ``heads`` memoises each tap's HEAD and ``index`` is the catalogue keyed by
+    name (:func:`catalog.name_index`), both shared across the whole run: per
+    skill, they were a git subprocess and a full ``all_entries`` + linear scan,
+    O(installed x catalogue) — 308 skills over 63k entries spent ~9 s there.
     """
     label = name + (" (project)" if scope == scopes.SCOPE_PROJECT else "")
     tapname: str = lk.get("tap") or "local"
     if tapname == "local" or tapname not in results:
         return 0, 0, 0, 0
-    matches = [e for e in catalog.find(name) if e["tap"] == tapname]
+    pool = index.get(catalog.split_name(name)[1], [])
+    matches = [e for e in catalog.find(name, entries=pool)
+               if e["tap"] == tapname]
     if not matches:
         out.warn("%s is no longer in tap %s — leaving as-is" % (label, tapname))
         return 0, 0, 0, 0
@@ -1850,7 +1861,9 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     new_v = str(entry.get("version", "0.0.0"))
     head, src_sha = "", None
     if not util.semver_gt(new_v, old_v):
-        head = gitutil.head_commit(registry.get(tapname).path)
+        if tapname not in heads:
+            heads[tapname] = gitutil.head_commit(registry.get(tapname).path)
+        head = heads[tapname]
         if head and head != lk.get("commit"):
             try:
                 src_sha = util.sha256_dir(store.source_dir_for(entry))
@@ -1934,9 +1947,19 @@ def cmd_update(argv: list[str]) -> int:
         return 0
     moved = []
     pinned_skips = 0
+    heads: dict[str, str] = {}
     for tname, summary in results.items():
         if "skipped" not in summary:
-            catalog.rebuild_tap(registry.get(tname))
+            # Rescan only a tap that moved, or whose cache is missing, from an
+            # older CACHE_FORMAT, or scanned at another commit. Rescanning all
+            # of them cost a full scan per tap on "already up to date", and the
+            # rewrite bumped every cache mtime, so the next search rebuilt the
+            # BM25 index too (rag.stale is stat-only).
+            tap = registry.get(tname)
+            heads[tname] = gitutil.head_commit(tap.path)
+            if "→" in summary or not catalog.cache_is_fresh(tap,
+                                                            heads[tname]):
+                catalog.rebuild_tap(tap)
         else:
             pinned_skips += 1
         # "abc1234 → def5678" is a tap whose tree changed; "already up to date"
@@ -1977,8 +2000,10 @@ def cmd_update(argv: list[str]) -> int:
     # Both locks, so a `--local` skill is refreshed in the repo it lives in —
     # the user lock alone left it at its old version under "everything up to
     # date" while `boost info` said it had an update.
+    index = catalog.name_index(catalog.all_entries())
     for name, lk, scope, pbase in integrity.installed_skill_rows():
-        n, h, p, q = _update_skill(name, lk, scope, pbase, results, args)
+        n, h, p, q = _update_skill(name, lk, scope, pbase, results, args,
+                                   heads=heads, index=index)
         upgraded += n
         held += h
         pinned_held += p
@@ -1991,7 +2016,7 @@ def cmd_update(argv: list[str]) -> int:
                           ("workflow", lockfile.installed_workflows())):
         n, h, p, q = _update_materialized(
             kind, section, results, discard_edits=args.discard_edits,
-            allow_downgrade=args.allow_downgrade)
+            allow_downgrade=args.allow_downgrade, index=index)
         upgraded += n
         held += h
         pinned_held += p

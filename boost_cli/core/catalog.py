@@ -373,7 +373,34 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
 # the cached list is shared by reference (matching the index cache). Keying on
 # nanosecond mtime + size catches rewrites a bare second-resolution mtime would
 # miss.
-_ENTRY_CACHE: dict[str, tuple[tuple[int, int], list[dict], bool]] = {}
+_ENTRY_CACHE: dict[str, tuple[tuple[int, int], list[dict], bool, str]] = {}
+
+
+def _cache_record(tap: registry.Tap) -> tuple[list[dict], bool, str] | None:
+    """``(skills, is_current, commit)`` for a tap's cache, or ``None`` when
+    the file is missing, unreadable or corrupt. ``commit`` is the HEAD the
+    cache was scanned at (``""`` when it never recorded one)."""
+    p = tap.cache_file
+    key = str(p)
+    try:
+        st = p.stat()
+    except OSError:
+        _ENTRY_CACHE.pop(key, None)
+        return None
+    stamp = (st.st_mtime_ns, st.st_size)
+    cached = _ENTRY_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1], cached[2], cached[3]
+    data = jsonstate.read_object(p)[0]
+    if data is None:
+        _ENTRY_CACHE.pop(key, None)
+        return None
+    skills = data.get("skills", [])
+    current = data.get("format") == CACHE_FORMAT
+    commit = data.get("commit")
+    commit = commit if isinstance(commit, str) else ""
+    _ENTRY_CACHE[key] = (stamp, skills, current, commit)
+    return skills, current, commit
 
 
 def _cached_tap(tap: registry.Tap) -> tuple[list[dict], bool] | None:
@@ -388,25 +415,45 @@ def _cached_tap(tap: registry.Tap) -> tuple[list[dict], bool] | None:
     them — so discarding it unconditionally would trade a missing digest for
     missing entries, which is the worse failure.
     """
-    p = tap.cache_file
-    key = str(p)
-    try:
-        st = p.stat()
-    except OSError:
-        _ENTRY_CACHE.pop(key, None)
-        return None
-    stamp = (st.st_mtime_ns, st.st_size)
-    cached = _ENTRY_CACHE.get(key)
-    if cached is not None and cached[0] == stamp:
-        return cached[1], cached[2]
-    data = jsonstate.read_object(p)[0]
-    if data is None:
-        _ENTRY_CACHE.pop(key, None)
-        return None
-    skills = data.get("skills", [])
-    current = data.get("format") == CACHE_FORMAT
-    _ENTRY_CACHE[key] = (stamp, skills, current)
-    return skills, current
+    rec = _cache_record(tap)
+    return None if rec is None else (rec[0], rec[1])
+
+
+def cache_is_fresh(tap: registry.Tap, head: str | None = None) -> bool:
+    """True when a tap's cache needs no rescan: it exists, parses, was written
+    at this ``CACHE_FORMAT``, stamps the tap's current ★, and was scanned at
+    the clone's current HEAD.
+
+    ``update`` and ``heal`` ask this before :func:`rebuild_tap`. Rescanning an
+    unchanged tap is not just slow (a full ``scan_dir``; ~20 s across a 63k-item
+    install that had nothing to do): the rewrite bumps the cache mtime, and
+    ``rag.stale`` is stat-only, so the next search rebuilt the BM25 index too.
+    An unresolvable HEAD (``""``) is never fresh — two unknowns are not a match.
+    ``head`` lets a caller that already resolved it skip the git subprocess.
+    """
+    rec = _cache_record(tap)
+    if rec is None or not rec[1]:
+        return False
+    # ``curated`` is config, stamped onto every entry at scan time: a tap whose
+    # ★ was set or cleared since (`heal` unstarring one) needs the restamp.
+    if any(bool(e.get("curated")) != tap.curated for e in rec[0][:1]):
+        return False
+    if head is None:
+        head = gitutil.head_commit(tap.path) if tap.is_cloned else ""
+    return bool(head) and rec[2] == head
+
+
+def name_index(entries: list[dict]) -> dict[str, list[dict]]:
+    """``{name: [entries…]}`` over ``entries``, in their order.
+
+    For a caller resolving one name per installed item: :func:`find` is a
+    linear pass over the whole catalogue, so N installed items cost N x 70k
+    comparisons where one pass and N dict lookups do.
+    """
+    idx: dict[str, list[dict]] = {}
+    for e in entries:
+        idx.setdefault(e["name"], []).append(e)
+    return idx
 
 
 def load_tap(tap: registry.Tap, rebuild: bool = False) -> list[dict]:

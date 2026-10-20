@@ -1976,7 +1976,7 @@ def cmd_heal(argv):
                      % _tilde(dup.path))
 
     # A ★ the catalogue no longer gives. Cleared before the cache loop below,
-    # which rebuilds every cloned tap's cache: the flag is stamped onto each
+    # which rebuilds a cache whose stamped ★ no longer matches: the flag is stamped onto each
     # entry at scan time, so flipping config alone would leave browse and the
     # curated fallback reading the old star. One line, not one per tap — a
     # catalogue machine has ~420 of them.
@@ -2017,7 +2017,12 @@ def cmd_heal(argv):
             if not had_cache and not cache_stuck:
                 out.info("would rebuild catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
-        else:
+        elif not (had_cache and catalog.cache_is_fresh(tap)):
+            # Only a missing, unreadable or stale cache (older CACHE_FORMAT,
+            # or scanned at another commit) — what the dry run promises. An
+            # unconditional rescan made "nothing to heal" cost a full scan of
+            # every tap and, by bumping each cache mtime, the next search a
+            # BM25 index rebuild.
             catalog.rebuild_tap(tap)
             # rebuild_tap survives a cache it cannot write and warns; claiming
             # the rebuild under that warning would certify a file that is
