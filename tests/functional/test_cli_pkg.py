@@ -519,7 +519,7 @@ class TestSync:
         link.mkdir()
         shutil.rmtree(paths.store_dir() / "brainstorming")
 
-        r = boost("sync")
+        r = boost("sync", expect=1)
         assert "reinstalled missing brainstorming" in r.out
         assert "could not be created" in r.out
         assert "brainstorming → cursor" in r.out
@@ -665,12 +665,12 @@ class TestSync:
     def test_over_a_corrupt_lock_the_store_dirs_are_named_not_in_sync(
             self, boost, installed):
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
-        r = boost("sync")
+        r = boost("sync", expect=1)
         assert ("the lock file is corrupt, so sync records nothing and leaves 1 "
                 "store dir as it is: brainstorming — restore it with `boost "
                 "replay`") in _flat(r.out + r.err)
         assert "everything in sync" not in r.out
-        data = json.loads(boost("sync", "--json").out)
+        data = json.loads(boost("sync", "--json", expect=1).out)
         assert (data["unrecorded_store"], data["lock"]) == (["brainstorming"],
                                                             "corrupt")
         # The preview words it the same way, not as a lock that was lost.
@@ -692,23 +692,23 @@ class TestSync:
         lock.write_text(json.dumps(data | {"version": 2}), encoding="utf-8")
         line = ("the lock file is schema v2, not v3, so sync %s nothing — "
                 "restore it with `boost replay`")
-        r = boost("sync")
+        r = boost("sync", expect=1)
         assert line % "records" in _flat(r.out + r.err)
         diff = boost("sync", "--diff")
         assert line % "will record" in _flat(diff.out + diff.err)
         assert "everything in sync" not in r.out + diff.out
-        assert json.loads(boost("sync", "--json").out)["lock"] == "schema"
+        assert json.loads(boost("sync", "--json", expect=1).out)["lock"] == "schema"
         assert json.loads(boost("sync", "--diff", "--json").out)["lock"] == "schema"
         assert json.loads(lock.read_text(encoding="utf-8"))["version"] == 2
 
     def test_a_corrupt_lock_over_an_empty_store_is_named_too(self, boost):
         paths.ensure_dirs()
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
-        for argv in (("sync",), ("sync", "--diff")):
-            r = boost(*argv)
+        # The repair is refused, so sync fails; `--diff` only previews it.
+        for argv, rc in ((("sync",), 1), (("sync", "--diff"), 0)):
+            r = boost(*argv, expect=rc)
             assert "the lock file is corrupt" in _flat(r.out + r.err)
             assert "everything in sync" not in r.out
-            assert r.rc == 0
 
     @pytest.mark.skipif(
             sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
@@ -2440,7 +2440,9 @@ class TestSyncJson:
                         "older_copies": [], "not_skill_store": [],
                         "unreadable_store": [], "misnamed_store": [], "workflow_copies": [], "rule_blocks": [],
                         "unrecorded_store": [], "out_of_scope_links": [],
-                        "blocked_links": [], "lock": None}
+                        "blocked_links": [], "unwritable_agent_dirs": [],
+                        "blocked_agent_dirs": [], "occupied_targets": [],
+                        "lock": None}
 
     def test_both_shapes_say_what_the_lock_was(self, boost, installed):
         paths.lockfile_path().unlink()

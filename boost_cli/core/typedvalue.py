@@ -67,11 +67,14 @@ class ValueTypeError(ValueError):
     was typed and can be any JSON scalar when it was read back off disk.
     """
 
-    def __init__(self, key: str, raw: Any, spec: str):
+    def __init__(self, key: str, raw: Any, spec: str,
+                 expected: str | None = None):
         self.key = key
         self.raw = raw
         self.spec = spec
-        self.expected = describe(spec)
+        # A caller that also bounds the value (a 0-100 score) names the range
+        # here; the type's own phrase would tell the user 500 is fine.
+        self.expected = expected or describe(spec)
         super().__init__("%s expects %s, got %r" % (key, self.expected, raw))
 
 

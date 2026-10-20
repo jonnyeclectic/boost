@@ -1272,6 +1272,21 @@ def cmd_sync(argv: list[str]) -> int:
     # left as they were, and the remedy is the lock's.
     unrecorded = plan["unrecorded_store"] if lock_bad else []
     blocked = plan["blocked_links"]
+    # A dir that refused a link or a file: sync wrote what it could and says
+    # what it could not, rather than "everything in sync" over it.
+    stuck = store.unwritable_agent_dirs()
+    # A file or a dangling link where a rules/ or commands/ dir belongs. A
+    # block the line above already names for a skill link is not named twice.
+    named = {Path(p) for _n, _a, p in blocked}
+    in_way = [(d, b) for d, b in store.blocked_agent_dirs() if b not in named]
+    # A directory where a rule's or workflow's file goes: no dir refuses, so
+    # neither line above sees it, and sync said "everything in sync" over it.
+    occupied = store.occupied_targets()
+    # A repair sync set out to make and could not is a failure, the same as
+    # doctor and heal call it: this returned 0 over a blocked link, so a CI
+    # step running `boost sync` could not tell the repair had been refused.
+    # Advisory states (another tool's copies, out-of-scope links) stay 0.
+    rc = 1 if (blocked or stuck or in_way or occupied or lock_bad) else 0
     if args.json:
         # `sync --diff --json` above is indent=2; this printed one unindented
         # line, so the two `--json` shapes of the same command disagreed on
@@ -1287,8 +1302,12 @@ def cmd_sync(argv: list[str]) -> int:
                           "unrecorded_store": unrecorded,
                           "out_of_scope_links": oos,
                           "blocked_links": blocked,
+                          "unwritable_agent_dirs": [str(d) for d in stuck],
+                          "blocked_agent_dirs": [[str(d), str(b)]
+                                                 for d, b in in_way],
+                          "occupied_targets": [str(t) for t in occupied],
                           "lock": integ.problem}, indent=2))
-        return 0
+        return rc
     for a in actions:
         (out.warn if store.is_unrepaired(a) else out.ok)(a)
     for line in kept:
@@ -1353,22 +1372,12 @@ def cmd_sync(argv: list[str]) -> int:
                  % (_plural(len(blocked), "agent link"),
                     ", ".join("%s → %s (%s in the way)"
                               % (n, a, _tilde(Path(p))) for n, a, p in blocked)))
-    # A dir that refused a link or a file: sync wrote what it could and says
-    # what it could not, rather than "everything in sync" over it.
-    stuck = store.unwritable_agent_dirs()
     for adir in stuck:
         out.warn("agent dir %s — %s, then re-run `boost sync`"
                  % store.unwritable_refusal(str(adir)), wrap=True)
-    # A file or a dangling link where a rules/ or commands/ dir belongs. A
-    # block the line above already names for a skill link is not named twice.
-    named = {Path(p) for _n, _a, p in blocked}
-    in_way = [(d, b) for d, b in store.blocked_agent_dirs() if b not in named]
     for adir, block in in_way:
         out.warn("%s — %s, then re-run `boost sync`"
                  % store.link_refusal(str(adir), str(block)), wrap=True)
-    # A directory where a rule's or workflow's file goes: no dir refuses, so
-    # neither line above sees it, and sync said "everything in sync" over it.
-    occupied = store.occupied_targets()
     for path in occupied:
         out.warn("%s, then re-run `boost sync`" % store.occupied_refusal(path),
                  wrap=True)
@@ -1377,7 +1386,7 @@ def cmd_sync(argv: list[str]) -> int:
             and not stuck and not in_way and not occupied and not lock_bad
             and not plan["unreadable_store"]):
         out.ok("everything in sync")
-    return 0
+    return rc
 
 
 def _go(args, prompt: str) -> bool:

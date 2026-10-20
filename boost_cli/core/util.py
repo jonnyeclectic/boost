@@ -574,13 +574,18 @@ def resolve_slug(raw: str, *, what: str = "name") -> str:
     seeing it — the same silent swap that let ``boost distill -o`` write a
     path its own install hint then refused, and let two differently-typed
     profile names collide on one file.
+
+    The note goes to stderr: it is a notice about the input, not output, and
+    every caller may be speaking ``--json`` on stdout — ``boost profile save
+    "My Team" --json`` printed it ahead of the JSON object, which then failed
+    to parse.
     """
     slug = _slug_or_none(raw)
     if slug is None:
         raise BoostError("%s has no letters or digits: %r" % (what, raw))
     _check_component(slug, what)
     if slug != raw:
-        out.info("using %s %r (from %r)" % (what, slug, raw))
+        out.info("using %s %r (from %r)" % (what, slug, raw), stream=sys.stderr)
     return slug
 
 
