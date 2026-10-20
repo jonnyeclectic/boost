@@ -83,6 +83,40 @@ class TestInstallPullsInRequires:
         assert "already installed" in text
         assert "commit-messages" not in lockfile.all_installed()["skill"]
 
+    def test_a_failed_dependency_is_a_warning_on_a_success(
+            self, boost, tapped, monkeypatch):
+        from boost_cli.core import store
+        from boost_cli.errors import BoostError
+        real = store.install
+
+        def install(e, *a, **kw):
+            if e["name"] == "commit-messages":
+                raise BoostError("disk full")
+            return real(e, *a, **kw)
+        monkeypatch.setattr(store, "install", install)
+        text, is_err = _call("boost_install", name="jira-integration")
+        assert is_err is False
+        lines = text.splitlines()
+        i = lines.index("WARNING — check before you rely on this install:")
+        assert "required skill 'commit-messages' was not installed: disk full" \
+            in lines[i + 1:]
+        assert set(lockfile.all_installed()["skill"]) == {"jira-integration"}
+
+    def test_a_failure_of_the_requested_item_is_an_error(
+            self, boost, tapped, monkeypatch):
+        from boost_cli.core import store
+        from boost_cli.errors import BoostError
+        real = store.install
+
+        def install(e, *a, **kw):
+            if e["name"] == "jira-integration":
+                raise BoostError("disk full")
+            return real(e, *a, **kw)
+        monkeypatch.setattr(store, "install", install)
+        text, is_err = _call("boost_install", name="jira-integration")
+        assert is_err is True
+        assert text.startswith("Error: disk full")
+
     def test_doctor_carries_the_cli_prerequisite_note(self, boost, tapped):
         boost("install", "jira-integration", "--no-deps")
         text, is_err = _tool("boost_doctor")
@@ -145,6 +179,13 @@ class TestOneTapShippingANameTwice:
         assert (err_a, err_b) == (False, False)
         assert "first copy of twin." in a and "second copy" not in a
         assert "second copy of twin different." in b
+
+    def test_read_says_installed_only_for_the_installed_copy(self, twin_tap):
+        _tool("boost_install", name="twin", path="a/twin")
+        a, _ = _tool("boost_read", name="twin", path="a/twin")
+        b, _ = _tool("boost_read", name="twin", path="b/twin")
+        assert "installed: yes" in a
+        assert "installed: no" in b
 
     def test_info_and_install_take_the_path(self, twin_tap):
         text, is_err = _tool("boost_info", name="twin", path="b/twin")

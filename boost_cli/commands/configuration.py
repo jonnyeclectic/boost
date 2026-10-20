@@ -1737,9 +1737,16 @@ def _tool_read(args: dict):
         cat = catalog.resolve_one(name, path=path)
         text = (registry.get(cat["tap"]).path / cat["skill_md"]).read_text(
             encoding="utf-8", errors="replace")
+        # "installed" must describe *this* copy: with a/twin installed, a read
+        # of b/twin said "installed: yes" over text that is not on disk. An
+        # older record without `source_dir` falls back to the tap alone.
+        found = integrity.find_installed(name)
+        rec = found[1] if found is not None else None
+        here = (rec is not None and rec.get("tap") == cat.get("tap")
+                and rec.get("source_dir", cat.get("rel_dir"))
+                == cat.get("rel_dir"))
         return mcp.read_reply(name, text, kind=cat.get("kind") or "skill",
-                              installed=integrity.find_installed(name)
-                              is not None), False
+                              installed=here), False
     text, kind, lock, _cat = info._resolve_text(name)
     return mcp.read_reply(name, text, kind=kind, installed=lock is not None), False
 
