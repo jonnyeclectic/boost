@@ -2654,6 +2654,13 @@ def _restore_project_copies(resolved_base: Path, name: str, entry: dict,
     same two checks a project install makes. Raises :class:`BoostError`
     when there is nothing it may write.
     """
+    # The same policy gate the install this replaced applied: a skill or tap
+    # blocklisted since the lock was written must not come back through sync.
+    violations = policy.check_install(
+        cat_entry, _count_others(projectlock.installed(resolved_base), name))
+    if violations:
+        raise BoostError("policy blocks restoring %s: %s"
+                         % (name, "; ".join(violations)))
     src = source_dir_for(cat_entry)
     _enforce_capability_policy(name, src / "SKILL.md")
     dests: list[Path] = []

@@ -278,6 +278,26 @@ class TestProjectSyncKeepsTheLock:
             store.project_sync_plan(base=str(repo)), base=str(repo))
         assert len(actions) == 1 and "repair declined" in actions[0]
 
+    def test_a_skill_blocklisted_since_install_is_not_restored(
+            self, tap, entry, tmp_path):
+        from boost_cli.core import policy
+        repo = self._install(entry, tmp_path)
+        cursor_copy = repo / ".cursor" / "skills" / "brainstorming"
+        shutil.rmtree(cursor_copy)
+        pol = policy.load()
+        pol["blocked_skills"] = ["brainstorming"]
+        policy.save(pol)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        with pytest.raises(BoostError, match="policy blocks restoring "
+                           "brainstorming: skill 'brainstorming' is on the "
+                           "blocklist"):
+            store._restore_project_copies(repo, "brainstorming", rec, entry,
+                                          ["cursor"])
+        assert store.project_sync_apply(
+            store.project_sync_plan(base=str(repo)), base=str(repo)) == [
+            store._project_gone("brainstorming")]
+        assert not cursor_copy.exists()
+
     def test_restore_with_nothing_writable_reports_gone(self, tap, entry, tmp_path):
         repo = self._install(entry, tmp_path)
         rec = projectlock.get_skill(repo, "brainstorming")
