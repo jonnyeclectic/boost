@@ -846,3 +846,33 @@ class TestSuggestionsAreAnswerable:
         q = chat.suggest_followups(UNRELATED, with_ai=False)[0]
         reply = chat.answer(q, [chat.Turn("x", "y", UNRELATED[::-1])])
         assert reply.skills[0]["name"] == UNRELATED[0]["name"]
+
+
+class TestIndexFreshness:
+    """chat refreshes the index the way `boost search` does, before ranking."""
+
+    def test_the_index_is_ensured_before_every_search(self, monkeypatch):
+        calls: list[str] = []
+        monkeypatch.setattr(chat.rag, "ensure",
+                            lambda: calls.append("ensure") or True)
+
+        def fake_retrieve_any(query, k=60, entries=None, **kw):
+            calls.append("retrieve:" + query)
+            return [{"entry": CANDIDATES[0]}], "BM25 full-content"
+
+        monkeypatch.setattr(chat.rag, "retrieve_any", fake_retrieve_any)
+        found, engine = chat._search("review a diff", 5, CANDIDATES)
+        assert calls == ["ensure", "retrieve:review a diff"]
+        assert found == [CANDIDATES[0]]
+        assert engine == "BM25 full-content"
+
+    def test_a_failed_build_still_falls_back_to_the_frontmatter_scan(
+            self, monkeypatch):
+        monkeypatch.setattr(chat.rag, "ensure", lambda: False)
+        monkeypatch.setattr(chat.rag, "retrieve_any",
+                            lambda q, k=60, entries=None, **kw: (None, ""))
+        monkeypatch.setattr(catalog, "search",
+                            lambda q: [(CANDIDATES[2], 3), (CANDIDATES[0], 1)])
+        found, engine = chat._search("pdf", 1, CANDIDATES)
+        assert found == [CANDIDATES[2]]
+        assert engine == "frontmatter scan"

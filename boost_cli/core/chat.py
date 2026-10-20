@@ -274,6 +274,12 @@ def promote_named(question: str, ranked: Sequence[dict],
 
 def _search(query: str, k: int, entries: list[dict]) -> tuple[list[dict], str]:
     """The top ``k`` for ``query`` from whichever engine the machine has."""
+    # The freshness check `boost search` makes: build the BM25 index on first
+    # use and refresh it after a tap changes. Without it chat answered a fresh
+    # install from the substring scan (which matched "is" and "a" in nearly
+    # every entry) and, once an index existed, never saw a newly tapped
+    # registry. Incremental, offline, and never raises.
+    rag.ensure()
     hits, engine = rag.retrieve_any(query, k=k, entries=entries)
     if hits is None:
         # No index of any kind: catalog.search is the documented floor.
