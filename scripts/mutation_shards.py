@@ -765,7 +765,11 @@ def unit_weight(root: Path, unit: Unit) -> int:
     total = sum(shares.values())
     if not total:
         return max(file_weight, 1)
-    return max(file_weight * shares.get(unit.symbol, 1) // total, 1)
+    # Ceiling, not floor: flooring every share drops up to 1 ms per function,
+    # so once every function of a file is timed the units sum to less than the
+    # file they were cut from (store.py: 178 ms short of its 53,114,371) and
+    # the planner under-counts the very file that sets the slowest shard.
+    return max(-(-file_weight * shares.get(unit.symbol, 1) // total), 1)
 
 
 def pack(root: Path, shards: int) -> list[list[Unit]]:
