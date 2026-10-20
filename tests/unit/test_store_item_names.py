@@ -13,6 +13,7 @@ from __future__ import annotations
 import errno
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -47,7 +48,16 @@ def make_tap(root: Path, skills: dict[str, str] | None = None,
     return tap
 
 
+# A 246-255 byte component under the runner's temp dir passes MAX_PATH on
+# Windows: a long-path setting the test cannot see, not boost's limit (as in
+# test_bad_input_is_not_a_crash.py).
+long_path = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="total path exceeds MAX_PATH under the runner's temp dir")
+
+
 class TestLongNames:
+    @long_path
     def test_a_temp_file_beside_a_long_name_is_no_longer_than_it(self, tmp_path):
         # 250 bytes fits as a file name; `.<name>.XXXXXXXX.tmp` did not.
         p = tmp_path / ("w" * 250)
@@ -58,6 +68,7 @@ class TestLongNames:
     def test_the_temp_prefix_is_short_and_hidden(self):
         assert util.TEMP_PREFIX == ".boost-"
 
+    @long_path
     def test_a_skill_staged_under_a_long_name_installs(self, tmp_path):
         src = tmp_path / "src"
         src.mkdir()
@@ -85,6 +96,7 @@ class TestLongNames:
         with pytest.raises(BoostError):
             util.check_item_name("n" * 251, "other")
 
+    @long_path
     def test_246_character_skill_and_workflow_install(self, sandbox, tmp_path):
         skill, wf = "s" + "b" * 245, "w" + "b" * 245
         make_tap(tmp_path / "long", skills={"long": skill},
