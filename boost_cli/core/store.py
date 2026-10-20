@@ -4289,16 +4289,28 @@ def uninstall(name: str, *, project_fallback: bool = True) -> dict:
     a rule or workflow never had.
 
     ``name`` may be tap-qualified (:func:`installed_name`). With
-    ``project_fallback=False`` (``uninstall --global``) a name only the
-    current repo has is reported as not installed rather than removed there.
+    ``project_fallback=False`` (``uninstall --global``) nothing in a repo is
+    removed: a skill only the current repo has, and a rule or workflow the
+    user lock records at project scope, are refused rather than removed.
     """
     name = installed_name(name)
     entry = lockfile.get_skill(name)
     if not entry:
         rule = lockfile.get_rule(name)
+        workflow = None if rule else lockfile.get_workflow(name)
+        rec = rule or workflow
+        if (rec and not project_fallback
+                and rec.get("scope") == scopes.SCOPE_PROJECT):
+            # A rule or workflow `install --local` put in a repo is recorded
+            # in the *user* lock, so the lookup above finds it — but its files
+            # are in that repo, which `--global` said to leave alone.
+            raise BoostError(
+                "%s is not installed in your user config" % name,
+                hint="it was installed into %s — `boost uninstall --local %s` "
+                     "from there" % (paths.tilde(Path(str(rec.get("base") or
+                                                          "a repo"))), name))
         if rule:
             return _uninstall_rule(name, rule)
-        workflow = lockfile.get_workflow(name)
         if workflow:
             return _uninstall_workflow(name, workflow)
         # Nothing at user scope — but the caller may be standing in a repo that
@@ -5415,11 +5427,13 @@ def reinstall_candidates(scope: str | None,
             continue
         for name, entry in sorted(section.items()):
             at = entry.get("scope", scopes.SCOPE_USER)
-            in_repo = (base is not None and bool(entry.get("base"))
-                       and Path(str(entry["base"])).resolve()
-                       == Path(base).resolve())
+            # scopes.owns, not a local resolve(): it is the predicate
+            # `uninstall --local` and `list --local` use, and it refuses a
+            # relative `base`, which resolve() would read against the cwd and
+            # so hand every repo the same row.
             if (scope is None or scope == at == scopes.SCOPE_USER
-                    or (scope == at == scopes.SCOPE_PROJECT and in_repo)):
+                    or (scope == scopes.SCOPE_PROJECT
+                        and scopes.owns(entry, base))):
                 found.append((kind, name, entry))
     return found
 

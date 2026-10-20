@@ -6643,3 +6643,47 @@ def test_uninstall_without_project_fallback_names_the_local_flag(
     with pytest.raises(BoostError) as exc:
         store.uninstall("nowhere", project_fallback=False)
     assert exc.value.hint == "see what is with `boost list`"
+
+
+def test_reinstall_candidates_project_ignores_a_relative_base(sandbox,
+                                                              tmp_path,
+                                                              monkeypatch):
+    # "." resolved against the cwd would make one row belong to every repo;
+    # scopes.owns refuses a relative base, and so must this.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.chdir(repo)
+    lockfile.set_rule("dot-rule", {"tap": "t", "scope": "project",
+                                   "base": "."})
+    lockfile.set_rule("abs-rule", {"tap": "t", "scope": "project",
+                                   "base": str(repo)})
+    got = [n for _, n, _ in store.reinstall_candidates("project", repo)]
+    assert got == ["abs-rule"]
+
+
+@pytest.mark.parametrize("kind", ["rule", "workflow"])
+def test_uninstall_without_project_fallback_keeps_a_repo_rule_or_workflow(
+        sandbox, tmp_path, kind):
+    from boost_cli.errors import BoostError
+    repo = tmp_path / "repo"
+    row = {"tap": "t", "scope": "project", "base": str(repo),
+           "materializations": []}
+    setter = lockfile.set_rule if kind == "rule" else lockfile.set_workflow
+    getter = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+    setter("in-repo", row)
+    with pytest.raises(BoostError) as exc:
+        store.uninstall("in-repo", project_fallback=False)
+    assert exc.value.message == "in-repo is not installed in your user config"
+    assert exc.value.hint == ("it was installed into %s — `boost uninstall "
+                              "--local in-repo` from there"
+                              % paths.tilde(repo))
+    assert getter("in-repo") == row
+
+
+def test_uninstall_without_project_fallback_still_removes_a_user_rule(
+        sandbox):
+    lockfile.set_rule("mine", {"tap": "t", "scope": "user",
+                               "materializations": []})
+    info = store.uninstall("mine", project_fallback=False)
+    assert info["kind"] == "rule"
+    assert lockfile.get_rule("mine") is None
