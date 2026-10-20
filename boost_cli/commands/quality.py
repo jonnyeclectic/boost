@@ -730,8 +730,9 @@ def cmd_doctor(argv):
         bad("lockfile", "lock file is corrupt — restore with `boost replay`")
         lock_ok = False
     else:  # "schema"
-        bad("lockfile", "lock file schema is v%s, expected v%d"
-            % (integ.version, lockfile.SCHEMA_VERSION))
+        bad("lockfile", "lock file schema is %s, expected v%d"
+            % ("unreadable" if integ.version is None
+               else "v%s" % integ.version, lockfile.SCHEMA_VERSION))
         lock_ok = False
 
     # linking_agents, not enabled_agents, for the same reason `sync_plan` uses

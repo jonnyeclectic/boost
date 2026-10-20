@@ -66,7 +66,9 @@ def _require_lock_integrity() -> None:
     if integ.problem == "corrupt":
         raise BoostError("lock file is corrupt — restore with `boost replay`")
     raise BoostError(
-        "lock file schema is v%s, expected v%d" % (integ.version, lockfile.SCHEMA_VERSION),
+        "lock file schema is %s, expected v%d"
+        % ("unreadable" if integ.version is None else "v%s" % integ.version,
+           lockfile.SCHEMA_VERSION),
         hint="restore with `boost replay`")
 
 

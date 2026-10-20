@@ -97,6 +97,10 @@ def test_sync_records_the_hash_of_files_boost_wrote(boost, items):
     assert ("would record the hash of workflow ship-it's %s" % _files(nw)
             in dry.out)
     assert paths.lockfile_path().read_bytes() == before
+    diff = boost("sync", "--diff")
+    assert "would record the hash of rule house's %s" % _files(nr) in diff.out
+    assert "everything in sync" not in diff.out
+    assert paths.lockfile_path().read_bytes() == before
 
     r = boost("sync")
     assert "recorded the hash of rule house's %s" % _files(nr) in r.out
@@ -175,4 +179,60 @@ def test_quarantined_items_are_left_alone(boost, items):
     lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
     lock["rules"]["house"]["quarantined"] = True
     paths.lockfile_path().write_text(json.dumps(lock), encoding="utf-8")
+    assert store.backfill_row_hashes() == []
+
+
+def _set(section, name, **fields):
+    lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+    lock[section][name].update(fields)
+    paths.lockfile_path().write_text(json.dumps(lock), encoding="utf-8")
+
+
+def test_a_stranded_local_install_is_left_alone(boost, items, tmp_path):
+    _age((("rules", "house"),))
+    _set("rules", "house", scope="project", base=str(tmp_path / "gone"))
+    assert store.backfill_row_hashes() == []
+
+
+def test_a_refused_row_is_neither_stamped_nor_named(boost, items):
+    _age((("rules", "house"),))
+    lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+    rows = lock["rules"]["house"]["materializations"]
+    rows[0]["unwritable"] = True
+    paths.lockfile_path().write_text(json.dumps(lock), encoding="utf-8")
+    n = len(items[("rules", "house")])
+    assert store.backfill_row_hashes() == [
+        "recorded the hash of rule house's %s" % _files(n - 1)]
+    assert _rows("rules", "house")[rows[0]["path"]] is None
+
+
+def test_a_skill_copy_row_without_a_hash_is_not_counted(boost, items):
+    _age((("workflows", "ship-it"),))
+    lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+    rows = lock["workflows"]["ship-it"]["materializations"]
+    rows.append({"agent": None, "slot": "skill",
+                 "path": str(store.skill_store_dir("ship-it") / "SKILL.md")})
+    paths.lockfile_path().write_text(json.dumps(lock), encoding="utf-8")
+    n = len(items[("workflows", "ship-it")])
+    assert store.backfill_row_hashes(dry=True) == [
+        "would record the hash of workflow ship-it's %s" % _files(n)]
+
+
+def test_a_missing_file_is_left_to_rematerialize(boost, items):
+    _age((("rules", "house"),))
+    gone = next(p for p in items[("rules", "house")]
+                if Path(p).name != "CLAUDE.md")
+    Path(gone).unlink()
+    n = len(items[("rules", "house")])
+    assert store.backfill_row_hashes(dry=True) == [
+        "would record the hash of rule house's %s" % _files(n - 1)]
+
+
+def test_a_row_for_a_disabled_agent_is_left_alone(boost, items):
+    from boost_cli.core import config
+    _age((("rules", "house"),))
+    cfg = config.load()
+    for agent in cfg["agents"]:
+        cfg["agents"][agent]["enabled"] = False
+    config.save(cfg)
     assert store.backfill_row_hashes() == []

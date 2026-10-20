@@ -4142,11 +4142,19 @@ def _expected_row_text(kind: str, name: str, entry: dict, m: dict,
     return workflows.render(m.get("agent"), slot, name, raw), on_disk
 
 
-def _unhashed_rows(entry: dict) -> list[dict]:
-    """The rows of a rule/workflow entry written before rows carried a hash."""
+def _unhashed_rows(kind: str, entry: dict) -> list[dict]:
+    """The rows of a rule/workflow entry written before rows carried a hash.
+
+    Only rows whose file is there and that name an agent boost still writes:
+    a missing file is re-materialized by sync (which records its hash), and
+    a row for a disabled agent is a record `boost verify` does not grade.
+    """
     return [m for m in entry.get("materializations") or ()
             if isinstance(m, dict) and not m.get("sha256")
-            and not m.get("unwritable") and not lockfile.is_skill_copy(m)]
+            and not m.get("unwritable") and not lockfile.is_skill_copy(m)
+            and agents.materialization_is_written(kind, entry.get("base"),
+                                                  m.get("agent"))
+            and os.path.isfile(m.get("path", ""))]  # noqa: FURB146
 
 
 def backfill_row_hashes(dry: bool = False) -> list[str]:
@@ -4167,7 +4175,7 @@ def backfill_row_hashes(dry: bool = False) -> list[str]:
     stamps: dict[tuple[str, str], dict[str, str]] = {}
     for kind, section in (("rule", "rules"), ("workflow", "workflows")):
         for name, entry in sorted(lockfile.read()[section].items()):
-            rows = _unhashed_rows(entry)
+            rows = _unhashed_rows(kind, entry)
             if (not rows or entry.get("quarantined")
                     or scopes.stranded(entry)):
                 continue
@@ -4197,9 +4205,9 @@ def backfill_row_hashes(dry: bool = False) -> list[str]:
     def stamp(lock: dict) -> bool:
         changed = False
         for (section, name), got in stamps.items():
-            for m in _unhashed_rows(lock[section].get(name) or {}):
-                sha = got.get(m.get("path", ""))
-                if sha is not None:
+            for m in lock[section].get(name, {}).get("materializations") or ():
+                sha = got.get(m.get("path", "")) if isinstance(m, dict) else None
+                if sha is not None and not m.get("sha256"):
                     m["sha256"] = sha
                     changed = True
         return changed

@@ -1395,6 +1395,14 @@ class TestVerify:
         r = boost("verify", expect=1)
         assert "lock file schema is v4, expected v3" in r.err
 
+    def test_a_versionless_lock_of_the_wrong_shape_never_says_vNone(
+            self, boost, installed):
+        paths.lockfile_path().write_text(json.dumps({"skills": []}),
+                                         encoding="utf-8")
+        r = boost("verify", expect=1)
+        assert "lock file schema is unreadable, expected v3" in r.err
+        assert "vNone" not in r.out + r.err
+
 
 # ── drift ────────────────────────────────────────────────────────────────
 

@@ -168,6 +168,8 @@ class TestCheck:
     def test_the_fault_of_a_lock_with_no_version_never_says_vNone(self):
         assert lockfile.fault(lockfile.Integrity(True, "older", None)) == (
             "has no schema version")
+        assert lockfile.fault(lockfile.Integrity(False, "schema", None)) == (
+            "is in no schema boost knows")
 
 
 class TestMigrate:

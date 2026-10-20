@@ -332,7 +332,10 @@ def fault(integ: Integrity) -> str:
     if integ.problem == "corrupt":
         return "is corrupt"
     if integ.version is None:
-        return "has no schema version"
+        # "older" with no version; "schema" with none is a section that is
+        # not a mapping, which no schema boost wrote holds.
+        return ("has no schema version" if integ.problem == "older"
+                else "is in no schema boost knows")
     return "is schema v%s, not v%d" % (integ.version, SCHEMA_VERSION)
 
 
