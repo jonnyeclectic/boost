@@ -212,8 +212,12 @@ def skill_store_dir(name: str) -> Path:
     return paths.store_dir() / name
 
 
-def read_skill_meta(name: str) -> tuple[dict, str] | None:
+def read_skill_meta(name: str, skill_dir: Path | None = None
+                    ) -> tuple[dict, str] | None:
     """(frontmatter, body) for an installed skill's store copy, or None.
+
+    ``skill_dir`` reads another copy instead — a project skill's, which is
+    not in the store (:class:`integrity.InstalledSkill` ``.dir``).
 
     None on anything that keeps the content from being read honestly: no
     store dir, no ``SKILL.md``, an unreadable file, or an unclosed
@@ -225,7 +229,8 @@ def read_skill_meta(name: str) -> tuple[dict, str] | None:
     """
     from . import frontmatter
 
-    skill_md = skill_store_dir(name) / "SKILL.md"
+    skill_md = (skill_dir if skill_dir is not None
+                else skill_store_dir(name)) / "SKILL.md"
     if not skill_md.exists():
         return None
     try:

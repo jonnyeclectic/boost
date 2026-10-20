@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 from itertools import chain
 from pathlib import Path
+from typing import NamedTuple
 
 from ..errors import BoostError
 from . import agents, catalog, config, lockfile, paths, projectlock, scopes, util
@@ -457,6 +458,103 @@ def find_installed(name: str) -> tuple[str, dict, Path | None] | None:
     return None
 
 
+class InstalledSkill(NamedTuple):
+    """One installed skill row, with where its content lives.
+
+    ``base`` is None for a user-scope row and the repo for a project one;
+    ``dir`` is the copy a reader should open — the canonical store directory
+    for user scope, the first materialized copy (:func:`project_skill_dir`)
+    for project scope — or None when that copy is not on disk. A reader that
+    took ``store.skill_store_dir(name)`` for a project row looked in
+    ``~/.agents/skills``, found nothing, and called a skill ``boost list``
+    shows "not installed".
+    """
+
+    name: str
+    entry: dict
+    scope: str
+    base: Path | None
+    dir: Path | None
+
+    @property
+    def is_project(self) -> bool:
+        """True for a row from the current project's lock."""
+        return self.scope == scopes.SCOPE_PROJECT
+
+
+def _skill_row(name: str, entry: dict, scope: str,
+               base: Path | None) -> InstalledSkill:
+    if scope == scopes.SCOPE_PROJECT:
+        d = project_skill_dir(entry, base)
+    else:
+        sd = paths.store_dir() / name
+        d = sd if util.is_safe_component(name) and sd.is_dir() else None
+    return InstalledSkill(name, entry, scope, base, d)
+
+
+def installed_skills() -> list[InstalledSkill]:
+    """:func:`installed_skill_rows`, each row carrying its content ``dir``.
+
+    The walk a reader over "every installed skill" uses — ``policy check``,
+    ``audit``, ``conflict``, ``count`` — so a ``--local`` install is checked
+    from the copy in the repo rather than skipped. A name in both scopes is
+    two rows: they are two installs, and either can be the blocked one.
+    """
+    return [_skill_row(n, e, s, b) for n, e, s, b in installed_skill_rows()]
+
+
+def resolve_skill(name: str) -> InstalledSkill | None:
+    """The installed *skill* ``name`` names, user scope first, else None.
+
+    ``name`` may be tap-qualified; a qualifier is held against the installed
+    record (:func:`catalog.for_tap`), so ``other:x`` does not answer with an
+    ``x`` installed from elsewhere. Only the lock's skills sections answer —
+    a rule or workflow of the same name is the caller's own question
+    (:func:`lockfile.find_any`). The user lock answers first, as everywhere
+    a bare name resolves; a skill installed ``--local`` into the current
+    project answers next, which is the row ``boost list`` shows under
+    "project skills".
+    """
+    qualifier, bare = catalog.split_name(name)
+    entry = catalog.for_tap(lockfile.get_skill(bare), qualifier)
+    if entry is not None:
+        return _skill_row(bare, entry, scopes.SCOPE_USER, None)
+    base, project = project_skills()
+    entry = catalog.for_tap(project.get(bare), qualifier)
+    if entry is not None:
+        return _skill_row(bare, entry, scopes.SCOPE_PROJECT, base)
+    return None
+
+
+def refuse_project_scope(row: InstalledSkill, command: str) -> None:
+    """Raise the truth for a user-scope-only ``command`` given a project row.
+
+    Some commands act on what only a user-scope install has — the canonical
+    store, the agent symlinks. For a project row the honest answer is which
+    scope it is in, not "not installed" beside a ``boost list`` that shows
+    it, and never a ``boost install`` hint that would add a second, user-scope
+    copy. A user row returns without raising.
+    """
+    if not row.is_project:
+        return
+    raise BoostError(
+        "%s is installed at project scope (%s) — %s applies to user-scope "
+        "skills" % (row.name, paths.tilde(row.base), command),
+        hint="see it with `boost list --local`", wrap=True)
+
+
+def refuse_project_only(name: str, command: str) -> None:
+    """:func:`refuse_project_scope` for ``name``, if it resolves to a project row.
+
+    Call it where a user-lock lookup has just missed and the next line says
+    "not installed": a name only the current project holds gets the scope
+    answer instead, and any other miss returns for the caller to report.
+    """
+    row = resolve_skill(name)
+    if row is not None:
+        refuse_project_scope(row, command)
+
+
 def installed_names() -> set[str]:
     """Every installed name, all three kinds, user lock and current project.
 
@@ -522,6 +620,25 @@ def verification_role(status: str, passed: bool) -> str:
 def enforcement_enabled() -> bool:
     """True when digest enforcement is switched on in config (default False)."""
     return bool(config.get(ENFORCE_KEY, False))
+
+
+def enforce_row(row: InstalledSkill) -> None:
+    """:func:`enforce` for an :class:`InstalledSkill` of either scope.
+
+    A user row is :func:`enforce` exactly. A project row has no store copy to
+    hash, so it is judged the way ``verify`` judges it (:func:`project_status`):
+    with enforcement on, a copy that drifted from the project lock's digest is
+    refused the same as a drifted store copy would be.
+    """
+    if not row.is_project:
+        enforce(row.name, row.entry)
+        return
+    if (enforcement_enabled()
+            and project_status(row.entry, row.base) == STATUS_MODIFIED):
+        raise BoostError(
+            "%s has been modified since install — its content no longer "
+            "matches the project lock file" % row.name,
+            hint="inspect with `boost verify %s`" % row.name, wrap=True)
 
 
 def commit_enforcement_enabled() -> bool:
