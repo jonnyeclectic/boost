@@ -81,6 +81,15 @@ def _save(keys: list[dict]) -> None:
         json.dumps(keys, indent=2) + "\n", encoding="utf-8")
 
 
+def parses_as_public_key(text: str) -> bool:
+    """True when ``text`` is a minisign public key (``.pub`` content or line)."""
+    try:
+        minisign.parse_public_key(text)
+    except minisign.MinisignError:
+        return False
+    return True
+
+
 def add_trusted_key(name: str, public_key_text: str) -> dict:
     """Parse ``public_key_text`` (a ``.pub`` file or its base64 line) and store it.
 

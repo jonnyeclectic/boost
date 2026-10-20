@@ -2391,10 +2391,15 @@ def cmd_trust(argv) -> int:
         key_path = paths.expand(args.key)
         if key_path.is_file():
             key_text = key_path.read_text(encoding="utf-8")
-        elif os.sep in args.key or args.key.endswith(".pub"):
+        elif (("/" in args.key or os.sep in args.key or args.key.endswith(".pub"))
+              and not provenance.parses_as_public_key(args.key)):
             # Looks like a path but isn't one — say so, rather than falling
             # through to text parsing and blaming base64 for a typo'd path.
-            raise BoostError("no such key file: %s" % args.key)
+            # '/' is in the base64 alphabet (most 56-char minisign keys hold
+            # one), so a string that parses as a key is a key, not a path.
+            raise BoostError("no such key file: %s" % args.key,
+                             hint="it does not parse as a minisign public key "
+                                  "either; pass an existing .pub file")
         else:
             key_text = args.key
         rec = provenance.add_trusted_key(args.name, key_text)

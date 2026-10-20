@@ -25,6 +25,20 @@ def test_adding_same_name_replaces_not_duplicates(sandbox, signer):
     assert len(provenance.trusted_keys()) == 1
 
 
+def test_parses_as_public_key_accepts_keys_with_a_slash(signer):
+    import base64
+    slashed = base64.b64encode(b"Ed" + b"\xff" * 8 + b"\x01" * 32).decode()
+    assert "/" in slashed
+    assert provenance.parses_as_public_key(slashed) is True
+    assert provenance.parses_as_public_key(signer.public_key_text()) is True
+
+
+def test_parses_as_public_key_rejects_paths_and_garbage():
+    assert provenance.parses_as_public_key("keys/acme.pub") is False
+    assert provenance.parses_as_public_key("") is False
+    assert provenance.parses_as_public_key("not-a-key") is False
+
+
 def test_add_rejects_garbage_key(sandbox):
     from boost_cli.errors import BoostError
     try:
