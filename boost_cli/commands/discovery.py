@@ -1652,8 +1652,9 @@ def _browse_tui(curses, entries, install=None, category=""):
     of the matching come from :mod:`core.browse`, which is where they can be
     tested — this function only draws and dispatches keys.
 
-    ``category`` opens the browser already narrowed to one category; ^G
-    switches it, or clears it, from inside.
+    ``category`` opens the browser already narrowed to one category. ^G,
+    ^R and ^K open the category, tap and kind pickers (one facet picker, see
+    :class:`browse.Picker`); their filters AND together and with the query.
     """
     state: dict[str, Any] = {"picks": None}
     categories = _tap_categories()
@@ -1774,8 +1775,12 @@ def _browse_tui(curses, entries, install=None, category=""):
         filt, sel, detail = "", 0, True
         focus, scope, dscroll = "list", browse.SCOPES[0], 0
         collapse = True
-        cat = category
-        picker: dict | None = None     # {"rows", "sel"} while ^G is open
+        # facet -> value; "" is no filter. Every facet is always present so
+        # the cache keys below have one fixed shape.
+        filters = dict.fromkeys(browse.FACETS, "")
+        filters["category"] = category.strip().lower()
+        picker: browse.Picker | None = None   # while ^G / ^R / ^K is open
+        order = browse.ORDERS[0]       # the picker's sort, kept across opens
         selected: set = set()
         # One haystack per entry per scope, built on first use and reused for
         # every keystroke: re-deriving it inside the filter cost 125 ms per key
@@ -1787,14 +1792,45 @@ def _browse_tui(curses, entries, install=None, category=""):
         # re-filtering 42,000 rows on each of those ticks spent the CPU on
         # an answer it already had.
         memo: tuple = (None, [])
+
+        def pool_for(coll, fl):
+            pk = (coll, *(fl[f] for f in browse.FACETS))
+            if pk not in pools:
+                pools[pk] = browse.narrow(unique_entries if coll else entries,
+                                          fl, categories)
+            return pools[pk]
+
+        def open_facet(facet):
+            # Counted over the rows the browser is showing — collapsed or
+            # not — narrowed by every *other* active filter but not this
+            # facet's own, so each count is what picking that row would leave
+            # (the faceted-search convention). The text query is left out on
+            # purpose: honouring it means a second haystack index per filter
+            # combination, rebuilt on every open, over 71,700 rows — and a
+            # count that moved under every keystroke would describe the query
+            # rather than the facet. One walk per open, never per draw.
+            base = pool_for(collapse, filters | {facet: ""})
+            return browse.open_picker(
+                facet, browse.facet_counts(base, facet, categories).items(),
+                len(base), filters[facet], order)
+
+        # Key codes the picker understands, by name; browse.picker_step
+        # decides what each does. ←/→ and Tab both walk the facets — the
+        # picker has no horizontal motion of its own to give them.
+        pkeys = {27: "esc", 10: "enter", 13: "enter",
+                 curses.KEY_ENTER: "enter", curses.KEY_UP: "up",
+                 curses.KEY_DOWN: "down", curses.KEY_PPAGE: "pgup",
+                 curses.KEY_NPAGE: "pgdn", curses.KEY_BACKSPACE: "backspace",
+                 127: "backspace", 8: "backspace", 9: "next",
+                 getattr(curses, "KEY_BTAB", 353): "prev",
+                 curses.KEY_RIGHT: "next", curses.KEY_LEFT: "prev",
+                 20: "sort"}
+        facet_codes = {7: "category", 18: "tap", 11: "kind"}  # ^G ^R ^K
         while True:
             _h, _w = scr.getmaxyx()
-            if (collapse, cat) not in pools:
-                pools[(collapse, cat)] = [
-                    e for e in (unique_entries if collapse else entries)
-                    if browse.in_category(e, cat, categories)]
-            pool = pools[(collapse, cat)]
-            key = (scope, collapse, cat)
+            fkey = tuple(filters[f] for f in browse.FACETS)
+            pool = pool_for(collapse, filters)
+            key = (scope, collapse, fkey)
             if key not in index:
                 index[key] = browse.index_entries(pool, scope, categories)
             if memo[0] != (key, filt):
@@ -1809,19 +1845,22 @@ def _browse_tui(curses, entries, install=None, category=""):
                 # copy keeps the fold safe from a mid-iteration mutation.
                 _draw_frame(put, th, lay, focus)
                 _draw_status(put, th, lay, "picker" if picker else focus,
-                             browse.session_summary(status.copy()))
+                             browse.session_summary(status.copy()),
+                             browse.FACET_MODES.get(picker.facet)
+                             if picker else None)
                 _draw_query(put, th, lay, filt, focus, len(found), len(pool),
-                            len(selected), hidden if collapse else 0, cat)
+                            len(selected), hidden if collapse else 0,
+                            browse.query_chips(filters))
                 _draw_scopes(put, th, lay, scope, focus)
                 if picker:
-                    rows = _draw_picker(put, th, lay, picker["rows"],
-                                        picker["sel"], cat)
+                    rows = _draw_picker(put, th, lay, picker)
                 else:
                     rows = _draw_rows(put, th, lay, found, sel, selected,
                                       filt, focus, describe, categories,
                                       installed_names,
                                       copies if collapse else None, status,
-                                      scope, hidden if collapse else 0, cat)
+                                      scope, hidden if collapse else 0,
+                                      filters)
                 if lay.has_detail and found:
                     dscroll = _draw_detail(
                         put, th, lay, found[sel], dscroll, focus,
@@ -1837,32 +1876,26 @@ def _browse_tui(curses, entries, install=None, category=""):
             if picker is not None:
                 # The picker owns every key while it is open: Esc closes it
                 # rather than quitting the browser behind it.
-                n = len(picker["rows"])
-                if key in (27, 7):                        # ESC / ^G: cancel
-                    picker = None
-                elif key in (10, 13, curses.KEY_ENTER):
-                    cat = picker["rows"][picker["sel"]][0]
+                name = pkeys.get(key) or (
+                    "facet:" + facet_codes[key] if key in facet_codes
+                    else chr(key) if 32 <= key <= 126 else "")
+                if not name:
+                    continue
+                picker, act = browse.picker_step(picker, name, max(1, rows))
+                order = picker.order
+                if act == "apply":
+                    filters[picker.facet] = browse.picker_value(picker) or ""
                     picker, sel, dscroll = None, 0, 0
-                elif key == curses.KEY_UP:
-                    picker["sel"] = max(0, picker["sel"] - 1)
-                elif key == curses.KEY_DOWN:
-                    picker["sel"] = min(n - 1, picker["sel"] + 1)
-                elif key == curses.KEY_PPAGE:
-                    picker["sel"] = max(0, picker["sel"] - max(1, rows))
-                elif key == curses.KEY_NPAGE:
-                    picker["sel"] = min(n - 1, picker["sel"] + max(1, rows))
-                elif 33 <= key <= 126:
-                    picker["sel"] = browse.picker_jump(picker["rows"],
-                                                       picker["sel"], chr(key))
+                elif act == "cancel":
+                    picker = None
+                elif act in ("next", "prev"):
+                    picker = open_facet(browse.next_facet(
+                        picker.facet, 1 if act == "next" else -1))
+                elif act:                                 # facet:<name>
+                    picker = open_facet(act.split(":", 1)[1])
                 continue
-            if key == 7:                                  # ^G: category
-                # Counted over the rows the browser is showing — collapsed or
-                # not — before any category, so every count is what picking
-                # it would leave.
-                rows_ = browse.picker_rows(
-                    unique_entries if collapse else entries, categories)
-                picker = {"rows": rows_,
-                          "sel": browse.picker_index(rows_, cat)}
+            if key in facet_codes:                        # ^G ^R ^K
+                picker = open_facet(facet_codes[key])
                 continue
             if key == 9 and found:                        # TAB: multi-select
                 selected.symmetric_difference_update({_desc_key(found[sel])})
@@ -2005,7 +2038,7 @@ def _draw_frame(put, th, lay, focus):
         put(bottom, lay.detail_x - 1, "┴", th["border"])
 
 
-def _draw_status(put, th, lay, focus, summary=None):
+def _draw_status(put, th, lay, focus, summary=None, mode=None):
     """The tmux-style status bar under the frame: mode pill, the hints for
     that mode, and the session's install chip at the right.
 
@@ -2016,26 +2049,28 @@ def _draw_status(put, th, lay, focus, summary=None):
     """
     if not lay.has_status:
         return
-    for x, role, text in browse.status_spans(focus, lay.w, summary):
+    for x, role, text in browse.status_spans(focus, lay.w, summary, mode):
         put(lay.status_y, x, text, th.get(role) or th.get("ok") or 0)
 
 
 def _draw_query(put, th, lay, filt, focus, n_found, n_all, n_sel, hidden=0,
-                category=""):
-    """The query row: chevron, category chip, text, cursor when focused,
-    right-aligned count.
+                chips=()):
+    """The query row: chevron, a chip per active facet filter, text, cursor
+    when focused, right-aligned count.
 
     ``hidden`` is stated, never implied: a browser that quietly drops a third of
     the catalogue and shows a smaller total is indistinguishable from one with a
     broken filter. The category chip sits where the query starts for the same
     reason — it narrows as much as the text does, so it reads as part of it.
+    The count's denominator is the pool after every filter, so ``n/m`` stays
+    the share of what the chips allow rather than of the whole catalogue.
     """
     active = focus == "search"
     put(1, 2, "❯", th["prompt"] if active else th["border"])
-    chip = browse.query_chip(category)
-    qx = 4 + (len(chip) + 1 if chip else 0)
-    if chip:
-        put(1, 4, chip, th["category"])
+    qx = 4
+    for chip in chips:
+        put(1, qx, chip, th["category"])
+        qx += len(chip) + 1
     put(1, qx, filt or "type to filter…",
         th["query"] if filt else th["help"])
     if active:
@@ -2073,7 +2108,7 @@ def _draw_scopes(put, th, lay, scope, focus):
 
 def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
                describe, categories, installed_names, copies=None,
-               status=None, scope="all", hidden=0, category=""):
+               status=None, scope="all", hidden=0, filters=None):
     """The result list. Returns how many rows fit, for page-up/down.
 
     Columns inside the pane: the ``▌`` selection bar, the ✓ multi-select
@@ -2087,8 +2122,8 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
     if not found:
         # A silent void is indistinguishable from a hung draw; the pane says
         # what happened and which keys widen the net (see browse.empty_lines).
-        for i, (role, text) in enumerate(browse.empty_lines(filt, scope,
-                                                            hidden, category)):
+        for i, (role, text) in enumerate(browse.empty_lines(
+                filt, scope, hidden, filters=filters or {})):
             y = lay.body_y + 1 + i
             if y >= bottom:
                 break
@@ -2165,30 +2200,59 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
     return rows
 
 
-def _draw_picker(put, th, lay, rows, sel, category):
-    """The ^G category picker, drawn over the list pane. Returns how many rows
-    fit, for page-up/down.
+def _draw_picker(put, th, lay, p):
+    """The facet picker, drawn over the list pane. Returns how many rows fit,
+    for page-up/down.
 
     Over the list rather than in a window of its own: the query, the count and
-    the detail pane stay where they were, so picking a category reads as
-    changing a filter, not as leaving the browser.
+    the detail pane stay where they were, so picking a filter reads as
+    changing a filter, not as leaving the browser. Row one names the facets —
+    the open one dotted, as the scope toggles are, so it reads with the colour
+    off — and the sort; row two is the picker's own query.
     """
     lw = lay.list_w
-    put(lay.body_y, lay.list_x + 2, "category", th["head"])
+    x = lay.list_x + 2
+    for facet in browse.FACETS:
+        on = facet == p.facet
+        put(lay.body_y, x, ("● " if on else "  ") + facet,
+            th["head"] if on else th["muted"])
+        x += len(facet) + 4
+    sort = "^T " + browse.order_label(p.order)
+    if x + len(sort) < lay.list_x + lw - 1:
+        put(lay.body_y, lay.list_x + lw - 1 - len(sort), sort, th["muted"])
+    vis = browse.picker_visible(p)
+    qy = lay.body_y + 1
+    put(qy, lay.list_x + 2, "❯", th["prompt"])
+    put(qy, lay.list_x + 4, p.query or "type to filter…",
+        th["query"] if p.query else th["help"])
+    put(qy, lay.list_x + 4 + len(p.query), "▏", th["prompt"])
+    tail = browse.picker_tail(p)
+    put(qy, max(lay.list_x + 6 + len(p.query), lay.list_x + lw - 1 - len(tail)),
+        tail, th["count"])
     visible = max(1, lay.bottom - lay.body_y - 2)
-    top = browse.picker_top(sel, len(rows), visible)
-    for i, (cat, n) in enumerate(rows[top:top + visible]):
+    if not vis:
+        for i, (role, text) in enumerate(browse.picker_empty(p.query)):
+            if lay.body_y + 2 + i < lay.bottom:
+                put(lay.body_y + 2 + i, lay.list_x + 2,
+                    text[:max(0, lw - 4)], th[role])
+        return visible
+    sel = max(0, min(p.sel, len(vis) - 1))
+    top = browse.picker_top(sel, len(vis), visible)
+    width = max(0, lw - 3)
+    for i, (value, n) in enumerate(vis[top:top + visible]):
         y = lay.body_y + 2 + i
         if y >= lay.bottom:
             break
         chosen = top + i == sel
-        line = browse.picker_line(cat, n, max(0, lw - 3),
-                                  cat == category.strip().lower())
+        line = browse.picker_line(value, n, width, value == p.active)
         if chosen:
             put(y, lay.list_x, " " * lw, th["row_sel"])
             put(y, lay.list_x, "▌", th["sel_bar"])
         put(y, lay.list_x + 2, line,
             th["row_sel_name"] if chosen else th["value"])
+        if not chosen:
+            for col in browse.picker_marks(p.query, value, n, width):
+                put(y, lay.list_x + 2 + col, line[col], th["match"])
     return visible
 
 

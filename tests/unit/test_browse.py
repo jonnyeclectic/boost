@@ -15,6 +15,7 @@ must match — and Tab took over selection.
 """
 from __future__ import annotations
 
+import dataclasses
 import typing
 
 import pytest
@@ -811,7 +812,8 @@ class TestEmptyLines:
         # Exact bytes: a drifted keycap ("^t") or a mangled template would
         # pass any substring check while lying about the keys.
         lines = browse.empty_lines("q", "all", hidden=22379)
-        assert lines[1][1] == "→ backspace widens · ^T scope · ^G category"
+        assert lines[1][1] == \
+            "→ backspace widens · ^T scope · ^G ^R ^K filters"
         assert lines[2][1] == "→ ^D shows 22,379 hidden duplicates"
 
     def test_a_single_hidden_duplicate_still_gets_the_hint(self):
@@ -1875,11 +1877,16 @@ class TestCategories:
 
 
 class TestPicker:
-    def test_rows_lead_with_everything(self):
+    def test_rows_lead_with_everything_then_sort_a_to_z(self):
         rows = browse.picker_rows(TestCategories.ROWS, TestCategories.CATS)
-        assert rows[0] == ("", 5)
-        assert rows[1:] == browse.category_counts(TestCategories.ROWS,
-                                                  TestCategories.CATS)
+        assert rows == [("", 5), ("ai", 1), ("devops", 1), ("testing", 2),
+                        (browse.UNCATEGORIZED, 1)]
+
+    def test_rows_by_count_still_pin_uncategorized_last(self):
+        rows = browse.picker_rows(TestCategories.ROWS, TestCategories.CATS,
+                                  order="count")
+        assert rows == [("", 5), ("testing", 2), ("ai", 1), ("devops", 1),
+                        (browse.UNCATEGORIZED, 1)]
 
     def test_it_opens_on_the_active_category(self):
         rows = [("", 9), ("testing", 5), ("ai", 4)]
@@ -1899,15 +1906,6 @@ class TestPicker:
     def test_top(self, sel, n, visible, want):
         assert browse.picker_top(sel, n, visible) == want
 
-    def test_jump_steps_through_matching_labels_and_wraps(self):
-        rows = [("", 9), ("data", 3), ("devops", 2), ("ai", 1)]
-        assert browse.picker_jump(rows, 0, "d") == 1
-        assert browse.picker_jump(rows, 1, "D") == 2
-        assert browse.picker_jump(rows, 2, "d") == 1          # wraps
-        assert browse.picker_jump(rows, 3, "a") == 0          # `all` row
-        assert browse.picker_jump(rows, 0, "a") == 3
-        assert browse.picker_jump(rows, 2, "z") == 2          # none: stays
-
     def test_line_layout(self):
         line = browse.picker_line("testing", 1234, 20, True)
         assert line == "● testing      1,234"
@@ -1926,13 +1924,25 @@ class TestPicker:
         assert browse.query_chip("") == ""
 
     def test_the_picker_has_a_mode_and_cancels_rather_than_quits(self):
-        assert browse.MODES["picker"] == "CATEGORY"
-        assert browse.HINTS["picker"][-1] == ("esc", "cancel")
+        assert browse.MODES["picker"] == "FILTER"
+        assert browse.FACET_MODES == {"category": "CATEGORY", "tap": "TAP",
+                                      "kind": "KIND"}
+        assert browse.HINTS["picker"] == (
+            ("a-z", "filter"), ("↑↓", "move"), ("↵", "apply"),
+            ("⇥", "facet"), ("^T", "sort"), ("esc", "cancel"))
         assert "picker" not in browse.PANES
 
-    def test_the_search_and_list_bars_advertise_the_key(self):
+    def test_the_search_and_list_bars_advertise_every_facet_key(self):
         for pane in ("search", "list"):
-            assert ("^G", "category") in browse.HINTS[pane]
+            for facet, key in browse.FACET_KEYS.items():
+                assert (key, facet) in browse.HINTS[pane]
+        assert browse.FACET_KEYS == {"category": "^G", "tap": "^R",
+                                     "kind": "^K"}
+
+    def test_the_mode_override_names_the_facet_in_the_pill(self):
+        spans = browse.status_spans("picker", 80, mode="TAP")
+        assert spans[0] == (0, "pill", " TAP ")
+        assert browse.status_spans("picker", 80)[0] == (0, "pill", " FILTER ")
 
 
 class TestEmptyLinesCategory:
@@ -1943,3 +1953,256 @@ class TestEmptyLinesCategory:
     def test_an_empty_category_says_so(self):
         assert browse.empty_lines("", "all", category="testing")[0][1] == \
             "○ nothing in #testing"
+
+
+# ------------------------------------------------------------------ facets
+
+
+_F = [_e("a", tap="Acme/Quality", category="testing"),
+      _e("b", tap="acme/quality", kind="rule", category="Testing"),
+      _e("c", tap="beta/ai", kind="workflow", category="ai"),
+      _e("d", tap="", kind="", category="")]
+
+
+class TestFacetValues:
+    def test_each_facet_files_an_entry_lowercased(self):
+        assert [browse.facet_value(e, "category") for e in _F] == [
+            "testing", "testing", "ai", browse.UNCATEGORIZED]
+        assert [browse.facet_value(e, "tap") for e in _F] == [
+            "acme/quality", "acme/quality", "beta/ai", browse.UNTAPPED]
+        assert [browse.facet_value(e, "kind") for e in _F] == [
+            "skill", "rule", "workflow", "skill"]
+
+    def test_an_unknown_facet_files_nothing(self):
+        assert browse.facet_value(_F[0], "colour") == ""
+
+    def test_a_blank_kind_is_a_skill(self):
+        assert browse.facet_value(_e("w", kind="  "), "kind") == "skill"
+        assert browse.facet_value(_e("w", tap="  "), "tap") == browse.UNTAPPED
+
+    def test_category_uses_the_tap_fallback(self):
+        e = _e("z", tap="p/q", category="")
+        assert browse.facet_value(e, "category", {"p/q": "DevOps"}) == "devops"
+
+    def test_counts(self):
+        assert browse.facet_counts(_F, "tap") == {
+            "acme/quality": 2, "beta/ai": 1, browse.UNTAPPED: 1}
+
+    def test_next_facet_wraps_both_ways(self):
+        assert browse.next_facet("category") == "tap"
+        assert browse.next_facet("kind") == "category"
+        assert browse.next_facet("category", -1) == "kind"
+        assert browse.next_facet("bogus") == "category"
+
+
+class TestNarrow:
+    def test_filters_and_together(self):
+        got = browse.narrow(_F, {"category": "testing", "kind": "rule"})
+        assert [e["name"] for e in got] == ["b"]
+
+    def test_values_are_normalised_once(self):
+        got = browse.narrow(_F, {"tap": " ACME/Quality ", "kind": ""})
+        assert [e["name"] for e in got] == ["a", "b"]
+
+    def test_no_filter_keeps_everything_as_a_new_list(self):
+        got = browse.narrow(_F, dict.fromkeys(browse.FACETS, ""))
+        assert got == _F and got is not _F
+        assert browse.narrow(_F, None) == _F
+
+    def test_an_unknown_facet_filter_keeps_nothing(self):
+        assert browse.narrow(_F, {"colour": "red"}) == []
+
+    def test_the_has_none_values_are_filters_too(self):
+        assert [e["name"] for e in
+                browse.narrow(_F, {"tap": browse.UNTAPPED})] == ["d"]
+
+
+class TestSortFacetRows:
+    ROWS: typing.ClassVar[list[tuple[str, int]]] = [
+        ("web", 1), (browse.UNCATEGORIZED, 50), ("AI", 3), ("ai", 3),
+        ("data", 9), ("Design", 9)]
+
+    def test_a_to_z_is_case_insensitive_with_the_none_value_last(self):
+        assert browse.sort_facet_rows(self.ROWS, "category") == [
+            ("AI", 3), ("ai", 3), ("data", 9), ("Design", 9), ("web", 1),
+            (browse.UNCATEGORIZED, 50)]
+
+    def test_by_count_breaks_ties_by_name(self):
+        assert browse.sort_facet_rows(self.ROWS, "category", "count") == [
+            ("data", 9), ("Design", 9), ("AI", 3), ("ai", 3), ("web", 1),
+            (browse.UNCATEGORIZED, 50)]
+
+    def test_only_a_facets_own_none_value_is_pinned(self):
+        rows = [(browse.UNCATEGORIZED, 1), ("a", 1), (browse.UNTAPPED, 1)]
+        assert browse.sort_facet_rows(rows, "tap") == [
+            ("a", 1), (browse.UNCATEGORIZED, 1), (browse.UNTAPPED, 1)]
+        assert browse.sort_facet_rows(rows, "kind") == [
+            ("a", 1), (browse.UNCATEGORIZED, 1), (browse.UNTAPPED, 1)]
+        assert browse.sort_facet_rows(rows, "category") == [
+            ("a", 1), (browse.UNTAPPED, 1), (browse.UNCATEGORIZED, 1)]
+
+    def test_order_label(self):
+        assert browse.order_label("az") == "A–Z"
+        assert browse.order_label("count") == "by count"
+        assert browse.order_label("x") == "x"
+
+
+def _pk(active="", order="az", **kw):
+    counts = [("testing", 4), ("ai", 2), ("data-science", 3),
+              ("devops", 1), (browse.UNCATEGORIZED, 5)]
+    p = browse.open_picker("category", counts, 15, active, order)
+    return dataclasses.replace(p, **kw) if kw else p
+
+
+def _step(p, *keys):
+    act = None
+    for k in keys:
+        p, act = browse.picker_step(p, k, page=2)
+    return p, act
+
+
+class TestPickerState:
+    def test_opens_sorted_on_the_value_in_force(self):
+        p = _pk(" DevOps ")
+        assert browse.picker_visible(p) == [
+            ("", 15), ("ai", 2), ("data-science", 3), ("devops", 1),
+            ("testing", 4), (browse.UNCATEGORIZED, 5)]
+        assert p.active == "devops"
+        assert p.sel == 3 and browse.picker_value(p) == "devops"
+        assert _pk().sel == 0 and browse.picker_value(_pk()) == ""
+
+    def test_typing_filters_with_the_label_matcher_and_hides_all(self):
+        p, act = _step(_pk(), "d", "s")
+        assert act is None and p.query == "ds"
+        # A subsequence is enough in a label, as in the name scope: `ds` is
+        # data-science's initials and also fits d-evop-s. `all` is gone while
+        # a query is typed.
+        assert browse.picker_visible(p) == [("data-science", 3), ("devops", 1)]
+        assert p.sel == 0
+
+    def test_the_all_row_leaves_while_a_query_is_typed(self):
+        p, _ = _step(_pk(), "a")
+        assert ("", 15) not in browse.picker_visible(p)
+        assert browse.picker_value(p) == "ai"
+
+    def test_tokens_and_together(self):
+        p, _ = _step(_pk(), *"dat sci")
+        assert browse.picker_visible(p) == [("data-science", 3)]
+
+    def test_no_match_leaves_nothing_and_enter_does_nothing(self):
+        p, _ = _step(_pk(), "z", "z")
+        assert browse.picker_visible(p) == []
+        assert browse.picker_value(p) is None
+        assert browse.picker_step(p, "enter") == (p, None)
+
+    def test_backspace_edits_and_an_empty_query_returns_to_the_active_row(
+            self):
+        p, _ = _step(_pk("testing"), "a", "i")
+        assert p.query == "ai" and p.sel == 0
+        p, _ = _step(p, "backspace")
+        assert p.query == "a"
+        p, _ = _step(p, "backspace")
+        assert p.query == "" and browse.picker_value(p) == "testing"
+        p, act = _step(p, "backspace")          # nothing left to delete
+        assert p.query == "" and act is None
+
+    def test_esc_clears_a_query_first_then_cancels(self):
+        p, act = _step(_pk("ai"), "t", "e", "esc")
+        assert act is None and p.query == ""
+        assert browse.picker_value(p) == "ai"
+        assert browse.picker_step(p, "esc") == (p, "cancel")
+
+    def test_moves_clamp_to_the_visible_rows(self):
+        p = _pk()
+        assert _step(p, "up")[0].sel == 0
+        assert _step(p, "down", "down", "down")[0].sel == 3
+        assert _step(p, "pgdn")[0].sel == 2
+        assert _step(p, "pgdn", "pgdn", "pgdn", "pgdn")[0].sel == 5
+        assert _step(p, "pgdn", "pgdn", "pgup")[0].sel == 2
+        # `d` keeps data-science, devops and uncategorized (a label takes
+        # any subsequence), so three downs clamp on the third.
+        q, _ = _step(p, "d")
+        assert len(browse.picker_visible(q)) == 3
+        assert _step(q, "down", "down", "down")[0].sel == 2
+        z, _ = _step(p, "z", "z")
+        assert _step(z, "down")[0].sel == 0
+
+    def test_enter_applies_the_selected_value(self):
+        p, act = _step(_pk(), "d", "e", "v", "enter")
+        assert act == "apply" and browse.picker_value(p) == "devops"
+        p, act = _step(_pk("ai"), "up", "enter")
+        assert act == "apply" and browse.picker_value(p) == ""
+
+    def test_sort_toggles_and_the_selection_follows_its_value(self):
+        p, act = _step(_pk("ai"), "sort")
+        assert act is None and p.order == "count"
+        assert browse.picker_visible(p) == [
+            ("", 15), ("testing", 4), ("data-science", 3), ("ai", 2),
+            ("devops", 1), (browse.UNCATEGORIZED, 5)]
+        assert browse.picker_value(p) == "ai" and p.sel == 3
+        p, _ = _step(p, "sort")
+        assert p.order == "az" and browse.picker_value(p) == "ai"
+        assert _step(_pk(order="bogus"), "sort")[0].order == "az"
+
+    def test_sort_under_a_query_keeps_the_query(self):
+        p, _ = _step(_pk(), "d", "down", "sort")
+        assert p.query == "d" and p.order == "count"
+        assert browse.picker_value(p) == "devops"
+
+    def test_facet_keys_switch_or_close(self):
+        assert _step(_pk(), "facet:category")[1] == "cancel"
+        assert _step(_pk(), "facet:tap")[1] == "facet:tap"
+        assert _step(_pk(), "next")[1] == "next"
+        assert _step(_pk(), "prev")[1] == "prev"
+
+    def test_an_unknown_key_changes_nothing(self):
+        p = _pk()
+        assert browse.picker_step(p, "f12") == (p, None)
+        assert browse.picker_step(p, "\x01") == (p, None)
+
+    def test_space_types_into_the_query(self):
+        assert _step(_pk(), "d", " ", "s")[0].query == "d s"
+
+
+class TestPickerDrawingHelpers:
+    def test_marks_offset_past_the_dot_lead(self):
+        # "  devops ... 1": label starts at column 2.
+        assert browse.picker_marks("dev", "devops", 1, 20) == [2, 3, 4]
+        assert browse.picker_marks("", "devops", 1, 20) == []
+
+    def test_marks_light_the_all_label(self):
+        assert browse.picker_marks("al", "", 5, 20) == [2, 3]
+
+    def test_marks_stop_at_the_cut(self):
+        # width 10, count "12": room = 10 - 3 - 2 = 5 label columns.
+        assert browse.picker_marks("abcdefg", "abcdefg", 12, 10) == [
+            2, 3, 4, 5, 6]
+        assert browse.picker_line("abcdefg", 12, 10, False) == "  abcde 12"
+
+    def test_tail_counts_values_not_the_all_row(self):
+        assert browse.picker_tail(_pk()) == "5/5"
+        assert browse.picker_tail(_step(_pk(), "d", "e", "v")[0]) == "1/5"
+        assert browse.picker_tail(_step(_pk(), "z", "z")[0]) == "0/5"
+
+    def test_empty_lines(self):
+        assert browse.picker_empty(" zz  q ") == [
+            ("muted", "○ no match for 'zz q'"),
+            ("muted", "→ backspace edits · esc clears")]
+
+    def test_chips_read_with_the_colour_off(self):
+        f = {"category": "testing", "tap": "acme/quality", "kind": "rule"}
+        assert browse.query_chips(f) == ["#testing", "@acme/quality",
+                                         "kind:rule"]
+        assert browse.query_chips({"kind": "rule", "tap": ""}) == ["kind:rule"]
+        assert browse.query_chips(None) == []
+        assert browse.facet_chip("tap", "") == ""
+        assert browse.facet_chip("colour", "red") == "colour:red"
+
+    def test_empty_lines_name_every_filter(self):
+        f = {"category": "testing", "tap": "", "kind": "rule"}
+        assert browse.empty_lines("zz", "all", filters=f)[0][1] == \
+            "○ no matches for 'zz' in all · #testing kind:rule"
+        assert browse.empty_lines("", "all", filters=f)[0][1] == \
+            "○ nothing in #testing kind:rule"
+        assert browse.empty_lines("", "all", filters={})[0][1] == \
+            "○ nothing here"

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import difflib
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 #: Search scopes, in cycle order. `all` first because it is the useful default:
 #: one token can come from the name and another from the description.
@@ -928,7 +928,7 @@ def scrollbar(total: int, visible: int, top: int) -> tuple[int, int] | None:
 
 
 def empty_lines(query: str, scope: str, hidden: int = 0,
-                category: str = "") -> list[tuple[str, str]]:
+                category: str = "", filters=None) -> list[tuple[str, str]]:
     """``(role, text)`` lines for a zero-match list pane.
 
     A silent void is indistinguishable from a hung draw, so the pane says
@@ -936,17 +936,20 @@ def empty_lines(query: str, scope: str, hidden: int = 0,
     every other boost empty state uses, and every line muted, because an
     absence is the quietest thing on screen. Never returns nothing.
 
-    An active ``category`` is named in the head: it narrows as much as the
-    query does, and a "no matches for 'x'" that leaves it out sends the user
-    deleting a query that was never the problem.
+    Every active facet filter (``filters``, or the older lone ``category``)
+    is named in the head: each narrows as much as the query does, and a "no
+    matches for 'x'" that leaves them out sends the user deleting a query
+    that was never the problem.
     """
     q = " ".join(query.split())
-    where = scope_label(scope) + (" · #" + category if category else "")
+    chip = " ".join(query_chips(filters if filters is not None
+                                else {"category": category}))
+    where = scope_label(scope) + (" · " + chip if chip else "")
     head = ("○ no matches for '%s' in %s" % (q, where) if q
-            else "○ nothing in #%s" % category if category
+            else "○ nothing in %s" % chip if chip
             else "○ nothing here")
     lines = [("muted", head),
-             ("muted", "→ backspace widens · ^T scope · ^G category")]
+             ("muted", "→ backspace widens · ^T scope · ^G ^R ^K filters")]
     if hidden > 0:
         lines.append(("muted",
                       "→ ^D shows %s hidden duplicates" % format(hidden, ",")))
@@ -992,17 +995,131 @@ def count_tail(n_found: int, n_all: int, n_sel: int, hidden: int) -> str:
     return tail
 
 
-# --------------------------------------------------------------- picker
+# --------------------------------------------------------------- facets
+#
+# A facet is a list-style filter: every entry is filed under exactly one of
+# its values, and the picker lists those values with a count each. Category
+# was the first; tap and kind are the same shape, so they share one picker
+# rather than growing three — three pickers is three sets of keys that drift
+# apart, and the user learns one.
 
-def picker_rows(entries, categories=None) -> list[tuple[str, int]]:
-    """The category picker's rows: ``("", total)`` — every category — first,
-    then :func:`category_counts`."""
-    return [("", len(entries)), *category_counts(entries, categories)]
+#: Facets in the order Tab walks them inside the picker.
+FACETS = ("category", "tap", "kind")
+
+#: What a tap facet files an entry with no tap under. Every scanned entry has
+#: one; a synthesised row may not, and it still has to be counted somewhere so
+#: the picker's rows add up to the total above them.
+UNTAPPED = "untapped"
+
+#: The "has none" value of a facet, pinned below the sorted rows. It is not a
+#: name the user is looking for, so it should not sit between ``design`` and
+#: ``web`` where A–Z would put it.
+_PINNED_LAST = {"category": UNCATEGORIZED, "tap": UNTAPPED}
+
+#: The key that opens each facet's picker, as the status bar spells it.
+#: ^G was category before there were others. ^R (repo) and ^K (kind) were
+#: picked from what a terminal in cbreak mode still delivers: ^C ^Z ^\ raise
+#: signals, ^S ^Q are flow control, and on macOS ^O (discard), ^V (literal
+#: next) and ^Y (delayed suspend) can be eaten by the tty before curses sees
+#: them. ^I ^J ^M ^H are Tab, Enter and Backspace already.
+FACET_KEYS = {"category": "^G", "tap": "^R", "kind": "^K"}
+
+#: The status bar's mode pill while each facet's picker is open.
+FACET_MODES = {"category": "CATEGORY", "tap": "TAP", "kind": "KIND"}
+
+#: Chip prefix per facet. Distinct prefixes are what let the chips read with
+#: the colour off: ``#testing @acme/quality kind:rule`` says which filter is
+#: which without a legend.
+_CHIP_PREFIX = {"category": "#", "tap": "@", "kind": "kind:"}
+
+#: Picker sort orders, in toggle order. A–Z first: a list you scan for a name
+#: is a list sorted by name; largest-first put ``uncategorized`` and the two
+#: biggest registries on top and every name anywhere else.
+ORDERS = ("az", "count")
+
+_ORDER_LABELS = {"az": "A–Z", "count": "by count"}
 
 
-def picker_index(rows, category: str) -> int:
-    """The row the picker opens on: the active category, else the top."""
-    want = category.strip().lower()
+def order_label(order: str) -> str:
+    """How the picker header names a sort order."""
+    return _ORDER_LABELS.get(order, order)
+
+
+def next_facet(facet: str, step: int = 1) -> str:
+    """The next facet in Tab order, wrapping in both directions."""
+    try:
+        i = FACETS.index(facet)
+    except ValueError:
+        return FACETS[0]
+    return FACETS[(i + step) % len(FACETS)]
+
+
+def facet_value(entry: dict, facet: str, categories=None) -> str:
+    """The value ``entry`` is filed under for ``facet``: lowercased, never
+    empty for a known facet (the "has none" value instead), ``""`` for an
+    unknown one."""
+    if facet == "category":
+        return category_of(entry, categories)
+    if facet == "tap":
+        return str(entry.get("tap") or "").strip().lower() or UNTAPPED
+    if facet == "kind":
+        # "skill" for a missing kind: the default everywhere else boost
+        # reads one (plain_footer, chips, install_target).
+        return str(entry.get("kind") or "skill").strip().lower() or "skill"
+    return ""
+
+
+def narrow(entries, filters, categories=None) -> list[dict]:
+    """``entries`` kept by every active facet filter (AND).
+
+    ``filters`` maps facet -> value; an empty value is no filter, so a caller
+    can pass every facet unconditionally. Values are normalised once here
+    rather than per entry, because this walks the whole catalogue.
+    """
+    want = [(f, str(v).strip().lower()) for f, v in (filters or {}).items()
+            if str(v or "").strip()]
+    if not want:
+        return list(entries)
+    return [e for e in entries
+            if all(facet_value(e, f, categories) == v for f, v in want)]
+
+
+def facet_counts(entries, facet: str, categories=None) -> dict[str, int]:
+    """``value -> rows`` for ``facet`` over ``entries``."""
+    counts: dict[str, int] = {}
+    for e in entries:
+        v = facet_value(e, facet, categories)
+        counts[v] = counts.get(v, 0) + 1
+    return counts
+
+
+def sort_facet_rows(rows, facet: str, order: str = "az"
+                    ) -> list[tuple[str, int]]:
+    """``(value, count)`` rows in picker order: A–Z (case-insensitive) or
+    largest first, with the facet's "has none" value pinned last either way.
+    """
+    pin = _PINNED_LAST.get(facet)
+    body = [r for r in rows if r[0] != pin]
+    if order == "count":
+        body.sort(key=lambda r: (-r[1], r[0].casefold(), r[0]))
+    else:
+        body.sort(key=lambda r: (r[0].casefold(), r[0]))
+    return body + [r for r in rows if r[0] == pin]
+
+
+def picker_rows(entries, categories=None, facet: str = "category",
+                order: str = "az") -> list[tuple[str, int]]:
+    """A facet picker's full row list: ``("", total)`` — no filter — first,
+    then every value with its count in ``order``."""
+    return [("", len(entries)),
+            *sort_facet_rows(list(facet_counts(entries, facet,
+                                               categories).items()),
+                             facet, order)]
+
+
+def picker_index(rows, value: str) -> int:
+    """The row whose value is ``value`` (case-insensitive), else the top."""
+    want = value.strip().lower()
     for i, (c, _n) in enumerate(rows):
         if c == want:
             return i
@@ -1017,25 +1134,11 @@ def picker_top(sel: int, n: int, visible: int) -> int:
     return max(0, min(sel - visible // 2, n - visible))
 
 
-def picker_jump(rows, sel: int, ch: str) -> int:
-    """The next row after ``sel`` whose label starts with ``ch``, wrapping;
-    ``sel`` when none does. Typing is how a 30-row list is crossed without
-    holding an arrow down — and pressing the same letter again steps through
-    every category that starts with it."""
-    ch = ch.lower()
-    n = len(rows)
-    for step in range(1, n + 1):
-        i = (sel + step) % n
-        if (rows[i][0] or "all").startswith(ch):
-            return i
-    return sel
-
-
 def picker_line(category: str, count: int, width: int,
                 active: bool) -> str:
     """One picker row, ``width`` wide: ``● testing ···· 1,234``.
 
-    The dot marks the category in force, so it reads with the colour off; the
+    The dot marks the value in force, so it reads with the colour off; the
     count right-aligns so the column scans. A label too long for the row is
     cut, never the count.
     """
@@ -1046,9 +1149,172 @@ def picker_line(category: str, count: int, width: int,
     return (head.ljust(width - len(num)) + num)[:max(0, width)]
 
 
+def picker_marks(query: str, value: str, count: int, width: int) -> list[int]:
+    """Columns of :func:`picker_line` to highlight for ``query``.
+
+    The same best-alignment positions the result list lights up
+    (:func:`highlight_positions`), moved past the two-column ``● `` lead and
+    dropped where :func:`picker_line` cut the label — a highlight past the cut
+    would paint a letter of the count.
+    """
+    label = value or "all"
+    room = max(0, width - 2 - 1 - len(format(count, ",")))
+    return sorted(2 + p for p in highlight_positions(query, label)
+                  if p < min(room, len(label)))
+
+
+def _label_hit(ftoks: list[str], label: str) -> bool:
+    """Whether every :func:`fold` ed token keeps a picker row.
+
+    The browser's own label rule, not a new one: a value is a short label like
+    a name or ``owner/repo``, so any subsequence matches (:func:`loose_text`
+    for a label scope is the whole haystack) — ``as`` finds
+    ``anthropics/skills`` the way it finds a name.
+    """
+    hay = fold(label)
+    return all(token_matches(t, hay, hay) for t in ftoks)
+
+
+@dataclass(frozen=True)
+class Picker:
+    """An open facet picker: everything a keypress can change, and nothing
+    curses owns, so :func:`picker_step` is a pure reducer.
+
+    ``rows`` are the value rows in ``order`` without the "all" row, which
+    :func:`picker_visible` adds; ``sel`` indexes the *visible* rows.
+    """
+    facet: str
+    rows: tuple[tuple[str, int], ...]
+    total: int
+    active: str = ""
+    query: str = ""
+    sel: int = 0
+    order: str = "az"
+
+
+def open_picker(facet: str, counts, total: int, active: str = "",
+                order: str = "az") -> Picker:
+    """A picker over ``counts`` (``(value, n)`` pairs), on the value in force.
+    """
+    p = Picker(facet=facet,
+               rows=tuple(sort_facet_rows(list(counts), facet, order)),
+               total=total, active=active.strip().lower(), order=order)
+    return replace(p, sel=picker_index(picker_visible(p), p.active))
+
+
+def picker_visible(p: Picker) -> list[tuple[str, int]]:
+    """The rows on screen: every row under "all" with no query, else only the
+    rows the query keeps, in the same order.
+
+    The "all" row leaves while a query is typed. A query means "I am looking
+    for a value", and the row whose label is ``all`` matched every ``a`` and
+    ``l`` — typing ``a`` for ``ai`` landed on it. Esc empties the query and
+    brings it back.
+    """
+    ftoks = [fold(t) for t in tokens(p.query)]
+    if not ftoks:
+        return [("", p.total), *p.rows]
+    return [r for r in p.rows if _label_hit(ftoks, r[0])]
+
+
+def picker_value(p: Picker) -> str | None:
+    """The selected row's value (``""`` for "all"), or None when the query
+    left no row to select."""
+    vis = picker_visible(p)
+    if not vis:
+        return None
+    return vis[max(0, min(p.sel, len(vis) - 1))][0]
+
+
+def _requery(p: Picker, query: str) -> Picker:
+    """``p`` with a new query: on the first match while one is typed, back on
+    the value in force once it is emptied."""
+    q = replace(p, query=query)
+    return replace(q, sel=0 if tokens(query)
+                   else picker_index(picker_visible(q), q.active))
+
+
+_MOVES = {"up": -1, "down": 1}
+
+
+def picker_step(p: Picker, key: str, page: int = 10
+                ) -> tuple[Picker, str | None]:
+    """One keypress: ``(new picker, action)``.
+
+    ``key`` is a name — ``up`` ``down`` ``pgup`` ``pgdn`` ``enter`` ``esc``
+    ``backspace`` ``next`` ``prev`` ``sort`` ``facet:<name>`` — or one
+    printable character; the curses layer translates key codes and nothing
+    else. ``action`` is None (stay open), ``apply`` (use
+    :func:`picker_value`), ``cancel``, ``next``/``prev`` (switch facet) or
+    ``facet:<name>``.
+
+    Esc empties a non-empty query before it cancels: a typed filter is work
+    in progress, and one key that threw it away *and* closed the picker
+    punished the most common correction. Enter on a query that kept nothing
+    does nothing — there is no value to apply. A facet's own key closes its
+    picker, the way it opened it.
+    """
+    if key == "esc":
+        return (_requery(p, ""), None) if p.query else (p, "cancel")
+    if key == "enter":
+        return (p, "apply") if picker_visible(p) else (p, None)
+    if key in ("next", "prev"):
+        return p, key
+    if key.startswith("facet:"):
+        return p, "cancel" if key[6:] == p.facet else key
+    if key == "sort":
+        cur = picker_value(p)
+        order = ORDERS[(ORDERS.index(p.order) + 1) % len(ORDERS)
+                       ] if p.order in ORDERS else ORDERS[0]
+        q = replace(p, order=order,
+                    rows=tuple(sort_facet_rows(list(p.rows), p.facet, order)))
+        # The selection follows its value through the re-sort rather than
+        # staying on a row number that now holds something else.
+        return replace(q, sel=picker_index(picker_visible(q), cur or "")), None
+    if key == "backspace":
+        return _requery(p, p.query[:-1]), None
+    step = _MOVES.get(key, 0) or {"pgup": -page, "pgdn": page}.get(key, 0)
+    if step:
+        n = len(picker_visible(p))
+        return replace(p, sel=max(0, min(n - 1, p.sel + step))), None
+    if len(key) == 1 and key.isprintable():
+        return _requery(p, p.query + key), None
+    return p, None
+
+
+def picker_tail(p: Picker) -> str:
+    """The picker's ``shown/values`` count. Values only — the "all" row is not
+    a value, and counting it made an unfiltered picker read ``4/3``."""
+    shown = sum(1 for v, _n in picker_visible(p) if v)
+    return "%d/%d" % (shown, len(p.rows))
+
+
+def picker_empty(query: str) -> list[tuple[str, str]]:
+    """``(role, text)`` lines for a picker whose query kept no row — in the
+    same ○/→ grammar as the list's :func:`empty_lines`, so an empty picker
+    never reads as one that failed to draw."""
+    return [("muted", "○ no match for '%s'" % " ".join(query.split())),
+            ("muted", "→ backspace edits · esc clears")]
+
+
+def facet_chip(facet: str, value: str) -> str:
+    """One filter as the query row shows it — ``#testing``, ``@acme/quality``,
+    ``kind:rule`` — or ``""`` for no filter."""
+    if not value:
+        return ""
+    return _CHIP_PREFIX.get(facet, facet + ":") + value
+
+
+def query_chips(filters) -> list[str]:
+    """The query row's chips for every active filter, in :data:`FACETS`
+    order."""
+    return [facet_chip(f, (filters or {}).get(f, "")) for f in FACETS
+            if (filters or {}).get(f)]
+
+
 def query_chip(category: str) -> str:
     """The query row's category chip, ``#testing``, or ``""`` for none."""
-    return "#" + category if category else ""
+    return facet_chip("category", category)
 
 
 # --------------------------------------------------------------- palette
@@ -1127,23 +1393,26 @@ def xterm256(rgb) -> int:
 #: tmux and vim name theirs, because the same arrow means four different things
 #: depending on which pane holds focus.
 MODES = {"search": "SEARCH", "scopes": "SCOPE", "list": "LIST",
-         "detail": "DETAIL", "picker": "CATEGORY"}
+         "detail": "DETAIL", "picker": "FILTER"}
 
 #: ``(key, label)`` hints per focus, most useful first, quitting always last.
 HINTS = {
     "search": (("a-z", "filter"), ("↓", "scopes"), ("↵", "install"),
-               ("^T", "scope"), ("^G", "category"), ("esc", "quit")),
+               ("^T", "scope"), ("^G", "category"), ("^R", "tap"),
+               ("^K", "kind"), ("esc", "quit")),
     "scopes": (("← →", "pick"), ("↓", "list"), ("↑", "search"),
                ("esc", "quit")),
     "list": (("↑↓", "move"), ("⇥", "select"), ("↵", "install"),
              ("→", "detail"), ("^T", "scope"), ("^G", "category"),
-             ("^D", "dupes"), ("esc", "quit")),
+             ("^R", "tap"), ("^K", "kind"), ("^D", "dupes"), ("esc", "quit")),
     "detail": (("↑↓", "scroll"), ("←", "list"), ("↵", "install"),
                ("esc", "quit")),
     # Not a pane in the focus ring — an overlay over the list — so Esc
-    # closes it rather than quitting, and the bar has to say so.
-    "picker": (("↑↓", "move"), ("a-z", "jump"), ("↵", "apply"),
-               ("esc", "cancel")),
+    # closes it rather than quitting, and the bar has to say so. Typing
+    # filters the rows (it used to jump to the next row starting with the
+    # letter, which over 460 taps is most of a screen per keypress).
+    "picker": (("a-z", "filter"), ("↑↓", "move"), ("↵", "apply"),
+               ("⇥", "facet"), ("^T", "sort"), ("esc", "cancel")),
 }
 
 _HINT_GAP = 2
@@ -1169,18 +1438,21 @@ def fit_hints(hints, room: int) -> list[tuple[str, str]]:
 
 
 def status_spans(focus: str, width: int,
-                 summary: tuple[str, str] | None = None
-                 ) -> list[tuple[int, str, str]]:
+                 summary: tuple[str, str] | None = None,
+                 mode: str | None = None) -> list[tuple[int, str, str]]:
     """``(x, role, text)`` spans for the status bar under the frame.
 
     Left: the mode pill, then the hints for that mode, keys and labels as
     separate spans so the draw layer can colour the key. Right: the session's
     install chip (:func:`session_summary`), which outranks the hints — it is
     news, and the hints are reference — so hints give way first.
+
+    ``mode`` overrides the pill's word: the picker is one focus with one set
+    of keys, but it says which facet it is picking (``TAP``, ``KIND``).
     """
     if width <= 0:
         return []
-    pill = " %s " % MODES.get(focus, "LIST")
+    pill = " %s " % (mode or MODES.get(focus, "LIST"))
     spans: list[tuple[int, str, str]] = [(0, "pill", pill[:width])]
     x = len(pill) + 1
     limit = width - 1
