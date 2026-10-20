@@ -2843,7 +2843,7 @@ def _install_rule(entry: dict, force: bool = False,
             scopes.ensure_in_base(resolved_base, path)
         if mode == rules.MODE_CLAUDE:
             try:
-                text = path.read_text(encoding="utf-8")
+                text = util.read_user_text(path)
             except OSError:
                 continue  # absent, or refused: the write loop handles both
             rules.require_well_formed(text, name, path)
@@ -2859,7 +2859,7 @@ def _install_rule(entry: dict, force: bool = False,
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             if mode == rules.MODE_CLAUDE:
-                current = path.read_text(encoding="utf-8") if path.exists() else ""
+                current = util.read_user_text(path) if path.exists() else ""
                 # A context file is the user's: write through a symlink to
                 # it and keep its mode (see util.write_user_file).
                 util.write_user_file(
@@ -3039,7 +3039,7 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
         with _refused_removal(name, path):
             if m.get("mode") == rules.MODE_CLAUDE:
                 if _present(path) and path.exists():
-                    text = path.read_text(encoding="utf-8")
+                    text = util.read_user_text(path)
                     # A damaged block refuses the whole uninstall, before the
                     # lock is touched: strip_block declines to guess, and
                     # dropping the row anyway reported the rule removed while
@@ -3144,7 +3144,7 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
                 # The whole file, not just the block: release_materialized
                 # needs it to restore the block at its original position
                 # rather than re-appending at end-of-file.
-                full_text = path.read_text(encoding="utf-8")
+                full_text = util.read_user_text(path)
                 content = rules.read_block(full_text, name)
                 if content is not None:
                     # A file the removal will rewrite is checked against the
@@ -3172,7 +3172,7 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
         path = Path(m.get("path", ""))
         if m.get("mode") == rules.MODE_CLAUDE:
             if path.exists():
-                text = path.read_text(encoding="utf-8")
+                text = util.read_user_text(path)
                 if rules.read_block(text, name) is not None:
                     stripped = rules.strip_block(text, name)
                     if stripped or path.is_symlink():
@@ -3237,7 +3237,7 @@ def release_materialized(kind: str, name: str, entry: dict,
         # late.
         util.user_file_target(path, entry.get("base"))
         try:
-            text = path.read_text(encoding="utf-8")
+            text = util.read_user_text(path)
         except OSError:
             continue  # absent: the restore writes it fresh
         rules.require_well_formed(text, name, path)
@@ -3261,7 +3261,7 @@ def release_materialized(kind: str, name: str, entry: dict,
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         if m.get("mode") == rules.MODE_CLAUDE:
-            current = path.read_text(encoding="utf-8") if path.exists() else ""
+            current = util.read_user_text(path) if path.exists() else ""
             full_text = m.get("full_text")
             # Byte-for-byte only holds when the surrounding text is exactly
             # what quarantine left behind — write the stashed file back
