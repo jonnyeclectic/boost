@@ -20,7 +20,7 @@ import types
 
 import pytest
 
-from boost_cli.core import output, paths, util
+from boost_cli.core import output, paths, selfupdate, util
 
 
 class _TtyBuffer(io.StringIO):
@@ -332,6 +332,10 @@ class TestSearch:
         # D05: every result stays one line within the terminal width; a long
         # description is clipped instead of blowing up the pane.
         monkeypatch.setenv("COLUMNS", "60")
+        # The [rag] hint names this install's command, which from a source
+        # checkout embeds the checkout path; pin a method with a short one.
+        monkeypatch.setattr(selfupdate, "detect",
+                            lambda *a, **k: selfupdate.UNKNOWN)
         r = boost("search", "workflow")
         ansi = re.compile(r"\x1b\[[0-9;]*m")
         rows = [ln for ln in r.out.splitlines() if ln and "ranked by" not in ln]
