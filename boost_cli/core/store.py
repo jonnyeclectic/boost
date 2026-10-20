@@ -3266,6 +3266,50 @@ def workflow_copy_lines(rows: list[tuple[str, str]]) -> list[str]:
                                     paths.tilde(p), n) for n, p in rows]
 
 
+def orphaned_rule_blocks(recorded: dict | None = None
+                         ) -> list[tuple[str, str]]:
+    """``(rule, context file)`` for each managed rule block in an enabled
+    agent's user-scope context file (``~/.claude/CLAUDE.md`` and the like)
+    that no rule lock entry by that name records.
+
+    The marker is boost's own (:data:`rules.BLOCK_START`), so a block is
+    evidence on disk the way a workflow's skill copy is
+    (:func:`orphaned_workflow_copies`). Without a record no command removes
+    it — `boost uninstall` answers "not installed" — and the agent reads it
+    every session, so an all-clear over one is false. ``recorded`` is the
+    rules half of the lock; a file drop into a rules dir carries no marker
+    and is not looked for.
+    """
+    from . import rules
+    if recorded is None:
+        recorded = lockfile.installed_rules()
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for agent, skills_dir in agents.enabled_agents().items():
+        if agent not in rules.CONTEXT_FILES:
+            continue
+        target = rules.rule_target(agent, skills_dir, "x")[1]
+        key = os.path.realpath(target)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            text = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        found.extend((n, str(target)) for n in rules.block_names(text)
+                     if n not in recorded)
+    return found
+
+
+def rule_block_lines(rows: list[tuple[str, str]]) -> list[str]:
+    """One line per :func:`orphaned_rule_blocks` row, with its remedy."""
+    return ["%s carries the block of rule %s, which the lock does not record "
+            "— no boost command removes it until `boost install %s` "
+            "re-records it, or delete the block by hand"
+            % (paths.tilde(Path(p)), n, n) for n, p in rows]
+
+
 def skill_copy_owner(name: str) -> str | None:
     """The workflow whose skill copy is the store dir ``name``, or None."""
     for wname, entry in lockfile.installed_workflows().items():
@@ -4525,7 +4569,8 @@ def sort_unrecorded(lock: dict, integ: lockfile.Integrity | None = None
       every dir is ``unrecorded_store``, which sync never writes over.
 
     ``misnamed_store`` (:func:`misnamed_store_dirs`) is answered whatever the
-    lock says.
+    lock says. ``rule_blocks`` (:func:`orphaned_rule_blocks`) is answered
+    unless the lock is unreadable, when every block would look unrecorded.
     """
     if integ is None:
         integ = lockfile.check()
@@ -4534,10 +4579,12 @@ def sort_unrecorded(lock: dict, integ: lockfile.Integrity | None = None
                             "foreign_store": [], "not_skill_store": [],
                             "unreadable_store": [], "unrecorded_store": [],
                             "misnamed_store": misnamed_store_dirs(),
-                            "workflow_copies": orphaned_workflow_copies(lock)}
+                            "workflow_copies": orphaned_workflow_copies(lock),
+                            "rule_blocks": []}
     if not integ.ok and integ.problem != "missing":
         out["unrecorded_store"] = names
         return out
+    out["rule_blocks"] = orphaned_rule_blocks()
     out.update(classify_unrecorded(names))
     if integ.ok:
         return out
@@ -4594,6 +4641,9 @@ def sync_plan() -> dict[str, list]:
       workflow_copies: (name, workflow file) for a workflow's skill copy no
                       lock entry records (:func:`orphaned_workflow_copies`) —
                       never adopted as a skill; `boost install` re-records
+      rule_blocks:    (rule, context file) for a managed rule block no lock
+                      entry records (:func:`orphaned_rule_blocks`) — never
+                      stripped; `boost install` re-records
       plugin_duplicates: skills boost links into Claude Code that an enabled
                       plugin also loads (:func:`plugin_duplicates`)
       unrecorded_store: store dirs the lock file has lost, or cannot be read
@@ -4631,7 +4681,7 @@ def sync_plan() -> dict[str, list]:
             "blocked_links": [], "stale_links": [], "adoptable_store": [],
             "older_copies": [], "foreign_store": [], "not_skill_store": [],
             "unreadable_store": [], "misnamed_store": [],
-            "workflow_copies": [],
+            "workflow_copies": [], "rule_blocks": [],
             "plugin_duplicates": [], "unrecorded_store": [],
             "missing_materializations": [], "out_of_scope_links": []}
     for name, entry in lock.items():

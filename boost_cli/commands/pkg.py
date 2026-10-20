@@ -1073,6 +1073,8 @@ _PLAN_LABELS = [
     ("misnamed_store", "store dirs boost cannot record a skill by, left alone"),
     ("workflow_copies", "workflow skill copies the lock has lost, left alone "
                         "(`boost install <workflow>` re-records)"),
+    ("rule_blocks", "rule blocks the lock has lost, left alone "
+                    "(`boost install <rule>` re-records)"),
     ("plugin_duplicates", "skills Claude Code also loads from a plugin"),
     ("unrecorded_store", "store dirs the lock file has lost"),
     ("missing_materializations", "missing rule/workflow files"),
@@ -1156,7 +1158,7 @@ def cmd_sync(argv: list[str]) -> int:
                     name, agent, path = item
                     out.info("%s → %s (%s in the way)"
                              % (name, agent, _tilde(Path(path))))
-                elif key == "workflow_copies":
+                elif key in ("workflow_copies", "rule_blocks"):
                     name, path = item
                     out.info("%s — %s" % (name, _tilde(Path(path))))
                 elif key == "older_copies":
@@ -1256,6 +1258,7 @@ def cmd_sync(argv: list[str]) -> int:
                           "unreadable_store": plan["unreadable_store"],
                           "misnamed_store": plan["misnamed_store"],
                           "workflow_copies": plan["workflow_copies"],
+                          "rule_blocks": plan["rule_blocks"],
                           "unrecorded_store": unrecorded,
                           "out_of_scope_links": oos,
                           "blocked_links": blocked,
@@ -1292,6 +1295,8 @@ def cmd_sync(argv: list[str]) -> int:
     if plan["misnamed_store"]:
         out.info(store.misnamed_line(plan["misnamed_store"]), wrap=True)
     for line in store.workflow_copy_lines(plan["workflow_copies"]):
+        out.warn(line, wrap=True)
+    for line in store.rule_block_lines(plan["rule_blocks"]):
         out.warn(line, wrap=True)
     if declined_dups:
         out.warn("%s still linked into Claude Code beside a plugin's copy "

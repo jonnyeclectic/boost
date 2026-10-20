@@ -1704,6 +1704,7 @@ def _tool_doctor(args: dict):
         "not_skill_store": lambda names: [store.not_skill_line(names)],
         "misnamed_store": lambda names: [store.misnamed_line(names)],
         "workflow_copies": store.workflow_copy_lines,
+        "rule_blocks": store.rule_block_lines,
         "blocked_links": lambda rows: [
             "%s not linked for %s: %s is in the way and is not boost's — ask "
             "the user to move or delete it, then run `boost sync`"
@@ -1811,6 +1812,7 @@ def _doctor_verdict(plan: dict[str, list], total: int, lock_bad: bool,
     user = (lock_bad + len(plan.get("blocked_links", ()))
             + len(plan.get("unreadable_store", ())) + repos
             + len(plan.get("workflow_copies", ()))
+            + len(plan.get("rule_blocks", ()))
             + (0 if lost else len(plan.get("unrecorded_store", ())))
             + (len(plan.get("adoptable_store", ())) if unrestored else 0))
     prune = (len(plan.get("foreign_store", ())) - repos

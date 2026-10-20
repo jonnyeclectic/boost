@@ -835,7 +835,7 @@ class TestSortUnrecorded:
             "foreign_store": [("automate", "Cursor's built-ins", str(theirs),
                                "differs")],
             "unrecorded_store": [], "misnamed_store": ["b copy"],
-            "workflow_copies": []}
+            "workflow_copies": [], "rule_blocks": []}
 
     def test_a_missing_lock_queues_what_boost_may_have_installed(self, installed):
         _mine("pr-me")
@@ -855,7 +855,7 @@ class TestSortUnrecorded:
             "older_copies": [("old-me", "Codex", str(older))],
             "foreign_store": [("unlinked", "Cursor's built-ins", str(theirs),
                                "differs")],
-            "misnamed_store": ["b copy"], "workflow_copies": []}
+            "misnamed_store": ["b copy"], "workflow_copies": [], "rule_blocks": []}
 
     def test_a_corrupt_lock_reads_nothing_else(self, installed, monkeypatch):
         _mine("pr-me")
@@ -865,7 +865,7 @@ class TestSortUnrecorded:
                             lambda *a, **k: pytest.fail("read"))
         assert store.sort_unrecorded(lockfile.installed()) == {
             **EMPTY, "unrecorded_store": ["brainstorming", "pr-me"],
-            "misnamed_store": ["b copy"], "workflow_copies": []}
+            "misnamed_store": ["b copy"], "workflow_copies": [], "rule_blocks": []}
 
     def test_the_check_passed_in_is_the_one_read(self, installed, monkeypatch):
         _mine("pr-me")

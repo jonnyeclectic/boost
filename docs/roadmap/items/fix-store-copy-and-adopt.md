@@ -34,5 +34,11 @@ a store dir whose <code>SKILL.md</code> is exactly what an agent's
 workflow's copy. It is never adopted or linked, and heal, sync and both doctors name it with
 <code>boost install &lt;workflow&gt;</code> as the fix. Because that install now claims a
 store dir that holds exactly its own copy, a single install converges.
-Known limits: rule blocks and workflow files the lost lock recorded are not rebuilt from
-disk, and a Gemini-only workflow's TOML command is no evidence.
+The same lost lock left a rule's <code>&lt;!-- boost:rule:&lt;name&gt; start --&gt;</code> block in
+<code>~/.claude/CLAUDE.md</code>, where <code>boost uninstall</code> answered "not installed" and
+<code>boost doctor</code> said healthy. <code>store.orphaned_rule_blocks</code> now reads boost's
+own marker in each agent's user-scope context file, and heal, sync and both doctors name a block
+no lock entry records, with <code>boost install &lt;rule&gt;</code> as the fix. It is never stripped.
+Known limits: nothing is rebuilt from disk; a rule's file drop into a rules dir and a workflow
+file without a skill copy carry no boost marker, so they are not reported (a user's own file
+would look the same); and a Gemini-only workflow's TOML command is no evidence.

@@ -1068,6 +1068,10 @@ def cmd_doctor(argv):
         # no command updates or uninstalls it until `boost install` re-records.
         for line in store.workflow_copy_lines(unrec["workflow_copies"]):
             bad("workflow-copies", line, wrap=True)
+        # The same for a rule's block in a context file: the agent reads it
+        # every session and `boost uninstall` answers "not installed".
+        for line in store.rule_block_lines(unrec["rule_blocks"]):
+            bad("rule-blocks", line, wrap=True)
     dups = store.plugin_duplicates(skills, coverage) if agents_ok else []
     same = [r[0] for r in dups if r[3] == foreign.IDENTICAL]
     if same:
@@ -1927,6 +1931,11 @@ def cmd_heal(argv):
     if plan["workflow_copies"]:
         stuck.extend(store.skill_store_dir(n) for n, _wf in plan["workflow_copies"])
         for line in store.workflow_copy_lines(plan["workflow_copies"]):
+            out.warn(line, wrap=True)
+    # A rule's block the lock lost: the same, in the file it sits in.
+    if plan["rule_blocks"]:
+        stuck.extend(Path(p) for _n, p in plan["rule_blocks"])
+        for line in store.rule_block_lines(plan["rule_blocks"]):
             out.warn(line, wrap=True)
     # A lock that cannot be read is `boost replay`'s to restore. heal answered
     # "nothing to heal" over it, with every store dir it could not record.

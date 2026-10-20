@@ -1216,6 +1216,7 @@ class TestSyncPlan:
              "blocked_links": [], "stale_links": [], "adoptable_store": [],
              "older_copies": [], "foreign_store": [], "not_skill_store": [],
              "unreadable_store": [], "misnamed_store": [], "workflow_copies": [],
+             "rule_blocks": [],
              "plugin_duplicates": [], "unrecorded_store": [],
              "missing_materializations": [], "out_of_scope_links": []}
 
