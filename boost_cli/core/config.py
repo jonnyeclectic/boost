@@ -526,13 +526,37 @@ def get_int(dotted: str, default: int) -> int:
     return typedvalue.adapt(dotted, value, typedvalue.INT)
 
 
+MANAGED_KEYS = ("taps",)
+"""Top-level keys only their own commands may write.
+
+`taps` is the tap registry: `registry.add`/`remove` keep it a list of
+``{name, url, curated, ...}`` records. `config set taps foo` replaced every
+record with a value `_read_file` then refused as a corrupt file, so `boost
+taps` said none were configured and `boost clean` offered to delete their
+catalog caches — all behind a check mark. `config unset taps` drops them all
+just as silently.
+"""
+
+
+def _refuse_managed(dotted: str, verb: str) -> None:
+    head = dotted.split(".", 1)[0]
+    if head in MANAGED_KEYS:
+        raise BoostError(
+            "config key %r is managed by `boost tap` — `config %s` would "
+            "rewrite the tap registry" % (dotted, verb),
+            hint="add or remove registries with `boost tap <spec>` / "
+                 "`boost untap <name>`")
+
+
 def set_value(dotted: str, raw: str) -> None:
     """Set a dotted key, reading the value at the type :data:`DEFAULTS` declares.
 
     Raises :class:`typedvalue.ValueTypeError` when the text cannot be read at
     that type. Keys with no default keep the old lenient behaviour: JSON when
-    it parses, the string otherwise.
+    it parses, the string otherwise. A :data:`MANAGED_KEYS` path is a
+    :class:`BoostError`, before anything is written.
     """
+    _refuse_managed(dotted, "set")
     value = typedvalue.coerce(dotted, raw, spec_for(dotted))
     cfg = load()
     node: Any = cfg
@@ -554,7 +578,9 @@ def unset(dotted: str) -> bool:
     `in node` forever, so a repeat `unset` (or a first one on a pristine
     machine with no config.json at all) reported success and wrote the whole
     of DEFAULTS to disk, freezing them against future default changes.
+    A :data:`MANAGED_KEYS` path is a :class:`BoostError`, before any read.
     """
+    _refuse_managed(dotted, "unset")
     cfg = _read_raw()
     node: Any = cfg
     parts = dotted.split(".")

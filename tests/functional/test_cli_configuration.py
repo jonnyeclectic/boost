@@ -26,7 +26,7 @@ import urllib.request
 
 import pytest
 
-from boost_cli.core import frontmatter, journal, paths, policy, util
+from boost_cli.core import config, frontmatter, journal, paths, policy, util
 from boost_cli.errors import BoostError
 
 
@@ -120,6 +120,19 @@ class TestConfig:
         r = boost("config", "set", "ai.model.extra", "1", expect=1)
         assert "config key 'model' is not a section" in r.err
         assert "the parent key holds a plain value" in r.err
+
+    def test_set_taps_refused_and_registry_kept(self, boost, sandbox):
+        taps = [{"name": "a/b", "url": "x", "curated": False}]
+        config.save({"taps": taps})
+        r = boost("config", "set", "taps", "foo", expect=1)
+        assert ("config key 'taps' is managed by `boost tap` — `config set` "
+                "would rewrite the tap registry") in r.err
+        assert "`boost untap <name>`" in r.err
+        assert "set taps" not in r.out
+        r = boost("config", "unset", "taps", expect=1)
+        assert "`config unset` would rewrite the tap registry" in r.err
+        assert config.get("taps") == taps
+        assert not journal.events(action="config")
 
     def test_unset_present_and_absent(self, boost, sandbox):
         boost("config", "set", "custom.flag", "true")

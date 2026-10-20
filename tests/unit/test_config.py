@@ -249,9 +249,32 @@ class TestSetValue:
         config.set_value("serve.port", "3")
         assert config.get("serve.port") == 3
 
-    def test_json_list(self, sandbox):
-        config.set_value("taps", "[1, 2]")
-        assert config.get("taps") == [1, 2]
+    @pytest.mark.parametrize("key", ["taps", "taps.0.pin"])
+    def test_managed_key_refused_before_write(self, sandbox, key):
+        # `config set taps foo` once replaced the tap registry with a value
+        # `_read_file` rejects, so every tap vanished behind a check mark.
+        config.save({"taps": [{"name": "a/b", "url": "x", "curated": False}]})
+        before = paths.config_path().read_bytes()
+        with pytest.raises(BoostError) as exc:
+            config.set_value(key, "foo")
+        assert str(exc.value) == (
+            "config key %r is managed by `boost tap` — `config set` would "
+            "rewrite the tap registry" % key)
+        assert exc.value.hint == ("add or remove registries with `boost tap "
+                                  "<spec>` / `boost untap <name>`")
+        assert paths.config_path().read_bytes() == before
+
+    @pytest.mark.parametrize("key", ["taps", "taps.0"])
+    def test_managed_key_unset_refused(self, sandbox, key):
+        config.save({"taps": [{"name": "a/b", "url": "x", "curated": False}]})
+        with pytest.raises(BoostError, match="`config unset` would"):
+            config.unset(key)
+        assert config.get("taps") == [{"name": "a/b", "url": "x",
+                                       "curated": False}]
+
+    def test_key_merely_starting_with_taps_is_not_managed(self, sandbox):
+        config.set_value("tapsx", "1")
+        assert config.get("tapsx") == 1
 
     def test_plain_string(self, sandbox):
         config.set_value("ai.model", "plain")
@@ -715,6 +738,7 @@ class TestTapsThatIsNotAList:
         assert config.check() is None
 
     def test_unset_reads_no_overrides_from_it(self, sandbox):
-        self._write('{"taps": "x"}')
-        assert config.unset("taps") is False
-        assert paths.config_path().read_text(encoding="utf-8") == '{"taps": "x"}'
+        self._write('{"taps": "x", "custom": 1}')
+        assert config.unset("custom") is False
+        assert (paths.config_path().read_text(encoding="utf-8")
+                == '{"taps": "x", "custom": 1}')
