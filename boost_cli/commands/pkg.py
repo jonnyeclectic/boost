@@ -23,25 +23,22 @@ from ..core import (
     catalog,
     complete,
     config,
-    deps,
     foreign,
     frontmatter,
     gitutil,
+    installplan,
     installscan,
     integrity,
     journal,
     lockfile,
     paths,
-    prereq,
     projectlock,
     rag,
     registry,
-    resolve,
     scopes,
     snapshot,
     staleness,
     store,
-    typosquat,
     updatediff,
     util,
 )
@@ -58,19 +55,10 @@ def _plural(n: int, word: str) -> str:
 
 def _warn_confusions(entries: list[dict]) -> None:
     """Warn when a skill about to be installed is confusable with one from a
-    *different* tap — the typosquat / owner-confusion guard (core.typosquat).
-
-    Quiet by default: it only speaks up when a near-identical name resolves to
-    another owner, which is exactly the fat-finger-into-a-look-alike case.
-    """
-    if not entries:
-        return
-    all_entries = catalog.all_entries()
-    for e in entries:
-        for other in typosquat.find_confusions(e, all_entries)[:3]:
-            out.warn("%s (%s) closely resembles %s (%s) — double-check you "
-                     "meant this one" % (e["name"], e["tap"],
-                                         other["name"], other["tap"]))
+    *different* tap — the typosquat / owner-confusion guard. The words live in
+    ``core.installplan`` so ``boost_install`` over MCP says the same thing."""
+    for line in installplan.confusion_lines(entries):
+        out.warn(line)
 
 
 def _check_agents(names: list[str] | None) -> list[str] | None:
@@ -436,106 +424,16 @@ def _others_installed() -> str:
     return " and ".join(parts)
 
 
-def _rel_list(meta: dict, key: str) -> list[str]:
-    """A skill's `requires:`/`conflicts:` frontmatter as a clean name list."""
-    val = meta.get(key)
-    if val in (None, "", False) or isinstance(val, dict):
-        return []
-    if isinstance(val, list):
-        return [str(x).strip() for x in val if str(x).strip()]
-    return [s.strip() for s in str(val).split(",") if s.strip()]
-
-
-def _skill_relations(name: str, key: str) -> list[str]:
-    """`requires:`/`conflicts:` for a skill by name, from its catalog entry.
-
-    ``requires:`` goes through :func:`deps.requirement_names`, the same
-    filter ``boost deps`` applies, so the two cannot disagree about what a
-    requirement *is*. Without it this path still fed prose and package
-    coordinates to the resolver: `requires: ["gh (GitHub CLI)", "python3"]`
-    printed "required skill 'gh (GitHub CLI)' is in no tap — skipped" while
-    `boost deps` on the same skill, post-filter, listed nothing. A qualified
-    `tap:name` survives the filter verbatim, because this feeds
-    ``catalog.find``.
-    """
-    matches = catalog.find(name)
-    if not matches:
-        return []
-    meta = matches[0].get("meta") or {}
-    if key == "requires":
-        return deps.requirement_names(meta)
-    return _rel_list(meta, key)
-
-
 def _report_prerequisites(entries: list[dict], *, pbase=None,
                           would: bool = False) -> None:
-    """Name the catalogued items an install's own frontmatter says it needs.
-
-    Advisory and after the fact: the ``requires:`` closure is installed for
-    you (above), and everything the wider spellings declare — ``skills:``,
-    ``dependencies:``, ``prerequisites:``, … — is reported here instead. See
-    :mod:`boost_cli.core.prereq` for why reporting rather than installing is
-    the answer, and for the census the key set comes from.
-
-    ``pbase`` is the project base for a ``--local`` install, so a sibling
-    installed into *this repo* counts as present. Without it every
-    project-scope user got a prerequisite line naming something already
-    beside it.
-    """
-    try:
-        rows = prereq.for_entries(entries, pbase=pbase)
-    except BoostError:
-        # A missing or unreadable catalog must not fail an install that has
-        # already happened; the prerequisite line is advice, not a step.
-        return
-    for row in rows:
-        out.warn("%s declares %s boost cannot see installed: %s"
-                 % (row.name, _plural(len(row.unmet), "prerequisite"),
-                    ", ".join("%s (%s)" % (m.name, m.tap) for m in row.unmet)),
-                 wrap=True)
-    if rows:
-        out.info(("would meet them with: %s" if would else "meet them with: %s")
-                 % prereq.install_hint(rows), wrap=True)
-
-
-def _expand_dependencies(entries: list[dict], pbase=None
-                         ) -> tuple[list[dict], resolve.Resolution]:
-    """Grow the requested entries into their full `requires:` closure.
-
-    Returns ``(ordered_entries, resolution)`` — the entries to install in
-    dependency-first order (roots plus any pulled-in dependencies that are not
-    already installed), and the :class:`resolve.Resolution` carrying what was
-    added, any advisory conflicts, and unresolved (dangling) requirements.
-
-    ``pbase`` is the project a ``--local`` install targets. Its lock counts as
-    installed too: without it, ``install --local needy`` re-planned a ``helper``
-    already in the repo, the forced-off reinstall refused it, and the command
-    exited 1 over a requirement that was met.
-    """
-    # All three lock sections, not just skills: a rule or workflow already
-    # installed under a required name must not be re-added to the plan.
-    installed = prereq.installed_names(pbase)
-    res = resolve.resolve(
-        [e["name"] for e in entries],
-        lambda n: _skill_relations(n, "requires"),
-        lambda n: _skill_relations(n, "conflicts"),
-        installed=installed,
-        known=lambda n: bool(catalog.find(n)),
-    )
-    by_name = {e["name"]: e for e in entries}
-    ordered: list[dict] = []
-    for name in res.order:
-        if name in by_name:
-            ordered.append(by_name[name])
-            continue
-        try:
-            ordered.append(catalog.resolve_one(name))
-        except BoostError:
-            # A dep that resolves nowhere unambiguously is reported via
-            # res.unresolved; skip it here rather than abort the whole install.
-            if name not in res.unresolved:
-                res.unresolved.append(name)
-    return ordered, res
+    """Name the catalogued items an install's own frontmatter says it needs
+    (``core.installplan.prerequisite_lines``, shared with MCP install)."""
+    warnings, hint = installplan.prerequisite_lines(entries, pbase=pbase,
+                                                    would=would)
+    for line in warnings:
+        out.warn(line, wrap=True)
+    if hint:
+        out.info(hint, wrap=True)
 
 
 # ── install ──────────────────────────────────────────────────────────────
@@ -658,38 +556,13 @@ def cmd_install(argv: list[str]) -> int:
     # unless the caller opted out. Only skills carry dependency frontmatter;
     # rules/workflows pass through unchanged.
     if not args.no_deps and entries:
-        entries, dep_res = _expand_dependencies(entries, pbase=pbase)
-        if dep_res.added:
-            out.info("pulling in %s required by your selection: %s"
-                     % (_plural(len(dep_res.added), "dependency"),
-                        ", ".join(dep_res.added)))
-        for name in dep_res.unresolved:
-            # "in no tap" is only true when the catalog has no row for it.
-            # `_expand_dependencies` also lands here when `resolve_one`
-            # refuses a name *several* taps carry, and calling that absent
-            # contradicted the prerequisite line printed a few lines below,
-            # which names a tap and gives a command that works. 77% of the
-            # ambiguous values in the census resolve this way, so the
-            # contradiction was the common case, not the corner.
-            cands = catalog.distinct_candidates(catalog.find(name))
-            if not cands:
-                out.warn("required skill %r is in no tap — skipped "
-                         "(install it manually or `boost tap` its source)"
-                         % name)
-                continue
-            taps = sorted({str(e.get("tap") or "") for e in cands})
-            # Only offer `tap:name` when that would actually disambiguate:
-            # one tap vendoring the same name twice is ambiguous too, and
-            # there `tap:name` is as unresolvable as the bare name.
-            fix = ("name one of %s" % ", ".join("%s:%s" % (t, name)
-                                                for t in taps)
-                   if len(taps) == len(cands)
-                   else "`boost search %s` and install the one you want"
-                        % name)
-            out.warn("required skill %r matches %d catalog entries — "
-                     "skipped (%s)" % (name, len(cands), fix), wrap=True)
-        for skill, clash in dep_res.conflicts:
-            out.warn("%s declares a conflict with %s (also present)" % (skill, clash))
+        entries, dep_res = installplan.expand_dependencies(entries,
+                                                           pbase=pbase)
+        added = installplan.added_line(dep_res)
+        if added:
+            out.info(added)
+        for line in installplan.dependency_warnings(dep_res):
+            out.warn(line, wrap=True)
         # Pulling in dependencies can turn a single-name request into a multi-item
         # install (per-item headings); it must never *lower* multi (e.g. when an
         # unknown co-requested name was dropped), so OR rather than reassign.
@@ -732,7 +605,7 @@ def cmd_install(argv: list[str]) -> int:
             # exited 1 out of the whole command — no plan for anything after
             # `b`, and not even the "dry run — nothing was changed" line —
             # while the run installs `a`, warns about `b` and exits 1. A
-            # single name reaches this too, since `_expand_dependencies` can
+            # single name reaches this too, since `expand_dependencies` can
             # raise `multi` on a `requires:` closure.
             try:
                 if args.scope == scopes.SCOPE_PROJECT and e.get("kind", "skill") == "skill":

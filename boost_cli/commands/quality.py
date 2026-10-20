@@ -1223,21 +1223,11 @@ def cmd_doctor(argv):
         # them (see `core/prereq`), so counting it would leave doctor
         # permanently red on something no boost command clears on its own.
         #
-        # One line, truncated, like `orphans` above — not one per item. The
-        # census found 1,323 `skills:` values across 18 taps, so a note per
-        # declaring item buries the rest of the report and repeats a single
-        # `name` down the whole `--json` `checks` array. The hint stays
-        # whole: it is a command, and a truncated command does not run.
-        missing = sorted({m.spec for row in prereq_rows for m in row.unmet})
-        rep.note("unmet-prerequisite",
-                 "%d installed item%s declare%s %d prerequisite%s not "
-                 "installed (%s%s) — `%s`"
-                 % (len(prereq_rows), _s(len(prereq_rows)),
-                    "" if len(prereq_rows) > 1 else "s",
-                    len(missing), _s(len(missing)),
-                    ", ".join(missing[:5]),
-                    ", …" if len(missing) > 5 else "",
-                    prereq.install_hint(prereq_rows)), wrap=True)
+        # One line, truncated, like `orphans` above — not one per item; a
+        # note per declaring item would repeat a single `name` down the whole
+        # `--json` `checks` array (see `prereq.summary_line`).
+        rep.note("unmet-prerequisite", prereq.summary_line(prereq_rows),
+                 wrap=True)
 
     stars = registry.overstarred()
     if stars:

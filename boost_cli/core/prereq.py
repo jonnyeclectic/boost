@@ -224,3 +224,26 @@ def install_hint(rows: Sequence[ItemPrereqs]) -> str:
             if miss.spec not in specs:
                 specs.append(miss.spec)
     return ("boost install %s" % " ".join(specs)) if specs else ""
+
+
+def summary_line(rows: Sequence[ItemPrereqs]) -> str:
+    """One line for every installed item's unmet prerequisites, or "".
+
+    One line, truncated to five names, not one per item: the census found
+    1,323 `skills:` values across 18 taps, so a line per declaring item buries
+    the rest of a health report. The install hint stays whole — it is a
+    command, and a truncated command does not run. CLI `boost doctor` and the
+    MCP `boost_doctor` both print this, so the two cannot disagree about it.
+    """
+    if not rows:
+        return ""
+    missing = sorted({m.spec for row in rows for m in row.unmet})
+
+    def s(n: int) -> str:
+        return "" if n == 1 else "s"
+
+    return ("%d installed item%s declare%s %d prerequisite%s not installed "
+            "(%s%s) — `%s`"
+            % (len(rows), s(len(rows)), "" if len(rows) > 1 else "s",
+               len(missing), s(len(missing)), ", ".join(missing[:5]),
+               ", …" if len(missing) > 5 else "", install_hint(rows)))

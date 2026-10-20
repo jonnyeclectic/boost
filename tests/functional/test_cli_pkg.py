@@ -4135,14 +4135,14 @@ class TestUnmetPrerequisites:
         # The install has already happened by the time this line is printed;
         # a catalog that went unreadable in between must not turn a completed
         # install into a non-zero exit.
-        from boost_cli.commands import pkg
+        from boost_cli.core import prereq
         from boost_cli.errors import BoostError
 
         def boom(*a, **k):
             raise BoostError("catalog is unreadable")
 
         boost("tap", self._tap(tmp_path))
-        monkeypatch.setattr(pkg.prereq, "for_entries", boom)
+        monkeypatch.setattr(prereq, "for_entries", boom)
         r = boost("install", "needy")
         assert "copied to" in r.out
         assert "catalog is unreadable" not in r.out + r.err
