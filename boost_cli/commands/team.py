@@ -91,6 +91,8 @@ def cmd_cohort(argv) -> int:
                    help="comma-separated skill names (repeatable)")
     p.add_argument("--percent", type=int, default=100,
                    help="rollout percentage (default 100)")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="`delete` without the confirmation prompt")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
@@ -142,7 +144,8 @@ def cmd_cohort(argv) -> int:
         if args.name not in cohorts:
             raise BoostError("no cohort named %s" % args.name,
                             hint="list cohorts with `boost cohort list`")
-        if not out.confirm("delete cohort %s?" % args.name, quiet=args.json):
+        if not (args.yes or out.confirm("delete cohort %s?" % args.name,
+                                        quiet=args.json)):
             if args.json:
                 print(json.dumps({"name": args.name, "deleted": False,
                                   "cancelled": True}, indent=2))
@@ -328,6 +331,9 @@ def cmd_profile(argv) -> int:
     p.add_argument("name", nargs="?", help="profile name")
     p.add_argument("--prune", action="store_true",
                    help="with `use`: fully uninstall skills not in the profile")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="`delete` and `use --prune` without the confirmation "
+                        "prompt")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
@@ -460,7 +466,8 @@ def cmd_profile(argv) -> int:
         if not path.exists():
             raise BoostError("no profile named %s" % args.name,
                             hint="list profiles with `boost profile list`")
-        if not out.confirm("delete profile %s?" % args.name, quiet=args.json):
+        if not (args.yes or out.confirm("delete profile %s?" % args.name,
+                                        quiet=args.json)):
             if args.json:
                 print(json.dumps({"name": args.name, "deleted": False,
                                   "cancelled": True}, indent=2))
@@ -531,10 +538,10 @@ def cmd_profile(argv) -> int:
         # the same sideline extras get without --prune keeps that claim true
         # either way, without a second prompt. `and` short-circuits, so no
         # prompt is raised when --prune was not asked for.
-        pruned = args.prune and bool(doomed) and out.confirm(
+        pruned = args.prune and bool(doomed) and (args.yes or out.confirm(
             "uninstall %d skill%s not in the profile (%s)?"
             % (len(doomed), _s(len(doomed)), ", ".join(doomed)),
-            quiet=args.json)
+            quiet=args.json))
         if pruned:
             for n in doomed:
                 store.uninstall(n)
@@ -840,6 +847,8 @@ def cmd_replay(argv) -> int:
                    help="what to do (default: list; rollback restores skills "
                         "only)")
     p.add_argument("id", nargs="?", help="history entry id (from `boost replay list`)")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="`rollback` without the confirmation prompt")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
@@ -898,10 +907,11 @@ def cmd_replay(argv) -> int:
         # read it as empty and reinstall each skill over it. Restoring is the
         # snapshot itself becoming the lock; the corrupt bytes stay aside.
         backup = paths.tilde(lockfile.corrupt_backup())
-        if not out.confirm("the lock file is corrupt — make snapshot %s the "
-                           "lock file? It is the lock as it was before the "
-                           "change after it; the newest record stays only in "
-                           "%s" % (args.id, backup), quiet=args.json):
+        if not (args.yes or out.confirm(
+                "the lock file is corrupt — make snapshot %s the lock file? "
+                "It is the lock as it was before the change after it; the "
+                "newest record stays only in %s" % (args.id, backup),
+                quiet=args.json)):
             if args.json:
                 print(json.dumps({"id": args.id, "cancelled": True}, indent=2))
             else:
@@ -1007,7 +1017,7 @@ def cmd_replay(argv) -> int:
     if not args.json:
         out.info("rollback to %s will: uninstall %d, install %d, revisit %d version change(s)"
                  % (args.id, len(added), len(restorable), len(changed)))
-    if not out.confirm("proceed?", quiet=args.json):
+    if not (args.yes or out.confirm("proceed?", quiet=args.json)):
         if args.json:
             print(json.dumps({"id": args.id, "cancelled": True}, indent=2))
             return 1

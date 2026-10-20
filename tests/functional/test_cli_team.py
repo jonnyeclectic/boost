@@ -1420,3 +1420,49 @@ class TestWho:
         r = boost("who")
         for ln in r.out.split("\n"):
             assert len(ln) <= 60, ln
+
+
+# ------------------------------------------- -y on every confirming action
+
+class TestYesFlag:
+    """The decline hint says "pass -y"; each of these used to reject it rc 2."""
+
+    @pytest.fixture()
+    def no_answer(self, monkeypatch):
+        # No env bypass, and a non-tty stdin: confirm() alone would decline.
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
+
+    @pytest.mark.parametrize("flag", ["-y", "--yes"])
+    def test_cohort_delete(self, boost, tapped, no_answer, flag):
+        boost("cohort", "create", "c1", "--skills", "brainstorming")
+        r = boost("cohort", "delete", "c1", expect=1)
+        assert "pass -y" in r.out + r.err
+        r = boost("cohort", "delete", "c1", flag)
+        assert "deleted cohort c1" in r.out
+        assert "pass -y" not in r.out + r.err
+
+    @pytest.mark.parametrize("flag", ["-y", "--yes"])
+    def test_profile_delete(self, boost, installed, no_answer, flag):
+        boost("profile", "save", "p1")
+        boost("profile", "delete", "p1", expect=1)
+        r = boost("profile", "delete", "p1", flag)
+        assert "deleted profile p1" in r.out
+        assert not (paths.profiles_dir() / "p1.json").exists()
+
+    def test_profile_use_prune(self, boost, tapped, no_answer):
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("install", "cowboy-coding")
+        r = boost("profile", "use", "solo", "--prune", "-y")
+        assert "uninstalled cowboy-coding" in r.out
+        assert not (paths.store_dir() / "cowboy-coding").exists()
+
+    def test_replay_rollback(self, boost, tapped, tick_clock, no_answer):
+        _history_ops(boost)
+        snap_id = lockfile.history_list()[1]["id"]
+        boost("replay", "rollback", snap_id, expect=1)
+        r = boost("replay", "rollback", snap_id, "-y")
+        assert "rollback to %s complete" % snap_id in r.out
+        assert "cowboy-coding" not in json.loads(
+            paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
