@@ -1706,6 +1706,20 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
             raise BoostError("%s is already installed" % name,
                             hint="`boost reinstall %s` to force" % name)
         return
+    if existing.get("scope", "user") == scope == scopes.SCOPE_PROJECT:
+        # Same scope, another repo. Calling that "a different scope" sent the
+        # user looking for a scope mismatch that was not there: the limit is
+        # the one-row-per-name lock, so a rule or workflow can be --local in
+        # one repo per machine (a skill, with a lock in each repo, cannot hit
+        # this).
+        raise BoostError(
+            "%s is already installed --local in %s, and a %s can be installed "
+            "--local into only one repo per machine"
+            % (name, paths.tilde(Path(existing["base"]))
+               if existing.get("base") else "another repo",
+               existing.get("kind") or "rule or workflow"),
+            hint="`boost uninstall %s` from that repo first; --force cannot "
+                 "move it" % name, wrap=True)
     raise BoostError(
         "%s is already installed at %s" % (name, _lock_location(existing)),
         hint="uninstall it there first — a different scope cannot force-overwrite it")
@@ -2592,10 +2606,13 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
         cat_entry, warning = _project_source(name, entry)
         if warning:
             actions.append(warning)
+        if cat_entry and not _project_restorable(entry, cat_entry):
+            actions.append(_project_moved(name))
+            continue
         if cat_entry:
             try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
-                install(cat_entry, force=True, scope=scopes.SCOPE_PROJECT,
-                        base=resolved_base, only_agents=wanted[name])
+                _restore_project_copies(resolved_base, name, entry, cat_entry,
+                                        wanted[name])
                 actions.append("re-materialized %s from %s" % (name, tap_name))
                 continue
             except BoostError:
@@ -2604,6 +2621,80 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
     if actions:
         journal.log("sync", "%d project fixes" % len(actions))
     return actions
+
+
+def _project_moved(name: str) -> str:
+    return ("%s's tap source has moved since the project lock was written%s"
+            "(`boost install --local %s --force` takes the new content and "
+            "updates the lock)" % (name, _DECLINED_MARK, name))
+
+
+def _project_restorable(entry: dict, cat_entry: dict) -> bool:
+    """Whether the tap can still hand back what the project lock records.
+
+    A repair restores the committed lock; it never moves it. Re-installing
+    from the tap's HEAD did: one missing ``.cursor`` copy came back at the
+    new version beside an untouched ``.claude`` copy at the old one, the lock
+    was rewritten to the new commit, and `boost verify` then failed the copy
+    nobody had touched. True when the tap still sits on the locked commit,
+    or its source for this skill hashes to the locked ``sha256`` (the tap
+    moved, this skill did not). The commit check comes first because it
+    costs no materialize.
+    """
+    from . import gitutil
+    locked_commit = entry.get("commit")
+    if locked_commit and gitutil.head_commit(
+            registry.get(cat_entry["tap"]).path) == locked_commit:
+        return True
+    locked_sha = entry.get("sha256")
+    return bool(locked_sha) and _skill_source_sha(cat_entry) == locked_sha
+
+
+def _project_policy_violations(resolved_base: Path, name: str,
+                               cat_entry: dict) -> list[str]:
+    """The install policy gate, applied to a sync repair.
+
+    The install a repair replaced applied it, so a skill or tap blocklisted
+    since the lock was written must not come back through `boost sync` — and
+    the dry run asks the same question, so it does not promise a restore the
+    run then refuses.
+    """
+    return policy.check_install(
+        cat_entry, _count_others(projectlock.installed(resolved_base), name))
+
+
+def _restore_project_copies(resolved_base: Path, name: str, entry: dict,
+                            cat_entry: dict, missing: list) -> None:
+    """Copy ``cat_entry``'s source back to the recorded paths ``missing``.
+
+    Writes the directories and nothing else: no lock row (it already says
+    what is there), no ``.mcp.json`` (the install registered it), and only
+    the agents named, because the other copies are committed files a team
+    edits in place. Every destination is checked before the first copy, the
+    same two checks a project install makes. Raises :class:`BoostError`
+    when there is nothing it may write.
+    """
+    violations = _project_policy_violations(resolved_base, name, cat_entry)
+    if violations:
+        raise BoostError("policy blocks restoring %s: %s"
+                         % (name, "; ".join(violations)))
+    src = source_dir_for(cat_entry)
+    _enforce_capability_policy(name, src / "SKILL.md")
+    dests: list[Path] = []
+    for m in entry.get("materializations") or []:
+        if m.get("agent", "?") not in missing:
+            continue
+        dest = scopes.resolve_in_base(resolved_base, m.get("path"))
+        if dest is None or dest.is_dir():
+            continue
+        scopes.ensure_in_base(resolved_base, dest)
+        scopes.ensure_spelled(resolved_base, dest)
+        dests.append(dest)
+    if not dests:
+        raise BoostError("no recorded copy of %s to restore" % name)
+    within = registry.get(cat_entry["tap"]).path
+    for dest in dests:
+        _copy_skill(src, dest, within=within)
 
 
 def _project_gone(name: str) -> str:
@@ -2648,7 +2739,10 @@ def project_sync_preview(plan: dict[str, list], base=None) -> list[str]:
         cat_entry, warning = _project_source(name, entry)
         if warning:
             lines.append(warning)
-        if cat_entry:
+        if cat_entry and not _project_restorable(entry, cat_entry):
+            lines.append(_project_moved(name))
+        elif cat_entry and not _project_policy_violations(
+                resolved_base, name, cat_entry):
             lines.append("would re-materialize project skill %s → %s from %s"
                          % (name, ", ".join(wanted[name]), entry.get("tap")))
         else:
@@ -2849,7 +2943,7 @@ def _install_rule(entry: dict, force: bool = False,
             scopes.ensure_in_base(resolved_base, path)
         if mode == rules.MODE_CLAUDE:
             try:
-                text = path.read_text(encoding="utf-8")
+                text = util.read_user_text(path)
             except OSError:
                 continue  # absent, or refused: the write loop handles both
             rules.require_well_formed(text, name, path)
@@ -2865,7 +2959,7 @@ def _install_rule(entry: dict, force: bool = False,
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             if mode == rules.MODE_CLAUDE:
-                current = path.read_text(encoding="utf-8") if path.exists() else ""
+                current = util.read_user_text(path) if path.exists() else ""
                 # A context file is the user's: write through a symlink to
                 # it and keep its mode (see util.write_user_file).
                 util.write_user_file(
@@ -3045,7 +3139,7 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
         with _refused_removal(name, path):
             if m.get("mode") == rules.MODE_CLAUDE:
                 if _present(path) and path.exists():
-                    text = path.read_text(encoding="utf-8")
+                    text = util.read_user_text(path)
                     # A damaged block refuses the whole uninstall, before the
                     # lock is touched: strip_block declines to guess, and
                     # dropping the row anyway reported the rule removed while
@@ -3150,7 +3244,7 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
                 # The whole file, not just the block: release_materialized
                 # needs it to restore the block at its original position
                 # rather than re-appending at end-of-file.
-                full_text = path.read_text(encoding="utf-8")
+                full_text = util.read_user_text(path)
                 content = rules.read_block(full_text, name)
                 if content is not None:
                     # A file the removal will rewrite is checked against the
@@ -3178,7 +3272,7 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
         path = Path(m.get("path", ""))
         if m.get("mode") == rules.MODE_CLAUDE:
             if path.exists():
-                text = path.read_text(encoding="utf-8")
+                text = util.read_user_text(path)
                 if rules.read_block(text, name) is not None:
                     stripped = rules.strip_block(text, name)
                     if stripped or path.is_symlink():
@@ -3243,7 +3337,7 @@ def release_materialized(kind: str, name: str, entry: dict,
         # late.
         util.user_file_target(path, entry.get("base"))
         try:
-            text = path.read_text(encoding="utf-8")
+            text = util.read_user_text(path)
         except OSError:
             continue  # absent: the restore writes it fresh
         rules.require_well_formed(text, name, path)
@@ -3267,7 +3361,7 @@ def release_materialized(kind: str, name: str, entry: dict,
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         if m.get("mode") == rules.MODE_CLAUDE:
-            current = path.read_text(encoding="utf-8") if path.exists() else ""
+            current = util.read_user_text(path) if path.exists() else ""
             full_text = m.get("full_text")
             # Byte-for-byte only holds when the surrounding text is exactly
             # what quarantine left behind — write the stashed file back

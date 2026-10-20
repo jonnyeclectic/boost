@@ -208,27 +208,70 @@ def require_well_formed(text: str, name: str,
             wrap=True)
 
 
+def line_ending(text: str) -> str:
+    """The line ending ``text`` mostly uses: ``"\\r\\n"`` or ``"\\n"``.
+
+    A context file is the user's, and a Windows checkout of a committed
+    ``AGENTS.md`` is CRLF. The block boost inserts takes the file's own
+    ending, so an install adds lines in the style already there instead of
+    a mix git reports on every line it touches. A tie, an empty file and a
+    file with no newline at all are ``"\\n"``.
+    """
+    crlf = text.count("\r\n")
+    return "\r\n" if crlf > text.count("\n") - crlf else "\n"
+
+
+def _ends_with_newline(text: str) -> bool:
+    return text.endswith("\n")
+
+
+def _cut_trailing_newline(text: str) -> tuple[str, bool]:
+    """``text`` less one trailing line ending (either style), and whether
+    there was one."""
+    for eol in ("\r\n", "\n"):
+        if text.endswith(eol):
+            return text[:-len(eol)], True
+    return text, False
+
+
+def _cut_leading_newline(text: str) -> tuple[str, bool]:
+    """``text`` less one leading line ending (either style), and whether
+    there was one."""
+    for eol in ("\r\n", "\n"):
+        if text.startswith(eol):
+            return text[len(eol):], True
+    return text, False
+
+
 def merge_block(text: str, name: str, body: str) -> str:
     """Return ``text`` with rule ``name``'s managed block set to ``body``.
 
-    Idempotent: if a block for ``name`` already exists it is replaced in place;
-    otherwise the block is appended after exactly one blank line. The result
-    always ends in a single newline so repeated installs don't accrete blank
-    lines at end-of-file. A malformed block raises (`require_well_formed`)
-    rather than appending a second block below the orphan start.
+    Idempotent: if a block for ``name`` already exists only that span is
+    replaced, and every byte around it is kept; otherwise the block is
+    appended after one blank line. Nothing outside the block is rewritten —
+    the block takes the file's own line ending (:func:`line_ending`), and a
+    file that did not end in a newline still does not, so that
+    :func:`strip_block` can hand back the original bytes exactly. A
+    malformed block raises (`require_well_formed`) rather than appending a
+    second block below the orphan start.
     """
+    eol = line_ending(text)
     start, end = markers(name)
-    block = "%s\n%s\n%s" % (start, body.strip("\n"), end)
+    lines = body.replace("\r\n", "\n").strip("\n").replace("\n", eol)
+    block = start + eol + lines + eol + end
     require_well_formed(text, name)
     span = block_span(text, name)
     if span is not None:
         i, j = span
-        merged = text[:i] + block + text[j:]
-        return merged.rstrip("\n") + "\n"
-    base = text.rstrip("\n")
-    if base:
-        return base + "\n\n" + block + "\n"
-    return block + "\n"
+        return text[:i] + block + text[j:]
+    if not text:
+        return block + eol
+    if _ends_with_newline(text):
+        return text + eol + block + eol
+    # No final newline: the gap goes before the block and none after it, so
+    # the file keeps the state it was in and the removal can tell this
+    # shape from a file that did end in one.
+    return text + eol + eol + block
 
 
 def read_block(text: str, name: str) -> str | None:
@@ -247,7 +290,11 @@ def read_block(text: str, name: str) -> str | None:
         return None
     start, end = markers(name)
     i, j = span
-    return text[i + len(start):j - len(end)].strip("\n")
+    # LF whatever the file uses: the hash `boost verify` compares against was
+    # taken over the rendered (LF) body, and a CRLF file read with
+    # ``newline=""`` must read back as the same text.
+    return (text[i + len(start):j - len(end)]
+            .replace("\r\n", "\n").strip("\n"))
 
 
 def unclosed_block(text: str, name: str) -> bool:
@@ -266,15 +313,36 @@ def unclosed_block(text: str, name: str) -> bool:
 def strip_block(text: str, name: str) -> str:
     """Return ``text`` with rule ``name``'s managed block removed.
 
-    Idempotent and lossless for the surrounding content: the block plus the
-    blank-line gap it introduced is collapsed, and a file that becomes empty
-    collapses to ``""`` rather than a lone newline.
+    The exact inverse of :func:`merge_block`'s append: the block, its line
+    ending and the blank-line gap it introduced come out, and every other
+    byte stays as it was — CRLF, a missing final newline, trailing blank
+    lines. Install then uninstall leaves the file byte-identical. A file that
+    held only the block collapses to ``""``.
     """
     span = block_span(text, name)
     if span is None:
         return text  # absent, or malformed: leave the file untouched
     i, j = span
-    before = text[:i].rstrip("\n")
-    after = text[j:].strip("\n")
-    parts = [p for p in (before, after) if p]
-    return "\n\n".join(parts) + "\n" if parts else ""
+    before, after = text[:i], text[j:]
+    after, terminated = _cut_leading_newline(after)
+    if terminated and (not after or after[0] in "\r\n"):
+        # Appended after a newline-terminated file: one blank line went in
+        # above the block. Take it only if it is still there, so a user who
+        # deleted the gap by hand keeps their own line ending — and only when
+        # the block ended the file or a gap follows it (another block's): text
+        # written straight under the block keeps the blank line above it
+        # rather than being run into the paragraph before.
+        trimmed, cut = _cut_trailing_newline(before)
+        if cut and _ends_with_newline(trimmed):
+            before = trimmed
+        elif not before and after:
+            # The block opened the file, so the gap below it is the one the
+            # next block was appended after: it goes with this one.
+            after, _ = _cut_leading_newline(after)
+    elif not after:
+        # The block ends the file with no newline after it: merge_block put
+        # two line endings in front of it and none behind (see there).
+        before, cut = _cut_trailing_newline(before)
+        if cut:
+            before, _ = _cut_trailing_newline(before)
+    return before + after
