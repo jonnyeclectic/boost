@@ -115,7 +115,8 @@ def cmd_audit(argv):
         # A project row is its own install, so its findings are its own —
         # labelled, since the same name may also be installed at user scope.
         name = row.name + (" (project)" if row.is_project else "")
-        if row.name in pol.get("blocked_skills", []):
+        if policy.is_blocked(row.name, row.entry.get("tap"),
+                             pol.get("blocked_skills")):
             add(name, "HIGH", "policy-blocked", "policy.json",
                 "skill is on the policy blocklist")
         sdir = row.dir
@@ -162,7 +163,8 @@ def cmd_audit(argv):
             if entry.get("quarantined"):
                 continue
             mat_scanned += 1
-            if name in pol.get("blocked_skills", []):
+            if policy.is_blocked(name, entry.get("tap"),
+                                 pol.get("blocked_skills")):
                 add(name, "HIGH", "policy-blocked", "policy.json",
                     "%s is on the policy blocklist" % kind)
             for m in entry.get("materializations") or []:

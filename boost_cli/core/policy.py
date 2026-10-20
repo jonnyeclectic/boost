@@ -107,6 +107,18 @@ def save(pol: dict) -> None:
     paths.policy_path().write_text(json.dumps(known, indent=2) + "\n", encoding="utf-8")
 
 
+def is_blocked(name: str, tap: str | None, blocked) -> bool:
+    """Whether ``blocked_skills`` names this item, bare or tap-qualified.
+
+    ``boost install`` takes ``tap:name``, so a blocklist entry written the same
+    way has to match too: comparing only the bare name stored
+    ``fx:cowboy-coding`` with a check mark and then never enforced it.
+    A bare entry still blocks the name from every tap.
+    """
+    blocked = blocked or []
+    return name in blocked or (bool(tap) and "%s:%s" % (tap, name) in blocked)
+
+
 def check_install(entry: dict, installed_count: int) -> list[str]:
     """Return a list of violation strings (empty = allowed)."""
     if not config.get("policy_enforce", True):
@@ -116,7 +128,7 @@ def check_install(entry: dict, installed_count: int) -> list[str]:
     name, tap = entry.get("name", ""), entry.get("tap", "")
     if pol["pin_only"]:
         v.append("environment is pin-only (frozen)")
-    if name in pol["blocked_skills"]:
+    if is_blocked(name, tap, pol["blocked_skills"]):
         v.append("skill %r is on the blocklist" % name)
     if tap in pol["blocked_taps"]:
         v.append("tap %r is blocked" % tap)

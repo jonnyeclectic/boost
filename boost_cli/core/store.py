@@ -1608,6 +1608,12 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
         hint="uninstall it there first — a different scope cannot force-overwrite it")
 
 
+def _count_others(installed: dict, name: str) -> int:
+    """How many skills ``installed`` holds besides ``name``: the count an
+    install of ``name`` is weighed against for ``max_skills``."""
+    return len(installed) - (1 if name in installed else 0)
+
+
 def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                    base=None, kind: str | None = None) -> dict | None:
     """The lock record an install of ``entry`` would replace, or its refusal.
@@ -1855,7 +1861,10 @@ def install(entry: dict, force: bool = False,
     name = entry["name"]
     existing = check_existing(entry, force=force, kind="skill")
 
-    violations = policy.check_install(entry, len(lockfile.installed()))
+    # An upgrade or reinstall replaces a skill already counted, so it adds
+    # none: at exactly max_skills, `boost update` declined every upgrade.
+    violations = policy.check_install(
+        entry, _count_others(lockfile.installed(), name))
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
@@ -1944,7 +1953,8 @@ def _install_project_skill(entry: dict, force: bool = False,
     existing = check_existing(entry, force=force, scope=scopes.SCOPE_PROJECT,
                               base=resolved_base, kind="skill")
 
-    violations = policy.check_install(entry, len(projectlock.installed(resolved_base)))
+    violations = policy.check_install(
+        entry, _count_others(projectlock.installed(resolved_base), name))
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
@@ -3978,7 +3988,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
          "version": str(meta.get("version") or "0.0.0"),
          "description": meta.get("description")},
         # Re-importing a skill that is already counted must not trip max_skills.
-        len(lockfile.installed()) - (1 if existing else 0))
+        _count_others(lockfile.installed(), name))
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")

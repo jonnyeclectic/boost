@@ -807,7 +807,7 @@ class TestEvolve:
         # outdated still shows the tap moved, marked as held by the pin
         r = boost("outdated")
         assert "1.4.1 (pinned)" in r.out
-        assert "pinned items stay put" in r.out
+        assert "pinned and quarantined items stay put" in r.out
 
     def test_info_after_apply_is_ahead_not_an_update(self, boost, installed):
         boost("evolve", "brainstorming", "--apply", "--feedback", "cap ideas")

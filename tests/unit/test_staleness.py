@@ -111,7 +111,8 @@ class TestOutdatedFooter:
 
     def test_no_source_missing_keeps_the_original_wording(self):
         assert staleness.outdated_footer(3, 0) == (
-            "3 outdated · `boost update` upgrades (pinned items stay put)")
+            "3 outdated · `boost update` upgrades (pinned and quarantined items "
+            "stay put)")
 
     def test_all_source_missing_never_mentions_update(self):
         footer = staleness.outdated_footer(2, 2)
@@ -168,7 +169,8 @@ class TestOutdatedFooterRemovedUpstream:
     def test_untapped_and_removed_are_counted_apart(self):
         footer = staleness.outdated_footer(5, 3, removed=1)
         assert footer == ("5 outdated · 2 upstream (`boost update` upgrades, "
-                          "pinned items stay put) · 2 source missing (re-tap "
+                          "pinned and quarantined items stay put) · 2 source "
+                          "missing (re-tap "
                           "or `boost uninstall`) · 1 removed upstream "
                           "(`boost uninstall`, or keep as-is)")
 

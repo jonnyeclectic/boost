@@ -218,6 +218,20 @@ class TestInstall:
         assert "max_skills limit (0) reached" in ei.value.message
         assert lockfile.get_skill("brainstorming") is None
 
+    def test_max_skills_at_cap_still_reinstalls_an_installed_skill(
+            self, tap, entry):
+        # Replacing a skill already counted adds none: at exactly the cap,
+        # `boost update` and `boost reinstall` were refused.
+        store.install(entry)
+        policy.save({"max_skills": 1})
+        store.install(entry, force=True)
+        assert lockfile.get_skill("brainstorming") is not None
+
+    def test_count_others(self):
+        assert store._count_others({"a": {}, "b": {}}, "a") == 1
+        assert store._count_others({"a": {}, "b": {}}, "c") == 2
+        assert store._count_others({}, "a") == 0
+
     def test_only_agents_links_subset(self, tap, entry):
         res = store.install(entry, only_agents=["claude-code"])
         assert res.linked == ["claude-code"]
