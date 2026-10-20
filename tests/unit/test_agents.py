@@ -379,3 +379,46 @@ class TestCheck:
                                        enabled=False)
         config.save(cfg)
         assert [n for n, _e in agents.check()] == ["cursor"]
+
+
+class TestFormerLinkDirs:
+    """Dirs boost linked into before an agent's dir was repointed."""
+
+    def _set_dir(self, agent, d):
+        cfg = config.load()
+        cfg["agents"][agent]["dir"] = str(d)
+        config.save(cfg)
+
+    def test_none_on_a_default_config(self, sandbox):
+        assert agents.former_link_dirs() == []
+        assert agents.sweep_dirs() == list(agents.unlinking_agents().values())
+
+    def test_a_repointed_default_dir_is_former(self, sandbox):
+        self._set_dir("cursor", sandbox / "elsewhere")
+        assert agents.former_link_dirs() == [
+            ("cursor", sandbox / ".cursor" / "skills")]
+
+    def test_a_remembered_dir_is_former_once_left(self, sandbox):
+        first, second = sandbox / "one", sandbox / "two"
+        self._set_dir("cursor", first)
+        agents.remember_link_dir("cursor", first)
+        agents.remember_link_dir("cursor", first)      # recorded once
+        assert agents._remembered_link_dirs() == {"cursor": [str(first)]}
+        self._set_dir("cursor", second)
+        assert ("cursor", first) in agents.former_link_dirs()
+        assert ("cursor", second) not in agents.former_link_dirs()
+
+    def test_a_native_store_agent_s_dir_is_never_former(self, sandbox):
+        gemini = agents.known_agents()["gemini"]["dir"]
+        agents.remember_link_dir("cursor", gemini)
+        assert all(d != gemini for _a, d in agents.former_link_dirs())
+
+    def test_an_unreadable_record_is_no_record(self, sandbox):
+        f = agents.link_dirs_path()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("[1, 2]", encoding="utf-8")
+        assert agents._remembered_link_dirs() == {}
+        f.write_text("{not json", encoding="utf-8")
+        assert agents._remembered_link_dirs() == {}
+        f.write_text('{"cursor": "nope", "x": ["/a", 3]}', encoding="utf-8")
+        assert agents._remembered_link_dirs() == {"x": ["/a"]}

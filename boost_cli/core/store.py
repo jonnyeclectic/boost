@@ -555,6 +555,7 @@ def link_agents(name: str, only: list[str] | None = None, *,
                     # writes, the unlink raised PermissionError and a reinstall
                     # printed "not linked" over a link still on disk, still
                     # pointing at the store, and still in the lock's `agents`.
+                    agents.remember_link_dir(agent, adir)
                     res.linked.append(agent)
                     continue
                 if keep_theirs and not points_into_store(link):
@@ -591,6 +592,9 @@ def link_agents(name: str, only: list[str] | None = None, *,
             res.blocked.append((str(adir), str(block)))
             res.refused.append(agent)
             continue
+        # So a later uninstall still finds this link after the agent's dir is
+        # repointed (:func:`agents.former_link_dirs`).
+        agents.remember_link_dir(agent, adir)
         res.linked.append(agent)
     return res
 
@@ -897,6 +901,15 @@ def unlink_agents(name: str) -> list[str]:
         if is_boost_link(link):
             link.unlink()
             removed.append(agent)
+    # And the dirs an agent linked into before its dir was repointed: the
+    # lock names agents, not paths, so a link made under `~/.cursor/skills`
+    # was left dangling once `agents.cursor.dir` moved.
+    for agent, adir in agents.former_link_dirs():
+        link = adir / name
+        if is_boost_link(link):
+            link.unlink()
+            if agent not in removed:
+                removed.append(agent)
     return removed
 
 
@@ -5132,7 +5145,8 @@ def sync_plan() -> dict[str, list]:
     # typed. Same "topology, not ownership" line as duplicate_discovery, which
     # reports those entries and removes nothing. Disabled agents are swept
     # too (`unlinking_agents`): boost linked there while they were enabled.
-    for adir in agents.unlinking_agents().values():
+    # Former dirs too: an agent whose dir was repointed left its old links.
+    for adir in agents.sweep_dirs():
         if not os.path.isdir(adir):  # noqa: FURB146
             continue
         for link in adir.iterdir():

@@ -219,7 +219,9 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
     """
     ours: list[Path] = []
     theirs: list[Path] = []
-    for adir in agents.unlinking_agents().values():
+    # Former dirs too (`agents.sweep_dirs`): repointing an agent's dir left
+    # every link made under the old one unreachable by any other check.
+    for adir in agents.sweep_dirs():
         # ``os.path``: ``Path.is_dir`` raises under a dotdir with no search
         # bit on Python 3.12 and 3.13, and doctor and heal exited 70 there.
         if not os.path.isdir(adir):  # noqa: FURB146
