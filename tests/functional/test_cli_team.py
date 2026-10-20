@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 
@@ -729,6 +730,98 @@ class TestProtocol:
         r = boost("protocol", "open", "boost://tap/owner/repo", expect=1)
         assert "cancelled" in r.out
 
+    def test_declined_hint_names_a_flag_that_parses(self, boost, tapped,
+                                                    monkeypatch):
+        # The decline prints "pass -y …"; `protocol open -y` used to be an
+        # argparse error (rc 2), so the hint named a flag that did not run.
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("protocol", "open", "boost://install/brainstorming", expect=1)
+        assert "pass -y or set BOOST_ASSUME_YES=1" in r.out
+        r = boost("protocol", "open", "-y", "boost://install/brainstorming")
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert "cancelled" not in r.out
+
+    def test_yes_and_gui_are_exclusive(self, boost, tapped):
+        r = boost("protocol", "open", "-y", "--gui",
+                  "boost://install/brainstorming", expect=2)
+        assert "not allowed with argument" in r.err
+
+    def _dialog(self, monkeypatch, rc, stdout=""):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, rc, stdout, "")
+        self._fake_desktop(monkeypatch, run=run,
+                           which=lambda c: "/usr/bin/zenity" if c == "zenity" else None)
+        return calls
+
+    @staticmethod
+    def _fake_desktop(monkeypatch, which, run=None):
+        # Through ask()'s own seams, not by patching shutil.which itself:
+        # that is one module object, and install needs the real one for git.
+        from boost_cli.core import dialog
+        real = dialog.ask
+        monkeypatch.setattr("boost_cli.commands.team.platform.system",
+                            lambda: "Linux")
+        monkeypatch.setattr(
+            "boost_cli.core.dialog.ask",
+            lambda prompt, ok, system: real(prompt, ok, system, which=which,
+                                            run=run, env={"DISPLAY": ":0"}))
+
+    def test_gui_installs_after_the_dialog_says_yes(self, boost, tapped,
+                                                    monkeypatch):
+        calls = self._dialog(monkeypatch, 0)
+        boost("protocol", "open", "--gui", "boost://install/brainstorming")
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert calls == [[
+            "zenity", "--question", "--no-markup", "--title=boost",
+            "--ok-label=Install", "--cancel-label=Cancel", "--timeout=120",
+            "--text=A boost:// link asks to install brainstorming from "
+            "fixture-tap?"]]
+
+    def test_gui_ignores_assume_yes_and_honours_a_decline(self, boost, tapped,
+                                                          monkeypatch):
+        # BOOST_ASSUME_YES is set by the sandbox: the handler mode must still
+        # ask, because the person who clicked is the only one who can say yes.
+        calls = self._dialog(monkeypatch, 1)
+        r = boost("protocol", "open", "--gui", "boost://install/brainstorming",
+                  expect=1)
+        assert len(calls) == 1
+        assert "cancelled" in r.out
+        assert not (paths.store_dir() / "brainstorming").exists()
+        r = boost("protocol", "open", "--gui", "boost://tap/owner/repo",
+                  expect=1)
+        assert calls[1][4] == "--ok-label=Tap"
+        assert calls[1][-1] == "--text=A boost:// link asks to tap owner/repo?"
+        assert "cancelled" in r.out
+
+    def test_gui_with_no_dialog_changes_nothing_and_names_the_command(
+            self, boost, tapped, monkeypatch):
+        self._fake_desktop(monkeypatch, which=lambda c: None)
+        r = boost("protocol", "open", "--gui",
+                  "boost://install/brainstorming", expect=1)
+        assert "no terminal and no dialog tool to ask with — nothing was changed" in r.out
+        assert ("to go ahead, run in a terminal:" in r.out)
+        assert ("`boost protocol open "
+                "boost://install/brainstorming`") in r.out
+        assert "cancelled" in r.out
+        assert not (paths.store_dir() / "brainstorming").exists()
+
+    def test_status_flags_a_handler_written_before_the_dialog(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.team.platform.system",
+                            lambda: "Linux")
+        paths.ensure_dirs()
+        script = paths.state_dir() / "boost-protocol-handler.sh"
+        script.write_text('#!/usr/bin/env bash\nexec boost protocol open "$1"\n',
+                          encoding="utf-8")
+        r = boost("protocol", "status")
+        assert "re-run `boost protocol register`" in r.out
+        monkeypatch.setattr("boost_cli.commands.team.shutil.which", lambda c: None)
+        boost("protocol", "register")
+        assert "re-run" not in boost("protocol", "status").out
+
     def test_open_tap_refreshes_the_completion_cache(self, boost, sandbox,
                                                       fixture_tap_src,
                                                       monkeypatch):
@@ -758,7 +851,12 @@ class TestProtocol:
             # Windows filesystems have no POSIX exec bit for chmod to set.
             assert script.stat().st_mode & stat.S_IEXEC
         body = script.read_text(encoding="utf-8")
-        assert 'protocol open "$1"' in body
+        assert 'protocol open --gui "$1"' in body
+        # Any page can open a boost:// link: the handler must never carry a
+        # bypass, and must drop one inherited from the launching session.
+        assert "unset BOOST_ASSUME_YES\n" in body
+        assert " -y" not in body and "--yes" not in body
+        assert "asks in a desktop dialog before it installs" in r.out
         assert str(paths.repo_root() / "boost") in body
         assert "Automator" in r.out  # macOS guidance
         r = boost("protocol", "status")
@@ -784,6 +882,7 @@ class TestProtocol:
         assert desktop.exists()
         assert "x-scheme-handler/boost" in desktop.read_text(encoding="utf-8")
         assert "xdg-mime not found — handler written but not registered" in r.out
+        assert "neither zenity nor kdialog found" in r.out
         r = boost("protocol", "status")
         assert "boost-protocol.desktop" in r.out
         boost("protocol", "unregister")
