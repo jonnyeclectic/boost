@@ -144,3 +144,27 @@ def test_invalid_when_signature_malformed(sandbox, tmp_path):
     (clone / provenance.SIGNED_FILE).write_bytes(b"x\n")
     (clone / provenance.SIGNATURE_FILE).write_text("garbage", encoding="utf-8")
     assert provenance.verify_dir(clone).status == provenance.INVALID
+
+
+def test_add_over_a_corrupt_store_quarantines_it(sandbox, signer, capsys):
+    # The reader sees a truncated store as empty, so `trust add` used to
+    # write one key over every key still sitting in the damaged file.
+    paths.ensure_dirs()
+    p = paths.trusted_keys_path()
+    p.write_text('[{"name": "old", "key": "k"}', encoding="utf-8")
+    provenance.add_trusted_key("acme", signer.public_key_text())
+    moved = p.with_name(p.name + ".corrupt")
+    assert moved.read_text(encoding="utf-8") == '[{"name": "old", "key": "k"}'
+    assert [k["name"] for k in provenance.trusted_keys()] == ["acme"]
+    err = capsys.readouterr().err
+    assert "%s was corrupt and has been moved to %s" % (p, moved) in err
+
+
+def test_add_over_a_valid_store_keeps_no_quarantine(sandbox, signer, capsys):
+    provenance.add_trusted_key("acme", signer.public_key_text())
+    provenance.add_trusted_key("beta", signer.public_key_text())
+    p = paths.trusted_keys_path()
+    assert not p.with_name(p.name + ".corrupt").exists()
+    assert sorted(k["name"] for k in provenance.trusted_keys()) == [
+        "acme", "beta"]
+    assert "corrupt" not in capsys.readouterr().err

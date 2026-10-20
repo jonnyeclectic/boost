@@ -56,6 +56,53 @@ def read_object(path: Path) -> tuple[dict | None, str | None]:
     return data, None
 
 
+def read_list(path: Path) -> tuple[list | None, str | None]:
+    """:func:`read_object` for a state file whose top level is a JSON array.
+
+    Same contract — ``(None, None)`` for a missing file, ``(data, None)`` for
+    a valid array, ``(None, message)`` for anything else — so a writer of a
+    list-shaped store (``trusted_keys.json``) can tell "nothing here yet" from
+    "something here I am about to destroy".
+    """
+    if not path.exists():
+        return None, None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, "%s: %s" % (path, exc)
+    except UnicodeDecodeError as exc:
+        return None, "%s: not valid UTF-8 (%s)" % (path, exc)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return None, "%s: invalid JSON (%s)" % (path, exc)
+    if not isinstance(data, list):
+        return None, "%s: expected a JSON array, found %s" % (
+            path, type(data).__name__)
+    return data, None
+
+
+def object_map_error(data: dict, key: str) -> str | None:
+    """Why ``data[key]`` is not an object whose every value is an object.
+
+    ``None`` when it is, or when ``key`` is absent. A state file can parse as
+    an object and still hold ``{"skills": "x"}`` or ``{"skills": {"a": 1}}``,
+    and every reader that then calls ``.get`` on a record crashes with an
+    AttributeError — so a reader checks the shape it is about to walk here,
+    once, instead of each call site meeting it as exit 70.
+    """
+    if key not in data:
+        return None
+    value = data[key]
+    if not isinstance(value, dict):
+        return "%r is a %s, not an object" % (key, type(value).__name__)
+    for name, record in value.items():
+        if not isinstance(record, dict):
+            return "%r entry %r is a %s, not an object" % (
+                key, name, type(record).__name__)
+    return None
+
+
 def is_corrupt(path: Path) -> bool:
     """True when `path` exists but :func:`read_object` can't parse it.
 

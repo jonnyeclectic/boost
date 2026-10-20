@@ -166,6 +166,39 @@ class TestOrient:
         assert r.rc == 0
 
 
+    @pytest.mark.parametrize("raw", [
+        b"[]", b"\xff\xfe", b'{"global": []}', b'{"projects": {"x": 1}}'])
+    def test_an_unusable_state_file_reads_as_off_and_status_still_runs(
+            self, boost, sandbox, proj, raw):
+        # Each of these crashed `bmad status` at exit 70 (setdefault on a
+        # list, a UnicodeDecodeError, `.get` on a non-object).
+        sp = bmad._state_path()
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        sp.write_bytes(raw)
+        assert bmad._state_read() == {"global": {}, "projects": {}}
+        assert bmad._state_load()[1].startswith("%s: " % sp)
+        boost("bmad", "status")
+        assert sp.read_bytes() == raw
+
+    def test_a_write_over_an_unusable_state_file_quarantines_it(
+            self, boost, sandbox, proj, capsys):
+        sp = bmad._state_path()
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        sp.write_bytes(b"[]")
+        bmad._set_scope_state("global", installed=True)
+        moved = sp.with_name("bmad.json.corrupt")
+        assert moved.read_bytes() == b"[]"
+        assert bmad._get_scope_state("global") == {"installed": True}
+        assert "%s was corrupt and has been moved to %s" % (sp, moved) in (
+            capsys.readouterr().err)
+
+    def test_a_write_over_a_good_state_file_keeps_it(self, sandbox, proj):
+        bmad._set_scope_state("global", a=1)
+        bmad._set_scope_state("global", b=2)
+        assert bmad._get_scope_state("global") == {"a": 1, "b": 2}
+        assert not bmad._state_path().with_name("bmad.json.corrupt").exists()
+
+
 class TestDisableEnable:
     def _seed_skills(self, scope_dir):
         skills = scope_dir / ".claude" / "skills"

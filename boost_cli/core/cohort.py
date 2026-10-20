@@ -8,6 +8,10 @@ targets ``boost_cli/core``, not ``boost_cli/commands``.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+from . import jsonstate
+
 
 def parse_skills(values: list[str]) -> list[str]:
     """Merge one or more ``--skills`` flag values into one skill-name list.
@@ -44,3 +48,44 @@ def apply_exit_code(installed: int, present: int, missing: int) -> int:
     silently did nothing looked identical to a clean, uneventful pass.
     """
     return 1 if missing and not installed and not present else 0
+
+
+def shape_error(cohorts: dict) -> str | None:
+    """Why a parsed ``cohorts.json`` can't be walked, or ``None`` if it can.
+
+    Every action indexes ``spec["percent"]`` and iterates ``spec["skills"]``,
+    so a cohort that is not an object, or that lacks either field in the
+    right type, crashed ``list``/``status``/``apply`` with a TypeError (exit
+    70). ``bool`` is refused as a percent even though it is an ``int``: a
+    ``true`` rollout is a hand-edit, not a 1% one.
+    """
+    for name, spec in cohorts.items():
+        if not isinstance(spec, dict):
+            return "cohort %r is a %s, not an object" % (
+                name, type(spec).__name__)
+        skills = spec.get("skills")
+        if not isinstance(skills, list) or not all(
+                isinstance(s, str) for s in skills):
+            return "cohort %r has no list of skill names" % name
+        percent = spec.get("percent")
+        if isinstance(percent, bool) or not isinstance(percent, int):
+            return "cohort %r has no integer percent" % name
+    return None
+
+
+def load(path: Path) -> tuple[dict, str | None]:
+    """``(cohorts, None)``, or ``({}, message)`` when ``path`` is unusable.
+
+    A missing file is ``({}, None)`` — no cohorts yet. Anything else that is
+    not a well-formed cohort map is an error naming the file, so a reader can
+    refuse cleanly and a writer can quarantine rather than overwrite.
+    """
+    data, err = jsonstate.read_object(path)
+    if err is not None:
+        return {}, err
+    if data is None:
+        return {}, None
+    bad = shape_error(data)
+    if bad is not None:
+        return {}, "%s: %s" % (path, bad)
+    return data, None

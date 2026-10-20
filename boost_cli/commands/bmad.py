@@ -78,7 +78,7 @@ from pathlib import Path
 from .. import cliparse
 from ..core import bmad as core
 from ..core import claude_settings as cs
-from ..core import hookhost, journal, paths, util
+from ..core import hookhost, journal, jsonstate, paths, util
 from ..core import output as out
 from ..errors import BoostError
 
@@ -948,22 +948,41 @@ def _state_path() -> Path:
     return paths.state_dir() / "bmad.json"
 
 
-def _state_read() -> dict:
+def _state_load() -> tuple[dict, str | None]:
+    """``(state, None)``, or ``(defaults, message)`` for an unusable file.
+
+    The router hook reads this on every prompt, so a corrupt file degrades
+    to "autopilot off" rather than raising; the message is for the writer,
+    which quarantines the file instead of writing over it. ``[]``, non-UTF-8
+    bytes or a ``"global"`` that is not an object used to crash `bmad status`
+    at exit 70.
+    """
     p = _state_path()
-    if not p.exists():
-        return {"global": {}, "projects": {}}
-    try:
-        d = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {"global": {}, "projects": {}}
+    d, err = jsonstate.read_object(p)
+    if d is not None:
+        bad = ("'global' is not an object"
+               if not isinstance(d.get("global", {}), dict)
+               else jsonstate.object_map_error(d, "projects"))
+        err = None if bad is None else "%s: %s" % (p, bad)
+    if d is None or err is not None:
+        return {"global": {}, "projects": {}}, err
     d.setdefault("global", {})
     d.setdefault("projects", {})
-    return d
+    return d, None
+
+
+def _state_read() -> dict:
+    return _state_load()[0]
 
 
 def _state_write(d: dict) -> None:
     paths.ensure_dirs()
-    _state_path().write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+    p = _state_path()
+    if _state_load()[1] is not None:
+        dest = jsonstate.quarantine(p)
+        out.warn("%s was corrupt and has been moved to %s before writing "
+                 "the new file" % (p, dest), stream=sys.stderr)
+    p.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
 
 
 SESSIONS_KEPT = 200

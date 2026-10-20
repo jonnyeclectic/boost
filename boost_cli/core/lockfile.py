@@ -602,7 +602,8 @@ def history_read(hist_id: str) -> dict:
     """Return the parsed lock snapshot for history entry ``hist_id``.
 
     Raises BoostError (with a `boost replay` hint) if no such entry, or if
-    the entry exists but is not a JSON object.
+    the entry exists but is not a JSON object whose sections are maps of
+    records.
     """
     from ..errors import BoostError
     p = paths.lock_history_dir() / ("lock-%s.json" % hist_id)
@@ -613,4 +614,14 @@ def history_read(hist_id: str) -> dict:
     if data is None:
         raise BoostError("no lock history entry %s" % hist_id,
                          hint="list entries with `boost replay`")
+    # `replay show` and `rollback` call `.get` on every record of every
+    # section; a section that is not a map of objects is refused here, before
+    # either acts, rather than dropped — a snapshot read as holding no skills
+    # would have rollback uninstall every skill installed now.
+    for _kind, section in SECTIONS:
+        bad = jsonstate.object_map_error(data, section)
+        if bad is not None:
+            raise BoostError("lock history entry %s is unreadable: %s: %s"
+                             % (hist_id, p, bad),
+                             hint="list other entries with `boost replay`")
     return data
