@@ -645,6 +645,12 @@ def cmd_doctor(argv):
                 % (tap.name, tap.name, " once %s is %s"
                    % (_tilde(cache_block), "moved aside" if cache_moved
                       else "writable") if cache_block else ""), wrap=True)
+        elif (moved := catalog.stale_commit(tap)) is not None:
+            # load_tap serves a cache from another commit as-is, so every
+            # lookup answers from the old tree until something rescans it.
+            bad("tap", "tap %s catalog is stale (scanned at %s, clone at %s) "
+                "— run `boost heal`" % (tap.name, moved[0][:7], moved[1][:7]),
+                wrap=True)
         else:
             tap_ok += 1
     if taps and cache_block:
@@ -2011,11 +2017,17 @@ def cmd_heal(argv):
             out.warn(registry.broken_clone_line(tap.name), wrap=True)
             continue
         had_cache = tap.cache_file.exists()
+        # One HEAD for both freshness questions below, before and after.
+        head = gitutil.head_commit(tap.path)
+        fresh = had_cache and catalog.cache_is_fresh(tap, head=head)
         if dry:
-            if not had_cache and not cache_stuck:
+            # A cache scanned at another commit is rebuilt by the real run,
+            # so the preview names it too; an unresolvable HEAD never reads
+            # fresh, and the run claims nothing for it, so neither does this.
+            if not fresh and not cache_stuck and (head or not had_cache):
                 out.info("would rebuild catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
-        elif not (had_cache and catalog.cache_is_fresh(tap)):
+        elif not fresh:
             # Only a missing, unreadable or stale cache (older CACHE_FORMAT,
             # or scanned at another commit) — what the dry run promises. An
             # unconditional rescan made "nothing to heal" cost a full scan of
@@ -2025,7 +2037,10 @@ def cmd_heal(argv):
             # rebuild_tap survives a cache it cannot write and warns; claiming
             # the rebuild under that warning would certify a file that is
             # still missing, and every later run would claim it again.
-            if not had_cache and tap.cache_file.exists():
+            # Fresh *now* is the test for a stale cache that was replaced:
+            # its old file still exists when the write failed.
+            if tap.cache_file.exists() and (
+                    not had_cache or catalog.cache_is_fresh(tap, head=head)):
                 out.ok("rebuilt catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
 

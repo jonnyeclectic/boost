@@ -193,3 +193,120 @@ class TestHeal:
         assert _cache("fixture-tap")[1]["format"] == catalog.CACHE_FORMAT
         boost("heal")
         assert scans == ["fixture-tap"]          # and then left alone
+
+
+def _move_clone_past_cache(own_tap):
+    """Upstream gains `beta`, and the clone is reset onto it without the cache
+    being rewritten — what an update interrupted after the reset, or a hand
+    `git pull` in the clone, leaves behind."""
+    _add_skill(own_tap, "beta")
+    _git(own_tap, "add", "-A")
+    _git(own_tap, "commit", "-qm", "beta")
+    tap = registry.get("own-tap")
+    before = json.loads(tap.cache_file.read_text(encoding="utf-8"))["commit"]
+    _git(tap.path, "fetch", "-q", "origin")
+    _git(tap.path, "reset", "-q", "--hard", "FETCH_HEAD")
+    catalog._ENTRY_CACHE.clear()
+    return tap, before, gitutil.head_commit(tap.path)
+
+
+def _flat(r):
+    return " ".join((r.out + r.err).split())
+
+
+class TestCacheBehindClone:
+    """load_tap serves a cache from another commit as-is, so until something
+    rescans it every lookup answers from the old tree: doctor said healthy,
+    install said "no skill named", heal --dry-run said nothing to heal, and
+    the real heal rebuilt it while printing "nothing to heal"."""
+
+    def test_doctor_names_the_stale_cache_and_heal(self, boost, own_tap):
+        _tap, before, head = _move_clone_past_cache(own_tap)
+        r = boost("doctor", expect=1)
+        assert ("! tap own-tap catalog is stale (scanned at %s, clone at %s) "
+                "— run `boost heal`" % (before[:7], head[:7])) in _flat(r)
+        assert "cloned & cached" not in r.out
+        boost("heal")
+        r = boost("doctor", expect=None)
+        assert "catalog is stale" not in r.out
+        assert "✓ 1 tap cloned & cached" in r.out
+
+    def test_install_and_info_hint_heal(self, boost, own_tap):
+        _move_clone_past_cache(own_tap)
+        hint = ("the catalog of own-tap was scanned at an older commit than "
+                "its clone — `boost heal` rescans it")
+        r = boost("install", "beta", expect=1)
+        assert "no skill named 'beta' in any tap" in _flat(r)
+        assert hint in _flat(r)
+        assert hint in _flat(boost("info", "beta", expect=1))
+        boost("heal")
+        assert "beta" in boost("install", "beta").out
+
+    def test_the_hint_is_absent_when_every_cache_is_current(self, boost,
+                                                           own_tap):
+        r = boost("install", "beta", expect=1)
+        assert "boost heal" not in _flat(r)
+
+    def test_the_hint_names_every_stale_tap(self, boost, own_tap, tapped):
+        _move_clone_past_cache(own_tap)
+        other = registry.get("fixture-tap")
+        data = json.loads(other.cache_file.read_text(encoding="utf-8"))
+        data["commit"] = "0" * 40
+        other.cache_file.write_text(json.dumps(data), encoding="utf-8")
+        r = boost("install", "beta", expect=1)
+        assert ("the catalog of %s was scanned at an older commit than their "
+                "clone — `boost heal` rescans it"
+                % ", ".join(t.name for t in registry.list_taps()
+                            if t.name in ("own-tap", "fixture-tap"))
+                ) in _flat(r)
+
+    def test_heal_previews_and_reports_the_rebuild(self, boost, own_tap,
+                                                   scans):
+        tap, _before, head = _move_clone_past_cache(own_tap)
+        boost("heal")          # a fresh HOME's agent dirs, out of the way
+        # Back to a cache from another commit, for a clean preview.
+        data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        data["commit"] = "0" * 40
+        tap.cache_file.write_text(json.dumps(data), encoding="utf-8")
+        scans.clear()
+        r = boost("heal", "--dry-run")
+        assert "would rebuild catalog cache for own-tap" in r.out
+        assert "nothing to heal" not in r.out
+        assert scans == []
+        r = boost("heal")
+        assert "rebuilt catalog cache for own-tap" in r.out
+        assert "nothing to heal" not in r.out
+        assert scans == ["own-tap"]
+        assert _cache("own-tap")[1]["commit"] == head
+        r = boost("heal")
+        assert "nothing to heal" in r.out
+        assert scans == ["own-tap"]
+
+    def test_a_rebuild_that_cannot_be_written_is_not_claimed(
+            self, boost, own_tap, monkeypatch):
+        tap, before, _head = _move_clone_past_cache(own_tap)
+        boost("heal")          # a fresh HOME's agent dirs, out of the way
+        data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        data["commit"] = before
+        tap.cache_file.write_text(json.dumps(data), encoding="utf-8")
+        monkeypatch.setattr(catalog, "rebuild_tap", lambda t: [])
+        r = boost("heal")
+        assert "rebuilt catalog cache" not in r.out
+
+    def test_an_unresolvable_head_is_neither_previewed_nor_claimed(
+            self, boost, own_tap, monkeypatch):
+        boost("heal")
+        _set_format("own-tap", catalog.CACHE_FORMAT - 1)
+        monkeypatch.setattr(gitutil, "head_commit", lambda p: "")
+        assert "would rebuild catalog cache" not in boost(
+            "heal", "--dry-run").out
+        assert "rebuilt catalog cache" not in boost("heal").out
+
+    def test_a_missing_cache_is_still_previewed_without_a_head(
+            self, boost, own_tap, monkeypatch):
+        boost("heal")
+        registry.get("own-tap").cache_file.unlink()
+        monkeypatch.setattr(gitutil, "head_commit", lambda p: "")
+        assert "would rebuild catalog cache for own-tap" in boost(
+            "heal", "--dry-run").out
+        assert "rebuilt catalog cache for own-tap" in boost("heal").out
