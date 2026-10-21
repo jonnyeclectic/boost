@@ -452,8 +452,12 @@ def main(argv: list[str] | None = None) -> int:
     # Seed the guard for every invocation before any code path can trip it.
     nethttp.harden_fork_safety()
     opts, argv = _extract_globals(argv)
-    logs.configure(verbose=opts["verbose"], debug=opts["debug"],
-                   quiet=opts["quiet"])
+    # Not for plumbing: `__complete` runs on every TAB and logs nothing (see
+    # `_route`), and configuring the file handler creates ~/.boost/logs — so
+    # one TAB on a machine where boost never ran would create boost's state.
+    if not (argv and argv[0] in _PLUMBING):
+        logs.configure(verbose=opts["verbose"], debug=opts["debug"],
+                       quiet=opts["quiet"])
     try:
         return _route(argv)
     except BrokenPipeError:
