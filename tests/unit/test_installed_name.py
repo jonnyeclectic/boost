@@ -188,6 +188,37 @@ class TestCheckExisting:
         with pytest.raises(BoostError) as ei:
             store.check_existing(_entry(), scope="project")
         assert ei.value.message == "x is already installed in this project (v1.2.3)"
-        assert ei.value.hint == "`boost install x --local --force` to force"
+        assert ei.value.hint == "`boost reinstall x --local` to force"
         assert store.check_existing(_entry(), scope="project", force=True)["tap"] \
             == "acme/kit"
+
+    def test_a_cross_tap_user_install_names_the_installed_tap(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("zed/kit"))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_entry())
+        assert ei.value.message == ("x is already installed (v1.2.3) from "
+                                    "zed/kit, not acme/kit")
+        assert ei.value.hint == "`boost install acme/kit:x --force` to replace it"
+
+    def test_a_cross_tap_project_install_keeps_qualifier_and_local(
+            self, sandbox, tmp_path, monkeypatch):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        projectlock.set_skill(repo, "x", _rec("zed/kit"))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_entry(), scope="project")
+        assert ei.value.message == ("x is already installed in this project "
+                                    "(v1.2.3) from zed/kit, not acme/kit")
+        assert ei.value.hint == ("`boost install acme/kit:x --local --force` "
+                                 "to replace it")
+
+    @pytest.mark.parametrize("installed_tap, entry_tap", [
+        ("", "acme/kit"), ("acme/kit", "")])
+    def test_a_tapless_side_keeps_the_bare_hint(self, sandbox, installed_tap,
+                                                entry_tap):
+        lockfile.set_entry("skill", "x", _rec(installed_tap))
+        entry = dict(_entry(), tap=entry_tap)
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(entry)
+        assert ei.value.message == "x is already installed (v1.2.3)"

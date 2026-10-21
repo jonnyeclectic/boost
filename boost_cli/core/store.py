@@ -2440,22 +2440,51 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                               " in this project")
         existing = projectlock.get_skill(resolved_base, name)
         if existing and not force:
+            other = _other_tap(entry, existing)
+            if other:
+                raise BoostError(
+                    "%s is already installed in this project (v%s) from %s, "
+                    "not %s" % (name, existing.get("version"), other,
+                                entry.get("tap")),
+                    hint="`boost install %s:%s --local --force` to replace it"
+                         % (entry.get("tap"), name), wrap=True)
+            # `reinstall --local` reads this repo's lock, so it reaches the
+            # recorded tap even where a bare `install x` would stop at "exists
+            # in multiple taps".
             raise BoostError(
                 "%s is already installed in this project (v%s)"
                 % (name, existing.get("version")),
-                # Not `reinstall --local`: reinstall has no scope flag (it
-                # would exit 2), and bare `reinstall` reads the user lock only,
-                # so it answers "not installed" for the very skill this is about.
-                hint="`boost install %s --local --force` to force" % name)
+                hint="`boost reinstall %s --local` to force" % name)
         return existing
     refuse_case_collision(name, lockfile.installed())
     existing = lockfile.get_skill(name)
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
     if existing and not force:
+        other = _other_tap(entry, existing)
+        if other:
+            # Not `boost reinstall`: it reinstalls the copy the lock records,
+            # which is the other tap's.
+            raise BoostError(
+                "%s is already installed (v%s) from %s, not %s"
+                % (name, existing.get("version"), other, entry.get("tap")),
+                hint="`boost install %s:%s --force` to replace it"
+                     % (entry.get("tap"), name), wrap=True)
         raise BoostError("%s is already installed (v%s)" % (name, existing.get("version")),
                         hint="`boost reinstall %s` to force, `boost update` to upgrade" % name)
     return existing
+
+
+def _other_tap(entry: dict, existing: dict) -> str:
+    """The installed record's tap when ``entry`` comes from a different one.
+
+    ``""`` when they agree, or when either side names no tap: only two taps
+    both spelled out can be told apart, and the bare-name hint stays right
+    for everything else. Naming the other tap matters because each bare-name
+    remedy acts on the installed copy, never on the one that was asked for.
+    """
+    want, have = str(entry.get("tap") or ""), str(existing.get("tap") or "")
+    return have if want and have and want != have else ""
 
 
 def _require_writable(name: str) -> None:
