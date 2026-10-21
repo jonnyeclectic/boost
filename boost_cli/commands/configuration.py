@@ -2515,7 +2515,7 @@ def _offer_boost_first(hosts: list[str]) -> None:
     """
     from ..core import builtin
 
-    if typedvalue.env_flag(NO_RULE_ENV):
+    if typedvalue.env_flag(NO_RULE_ENV, unknown=True):
         return
     # Scoped to hosts where boost actually registered a server. Offering it for
     # an agent with no boost tools would install standing text naming

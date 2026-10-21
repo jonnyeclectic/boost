@@ -179,7 +179,7 @@ def _formatter(fmt_name: str) -> logging.Formatter:
 
 
 def _file_enabled() -> bool:
-    if typedvalue.env_flag("BOOST_NO_LOG"):
+    if typedvalue.env_flag("BOOST_NO_LOG", unknown=True):
         return False
     from . import config
     return bool(config.get("logging.file", True))

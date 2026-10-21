@@ -120,7 +120,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     command it cannot run.
     """
     rows = res.mcp_servers
-    if not rows or no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER"):
+    if not rows or no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
         return
     from ..core import mcpdecl, scopes
     # A project-scoped install already recorded these in the repo's .mcp.json
@@ -614,7 +614,7 @@ def cmd_install(argv: list[str]) -> int:
         # predict. See agents.workflow_agents.
         mat_sets = {"rule": agents.materializing_agents(mbase),
                     "workflow": agents.workflow_agents(mbase)}
-        offer_mcp = not args.no_mcp and not typedvalue.env_flag("BOOST_NO_MCP_OFFER")
+        offer_mcp = not args.no_mcp and not typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True)
         mcp_hosts = [h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))] \
             or mcphost.hosts()
         for e in entries:

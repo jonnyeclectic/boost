@@ -59,6 +59,63 @@ class TestEnvFlag:
             "! BOOST_X='Sure' is not a boolean (1/0, true/false, yes/no, "
             "on/off) — treating it as off\n")
 
+    def test_a_kill_switch_reads_an_unreadable_value_as_on(
+            self, sandbox, monkeypatch, capsys, fresh_warnings):
+        monkeypatch.setenv("BOOST_X", "y")
+        assert tv.env_flag("BOOST_X", unknown=True) is True
+        assert tv.env_flag("BOOST_X", unknown=True) is True
+        assert capsys.readouterr().err == (
+            "! BOOST_X='y' is not a boolean (1/0, true/false, yes/no, "
+            "on/off) — treating it as on\n")
+
+    @pytest.mark.parametrize("value", OFF)
+    def test_a_kill_switch_still_reads_off_words_as_off(
+            self, sandbox, monkeypatch, value):
+        monkeypatch.setenv("BOOST_X", value)
+        assert tv.env_flag("BOOST_X", unknown=True) is False
+
+    @pytest.mark.parametrize("value", ON)
+    def test_a_kill_switch_reads_on_words_as_on(self, sandbox, monkeypatch,
+                                                 capsys, value):
+        monkeypatch.setenv("BOOST_X", value)
+        assert tv.env_flag("BOOST_X", unknown=True) is True
+        assert capsys.readouterr().err == ""
+
+
+class TestKillSwitchesFailClosed:
+    """An unreadable value on a ``BOOST_NO_*`` switch keeps it switched on:
+    it used to, and reading ``BOOST_NO_NET=y`` as off would call out from a
+    machine its owner had told to stay offline."""
+
+    def test_no_net(self, sandbox, monkeypatch, fresh_warnings):
+        monkeypatch.setenv("BOOST_NO_NET", "y")
+        assert selfupdate.latest_version() is None
+
+    def test_no_ai(self, sandbox, monkeypatch, fresh_warnings):
+        monkeypatch.setenv("BOOST_NO_AI", "y")
+        assert ai.enabled() is False
+        assert ai.unavailable_reason() == "disabled (BOOST_NO_AI is set)"
+
+    def test_no_embed(self, sandbox, monkeypatch, fresh_warnings):
+        monkeypatch.setenv("BOOST_NO_EMBED", "y")
+        assert embed.enabled() is False
+
+    def test_no_log(self, sandbox, monkeypatch, fresh_warnings):
+        monkeypatch.setenv("BOOST_NO_LOG", "y")
+        assert logs._file_enabled() is False
+
+    def test_no_seed(self, sandbox, monkeypatch, fresh_warnings):
+        from boost_cli.core import bootstrap
+        monkeypatch.setenv("BOOST_NO_SEED", "y")
+        assert bootstrap.will_seed() is False
+        assert bootstrap.seed_catalog().skipped is True
+
+    def test_assume_yes_stays_off(self, sandbox, monkeypatch, fresh_warnings):
+        monkeypatch.setattr("sys.argv", ["boost"])
+        monkeypatch.setattr(output, "stdin_is_tty", lambda *a: False)
+        monkeypatch.setenv("BOOST_ASSUME_YES", "y")
+        assert output.confirm("delete?") is False
+
 
 class TestEachSwitch:
     """The finding's sites, each read with ``0`` meaning off."""

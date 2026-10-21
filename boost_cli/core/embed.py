@@ -95,7 +95,7 @@ _model_instance: Any = None
 
 def enabled() -> bool:
     """True unless the ``BOOST_NO_EMBED`` kill-switch is set."""
-    return not typedvalue.env_flag("BOOST_NO_EMBED")
+    return not typedvalue.env_flag("BOOST_NO_EMBED", unknown=True)
 
 
 def _load_backend():

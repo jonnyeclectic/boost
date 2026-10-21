@@ -286,8 +286,10 @@ Everything that changes boost's runtime behaviour, in one place:
 
 The on/off switches (`BOOST_DEBUG`, `BOOST_NO_LOG`, `BOOST_NO_AI`,
 `BOOST_NO_NET`, `BOOST_ASSUME_YES`, `CLICOLOR_FORCE`, …) read `1`/`true`/`yes`/`on`
-as on and unset, empty, `0`/`false`/`no`/`off` as off. Any other value is off,
-with a one-line warning naming the variable. `NO_COLOR` is the exception: per
+as on and unset, empty, `0`/`false`/`no`/`off` as off. Any other value gets a
+one-line warning naming the variable and reads as the safe side: on for a
+`BOOST_NO_*` kill switch (so `BOOST_NO_NET=y` still stays offline), off for
+everything else (so `BOOST_ASSUME_YES=y` still asks). `NO_COLOR` is the exception: per
 no-color.org, any non-empty value turns color off.
 
 Tests sandbox the whole tool by pointing `HOME`/`BOOST_HOME`/`BOOST_AGENTS_STORE`

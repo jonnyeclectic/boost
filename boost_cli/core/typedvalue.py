@@ -237,7 +237,7 @@ def adapt(key: str, value: Any, spec: str) -> Any:
 _env_warned: set[str] = set()
 
 
-def env_flag(name: str) -> bool:
+def env_flag(name: str, *, unknown: bool = False) -> bool:
     """Read a boolean environment switch (``BOOST_ASSUME_YES``, ``BOOST_NO_AI``).
 
     Every switch used to be a bare ``os.environ.get(name)`` truthiness test, so
@@ -245,9 +245,15 @@ def env_flag(name: str) -> bool:
     destructive prompts unasked, and ``BOOST_NO_AI=false`` disabled AI. This
     reads the value with the same vocabulary as a :data:`BOOL` config key:
     unset, empty, or one of :data:`FALSE_WORDS` is off; one of
-    :data:`TRUE_WORDS` is on. Anything else is **off**, with one warning on
-    stderr naming the variable — off because the switch that matters most here
-    skips a confirmation, and an unreadable "yes" must not be taken as one.
+    :data:`TRUE_WORDS` is on. Anything else reads as ``unknown``, with one
+    warning on stderr naming the variable.
+
+    ``unknown`` is the *safe* reading, so it differs by switch. For a switch
+    that grants something (``BOOST_ASSUME_YES`` skips a confirmation) it is
+    off: an unreadable "yes" must not be taken as one. For a kill switch
+    (``BOOST_NO_NET``, ``BOOST_NO_AI``, every ``BOOST_NO_*``) it is on:
+    ``BOOST_NO_NET=y`` used to keep an air-gapped machine offline, and
+    reading it as off would quietly start calling out.
 
     ``NO_COLOR`` is deliberately not read through this: no-color.org defines it
     as "present and not empty", whatever the value.
@@ -256,10 +262,13 @@ def env_flag(name: str) -> bool:
     word = raw.strip().lower()
     if word in TRUE_WORDS:
         return True
-    if word and word not in FALSE_WORDS and name not in _env_warned:
+    if not word or word in FALSE_WORDS:
+        return False
+    if name not in _env_warned:
         _env_warned.add(name)
         # Plain stderr, not core.output: output reads switches through here,
         # and a warning that paints itself would re-enter this function.
         sys.stderr.write("! %s=%r is not a boolean (1/0, true/false, yes/no, "
-                         "on/off) — treating it as off\n" % (name, raw))
-    return False
+                         "on/off) — treating it as %s\n"
+                         % (name, raw, "on" if unknown else "off"))
+    return unknown

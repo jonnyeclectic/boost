@@ -171,7 +171,7 @@ def latest_version(timeout: float = 10.0) -> str | None:
     ``BOOST_NO_AI`` / ``BOOST_NO_SEED``: an air-gapped user (or a test) can
     guarantee nothing leaves the machine.
     """
-    if typedvalue.env_flag("BOOST_NO_NET"):
+    if typedvalue.env_flag("BOOST_NO_NET", unknown=True):
         return None
     # S310 is suppressed below: PYPI_JSON is a module constant with an https
     # scheme and no caller-controlled component.

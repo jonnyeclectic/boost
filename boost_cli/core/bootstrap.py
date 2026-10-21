@@ -76,7 +76,7 @@ def will_seed(*, force: bool = False) -> bool:
     command a first-time user was told to run, silence that long reads as a
     hang. Deliberately mirrors seed_catalog's own gates rather than guessing.
     """
-    if not force and typedvalue.env_flag(NO_SEED_ENV):
+    if not force and typedvalue.env_flag(NO_SEED_ENV, unknown=True):
         return False
     existing = {t.name for t in registry.list_taps()}
     if not force and existing:
@@ -102,7 +102,7 @@ def seed_catalog(*, force: bool = False) -> SeedResult:
     dead network or one bad remote must cost them a reported line, not the
     server they asked for.
     """
-    if not force and typedvalue.env_flag(NO_SEED_ENV):
+    if not force and typedvalue.env_flag(NO_SEED_ENV, unknown=True):
         return SeedResult(skipped=True)
     existing = {t.name for t in registry.list_taps()}
     # `force` re-checks the DEFAULTS rather than re-adding them: a machine
