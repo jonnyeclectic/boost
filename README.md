@@ -134,6 +134,10 @@ git clone https://github.com/jonnyeclectic/boost ~/.boost-src
 ln -s ~/.boost-src/boost ~/bin/boost        # anywhere on PATH works
 ```
 
+The shim runs the first of `python3.14`, `python3.13`, `python3.12`, `python3`
+and `python` on PATH that is 3.12 or newer, so a `python@3.13` installed
+beside an older system `python3` is found without relinking anything.
+
 ## Search
 
 `boost search` ranks with a built-in full-content BM25 engine. The index builds
