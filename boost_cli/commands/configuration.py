@@ -1543,6 +1543,11 @@ def _hit_paths(entries: list[dict]) -> list[str | None]:
 
 def _tool_search(args: dict):
     query = mcp.str_arg(args, "query") or ""
+    if not query.strip():
+        # The CLI refuses this as a usage error; answering "no skills match ''"
+        # told the agent the catalogue was missing something it never asked.
+        return ("boost_search needs a query — pass a plain-word description "
+                "of the task"), True
     rag.ensure()  # build the full-content index on first use (BM25 by default)
     # smart=True is stated, not inherited. It is `rag.search`'s default, so this
     # path was spending an LLM call per search by accident of a signature —
@@ -1579,10 +1584,12 @@ def _tool_search(args: dict):
         # every word of which fell out of the tokenizer. The third is asked
         # only of the RAG branch — `catalog.search` is a substring match and
         # discards nothing, so a notice there would describe another engine.
-        dropped = (rag.dropped_terms(query)
-                   if rag_result is not None
-                   and rag.tokenizer_is_the_only_reader() else [])
-        return mcp.no_results(query, tapped=tapped, dropped=dropped), False
+        tokenized_only = (rag_result is not None
+                          and rag.tokenizer_is_the_only_reader())
+        dropped = rag.dropped_terms(query) if tokenized_only else []
+        ignored = tokenized_only and rag.ignored_by_design(query)
+        return mcp.no_results(query, tapped=tapped, dropped=dropped,
+                              ignored=ignored), False
     # Name-keyed, the same test `lockfile.find_any` and `store.install` apply —
     # those are the tools this marker is advising about. mcp.hit_line's
     # docstring records why the imprecision is disclosed rather than removed,

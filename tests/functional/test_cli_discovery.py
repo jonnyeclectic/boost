@@ -579,6 +579,59 @@ class TestSearchDroppedTerms:
         assert "not searched: 'R'" in r.err
 
 
+class TestSearchWithNothingToSearch:
+    """Empty, blank, stopword-only and punctuation-only queries.
+
+    Each was answered as a real miss with a hint to run `boost discover`, which
+    for a blank query was a bare `boost discover` — a cache browse that
+    searches nothing — and for `the and of` a GitHub search on stopwords.
+    """
+
+    @pytest.mark.parametrize("q", ["", "   ", "\t"])
+    def test_a_blank_query_is_a_usage_error(self, boost, tapped, q):
+        r = boost("search", q, expect=2)
+        assert "the query is empty — give at least one search term" in r.err
+        assert "usage: boost search" in r.err
+        assert r.out == ""
+
+    def test_a_blank_query_is_refused_under_json_too(self, boost, tapped):
+        r = boost("search", " ", "--json", expect=2)
+        assert r.out == ""
+        assert "the query is empty" in r.err
+
+    def test_a_blank_query_is_refused_before_the_tap_check(self, boost, sandbox):
+        # Usage first, like argparse: the query was wrong whatever is tapped.
+        r = boost("search", "", expect=2)
+        assert "the query is empty" in r.err
+
+    @pytest.mark.parametrize("q", ["the and of", "--", "how to &"])
+    def test_an_ignored_query_says_so_and_skips_github(self, boost, tapped, q):
+        r = boost("search", "--", q)
+        assert ("○ no searchable terms in %r" % q) in r.out
+        assert ("→ common words (the, and, how, …) and punctuation are not "
+                "indexed — add a word that names the task") in r.out
+        assert "no matches for" not in r.out
+        assert "boost discover" not in r.out
+
+    def test_an_ignored_query_under_json_warns_on_stderr(self, boost, tapped):
+        r = boost("search", "the", "and", "--json")
+        assert json.loads(r.out) == []
+        assert "no searchable terms in 'the and'" in r.err
+
+    def test_an_ordinary_miss_under_json_leaves_stderr_clean(self, boost, tapped):
+        r = boost("search", "zzzznothing", "--json")
+        assert json.loads(r.out) == []
+        assert "no searchable terms" not in r.err
+
+    def test_a_dense_store_also_suppresses_the_ignored_state(
+            self, boost, tapped, monkeypatch):
+        # dense embeds the raw string, so the words did reach an index.
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "ready", lambda: True)
+        r = boost("search", "the", "and", "of")
+        assert "no searchable terms" not in r.out
+
+
 class TestSearchCategoryFilter:
     """Every fixture skill's `category` (see catalog.CACHE_FORMAT 2) is its
     first frontmatter tag, since none declares an explicit `category`:
