@@ -1814,6 +1814,24 @@ class TestQuarantine:
         assert r.rc == 0
         assert "outside its declared scope" not in r.out
 
+    def test_release_of_a_skill_blocklisted_since_is_refused(self, boost,
+                                                             installed):
+        # `replay rollback` refuses a blocklisted skill; release used to
+        # relink it to every agent with rc 0.
+        boost("quarantine", "brainstorming")
+        boost("policy", "set", "blocked_skills", "brainstorming")
+        r = boost("quarantine", "--release", "brainstorming", expect=1)
+        assert ("policy blocks releasing brainstorming: skill 'brainstorming' "
+                "is on the blocklist — it stays quarantined") in r.err
+        assert "boost uninstall brainstorming" in r.err
+        assert _lock()["brainstorming"]["quarantined"] is True
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "brainstorming")
+        assert (paths.held_skills_dir() / "brainstorming" / "SKILL.md").is_file()
+        boost("policy", "set", "blocked_skills", "")
+        r = boost("quarantine", "--release", "brainstorming")
+        assert "released brainstorming" in r.out
+
 
 def _unhold(name):
     """What a quarantine or sideline made before either held the copy aside
@@ -1937,6 +1955,28 @@ class TestQuarantineMaterialized:
         r = boost("quarantine", "--release", "house")
         assert "released rule house" in r.out
         assert cm.read_text(encoding="utf-8") == before
+
+    def test_release_of_a_rule_whose_tap_is_now_blocked_is_refused(
+            self, boost, sandbox):
+        cm = self._seed_claude_rule()
+        boost("quarantine", "house")
+        held = cm.read_text(encoding="utf-8")
+        boost("policy", "set", "blocked_taps", "some-tap")
+        r = boost("quarantine", "--release", "house", expect=1)
+        assert ("policy blocks releasing house: tap 'some-tap' is blocked — "
+                "it stays quarantined") in r.err
+        assert cm.read_text(encoding="utf-8") == held
+        assert lockfile.get_rule("house")["quarantined"] is True
+
+    def test_release_of_a_rule_is_not_refused_for_an_unread_description(
+            self, boost, sandbox):
+        # The lock records no description for a rule; not knowing it is not
+        # evidence it has none.
+        self._seed_claude_rule()
+        boost("quarantine", "house")
+        boost("policy", "set", "require_description", "true")
+        r = boost("quarantine", "--release", "house")
+        assert "released rule house" in r.out
 
     def test_release_of_an_unquarantined_rule_says_so(self, boost, sandbox):
         self._seed_claude_rule()

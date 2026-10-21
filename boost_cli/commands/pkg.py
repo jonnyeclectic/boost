@@ -3135,10 +3135,16 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
     # store.restore_preserve_newer_lock_sections.
     pre_rules = lockfile.installed_rules().copy()
     pre_workflows = lockfile.installed_workflows().copy()
+    pre_skills = set(lockfile.installed())
     # Extracted into a staging dir and swapped in only once that succeeded,
     # so a corrupt or refused snapshot can never leave an emptied store.
     snapshot.restore(tar_path, root, snap_id)
     kept = store.restore_preserve_newer_lock_sections(pre_rules, pre_workflows)
+    # Before anything links: a skill blocklisted since the snapshot was saved
+    # is declined here, as `replay rollback` and `install` decline it.
+    declined = store.decline_restored_by_policy(pre_skills)
+    for line in declined:
+        out.warn(line, wrap=True)
     actions = store.sync_apply(store.sync_plan())
     for action in actions:
         out.ok(action)
@@ -3160,7 +3166,9 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
         if extra:
             msg += " (%s)" % "; ".join(extra)
         out.warn(msg)
-    return 0
+    # Partial on purpose, and said so in the exit code: a declined skill is
+    # what `replay rollback` and `install` fail on too.
+    return 1 if declined else 0
 
 
 # ── export ───────────────────────────────────────────────────────────────

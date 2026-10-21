@@ -632,6 +632,7 @@ def cmd_quarantine(argv):
         if not entry.get("quarantined"):
             out.warn("%s is not quarantined" % name)
             return 0
+        store.refuse_release_by_policy(kind, name, entry)
         if kind == "skill":
             res = store.release_skill(name, entry)
             from .pkg import _warn_unwritable

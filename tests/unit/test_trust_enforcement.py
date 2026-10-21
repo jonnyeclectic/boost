@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests: provenance and install policy hold on every path back in.
 
-`boost tap` checked a tap's signature once; `update` moved a tap onto any
-later commit unchecked.
+`boost tap` checked a tap's signature once, and `install` the policy; `update`
+moved a tap onto any later commit unchecked, and `snapshot restore` /
+`quarantine --release` brought back skills the policy had since blocked.
 """
 from __future__ import annotations
 
@@ -13,11 +14,14 @@ import subprocess
 import pytest
 
 from boost_cli.core import (
+    catalog,
     gitutil,
+    lockfile,
     paths,
     policy,
     provenance,
     registry,
+    store,
     util,
 )
 from boost_cli.errors import BoostError
@@ -141,3 +145,121 @@ class TestUpdateRefusesAnUnsignedCommit:
         with pytest.raises(BoostError) as exc:
             registry.update("stap")
         assert exc.value.hint.startswith("repair policy.json first")
+
+
+# ── recorded items coming back: release and snapshot restore ────────────
+
+@pytest.fixture()
+def two(sandbox, fixture_tap_src):
+    registry.add(str(fixture_tap_src))
+    for n in ("brainstorming", "tdd-workflow"):
+        store.install(catalog.find(n)[0])
+
+
+def _block(**changes):
+    pol = policy.load()
+    pol.update(changes)
+    policy.save(pol)
+
+
+class TestRecordedPolicyViolations:
+    def test_blocklisted_skill(self, two):
+        _block(blocked_skills=["brainstorming"])
+        entry = lockfile.get_skill("brainstorming")
+        assert store.recorded_policy_violations(
+            "skill", "brainstorming", entry) == [
+            "skill 'brainstorming' is on the blocklist"]
+
+    def test_counts_the_item_itself_as_installed(self, two):
+        _block(max_skills=2)
+        entry = lockfile.get_skill("brainstorming")
+        assert store.recorded_policy_violations(
+            "skill", "brainstorming", entry) == []
+        assert store.recorded_policy_violations(
+            "rule", "house", {"tap": "t", "version": "1.0.0"}) == []
+        assert store.recorded_policy_violations(
+            "skill", "other", {"tap": "t", "version": "1.0.0"}) == [
+            "max_skills limit (2) reached"]
+
+    def test_description_comes_from_the_skill_copy(self, two):
+        _block(require_description=True)
+        assert store.recorded_policy_violations(
+            "skill", "brainstorming",
+            lockfile.get_skill("brainstorming")) == []
+        skill_md = paths.store_dir() / "brainstorming" / "SKILL.md"
+        skill_md.write_text("---\nname: brainstorming\nversion: 1.0.0\n---\n"
+                            "body\n", encoding="utf-8")
+        assert store.recorded_policy_violations(
+            "skill", "brainstorming", lockfile.get_skill("brainstorming")) == [
+            "skill has no description (required by policy)"]
+
+    def test_an_unread_description_is_not_a_violation(self, two):
+        _block(require_description=True)
+        assert store.recorded_policy_violations(
+            "workflow", "ship", {"tap": "t", "version": "1.0.0"}) == []
+
+    def test_version_is_read_from_the_record(self, two):
+        _block(require_version=True)
+        assert store.recorded_policy_violations(
+            "rule", "house", {"tap": "t"}) == [
+            "skill has no version (required by policy)"]
+        assert store.recorded_policy_violations(
+            "rule", "house", {"tap": "t", "version": "2.0.0"}) == []
+
+    def test_blocked_tap_is_read_from_the_record(self, two):
+        _block(blocked_taps=["t"])
+        assert store.recorded_policy_violations(
+            "rule", "house", {"tap": "t", "version": "1.0.0"}) == [
+            "tap 't' is blocked"]
+
+
+class TestRefuseRelease:
+    def test_refusal_names_the_rule_and_the_way_out(self, two):
+        _block(blocked_skills=["tdd-workflow"])
+        with pytest.raises(BoostError) as exc:
+            store.refuse_release_by_policy(
+                "skill", "tdd-workflow", lockfile.get_skill("tdd-workflow"))
+        assert exc.value.message == (
+            "policy blocks releasing tdd-workflow: skill 'tdd-workflow' is on "
+            "the blocklist — it stays quarantined")
+        assert exc.value.hint == ("inspect with `boost policy list`; `boost "
+                                  "uninstall tdd-workflow` removes it")
+
+    def test_allowed_release_passes(self, two):
+        store.refuse_release_by_policy(
+            "skill", "tdd-workflow", lockfile.get_skill("tdd-workflow"))
+
+
+class TestDeclineRestored:
+    def test_declines_only_what_the_restore_brought_back(self, two):
+        _block(blocked_skills=["brainstorming", "tdd-workflow"])
+        lines = store.decline_restored_by_policy({"brainstorming"})
+        assert lines == [
+            "not restored tdd-workflow: policy blocks installing "
+            "tdd-workflow: skill 'tdd-workflow' is on the blocklist"]
+        assert sorted(lockfile.installed()) == ["brainstorming"]
+        assert not (paths.store_dir() / "tdd-workflow").exists()
+        assert (paths.store_dir() / "brainstorming").is_dir()
+
+    def test_max_skills_counts_the_accepted_ones(self, two):
+        _block(max_skills=1)
+        lines = store.decline_restored_by_policy(set())
+        assert lines == [
+            "not restored tdd-workflow: policy blocks installing "
+            "tdd-workflow: max_skills limit (1) reached"]
+        assert sorted(lockfile.installed()) == ["brainstorming"]
+
+    def test_nothing_declined_leaves_everything(self, two):
+        assert store.decline_restored_by_policy(set()) == []
+        assert sorted(lockfile.installed()) == ["brainstorming",
+                                                "tdd-workflow"]
+
+    def test_a_quarantined_row_is_left_alone(self, two):
+        store.quarantine_skill("tdd-workflow", lockfile.get_skill("tdd-workflow"))
+        held = store.held_copy_dir("tdd-workflow")
+        assert held.is_dir()
+        _block(blocked_skills=["tdd-workflow"])
+        assert store.decline_restored_by_policy(set()) == []
+        assert sorted(lockfile.installed()) == ["brainstorming",
+                                                "tdd-workflow"]
+        assert held.is_dir()

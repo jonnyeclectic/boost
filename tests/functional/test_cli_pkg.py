@@ -2082,6 +2082,51 @@ class TestSnapshot:
         link = paths.home() / ".claude" / "skills" / "brainstorming"
         assert link.is_symlink() and link.exists()
 
+    def _snap_then_drop(self, boost, *names):
+        r = boost("snapshot", "save")
+        snap_id = re.search(r"saved (snap-[\w-]+)", r.out).group(1)
+        for n in names:
+            boost("uninstall", n)
+        return snap_id
+
+    def test_restore_declines_a_skill_blocklisted_since(self, boost, installed):
+        # `replay rollback` and `install` refuse a blocklisted skill; restore
+        # re-activated it with rc 0 and left `policy check` failing.
+        boost("install", "tdd-workflow")
+        snap_id = self._snap_then_drop(boost, "tdd-workflow")
+        boost("policy", "set", "blocked_skills", "tdd-workflow")
+        r = boost("snapshot", "restore", snap_id, "-y", expect=1)
+        assert ("not restored tdd-workflow: policy blocks installing "
+                "tdd-workflow: skill 'tdd-workflow' is on the blocklist"
+                ) in " ".join(r.out.split())     # the warning folds
+        assert "restored %s (1 skill)" % snap_id in r.out
+        assert sorted(_lock()) == ["brainstorming"]
+        assert not (paths.store_dir() / "tdd-workflow").exists()
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "tdd-workflow")
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").exists()
+        boost("policy", "check")
+
+    def test_restore_keeps_a_skill_installed_all_along(self, boost, installed):
+        # Only skills the restore brings back are being installed; one live
+        # throughout is `policy check`'s to report, as rollback leaves it too.
+        snap_id = self._snap_then_drop(boost)
+        boost("policy", "set", "blocked_skills", "brainstorming")
+        r = boost("snapshot", "restore", snap_id, "-y")
+        assert "not restored" not in r.out
+        assert sorted(_lock()) == ["brainstorming"]
+
+    def test_restore_counts_max_skills_as_it_goes(self, boost, installed):
+        boost("install", "tdd-workflow")
+        snap_id = self._snap_then_drop(boost, "brainstorming", "tdd-workflow")
+        boost("policy", "set", "max_skills", "1")
+        r = boost("snapshot", "restore", snap_id, "-y", expect=1)
+        assert ("not restored tdd-workflow: policy blocks installing "
+                "tdd-workflow: max_skills limit (1) reached"
+                ) in " ".join(r.out.split())
+        assert "brainstorming:" not in r.out
+        assert sorted(_lock()) == ["brainstorming"]
+
     @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
     def test_symlinked_store_entry_round_trips(self, boost, installed,
                                                tmp_path):
