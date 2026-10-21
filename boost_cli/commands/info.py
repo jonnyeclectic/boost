@@ -260,13 +260,11 @@ def _scope_flag(entry: dict) -> list[str]:
     the checkout; ``(gone)`` says the directory no longer exists, which is
     the case every other surface now reports as ``stranded``.
     """
-    if (entry.get("scope") != scopes.SCOPE_PROJECT
-            or not scopes.names_a_directory(entry.get("base"))):
+    where = scopes.project_label(entry)
+    if where is None:
         return []
-    where = "project:" + paths.tilde(Path(entry["base"]))
-    if scopes.stranded(entry):
-        return [out.role(where + " (gone)", "danger")]
-    return [out.role(where, "muted")]
+    return [out.role("project:" + where,
+                     "danger" if scopes.stranded(entry) else "muted")]
 
 
 def _kind_table(heading, kind, items, extra=None):
@@ -479,12 +477,11 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         out.kv("slot", str(entry["slot"]))
     if entry.get("scope"):
         out.kv("scope", str(entry["scope"]))
-    if (entry.get("scope") == scopes.SCOPE_PROJECT
-            and scopes.names_a_directory(entry.get("base"))):
+    where = scopes.project_label(entry)
+    if where:
         # "scope project" alone does not say which checkout -- or that it is
         # gone, which is the one fact here that changes what to do next.
-        out.kv("base", paths.tilde(Path(entry["base"]))
-               + (" (gone)" if stranded else ""))
+        out.kv("base", where)
     if entry.get("source_file"):
         out.kv("source", str(entry["source_file"]))
     if entry.get("commit"):

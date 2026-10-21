@@ -222,3 +222,51 @@ class TestInfoReportsTheUpdateOutdatedLists:
         assert "latest: 1.0.0 (content changed)" in _tool(
             "boost_info", name="style")[0].splitlines()
 
+
+class TestMcpCarriesTheProjectScope:
+    def test_a_local_rule_and_workflow_viewed_from_another_repo(
+            self, boost, mytap, tmp_path, monkeypatch):
+        from boost_cli.core import paths
+        proj = tmp_path / "proj"
+        (proj / ".git").mkdir(parents=True)
+        other = tmp_path / "other"
+        (other / ".git").mkdir(parents=True)
+        monkeypatch.chdir(proj)
+        boost("install", "style", "--local")
+        boost("install", "ship", "--local")
+        where = paths.tilde(proj.resolve())
+        monkeypatch.chdir(other)
+
+        listed = _tool("boost_list")[0].splitlines()
+        assert "style v1.0.0 (mytap) [rule] [project %s]" % where in listed
+        assert "ship v1.0.0 (mytap) [workflow] [project %s]" % where in listed
+
+        lines = _tool("boost_info", name="style")[0].splitlines()
+        assert "scope: project (%s)" % where in lines
+
+        text = _tool("boost_read", name="style")[0]
+        assert "installed: yes (project %s)" % where in text.splitlines()
+
+    def test_a_user_rule_has_no_project_marker(self, boost, mytap):
+        boost("install", "style")
+        listed = _tool("boost_list")[0].splitlines()
+        assert "style v1.0.0 (mytap) [rule]" in listed
+        assert not any(ln.startswith("scope:") for ln in
+                       _tool("boost_info", name="style")[0].splitlines())
+        assert "installed: yes" in _tool(
+            "boost_read", name="style")[0].splitlines()
+
+    def test_a_deleted_checkout_is_marked_gone(self, boost, mytap, tmp_path,
+                                               monkeypatch):
+        from boost_cli.core import paths, util
+        proj = tmp_path / "proj"
+        (proj / ".git").mkdir(parents=True)
+        monkeypatch.chdir(proj)
+        boost("install", "style", "--local")
+        where = paths.tilde(proj.resolve())
+        monkeypatch.chdir(tmp_path)
+        util.rmtree(proj)
+        listed = _tool("boost_list")[0].splitlines()
+        assert "style v1.0.0 (mytap) [rule] [project %s (gone)]" % where in listed
+        assert "scope: project (%s (gone))" % where in _tool(
+            "boost_info", name="style")[0].splitlines()

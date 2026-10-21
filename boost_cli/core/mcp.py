@@ -395,7 +395,8 @@ READ_LIMIT = 12000
 
 
 def read_reply(name: str, text: str, *, kind: str = "skill",
-               installed: bool = False, limit: int = READ_LIMIT) -> str:
+               installed: bool = False, limit: int = READ_LIMIT,
+               where: str | None = None) -> str:
     """`boost_read`'s reply: a header, then the item's own content.
 
     The header exists because the body alone does not say what the agent is
@@ -420,7 +421,10 @@ def read_reply(name: str, text: str, *, kind: str = "skill",
     head = ["name: %s" % name]
     if kind != "skill":
         head.append("kind: %s" % kind)
-    head.append("installed: %s" % ("yes" if installed else "no"))
+    # ``where`` names the checkout a `--local` install lives in: "yes"
+    # alone told an agent in another repo that the item was active there.
+    head.append("installed: %s" % (("yes (project %s)" % where if where
+                                     else "yes") if installed else "no"))
     body = text.strip("\n")
     if len(body) > limit:
         cut = body[:limit].rpartition("\n")[0] or body[:limit]

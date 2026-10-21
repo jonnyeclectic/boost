@@ -1698,9 +1698,11 @@ def _tool_list(args: dict):
     lines = []
     for kind, section in everything.items():
         for n, e in sorted(section.items()):
-            lines.append("%s v%s (%s)%s%s"
+            where = scopes.project_label(e) if kind != "skill" else None
+            lines.append("%s v%s (%s)%s%s%s"
                          % (n, e.get("version", "?"), e.get("tap", "?"),
                             "" if kind == "skill" else " [%s]" % kind,
+                            " [project %s]" % where if where else "",
                             " [pinned]" if e.get("pinned") else ""))
     if project:
         lines.append("project skills (%s):" % _tilde(pbase))
@@ -1790,8 +1792,10 @@ def _tool_info(args: dict):
             integrity.written_agent_names(kind, entry)) or "none"
         lines.extend(("installed: yes (%s)" % entry.get("installed_at", "?"),
                       "agents: %s" % agents_s))
-        if pbase is not None:
-            lines.append("scope: project (%s)" % _tilde(pbase))
+        where = (_tilde(pbase) if pbase is not None
+                 else scopes.project_label(entry))
+        if where:
+            lines.append("scope: project (%s)" % where)
         if entry.get("pinned"):
             lines.append("pinned: yes")
         if entry.get("quarantined"):
@@ -1856,9 +1860,11 @@ def _tool_read(args: dict):
                 and rec.get("source_dir", cat.get("rel_dir"))
                 == cat.get("rel_dir"))
         return mcp.read_reply(name, text, kind=cat.get("kind") or "skill",
-                              installed=here), False
+                              installed=here,
+                              where=scopes.project_label(rec or {})), False
     text, kind, lock, _cat = info._resolve_text(name)
-    return mcp.read_reply(name, text, kind=kind, installed=lock is not None), False
+    return mcp.read_reply(name, text, kind=kind, installed=lock is not None,
+                          where=scopes.project_label(lock or {})), False
 
 
 @_path_hint
