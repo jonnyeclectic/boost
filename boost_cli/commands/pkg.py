@@ -40,6 +40,7 @@ from ..core import (
     snapshot,
     staleness,
     store,
+    typedvalue,
     updatediff,
     util,
 )
@@ -119,7 +120,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     command it cannot run.
     """
     rows = res.mcp_servers
-    if not rows or no_mcp or os.environ.get("BOOST_NO_MCP_OFFER"):
+    if not rows or no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
         return
     from ..core import mcpdecl, scopes
     # A project-scoped install already recorded these in the repo's .mcp.json
@@ -613,7 +614,7 @@ def cmd_install(argv: list[str]) -> int:
         # predict. See agents.workflow_agents.
         mat_sets = {"rule": agents.materializing_agents(mbase),
                     "workflow": agents.workflow_agents(mbase)}
-        offer_mcp = not args.no_mcp and not os.environ.get("BOOST_NO_MCP_OFFER")
+        offer_mcp = not args.no_mcp and not typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True)
         mcp_hosts = [h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))] \
             or mcphost.hosts()
         for e in entries:
@@ -1139,7 +1140,7 @@ def cmd_sync(argv: list[str]) -> int:
     # own confirm so the two are never approved as one.
     oos = plan["out_of_scope_links"]
     if args.prune and oos:
-        go = (args.yes or bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
+        go = (args.yes or typedvalue.env_flag("BOOST_ASSUME_YES") if args.json else
               args.yes or out.confirm("Remove %s outside their declared scope: %s?"
                           % (_plural(len(oos), "link"),
                              ", ".join("%s → %s" % (n, a) for n, a in oos))))
@@ -1320,7 +1321,7 @@ def _go(args, prompt: str) -> bool:
     """A `--prune` confirm: `--yes` or BOOST_ASSUME_YES skip it, and `--json`
     never prompts, since a question on stdout would break the JSON after it."""
     if args.json:
-        return args.yes or bool(os.environ.get("BOOST_ASSUME_YES"))
+        return args.yes or typedvalue.env_flag("BOOST_ASSUME_YES")
     return args.yes or out.confirm(prompt)
 
 

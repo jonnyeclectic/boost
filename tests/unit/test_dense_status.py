@@ -460,14 +460,14 @@ def test_doctor_under_the_kill_switch_with_no_store_claims_no_vectors(
     assert "on disk" not in res.out
 
 
-def test_a_falsy_looking_kill_switch_still_disables(sandbox, keyed, monkeypatch):
-    # `enabled()` is `not os.environ.get(...)`, so BOOST_NO_EMBED=0 disables
-    # too. That is the surprising spelling, and it is the one where naming the
-    # switch matters most — the user who wrote 0 meaning "off" is the user
-    # least likely to guess why dense is quiet.
+def test_a_falsy_kill_switch_does_not_disable(sandbox, keyed, monkeypatch):
+    # `enabled()` was `not os.environ.get(...)`, so BOOST_NO_EMBED=0 disabled
+    # dense too — the user who wrote 0 meaning "off" got the opposite. It is
+    # read through typedvalue.env_flag now, so 0/false/no/off mean off.
     monkeypatch.setenv("BOOST_NO_EMBED", "0")
-    st = dense.status()
-    assert st["reason"] == "disabled"
+    assert dense.status()["reason"] != "disabled"
+    monkeypatch.setenv("BOOST_NO_EMBED", "1")
+    assert dense.status()["reason"] == "disabled"
 
 
 def test_doctor_flags_a_log_it_cannot_write(boost, sandbox):

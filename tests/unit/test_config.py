@@ -734,7 +734,9 @@ class TestTapsThatIsNotAList:
         quarantined = paths.config_path().with_name("config.json.corrupt")
         assert quarantined.read_text(encoding="utf-8") == original
         fresh = json.loads(paths.config_path().read_text(encoding="utf-8"))
-        assert fresh["taps"] == [] and fresh["ai"]["enabled"] is False
+        # Overrides only: the fresh file holds the one key that was set, not
+        # a `taps: []` (or any other default) copied in from DEFAULTS.
+        assert fresh == {"ai": {"enabled": False}}
         assert config.check() is None
 
     def test_unset_reads_no_overrides_from_it(self, sandbox):

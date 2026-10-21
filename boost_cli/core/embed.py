@@ -42,7 +42,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from . import nethttp
+from . import nethttp, typedvalue
 
 # The environment variable that selects each API provider. A mapping rather
 # than literals inlined at each use, because `dense.fix_hint` has to name the
@@ -95,7 +95,7 @@ _model_instance: Any = None
 
 def enabled() -> bool:
     """True unless the ``BOOST_NO_EMBED`` kill-switch is set."""
-    return not os.environ.get("BOOST_NO_EMBED")
+    return not typedvalue.env_flag("BOOST_NO_EMBED", unknown=True)
 
 
 def _load_backend():

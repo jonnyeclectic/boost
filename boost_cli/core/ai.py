@@ -27,7 +27,7 @@ import subprocess
 import urllib.error
 import urllib.request
 
-from . import aihost, config, logs, nethttp
+from . import aihost, config, logs, nethttp, typedvalue
 
 API_URL = "https://api.anthropic.com/v1/messages"
 
@@ -46,7 +46,7 @@ _last_failure: str | None = None
 
 def enabled() -> bool:
     """Return True when `ai.enabled` is on and BOOST_NO_AI is unset."""
-    return bool(config.get("ai.enabled", True)) and not os.environ.get("BOOST_NO_AI")
+    return bool(config.get("ai.enabled", True)) and not typedvalue.env_flag("BOOST_NO_AI", unknown=True)
 
 
 def available() -> bool:
@@ -77,7 +77,7 @@ def unavailable_reason() -> str:
     problem — blaming it for the other two sends a user with a working
     backend chasing an environment issue they do not have.
     """
-    if os.environ.get("BOOST_NO_AI"):
+    if typedvalue.env_flag("BOOST_NO_AI", unknown=True):
         return "disabled (BOOST_NO_AI is set)"
     if not bool(config.get("ai.enabled", True)):
         return "disabled (ai.enabled is off)"
