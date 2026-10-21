@@ -322,7 +322,7 @@ def resolve_lock_entry(name: str) -> tuple[str, str | None, dict | None]:
     return bare, kind, entry
 
 
-def installed_name(name: str) -> str:
+def installed_name(name: str, scope: str | None = None) -> str:
     """The bare lock key a command acting on an installed ``name`` should use.
 
     ``install`` accepts ``tap:skill`` and every ambiguity hint tells the user
@@ -339,32 +339,52 @@ def installed_name(name: str) -> str:
     not reach: a bare name resolves skill-first (:func:`lockfile.find_any`),
     so ``other:x`` selecting the rule ``x`` while a skill ``x`` is installed
     would otherwise uninstall or pin the skill.
+
+    ``scope`` is the command's own ``--scope``. Given one, only that scope's
+    rows are the ones the command acts on, so only they are checked: with a
+    user ``x`` from tap A and a project ``x`` from tap B, ``B:x --local``
+    names the project copy, and ``A:x --local`` names nothing in this repo.
+    Checking both against the user row first refused the first and let the
+    second remove or reinstall tap B's copy.
     """
     qualifier, bare = catalog.split_name(name)
     if qualifier is None:
         return name
-    held = [(kind, section[bare]) for kind, section in lockfile.all_installed().items()
-            if bare in section]
-    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
-    project_entry = projectlock.get_skill(pbase, bare) if pbase is not None else None
+    held: list[tuple[str, dict]] = []
+    if scope != scopes.SCOPE_PROJECT:
+        held = [(kind, section[bare])
+                for kind, section in lockfile.all_installed().items()
+                if bare in section]
+    project_entry = None
+    if scope != scopes.SCOPE_USER:
+        pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        project_entry = (projectlock.get_skill(pbase, bare)
+                         if pbase is not None else None)
     if project_entry is not None:
         held.append(("skill", project_entry))
     if not held:
         return bare
     taps = [str(entry.get("tap") or "local") for _kind, entry in held]
+    where = {scopes.SCOPE_PROJECT: " in this repo",
+             scopes.SCOPE_USER: " in your user config"}.get(scope or "", "")
     if not any(catalog.tap_matches(t, qualifier) for t in taps):
         raise BoostError(
-            "%s is not installed — %s is installed from %s, not %s"
-            % (name, bare, ", ".join(dict.fromkeys(taps)), qualifier),
+            "%s is not installed%s — %s is installed from %s, not %s"
+            % (name, where, bare, ", ".join(dict.fromkeys(taps)), qualifier),
             hint="name it `%s` or `%s:%s`" % (bare, taps[0], bare), wrap=True)
     if not catalog.tap_matches(taps[0], qualifier):
-        kind = next(k for (k, _e), t in zip(held, taps, strict=True)
-                    if catalog.tap_matches(t, qualifier))
+        idx = next(i for i, t in enumerate(taps)
+                   if catalog.tap_matches(t, qualifier))
+        # The qualifier picks this repo's copy, which `--local` reaches:
+        # "uninstall one of the two first" would be the long way round.
+        local = project_entry is not None and idx == len(held) - 1
         raise BoostError(
             "%s is ambiguous here — it selects the %s %s, but the %s %s from %s "
             "is the one this command would act on"
-            % (name, kind, bare, held[0][0], bare, taps[0]),
-            hint="uninstall one of the two first, or see `boost list`", wrap=True)
+            % (name, held[idx][0], bare, held[0][0], bare, taps[0]),
+            hint=("add `--local` to act on this repo's copy" if local
+                  else "uninstall one of the two first, or see `boost list`"),
+            wrap=True)
     return bare
 
 
@@ -2420,22 +2440,51 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                               " in this project")
         existing = projectlock.get_skill(resolved_base, name)
         if existing and not force:
+            other = _other_tap(entry, existing)
+            if other:
+                raise BoostError(
+                    "%s is already installed in this project (v%s) from %s, "
+                    "not %s" % (name, existing.get("version"), other,
+                                entry.get("tap")),
+                    hint="`boost install %s:%s --local --force` to replace it"
+                         % (entry.get("tap"), name), wrap=True)
+            # `reinstall --local` reads this repo's lock, so it reaches the
+            # recorded tap even where a bare `install x` would stop at "exists
+            # in multiple taps".
             raise BoostError(
                 "%s is already installed in this project (v%s)"
                 % (name, existing.get("version")),
-                # Not `reinstall --local`: reinstall has no scope flag (it
-                # would exit 2), and bare `reinstall` reads the user lock only,
-                # so it answers "not installed" for the very skill this is about.
-                hint="`boost install %s --local --force` to force" % name)
+                hint="`boost reinstall %s --local` to force" % name)
         return existing
     refuse_case_collision(name, lockfile.installed())
     existing = lockfile.get_skill(name)
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
     if existing and not force:
+        other = _other_tap(entry, existing)
+        if other:
+            # Not `boost reinstall`: it reinstalls the copy the lock records,
+            # which is the other tap's.
+            raise BoostError(
+                "%s is already installed (v%s) from %s, not %s"
+                % (name, existing.get("version"), other, entry.get("tap")),
+                hint="`boost install %s:%s --force` to replace it"
+                     % (entry.get("tap"), name), wrap=True)
         raise BoostError("%s is already installed (v%s)" % (name, existing.get("version")),
                         hint="`boost reinstall %s` to force, `boost update` to upgrade" % name)
     return existing
+
+
+def _other_tap(entry: dict, existing: dict) -> str:
+    """The installed record's tap when ``entry`` comes from a different one.
+
+    ``""`` when they agree, or when either side names no tap: only two taps
+    both spelled out can be told apart, and the bare-name hint stays right
+    for everything else. Naming the other tap matters because each bare-name
+    remedy acts on the installed copy, never on the one that was asked for.
+    """
+    want, have = str(entry.get("tap") or ""), str(existing.get("tap") or "")
+    return have if want and have and want != have else ""
 
 
 def _require_writable(name: str) -> None:

@@ -18,7 +18,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, gitutil, lockfile, output, paths, policy, util
+from . import (
+    config,
+    gitutil,
+    lockfile,
+    output,
+    paths,
+    policy,
+    projectlock,
+    scopes,
+    util,
+)
 
 
 @dataclass
@@ -1024,6 +1034,21 @@ def dependents(tap_name: str) -> list[tuple[str, str]]:
     return [(kind, n)
             for kind, section in lockfile.all_installed().items()
             for n, e in sorted(section.items())
+            if e.get("tap") == tap_name]
+
+
+def project_dependents(tap_name: str) -> list[str]:
+    """Skills installed ``--local`` in the current repo whose row names `tap_name`.
+
+    Name-sorted. :func:`dependents` reads the user lock only, so untapping the
+    source of a project skill went through with no warning and left a row
+    `drift` reads as source-missing. A project lock records skills only, and
+    only this repo's is reachable: other checkouts are not known to boost.
+    """
+    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
+    if pbase is None:
+        return []
+    return [n for n, e in sorted(projectlock.installed(pbase).items())
             if e.get("tap") == tap_name]
 
 

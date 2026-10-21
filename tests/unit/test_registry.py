@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from boost_cli.core import config, gitutil, lockfile, paths, registry, util
+from boost_cli.core import config, gitutil, lockfile, paths, projectlock, registry, util
 from boost_cli.errors import BoostError
 
 
@@ -506,6 +506,31 @@ class TestDependents:
         lockfile.set_skill("alpha", {"tap": "fixture-tap"})
         assert registry.dependents("fixture-tap") == [
             ("skill", "alpha"), ("skill", "zeta")]
+
+
+class TestProjectDependents:
+    @pytest.fixture
+    def repo(self, sandbox, tmp_path, monkeypatch):
+        d = tmp_path / "proj"
+        (d / ".git").mkdir(parents=True)
+        monkeypatch.chdir(d)
+        return d
+
+    def test_outside_a_repo_is_empty(self, sandbox, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert registry.project_dependents("fixture-tap") == []
+
+    def test_finds_this_repos_skills_from_the_tap_sorted(self, repo):
+        projectlock.set_skill(repo, "zeta", {"tap": "fixture-tap"})
+        projectlock.set_skill(repo, "alpha", {"tap": "fixture-tap"})
+        projectlock.set_skill(repo, "other", {"tap": "other-tap"})
+        assert registry.project_dependents("fixture-tap") == ["alpha", "zeta"]
+
+    def test_user_rows_are_not_project_dependents(self, repo):
+        lockfile.set_skill("brainstorming", {"tap": "fixture-tap"})
+        assert registry.project_dependents("fixture-tap") == []
+        assert registry.dependents("fixture-tap") == [
+            ("skill", "brainstorming")]
 
 
 class TestUpdate:

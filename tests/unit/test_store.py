@@ -3686,17 +3686,18 @@ class TestProjectSkills:
 
     def test_already_installed_hint_names_a_command_that_exists(self, entry,
                                                                 tmp_path):
-        """`reinstall --local` exits 2 and bare `reinstall` cannot see a repo.
+        """Bare `reinstall` cannot see a repo; `reinstall --local` can.
 
         The hint is the only route the error offers, so it has to be the one
-        the README documents and the CLI accepts.
+        the CLI accepts. `reinstall --local` reads the repo's lock, so it
+        reaches the recorded tap where `install x --local --force` stops at
+        "exists in multiple taps" once two taps ship the name.
         """
         repo, _ = self._install(entry, tmp_path)
         with pytest.raises(BoostError) as err:
             store.install(entry, scope="project", base=str(repo))
         assert "already installed in this project" in err.value.message
-        assert err.value.hint == "`boost install brainstorming --local --force` to force"
-        assert "reinstall" not in (err.value.hint or "")
+        assert err.value.hint == "`boost reinstall brainstorming --local` to force"
 
     def test_uninstall_refuses_a_path_outside_the_project(self, entry, tmp_path):
         """The lock is committed, so its paths are input — never trusted."""

@@ -284,12 +284,13 @@ def _untap_one(name: str, force: bool) -> int:
     except BoostError as exc:
         out.warn("could not untap %s: %s" % (name, exc.message))
         return 1
-    dependent = registry.dependents(tap.name)
-    if dependent:
-        labels = [n if kind == "skill" else "%s (%s)" % (n, kind)
-                  for kind, n in dependent]
+    labels = [n if kind == "skill" else "%s (%s)" % (n, kind)
+              for kind, n in registry.dependents(tap.name)]
+    labels += ["%s (project)" % n
+               for n in registry.project_dependents(tap.name)]
+    if labels:
         out.warn("%d installed item(s) from %s: %s"
-                 % (len(dependent), tap.name, ", ".join(labels)))
+                 % (len(labels), tap.name, ", ".join(labels)))
         out.warn("installed items keep working but lose their update source")
         if not force and not out.confirm("untap %s anyway?" % tap.name):
             out.info("cancelled")
