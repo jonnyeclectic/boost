@@ -4171,6 +4171,12 @@ def backfill_row_hashes(dry: bool = False) -> list[str]:
     is gone, are named with the reinstall that records them. One lock write
     for the lot. Returns one line per item, in the tense of ``dry``.
     """
+    # Only a lock sync may write: :func:`lockfile.write` stamps the current
+    # schema, so stamping rows into a newer one (which `refuse_corrupt` lets
+    # through) rewrote a v4 lock as v3 under the line saying sync records
+    # nothing. An "older" lock is ok, and is migrated before this runs.
+    if not lockfile.check().ok:
+        return []
     lines: list[str] = []
     stamps: dict[tuple[str, str], dict[str, str]] = {}
     for kind, section in (("rule", "rules"), ("workflow", "workflows")):

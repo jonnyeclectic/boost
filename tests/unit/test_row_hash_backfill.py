@@ -241,3 +241,39 @@ def test_a_row_for_a_disabled_agent_is_left_alone(boost, items):
         cfg["agents"][agent]["enabled"] = False
     config.save(cfg)
     assert store.backfill_row_hashes() == []
+
+
+@pytest.mark.parametrize("raw_version", [4, "3"])
+def test_a_lock_sync_refuses_is_not_stamped(boost, items, raw_version):
+    """A newer or unknown schema is `boost replay`'s: stamping a row into it
+    went through `lockfile.write`, which restamped the lock as v3 under the
+    line saying sync records nothing."""
+    _age()
+    lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+    lock["version"] = raw_version
+    paths.lockfile_path().write_text(json.dumps(lock), encoding="utf-8")
+    before = paths.lockfile_path().read_bytes()
+    assert store.backfill_row_hashes(dry=True) == []
+    assert store.backfill_row_hashes() == []
+    diff = boost("sync", "--diff")
+    assert "would record the hash" not in diff.out
+    r = boost("sync", expect=1)
+    assert "recorded the hash" not in r.out
+    assert paths.lockfile_path().read_bytes() == before
+
+
+def test_an_older_lock_is_migrated_and_backfilled_in_one_sync(boost, items):
+    _age()
+    lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+    del lock["version"]
+    paths.lockfile_path().write_text(json.dumps(lock), encoding="utf-8")
+    # The preview of an older lock still names the rows sync will record.
+    assert store.backfill_row_hashes(dry=True) == [
+        "would record the hash of rule house's %s"
+        % _files(len(items[("rules", "house")])),
+        "would record the hash of workflow ship-it's %s"
+        % _files(len(items[("workflows", "ship-it")]))]
+    boost("sync")
+    assert lockfile.check() == (True, None, 3)
+    assert _rows("rules", "house") == items[("rules", "house")]
+    assert _rows("workflows", "ship-it") == items[("workflows", "ship-it")]
