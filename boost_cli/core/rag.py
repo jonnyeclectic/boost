@@ -1998,6 +1998,31 @@ def retrieve_any(query: str, k: int = 60, kind: str | None = None,
     return hits, engine
 
 
+HEURISTIC_ENGINE = "heuristic relevance"
+
+
+def retrieve_or_fallback(query: str, k: int, kind: str | None = None,
+                         ) -> tuple[list[Hit], str]:
+    """``retrieve_any`` with ``boost search``'s fallback: never ``None``.
+
+    For a library caller that has no "no index" branch of its own. When the
+    index cannot be made current (:func:`ensure` swallows every build failure
+    and answers False — a read-only cache dir, a corrupt postings file) or no
+    index answers, rank with ``catalog.search`` exactly as ``cmd_search`` does,
+    narrowed to ``kind`` and cut to ``k``. Returning ``[]`` there instead told
+    a chain "nothing matches" about items the CLI found on the same machine.
+    An empty list therefore means nothing matched or nothing is tapped.
+    """
+    if ensure():
+        hits, engine = retrieve_any(query, k=k, kind=kind)
+        if hits is not None:
+            return hits, engine
+    scored = [(e, s) for e, s in catalog.search(query)
+              if kind is None or e.get("kind", "skill") == kind]
+    return ([Hit(entry=e, score=float(s)) for e, s in scored[:k]],
+            HEURISTIC_ENGINE)
+
+
 def search(query: str, limit: int = 10, kind: str | None = None,
            smart: bool = True,
            entries: list[dict] | None = None) -> tuple[list[Hit], str] | None:

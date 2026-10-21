@@ -58,9 +58,54 @@ def test_from_installed_rejects_unsafe_names(sandbox):
 
 
 def test_missing_skill_raises_a_clear_error(sandbox):
-    loader = SkillMarkdownLoader.from_installed("never-installed")
-    with pytest.raises(FileNotFoundError):
-        loader.load()
+    # Declined at from_installed, naming the skill and the scope it is absent
+    # from — not a bare FileNotFoundError on a store path at load().
+    from boost_cli.core import paths
+    from boost_cli.errors import BoostError
+    with pytest.raises(BoostError) as excinfo:
+        SkillMarkdownLoader.from_installed("never-installed")
+    assert str(excinfo.value) == (
+        "never-installed is not installed in user scope (the canonical "
+        "store, %s)" % paths.store_dir())
+    assert excinfo.value.hint == "boost install never-installed"
+
+
+def test_a_tapped_but_uninstalled_skill_is_declined(indexed):
+    from boost_cli.errors import BoostError
+    with pytest.raises(BoostError, match=r"^brainstorming is not installed "):
+        SkillMarkdownLoader.from_installed("brainstorming")
+
+
+def test_a_project_only_install_names_its_scope_and_copy(indexed):
+    from boost_cli.core import catalog, integrity, scopes, store
+    from boost_cli.errors import BoostError
+    base = scopes.resolve_base(scopes.SCOPE_PROJECT)
+    store.install(catalog.resolve_one("brainstorming"),
+                  scope=scopes.SCOPE_PROJECT, base=base)
+    _base, project = integrity.project_skills()
+    local = integrity.project_skill_dir(project["brainstorming"], _base)
+    assert local is not None
+    with pytest.raises(BoostError) as excinfo:
+        SkillMarkdownLoader.from_installed("brainstorming")
+    assert str(excinfo.value) == (
+        "brainstorming is installed only in project scope, at %s — "
+        "from_installed reads the user-scope canonical store" % local)
+    assert excinfo.value.hint == (
+        "load the project copy with SkillMarkdownLoader(%r)" % str(local))
+    # ...and the hint's loader works.
+    assert SkillMarkdownLoader(local).load()[0].metadata["name"] == "brainstorming"
+
+
+def test_an_unmanaged_store_copy_still_loads(sandbox):
+    # A skill dropped into the store by hand has no lock row; the decline is
+    # for an absent skill, not an unmanaged one.
+    from boost_cli.core import paths
+    d = paths.store_dir() / "hand-made"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: hand-made\n---\nbody\n",
+                                encoding="utf-8")
+    docs = SkillMarkdownLoader.from_installed("hand-made").load()
+    assert docs[0].page_content.strip() == "body"
 
 
 def test_from_installed_declines_a_rule_by_kind(sandbox):
