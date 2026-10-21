@@ -152,6 +152,18 @@ def test_reset_detaches_handlers(env):
     assert not logs.get_logger().handlers
 
 
+def test_reset_forgets_configuration_exactly(env):
+    # `is False`, not falsiness: a reset that leaves None or a stale debug
+    # flag survives every behavioural test for minutes per mutant, which is
+    # what ran the mutation shard into its runner's limits.
+    logs.configure(debug=True)
+    assert logs._configured is True
+    assert logs._debug_console is True
+    logs.reset()
+    assert logs._configured is False
+    assert logs._debug_console is False
+
+
 def test_configure_is_idempotent(env):
     logs.configure()
     first = list(logs.get_logger().handlers)
