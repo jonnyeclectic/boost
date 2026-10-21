@@ -346,7 +346,7 @@ class TestUninstall:
         assert "unlinked ← claude-code · windsurf · cursor" in r.out
         assert "Uninstalled 2 skills" in r.out
         assert "╭─ removed" in r.out               # D13: framed summary card
-        assert not paths.lockfile_path().exists()
+        assert _lock() == {}
         assert not (paths.store_dir() / "brainstorming").exists()
         assert not (paths.store_dir() / "commit-messages").exists()
 
@@ -372,7 +372,7 @@ class TestUninstall:
         r = boost("uninstall", "brainstorming")
         assert "uninstall brainstorming? [y/N]" in r.out
         assert "Uninstalled 1 skill" in r.out
-        assert not paths.lockfile_path().exists()
+        assert _lock() == {}
 
     def test_the_prompt_says_when_the_store_holds_the_only_copy(
             self, boost, installed, monkeypatch):
@@ -411,7 +411,7 @@ class TestUninstall:
         r = boost("uninstall", "brainstorming", "-y")
         assert "uninstall brainstorming?" not in r.out
         assert "Uninstalled 1 skill" in r.out
-        assert not paths.lockfile_path().exists()
+        assert _lock() == {}
 
     def test_non_interactive_uninstall_still_works(self, boost, installed,
                                                    monkeypatch):
@@ -425,7 +425,7 @@ class TestUninstall:
         assert "uninstall brainstorming?" not in r.out
         assert "cancelled" not in r.out
         assert "Uninstalled 1 skill" in r.out
-        assert not paths.lockfile_path().exists()
+        assert _lock() == {}
 
     def test_closed_stdin_uninstall_proceeds(self, boost, installed,
                                              monkeypatch):
@@ -438,7 +438,7 @@ class TestUninstall:
         assert r.rc == 0
         assert "uninstall brainstorming?" not in r.out
         assert "Uninstalled 1 skill" in r.out
-        assert not paths.lockfile_path().exists()
+        assert _lock() == {}
 
     def test_rule_uninstall_says_removed_from_not_unlinked(
             self, boost, fixture_tap_src, tmp_path):
@@ -2072,7 +2072,7 @@ class TestSnapshot:
         assert snap_id in r.out and "before-wipe" in r.out
 
         boost("uninstall", "brainstorming")
-        assert not paths.lockfile_path().exists()
+        assert _lock() == {}
         assert not (paths.store_dir() / "brainstorming").exists()
 
         r = boost("snapshot", "restore", snap_id)
