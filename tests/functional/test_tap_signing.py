@@ -14,7 +14,7 @@ import subprocess
 
 import pytest
 
-from boost_cli.core import policy
+from boost_cli.core import paths, policy
 
 
 def _git(*args, cwd):
@@ -218,7 +218,25 @@ def test_unsigned_tap_refused_when_signing_required(boost, fixture_tap_src,
     r = boost("tap", dst, expect=1)
     assert "provenance policy" in (r.out + r.err)
     assert "unsigned" in (r.out + r.err)
+    assert "boost trust add" in (r.out + r.err)
+    assert "repair policy.json" not in (r.out + r.err)
     assert boost("taps").out.count("plain") == 0     # nothing recorded
+
+
+def test_unreadable_policy_value_refusal_hints_the_repair(boost, fixture_tap_src,
+                                                         tmp_path):
+    # Trusting a key would not get past an unreadable value, so the hint
+    # names the repair instead of `boost trust add`.
+    p = paths.policy_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('{"pin_only": "frozen"}', encoding="utf-8")
+    dst = tmp_path / "plain"
+    shutil.copytree(fixture_tap_src, dst)
+    r = boost("tap", dst, expect=1)
+    assert "pin_only" in (r.out + r.err)
+    assert "repair policy.json first" in (r.out + r.err)
+    assert "boost trust add" not in (r.out + r.err)
+    assert boost("taps").out.count("plain") == 0
 
 
 def test_signed_trusted_tap_accepted_when_required(boost, fixture_tap_src,

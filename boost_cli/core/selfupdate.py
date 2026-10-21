@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -29,7 +28,7 @@ import urllib.request
 from pathlib import Path
 
 from ..errors import BoostError
-from . import gitutil, nethttp, paths
+from . import gitutil, nethttp, paths, typedvalue
 
 DIST = "boost-skill-cli"
 
@@ -172,7 +171,7 @@ def latest_version(timeout: float = 10.0) -> str | None:
     ``BOOST_NO_AI`` / ``BOOST_NO_SEED``: an air-gapped user (or a test) can
     guarantee nothing leaves the machine.
     """
-    if os.environ.get("BOOST_NO_NET"):
+    if typedvalue.env_flag("BOOST_NO_NET", unknown=True):
         return None
     # S310 is suppressed below: PYPI_JSON is a module constant with an https
     # scheme and no caller-controlled component.

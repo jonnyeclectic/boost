@@ -65,7 +65,14 @@ Each `Document`'s `page_content` is the item's *indexed text* — its name and
 one-line description followed by the full body, i.e. exactly the surface BM25
 scored, so what you retrieve is what matched (pass `full_content=False` for
 just the description). `metadata` carries
-`name` / `kind` / `tap` / `path` / `version` / `source` / `engine`.
+`name` / `kind` / `tap` / `path` / `version` / `source` / `has_body` / `engine`.
+
+Three of those say *absent* rather than guess. `version` is what the item's
+file declares, and `""` when it declares none — never the `0.0.0` the catalog
+sorts by. `has_body` is True only when `page_content` really carries the body:
+it is False for `full_content=False`, and for a hit whose file is not on disk
+(a tap restored by `boost catalog --import` without its clone still ranks on
+its name and description). `source` is `""` whenever there is no file to open.
 
 `path` and `source` are the same file seen two ways, and picking the wrong one
 is a quiet bug. **`path`** is tap-relative (`skills/brainstorming/SKILL.md`) —
@@ -106,11 +113,15 @@ ladder:
   extra installed the two engines are fused by reciprocal rank fusion; a
   Voyage or OpenAI key improves embedding quality but a local model ships
   with the extra.
+- **No buildable index still answers.** If the index cannot be built (a
+  read-only cache dir, say) the retriever ranks the catalog the way
+  `boost search` does and reports `"heuristic relevance"`.
 - **Nothing tapped means `[]`, not an exception** — a chain keeps running
   without boost context rather than crashing on it.
 
 `metadata["engine"]` names which engine actually answered
-(`"BM25 full-content"`, `"dense vectors"`, or `"hybrid RRF (BM25 + dense)"`).
+(`"BM25 full-content"`, `"dense vectors"`, `"hybrid RRF (BM25 + dense)"`, or
+`"heuristic relevance"`).
 
 ## LangGraph: skills as mid-run procedures
 
@@ -144,7 +155,8 @@ from boost_langchain import SkillMarkdownLoader
 # From a path (a SKILL.md, or a directory containing one):
 doc = SkillMarkdownLoader("path/to/skill").load()[0]
 
-# From boost's canonical store, for a skill you already installed:
+# From boost's canonical store, for a skill you already installed
+# (a name not installed in user scope raises BoostError saying so):
 doc = SkillMarkdownLoader.from_installed("brainstorming").load()[0]
 
 doc.page_content        # the markdown body, frontmatter stripped

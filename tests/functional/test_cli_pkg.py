@@ -1867,6 +1867,52 @@ class TestImport:
         assert "pr-me" in prompt and "pr-too" in prompt
         assert "fresh" not in _lock()
 
+    def _mixed_repo(self, tmp_path, skills=("alpha",)):
+        root = tmp_path / "repo1"
+        for n in skills:
+            _skill_dir(root / "skills", n)
+        (root / "commands").mkdir(parents=True)
+        (root / "commands" / "deploy.md").write_text(
+            "---\ndescription: a deploy command\n---\n\nDeploy.\n",
+            encoding="utf-8")
+        return root
+
+    def test_a_workflow_beside_one_skill_is_skipped_by_name(
+            self, boost, sandbox, tmp_path):
+        # It was counted as a second skill, so the run stopped at
+        # "multiple skills found" and listed `deploy` as one.
+        root = self._mixed_repo(tmp_path)
+        r = boost("import", root)
+        assert _flat(r.out).startswith(
+            "skipping deploy (workflow) — boost import takes skills; rules "
+            "and workflows install from a tap: `boost tap %s`, then "
+            "`boost install NAME`" % root)
+        assert sorted(_lock()) == ["alpha"]
+
+    def test_import_all_imports_exactly_the_skills(self, boost, sandbox,
+                                                   tmp_path):
+        # `--all` crashed rc 70 reading commands/SKILL.md, before any skill.
+        root = self._mixed_repo(tmp_path, skills=("alpha", "beta"))
+        r = boost("import", root, "--all")
+        assert "Imported 2 skills" in r.out
+        assert sorted(_lock()) == ["alpha", "beta"]
+
+    def test_name_of_a_workflow_is_an_error_not_a_crash(self, boost, sandbox,
+                                                        tmp_path):
+        root = self._mixed_repo(tmp_path, skills=("alpha", "beta"))
+        r = boost("import", root, "--name", "deploy", expect=1)
+        assert "Error: deploy is a workflow, and boost import takes skills" \
+            in r.err
+        assert "unexpected error" not in r.err
+        assert not paths.lockfile_path().exists()
+
+    def test_a_repo_of_only_workflows_says_where_they_install_from(
+            self, boost, sandbox, tmp_path):
+        root = self._mixed_repo(tmp_path, skills=())
+        r = boost("import", root, expect=1)
+        assert "Error: no SKILL.md found under %s" % root in r.err
+        assert "`boost install NAME`" in _flat(r.err)
+
     def test_dir_with_skill_md(self, boost, sandbox, tmp_path):
         d = _skill_dir(tmp_path, "my-skill")
         r = boost("import", d)
@@ -3425,6 +3471,89 @@ class TestImportProvenance:
         monkeypatch.setattr("tempfile.tempdir", str(scratch))
         boost("import", _URL)
         assert list(scratch.iterdir()) == []
+
+    def test_url_import_off_the_allowlist_is_refused(self, boost, sandbox,
+                                                     url_remote):
+        # Recorded as tap `local`, which the allowlist exempts, so a URL
+        # `boost tap` would refuse imported with a check mark.
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("policy", "set", "allowed_taps", "gov")
+        r = boost("import", _URL, expect=1)
+        assert ("policy blocks installing url-skill: source 'team/skills' is "
+                "not on the allowlist") in " ".join(r.err.split())
+        assert not paths.lockfile_path().exists()   # nothing recorded
+        assert not (paths.store_dir() / "url-skill").exists()
+
+    def test_url_import_on_the_allowlist_still_imports(self, boost, sandbox,
+                                                       url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("policy", "set", "allowed_taps", "team/skills")
+        assert "Imported url-skill" in boost("import", _URL).out
+        assert "policy check passed" in boost("policy", "check").out
+
+    def test_url_import_of_a_blocked_source_is_refused(self, boost, sandbox,
+                                                       url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("policy", "set", "blocked_taps", "team/skills")
+        r = boost("import", _URL, expect=1)
+        assert ("policy blocks installing url-skill: source 'team/skills' is "
+                "blocked") in " ".join(r.err.split())
+
+    def test_url_import_of_an_unsigned_repo_is_refused(self, boost, sandbox,
+                                                       url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("policy", "set", "require_signed_taps", "true")
+        r = boost("import", _URL, expect=1)
+        assert ("policy blocks installing url-skill: source is unsigned (no "
+                ".boost/tap.manifest.minisig), and policy requires a trusted "
+                "signature") in " ".join(r.err.split())
+        assert not (paths.store_dir() / "url-skill").exists()
+
+    def test_url_import_all_refuses_each_skill(self, boost, sandbox, url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo / "skills", "alpha")
+        _skill_dir(repo / "skills", "beta")
+        _commit_all(repo)
+        boost("policy", "set", "allowed_taps", "gov")
+        r = boost("import", _URL, "--all", expect=1)
+        out = " ".join((r.out + r.err).split())
+        assert "alpha: policy blocks installing alpha" in out
+        assert "beta: policy blocks installing beta" in out
+        assert "Imported 0 skills" in out
+
+    def test_reinstall_of_a_url_import_honours_the_allowlist(
+            self, boost, sandbox, url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        boost("policy", "set", "allowed_taps", "gov")
+        r = boost("reinstall", "url-skill", expect=1)
+        assert "source 'team/skills' is not on the allowlist" in " ".join(
+            (r.out + r.err).split())
+
+    def test_policy_check_flags_a_url_import_off_the_allowlist(
+            self, boost, sandbox, url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        boost("policy", "set", "allowed_taps", "gov")
+        r = boost("policy", "check", "--json", expect=1)
+        assert json.loads(r.out)["violations"] == [
+            {"name": "url-skill", "kind": "skill", "skill": "url-skill",
+             "violation": "source 'team/skills' is not on the allowlist"}]
+        # A path import names no source, so it stays exempt.
+        boost("policy", "set", "allowed_taps", "team/skills")
+        assert "policy check passed" in boost("policy", "check").out
 
     def test_local_import_records_an_absolute_source(self, boost, sandbox,
                                                      tmp_path, monkeypatch):

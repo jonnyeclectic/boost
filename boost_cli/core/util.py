@@ -23,7 +23,7 @@ from . import paths
 IGNORED = {".git", "__pycache__", ".DS_Store"}
 
 
-def _clear_readonly_and_retry(func, path, exc) -> None:
+def _clear_readonly_and_retry(func, path, exc, root=None) -> None:
     """Clear a read-only bit and retry the failed operation — never on a link.
 
     ``os.chmod`` follows symlinks, and the path handed to this hook is the one
@@ -59,6 +59,17 @@ def _clear_readonly_and_retry(func, path, exc) -> None:
     """
     if os.path.islink(path) or func not in _RETRYABLE:
         raise exc
+    # On POSIX the *parent's* write bit is what gates an unlink or rmdir, so
+    # a skill copied from a read-only package (a 0o555 ``assets/``) could not
+    # be uninstalled: chmod-ing the file it held changed nothing and the retry
+    # failed again. Only a parent inside ``root``, the tree being deleted: the
+    # directory that *holds* the tree is not this delete's to unlock (a
+    # read-only skill store is a refusal doctor reports, not a mode to undo),
+    # and never through a link.
+    parent = os.path.normpath(os.path.dirname(path))
+    if (root is not None and _inside_tree(parent, root)
+            and not os.path.islink(parent)):
+        os.chmod(parent, os.lstat(parent).st_mode | stat.S_IWUSR)
     # OR the bit in: setting the mode to exactly S_IWRITE also stripped read
     # and search, so a retry that failed anyway (a read-only *parent*) left a
     # ``d-w-------`` directory behind that every later walk of it crashed on.
@@ -70,6 +81,16 @@ def _clear_readonly_and_retry(func, path, exc) -> None:
 _RETRYABLE = (os.unlink, os.remove, os.rmdir)
 
 
+def _inside_tree(path: str, root: str) -> bool:
+    """True if ``path`` is ``root`` or under it, compared as spelled.
+
+    Lexical on purpose: ``shutil.rmtree`` builds every path it reports by
+    joining onto the ``root`` it was given, so no resolving is needed.
+    """
+    root = os.path.normpath(root)
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
 def rmtree(path) -> None:
     """``shutil.rmtree`` that survives read-only files.
 
@@ -77,9 +98,12 @@ def rmtree(path) -> None:
     owner unlink a read-only file (permission lives on the directory), but
     Windows refuses outright. Clear the read-only bit and retry once per
     failure. ``onexc`` is the 3.12+ spelling; the ``onerror`` branch this used
-    to carry was dead the moment the floor moved to 3.12.
+    to carry was dead the moment the floor moved to 3.12. A read-only
+    directory *inside* the tree is unlocked too; the one holding it is not.
     """
-    shutil.rmtree(str(path), onexc=_clear_readonly_and_retry)
+    root = str(path)
+    shutil.rmtree(root, onexc=lambda func, p, exc:
+                  _clear_readonly_and_retry(func, p, exc, root=root))
 
 
 def remove_path(path) -> bool:
@@ -656,9 +680,92 @@ def check_item_name(name: str, kind: str = "skill") -> str:
     install — a staging ``mkdtemp`` (hinted as "free space") or a workflow's
     temp file (a crash). Asked up front, against the longest file name the
     install would write for that kind.
+
+    It is also the one answer to "is this a name boost installs under?":
+    a name that is not a safe path component is refused here with a hint,
+    rather than later as a bare "invalid skill name" from the store, and
+    `boost lint` asks the same question through :func:`item_name_error`.
     """
+    if not is_safe_component(name):
+        raise BoostError("invalid %s name %r" % (kind, name), hint=NAME_RULE_HINT)
     _check_component(name + _ITEM_SUFFIX.get(kind, ".toml"), "%s name" % kind)
     return name
+
+
+#: What a valid item name may contain, said once for every refusal of one.
+NAME_RULE_HINT = ("a name may use only letters, digits, '.', '_' and '-' "
+                  "(e.g. my-skill)")
+
+
+def item_name_error(name: str, kind: str = "skill") -> str | None:
+    """Why ``name`` cannot be installed as a ``kind``, or None when it can.
+
+    :func:`check_item_name` as a predicate, for a caller that reports rather
+    than raises — `boost lint`, whose pass has to mean `boost import` takes
+    the skill as written.
+    """
+    try:
+        check_item_name(name, kind)
+    except BoostError as exc:
+        return str(exc)
+    return None
+
+
+def frontmatter_text(meta: dict, key: str) -> str:
+    """A scalar frontmatter field as stripped text; a nested map reads as "".
+
+    `frontmatter.parse_block` keeps `author:`/`metadata:`-style maps as dicts,
+    and `str()` of one would put a Python repr into a name or description.
+    This is the reading the catalog indexes (`catalog._text`), so lint scores
+    the same text search will show.
+    """
+    val = meta.get(key)
+    if isinstance(val, dict):
+        return ""
+    return str(val or "").strip()
+
+
+def _yaml_kind(val: object) -> str:
+    if isinstance(val, dict):
+        return "a map"
+    if isinstance(val, list):
+        return "a list"
+    if isinstance(val, bool):
+        return "a boolean"
+    return "a number" if isinstance(val, int | float) else type(val).__name__
+
+
+def string_field_error(meta: dict, key: str) -> str | None:
+    """Why frontmatter ``key`` is not a usable string, or None when it is.
+
+    Missing (absent, empty, blank) and present-but-not-a-string are different
+    faults: `description:` written as a map, or `name: true`, is truthy, so a
+    presence check passed it, while the catalog reads a map as "" (and falls
+    back to the body's first line) and a bool as ``"True"``.
+    """
+    val = meta.get(key)
+    if val is None or (isinstance(val, str) and not val.strip()):
+        return "missing required field: %s" % key
+    if not isinstance(val, str):
+        return "`%s` must be a string, not %s" % (key, _yaml_kind(val))
+    return None
+
+
+def frontmatter_name(meta: dict, default: str) -> str:
+    """The name a local install reads from ``meta``, else ``default``.
+
+    Raises BoostError for a name that is present but not a string: `name:
+    [a, b]` used to install as ``"['a', 'b']"`` (refused as a path) and
+    `name: true` as ``True``, a name the SKILL.md never says.
+    """
+    val = meta.get("name")
+    if val is None or val == "":
+        return default
+    if not isinstance(val, str):
+        raise BoostError("frontmatter `name` must be a string, not %s"
+                         % _yaml_kind(val),
+                         hint="write it as plain text, e.g. `name: my-skill`")
+    return val.strip() or default
 
 
 def check_path_length(path: Path, *, what: str = "path") -> Path:
@@ -749,15 +856,41 @@ def safe_component(name: str) -> str:
     return name if is_safe_component(name) else slugify(name)
 
 
+def _hashed_files(root: Path) -> list[Path]:
+    """The files :func:`sha256_dir` and :func:`exec_bits` read, sorted."""
+    return sorted(
+        p for p in root.rglob("*")
+        if p.is_file() and not any(part in IGNORED for part in p.parts)
+    )
+
+
+def exec_bits(path: Path) -> list[str] | None:
+    """The files under ``path`` whose owner exec bit is set, as sorted
+    relative POSIX paths — the same files :func:`sha256_dir` hashes.
+
+    A mode is not content, so :func:`sha256_dir` does not see one: a script
+    made executable upstream read as up to date, and a ``chmod -x`` on the
+    store copy passed `verify`. Kept apart from the hash rather than folded
+    into it, so every lock row written before this still verifies; a row
+    records this list as ``exec`` (see :func:`integrity.exec_drifted`).
+
+    None on Windows, which has no exec bit: ``os.stat`` reports one by
+    extension, so a project lock written on a Mac would read every script
+    as modified there, and the reverse. None is recorded and compared as
+    "unknown", never as an empty list.
+    """
+    if os.name == "nt":
+        return None
+    root = Path(path)
+    return [f.relative_to(root).as_posix() for f in _hashed_files(root)
+            if f.stat().st_mode & stat.S_IXUSR]
+
+
 def sha256_dir(path: Path) -> str:
     """Deterministic content hash of a directory tree (paths + bytes)."""
     h = hashlib.sha256()
     root = Path(path)
-    files = sorted(
-        p for p in root.rglob("*")
-        if p.is_file() and not any(part in IGNORED for part in p.parts)
-    )
-    for f in files:
+    for f in _hashed_files(root):
         h.update(f.relative_to(root).as_posix().encode())
         h.update(b"\0")
         h.update(f.read_bytes())
@@ -901,11 +1034,11 @@ def score_skill(skill_dir: Path) -> tuple[int, list[str]]:
     meta, body = frontmatter.parse(text)
     score = 20  # exists and parses
 
-    if meta.get("name"):
+    if frontmatter_text(meta, "name"):
         score += 10
     else:
         notes.append("frontmatter missing `name`")
-    desc = str(meta.get("description") or "")
+    desc = frontmatter_text(meta, "description")
     if desc:
         score += 10
         if len(desc) >= 40:
@@ -975,12 +1108,49 @@ def lint_errors(skill_dir: Path) -> list[str]:
     if frontmatter.unclosed(text):
         return [frontmatter.UNCLOSED_NOTE]
     meta, _body = frontmatter.parse(text)
-    errors = []
-    if not meta.get("name"):
-        errors.append("missing required field: name")
-    if not meta.get("description"):
-        errors.append("missing required field: description")
+    errors = [e for e in (string_field_error(meta, "name"),
+                          string_field_error(meta, "description")) if e]
+    name = meta.get("name")
+    if isinstance(name, str) and name.strip():
+        # The name `boost import` would install under — the same check, so a
+        # pass here means import takes the skill as written (and a tap
+        # install does not silently slug it into a name the file never says).
+        bad = item_name_error(name.strip())
+        if bad:
+            errors.append(bad)
     return errors
+
+
+def lint_label(skill_dir: Path) -> str:
+    """The name to show for a skill dir in `boost lint`: the one boost installs
+    it under (its frontmatter `name`), falling back to the directory."""
+    from . import frontmatter
+
+    try:
+        text = (Path(skill_dir) / "SKILL.md").read_text(encoding="utf-8",
+                                                        errors="replace")
+    except OSError:
+        return Path(skill_dir).name
+    if frontmatter.unclosed(text):
+        return Path(skill_dir).name
+    name = frontmatter.parse(text)[0].get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return Path(skill_dir).name
+
+
+def name_dir_note(skill_dir: Path) -> str | None:
+    """A note when a skill's frontmatter `name` differs from its directory.
+
+    Not an error — boost installs under the frontmatter name either way — but
+    the Agent Skills format expects the two to match, and an author linting
+    `skills/mismatch` should learn it installs as something else.
+    """
+    label = lint_label(skill_dir)
+    if label == Path(skill_dir).name:
+        return None
+    return "name %r differs from its directory %r — it installs as %r" % (
+        label, Path(skill_dir).name, label)
 
 
 def lint_failed(skill_dir: Path, score: int, min_score: int = 40) -> bool:

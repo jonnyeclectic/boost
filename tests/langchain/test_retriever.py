@@ -179,3 +179,60 @@ def test_a_zero_k_is_rejected_through_the_graph_node_too(sandbox):
     from boost_langchain import skill_context_node
     with pytest.raises(ValidationError):
         skill_context_node(k=0)
+
+
+def test_a_failed_index_build_falls_back_like_boost_search(
+        sandbox, fixture_tap_src, monkeypatch):
+    """`boost search` ranks the catalog when the index cannot be built; so must
+    the retriever. ensure() swallows the build failure, and answering [] there
+    told a chain that nothing matched an item the CLI found."""
+    from boost_cli.core import catalog, rag, registry
+    catalog.rebuild_tap(registry.add(str(fixture_tap_src)))
+
+    def boom():
+        raise OSError("read-only cache dir")
+
+    monkeypatch.setattr(rag, "build", boom)
+    docs = BoostRetriever(k=1).invoke("brainstorming")
+    assert [d.metadata["name"] for d in docs] == ["brainstorming"]
+    assert docs[0].metadata["engine"] == "heuristic relevance"
+    assert docs[0].metadata["has_body"] is True
+    rules = BoostRetriever(kind="rule").invoke("python")
+    assert [d.metadata["name"] for d in rules] == ["python-style"]
+
+
+def test_has_body_marks_full_content_and_description_hits(indexed):
+    query = "structured divergent thinking ideation"
+    assert BoostRetriever(k=1).invoke(query)[0].metadata["has_body"] is True
+    assert BoostRetriever(
+        k=1, full_content=False).invoke(query)[0].metadata["has_body"] is False
+
+
+def test_a_missing_file_is_marked_not_passed_off_as_the_body(indexed, tmp_path):
+    """A tap whose clone is gone (what `boost catalog --import` leaves) still
+    ranks on its catalog metadata. The document must say the body is absent,
+    and ``source`` must not name a file nobody read."""
+    import os
+    from pathlib import Path
+
+    query = "structured divergent thinking ideation"
+    src = Path(BoostRetriever(k=1).invoke(query)[0].metadata["source"])
+    clone = src.parents[2]          # <clone>/skills/brainstorming/SKILL.md
+    os.rename(clone, tmp_path / "moved-clone")
+    doc = BoostRetriever(k=1).invoke(query)[0]
+    assert doc.metadata["name"] == "brainstorming"
+    assert doc.page_content == (
+        "brainstorming\nStructured ideation & divergent-thinking facilitation")
+    assert doc.metadata["has_body"] is False
+    assert doc.metadata["source"] == ""
+    # `path` still names the upstream file: it is provenance, not a claim
+    # that anything here was read.
+    assert doc.metadata["path"] == "skills/brainstorming/SKILL.md"
+
+
+def test_an_undeclared_version_is_empty_not_the_placeholder(indexed):
+    # The rule fixture declares no version; the catalog stamps 0.0.0 on it.
+    doc = BoostRetriever(kind="rule", k=1).invoke(
+        "python formatting conventions")[0]
+    assert doc.metadata["name"] == "python-style"
+    assert doc.metadata["version"] == ""

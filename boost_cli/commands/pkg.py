@@ -40,6 +40,7 @@ from ..core import (
     snapshot,
     staleness,
     store,
+    typedvalue,
     updatediff,
     util,
 )
@@ -119,7 +120,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     command it cannot run.
     """
     rows = res.mcp_servers
-    if not rows or no_mcp or os.environ.get("BOOST_NO_MCP_OFFER"):
+    if not rows or no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
         return
     from ..core import mcpdecl, scopes
     # A project-scoped install already recorded these in the repo's .mcp.json
@@ -613,7 +614,7 @@ def cmd_install(argv: list[str]) -> int:
         # predict. See agents.workflow_agents.
         mat_sets = {"rule": agents.materializing_agents(mbase),
                     "workflow": agents.workflow_agents(mbase)}
-        offer_mcp = not args.no_mcp and not os.environ.get("BOOST_NO_MCP_OFFER")
+        offer_mcp = not args.no_mcp and not typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True)
         mcp_hosts = [h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))] \
             or mcphost.hosts()
         for e in entries:
@@ -693,6 +694,8 @@ def cmd_install(argv: list[str]) -> int:
                 # past it, a seen record is one --force overwrites.
                 seen = store.check_existing(e, force=args.force,
                                             scope=args.scope)
+                # The run's refusal, ahead of the header, as the branches above.
+                store.refuse_unreachable_skill(only, e["name"])
                 verb = "reinstall" if seen else "install"
                 # The lock's recorded scope, replayed exactly as `store.install`
                 # replays it before calling `link_agents` — the same two steps
@@ -739,6 +742,9 @@ def cmd_install(argv: list[str]) -> int:
             out.heading("%s v%s (%s)"
                         % (e["name"], out.plain(e["version"]), e["tap"]))
         try:
+            if (args.scope != scopes.SCOPE_PROJECT
+                    and e.get("kind", "skill") == "skill"):
+                store.refuse_unreachable_skill(only, e["name"])
             res = store.install(e, force=args.force, only_agents=only,
                                 scope=args.scope, as_skill=args.as_skill)
         except BoostError as err:
@@ -1134,7 +1140,7 @@ def cmd_sync(argv: list[str]) -> int:
     # own confirm so the two are never approved as one.
     oos = plan["out_of_scope_links"]
     if args.prune and oos:
-        go = (args.yes or bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
+        go = (args.yes or typedvalue.env_flag("BOOST_ASSUME_YES") if args.json else
               args.yes or out.confirm("Remove %s outside their declared scope: %s?"
                           % (_plural(len(oos), "link"),
                              ", ".join("%s → %s" % (n, a) for n, a in oos))))
@@ -1315,7 +1321,7 @@ def _go(args, prompt: str) -> bool:
     """A `--prune` confirm: `--yes` or BOOST_ASSUME_YES skip it, and `--json`
     never prompts, since a question on stdout would break the JSON after it."""
     if args.json:
-        return args.yes or bool(os.environ.get("BOOST_ASSUME_YES"))
+        return args.yes or typedvalue.env_flag("BOOST_ASSUME_YES")
     return args.yes or out.confirm(prompt)
 
 
@@ -1482,6 +1488,27 @@ def _refresh_line(label: str, old_v: str, new_v: str, edited: bool,
     return msg + (" — local edits discarded" if edited else "")
 
 
+def _source_changed_hold(label: str, name: str, lk: dict, tapname: str) -> bool:
+    """Warn and return True when ``tapname`` now names another repository.
+
+    The tap's same-named item is not this install's upstream, so refreshing
+    from it would replace one item with an unrelated one — and it would do so
+    behind the risky-diff gate that `--yes` waives. Never implicit: `boost
+    reinstall` is the explicit way to take the new source's copy.
+    """
+    try:
+        tap = registry.get(tapname)
+    except BoostError:
+        return False
+    if not registry.source_changed(lk, tap):
+        return False
+    out.warn("%s: not updated — tap %s now points at %s, not %s where it was "
+             "installed; `boost reinstall %s` takes the new source's copy"
+             % (label, tapname, _tilde(tap.url),
+                _tilde(str(lk.get("tap_url"))), name), wrap=True)
+    return True
+
+
 def _update_materialized(kind: str, installed: dict[str, dict], results,
                          discard_edits: bool = False,
                          allow_downgrade: bool = False, *,
@@ -1508,6 +1535,9 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
     for name, lk in sorted(installed.items()):
         tapname = lk.get("tap")
         if tapname in (None, "local") or tapname not in results:
+            continue
+        if _source_changed_hold("%s %s" % (kind, name), name, lk, tapname):
+            held += 1
             continue
         pool = index.get(catalog.split_name(name)[1], [])
         matches = [e for e in catalog.find(name, entries=pool)
@@ -1761,6 +1791,8 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     tapname: str = lk.get("tap") or "local"
     if tapname == "local" or tapname not in results:
         return 0, 0, 0, 0
+    if _source_changed_hold(label, name, lk, tapname):
+        return 0, 1, 0, 0
     pool = index.get(catalog.split_name(name)[1], [])
     matches = [e for e in catalog.find(name, entries=pool)
                if e["tap"] == tapname]
@@ -1776,7 +1808,7 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
         out.warn("%s: %s" % (label, warning))
     old_v = str(lk.get("version", "0.0.0"))
     new_v = str(entry.get("version", "0.0.0"))
-    head, src_sha = "", None
+    head, src_sha, exec_changed = "", None, False
     if not util.semver_gt(new_v, old_v):
         if tapname not in heads:
             heads[tapname] = gitutil.head_commit(registry.get(tapname).path)
@@ -1786,8 +1818,13 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
                 src_sha = store.skill_source_sha(entry)
             except BoostError:
                 return 0, 0, 0, 0
+            exec_changed = store.source_exec_changed(
+                entry, lk, integrity.project_skill_dir(lk, pbase)
+                if scope == scopes.SCOPE_PROJECT
+                else store.skill_store_dir(name))
     reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
-                                       head, lk.get("sha256", ""), src_sha)
+                                       head, lk.get("sha256", ""), src_sha,
+                                       exec_changed)
     if reason is None:
         return 0, 0, 0, 0
     if lk.get("quarantined"):
@@ -2748,9 +2785,26 @@ def _import_root(root: Path, name: str | None, do_all: bool,
 
     if (root / "SKILL.md").exists():
         return one(root, rename=name)
-    entries = catalog.scan_dir(root)
+    # import copies SKILL.md dirs: a rule or workflow is one file with no
+    # SKILL.md, and offering one crashed every path that read it as a skill.
+    entries: list[dict] = []
+    others: list[dict] = []
+    for e in catalog.scan_dir(root):
+        (entries if e.get("kind", "skill") == "skill" else others).append(e)
+    other_hint = "rules and workflows install from a tap: `boost tap %s`, " \
+        "then `boost install NAME`" % display
+    if name and not do_all:
+        clash = [e for e in others if e["name"] == name]
+        if clash and not any(e["name"] == name for e in entries):
+            raise BoostError("%s is a %s, and boost import takes skills"
+                             % (name, clash[0]["kind"]), hint=other_hint)
     if not entries:
-        raise BoostError("no SKILL.md found under %s" % display)
+        raise BoostError("no SKILL.md found under %s" % display,
+                         hint=other_hint if others else None)
+    if others:
+        out.info("skipping %s — boost import takes skills; %s" % (
+            ", ".join("%s (%s)" % (e["name"], e["kind"]) for e in others),
+            other_hint), wrap=True)
 
     def dir_of(e: dict) -> Path:
         return root if e["rel_dir"] == "." else root / e["rel_dir"]

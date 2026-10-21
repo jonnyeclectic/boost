@@ -29,7 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from . import gitutil, util
+from . import gitutil, lockfile, projectlock, scopes, util
 
 
 @dataclass(frozen=True)
@@ -116,6 +116,39 @@ def tracked_files(repo: Path) -> set[str]:
     """
     out = gitutil.run(["-C", str(repo), "ls-files", "-z"]).stdout
     return {p for p in out.split("\0") if p}
+
+
+def keep_dirs(start=None) -> dict[str, list[str]]:
+    """``{tap: [source_dir, ...]}`` that every lock in view still needs.
+
+    `compact` re-materializes these after narrowing, so routine hashing
+    (`outdated`, `drift`, `doctor`) stays offline once the freight is gone.
+    Reading only the user lock missed a project-scope install: compact
+    narrowed its `scripts/` away, the next `drift` put them back through
+    `store.source_dir_for`, and every compact "freed" the same bytes again.
+    The project is the one the cwd (or ``start``) resolves to, as `boost list`
+    finds it — boost records no list of every project on the machine.
+    """
+    keep: dict[str, list[str]] = {}
+
+    def add(entry: object) -> None:
+        if not isinstance(entry, dict):
+            return
+        rel = entry.get("source_dir")
+        if not rel or not isinstance(rel, str):
+            return
+        dirs = keep.setdefault(str(entry.get("tap", "")), [])
+        if rel not in dirs:
+            dirs.append(rel)
+
+    for section in lockfile.all_installed().values():
+        for entry in section.values():
+            add(entry)
+    base = scopes.resolve_base(scopes.SCOPE_PROJECT, start=start)
+    if base is not None:
+        for entry in projectlock.installed(base).values():
+            add(entry)
+    return keep
 
 
 def _kept_prefixes(keep_dirs: list[str]) -> tuple[str, ...]:

@@ -16,15 +16,19 @@ own type. This module turns that table into a parser: ``coerce("pin_only",
 raises :class:`ValueTypeError` at the setter instead of exit 70 at the next
 install.
 
-The one deliberate asymmetry is :data:`LIST`, which never raises. A list key's
-documented surface is a comma list (``blocked_skills a,b``), so anything that
-is not already a JSON array is split on commas rather than refused — which is
-also what turns ``blocked_skills 42`` from a stored ``42`` (and a later
-``TypeError: argument of type 'int' is not iterable``) into ``["42"]``.
+The one deliberate asymmetry is :data:`LIST`, which almost never raises. A
+list key's documented surface is a comma list (``blocked_skills a,b``), so
+text that is not already a JSON array is split on commas rather than refused —
+which is also what turns ``blocked_skills 42`` from a stored ``42`` (and a
+later ``TypeError: argument of type 'int' is not iterable``) into ``["42"]``.
+The exception is text that opens like JSON (``{`` or ``[``) and is not an
+array: split, ``{"a": true}`` became a one-item blocklist naming no skill.
 """
 from __future__ import annotations
 
 import json
+import os
+import sys
 from typing import Any
 
 #: Spec names. A spec is a plain string so the tables that use it stay readable
@@ -125,14 +129,22 @@ def _as_int(key: str, raw: str, spec: str) -> int:
         raise ValueTypeError(key, raw, spec) from e
 
 
-def _as_list(raw: str) -> list:
-    """A JSON array as written, else the comma split. Never raises."""
+def _as_list(key: str, raw: str) -> list:
+    """A JSON array as written, else the comma split.
+
+    Text that opens like JSON — ``{`` or ``[`` — and is not an array is
+    refused rather than split: ``'{"cowboy-coding": true}'`` became the
+    one-item list ``['{"cowboy-coding": true}']``, a blocklist naming no
+    skill, set behind a check mark.
+    """
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         parsed = None
     if isinstance(parsed, list):
         return parsed
+    if raw.lstrip().startswith(("{", "[")):
+        raise ValueTypeError(key, raw, LIST)
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
@@ -172,7 +184,7 @@ def coerce(key: str, raw: str, spec: str) -> Any:
     if spec == INT_OR_NONE:
         return None if raw.strip().lower() in NONE_WORDS else _as_int(key, raw, INT_OR_NONE)
     if spec == LIST:
-        return _as_list(raw)
+        return _as_list(key, raw)
     if spec == STR:
         return raw
     if spec == DICT:
@@ -218,3 +230,45 @@ def adapt(key: str, value: Any, spec: str) -> Any:
     if isinstance(value, str):
         return coerce(key, value, spec)
     raise ValueTypeError(key, value, spec)
+
+
+#: Variables :func:`env_flag` has already warned about, so a value read on a
+#: hot path (``use_color`` runs per painted span) warns once per process.
+_env_warned: set[str] = set()
+
+
+def env_flag(name: str, *, unknown: bool = False) -> bool:
+    """Read a boolean environment switch (``BOOST_ASSUME_YES``, ``BOOST_NO_AI``).
+
+    Every switch used to be a bare ``os.environ.get(name)`` truthiness test, so
+    *any* non-empty value turned it on: ``BOOST_ASSUME_YES=0`` confirmed
+    destructive prompts unasked, and ``BOOST_NO_AI=false`` disabled AI. This
+    reads the value with the same vocabulary as a :data:`BOOL` config key:
+    unset, empty, or one of :data:`FALSE_WORDS` is off; one of
+    :data:`TRUE_WORDS` is on. Anything else reads as ``unknown``, with one
+    warning on stderr naming the variable.
+
+    ``unknown`` is the *safe* reading, so it differs by switch. For a switch
+    that grants something (``BOOST_ASSUME_YES`` skips a confirmation) it is
+    off: an unreadable "yes" must not be taken as one. For a kill switch
+    (``BOOST_NO_NET``, ``BOOST_NO_AI``, every ``BOOST_NO_*``) it is on:
+    ``BOOST_NO_NET=y`` used to keep an air-gapped machine offline, and
+    reading it as off would quietly start calling out.
+
+    ``NO_COLOR`` is deliberately not read through this: no-color.org defines it
+    as "present and not empty", whatever the value.
+    """
+    raw = os.environ.get(name) or ""
+    word = raw.strip().lower()
+    if word in TRUE_WORDS:
+        return True
+    if not word or word in FALSE_WORDS:
+        return False
+    if name not in _env_warned:
+        _env_warned.add(name)
+        # Plain stderr, not core.output: output reads switches through here,
+        # and a warning that paints itself would re-enter this function.
+        sys.stderr.write("! %s=%r is not a boolean (1/0, true/false, yes/no, "
+                         "on/off) — treating it as %s\n"
+                         % (name, raw, "on" if unknown else "off"))
+    return unknown

@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
 from . import config, jsonstate, output, paths, typedvalue, util
 
@@ -122,6 +122,32 @@ def corrupt_violation(action: str = "install") -> str | None:
             "the file is repaired" % (err, action))
 
 
+def invalid_violation(action: str = "install") -> str | None:
+    """The violation stored values unreadable at their type amount to.
+
+    :func:`load` reads such a value as its default, and every default is the
+    permissive one: a blocklist written as an object read as an empty list,
+    ``"pin_only": "frozen"`` as False, so the blocked skill installed and
+    `boost policy check` passed. Enforcement fails closed instead, naming
+    each key and the type it expects.
+    """
+    bad = invalid_values()
+    if not bad:
+        return None
+    return ("policy.json holds %s — boost cannot read %s, so it will not %s "
+            "until %s fixed with `boost policy set` or `boost policy unset`"
+            % ("; ".join("%s = %s, which expects %s"
+                         % (key, json.dumps(value), expected)
+                         for key, value, expected in bad),
+               "it" if len(bad) == 1 else "them", action,
+               "it is" if len(bad) == 1 else "they are"))
+
+
+def unreadable_violation(action: str = "install") -> str | None:
+    """:func:`corrupt_violation`, else :func:`invalid_violation`, else None."""
+    return corrupt_violation(action) or invalid_violation(action)
+
+
 def _read_file() -> dict:
     """The raw contents of policy.json; ``{}`` when missing or unusable.
 
@@ -148,8 +174,11 @@ def load() -> dict:
     ``"pin_only": "no"`` is the boolean the user meant and not a truthy string
     that freezes the machine. A value that cannot be read at its type falls
     back to the default — as does one outside its :data:`RANGES` — and is
-    reported by :func:`invalid_values` — never
-    raised into the middle of an install, and never silently obeyed either.
+    reported by :func:`invalid_values`, never raised into the middle of an
+    install. The default is for display only: :func:`check_install` and
+    :func:`check_tap_signing` refuse while any value is unreadable
+    (:func:`invalid_violation`), and :func:`mutate` never writes the default
+    over it.
     """
     base = copy.deepcopy(DEFAULTS)     # its lists are mutated by mutate()
     for key, value in _read_file().items():
@@ -201,7 +230,8 @@ def guard_path():
     return p.with_name(p.name + ".lock")
 
 
-def mutate(fn: Callable[[dict], bool | None]) -> bool:
+def mutate(fn: Callable[[dict], bool | None],
+           repairs: Collection[str] = ()) -> bool:
     """Apply ``fn`` to a fresh :func:`load` and :func:`save` it, atomically.
 
     `boost policy set` used to `load()`, change one key and `save()` the
@@ -210,11 +240,20 @@ def mutate(fn: Callable[[dict], bool | None]) -> bool:
     blocklist entry another shell had just added could vanish, failing the
     policy open. The read happens inside an exclusive cross-process lock.
     ``fn`` returning False skips the write; returns whether it wrote.
+
+    ``repairs`` names the keys this write replaces outright. Every *other*
+    key whose stored value is unreadable is written back exactly as it was
+    stored: :func:`load` read it as its default, and saving that would have
+    replaced a blocklist written by hand with an empty one behind a check
+    mark — while keeping it leaves enforcement refusing until it is fixed.
     """
     with util.file_lock(guard_path(), what="the policy file", strict=False):
+        keep = {key: value for key, value, _ in invalid_values()
+                if key not in repairs}
         pol = load()
         if fn(pol) is False:
             return False
+        pol.update(keep)
         save(pol)
         return True
 
@@ -223,7 +262,7 @@ def set_key(key: str, value) -> None:
     """Set one policy key on a fresh read, under :func:`mutate`."""
     def put(pol: dict) -> None:
         pol[key] = value
-    mutate(put)
+    mutate(put, repairs=(key,))
 
 
 def is_blocked(name: str, tap: str | None, blocked) -> bool:
@@ -242,9 +281,9 @@ def check_install(entry: dict, installed_count: int) -> list[str]:
     """Return a list of violation strings (empty = allowed)."""
     if not config.get("policy_enforce", True):
         return []
-    corrupt = corrupt_violation()
-    if corrupt is not None:
-        return [corrupt]
+    unreadable = unreadable_violation()
+    if unreadable is not None:
+        return [unreadable]
     pol = load()
     v: list[str] = []
     name, tap = entry.get("name", ""), entry.get("tap", "")
@@ -335,21 +374,56 @@ def check_capabilities(meta: dict, text: str) -> list[str]:
         denied, bool(pol["enforce_detected_capabilities"]))
 
 
-def check_tap_signing(clone_dir) -> list[str]:
+def source_violations(name: str, pol: dict) -> list[str]:
+    """``blocked_taps``/``allowed_taps`` violations for a non-tap source.
+
+    ``name`` is the tap name the source's URL would get from ``boost tap``
+    (``registry.parse_spec``). A `boost import <URL>` is recorded as tap
+    ``local``, which the allowlist exempts because a directory on this disk
+    names no source to allow. A clone does name one, so it gets the gates
+    its tap would — with no ``local`` exemption. ``pol`` is a :func:`load`.
+    """
+    v: list[str] = []
+    if name in pol["blocked_taps"]:
+        v.append("source %r is blocked" % name)
+    if pol["allowed_taps"] and name not in pol["allowed_taps"]:
+        v.append("source %r is not on the allowlist" % name)
+    return v
+
+
+def check_source(name: str, clone_dir) -> list[str]:
+    """Every tap gate for a clone installed without a tap (`boost import`).
+
+    :func:`source_violations` plus :func:`check_tap_signing` on the clone, so
+    an import of a URL that `boost tap` would refuse is refused too. Fails
+    closed on an unreadable policy and honors ``policy_enforce``.
+    """
+    if not config.get("policy_enforce", True):
+        return []
+    unreadable = unreadable_violation()
+    if unreadable is not None:
+        return [unreadable]
+    return source_violations(name, load()) + check_tap_signing(clone_dir,
+                                                               what="source")
+
+
+def check_tap_signing(clone_dir, what: str = "tap") -> list[str]:
     """Return provenance violations for a tap clone (empty = allowed).
 
     No-op unless ``require_signed_taps`` is on. When on, anything short of a
     signature from a trusted key (:func:`core.provenance.verify_dir`) is a
     violation, worded with the reason so ``boost tap`` can explain the refusal.
+    ``what`` is the noun the reason starts with (``source`` for an import).
     Honors the ``policy_enforce`` master switch.
     """
     if not config.get("policy_enforce", True):
         return []
-    # Fail closed like check_install: a truncated policy.json reads
-    # require_signed_taps as its default, False, and would admit any tap.
-    corrupt = corrupt_violation("tap")
-    if corrupt is not None:
-        return [corrupt]
+    # Fail closed like check_install: a truncated policy.json, or a
+    # "require_signed_taps": "maybe", reads as the default, False, and would
+    # admit any tap.
+    unreadable = unreadable_violation("tap")
+    if unreadable is not None:
+        return [unreadable]
     pol = load()
     if not pol["require_signed_taps"]:
         return []
@@ -358,10 +432,10 @@ def check_tap_signing(clone_dir) -> list[str]:
     if result.ok:
         return []
     reason = {
-        provenance.UNSIGNED: "tap is unsigned",
-        provenance.UNTRUSTED: "tap is signed but by no trusted key",
-        provenance.INVALID: "tap signature is invalid",
-    }.get(result.status, "tap is not verified")
+        provenance.UNSIGNED: "%s is unsigned",
+        provenance.UNTRUSTED: "%s is signed but by no trusted key",
+        provenance.INVALID: "%s signature is invalid",
+    }.get(result.status, "%s is not verified") % what
     if result.detail:
         reason += " (%s)" % result.detail
     return [reason + ", and policy requires a trusted signature"]

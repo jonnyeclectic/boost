@@ -9,8 +9,11 @@ worse than one that returns nothing.
 """
 from __future__ import annotations
 
+import importlib
 import json
 import os
+import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -281,7 +284,7 @@ class TestANamesFileBoostCannotWrite:
             raise PermissionError(13, "Permission denied",
                                   str(paths.cache_dir()))
 
-        monkeypatch.setattr(complete.paths, "ensure_dirs", refuse)
+        monkeypatch.setattr(Path, "mkdir", lambda self, *a, **k: refuse())
         monkeypatch.setattr(Path, "write_text",
                             lambda self, *a, **k: refuse())
         assert complete.refresh_names() == 2
@@ -424,7 +427,7 @@ class TestPositionalChoices:
 
     def test_first_word_of_a_subcommand_offers_its_literal_actions(self, sandbox):
         # `policy`'s own action positional (`choices=("list", "set", "unset",
-        # "check")`) is scraped the same way `_flags_for` scrapes flags.
+        # "check")`), read off the parser the same way `_flags_for` is.
         got = complete.candidates(["boost", "policy", ""], COMMANDS)
         assert set(got) == {"list", "set", "unset", "check"}
 
@@ -485,11 +488,13 @@ class TestPositionalChoices:
         # rather than guessing at event names.
         assert complete.candidates(["boost", "hooks", "add", ""], COMMANDS) == []
 
-    def test_a_non_literal_choices_source_offers_nothing(self, sandbox):
-        # bmad's action choices are `choices=_ACTIONS` — a name, not a tuple
-        # literal in the call itself. Resolving it would mean evaluating
-        # arbitrary module globals; degrading to nothing is the safe call.
-        assert complete.candidates(["boost", "bmad", ""], COMMANDS) == []
+    def test_a_choices_tuple_held_in_a_name_is_offered_too(self, sandbox):
+        # bmad's action choices are `choices=_ACTIONS` — a name, which the old
+        # source scraper could not resolve and so offered nothing for. Read
+        # off the built parser, it is the exact tuple argparse validates.
+        from boost_cli.commands import bmad
+        assert complete.candidates(["boost", "bmad", ""], COMMANDS) == \
+            list(bmad._ACTIONS)
 
     def test_an_unknown_command_offers_no_positional_choices(self, sandbox):
         assert complete.candidates(["boost", "nosuchcommand", ""], COMMANDS) == []
@@ -503,67 +508,14 @@ class TestPositionalChoices:
             ["boost", "install", "brainstorming", ""], COMMANDS)
         assert first == second == ["brainstorming", "code-reviewer"]
 
-    def test_a_choices_scrape_that_explodes_is_swallowed(self, sandbox, monkeypatch):
-        monkeypatch.setattr(complete, "_positional_choices",
-                             lambda src: (_ for _ in ()).throw(RuntimeError("boom")))
+    def test_a_choices_lookup_that_explodes_is_swallowed(self, sandbox, monkeypatch):
+        monkeypatch.setattr(complete, "_positional_at",
+                             lambda p, i: (_ for _ in ()).throw(RuntimeError("boom")))
         assert complete.candidates(["boost", "policy", ""], COMMANDS) == []
 
 
 class TestPositionalChoicesHelpers:
-    """Direct coverage of the scraping helpers, independent of a real
-    command's source — pins the exact literal-vs-dynamic boundary.
-    """
-
-    def test_a_literal_tuple_is_read(self):
-        assert complete._literal_choices('choices=("a", "b")') == ["a", "b"]
-
-    def test_a_literal_list_is_read(self):
-        assert complete._literal_choices('choices=["a", "b"]') == ["a", "b"]
-
-    def test_a_bare_name_is_dynamic(self):
-        assert complete._literal_choices("choices=_ACTIONS") is None
-
-    def test_a_dotted_attribute_is_dynamic(self):
-        assert complete._literal_choices("choices=cs.SCOPES") is None
-
-    def test_a_call_is_dynamic(self):
-        assert complete._literal_choices("choices=tuple(_INTERVALS)") is None
-
-    def test_a_starred_call_is_dynamic(self):
-        assert complete._literal_choices(
-            'choices=(*hookhost.hosts(), "auto")') is None
-
-    def test_an_empty_tuple_is_not_offered(self):
-        # Vacuous choices are indistinguishable from "no choices given" here;
-        # both mean nothing to complete.
-        assert complete._literal_choices("choices=()") is None
-
-    def test_a_non_choices_kwarg_is_not_matched(self):
-        assert complete._literal_choices('default="list"') is None
-
-    def test_positional_choices_skips_flags(self):
-        src = ('def cmd_x(argv):\n'
-               '    p.add_argument("--json", action="store_true")\n'
-               '    p.add_argument("action", choices=("a", "b"))\n')
-        assert complete._positional_choices(src) == [["a", "b"]]
-
-    def test_positional_choices_none_for_a_choiceless_positional(self):
-        src = 'def cmd_x(argv):\n    p.add_argument("name", help="a name")\n'
-        assert complete._positional_choices(src) == [None]
-
-    def test_positional_choices_preserves_declaration_order(self):
-        src = ('def cmd_x(argv):\n'
-               '    p.add_argument("action", choices=("set", "get"))\n'
-               '    p.add_argument("key", help="k")\n')
-        assert complete._positional_choices(src) == [["set", "get"], None]
-
-    def test_a_comma_inside_a_quoted_help_string_does_not_split_the_call(self):
-        # Real source: `help="dotted key, e.g. ai.enabled"` — the comma there
-        # must not be mistaken for the boundary between add_argument's args.
-        src = ('def cmd_x(argv):\n'
-               '    p.add_argument("key", nargs="?", '
-               'help="dotted key, e.g. ai.enabled")\n')
-        assert complete._positional_choices(src) == [None]
+    """Direct coverage of the defaults-dict key walker."""
 
     def test_dotted_keys_flattens_nested_dicts(self):
         node = {"a": {"b": 1, "c": {"d": 2}}, "e": []}
@@ -571,20 +523,6 @@ class TestPositionalChoicesHelpers:
 
     def test_dotted_keys_of_an_empty_dict_is_empty(self):
         assert complete._dotted_keys({}) == []
-
-    def test_a_flag_spelling_is_not_a_positional_literal(self):
-        assert complete._is_positional_literal('"--json"') is False
-        assert complete._is_positional_literal('"-s"') is False
-
-    def test_a_quoted_name_is_a_positional_literal(self):
-        assert complete._is_positional_literal('"action"') is True
-        assert complete._is_positional_literal("'action'") is True
-
-    def test_an_unquoted_token_is_not_a_positional_literal(self):
-        assert complete._is_positional_literal("action") is False
-
-    def test_choices_of_none_is_not_offered(self):
-        assert complete._literal_choices("choices=None") is None
 
 
 class TestFlagLookupDegrades:
@@ -599,11 +537,33 @@ class TestFlagLookupDegrades:
         rows = [*COMMANDS, ("ghost", "cfg", "configuration", "unbuilt")]
         assert complete.candidates(["boost", "ghost", "--"], rows) == []
 
-    def test_source_that_cannot_be_read_has_no_flags(self, sandbox, monkeypatch):
-        import inspect
-        def boom(_f):
-            raise OSError("no source available")     # e.g. a frozen build
-        monkeypatch.setattr(inspect, "getsource", boom)
+    def test_a_parser_that_cannot_be_built_has_no_flags(self, sandbox,
+                                                        monkeypatch):
+        from boost_cli.commands import discovery
+        def boom(_argv):
+            raise RuntimeError("fails before it parses")
+        monkeypatch.setattr(discovery, "cmd_search", boom)
+        assert complete.candidates(["boost", "search", "--"], COMMANDS) == []
+
+    def test_without_a_parser_flags_still_are_not_positionals(
+            self, sandbox, monkeypatch):
+        from boost_cli.core import policy
+        monkeypatch.setattr(complete, "_parser_for", lambda c, r: None)
+        assert complete.candidates(["boost", "policy", "--json", "set", ""],
+                                   COMMANDS) == sorted(policy.DEFAULTS)
+
+    def test_a_command_that_never_parses_has_no_flags(self, sandbox,
+                                                      monkeypatch):
+        from boost_cli.commands import discovery
+        monkeypatch.setattr(discovery, "cmd_search", lambda argv: 0)
+        assert complete.candidates(["boost", "search", "--"], COMMANDS) == []
+
+    def test_a_command_that_exits_before_parsing_has_no_flags(
+            self, sandbox, monkeypatch):
+        from boost_cli.commands import discovery
+        def leave(_argv):
+            raise SystemExit(2)
+        monkeypatch.setattr(discovery, "cmd_search", leave)
         assert complete.candidates(["boost", "search", "--"], COMMANDS) == []
 
     def test_short_flags_are_not_offered(self, sandbox):
@@ -744,3 +704,357 @@ class TestDetectShell:
     def test_empty_when_shell_env_is_unset(self, monkeypatch):
         monkeypatch.delenv("SHELL", raising=False)
         assert complete.detect_shell() == ""
+
+
+def _help_long_flags(command, capsys):
+    """The long options `boost <command> --help` lists, read off its text."""
+    row = next(r for r in COMMANDS if r[0] == command)
+    module = importlib.import_module("boost_cli.commands." + row[2])
+    func = getattr(module, "cmd_" + command.replace("-", "_"))
+    capsys.readouterr()
+    with pytest.raises(SystemExit):
+        func(["--help"])
+    text = capsys.readouterr().out
+    flags = set()
+    for m in re.finditer(r"(?m)^ {2,}(-\S.*?)(?: {2,}|$)", text):
+        flags.update(re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]*)", m.group(1)))
+    return sorted(flags)
+
+
+_COMMAND_NAMES = [r[0] for r in COMMANDS]
+
+
+class TestFlagsComeFromTheParser:
+    """`--<TAB>` offers what the parser accepts. A regex over each `cmd_*`
+    function's source missed every flag a shared helper adds (`install --s`
+    offered nothing although `--scope` is valid) and offered `--x` strings
+    from git argv lists that the parser rejects (`onboard --fill`)."""
+
+    @pytest.mark.parametrize("command", _COMMAND_NAMES)
+    def test_flags_match_the_commands_own_help(self, command, sandbox, capsys,
+                                               monkeypatch):
+        monkeypatch.setenv("COLUMNS", "400")    # one option per line
+        got = complete._flags_for(command, COMMANDS)
+        assert got == _help_long_flags(command, capsys)
+        assert "--help" in got                  # never vacuously equal
+
+    @pytest.mark.parametrize("command", _COMMAND_NAMES)
+    def test_building_the_parser_writes_nothing(self, command, sandbox):
+        # Running a cmd_* up to its parse is only safe while each one parses
+        # before it touches anything; this is that promise, per command.
+        assert complete._parser_for(command, COMMANDS) is not None
+        assert list(sandbox.iterdir()) == []
+
+    def test_a_suppressed_alias_is_accepted_but_not_offered(self, sandbox):
+        # untap's `-y/--yes` is help=SUPPRESS: valid, deliberately unlisted.
+        assert complete.candidates(["boost", "untap", "--y"], COMMANDS) == []
+        assert complete.candidates(["boost", "untap", "--f"], COMMANDS) == \
+            ["--force"]
+
+    def test_the_parse_methods_are_restored(self, sandbox):
+        import argparse
+        before = argparse.ArgumentParser.parse_args
+        complete._parser_for("search", COMMANDS)
+        assert argparse.ArgumentParser.parse_args is before
+        assert argparse.ArgumentParser.parse_known_args is not complete._capture
+
+    def test_a_shared_helper_s_flags_are_offered(self, sandbox):
+        assert complete.candidates(["boost", "install", "--s"], COMMANDS) == \
+            ["--scope"]
+        got = complete.candidates(["boost", "uninstall", "--"], COMMANDS)
+        assert {"--scope", "--local", "--global"} <= set(got)
+
+    def test_a_literal_the_parser_rejects_is_not_offered(self, sandbox):
+        got = complete.candidates(["boost", "onboard", "--"], COMMANDS)
+        assert "--fill" not in got and "--porcelain" not in got
+        assert got == complete._flags_for("onboard", COMMANDS)
+
+    def test_a_subcommand_offers_its_own_flags(self, sandbox):
+        assert complete.candidates(["boost", "context", "status", "--"],
+                                   COMMANDS) == ["--help", "--json"]
+        assert complete.candidates(["boost", "context", "enable", "--"],
+                                   COMMANDS) == ["--help"]
+
+    def test_the_command_s_own_flags_before_its_subcommand(self, sandbox):
+        assert complete.candidates(["boost", "context", "--"], COMMANDS) == \
+            ["--help", "--json"]
+
+    def test_nothing_the_command_prints_reaches_the_prompt(self, sandbox,
+                                                           capsys,
+                                                           monkeypatch):
+        from boost_cli.commands import discovery
+        def noisy(argv):
+            print("chatter")
+            sys.stderr.write("more chatter\n")
+            return 0
+        monkeypatch.setattr(discovery, "cmd_search", noisy)
+        capsys.readouterr()
+        assert complete._parser_for("search", COMMANDS) is None
+        assert capsys.readouterr() == ("", "")
+
+
+class TestFlagsAreNotPositionals:
+    """A flag already typed, and the value it takes, are not positional
+    words: counting them put every later position off by one per flag."""
+
+    def test_a_switch_before_the_word_is_skipped(self, sandbox):
+        assert complete.candidates(["boost", "completions", "--eval", ""],
+                                   COMMANDS) == ["bash", "zsh", "fish"]
+
+    def test_a_switch_before_the_action_is_skipped(self, sandbox):
+        from boost_cli.core import policy
+        assert complete.candidates(["boost", "policy", "--json", "set", ""],
+                                   COMMANDS) == sorted(policy.DEFAULTS)
+
+    def test_config_keys_after_a_leading_switch(self, sandbox):
+        assert complete.candidates(["boost", "config", "--json", "get", "ai.m"],
+                                   COMMANDS) == ["ai.model"]
+
+    def test_a_choices_flag_offers_its_choices(self, sandbox):
+        _tap("t", ["brainstorming"])
+        assert complete.candidates(["boost", "install", "--scope", ""],
+                                   COMMANDS) == ["user", "project"]
+        assert complete.candidates(["boost", "install", "--scope", "p"],
+                                   COMMANDS) == ["project"]
+
+    def test_the_flag_s_value_is_consumed(self, sandbox):
+        _tap("t", ["brainstorming"])
+        assert complete.candidates(
+            ["boost", "install", "--scope", "user", "br"], COMMANDS) == \
+            ["brainstorming"]
+
+    def test_a_free_text_value_offers_nothing(self, sandbox):
+        # `search --kind` and the like take free text where they have no
+        # choices; offering the command's positional source there is a guess.
+        _tap("t", ["brainstorming"])
+        assert complete.candidates(["boost", "export", "--out", ""],
+                                   COMMANDS) == []
+
+    def test_an_inline_value_consumes_nothing_more(self, sandbox):
+        assert complete.candidates(
+            ["boost", "completions", "--shell=x", ""], COMMANDS) == \
+            ["bash", "zsh", "fish"]
+
+    def test_after_a_double_dash_everything_is_positional(self, sandbox):
+        # `--` ends options, so the word after it is position 0 again.
+        assert complete.candidates(["boost", "policy", "--", ""],
+                                   COMMANDS) == ["list", "set", "unset",
+                                                 "check"]
+
+    def test_a_flag_after_a_double_dash_is_a_positional(self, sandbox):
+        assert complete.candidates(["boost", "policy", "--", "--json", ""],
+                                   COMMANDS) == []
+
+    def test_an_unknown_flag_takes_no_value(self, sandbox):
+        assert complete.candidates(["boost", "completions", "--nope", ""],
+                                   COMMANDS) == ["bash", "zsh", "fish"]
+
+    def test_a_flag_word_while_a_value_is_owed_offers_flags(self, sandbox):
+        assert complete.candidates(["boost", "install", "--scope", "--s"],
+                                   COMMANDS) == ["--scope"]
+
+    def test_values_taken(self):
+        import argparse
+        ap = argparse.ArgumentParser()
+        sw = ap.add_argument("--sw", action="store_true")
+        one = ap.add_argument("--one")
+        opt = ap.add_argument("--opt", nargs="?")
+        two = ap.add_argument("--two", nargs=2)
+        many = ap.add_argument("--many", nargs="*")
+        some = ap.add_argument("--some", nargs="+")
+        exact = ap.add_argument("--exact", nargs=1)
+        rest = ap.add_argument("--rest", nargs=argparse.REMAINDER)
+        assert [complete._values_taken(a) for a in (
+            sw, one, opt, two, many, some, exact, rest)] == [
+            0, 1, 1, 2, -1, -1, 1, -1]
+
+    def test_a_subcommand_word_in_an_earlier_positional_slot_is_a_value(self):
+        # argparse fills `name` first, so `map` there is a name, not the
+        # subcommand — only the word at the subparsers' own slot switches.
+        import argparse
+        ap = argparse.ArgumentParser()
+        ap.add_argument("name")
+        sub = ap.add_subparsers(dest="action")
+        sp = sub.add_parser("map")
+        walk = complete._walk(ap, ["map"])
+        assert walk.parser is ap and walk.positionals == ["map"]
+        walk = complete._walk(ap, ["map", "map"])
+        assert walk.parser is sp and walk.positionals == []
+
+    def test_a_fixed_arity_flag_consumes_exactly_its_values(self):
+        import argparse
+        ap = argparse.ArgumentParser()
+        ap.add_argument("--two", nargs=2)
+        ap.add_argument("--many", nargs="*")
+        ap.add_argument("word", nargs="*")
+        walk = complete._walk(ap, ["--two", "a", "b", "c"])
+        assert walk.positionals == ["c"] and walk.pending is None
+        walk = complete._walk(ap, ["--two", "a"])
+        assert walk.positionals == [] and walk.pending is not None
+        walk = complete._walk(ap, ["--many", "a", "b"])
+        assert walk.positionals == [] and walk.pending is not None
+        walk = complete._walk(ap, ["-"])
+        assert walk.positionals == ["-"]
+
+    def test_a_variadic_positional_absorbs_later_positions(self):
+        import argparse
+        ap = argparse.ArgumentParser()
+        ap.add_argument("first", choices=("a", "b"))
+        ap.add_argument("rest", nargs="*", choices=("x", "y"))
+        ap.add_argument("never", choices=("z",))
+        assert complete._choices(complete._positional_at(ap, 0)) == ["a", "b"]
+        assert complete._choices(complete._positional_at(ap, 1)) == ["x", "y"]
+        assert complete._choices(complete._positional_at(ap, 4)) == ["x", "y"]
+        ap2 = argparse.ArgumentParser()
+        ap2.add_argument("only")
+        assert complete._positional_at(ap2, 1) is None
+        assert complete._choices(complete._positional_at(ap2, 0)) is None
+
+    def test_a_subcommand_word_only_counts_in_its_own_slot(self):
+        import argparse
+        ap = argparse.ArgumentParser()
+        sub = ap.add_subparsers(dest="action")
+        sp = sub.add_parser("map")
+        sp.add_argument("pattern", choices=("p", "q"))
+        walk = complete._walk(ap, ["map"])
+        assert walk.parser is sp and walk.positionals == []
+        walk = complete._walk(ap, ["map", "map"])
+        assert walk.parser is sp and walk.positionals == ["map"]
+
+    def test_non_string_choices_are_offered_as_text(self):
+        import argparse
+        ap = argparse.ArgumentParser()
+        action = ap.add_argument("--n", type=int, choices=(1, 2))
+        assert complete._choices(action) == ["1", "2"]
+
+
+class TestGlobalOptions:
+    """`boost --<TAB>` offers what cli.main accepts before a command."""
+
+    def test_double_dash_offers_every_long_global(self, sandbox, capsys):
+        from boost_cli import cli
+        assert cli.main(["__complete", "boost", "--"]) == 0
+        assert capsys.readouterr().out.split() == [
+            "--debug", "--help", "--quiet", "--verbose", "--version"]
+
+    def test_a_prefix_narrows_the_globals(self, sandbox):
+        from boost_cli import cli
+        assert complete.candidates(["boost", "--deb"], COMMANDS,
+                                   frozenset(cli._GLOBAL_FLAGS)) == ["--debug"]
+
+    def test_a_single_dash_offers_short_spellings_too(self, sandbox):
+        from boost_cli import cli
+        assert complete.candidates(["boost", "-"], COMMANDS,
+                                   frozenset(cli._GLOBAL_FLAGS)) == [
+            "--debug", "--help", "--quiet", "--verbose", "--version",
+            "-V", "-h", "-q", "-v"]
+
+    def test_after_a_global_the_next_dash_word_offers_globals(self, sandbox):
+        from boost_cli import cli
+        assert complete.candidates(["boost", "--debug", "--q"], COMMANDS,
+                                   frozenset(cli._GLOBAL_FLAGS)) == ["--quiet"]
+
+
+class TestATabWritesNothing:
+    """One TAB in a HOME where boost never ran created the whole ~/.boost
+    tree and ~/.agents/skills (the store Gemini CLI auto-discovers)."""
+
+    @pytest.mark.parametrize("line", [
+        ["boost", "install", ""], ["boost", "uninstall", ""],
+        ["boost", "untap", ""], ["boost", "config", "get", ""],
+        ["boost", "doctor", "--"], ["boost", ""], ["boost", "--debug", "in"],
+    ])
+    def test_the_home_stays_empty(self, sandbox, capsys, line):
+        from boost_cli import cli
+        assert cli.main(["__complete", *line]) == 0
+        assert list(sandbox.iterdir()) == []
+
+    def test_no_cache_dir_offers_nothing_and_builds_nothing(self, sandbox,
+                                                            monkeypatch):
+        called = []
+        monkeypatch.setattr(complete, "refresh_names",
+                            lambda: called.append(1) or 0)
+        assert complete._cached_names() == []
+        assert called == []
+
+    def test_refresh_creates_only_the_cache_dir(self, sandbox):
+        assert complete.refresh_names() == 0
+        assert complete.names_file().read_text(encoding="utf-8") == ""
+        assert sorted(p.relative_to(sandbox).as_posix()
+                      for p in sandbox.rglob("*")) == [
+            ".boost", ".boost/cache", ".boost/cache/_names.txt"]
+
+
+_BASH_BIN = "/bin/bash"
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not os.path.exists(_BASH_BIN),
+                    reason="needs a POSIX /bin/bash")
+class TestTheBashShim:
+    """macOS's /bin/bash is 3.2, where a quoted array slice expanded under
+    IFS=$'\\n' joins into ONE word: `boost __complete 'boost install br'`
+    got a single argument and every TAB completed nothing."""
+
+    def _run(self, tmp_path, words, cword):
+        import subprocess
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        fake = bindir / "boost"
+        # Echoes each argument it receives, one per line, so COMPREPLY shows
+        # exactly how the shim split the line.
+        fake.write_text('#!/bin/sh\nfor a in "$@"; do printf "<%s>\\n" "$a"; '
+                        'done\n', encoding="utf-8")
+        fake.chmod(0o755)
+        script = tmp_path / "c.bash"
+        script.write_text(complete.script("bash"), encoding="utf-8")
+        cmd = ('source "$1"; COMP_WORDS=(%s); COMP_CWORD=%d; _boost_complete; '
+               'printf "%%s\\n" "${COMPREPLY[@]}"'
+               % (" ".join("'%s'" % w for w in words), cword))
+        env = {"PATH": "%s:/usr/bin:/bin" % bindir, "HOME": str(tmp_path)}
+        res = subprocess.run([_BASH_BIN, "--norc", "--noprofile", "-c", cmd,
+                              "x", str(script)], capture_output=True,
+                             text=True, env=env, check=False)
+        assert res.stderr == ""
+        return res.stdout.splitlines()
+
+    def test_each_word_is_its_own_argument(self, tmp_path):
+        assert self._run(tmp_path, ["boost", "install", "br"], 2) == [
+            "<__complete>", "<boost>", "<install>", "<br>"]
+
+    def test_an_empty_current_word_survives(self, tmp_path):
+        assert self._run(tmp_path, ["boost", "install", ""], 2) == [
+            "<__complete>", "<boost>", "<install>", "<>"]
+
+    def test_only_words_up_to_the_cursor_are_sent(self, tmp_path):
+        assert self._run(tmp_path, ["boost", "ins", "later"], 1) == [
+            "<__complete>", "<boost>", "<ins>"]
+
+    def test_a_word_with_a_space_stays_one_argument(self, tmp_path):
+        assert self._run(tmp_path, ["boost", "search", "two words"], 2) == [
+            "<__complete>", "<boost>", "<search>", "<two words>"]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or shutil.which("zsh") is None,
+                    reason="needs zsh")
+class TestTheZshEvalBlock:
+    """Stock macOS zsh never runs compinit, and the eval block called
+    `compdef` regardless: `command not found: compdef` at every shell start,
+    and TAB stayed dead."""
+
+    def test_eval_without_compinit_is_silent_and_registers(self, tmp_path):
+        import subprocess
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+               "ZDOTDIR": str(tmp_path)}
+        cmd = 'eval "$1"; print -r -- "${_comps[boost]}"'
+        res = subprocess.run([shutil.which("zsh"), "-f", "-c", cmd, "x",
+                              complete.eval_script("zsh")],
+                             capture_output=True, text=True, env=env,
+                             check=False)
+        assert res.stderr == ""
+        assert res.stdout == "_boost\n"
+        assert res.returncode == 0
+
+    def test_an_existing_compinit_is_not_rerun(self):
+        got = complete.eval_script("zsh")
+        assert "(( $+functions[compdef] )) || { autoload -Uz compinit && " \
+               "compinit -i; }\ncompdef _boost boost\n" in got

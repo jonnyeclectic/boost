@@ -19,6 +19,7 @@ that keep a snapshot honest:
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import tarfile
 import tempfile
@@ -30,6 +31,72 @@ from . import util
 
 UNTOUCHED_HINT = ("the store was left untouched — "
                   "see `boost snapshot list` for other snapshots")
+
+
+TAR_SUFFIX = ".tar.gz"
+META_SUFFIX = ".json"
+
+
+@dataclass(frozen=True)
+class Unit:
+    """One snapshot as `boost snapshot list` counts it: ``<id>.tar.gz`` and
+    its ``<id>.json`` sidecar are one thing, with one age.
+
+    `clean --deep` used to age and count each file on its own, so one old
+    snapshot was prompted as "2 snapshot(s)", and a tarball and its sidecar
+    could fall on opposite sides of the cutoff — one removed, one orphaned.
+    Anything else in the directory is a unit of its own.
+    """
+
+    id: str
+    #: Tarball first, sidecar last: if the tarball goes and the sidecar
+    #: cannot, the orphan sidecar is still aged by its ``created`` next time.
+    files: tuple[Path, ...]
+    created: float            #: Unix time
+    sizes: tuple[int, ...]    #: one per file, in ``files`` order
+
+
+def _unit_key(name: str) -> str:
+    for suffix in (TAR_SUFFIX, META_SUFFIX):
+        if name.endswith(suffix):
+            return name[:-len(suffix)]
+    return name
+
+
+def _created(meta: Path | None) -> float | None:
+    """The sidecar's ``created`` stamp — what `snapshot list` shows."""
+    if meta is None:
+        return None
+    try:
+        data = json.loads(meta.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return util.epoch_from_iso(data.get("created")) if isinstance(data, dict) else None
+
+
+def units(snap_dir: Path) -> list[Unit]:
+    """Every snapshot unit in ``snap_dir``, sorted by id."""
+    groups: dict[str, list[Path]] = {}
+    for entry in sorted(snap_dir.iterdir()):
+        groups.setdefault(_unit_key(entry.name), []).append(entry)
+    found = []
+    for key, members in sorted(groups.items()):
+        tar = next((m for m in members if m.name == key + TAR_SUFFIX), None)
+        meta = next((m for m in members if m.name == key + META_SUFFIX), None)
+        files = sorted(members, key=lambda m: (m is not tar, m is meta, m.name))
+        created = _created(meta)
+        if created is None:
+            created = files[0].lstat().st_mtime
+        sizes = tuple(util.dir_size(m) if m.is_dir() and not m.is_symlink()
+                      else m.lstat().st_size for m in files)
+        found.append(Unit(id=key, files=tuple(files), created=created,
+                          sizes=sizes))
+    return found
+
+
+def older_than(snap_dir: Path, cutoff: float) -> list[Unit]:
+    """The units of ``snap_dir`` created before ``cutoff`` (a Unix time)."""
+    return [u for u in units(snap_dir) if u.created < cutoff]
 
 
 @dataclass

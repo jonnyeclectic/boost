@@ -93,6 +93,13 @@ def _ai_rank(query: str, scored):
         max_tokens=400)
     order = _json_array(reply)
     if not order:
+        if reply:
+            ai.note_bad_reply("no JSON array of names", reply)
+        return None
+    # A reply naming none of the candidates leaves the order exactly as BM25
+    # had it, so crediting the AI with it would be a false label.
+    if not rag.names_any(scored, order, lambda t: t[0]["name"]):
+        ai.note_bad_reply("named none of the candidates", reply)
         return None
     # Homonyms from different taps are different rows; see reorder_by_names.
     return rag.reorder_by_names(scored, order, lambda t: t[0]["name"])
@@ -243,14 +250,15 @@ def cmd_search(argv):
     # The CLI's long-standing wording for the BM25 engine differs from the label
     # rag/eval use ("BM25 full-content"), and both are load-bearing: the latter
     # is pinned in tests/eval/baseline.json. Map instead of moving either.
-    ranker = _ENGINE_LABEL.get(engine, engine) if use_rag else "heuristic relevance"
+    ranker = _ENGINE_LABEL.get(engine, engine) if use_rag else rag.HEURISTIC_ENGINE
     if args.smart:
         reranked = None
         if ai.available():
             with spin.Spinner("ranking %d matches with Claude" % len(scored)):
                 reranked = _ai_rank(query, scored)
         if reranked:
-            scored, ranker = reranked, "Claude Haiku relevance"
+            # Named for the route that answered, not a model nobody checked.
+            scored, ranker = reranked, ai.ranker_label()
         else:
             # Fires whether AI was never available or was tried and failed —
             # a silent unranked list otherwise looks identical to a
@@ -1221,8 +1229,13 @@ def _ai_picks(stack: dict, cands):
         max_tokens=500)
     picks = _json_array(reply)
     if not picks:
+        if reply:
+            ai.note_bad_reply("no JSON array of picks", reply)
         return None
-    return [pk for pk in picks if isinstance(pk, dict) and pk.get("name")][:5]
+    usable = [pk for pk in picks if isinstance(pk, dict) and pk.get("name")][:5]
+    if not usable:
+        ai.note_bad_reply("no pick carried a name", reply)
+    return usable or None
 
 
 def cmd_recommend(argv):
@@ -1319,12 +1332,19 @@ def cmd_recommend(argv):
         out.info(name_cell + "  " + desc + " " * (desc_w - out.visible_len(desc))
                  + "  " + out.role(because, "muted"))
     if ai.available():
-        picks = _ai_picks(stack, [r["entry"] for r in ranked[:20]])
+        # A spinner, as search --smart has: the table above already looks
+        # finished, and a hung CLI otherwise sat silent until the timeout.
+        with spin.Spinner("asking AI for its picks"):
+            picks = _ai_picks(stack, [r["entry"] for r in ranked[:20]])
         if picks:
             out.heading("AI picks")
             for pk in picks:
                 out.info(out.role(str(pk.get("name", "?")), "accent") + "  "
                          + str(pk.get("reason", "")))
+        else:
+            # Same contract as every other AI-assisted command: a dropped
+            # "AI picks" section says why instead of vanishing.
+            out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     return 0
 
 
@@ -2547,7 +2567,7 @@ def cmd_stats(argv):
     cat = catalog.for_lock(catalog.find(args.name), lock)
     if not lock and not cat:
         raise BoostError("no skill named %r installed or in any tap" % args.name,
-                        hint=catalog.join_hints("try `boost search %s`" % name,
+                        hint=catalog.join_hints(catalog.search_hint(name),
                                                 catalog.stale_commit_hint()))
     acts = {a: len(catalog.events_for_tap(
                 journal.events(action=a, subject=name), qualifier, lock))

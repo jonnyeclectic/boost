@@ -50,6 +50,23 @@ class Tap:
         return paths.cache_dir() / (self.safe_name + ".json")
 
     @property
+    def owns_cache_file(self) -> bool:
+        """False when :attr:`cache_file` is one of boost's own indexes.
+
+        A local tap is named after its directory, so a directory called
+        ``rag_index`` mapped onto ``cache/rag_index.json`` — the BM25 index.
+        :func:`add` now refuses such a name; this guards a config written
+        before it did, so the catalog never overwrites, or `untap` deletes,
+        a file that is not the tap's.
+        """
+        return not reserved_cache_name(self.name)
+
+    @property
+    def is_wheel(self) -> bool:
+        """True for a tap that ships inside the wheel (no git clone)."""
+        return self.url.startswith(WHEEL_SCHEME)
+
+    @property
     def is_cloned(self) -> bool:
         """True if the tap's clone directory exists on disk."""
         return self.path.is_dir()
@@ -65,8 +82,26 @@ class Tap:
         healthy, heal said nothing to heal, and every `boost update` failed
         with "not a git repository" without ever re-cloning it.
         """
-        return (self.is_cloned and not self.url.startswith(WHEEL_SCHEME)
+        return (self.is_cloned and not self.is_wheel
                 and not gitutil.is_repo(self.path))
+
+
+def reserved_cache_name(name: str) -> bool:
+    """True when tap ``name``'s catalog cache would be one of boost's own
+    files in ``cache/`` (:data:`paths.INTERNAL_CACHE_FILES`).
+
+    Case-folded: on a case-insensitive filesystem ``RAG_INDEX.json`` *is*
+    ``rag_index.json``.
+    """
+    leaf = (Tap(name=name, url="").safe_name + ".json").lower()
+    return leaf in paths.INTERNAL_CACHE_FILES
+
+
+def _reserved(name: str) -> BoostError:
+    return BoostError(
+        "tap name %s is reserved: its catalog would overwrite boost's own "
+        "cache/%s.json" % (name, Tap(name=name, url="").safe_name),
+        hint="rename the directory and tap it again")
 
 
 # One path component, in BYTES. ext4, APFS and NTFS all stop at 255, and
@@ -312,6 +347,20 @@ def same_source(a: str, b: str) -> bool:
     return _is_local(a) and _is_local(b) and _same_file(a, b)
 
 
+def source_changed(lk: dict, tap: Tap) -> bool:
+    """True when ``tap`` no longer names the repository ``lk`` came from.
+
+    A tap is addressed by its name, and a name is only the tail of a URL:
+    untap `~/a/reg` and tap `~/b/reg`, and the lock rows installed from the
+    first now resolve to the second. Comparing versions across that seam
+    called an unrelated skill of the same name an upgrade, and `boost update`
+    applied it. The lock's ``tap_url`` (written at install) is the source; a
+    row without one predates the field and keeps the old behaviour.
+    """
+    recorded = str(lk.get("tap_url") or "")
+    return bool(recorded) and not same_source(recorded, tap.url)
+
+
 def _is_local(url: str) -> bool:
     return not (url.startswith("git@") or _SCHEME.match(url))
 
@@ -426,6 +475,8 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     Raises BoostError if a tap with that name is already configured.
     """
     name, url = parse_spec(spec)
+    if reserved_cache_name(name):
+        raise _reserved(name)
     for existing in list_taps():
         if name_key(existing.name) == name_key(name):
             if not same_source(existing.url, url):
@@ -454,10 +505,15 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     problems = policy.check_tap_signing(tap.path)
     if problems:
         util.rmtree(tap.path)  # leave no half-added tap behind
+        # An unreadable policy.json refuses every tap; trusting a key or
+        # relaxing signing would not repair it, so say what would.
+        hint = ("repair policy.json first — `boost policy` names each "
+                "unreadable value" if policy.unreadable_violation("tap")
+                else "add its key with `boost trust add <name> <key>`, "
+                     "or relax `boost policy set require_signed_taps false`")
         raise BoostError(
             "tap %s failed provenance policy: %s" % (name, "; ".join(problems)),
-            hint="add its key with `boost trust add <name> <key>`, "
-                 "or relax `boost policy set require_signed_taps false`")
+            hint=hint)
     row = _row(name, url, curated, by_user=curated)
     if at:
         row["pin"] = at
@@ -656,6 +712,37 @@ def _reclone(tap: Tap, pin: str | None) -> None:
             hint="retry `boost update %s`" % tap.name) from exc
 
 
+def ensure_cloned(tap: Tap) -> bool:
+    """Clone a registered tap that has no clone, **at its pin**. True if it
+    cloned.
+
+    The path every consumer of a tap's files takes when the clone is missing
+    (`store.source_dir_for`, so `drift`, `info`, `install`). It used to be a
+    bare `clone_shallow`, which landed on HEAD while config.json kept the pin:
+    a read-only `boost drift` moved the tap, `update` then answered "pinned at
+    <pin> (skipped)" for a clone that was not, and `heal` rescanned the catalog
+    to match the wrong tree. Routed through :func:`_reclone`, the same staged,
+    sparse, pinned clone `update` uses for a missing clone.
+    """
+    if tap.is_cloned:
+        return False
+    _reclone(tap, tap.pin or None)
+    return True
+
+
+def off_pin(tap: Tap) -> str | None:
+    """The clone's HEAD when ``tap`` is pinned and its clone is not at the
+    pin, else ``None``.
+
+    ``None`` too when the answer is unknowable (no git, no clone, an
+    unresolvable HEAD): an unread HEAD is not evidence of a move.
+    """
+    if not tap.pin or not tap.is_cloned or not gitutil.has_git():
+        return None
+    head = gitutil.head_commit(tap.path)
+    return head if head and head.lower() != tap.pin.lower() else None
+
+
 def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
     """Clone one tap without touching config. Never raises.
 
@@ -721,6 +808,10 @@ def add_many(specs: list[str], curated: bool = False,
         except BoostError as exc:
             results.append({"spec": spec, "name": spec, "ok": False,
                             "error": exc.message})
+            continue
+        if reserved_cache_name(name):
+            results.append({"spec": spec, "name": name, "ok": False,
+                            "error": _reserved(name).message})
             continue
         # A different repository under a taken name is a failure, not a skip:
         # "already tapped" with nothing tapped is the answer that hid it.
@@ -983,6 +1074,8 @@ def _remove_clone(tap: Tap) -> None:
 
 def _remove_cache(tap: Tap) -> None:
     """Delete `tap`'s catalog cache, warning rather than raising if it cannot."""
+    if not tap.owns_cache_file:
+        return      # boost's own index, not this tap's — see owns_cache_file
     try:
         tap.cache_file.unlink()
     except OSError as e:
@@ -1100,6 +1193,17 @@ def update(name: str | None = None,
             # like nothing at all. Not an error, because "update
             # everything" over 400 taps should not fail because three are
             # pinned.
+            #
+            # Unless the clone is not *at* the pin (a hand checkout, or a
+            # clone some older path made at HEAD): "skipped" would then name
+            # a commit the tree does not sit on, forever. Put it back — the
+            # remedy doctor prints for exactly this — and report it as a
+            # move, so the caller rescans the catalog and resyncs vectors.
+            head = off_pin(tap)
+            if head:
+                gitutil.checkout_commit(tap.path, tap.pin)
+                return ("%s → %s (back on its pin)"
+                        % (head[:7], tap.pin[:7]), False)
             return "pinned at %s (skipped)" % tap.pin[:7], False
         return gitutil.pull(tap.path), bool(tap.pin)
 

@@ -701,6 +701,156 @@ class TestOutdated:
                          "tap": "rule-tap", "pinned": False, "scope": "user"}]
 
 
+def _commit_all(repo, msg):
+    """Stage and commit everything in a test-owned repo copy."""
+    subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@boost.test",
+                    "-c", "user.name=Boost Test", "commit", "-qm", msg],
+                   check=True, capture_output=True)
+
+
+_RULE = "---\nname: house-style\nversion: %s\n---\n\n%s\n"
+
+
+@pytest.fixture()
+def two_sources(fixture_tap_src, tmp_path):
+    """Two different repos that both name themselves `reg`: the second ships
+    an unrelated `brainstorming` (at a higher version) and `house-style`."""
+    a = _copy_tap(fixture_tap_src, tmp_path / "a" / "reg")
+    b = _copy_tap(fixture_tap_src, tmp_path / "b" / "reg")
+    for repo, version, body in ((a, "1.0.0", "Two-space indents."),
+                                (b, "2.0.0", "Something unrelated.")):
+        rule = repo / "rules" / "house.mdc"
+        rule.parent.mkdir(parents=True)
+        rule.write_text(_RULE % (version, body), encoding="utf-8")
+        _commit_all(repo, "add rule")
+    (b / "skills" / "brainstorming" / "SKILL.md").write_text(
+        "---\nname: brainstorming\ndescription: Totally different skill from "
+        "another repo\nversion: 9.0.0\n---\n\nSomething unrelated.\n",
+        encoding="utf-8")
+    _commit_all(b, "unrelated skill")
+    return a, b
+
+
+class TestSourceIdentity:
+    """A tap name re-pointed at another repository is not an upstream: the
+    lock's recorded `tap_url` is compared against the configured tap, and a
+    mismatch is reported, never upgraded implicitly (not even with --yes)."""
+
+    def _retap_other(self, boost, two_sources):
+        a, b = two_sources
+        boost("tap", a)
+        boost("install", "brainstorming")
+        boost("install", "house-style")
+        boost("untap", "reg", "--force")
+        boost("tap", b)
+        return a, b
+
+    def test_outdated_reports_source_changed(self, boost, two_sources):
+        self._retap_other(boost, two_sources)
+        r = boost("outdated")
+        rows = {l.split()[0]: l for l in r.out.splitlines()
+                if l.startswith(("brainstorming", "house-style"))}
+        assert "source changed" in rows["brainstorming"]
+        assert "9.0.0" not in r.out
+        assert "source changed" in rows["house-style"]
+        assert ("2 outdated · 2 source changed (the tap now points at another "
+                "repo; `boost reinstall` takes its copy)") in r.out
+        data = json.loads(boost("outdated", "--json").out)
+        assert [(d["name"], d["kind"], d["reason"], d["latest"])
+                for d in data] == [
+            ("brainstorming", "skill", staleness.SOURCE_CHANGED, None),
+            ("house-style", "rule", staleness.SOURCE_CHANGED, None)]
+
+    def test_update_yes_never_replaces_the_installed_copy(self, boost,
+                                                          two_sources):
+        from boost_cli.core import lockfile, store
+        a, _b = self._retap_other(boost, two_sources)
+        md = store.skill_store_dir("brainstorming") / "SKILL.md"
+        before = md.read_bytes()
+        rule_sha = lockfile.installed_rules()["house-style"]["sha256"]
+        r = boost("update", "--yes")
+        assert "upgraded" not in r.out
+        assert "tap reg now points at" in r.out
+        assert "`boost reinstall brainstorming` takes the new" in r.out
+        assert "`boost reinstall house-style` takes the new" in r.out
+        assert "2 items held back" in r.out
+        assert "everything up to date" not in r.out
+        assert md.read_bytes() == before
+        assert lockfile.get_skill("brainstorming")["tap_url"] == str(
+            a.resolve())
+        rule = lockfile.installed_rules()["house-style"]
+        assert (rule["sha256"], rule["tap_url"]) == (rule_sha,
+                                                      str(a.resolve()))
+
+    def test_drift_names_the_changed_source(self, boost, two_sources):
+        self._retap_other(boost, two_sources)
+        rows = json.loads(boost("drift", "--json").out)["skills"]
+        assert {(r["name"], r["status"], r["hint"]) for r in rows} == {
+            ("brainstorming", "source-changed",
+             "boost reinstall brainstorming to take the new source's copy, "
+             "or re-tap the original"),
+            ("house-style", "source-changed",
+             "boost reinstall house-style to take the new source's copy, "
+             "or re-tap the original")}
+
+    def test_explicit_reinstall_takes_the_new_source(self, boost,
+                                                     two_sources):
+        from boost_cli.core import lockfile, store
+        _a, b = self._retap_other(boost, two_sources)
+        boost("reinstall", "brainstorming", "house-style")
+        md = store.skill_store_dir("brainstorming") / "SKILL.md"
+        assert "Totally different skill" in md.read_text(encoding="utf-8")
+        assert lockfile.get_skill("brainstorming")["tap_url"] == str(
+            b.resolve())
+        assert "everything up to date" in boost("outdated").out
+
+    def test_legacy_row_without_tap_url_keeps_old_behaviour(self, boost,
+                                                            two_sources):
+        from boost_cli.core import lockfile
+        self._retap_other(boost, two_sources)
+        def drop_urls(lock):
+            for section in ("skills", "rules"):
+                for row in lock.get(section, {}).values():
+                    row.pop("tap_url", None)
+        lockfile.mutate(drop_urls)
+        data = json.loads(boost("outdated", "--json").out)
+        assert ("brainstorming", staleness.VERSION, "9.0.0") in [
+            (d["name"], d["reason"], d["latest"]) for d in data]
+
+
+class TestOutdatedNotCloned:
+    """A configured tap whose clone is gone is `boost update`'s to fix, and
+    `outdated` says so for every kind — not "removed upstream"."""
+
+    def test_skill_and_workflow_read_not_cloned(self, boost, fixture_tap_src,
+                                                tmp_path):
+        src = _copy_tap(fixture_tap_src, tmp_path / "two")
+        cmd = src / "commands" / "ship.md"
+        cmd.parent.mkdir(parents=True)
+        cmd.write_text("---\ndescription: Ship it\n---\n\nShip.\n",
+                       encoding="utf-8")
+        _commit_all(src, "add workflow")
+        boost("tap", src)
+        boost("install", "ship")
+        boost("install", "brainstorming")
+        util.rmtree(paths.repos_dir() / "two")
+        r = boost("outdated")
+        for name in ("brainstorming ", "ship (workflow)"):
+            row = next(l for l in r.out.splitlines() if l.startswith(name))
+            assert "not cloned" in row
+        assert "removed upstream" not in r.out
+        assert "2 outdated · 2 not cloned (`boost update` clones the tap)" \
+            in r.out
+        data = json.loads(boost("outdated", "--json").out)
+        assert [(d["name"], d["kind"], d["reason"]) for d in data] == [
+            ("brainstorming", "skill", staleness.NOT_CLONED),
+            ("ship", "workflow", staleness.NOT_CLONED)]
+        boost("update", "two")
+        assert "everything up to date" in boost("outdated").out
+
+
 # ── completion cache invalidation ───────────────────────────────────────
 
 class TestCompletionCacheStaysFresh:

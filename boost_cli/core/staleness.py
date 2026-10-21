@@ -23,19 +23,22 @@ CONTENT = "content"  # the tap HEAD moved AND the source tree's bytes changed
 
 def upstream_reason(installed_version: str, latest_version: str,
                     installed_commit: str, tap_head: str,
-                    installed_sha: str, source_sha: str | None
-                    ) -> str | None:
+                    installed_sha: str, source_sha: str | None,
+                    exec_changed: bool = False) -> str | None:
     """Why the tap's copy is newer than the installed one, else ``None``.
 
     Mirrors the historical order exactly: a higher advertised semver wins
     immediately; otherwise a *moved* tap HEAD **plus** a changed source tree
     counts as content drift. ``source_sha`` is ``None`` when the source tree
     could not be hashed (missing checkout) — treated as "no content signal",
-    i.e. not stale on that axis.
+    i.e. not stale on that axis. ``exec_changed`` says the source's exec bits
+    differ from the installed copy's (:func:`store.source_exec_changed`): a
+    mode-only commit is content drift too.
     """
     if util.semver_gt(latest_version, installed_version):
         return VERSION
-    if tap_head and tap_head != installed_commit and source_sha is not None and source_sha != installed_sha:
+    if (tap_head and tap_head != installed_commit and source_sha is not None
+            and (source_sha != installed_sha or exec_changed)):
         return CONTENT
     return None
 
@@ -99,12 +102,19 @@ IN_SYNC = "in-sync"
 LOCAL_EDITS = "local-edits"
 UPSTREAM_MOVED = "upstream-moved"
 SOURCE_MISSING = "source-missing"
+#: The tap's name now resolves to another repository than the lock's
+#: ``tap_url`` — an outdated reason and a drift state, never an upgrade.
+SOURCE_CHANGED = "source-changed"
+#: The tap is configured but has no clone: `boost update` clones it.
+NOT_CLONED = "not-cloned"
 STORE_MISSING = "store-missing"
 NA = "n/a"
 
 
 def drift_state(store_sha: str | None, lock_sha: str,
-                is_local: bool, source_sha: str | None) -> str:
+                is_local: bool, source_sha: str | None,
+                source_changed: bool = False,
+                exec_changed: bool = False) -> str:
     """Drift of an installed skill's store copy vs its lock entry and tap.
 
     Signals (all pre-computed by the caller):
@@ -116,6 +126,11 @@ def drift_state(store_sha: str | None, lock_sha: str,
     * ``source_sha`` — ``sha256`` of the tap source dir, or ``None`` if it is
       unavailable (only consulted once the store copy matches the lock and the
       skill has a tap).
+    * ``source_changed`` — the configured tap is no longer the repository the
+      lock recorded (:func:`registry.source_changed`), so its copy is not
+      this skill's upstream at all.
+    * ``exec_changed`` — the source's exec bits differ from the copy's, which
+      the content hash cannot see.
 
     The ordering is significant and matches the historical ``_drift_status``:
     a missing store beats local edits, which beat the local/upstream split.
@@ -126,9 +141,12 @@ def drift_state(store_sha: str | None, lock_sha: str,
         return LOCAL_EDITS
     if is_local:
         return NA
+    if source_changed:
+        return SOURCE_CHANGED
     if source_sha is None:
         return SOURCE_MISSING
-    return IN_SYNC if source_sha == lock_sha else UPSTREAM_MOVED
+    return (IN_SYNC if source_sha == lock_sha and not exec_changed
+            else UPSTREAM_MOVED)
 
 
 # ── outdated_footer: the one-line summary `cmd_outdated` prints ────────────
@@ -141,9 +159,25 @@ OUTDATED_SOURCE_MISSING = "source missing"
 #: The LATEST cell for a missing row whose tap is still configured: the
 #: footer's own words, so the row and the summary name one state.
 OUTDATED_REMOVED_UPSTREAM = "removed upstream"
+#: The LATEST cell for a row whose tap name now points at another repository.
+OUTDATED_SOURCE_CHANGED = "source changed"
+#: The LATEST cell for a row whose tap is configured but not cloned.
+OUTDATED_NOT_CLONED = "not cloned"
 
 
-def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
+def removed_upstream_remedy(name: str = "", quote: bool = False) -> str:
+    """What to do about an item its still-configured tap no longer ships.
+
+    One source for the words, so `outdated`'s footer and `drift`'s hint
+    cannot drift apart: `boost update` restores nothing here (it answers
+    "no longer in tap — leaving as-is"), so neither may suggest it.
+    """
+    cmd = "boost uninstall %s" % name if name else "boost uninstall"
+    return "%s, or keep as-is" % ("`%s`" % cmd if quote else cmd)
+
+
+def outdated_footer(total: int, source_missing: int, removed: int = 0,
+                    source_changed: int = 0, not_cloned: int = 0) -> str:
     """Summary line for `boost outdated`, worded so it never promises
     `boost update` can fix a row whose source is gone.
 
@@ -152,16 +186,21 @@ def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
     still configured — the item was dropped upstream — and re-tapping would
     restore nothing, so only the rest are told to re-tap. Every such row used
     to read as a deleted tap, while `boost taps` showed it present.
+
+    ``source_changed`` and ``not_cloned`` count rows `boost update` will not
+    upgrade either: one names another repository than the install came from,
+    the other has no clone to compare against (`boost update` clones it).
     """
-    if source_missing == 0:
+    held = source_changed + not_cloned
+    if source_missing == held == 0:
         return ("%d outdated · `boost update` upgrades "
                 "(pinned and quarantined items stay put)" % total)
-    updatable = total - source_missing
+    updatable = total - source_missing - held
     untapped = source_missing - removed
-    if updatable == removed == 0:
+    if held == 0 and updatable == removed == 0:
         return ("%d outdated · source missing — `boost update` can't "
                 "restore a deleted tap; re-tap or `boost uninstall`" % total)
-    if updatable == untapped == 0:
+    if held == 0 and updatable == untapped == 0:
         them, copies = (("them", "these copies") if total > 1
                         else ("it", "this copy"))
         return ("%d outdated · %s — `boost update` can't bring %s back; "
@@ -175,6 +214,12 @@ def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
         parts.append("%d source missing (re-tap or `boost uninstall`)"
                      % untapped)
     if removed:
-        parts.append("%d removed upstream (`boost uninstall`, or keep as-is)"
-                     % removed)
+        parts.append("%d removed upstream (%s)"
+                     % (removed, removed_upstream_remedy(quote=True)))
+    if source_changed:
+        parts.append("%d source changed (the tap now points at another "
+                     "repo; `boost reinstall` takes its copy)" % source_changed)
+    if not_cloned:
+        parts.append("%d not cloned (`boost update` clones the tap)"
+                     % not_cloned)
     return " · ".join(parts)

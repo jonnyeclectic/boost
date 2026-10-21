@@ -352,23 +352,25 @@ class TestSearch:
         assert "using the heuristic fallback" in " ".join(r.err.split())
         assert "ranked by full-content BM25" in r.out
 
-    def test_smart_with_ai_reorders_and_credits_haiku(self, boost, tapped,
+    def test_smart_with_ai_reorders_and_credits_the_ai(self, boost, tapped,
                                                       monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         # BM25 for "workflow" returns tdd-workflow then jira-integration; the
         # rerank flips them.
         monkeypatch.setattr("boost_cli.core.ai.ask",
                             lambda *a, **k: '["jira-integration", "tdd-workflow"]')
         r = boost("search", "workflow", "--smart")
         assert r.out.index("jira-integration") < r.out.index("tdd-workflow")
-        assert "ranked by Claude Haiku relevance" in r.out
+        assert "ranked by AI relevance" in r.out
         assert "full-content BM25" not in r.out
 
     def test_smart_with_junk_ai_reply_keeps_base_ranker(self, boost, tapped,
                                                         monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr("boost_cli.core.ai.ask",
                             lambda *a, **k: "sorry, no list here")
         r = boost("search", "workflow", "--smart")
@@ -379,10 +381,52 @@ class TestSearch:
         # nothing usable — indistinguishable from a deliberate BM25-only run.
         assert "using the heuristic fallback" in " ".join(r.err.split())
 
+    def test_smart_with_invented_names_keeps_base_ranker(self, boost, tapped,
+                                                         monkeypatch):
+        # A permutation of nothing: the order is BM25's, so the label must be.
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask",
+                            lambda *a, **k: '["no-such-skill", "made-up"]')
+        r = boost("search", "workflow", "--smart", "--json")
+        data = json.loads(r.out)
+        assert {e["ranker"] for e in data} == {"full-content BM25"}
+        assert [e["name"] for e in data][:2] == ["tdd-workflow",
+                                                 "jira-integration"]
+        assert ("AI reply was not usable (named none of the candidates)"
+                in " ".join(r.err.split()))
+
+    def test_smart_junk_reply_names_the_cause(self, boost, tapped, monkeypatch):
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask",
+                            lambda *a, **k: "{not json [[ garbage")
+        r = boost("search", "workflow", "--smart")
+        assert (" ".join(r.err.split())
+                == "! AI reply was not usable (no JSON array of names) — see "
+                "~/.boost/logs/boost.log — using the heuristic fallback")
+
+    def test_smart_label_names_the_route_that_answered(self, boost, tapped,
+                                                       monkeypatch):
+        from boost_cli.core import ai
+
+        def ask(*a, **k):
+            ai._last_route = "gemini CLI"
+            return '["jira-integration", "tdd-workflow"]'
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask", ask)
+        r = boost("search", "workflow", "--smart")
+        assert "ranked by AI relevance (gemini CLI)" in r.out
+
     def test_smart_with_a_failed_ai_call_still_warns(self, boost, tapped,
                                                       monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr("boost_cli.core.ai.ask", lambda *a, **k: None)
         r = boost("search", "workflow", "--smart")
         assert r.out.index("tdd-workflow") < r.out.index("jira-integration")
@@ -402,12 +446,13 @@ class TestSearch:
         # JSON branch returned before the --smart rerank ever ran.
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr("boost_cli.core.ai.ask",
                             lambda *a, **k: '["jira-integration", "tdd-workflow"]')
         r = boost("search", "workflow", "--json", "--smart")
         data = json.loads(r.out)
         assert [e["name"] for e in data] == ["jira-integration", "tdd-workflow"]
-        assert data[0]["ranker"] == "Claude Haiku relevance"
+        assert data[0]["ranker"] == "AI relevance"
 
     def test_json_smart_without_ai_warns_but_stdout_stays_valid_json(
             self, boost, tapped):
@@ -1533,12 +1578,68 @@ class TestRecommend:
     def test_ai_picks(self, boost, stack_tap, react_project, monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr(
             "boost_cli.core.ai.ask",
             lambda *a, **k: '[{"name": "python-style", "reason": "fits the stack"}]')
         r = boost("recommend", "--path", react_project)
         assert "AI picks" in r.out
         assert "python-style  fits the stack" in r.out
+        assert "using the heuristic fallback" not in " ".join(r.err.split())
+
+    def _ai_reply(self, monkeypatch, reply):
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask", lambda *a, **k: reply)
+
+    def test_ai_picks_run_under_a_spinner(self, boost, stack_tap,
+                                          react_project, monkeypatch):
+        # Without one, a hung CLI sat silent for the whole timeout after a
+        # table that already looked finished.
+        import contextlib
+
+        from boost_cli import spin
+        labels = []
+
+        @contextlib.contextmanager
+        def fake_spinner(label, *a, **k):
+            labels.append(label)
+            yield None
+        monkeypatch.setattr(spin, "Spinner", fake_spinner)
+        self._ai_reply(monkeypatch, None)
+        boost("recommend", "--path", react_project)
+        assert labels == ["asking AI for its picks"]
+
+    def test_a_failed_ai_call_says_so(self, boost, stack_tap, react_project,
+                                      monkeypatch):
+        self._ai_reply(monkeypatch, None)
+        r = boost("recommend", "--path", react_project)
+        assert "AI picks" not in r.out
+        assert "python-style" in r.out
+        assert " ".join(r.err.split()) == (
+            "! AI unavailable — using the heuristic fallback")
+
+    def test_a_junk_ai_reply_says_why(self, boost, stack_tap, react_project,
+                                      monkeypatch):
+        self._ai_reply(monkeypatch, "{not json [[ garbage")
+        r = boost("recommend", "--path", react_project)
+        assert "AI picks" not in r.out
+        assert ("AI reply was not usable (no JSON array of picks) — see "
+                "~/.boost/logs/boost.log") in " ".join(r.err.split())
+
+    def test_picks_without_names_say_why(self, boost, stack_tap,
+                                         react_project, monkeypatch):
+        self._ai_reply(monkeypatch, '[{"reason": "x"}, "python-style"]')
+        r = boost("recommend", "--path", react_project)
+        assert "AI picks" not in r.out
+        assert "AI reply was not usable (no pick carried a name)" in \
+            " ".join(r.err.split())
+
+    def test_no_ai_prints_no_note(self, boost, stack_tap, react_project):
+        # BOOST_NO_AI (the sandbox default): nothing was tried, nothing to say.
+        r = boost("recommend", "--path", react_project)
+        assert "heuristic fallback" not in r.err
 
 
 # ---------------------------------------------------------------- browse
@@ -2345,6 +2446,15 @@ class TestStats:
         r = boost("stats", "nope", expect=1)
         assert "no skill named 'nope' installed or in any tap" in r.err
         assert "try `boost search nope`" in r.err
+
+    def test_unknown_with_no_taps_hints_tapping_first(self, boost):
+        # `boost search` fails too on an untapped machine, so pointing at it
+        # sent a new user from one error to another.
+        r = boost("stats", "brainstorming", expect=1)
+        assert "no skill named 'brainstorming' installed or in any tap" in r.err
+        assert "hint: no taps configured — start with `boost tap --defaults`" \
+            in r.err
+        assert "boost search" not in r.err
 
     def test_installed_rule_reports_lock_facts(self, boost, tapped):
         # Before find_any this raised "no skill named 'house-style'" for a

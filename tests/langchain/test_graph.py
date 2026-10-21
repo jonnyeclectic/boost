@@ -153,3 +153,28 @@ def test_node_runs_inside_a_real_stategraph(indexed):
     injected = [m for m in msgs if isinstance(m, SystemMessage)]
     assert len(injected) == 1
     assert "brainstorming" in injected[0].content
+
+
+def test_an_undeclared_version_is_left_out_of_provenance(indexed):
+    # The rule fixture declares no version. Provenance is for auditing, so it
+    # must not quote the catalog's 0.0.0 placeholder as a version.
+    content = _content(skill_context_node(kind="rule", k=1)({
+        "messages": [HumanMessage("python formatting conventions")]}))
+    assert "### python-style (rule — fixture-tap:rules/python-style.mdc)\n" \
+        in content
+    assert " @ " not in content
+
+
+def test_a_description_only_hit_is_labelled(indexed, tmp_path):
+    import os
+    from pathlib import Path
+
+    query = "structured divergent thinking ideation"
+    src = Path(BoostRetriever(k=1).invoke(query)[0].metadata["source"])
+    os.rename(src.parents[2], tmp_path / "moved-clone")
+    content = _content(skill_context_node(k=1)({
+        "messages": [HumanMessage(query)]}))
+    assert ("### brainstorming (skill — fixture-tap:skills/brainstorming/"
+            "SKILL.md @ 1.4.0; description only, body not included)\n\n"
+            "brainstorming\nStructured ideation & divergent-thinking "
+            "facilitation") in content

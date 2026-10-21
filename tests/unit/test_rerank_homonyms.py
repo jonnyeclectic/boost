@@ -51,6 +51,20 @@ class TestReorderByNames:
         assert rag.reorder_by_names(["a", "b"], [], lambda s: s) == ["a", "b"]
 
 
+class TestNamesAny:
+    def test_one_known_name_is_enough(self):
+        assert rag.names_any(["a", "b"], ["zzz", "b"], lambda s: s) is True
+
+    def test_only_invented_names_is_false(self):
+        assert rag.names_any(["a", "b"], ["zzz", "yyy"], lambda s: s) is False
+
+    def test_names_compare_as_strings(self):
+        assert rag.names_any(["1"], [1], lambda s: s) is True
+
+    def test_empty_order_is_false(self):
+        assert rag.names_any(["a"], [], lambda s: s) is False
+
+
 @pytest.fixture
 def stub_ai(monkeypatch, sandbox):
     monkeypatch.setenv("BOOST_NO_RERANK_CACHE", "1")
@@ -59,6 +73,30 @@ def stub_ai(monkeypatch, sandbox):
     def _reply(text):
         monkeypatch.setattr(rag.ai, "ask", lambda *_a, **_k: text)
     return _reply
+
+
+class TestRagRerankInventedNames:
+    def test_invented_names_keep_the_engine_label(self, stub_ai):
+        stub_ai('["no-such-skill"]')
+        hits = [_hit("a", "t"), _hit("b", "t")]
+        out, label = rag.rerank("q", hits, limit=10, engine="hybrid RRF")
+        assert _rows(out) == [("a", "t"), ("b", "t")]
+        assert label == "hybrid RRF"
+        assert rag.ai._last_failure == (
+            "reply was not usable (named none of the candidates)")
+
+    def test_junk_reply_names_the_cause(self, stub_ai):
+        stub_ai("sorry")
+        _out, label = rag.rerank("q", [_hit("a", "t")], limit=10)
+        assert label == "BM25 full-content"
+        assert rag.ai._last_failure == (
+            "reply was not usable (no JSON array of names)")
+
+    def test_no_reply_leaves_the_transport_failure_alone(self, stub_ai):
+        stub_ai(None)
+        rag.ai._last_failure = "claude CLI failed (exit 1: boom)"
+        rag.rerank("q", [_hit("a", "t")], limit=10)
+        assert rag.ai._last_failure == "claude CLI failed (exit 1: boom)"
 
 
 class TestRagRerankKeepsHomonyms:
@@ -106,3 +144,16 @@ class TestSmartRankKeepsHomonyms:
     def test_an_unparseable_reply_is_none(self, stub_ai):
         stub_ai("nope")
         assert discovery._ai_rank("q", [(_hit("a", "x")["entry"], 1.0)]) is None
+        assert rag.ai._last_failure == (
+            "reply was not usable (no JSON array of names)")
+
+    def test_invented_names_are_none(self, stub_ai):
+        stub_ai('["zzz"]')
+        assert discovery._ai_rank("q", [(_hit("a", "x")["entry"], 1.0)]) is None
+        assert rag.ai._last_failure == (
+            "reply was not usable (named none of the candidates)")
+
+    def test_no_reply_is_none_and_notes_nothing(self, stub_ai):
+        stub_ai(None)
+        assert discovery._ai_rank("q", [(_hit("a", "x")["entry"], 1.0)]) is None
+        assert rag.ai._last_failure is None

@@ -18,7 +18,7 @@ Verbosity is resolved once, in this order (first wins):
   1. ``--debug`` flag / ``BOOST_DEBUG=1``      -> console shows DEBUG + tracebacks
   2. ``--verbose`` / ``-v`` flag              -> console shows INFO
   3. ``--quiet`` / ``-q`` flag                -> console stays silent
-  4. ``BOOST_LOG_LEVEL=DEBUG|INFO|WARNING|…`` -> explicit console level
+  4. ``BOOST_LOG_LEVEL=OFF|DEBUG|INFO|…``   -> explicit console level
   5. config ``logging.level`` (default ``OFF`` -> console silent)
 
 The console diagnostic channel is *off by default* — user-facing messages
@@ -56,7 +56,7 @@ import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import paths
+from . import paths, typedvalue
 
 LOGGER_NAME = "boost"
 MAX_BYTES = 1_000_000  # ~1 MB per file …
@@ -65,6 +65,11 @@ KEEP_CRASH_REPORTS = 20
 
 _LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _FORMATS = ("text", "json")
+#: What `config set logging.level` / `logging.format` accept: ``OFF`` is the
+#: default and silences the console, so it is a valid level even though
+#: :mod:`logging` has no such name.
+LEVEL_CHOICES = ("OFF", *_LEVELS)
+FORMAT_CHOICES = _FORMATS
 _TEXT_FMT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 _DATE_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -100,15 +105,26 @@ def _console_level(verbose: bool, debug: bool, quiet: bool) -> int | None:
     for, so a normal run leaves stderr clean while the file keeps the full
     DEBUG trail.
     """
-    if debug or os.environ.get("BOOST_DEBUG"):
+    if debug or typedvalue.env_flag("BOOST_DEBUG"):
         return logging.DEBUG
     if verbose:
         return logging.INFO
     if quiet:
         return None
+    # A set BOOST_LOG_LEVEL decides, whatever config says: `OFF` was missing
+    # from the levels read here, so it fell through and a configured DEBUG
+    # still printed — env silencing config is the documented order. An
+    # unrecognised value silences too, and says so, rather than letting the
+    # config level it was presumably meant to override win.
     env = (os.environ.get("BOOST_LOG_LEVEL") or "").strip().upper()
     if env in _LEVELS:
         return getattr(logging, env)
+    if env:
+        if env != "OFF":
+            sys.stderr.write("! BOOST_LOG_LEVEL=%r is not one of %s — "
+                             "treating it as OFF\n"
+                             % (env, ", ".join(LEVEL_CHOICES)))
+        return None
     from . import config
     cfg = str(config.get("logging.level", "OFF") or "OFF").upper()
     return getattr(logging, cfg) if cfg in _LEVELS else None
@@ -163,7 +179,7 @@ def _formatter(fmt_name: str) -> logging.Formatter:
 
 
 def _file_enabled() -> bool:
-    if os.environ.get("BOOST_NO_LOG"):
+    if typedvalue.env_flag("BOOST_NO_LOG", unknown=True):
         return False
     from . import config
     return bool(config.get("logging.file", True))
@@ -217,7 +233,7 @@ def configure(verbose: bool = False, debug: bool = False,
     logger.setLevel(logging.DEBUG)  # handlers do the real filtering
     logger.propagate = False
 
-    _debug_console = bool(debug or os.environ.get("BOOST_DEBUG"))
+    _debug_console = bool(debug or typedvalue.env_flag("BOOST_DEBUG"))
 
     if _configured:
         return logger

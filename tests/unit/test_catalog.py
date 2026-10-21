@@ -2048,3 +2048,20 @@ class TestCatalogueLookupIndex:
             sys.setswitchinterval(old)
         assert errors == []
         assert len(catalog._NAME_INDEX) == catalog._NAME_INDEX_SLOTS
+
+
+class TestSearchHint:
+    """The next step after a failed lookup must be one that can succeed."""
+
+    def test_no_taps_points_at_tapping(self, sandbox, monkeypatch):
+        from boost_cli.core import builtin
+        monkeypatch.setattr(builtin, "configured_tap_count", lambda: 0)
+        assert catalog.search_hint("brainstorming") == (
+            "no taps configured — start with `boost tap --defaults`")
+        assert catalog.search_hint("x") == catalog.NO_TAPS_HINT
+
+    def test_with_a_tap_points_at_search(self, sandbox, monkeypatch):
+        from boost_cli.core import builtin
+        monkeypatch.setattr(builtin, "configured_tap_count", lambda: 1)
+        assert catalog.search_hint("brainstorming") == \
+            "try `boost search brainstorming`"

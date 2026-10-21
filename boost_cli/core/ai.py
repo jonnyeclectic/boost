@@ -27,7 +27,7 @@ import subprocess
 import urllib.error
 import urllib.request
 
-from . import aihost, config, logs, nethttp
+from . import aihost, config, frontmatter, logs, nethttp, typedvalue
 
 API_URL = "https://api.anthropic.com/v1/messages"
 
@@ -43,10 +43,20 @@ STDERR_LOG_CHARS = 200
 # of which was true.
 _last_failure: str | None = None
 
+# Which route produced the most recent reply ("claude CLI", "Anthropic API"),
+# reset by `ask()` like `_last_failure`. A caller that finds the reply unusable
+# names the route through `note_bad_reply()`, and a ranking label names it
+# rather than claiming a model nobody checked answered.
+_last_route: str | None = None
+
+#: How much of an unusable reply the debug log keeps — enough to see whether
+#: the model refused, chatted, or wrapped its answer, never the whole reply.
+BAD_REPLY_LOG_CHARS = 200
+
 
 def enabled() -> bool:
     """Return True when `ai.enabled` is on and BOOST_NO_AI is unset."""
-    return bool(config.get("ai.enabled", True)) and not os.environ.get("BOOST_NO_AI")
+    return bool(config.get("ai.enabled", True)) and not typedvalue.env_flag("BOOST_NO_AI", unknown=True)
 
 
 def available() -> bool:
@@ -77,7 +87,7 @@ def unavailable_reason() -> str:
     problem — blaming it for the other two sends a user with a working
     backend chasing an environment issue they do not have.
     """
-    if os.environ.get("BOOST_NO_AI"):
+    if typedvalue.env_flag("BOOST_NO_AI", unknown=True):
         return "disabled (BOOST_NO_AI is set)"
     if not bool(config.get("ai.enabled", True)):
         return "disabled (ai.enabled is off)"
@@ -101,10 +111,11 @@ def fallback_note() -> str:
 def ask(prompt: str, system: str | None = None, model: str | None = None,
         max_tokens: int = 1500, timeout: int = 120) -> str | None:
     """Ask Claude. Returns the text reply, or None if AI is unavailable/fails."""
-    global _last_failure
+    global _last_failure, _last_route
     if not enabled():
         return None
     _last_failure = None
+    _last_route = None
     model = model or str(config.get("ai.model"))
     backend = cli_backend()
     if backend:
@@ -139,10 +150,89 @@ def _log_failure(route: str, reason: str) -> None:
     logs.get_logger().debug("ai: %s call failed: %s", route, reason)
 
 
+def _answered(route: str) -> None:
+    global _last_route
+    _last_route = route
+
+
+def last_route() -> str | None:
+    """The route that produced the last reply, or None if none did."""
+    return _last_route
+
+
+def note_bad_reply(why: str, reply: str | None) -> None:
+    """Record that a backend answered, but with nothing the caller can use.
+
+    Transport failures land in ``_last_failure`` via :func:`_log_failure`; a
+    reply that arrived with exit 0 and then failed to parse (no JSON array, no
+    frontmatter) used to set nothing, so ``fallback_note()`` fell through to a
+    bare "AI unavailable" about a backend that had just run and replied, and
+    the log held no trace of it. This names the cause on stderr and keeps the
+    head of the reply in the debug log, where the user is pointed.
+    """
+    global _last_failure
+    route = _last_route
+    _last_failure = "%s was not usable (%s)" % (
+        "%s reply" % route if route else "reply", why)
+    head = " ".join((reply or "").split())
+    if len(head) > BAD_REPLY_LOG_CHARS:
+        head = head[:BAD_REPLY_LOG_CHARS] + "..."
+    logs.get_logger().debug("ai: %s reply unusable (%s): %r",
+                            route or "AI", why, head)
+
+
+def authored_skill(reply: str | None, name: str) -> str | None:
+    """An AI-authored SKILL.md reply as text that carries ``name``, or None.
+
+    The model is asked for ``name: <name>`` and does not always write it: a
+    reply naming some other skill was accepted as-is, so `boost distill
+    --name merged-one` wrote a file that `boost import` installed as
+    something-else, and `boost evolve --apply` renamed the installed skill out
+    from under its own directory. The caller already validated ``name``, so a
+    missing or different one is overwritten in place (only that line of the
+    frontmatter changes). A reply with no frontmatter at all is unusable — it
+    is recorded via :func:`note_bad_reply` and None tells the caller to
+    degrade to its heuristic.
+    """
+    if not reply:
+        return None
+    text = extract_markdown(reply)
+    if not text:
+        note_bad_reply("empty after removing the code fence", reply)
+        return None
+    if not frontmatter.split(text)[0]:
+        note_bad_reply("no SKILL.md frontmatter", reply)
+        return None
+    meta, _ = frontmatter.parse(text)
+    if meta.get("name") != name:
+        logs.get_logger().debug("ai: reply named the skill %r; using %r",
+                                meta.get("name"), name)
+        text = frontmatter.set_field(text, "name", name)
+    return text
+
+
+def ranker_label() -> str:
+    """The ranking label for an order the AI produced, naming its route."""
+    return "AI relevance (%s)" % _last_route if _last_route else "AI relevance"
+
+
 def _stderr_excerpt(text: str | None) -> str:
     """Collapse a subprocess' stderr to one bounded line fit for the log."""
     s = " ".join((text or "").split())
     return (s[:STDERR_LOG_CHARS] + "...") if len(s) > STDERR_LOG_CHARS else s
+
+
+def _exit_reason(backend: str, proc: subprocess.CompletedProcess) -> str:
+    """Why a CLI exited non-zero, as one bounded line — never an empty one.
+
+    Stderr first; then stdout, because an unauthenticated ``claude -p`` exits
+    1 with "Not logged in · Please run /login" on stdout and nothing on
+    stderr, which left the warning and the log it points at both reading
+    ``exit 1: ``. With neither, name the one step that usually explains it.
+    """
+    return (_stderr_excerpt(proc.stderr) or _stderr_excerpt(proc.stdout)
+            or "no output — run `%s` by itself to check it is logged in"
+            % aihost.cli(backend))
 
 
 def _ask_cli(backend: str, prompt: str, system: str | None, model: str,
@@ -167,12 +257,13 @@ def _ask_cli(backend: str, prompt: str, system: str | None, model: str,
         return None
     if proc.returncode != 0:
         _log_failure(who, "exit %d: %s"
-                     % (proc.returncode, _stderr_excerpt(proc.stderr)))
+                     % (proc.returncode, _exit_reason(backend, proc)))
         return None
     out = proc.stdout.strip()
     if not out:
         _log_failure(who, "empty reply")
         return None
+    _answered(who)
     return out
 
 
@@ -207,6 +298,7 @@ def _ask_api(prompt: str, system: str | None, model: str,
     if not text:
         _log_failure("Anthropic API", "reply had no text content")
         return None
+    _answered("Anthropic API")
     return text
 
 

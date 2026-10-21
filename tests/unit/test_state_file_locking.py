@@ -292,16 +292,16 @@ class TestMutate:
         config.mutate(lambda cfg: seen.append(cfg["x"]["y"]) or False)
         assert seen == [2]
 
-    def test_config_raw_reads_only_overrides(self, sandbox):
+    def test_config_mutate_reads_only_overrides(self, sandbox):
+        # Every writer sees the on-disk overrides, never the DEFAULTS-merged
+        # view: handing it the merged view is what wrote all of DEFAULTS to
+        # disk on the first `config set` or `boost tap`.
         p = paths.config_path()
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text('{"x": {"y": 1}}', encoding="utf-8")
         seen: list[dict] = []
-        config.mutate(lambda cfg: seen.append(cfg) or False, raw=True)
         config.mutate(lambda cfg: seen.append(cfg) or False)
-        assert seen[0] == {"x": {"y": 1}}
-        assert seen[1]["x"] == {"y": 1}
-        assert seen[1]["agents"] == config.DEFAULTS["agents"]
+        assert seen == [{"x": {"y": 1}}]
 
     def test_config_unset_absent_writes_nothing(self, sandbox):
         config.set_value("x.y", "1")

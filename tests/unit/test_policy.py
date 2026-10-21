@@ -470,7 +470,9 @@ class TestRanges:
         pol = policy.load()
         assert pol["min_quality_score"] == 0
         assert pol["max_skills"] is None
-        assert policy.check_install(GOOD_ENTRY, 3) == []
+        # Read as the default for display, but enforcement refuses: the
+        # default is the permissive value, not the one the user wrote.
+        assert policy.check_install(GOOD_ENTRY, 3) == [policy.invalid_violation()]
         assert sorted(policy.invalid_values()) == [
             ("max_skills", -1, "a whole number of 0 or more, or null for no limit"),
             ("min_quality_score", 500, "a whole number from 0 to 100")]
@@ -505,7 +507,10 @@ class TestLoadCoercesStoredValues:
         pol = policy.load()
         assert pol["max_skills"] is None
         assert pol["blocked_skills"] == []
-        assert policy.check_install(GOOD_ENTRY, 500) == []
+        # No traceback — and no install either: the refusal names both keys.
+        v = policy.check_install(GOOD_ENTRY, 500)
+        assert v == [policy.invalid_violation()]
+        assert "max_skills" in v[0] and "blocked_skills" in v[0]
 
     def test_a_good_value_beside_a_bad_one_still_applies(self, sandbox):
         write_policy_json({"max_skills": "abc", "pin_only": True})
@@ -636,3 +641,148 @@ class TestCorruptPolicy:
         set_policy(pin_only=False)
         assert sorted(q.name for q in paths.policy_path().parent.iterdir()
                       if q.name.startswith("policy")) == ["policy.json"]
+
+
+# --------------------------------------- unreadable values fail closed
+
+LIST_PHRASE = "a comma-separated list, or a JSON array"
+BOOL_PHRASE = "a boolean (true/false, yes/no, on/off, 1/0)"
+CAP_PHRASE = "a whole number, or null for no limit"
+
+
+class TestInvalidViolation:
+    """A value unreadable at its type reads as its (permissive) default for
+    display; enforcement refuses instead of obeying that default."""
+
+    def test_none_when_every_value_reads(self, sandbox):
+        assert policy.invalid_violation() is None
+        set_policy(pin_only=True, max_skills=5)
+        assert policy.invalid_violation() is None
+        assert policy.unreadable_violation() is None
+
+    def test_one_key_is_named_with_its_type(self, sandbox):
+        write_policy_json({"blocked_skills": {"cowboy-coding": True}})
+        assert policy.invalid_violation() == (
+            'policy.json holds blocked_skills = {"cowboy-coding": true}, which '
+            "expects %s — boost cannot read it, so it will not install until "
+            "it is fixed with `boost policy set` or `boost policy unset`"
+            % LIST_PHRASE)
+
+    def test_several_keys_are_all_named(self, sandbox):
+        write_policy_json({"pin_only": "frozen", "max_skills": "2.5"})
+        assert policy.invalid_violation("tap") == (
+            'policy.json holds pin_only = "frozen", which expects %s; '
+            'max_skills = "2.5", which expects %s — boost cannot read them, '
+            "so it will not tap until they are fixed with `boost policy set` "
+            "or `boost policy unset`" % (BOOL_PHRASE, CAP_PHRASE))
+
+    def test_unreadable_prefers_the_parse_error(self, sandbox):
+        _corrupt(TRUNCATED)
+        assert policy.unreadable_violation() == policy.corrupt_violation()
+        assert policy.unreadable_violation() is not None
+
+    def test_unreadable_falls_back_to_the_invalid_value(self, sandbox):
+        write_policy_json({"pin_only": "frozen"})
+        assert policy.corrupt_violation() is None
+        assert policy.unreadable_violation() == policy.invalid_violation()
+        assert policy.unreadable_violation() is not None
+
+    @pytest.mark.parametrize("raw", [
+        {"blocked_skills": {"cowboy-coding": True}},
+        {"pin_only": "frozen"},
+        {"max_skills": "2.5"},
+        {"blocked_taps": 7},
+        {"require_signed_taps": "maybe"},
+    ])
+    def test_each_bad_key_blocks_install(self, sandbox, raw):
+        write_policy_json(raw)
+        assert policy.check_install(GOOD_ENTRY, 0) == [policy.invalid_violation()]
+
+    def test_a_bad_require_signed_taps_refuses_the_tap(self, sandbox, tmp_path):
+        write_policy_json({"require_signed_taps": "maybe"})
+        assert policy.check_tap_signing(tmp_path) == [
+            policy.invalid_violation("tap")]
+
+    def test_enforce_switch_still_bypasses(self, sandbox, tmp_path):
+        cfg = config.load()
+        cfg["policy_enforce"] = False
+        config.save(cfg)
+        write_policy_json({"pin_only": "frozen"})
+        assert policy.check_install(GOOD_ENTRY, 0) == []
+        assert policy.check_tap_signing(tmp_path) == []
+        assert policy.check_source("evil/repo", tmp_path) == []
+
+
+class TestMutateKeepsUnreadableValues:
+    def test_setting_another_key_keeps_the_bad_value_verbatim(self, sandbox):
+        write_policy_json({"blocked_skills": {"cowboy-coding": True},
+                           "pin_only": "frozen"})
+        policy.set_key("min_quality_score", 5)
+        stored = json.loads(paths.policy_path().read_text(encoding="utf-8"))
+        assert stored["blocked_skills"] == {"cowboy-coding": True}
+        assert stored["pin_only"] == "frozen"
+        assert stored["min_quality_score"] == 5
+        assert policy.check_install(GOOD_ENTRY, 0) == [policy.invalid_violation()]
+
+    def test_setting_the_bad_key_repairs_it(self, sandbox):
+        write_policy_json({"blocked_skills": {"cowboy-coding": True},
+                           "pin_only": "frozen"})
+        policy.set_key("blocked_skills", ["cowboy-coding"])
+        assert [k for k, _v, _e in policy.invalid_values()] == ["pin_only"]
+        policy.set_key("pin_only", False)
+        assert policy.invalid_values() == []
+        assert policy.check_install(
+            dict(GOOD_ENTRY, name="cowboy-coding"), 0) == [
+            "skill 'cowboy-coding' is on the blocklist"]
+
+
+class TestCheckSource:
+    def test_source_violations_default_allow(self, sandbox):
+        assert policy.source_violations("evil/repo", policy.load()) == []
+
+    def test_allowlist_has_no_local_exemption(self, sandbox):
+        pol = set_policy(allowed_taps=["gov"])
+        assert policy.source_violations("evil/repo", pol) == [
+            "source 'evil/repo' is not on the allowlist"]
+        assert policy.source_violations("local", pol) == [
+            "source 'local' is not on the allowlist"]
+        assert policy.source_violations("gov", pol) == []
+
+    def test_blocklisted_source(self, sandbox):
+        pol = set_policy(blocked_taps=["evil/repo"])
+        assert policy.source_violations("evil/repo", pol) == [
+            "source 'evil/repo' is blocked"]
+        assert policy.source_violations("good/repo", pol) == []
+
+    def test_both_accumulate(self, sandbox):
+        pol = set_policy(blocked_taps=["evil/repo"], allowed_taps=["gov"])
+        assert policy.source_violations("evil/repo", pol) == [
+            "source 'evil/repo' is blocked",
+            "source 'evil/repo' is not on the allowlist"]
+
+    def test_check_source_folds_in_signing(self, sandbox, tmp_path):
+        set_policy(allowed_taps=["gov"], require_signed_taps=True)
+        assert policy.check_source("evil/repo", tmp_path) == [
+            "source 'evil/repo' is not on the allowlist",
+            "source is unsigned (no .boost/tap.manifest.minisig), and policy "
+            "requires a trusted signature"]
+
+    def test_check_source_allows_a_signed_allowed_source(self, sandbox,
+                                                         tmp_path, signer):
+        from boost_cli.core import provenance
+        set_policy(allowed_taps=["gov"], require_signed_taps=True)
+        provenance.add_trusted_key("acme", signer.public_key_text())
+        signer.write_signed(tmp_path)
+        assert policy.check_source("gov", tmp_path) == []
+
+    def test_check_source_fails_closed_on_an_unreadable_policy(self, sandbox,
+                                                               tmp_path):
+        write_policy_json({"allowed_taps": {"gov": True}})
+        assert policy.check_source("gov", tmp_path) == [
+            policy.invalid_violation()]
+
+    def test_tap_wording_is_unchanged(self, sandbox, tmp_path):
+        set_policy(require_signed_taps=True)
+        assert policy.check_tap_signing(tmp_path) == [
+            "tap is unsigned (no .boost/tap.manifest.minisig), and policy "
+            "requires a trusted signature"]

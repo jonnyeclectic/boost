@@ -46,6 +46,7 @@ from ..core import (
     scopes,
     selfupdate,
     serve,
+    snapshot,
     store,
     typedvalue,
     util,
@@ -127,7 +128,7 @@ def cmd_config(argv) -> int:
             config.set_value(args.key, args.value)
         except typedvalue.ValueTypeError as e:
             raise _bad_value(e, "boost config set %s <%s>"
-                             % (args.key, config.spec_for(args.key))) from e
+                             % (args.key, config.placeholder(args.key))) from e
         except TypeError as e:
             raise BoostError(str(e),
                             hint="the parent key holds a plain value — "
@@ -212,31 +213,41 @@ def cmd_clean(argv) -> int:
             for old in snaps[:-50]
         )
 
+    leftovers = store.leftover_copies()
+    items.extend((pth, "leftover skill copy", util.dir_size(pth))
+                 for pth in leftovers)
     if paths.store_dir().is_dir():
         for pth in sorted(paths.store_dir().rglob("*")):
+            if any(pth.is_relative_to(d) for d in leftovers):
+                continue    # removed whole, above
             if pth.name == "__pycache__" and pth.is_dir():
                 items.append((pth, "__pycache__", util.dir_size(pth)))
             elif pth.name == ".DS_Store" and pth.is_file():
                 items.append((pth, ".DS_Store", pth.stat().st_size))
 
     declined = False
+    old_snaps: list[snapshot.Unit] = []
     if args.deep and paths.snapshots_dir().is_dir():
-        cutoff = time.time() - 90 * 86400
-        old_snaps = [s for s in sorted(paths.snapshots_dir().iterdir())
-                     if s.lstat().st_mtime < cutoff]
+        # Counted and aged per snapshot — a tarball and its sidecar are one,
+        # aged by the `created` `snapshot list` shows (see snapshot.Unit).
+        old_snaps = snapshot.older_than(paths.snapshots_dir(),
+                                        time.time() - 90 * 86400)
         # `quiet` under --json for the reason out.confirm documents: on a
         # non-TTY decline it prints a bypass hint, which would land as a stray
         # prose line ahead of the payload and stop it parsing.
         if old_snaps and not args.dry_run and not (args.yes or out.confirm(
-                "remove %d snapshot(s) older than 90 days?" % len(old_snaps),
+                "remove %d snapshot%s older than 90 days?"
+                % (len(old_snaps), _s(len(old_snaps))),
                 quiet=args.json)):
             if not args.json:
                 out.info("keeping old snapshots")
             declined = True
             old_snaps = []
-        for s in old_snaps:
-            size = util.dir_size(s) if s.is_dir() else s.lstat().st_size
-            items.append((s, "old snapshot", size))
+        for unit in old_snaps:
+            items.extend((f, "old snapshot", size)
+                         for f, size in zip(unit.files, unit.sizes, strict=True))
+    snaps_note = (" (%d old snapshot%s)" % (len(old_snaps), _s(len(old_snaps)))
+                  if old_snaps else "")
 
     if not items:
         # `declined` means the only candidate was the --deep snapshot purge
@@ -244,6 +255,7 @@ def cmd_clean(argv) -> int:
         # nothing to do when there was, and the user just declined doing it.
         if args.json:
             print(json.dumps({"items": [], "count": 0, "bytes": 0,
+                              "snapshots": 0,
                               "dry_run": args.dry_run, "removed": 0,
                               "failed": [], "declined": declined,
                               "ok": not declined}, indent=2))
@@ -258,12 +270,14 @@ def cmd_clean(argv) -> int:
         if args.json:
             print(json.dumps({"items": [row(*i) for i in items],
                               "count": len(items), "bytes": freed,
+                              "snapshots": len(old_snaps),
                               "dry_run": True, "removed": 0, "failed": [],
                               "declined": declined, "ok": True}, indent=2))
             return 0
         for pth, kind, _size in items:
             out.info("would remove %s %s" % (_tilde(pth), out.role("(%s)" % kind, "muted")))
-        out.dim("  %d item(s) · %s would be freed" % (len(items), util.human_size(freed)))
+        out.dim("  %d item(s)%s · %s would be freed"
+                % (len(items), snaps_note, util.human_size(freed)))
         return 0
 
     removed, freed, failures = util.remove_items(items)
@@ -273,7 +287,8 @@ def cmd_clean(argv) -> int:
                     freed=util.human_size(freed))
         print(json.dumps(
             {"items": [row(*i) for i in items], "count": len(items),
-             "bytes": freed, "dry_run": False, "removed": removed,
+             "bytes": freed, "snapshots": len(old_snaps),
+             "dry_run": False, "removed": removed,
              "failed": [{"path": str(pth), "error": err}
                         for pth, err in failures],
              "declined": declined, "ok": not failures}, indent=2))
@@ -319,6 +334,16 @@ def cmd_compact(argv) -> int:
     rows: list[dict] = []
 
     taps = [registry.get(n) for n in args.tap] if args.tap else registry.list_taps()
+    # boost's own tap ships inside the wheel: a plain directory with no
+    # `.git`, so there is nothing to narrow and no remote to re-clone from.
+    # Handed to git it warned on every sweep, and `--reclone` deleted it and
+    # then failed to clone `builtin:boost`. Only a named request is answered.
+    for tap in taps:
+        if tap.is_wheel and args.tap:
+            rows.append({"tap": tap.name, "skipped": "ships with boost"})
+            if not args.json:
+                out.info("%s ships with boost — nothing to compact" % tap.name)
+    taps = [t for t in taps if not t.is_wheel]
     # A named tap is a request about that one tap (`registry.update`'s
     # convention), so a missing clone is the answer to it. Filtering it out
     # silently used to fall through to a green, global "no cloned taps to
@@ -331,23 +356,20 @@ def cmd_compact(argv) -> int:
                          stream=sys.stderr if args.json else None)
     taps = [t for t in taps if t.is_cloned]
     if not taps:
+        errored = any("error" in r for r in rows)
         if args.json:
             print(json.dumps({"taps": rows, "count": 0, "bytes": 0,
-                              "dry_run": args.dry_run, "ok": not rows},
+                              "dry_run": args.dry_run, "ok": not errored},
                              indent=2))
-            return 1 if rows else 0
-        if rows:
+            return 1 if errored else 0
+        if errored:
             return 1
-        out.ok("no cloned taps to compact")
+        if not rows:            # a named wheel tap was answered above
+            out.ok("no cloned taps to compact")
         return 0
 
-    # source_dir keeps an installed skill's own assets on disk, so routine
-    # hashing (`outdated`, `doctor`) stays offline after the freight is gone.
-    keep: dict[str, list[str]] = {}
-    for section in lockfile.all_installed().values():
-        for entry in section.values():
-            if entry.get("source_dir"):
-                keep.setdefault(entry.get("tap", ""), []).append(entry["source_dir"])
+    # Installed skills' own assets stay on disk, user and project scope alike.
+    keep = compactplan.keep_dirs()
 
     freed = 0
     removed = 0                 # bytes deleted before any re-download (reclone)
@@ -602,15 +624,17 @@ def _parse_policy_value(key: str, raw: str):
 def _warn_invalid_policy_values() -> None:
     """Name every stored policy value boost had to ignore, and why.
 
-    `policy.load()` substitutes the default for a value it cannot read at the
-    key's type, which is the right thing to do in the middle of an install and
-    the wrong thing to do silently. This is where it stops being silent.
+    `policy.load()` shows the default for a value it cannot read at the
+    key's type, but enforcement refuses while any such value stands
+    (`policy.invalid_violation`), so the warning says that rather than
+    "using the default" — every default is the permissive one.
     """
     for key, value, expected in policy.invalid_values():
-        out.warn("ignoring %s = %s in policy.json — expects %s"
+        out.warn("cannot read %s = %s in policy.json — expects %s"
                  % (key, json.dumps(value), expected))
-        out.dim("  using the default; fix it with `boost policy set %s <%s>`"
-                % (key, policy.spec_for(key)), wrap=True)
+        out.dim("  installs and taps are refused until it is fixed with "
+                "`boost policy set %s <%s>`" % (key, policy.spec_for(key)),
+                wrap=True)
 
 
 def cmd_policy(argv) -> int:
@@ -648,8 +672,11 @@ def cmd_policy(argv) -> int:
             _warn_invalid_policy_values()
             diff = sorted(k for k in policy.DEFAULTS
                           if pol.get(k) != policy.DEFAULTS[k])
-            out.dim("  modified from defaults: %s" % ", ".join(diff)
-                    if diff else "  all values at defaults")
+            if diff:
+                out.dim("  modified from defaults: %s" % ", ".join(diff))
+            elif not policy.invalid_values():
+                # An unreadable value displays as its default but is not one.
+                out.dim("  all values at defaults")
         return 0
 
     if args.action == "set":
@@ -709,6 +736,12 @@ def cmd_policy(argv) -> int:
         if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
             violations.append((name, kind, label,
                                "tap %s is not on the allowlist" % tap))
+        if store.is_url_import(entry):
+            # `local` is exempt above, but a URL import names its source; the
+            # clone is gone, so signing cannot be re-checked here.
+            violations.extend(
+                (name, kind, label, msg) for msg in policy.source_violations(
+                    store.url_source_name(str(entry["source_url"])), pol))
         violations.extend(
             (name, kind, label, msg)
             for msg in policy.check_installed_version(entry))
@@ -742,9 +775,10 @@ def cmd_policy(argv) -> int:
                 violations.append(
                     (name, kind, label,
                      "quality score %d < required %d" % (score, min_score)))
-    # A policy.json that does not parse read as defaults above, so every row
-    # passed; that is a failed check, whatever policy_enforce says.
-    corrupt_msg = policy.corrupt_violation()
+    # A policy.json that does not parse, or holds a value unreadable at its
+    # type, read as defaults above, so every row passed; that is a failed
+    # check, whatever policy_enforce says.
+    corrupt_msg = policy.unreadable_violation()
     if corrupt_msg:
         violations.append((None, None, "(policy)", corrupt_msg))
     max_skills_msg = policy.max_skills_violation(skill_count)
@@ -1444,16 +1478,29 @@ def cmd_serve(argv) -> int:
     try:
         default_port = config.get_int("serve.port", 8787) or 8787
     except typedvalue.ValueTypeError as e:
-        raise _bad_value(e, "boost config set serve.port <int>") from e
+        raise _bad_value(e, "boost config set serve.port <0-65535>") from e
     p = cliparse.parser(
         prog="boost serve",
         description="Browse the catalogue in a browser: search, facets and a tap graph")
-    p.add_argument("--port", type=util.port_number, default=default_port,
+    p.add_argument("--port", type=util.port_number, default=None,
                    help="port to listen on (default: config serve.port)")
     p.add_argument("--host", default="127.0.0.1",
                    help="address to bind (default: 127.0.0.1)")
     args = p.parse_args(argv)
-    serve.serve_http(args.host, args.port)
+    port = args.port
+    if port is None:
+        # argparse never runs `type=` over a non-string default, so an
+        # out-of-range `serve.port` reached the bind and was reported as an
+        # "invalid --port" nobody passed. Checked only when it is the port in
+        # use: an explicit --port still overrides a bad stored value.
+        try:
+            port = config.check_value("serve.port", default_port)
+        except typedvalue.ValueTypeError as e:
+            raise BoostError(
+                "config serve.port is %s — must be 0-65535" % default_port,
+                hint="`boost config set serve.port <0-65535>`, or `boost "
+                     "config unset serve.port` for the default") from e
+    serve.serve_http(args.host, port)
     return 0
 
 
@@ -2468,7 +2515,7 @@ def _offer_boost_first(hosts: list[str]) -> None:
     """
     from ..core import builtin
 
-    if os.environ.get(NO_RULE_ENV):
+    if typedvalue.env_flag(NO_RULE_ENV, unknown=True):
         return
     # Scoped to hosts where boost actually registered a server. Offering it for
     # an agent with no boost tools would install standing text naming

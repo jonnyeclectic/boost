@@ -85,6 +85,12 @@ def skill_context_node(
             prov = "%s:%s" % (meta.get("tap") or "?", meta.get("path") or "?")
             if meta.get("version"):
                 prov = "%s @ %s" % (prov, meta["version"])
+            # Say so when the "procedure" is only its catalog description —
+            # the file could not be read, or the retriever was built with
+            # full_content=False. Presented unlabelled, a one-line summary
+            # reads to the model as the whole instruction.
+            if meta.get("has_body") is False:
+                prov = "%s; description only, body not included" % prov
             blocks.append("### %s (%s — %s)\n\n%s" % (
                 meta.get("name") or "unnamed",
                 meta.get("kind") or "skill",

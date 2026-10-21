@@ -86,15 +86,30 @@ def _read(path: Path) -> tuple[dict, str] | None:
 
 
 def _text(meta: dict, key: str) -> str:
-    """A scalar frontmatter field as stripped text; a nested map reads as "".
+    """A scalar frontmatter field as stripped text (`util.frontmatter_text`)."""
+    return util.frontmatter_text(meta, key)
 
-    `frontmatter.parse_block` keeps `author:`/`metadata:`-style maps as dicts,
-    and `str()` of one would put a Python repr into a name or description.
+
+# What `_make_entry` stamps when the file declares no version, so the entry's
+# version field is always a sortable string.
+UNDECLARED_VERSION = "0.0.0"
+
+
+def declared_version(entry: dict) -> str:
+    """The version the item's own file declares, or ``""`` when it declares none.
+
+    ``entry["version"]`` cannot answer that: an unversioned file is stamped
+    ``0.0.0``, which is a fine sort key and a false statement in anything meant
+    for auditing — provenance read ``@ 0.0.0`` for a version that exists
+    nowhere in the source. The frontmatter (``entry["meta"]``) is the record of
+    what was declared. An entry carrying no ``meta`` (synthesised, or an old
+    cache) falls back to the field, with the placeholder read as absent.
     """
-    val = meta.get(key)
-    if isinstance(val, dict):
-        return ""
-    return str(val or "").strip()
+    meta = entry.get("meta")
+    if isinstance(meta, dict):
+        return str(entry.get("version") or "") if _text(meta, "version") else ""
+    version = str(entry.get("version") or "")
+    return "" if version == UNDECLARED_VERSION else version
 
 
 def _description(meta: dict, body: str) -> str:
@@ -247,7 +262,7 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
     return {
         "name": slug,
         "description": description,
-        "version": _text(meta, "version") or "0.0.0",
+        "version": _text(meta, "version") or UNDECLARED_VERSION,
         "tap": tap_name,
         "curated": curated,
         "kind": kind,
@@ -360,6 +375,11 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
         raise BoostError("tap %s is not cloned" % tap.name,
                         hint="run `boost update %s`" % tap.name)
     entries = scan_dir(tap.path, tap.name, tap.curated)
+    if not tap.owns_cache_file:
+        # Its cache path is one of boost's own indexes (a tap configured
+        # before `add` refused the name): the scan is the answer, and writing
+        # it would replace the BM25 index. See registry.Tap.owns_cache_file.
+        return entries
     payload = json.dumps({
         "tap": tap.name,
         "url": tap.url,
@@ -415,6 +435,8 @@ def _cache_record(tap: registry.Tap) -> tuple[list[dict], bool, str] | None:
     """``(skills, is_current, commit)`` for a tap's cache, or ``None`` when
     the file is missing, unreadable or corrupt. ``commit`` is the HEAD the
     cache was scanned at (``""`` when it never recorded one)."""
+    if not tap.owns_cache_file:
+        return None     # boost's own index, never this tap's catalog
     p = tap.cache_file
     key = str(p)
     try:
@@ -504,6 +526,18 @@ def stale_commit(tap: registry.Tap, head: str | None = None
 def join_hints(*hints: str | None) -> str | None:
     """The non-empty ``hints`` as one ``; ``-separated line, or ``None``."""
     return "; ".join(h for h in hints if h) or None
+
+
+NO_TAPS_HINT = "no taps configured — start with `boost tap --defaults`"
+
+
+def search_hint(name: str) -> str:
+    """The next step after a failed lookup of ``name``: ``boost search`` it,
+    unless nothing is tapped — then search fails too ("no taps configured"),
+    so the step is to tap something first."""
+    if not builtin.configured_tap_count():
+        return NO_TAPS_HINT
+    return "try `boost search %s`" % name
 
 
 def stale_commit_hint() -> str | None:
@@ -1148,7 +1182,7 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 # wheel and is appended on a machine the user has tapped
                 # nothing on, which silenced this hint exactly where a new
                 # user needs it.
-                hint = "no taps configured — start with `boost tap --defaults`"
+                hint = NO_TAPS_HINT
         raise BoostError("no skill named %r in any tap" % name,
                          hint=join_hints(hint, stale_commit_hint()))
     if len(matches) > 1:
