@@ -57,9 +57,10 @@ def test_the_store_copy_s_directories_are_owner_writable(boost,
 
     assert _mode(sdir) == 0o755
     assert _mode(sdir / "assets") == 0o755
-    # Files keep the source's mode: that is the skill's, exec bit and all.
-    assert _mode(sdir / "SKILL.md") == 0o444
-    assert _mode(sdir / "assets" / "a.txt") == 0o444
+    # Files gain owner write (import --name rewrites SKILL.md in place) and
+    # otherwise keep the source's mode, exec bit and all.
+    assert _mode(sdir / "SKILL.md") == 0o644
+    assert _mode(sdir / "assets" / "a.txt") == 0o644
 
 
 def test_uninstall_removes_a_copy_installed_read_only(boost, read_only_skill):
