@@ -454,6 +454,41 @@ def _put(section: str, name: str, entry: dict) -> None:
     mutate(put)
 
 
+def _section(kind: str) -> str:
+    section = dict(SECTIONS).get(kind)
+    if section is None:
+        raise ValueError("unknown lock kind %r" % kind)
+    return section
+
+
+def update_entry(kind: str, name: str,
+                 fn: Callable[[dict], bool | None]) -> bool:
+    """Apply ``fn`` to ``name``'s row as it is *under the lock*, and persist.
+
+    The way a command changes the fields it owns without writing back the
+    rest of a row it read earlier. `boost tag`, `pin` and `edit` each used to
+    read the row, do their work, and hand the whole row to :func:`set_entry`:
+    a pin made while `boost edit` sat in the editor was reverted when it
+    exited, and an uninstall in that window came back as a ghost row.
+    ``fn`` mutates the fresh row in place; returning False writes nothing.
+    A row that is gone by now is not recreated: ``fn`` is not called and
+    nothing is written. Returns whether it wrote.
+    """
+    section = _section(kind)
+
+    def apply(lock: dict) -> bool | None:
+        row = lock[section].get(name)
+        if row is None:
+            return False
+        return fn(row)
+    return mutate(apply)
+
+
+def update_skill(name: str, fn: Callable[[dict], bool | None]) -> bool:
+    """:func:`update_entry` for a skill row."""
+    return update_entry("skill", name, fn)
+
+
 def _drop(section: str, name: str) -> bool:
     def drop(lock: dict) -> bool:
         if name not in lock[section]:
@@ -625,10 +660,7 @@ def find_any(name: str) -> tuple[str, dict] | None:
 
 def set_entry(kind: str, name: str, entry: dict) -> None:
     """Insert or replace the lock entry for ``name`` of ``kind`` and persist."""
-    section = dict(SECTIONS).get(kind)
-    if section is None:
-        raise ValueError("unknown lock kind %r" % kind)
-    _put(section, name, entry)
+    _put(_section(kind), name, entry)
 
 
 def all_installed() -> dict[str, dict]:

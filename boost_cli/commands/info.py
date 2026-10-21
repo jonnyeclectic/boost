@@ -798,16 +798,33 @@ def cmd_edit(argv):
     if rc != 0:
         out.warn("editor exited with status %d" % rc)
         return 1
-    sha = util.sha256_dir(sdir)
-    if sha != lock.get("sha256"):
-        # Deliberately does NOT rewrite lock["sha256"] to the post-edit hash:
+    # The row is re-read under the lock now the editor has exited, not the
+    # one read before it opened: writing that back reverted a `boost pin` or
+    # `tag` made meanwhile, and resurrected a skill uninstalled meanwhile as
+    # a row with no store dir. Edit owns `updated_at` and nothing else.
+    seen: dict[str, bool] = {}
+
+    def stamp(row: dict) -> bool:
+        if not sdir.is_dir():
+            return False
+        seen["present"] = True
+        # Deliberately does NOT rewrite row["sha256"] to the post-edit hash:
         # that field is also what drift_state compares the store against, and
         # overwriting it here would make an edited store always match its own
         # lock, hiding the edit from `boost drift` (which would then fall
         # through to UPSTREAM_MOVED instead of LOCAL_EDITS). The journal is
         # the record of the edit; drift/attest compare honestly instead.
-        lock["updated_at"] = util.now_iso()
-        lockfile.set_skill(name, lock)
+        if util.sha256_dir(sdir) == row.get("sha256"):
+            return False
+        row["updated_at"] = util.now_iso()
+        return True
+
+    edited = lockfile.update_skill(name, stamp)
+    if not seen:
+        out.warn("%s was uninstalled while the editor was open — nothing "
+                 "recorded" % name)
+        return 1
+    if edited:
         journal.log("edit", name)
         out.warn("local edits diverge from the tap source — boost drift will flag this")
     else:
@@ -1416,10 +1433,23 @@ def cmd_tag(argv):
             % (args.name, kind),
             hint="tags are a skill-only label; rules and workflows are "
                  "governed by pin / quarantine / verify")
-    tags, changed = lockfile.apply_tag_mods(entry.get("tags") or [], mods)
+    # The mods apply to the row as it is under the lock, not to `entry`:
+    # two `boost tag` runs overlapping each wrote back the tags they had
+    # read, so one's new tag replaced the other's.
+    result: dict[str, list[str]] = {}
+
+    def retag(row: dict) -> bool:
+        result["tags"], changed = lockfile.apply_tag_mods(row.get("tags") or [], mods)
+        if changed:
+            row["tags"] = result["tags"]
+        return changed
+
+    changed = lockfile.update_skill(name, retag)
+    if "tags" not in result:
+        raise BoostError("%s was uninstalled while tagging it" % args.name,
+                         hint="see what is with `boost list`")
+    tags = result["tags"]
     if changed:
-        entry["tags"] = tags
-        lockfile.set_skill(name, entry)
         journal.log("tag", name, tags=tags)
     if args.json:
         print(json.dumps({"name": name, "tags": tags}, indent=2))

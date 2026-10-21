@@ -2754,8 +2754,14 @@ def _set_pin(name: str, pinned: bool) -> int:
         out.info("%s is already %s" % (label, "pinned at v%s" % version
                                        if pinned else "unpinned"))
         return 0
-    entry["pinned"] = pinned
-    lockfile.set_entry(kind, name, entry)
+    # Flip the flag on the row as it is under the lock: writing back `entry`
+    # reverted any tag or reinstall that landed since it was read.
+    def flip(row: dict) -> None:
+        row["pinned"] = pinned
+    if not lockfile.update_entry(kind, name, flip):
+        raise BoostError("%s was uninstalled while %s it"
+                         % (label, "pinning" if pinned else "unpinning"),
+                         hint="see what is with `boost list`")
     journal.log("pin" if pinned else "unpin", name)
     if pinned:
         out.ok("pinned %s at v%s — `boost update` will skip it" % (label, version))

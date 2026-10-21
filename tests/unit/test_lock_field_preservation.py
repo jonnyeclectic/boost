@@ -57,7 +57,9 @@ def _commit_pin(kind, name):
     """What `boost pin NAME --commit` writes: the version pin, then the commit."""
     found = lockfile.find_any(name)
     assert found is not None and found[0] == kind
-    found[1]["pinned"] = True
+    # Two writes, as `boost pin --commit` makes them: set_commit_pin writes
+    # only `commit_pin`, onto the row as the lock holds it.
+    lockfile.update_entry(kind, name, lambda row: row.update(pinned=True))
     integrity.set_commit_pin(name, found[1], kind=kind)
     return lockfile.find_any(name)[1]
 

@@ -703,7 +703,12 @@ def set_commit_pin(name: str, entry: dict, kind: str = "skill") -> str:
             "%s has no recorded source commit to pin" % name,
             hint="commit pinning needs an item installed from a tapped repo")
     entry["commit_pin"] = commit
-    lockfile.set_entry(kind, name, entry)
+
+    # Only `commit_pin` is ours: the rest of the row is taken as it is under
+    # the lock, so a tag or pin landed since `entry` was read survives.
+    def freeze(row: dict) -> None:
+        row["commit_pin"] = commit
+    lockfile.update_entry(kind, name, freeze)
     return commit
 
 
@@ -712,5 +717,8 @@ def clear_commit_pin(name: str, entry: dict, kind: str = "skill") -> bool:
     if not entry.get("commit_pin"):
         return False
     del entry["commit_pin"]
-    lockfile.set_entry(kind, name, entry)
+
+    def release(row: dict) -> None:
+        row.pop("commit_pin", None)
+    lockfile.update_entry(kind, name, release)
     return True
