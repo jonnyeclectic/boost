@@ -513,6 +513,14 @@ def cmd_verify(argv):
         if "materialization sha256" in r["missing_fields"]:
             bits.append("`boost sync` records it, or `boost reinstall %s` "
                         "if a file was edited" % r["name"])
+        # The next step, not just the verdict: verify was where doctor sent a
+        # modified skill, and it stopped at "modified" with rc 1.
+        # Not a vendored project skill: its copy is the repo's, not a
+        # reinstall's.
+        if (r["status"] == integrity.STATUS_MODIFIED
+                and not (r["kind"] == "skill" and r["scope"] == "project")):
+            bits.append("`%s` %s" % integrity.modified_remedy(r["name"],
+                                                             r["kind"]))
         if r["commit_pin"] == integrity.STATUS_OK:
             bits.append("commit-pinned")
         elif r["commit_pin"] == integrity.STATUS_MODIFIED:

@@ -115,6 +115,24 @@ def skill_modified(name: str, entry: dict | None) -> bool:
     return status(name, entry) == STATUS_MODIFIED
 
 
+def modified_remedy(name: str, kind: str = "skill") -> tuple[str, str]:
+    """``(command, purpose)`` that resolves item ``name`` reading MODIFIED.
+
+    Two faults share that status and have different fixes. A store dir with
+    no ``SKILL.md`` left is what `heal`'s plan reads as a missing store and
+    reinstalls (``store.sync_plan``), so it is named for heal. Anything else
+    is a local edit, which ``boost reinstall`` discards. Doctor used to name
+    ``boost verify`` for both, which prints "modified" and stops -- a remedy
+    that leads nowhere. Every surface (`doctor`, `verify`, `drift`, the MCP
+    doctor) asks this one function, so none can name a different next step.
+    A rule or workflow has no store copy to lose: its edit is always the
+    materialized file, which a reinstall rewrites.
+    """
+    if kind == "skill" and not (_store_dir(name) / "SKILL.md").is_file():
+        return "boost heal", "to restore its missing SKILL.md"
+    return "boost reinstall %s" % name, "to discard local edits"
+
+
 def reaches_no_agent(kind: str | None, entry: dict) -> bool:
     """Whether every materialization row names an agent boost no longer writes.
 

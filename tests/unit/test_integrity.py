@@ -934,3 +934,28 @@ class TestLocallyEdited:
         TestARowNothingWritesIsNotAMissingArtifact._disable("cursor")
         assert integrity.locally_edited(
             "rule", "r", {"materializations": [row]}) is False
+
+
+# ── modified_remedy: the next step every "modified" surface names ──────────
+def test_modified_remedy_for_an_edited_skill_is_a_reinstall(installed):
+    _tamper(installed)
+    assert integrity.modified_remedy(installed) == (
+        "boost reinstall brainstorming", "to discard local edits")
+
+
+def test_modified_remedy_for_a_deleted_skill_md_is_heal(installed):
+    # The same MODIFIED status, but heal's plan reinstalls this one.
+    (paths.store_dir() / installed / "SKILL.md").unlink()
+    assert integrity.status(installed) == integrity.STATUS_MODIFIED
+    assert integrity.modified_remedy(installed) == (
+        "boost heal", "to restore its missing SKILL.md")
+    assert integrity.modified_remedy(installed, "skill") == (
+        "boost heal", "to restore its missing SKILL.md")
+
+
+def test_modified_remedy_for_a_rule_or_workflow_is_a_reinstall(sandbox):
+    # No store copy to lose: a store dir with no SKILL.md says nothing
+    # about a rule of the same name.
+    for kind in ("rule", "workflow"):
+        assert integrity.modified_remedy("r", kind) == (
+            "boost reinstall r", "to discard local edits")
