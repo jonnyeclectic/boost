@@ -319,6 +319,16 @@ def cmd_compact(argv) -> int:
     rows: list[dict] = []
 
     taps = [registry.get(n) for n in args.tap] if args.tap else registry.list_taps()
+    # boost's own tap ships inside the wheel: a plain directory with no
+    # `.git`, so there is nothing to narrow and no remote to re-clone from.
+    # Handed to git it warned on every sweep, and `--reclone` deleted it and
+    # then failed to clone `builtin:boost`. Only a named request is answered.
+    for tap in taps:
+        if tap.is_wheel and args.tap:
+            rows.append({"tap": tap.name, "skipped": "ships with boost"})
+            if not args.json:
+                out.info("%s ships with boost — nothing to compact" % tap.name)
+    taps = [t for t in taps if not t.is_wheel]
     # A named tap is a request about that one tap (`registry.update`'s
     # convention), so a missing clone is the answer to it. Filtering it out
     # silently used to fall through to a green, global "no cloned taps to
@@ -331,14 +341,16 @@ def cmd_compact(argv) -> int:
                          stream=sys.stderr if args.json else None)
     taps = [t for t in taps if t.is_cloned]
     if not taps:
+        errored = any("error" in r for r in rows)
         if args.json:
             print(json.dumps({"taps": rows, "count": 0, "bytes": 0,
-                              "dry_run": args.dry_run, "ok": not rows},
+                              "dry_run": args.dry_run, "ok": not errored},
                              indent=2))
-            return 1 if rows else 0
-        if rows:
+            return 1 if errored else 0
+        if errored:
             return 1
-        out.ok("no cloned taps to compact")
+        if not rows:            # a named wheel tap was answered above
+            out.ok("no cloned taps to compact")
         return 0
 
     # source_dir keeps an installed skill's own assets on disk, so routine

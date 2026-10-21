@@ -375,3 +375,61 @@ class TestANamedTapIsAnsweredAboutThatTap:
         assert "could not compact bad" in res.out
         assert "every other tap is already compact" in res.out
         assert "every tap is already compact" not in res.out
+
+
+class TestTheWheelTapIsNotACloneToCompact:
+    """boost's own tap (`url: builtin:boost`) is a plain directory copied out
+    of the wheel. compact handled it as a git clone: every sweep warned
+    "not a git repository", `--reclone --dry-run` promised a re-clone, and
+    the real `--reclone` deleted it and then failed to clone `builtin:boost`.
+    """
+
+    @staticmethod
+    def _with_builtin(boost, tmp_path):
+        from boost_cli.core import builtin, catalog
+        tap = builtin.ensure_tap()
+        catalog.rebuild_tap(tap)
+        boost("tap", str(_repo(tmp_path / "src")))
+        assert tap.path.is_dir()
+        return tap
+
+    def test_the_sweep_is_clean(self, boost, sandbox, tmp_path):
+        tap = self._with_builtin(boost, tmp_path)
+        res = boost("compact")
+        assert "could not" not in res.out + res.err
+        assert "boost/builtin" not in res.out
+        assert "✓ every tap is already compact" in res.out
+        assert tap.path.is_dir()
+
+    def test_reclone_dry_run_promises_nothing_for_it(self, boost, sandbox,
+                                                     tmp_path):
+        self._with_builtin(boost, tmp_path)
+        res = boost("compact", "--reclone", "--dry-run")
+        assert "boost/builtin" not in res.out
+        assert "would re-clone src" in res.out
+        assert "1 tap(s) would be re-cloned" in res.out
+
+    def test_reclone_leaves_it_in_place(self, boost, sandbox, tmp_path):
+        tap = self._with_builtin(boost, tmp_path)
+        before = sorted(p.relative_to(tap.path).as_posix()
+                        for p in tap.path.rglob("*"))
+        assert before
+        boost("compact", "--reclone")
+        assert sorted(p.relative_to(tap.path).as_posix()
+                      for p in tap.path.rglob("*")) == before
+
+    def test_named_it_says_there_is_nothing_to_compact(self, boost, sandbox,
+                                                       tmp_path):
+        tap = self._with_builtin(boost, tmp_path)
+        res = boost("compact", "boost/builtin", "--reclone")
+        assert res.out.strip() == (
+            "boost/builtin ships with boost — nothing to compact")
+        assert tap.path.is_dir()
+
+    def test_named_json_is_a_skipped_ok_row(self, boost, sandbox, tmp_path):
+        import json
+        self._with_builtin(boost, tmp_path)
+        d = json.loads(boost("compact", "boost/builtin", "--json").out)
+        assert d == {"taps": [{"tap": "boost/builtin",
+                               "skipped": "ships with boost"}],
+                     "count": 0, "bytes": 0, "dry_run": False, "ok": True}
