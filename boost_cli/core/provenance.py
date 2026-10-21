@@ -99,7 +99,10 @@ def add_trusted_key(name: str, public_key_text: str) -> dict:
     """Parse ``public_key_text`` (a ``.pub`` file or its base64 line) and store it.
 
     Replaces any existing key of the same ``name`` so re-adding is idempotent.
-    Raises :class:`BoostError` if the key does not parse.
+    Raises :class:`BoostError` if the key does not parse, or if the same key is
+    already trusted under a **different** name: two names for one key made
+    ``trust remove <name>`` report a revocation while the key, still stored
+    under the other name, went on verifying taps.
     """
     name = name.strip()
     if not name:
@@ -115,6 +118,15 @@ def add_trusted_key(name: str, public_key_text: str) -> dict:
         "fingerprint": minisign.key_id_hex(pk.key_id),
         "key": base64.b64encode(pk.key_id + pk.key).decode("ascii"),
     }
+    for k in trusted_keys():
+        if k.get("name") != name and (
+                k.get("key") == record["key"]
+                or k.get("fingerprint") == record["fingerprint"]):
+            raise BoostError(
+                "key %s is already trusted as %s"
+                % (record["fingerprint"], k["name"]),
+                hint="one key, one name: `boost trust remove %s` first to "
+                     "rename it" % k["name"])
     keys = [k for k in trusted_keys() if k.get("name") != name]
     keys.append(record)
     _save(keys)

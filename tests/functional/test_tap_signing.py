@@ -51,6 +51,16 @@ def test_trust_add_list_remove(boost, tmp_path, signer):
     assert "acme" not in boost("trust", "--json").out
 
 
+def test_trust_add_refuses_a_key_already_trusted_under_another_name(
+        boost, signer):
+    boost("trust", "add", "acme", signer.public_key_text())
+    r = boost("trust", "add", "acme2", signer.public_key_text(), expect=1)
+    assert "key 1122334455667788 is already trusted as acme" in r.err
+    assert [k["name"] for k in json.loads(
+        boost("trust", "--json").out)["trusted_keys"]] == ["acme"]
+    boost("trust", "add", "acme", signer.public_key_text())   # same name: ok
+
+
 def test_trust_add_prints_the_key_name_and_fingerprint(boost, tmp_path, signer):
     """`trust add` must echo the fingerprint it just trusted.
 
