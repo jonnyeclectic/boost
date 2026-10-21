@@ -1356,3 +1356,94 @@ class TestKindDeclines:
         r = boost("context", "apply")
         assert "mapped but not installed" not in r.out
         assert "house (rule)" in r.out
+
+
+# ------------------------------------------- AI-authored names and bad replies
+
+WRONG_NAME = ("---\nname: something-else\ndescription: AI wrote it\n"
+              "version: 1.0.0\n---\n\n# Body\n\n- An AI rule.\n")
+JUNK = "{not json [[ garbage"
+JUNK_NOTE = ("AI reply was not usable (no SKILL.md frontmatter) — see "
+             "~/.boost/logs/boost.log — using the heuristic fallback")
+
+
+class TestAuthoredName:
+    """The model is asked for a name and does not always write it; the file
+    must carry the name the user asked for, whatever the reply said."""
+
+    def _history(self, tmp_path):
+        f = tmp_path / "h.jsonl"
+        f.write_text("\n".join(
+            [_history_line("please write docstrings for every function")] * 3),
+            encoding="utf-8")
+        return f
+
+    def test_distill_writes_the_requested_name(self, boost, tapped, tmp_path,
+                                               monkeypatch, ai_on):
+        monkeypatch.chdir(tmp_path)
+        ai_on(ask_author=WRONG_NAME)
+        r = boost("distill", "brainstorming", "tdd-workflow",
+                  "--name", "merged-one")
+        text = (tmp_path / "merged-one" / "SKILL.md").read_text(encoding="utf-8")
+        assert text.startswith("---\nname: merged-one\ndescription: AI wrote it\n")
+        assert "- An AI rule." in text
+        assert FALLBACK not in flat(r.err)
+
+    def test_infer_output_carries_the_requested_name(self, boost, sandbox,
+                                                     py_project, tmp_path,
+                                                     ai_on):
+        ai_on(ask_author=WRONG_NAME)
+        out_file = tmp_path / "inf" / "SKILL.md"
+        boost("infer", "--path", py_project, "--name", "my-conv", "-o", out_file)
+        meta, body = frontmatter.parse(out_file.read_text(encoding="utf-8"))
+        assert meta["name"] == "my-conv"
+        assert "- An AI rule." in body
+
+    def test_infer_refuses_a_name_with_nothing_to_slug(self, boost, sandbox,
+                                                       py_project):
+        r = boost("infer", "--path", py_project, "--name", "!!!", expect=1)
+        assert "skill name has no letters or digits: '!!!'" in r.err
+
+    def test_absorb_prints_the_absorbed_name(self, boost, sandbox, tmp_path,
+                                             ai_on):
+        ai_on(ask_author=WRONG_NAME)
+        r = boost("absorb", "--history", self._history(tmp_path))
+        assert "name: absorbed-patterns\n" in r.out
+        assert "something-else" not in r.out
+        assert "- An AI rule." in r.out
+
+    def test_evolve_apply_keeps_the_installed_name(self, boost, installed,
+                                                   ai_on):
+        ai_on(ask_author=WRONG_NAME.replace("1.0.0", "1.4.1"))
+        r = boost("evolve", "brainstorming", "--apply", "--feedback", "terser")
+        assert "evolved brainstorming → v1.4.1" in r.out
+        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert frontmatter.parse(text)[0]["name"] == "brainstorming"
+        assert "- An AI rule." in text
+
+    def test_distill_junk_reply_says_why(self, boost, tapped, tmp_path,
+                                         monkeypatch, ai_on):
+        monkeypatch.chdir(tmp_path)
+        ai_on(ask_author=JUNK)
+        r = boost("distill", "brainstorming", "tdd-workflow", "--name", "m3")
+        assert JUNK_NOTE in flat(r.err)
+        assert "AI unavailable" not in flat(r.err)
+        assert (tmp_path / "m3" / "SKILL.md").is_file()
+
+    def test_infer_junk_reply_says_why(self, boost, sandbox, py_project, ai_on):
+        ai_on(ask_author=JUNK)
+        r = boost("infer", "--path", py_project)
+        assert JUNK_NOTE in flat(r.err)
+        assert r.out.startswith("---\nname: project-conventions\n")
+
+    def test_absorb_junk_reply_says_why(self, boost, sandbox, tmp_path, ai_on):
+        ai_on(ask_author=JUNK)
+        r = boost("absorb", "--history", self._history(tmp_path))
+        assert JUNK_NOTE in flat(r.err)
+
+    def test_evolve_junk_reply_says_why(self, boost, installed, ai_on):
+        ai_on(ask_author=JUNK)
+        r = boost("evolve", "brainstorming", "--feedback", "be terser")
+        assert JUNK_NOTE in flat(r.err)
+        assert "+- be terser." in r.out

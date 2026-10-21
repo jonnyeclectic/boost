@@ -287,11 +287,7 @@ def _distill_ai(new: str, sources: list[dict]) -> str | None:
         % (len(sources), new, blocks),
         system="You are an expert author of SKILL.md files for AI coding "
                "agents. Reply with ONLY the complete merged SKILL.md content.")
-    if not reply:
-        return None
-    text = ai.extract_markdown(reply)
-    meta, _ = frontmatter.parse(text)
-    return text if meta.get("name") else None
+    return ai.authored_skill(reply, new)
 
 
 _FENCE_RE = re.compile(r"^`{3,}")
@@ -433,7 +429,10 @@ def cmd_infer(argv: list[str]) -> int:
     root = paths.expand(args.path).resolve()
     if not root.is_dir():
         raise BoostError("%s is not a directory" % _tilde(root))
-    name = util.slugify(args.name)
+    # resolve_slug, not slugify: the shared validator refuses a name with
+    # nothing to slug rather than quietly naming the skill "skill", and says
+    # so when the slug differs from what was typed.
+    name = util.resolve_slug(args.name, what="skill name")
     facts = _probe_repo(root)
 
     text = _infer_ai(name, root, facts) if ai.available() else None
@@ -597,11 +596,7 @@ def _infer_ai(name: str, root: Path, facts: dict) -> str | None:
         % (json.dumps(detected), listing, name),
         system="You are an expert author of SKILL.md files for AI coding "
                "agents. Reply with ONLY the complete SKILL.md content.")
-    if not reply:
-        return None
-    text = ai.extract_markdown(reply)
-    meta, _ = frontmatter.parse(text)
-    return text if meta.get("name") else None
+    return ai.authored_skill(reply, name)
 
 
 def _infer_template(name: str, facts: dict) -> str:
@@ -793,11 +788,7 @@ def _absorb_ai(name: str, patterns: list[tuple[str, int]]) -> str | None:
         % (listing, name),
         system="You are an expert author of SKILL.md files for AI coding "
                "agents. Reply with ONLY the complete SKILL.md content.")
-    if not reply:
-        return None
-    text = ai.extract_markdown(reply)
-    meta, _ = frontmatter.parse(text)
-    return text if meta.get("name") else None
+    return ai.authored_skill(reply, name)
 
 
 def _absorb_template(name: str, patterns: list[tuple[str, int]]) -> str:
@@ -858,7 +849,8 @@ def cmd_evolve(argv: list[str]) -> int:
     old_ver = str(old_meta.get("version") or "0.0.0")
 
     out.heading("evolving %s  %s" % (args.name, out.role("(v%s)" % old_ver, "muted")))
-    new = _evolve_ai(old, old_ver, feedback) if ai.available() else None
+    new = (_evolve_ai(args.name, old, old_ver, feedback) if ai.available()
+           else None)
     if new is None:
         _note_fallback()
         new = _evolve_append(old, old_ver, feedback)
@@ -899,7 +891,8 @@ def cmd_evolve(argv: list[str]) -> int:
     return 0
 
 
-def _evolve_ai(old: str, old_ver: str, feedback: str) -> str | None:
+def _evolve_ai(name: str, old: str, old_ver: str,
+               feedback: str) -> str | None:
     reply = ai.ask_author(
         "Revise this SKILL.md based on user feedback. Keep everything that "
         "still holds, integrate the feedback as concrete rules, and bump the "
@@ -907,12 +900,12 @@ def _evolve_ai(old: str, old_ver: str, feedback: str) -> str | None:
         % (old_ver, feedback, old),
         system="You are an expert author of SKILL.md files for AI coding "
                "agents. Reply with ONLY the complete revised SKILL.md content.")
-    if not reply:
+    # The installed name, whatever the model wrote: the store dir is named
+    # for it, and a different `name:` renamed the skill under `--apply`.
+    text = ai.authored_skill(reply, name)
+    if text is None:
         return None
-    text = ai.extract_markdown(reply)
     meta, body = frontmatter.parse(text)
-    if not meta.get("name"):
-        return None
     if not util.semver_gt(str(meta.get("version") or ""), old_ver):
         meta["version"] = _bump_patch(old_ver)
         text = frontmatter.dump(meta) + "\n\n" + body.strip() + "\n"
