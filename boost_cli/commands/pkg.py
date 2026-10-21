@@ -2916,7 +2916,10 @@ def cmd_pin(argv: list[str]) -> int:
         # would promise a check that does not exist.
         raise BoostError("%s is installed at project scope — --commit applies "
                          "to user-scope installs" % args.name,
-                         hint="`boost pin %s` holds it at its version" % args.name)
+                         # --local: unscoped is refused when a user copy
+                         # shares the name, so the bare form could not run.
+                         hint="`boost pin %s --local` holds it at its version"
+                              % args.name)
     if row is not None:
         return _set_project_pin(row, True)
     rc = _set_pin(args.name, True)

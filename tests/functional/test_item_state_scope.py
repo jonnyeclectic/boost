@@ -265,6 +265,8 @@ class TestPinScope:
         r = boost("pin", "--commit", "cowboy-coding", "--local", expect=1)
         assert ("cowboy-coding is installed at project scope — --commit "
                 "applies to user-scope installs") in _said(r)
+        # The bare `boost pin NAME` is refused while a user copy exists.
+        assert "`boost pin cowboy-coding --local` holds it" in _said(r)
         assert _project_pinned(repo) is None
 
     def test_local_with_no_project_row(self, boost, src, repo):
