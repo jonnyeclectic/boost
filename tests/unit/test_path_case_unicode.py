@@ -94,6 +94,19 @@ class TestNfdMaterialize:
         assert "/%s/*" % NFD_DIR in cone
         assert "/%s/*" % unicodedata.normalize("NFC", NFD_DIR) in cone
 
+    def test_a_cone_holding_only_the_nfc_line_is_healed(self, clone):
+        """What every machine that hit this has: the precomposed line git
+        stored, matching nothing. It must not count as materialized."""
+        cone = clone / ".git" / "info" / "sparse-checkout"
+        cone.write_text(cone.read_text(encoding="utf-8") + "/%s/*\n"
+                        % unicodedata.normalize("NFC", NFD_DIR),
+                        encoding="utf-8")
+        (entry,) = catalog.scan_dir(clone, "c")
+
+        gitutil.materialize(clone, entry["rel_dir"])
+
+        assert (clone / entry["rel_dir"] / "scripts" / "run.sh").is_file()
+
     def test_a_pattern_that_matched_nothing_is_refused(self, clone,
                                                        monkeypatch):
         """Whatever the cause, a skill still partly outside the checkout
@@ -172,6 +185,27 @@ class TestCaseCollisionsInOneTap:
     def test_a_case_sensitive_clone_has_none(self, clone):
         _ignorecase(clone, False)
         assert gitutil.case_collisions(clone) == []
+
+    def test_a_case_sensitive_clone_installs_each_twin(self, clone):
+        """There both dirs are real, and the other one staying outside the
+        checkout is not a partial copy."""
+        _ignorecase(clone, False)
+        gitutil.materialize(clone, "skills/lint")
+        assert (clone / "skills" / "lint" / "scripts" / "lower.sh").is_file()
+
+    @pytest.mark.parametrize(("text", "want"), [
+        ("[core]\n\tignorecase = true\n", True),
+        ("[core]\n\tbare = false\n\tignoreCase = TRUE\n[remote \"o\"]\n",
+         True),
+        ("[core]\n\tignorecase = false\n", False),
+        ("[core]\n\tbare = false\n[x]\n\tignorecase = true\n", False),
+        ("", False),
+    ])
+    def test_ignorecase_is_read_from_the_core_section(self, tmp_path, text,
+                                                      want):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "config").write_text(text, encoding="utf-8")
+        assert gitutil._ignorecase(tmp_path) is want
 
     def test_a_dir_that_is_not_a_repo_has_none(self, tmp_path):
         assert gitutil.case_collisions(tmp_path) == []

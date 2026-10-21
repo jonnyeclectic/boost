@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -520,9 +521,13 @@ def _require_checked_out(repo: Path, rel: str) -> None:
     """
     proc = run([*_RAW_PATHS, "-C", str(repo), "ls-files", "-t", "-z"],
                check=False)
-    want = _fold(rel) + "/"
+    # Normalization only, never case: on a case-sensitive clone
+    # ``skills/Lint`` is another skill, rightly left outside the checkout
+    # that widened ``skills/lint``.
+    want = unicodedata.normalize("NFC", rel) + "/"
     skipped = [rec[2:] for rec in (proc.stdout or "").split("\0")
-               if rec.startswith("S ") and _fold(rec[2:]).startswith(want)]
+               if rec.startswith("S ")
+               and unicodedata.normalize("NFC", rec[2:]).startswith(want)]
     if skipped:
         raise BoostError(
             "could not check out %d file%s of %s from the %s tap (%s), so "
@@ -558,6 +563,22 @@ def materialize_paths(repo: Path, rels: list[str]) -> None:
     _sparse_add(Path(repo), patterns, ", ".join(rels))
 
 
+_CORE_IGNORECASE = re.compile(
+    r"^\[core\][^\[]*?^\s*ignorecase\s*=\s*(true|yes|on|1)\s*$",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL)
+
+
+def _ignorecase(repo: Path) -> bool:
+    """Whether the clone records ``core.ignorecase = true``, read from
+    ``.git/config`` as a file: `rebuild_tap` asks once per tap, and a git
+    subprocess each time is ~40 ms over hundreds of taps."""
+    try:
+        text = (repo / ".git" / "config").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return _CORE_IGNORECASE.search(text) is not None
+
+
 def case_collisions(repo: Path) -> list[list[str]]:
     """Index paths of ``repo`` that its checkout cannot hold apart.
 
@@ -570,9 +591,7 @@ def case_collisions(repo: Path) -> list[list[str]]:
     records ``core.ignorecase`` (git sets it per clone after probing the
     filesystem), because on a case-sensitive one each path is its own file.
     """
-    probe = run(["-C", str(repo), "config", "--bool", "--get",
-                 "core.ignorecase"], check=False)
-    if probe.returncode != 0 or probe.stdout.strip() != "true":
+    if not _ignorecase(Path(repo)):
         return []
     proc = run([*_RAW_PATHS, "-C", str(repo), "ls-files", "-z"], check=False)
     groups: dict[str, set[str]] = {}
