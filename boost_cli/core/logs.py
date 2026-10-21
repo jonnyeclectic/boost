@@ -194,6 +194,10 @@ def _file_enabled() -> bool:
     return bool(config.get("logging.file", True))
 
 
+#: ``os.O_BINARY`` where it exists (Windows), else no flag.
+_O_BINARY: int = getattr(os, "O_BINARY", 0)
+
+
 class _BestEffortFileHandler(logging.handlers.RotatingFileHandler):
     """A rotating file handler whose own I/O failures never reach the user.
 
@@ -218,8 +222,10 @@ class _BestEffortFileHandler(logging.handlers.RotatingFileHandler):
         # file users are asked to attach to bug reports — not one for every
         # account on the machine to read. A file left 0644 by an older boost
         # is tightened too, best-effort.
-        fd = os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND,
-                     0o600)
+        # O_BINARY (Windows only): an fd os.open makes there is CRT text mode,
+        # which would turn the TextIOWrapper's "\r\n" into "\r\r\n".
+        fd = os.open(self.baseFilename,
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND | _O_BINARY, 0o600)
         with contextlib.suppress(OSError):
             os.chmod(self.baseFilename, 0o600)
         # "a", not self.mode: a rotating handler with a size cap is always
@@ -484,7 +490,9 @@ def _create_exclusive(ldir: Path, stamp: str, data: bytes) -> Path:
     for n in range(100):
         report = ldir / ("crash-%s%s.log" % (stamp, "-%d" % n if n else ""))
         try:
-            fd = os.open(report, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            fd = os.open(report,
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_BINARY,
+                         0o600)
         except FileExistsError:
             continue
         with os.fdopen(fd, "wb") as fh:
