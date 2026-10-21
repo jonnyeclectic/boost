@@ -1544,6 +1544,26 @@ class TestMcp:
         assert "nothing was searched" in text
         assert "2 or more" in text
 
+    @pytest.mark.parametrize("q", ["", "   "])
+    def test_boost_search_refuses_a_blank_query(self, boost, tapped, q):
+        # The CLI's usage error, as a tool error: "no skills match ''" told the
+        # agent the catalogue lacked something it never asked for.
+        from boost_cli.commands import configuration
+        text, is_err = configuration._mcp_tool("boost_search", {"query": q})
+        assert is_err is True
+        assert text == ("boost_search needs a query — pass a plain-word "
+                        "description of the task")
+
+    def test_boost_search_says_a_stopword_query_searched_nothing(
+            self, boost, tapped):
+        from boost_cli.commands import configuration
+        boost("reindex")
+        text, is_err = configuration._mcp_tool(
+            "boost_search", {"query": "the and of"})
+        assert is_err is False
+        assert "no skills match" not in text
+        assert "only common words and punctuation" in text
+
     def test_boost_search_stays_quiet_when_vectors_read_the_query(
             self, boost, tapped, monkeypatch):
         # Same scope rule as the CLI: dense never calls `tokenize`, so the

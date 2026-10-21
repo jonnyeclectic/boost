@@ -123,6 +123,12 @@ def cmd_search(argv):
                    help="machine-readable output")
     args = p.parse_args(argv)
     query = " ".join(args.query)
+    if not query.strip():
+        # `boost search ""` got past `nargs="+"` and was answered as a real
+        # miss, with a hint to run a bare `boost discover` — which browses the
+        # cache and searches nothing. It is the same mistake as giving no
+        # query at all, so it gets the same answer and argparse's rc 2.
+        p.error("the query is empty — give at least one search term")
     if not registry.list_taps():
         raise BoostError("no taps configured — nothing to search",
                         hint="add the recommended registries with `boost tap --defaults`")
@@ -176,14 +182,23 @@ def cmd_search(argv):
     # `catalog.search` is a substring match, so the non-RAG path discards
     # nothing; and `dense.retrieve` embeds the raw query string, so on a
     # machine with vectors built the term reached an index after all.
-    dropped = (rag.dropped_terms(query)
-               if use_rag and rag.tokenizer_is_the_only_reader() else [])
+    tokenized_only = use_rag and rag.tokenizer_is_the_only_reader()
+    dropped = rag.dropped_terms(query) if tokenized_only else []
+    # Stopwords and bare punctuation are not "dropped" (a notice on every
+    # ordinary phrase is noise), so a query of nothing else needs its own test.
+    ignored = tokenized_only and rag.ignored_by_design(query)
     if not scored:
         if args.as_json:
             print(json.dumps([]))
             _warn_dropped_terms(dropped)
+            if ignored:
+                out.warn("no searchable terms in %r — %s" % (query, _IGNORED_RULE),
+                         wrap=True, stream=sys.stderr)
             return 0
-        if dropped and not rag.tokenize(query):
+        if ignored:
+            print(out.empty_state("no searchable terms in %r" % query,
+                                  _IGNORED_RULE))
+        elif dropped and not rag.tokenize(query):
             # Nothing was searched at all, so "no matches" asserts something
             # this command never checked, and `boost discover` spends a network
             # round trip on a query that never reached an index. Measured: a
@@ -323,6 +338,11 @@ def _note_stem_expansions(query: str) -> None:
 
 #: How the index's own rule reads to someone who just lost a word to it.
 _TERM_RULE = "a term needs 2 or more ASCII letters or digits"
+
+
+#: Why a query of only stopwords or punctuation searched nothing.
+_IGNORED_RULE = ("common words (the, and, how, …) and punctuation are not "
+                 "indexed — add a word that names the task")
 
 
 def _quoted(terms: list[str]) -> str:
