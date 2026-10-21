@@ -60,13 +60,9 @@ def _save_cohorts(cohorts: dict) -> None:
     `create` over a file with a trailing comma used to read it as empty and
     write the one new cohort over every existing one, with no warning.
     """
-    paths.ensure_dirs()
     p = _cohorts_path()
-    if cohort.load(p)[1] is not None:
-        dest = jsonstate.quarantine(p)
-        out.warn("%s was corrupt and has been moved to %s before writing "
-                 "the new file" % (_tilde(p), _tilde(dest)), stream=sys.stderr)
-    p.write_text(json.dumps(cohorts, indent=2) + "\n", encoding="utf-8")
+    jsonstate.save(p, json.dumps(cohorts, indent=2) + "\n",
+                   corrupt=cohort.load(p)[1] is not None, show=_tilde)
 
 
 def _is_member(user: str, cohort_name: str, percent: int) -> bool:
@@ -322,6 +318,45 @@ def _load_profile(name: str) -> dict:
     return data
 
 
+def _profile_row(entry: dict) -> dict:
+    """What a profile records about one installed skill.
+
+    Tap and version, plus what ``profile use`` needs to put it back as it was
+    rather than merely present: the source ``commit`` it was installed at,
+    its agent scope (``only_agents``) and its version pin. Optional keys are
+    written only when set, so a profile without them reads as before.
+    """
+    row = {"tap": entry.get("tap", "local"),
+           "version": entry.get("version", "0.0.0")}
+    if entry.get("commit"):
+        row["commit"] = entry["commit"]
+    if entry.get("only_agents") is not None:
+        row["only_agents"] = list(entry["only_agents"])
+    if entry.get("pinned"):
+        row["pinned"] = True
+    return row
+
+
+def _row_differs(saved: dict, entry: dict) -> str:
+    """Why an installed ``entry`` is not the profile's ``saved`` row, or "".
+
+    A version first; failing that a recorded commit, since a tap that moved
+    can change a skill without bumping its version. A side that records no
+    commit (an older profile, a local import) is no evidence either way.
+    """
+    if str(saved.get("version")) != str(entry.get("version")):
+        return "version differs"
+    have, want = entry.get("commit"), saved.get("commit")
+    if have and want and have != want:
+        return "commit differs"
+    return ""
+
+
+def _at(row: dict) -> str:
+    """`` @abc1234`` for a row that records its commit, else ""."""
+    return " @%s" % row["commit"][:7] if row.get("commit") else ""
+
+
 def _profile_diff(profile: dict):
     """-> (missing, extras, changed, other_kind): profile vs installed.
 
@@ -341,8 +376,8 @@ def _profile_diff(profile: dict):
         else:
             missing.append(n)
     extras = sorted(n for n in current if n not in want)
-    changed = sorted(n for n in want if n in current and
-                     str(want[n].get("version")) != str(current[n].get("version")))
+    changed = sorted(n for n in want
+                     if n in current and _row_differs(want[n], current[n]))
     return missing, extras, changed, other_kind
 
 
@@ -410,19 +445,13 @@ def cmd_profile(argv) -> int:
         path = _profile_path(args.name)
         old, bad = _read_profile(path)
         was = len(old.get("skills", {})) if old is not None else None
-        if bad is not None:
-            # Still fine to replace — but not to destroy: the bad bytes go
-            # aside, the way every other corrupt state file's writer does.
-            dest = jsonstate.quarantine(path)
-            out.warn("%s was corrupt and has been moved to %s before writing "
-                     "the new profile" % (_tilde(path), _tilde(dest)),
-                     stream=sys.stderr)
         profile = {"name": args.name, "saved": util.now_iso(), "user": util.user(),
-                   "skills": {n: {"tap": e.get("tap", "local"),
-                                  "version": e.get("version", "0.0.0")}
+                   "skills": {n: _profile_row(e)
                               for n, e in installed.items()}}
-        paths.ensure_dirs()
-        path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+        # A corrupt one is still fine to replace — but not to destroy: the
+        # bad bytes go aside, the way every other state file's writer does.
+        jsonstate.save(path, json.dumps(profile, indent=2) + "\n",
+                       corrupt=bad is not None, noun="profile", show=_tilde)
         journal.log("profile", args.name, op="save", skills=len(installed))
         n_rules = len(lockfile.installed_rules())
         n_workflows = len(lockfile.installed_workflows())
@@ -482,8 +511,11 @@ def cmd_profile(argv) -> int:
             out.info(out.role("+ %s" % n, "success") + out.role("  (in profile, not installed)", "muted"))
         for n in extras:
             out.info(out.role("- %s" % n, "danger") + out.role("  (installed, not in profile)", "muted"))
+        current = lockfile.installed()
+        want = profile.get("skills", {})
         for n in changed:
-            out.info(out.role("~ %s" % n, "warn") + out.role("  (version differs)", "muted"))
+            out.info(out.role("~ %s" % n, "warn") + out.role(
+                "  (%s)" % _row_differs(want[n], current[n]), "muted"))
         for n, kind in sorted(other_kind.items()):
             out.info(out.role("~ %s" % n, "warn")
                      + out.role("  (in profile, installed as a %s — profiles "
@@ -529,19 +561,37 @@ def cmd_profile(argv) -> int:
                 out.warn("%s is in the profile but not in any tap — skipped" % n)
             not_found.append(n)
             continue
-        res = store.install(entry)
+        saved = want[n]
+        # Into the agents the profile recorded: a skill saved linked for one
+        # agent came back linked for every agent, so the switch rewrote the
+        # scope it was meant to restore.
+        res = store.install(entry, only_agents=saved.get("only_agents") or None)
+        if saved.get("pinned"):
+            lockfile.update_skill(n, lambda row: row.update(pinned=True))
         if not args.json:
             out.ok("installed %s → %s" % (n, " · ".join(res.linked)))
             _warn_unwritable(res)
         installed_now.append(n)
-    for n in changed:
+        why = _row_differs(saved, lockfile.get_skill(n) or entry)
+        if why:
+            # The tap has moved since the save, so what came back is not what
+            # was saved — said here, not left for `profile diff` to find.
+            changed.append(n)
+            if not args.json:
+                out.warn("%s (%s): profile has v%s%s, installed v%s%s — its "
+                         "tap has moved since the profile was saved"
+                         % (n, why, out.plain(saved.get("version")),
+                            _at(saved), out.plain(entry.get("version")),
+                            _at(lockfile.get_skill(n) or {})), wrap=True)
+    for n in (c for c in changed if c not in installed_now):
         # Mirrors `diff`'s "~ NAME (version differs)" — `use` used to discard
         # this and switch silently, leaving the drift `diff` warns about
         # invisible from the command that is supposed to resolve it. Prose, so
         # it is gated like every other line here; `--json` callers already read
         # the same drift out of `profile diff`.
         if not args.json:
-            out.warn("%s (version differs)" % n)
+            out.warn("%s (%s)" % (n, _row_differs(
+                want[n], lockfile.get_skill(n) or {})))
     for n in sorted(want):
         if lockfile.get_skill(n) and not (lockfile.get_skill(n) or {}).get("quarantined"):
             # unsideline, not link_agents: a skill this profile wants may have
@@ -599,8 +649,16 @@ def cmd_profile(argv) -> int:
         print(json.dumps({"name": args.name, "installed": installed_now,
                           "not_found": not_found, "uninstalled": uninstalled,
                           "sidelined": sidelined, "kept_extras": kept_extras,
-                          "other_kind": other_kind,
+                          "other_kind": other_kind, "differs": sorted(changed),
                           **({"only_copies": only} if only else {})}, indent=2))
+        return 0
+    if changed:
+        # "switched" is a claim that this machine now is the profile; with a
+        # skill at another version or commit it is not, so it is not made.
+        out.warn("applied profile %s, but %d skill%s differ%s from it — "
+                 "compare with `boost profile diff %s`"
+                 % (args.name, len(changed), _s(len(changed)),
+                    "s" if len(changed) == 1 else "", args.name), wrap=True)
         return 0
     out.ok("switched to profile %s" % args.name)
     return 0
@@ -847,6 +905,9 @@ def cmd_pulse(argv) -> int:
             journal.pulse_empty_state(args.action, all_events), wrap=True))
         return 0
     for e in events:
+        # A journal row repeats the tap's frontmatter (`version=`, a subject
+        # read off a SKILL.md): a display copy, terminal controls dropped.
+        e = out.plain_fields(e)
         action = e.get("action", "?")
         action_role = _ACTION_ROLE.get(action, "accent")
         extras = {k: v for k, v in e.items()

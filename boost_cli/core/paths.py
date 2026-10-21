@@ -344,6 +344,22 @@ def write_remedy(block: Path) -> str:
     return "run `%s`" % chmod_command(block)
 
 
+def save_refused(p: Path, e: OSError) -> BoostError:
+    """The error for a write of `p` that raised `e`: names `p` and, when a
+    directory is what refused, that directory and the one step that clears it.
+
+    ``config.save`` and every state-file writer raise this, so a read-only
+    ``~/.boost/state`` reads as one sentence with a remedy instead of an
+    exit-70 crash report naming a ``PermissionError``.
+    """
+    block = refuses_writes(p.parent)
+    return BoostError(
+        "could not save %s (%s)%s"
+        % (tilde(p), e.strerror or e,
+           ": " + not_writable(p.parent, block) if block else ""),
+        hint="%s, then re-run" % write_remedy(block) if block else None)
+
+
 def chmod_command(block: Path) -> str:
     """The ``chmod`` that makes `block` writable *and* enterable.
 

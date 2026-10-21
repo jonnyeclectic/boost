@@ -857,6 +857,24 @@ class TestTheEmptyCatalogAnswersDifferentlyFromAMiss:
         reply = mcp.no_results("R", tapped=0, dropped=["R"])
         assert "boost tap --defaults" in reply
 
+    def test_a_stopword_only_query_says_nothing_was_searched(self):
+        assert mcp.no_results("the and of", tapped=4, ignored=True) == (
+            "'the and of' holds only common words and punctuation, which the "
+            "index ignores, so nothing was searched. Retry with a plain-word "
+            "description of the task.")
+
+    def test_setup_state_outranks_an_ignored_query(self):
+        reply = mcp.no_results("the", tapped=0, ignored=True)
+        assert "boost tap --defaults" in reply
+
+    def test_dropped_terms_outrank_ignored(self):
+        reply = mcp.no_results("R", tapped=4, dropped=["R"], ignored=True)
+        assert reply.startswith("'R' did not reach the index")
+
+    def test_ignored_query_echo_is_bounded(self):
+        reply = mcp.no_results("the " * 100000, tapped=4, ignored=True)
+        assert len(reply) < 400
+
 
 class TestTheMissReplyDoesNotCostWhatTheQueryCost:
     """The miss is the reply an agent hits repeatedly while it rephrases, and
@@ -1754,10 +1772,10 @@ class TestDoctorToolOnStoreDirsBoostDidNotInstall:
         from boost_cli.core import paths
         lock = paths.lockfile_path()
         raw = json.loads(lock.read_text(encoding="utf-8"))
-        raw["version"] = 2
+        raw["version"] = 4
         lock.write_text(json.dumps(raw), encoding="utf-8")
         text, is_error = configuration._tool_doctor({})
-        assert ("the lock file is schema v2, not v3 — ask the user to restore "
+        assert ("the lock file is schema v4, not v3 — ask the user to restore "
                 "it with `boost replay`") in text
         assert ("1 issue(s) — 1 is the user's to change, and `boost sync` "
                 "leaves it") in text

@@ -460,6 +460,16 @@ class TestSideline:
             assert _link(agent).is_symlink()
         assert "sidelined_by" not in lockfile.get_skill("brainstorming")
 
+    def test_unsideline_relinks_only_into_the_declared_agents(self, tap):
+        store.install(catalog.find("brainstorming")[0],
+                      only_agents=["cursor"])
+        store.sideline("brainstorming", "profile")
+        res = store.unsideline("brainstorming")
+        assert res.linked == ["cursor"]
+        assert _link("cursor").is_symlink()
+        assert not _link("claude-code").exists()
+        assert not _link("windsurf").exists()
+
     def test_unsideline_on_a_never_sidelined_skill_is_a_noop_for_the_flag(
             self, brainstorming):
         store.unsideline("brainstorming")
@@ -5858,7 +5868,7 @@ class TestTwoAgentsOnOneDotdir:
         # The plan is made in one pass and applied in the next; a file gone
         # in between (another agent's row, another process) is the end state
         # the removal wanted, not an error.
-        store._remove_all_or_nothing("x", [(tmp_path / "gone.md", "")])
+        store._remove_all_or_nothing("x", [(tmp_path / "gone.md", None)])
         assert not (tmp_path / "gone.md").exists()
 
 

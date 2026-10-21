@@ -727,9 +727,9 @@ class TestDoctor:
 
     def test_wrong_schema_lock_rc1(self, boost, installed):
         paths.lockfile_path().write_text(
-            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
+            json.dumps({"version": 4, "skills": {}}), encoding="utf-8")
         r = boost("doctor", expect=1)
-        assert "lock file schema is v2, expected v3" in r.out
+        assert "lock file schema is v4, expected v3" in r.out
         assert "lock file parses (v3)" not in r.out
 
     def test_links_outside_the_declared_scope_rc1(self, boost, installed):
@@ -766,8 +766,23 @@ class TestDoctor:
         # editing SKILL.md content after install is drift from the lock digest.
         _tamper("brainstorming")
         r = boost("doctor", expect=1)
-        assert "skill brainstorming modified since install — run `boost verify`" in r.out
+        # The remedy is one that resolves it, not `boost verify`, which
+        # prints "modified" and stops.
+        assert ("skill brainstorming modified since install — run `boost "
+                "reinstall brainstorming` to discard local edits") in " ".join(r.out.split())
         assert "1 issue needs attention" in r.out
+
+    def test_a_deleted_skill_md_points_at_heal_rc1(self, boost, installed):
+        # Heal reinstalls it (its plan reads a dir with no SKILL.md as a
+        # missing store), so heal is the remedy doctor names — not verify.
+        (paths.store_dir() / "brainstorming" / "SKILL.md").unlink()
+        r = boost("doctor", expect=1)
+        assert ("skill brainstorming modified since install — run `boost "
+                "heal` to restore its missing SKILL.md") in " ".join(
+                    r.out.split())
+        boost("heal")
+        assert "modified since install" not in boost("doctor",
+                                                     expect=None).out
 
     def test_materialized_rules_and_workflows_ok_rc0(self, boost, sandbox):
         from boost_cli.core import lockfile
@@ -845,11 +860,19 @@ class TestDoctor:
         self._seed_hashed(rule_text="rule body\nTAMPERED\n",
                           wf_text="workflow body\nTAMPERED\n")
         r = boost("doctor", expect=1)
-        assert "rule r modified since install — run `boost verify`" in r.out
-        assert "workflow w modified since install — run `boost verify`" in r.out
+        assert ("rule r modified since install — run `boost reinstall r` "
+                "to discard local edits") in " ".join(r.out.split())
+        assert ("workflow w modified since install — run `boost reinstall "
+                "w` to discard local edits") in " ".join(r.out.split())
         assert "fully materialized" not in r.out
         assert "2 issues need attention" in r.out
-        assert boost("verify", expect=1)
+        v = " ".join(boost("verify", expect=1).out.split())
+        assert ("r modified rule · missing lock fields: version, tap, sha256, "
+                "installed_at · `boost reinstall r` to discard local edits"
+                ) in v
+        assert ("w modified workflow · missing lock fields: version, tap, "
+                "sha256, installed_at · `boost reinstall w` to discard local "
+                "edits") in v
 
     def test_hand_edited_claude_block_rc1(self, boost, sandbox):
         import hashlib
@@ -861,7 +884,8 @@ class TestDoctor:
             {"agent": "claude-code", "mode": "claude", "path": str(cm),
              "sha256": hashlib.sha256(b"original").hexdigest()}]})
         r = boost("doctor", expect=1)
-        assert "rule blk modified since install — run `boost verify`" in r.out
+        assert ("rule blk modified since install — run `boost reinstall "
+                "blk` to discard local edits") in " ".join(r.out.split())
 
     def test_claude_block_with_no_end_marker_is_malformed_rc1(
             self, boost, sandbox):
@@ -1348,6 +1372,32 @@ class TestVerify:
         assert "modified" in r.out
         assert "1 of 1 item failed verification" in r.out
 
+    def test_modified_row_names_the_reinstall_that_fixes_it(self, boost,
+                                                          installed):
+        # Doctor sends a modified skill here; "modified" with rc 1 and no
+        # next step was a dead end.
+        _tamper("brainstorming")
+        r = boost("verify", expect=1)
+        assert ("brainstorming  modified  `boost reinstall brainstorming` to "
+                "discard local edits") in r.out
+        boost("reinstall", "brainstorming")
+        assert "lock file integrity OK" in boost("verify").out
+
+    def test_a_deleted_skill_md_names_heal(self, boost, installed):
+        # The dir is still there, so this reads MODIFIED rather than MISSING;
+        # heal's plan reads the same tree as a missing store and reinstalls.
+        (paths.store_dir() / "brainstorming" / "SKILL.md").unlink()
+        r = boost("verify", expect=1)
+        assert ("brainstorming  modified  `boost heal` to restore its missing "
+                "SKILL.md") in r.out
+        assert "reinstalled missing brainstorming" in boost("heal").out
+        assert "lock file integrity OK" in boost("verify").out
+
+    def test_an_ok_row_carries_no_remedy(self, boost, installed):
+        r = boost("verify")
+        assert "boost reinstall" not in r.out
+        assert "boost heal" not in r.out
+
     def test_deleted_missing_rc1(self, boost, installed):
         shutil.rmtree(paths.store_dir() / "brainstorming")
         r = boost("verify", expect=1)
@@ -1391,9 +1441,17 @@ class TestVerify:
 
     def test_lock_file_wrong_schema_rc1(self, boost, installed):
         paths.lockfile_path().write_text(
-            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
+            json.dumps({"version": 4, "skills": {}}), encoding="utf-8")
         r = boost("verify", expect=1)
-        assert "lock file schema is v2, expected v3" in r.err
+        assert "lock file schema is v4, expected v3" in r.err
+
+    def test_a_versionless_lock_of_the_wrong_shape_never_says_vNone(
+            self, boost, installed):
+        paths.lockfile_path().write_text(json.dumps({"skills": []}),
+                                         encoding="utf-8")
+        r = boost("verify", expect=1)
+        assert "lock file schema is unreadable, expected v3" in r.err
+        assert "vNone" not in r.out + r.err
 
 
 # ── drift ────────────────────────────────────────────────────────────────
@@ -1415,6 +1473,13 @@ class TestDrift:
         assert "local-edits" in r.out
         assert "boost reinstall brainstorming to discard local edits" in r.out
         assert "1 local-edits" in r.out
+
+    def test_a_deleted_skill_md_hints_heal(self, boost, installed):
+        (paths.store_dir() / "brainstorming" / "SKILL.md").unlink()
+        rows = json.loads(boost("drift", "--json").out)["skills"]
+        assert [(r["name"], r["status"], r["hint"]) for r in rows] == [
+            ("brainstorming", "local-edits",
+             "boost heal to restore its missing SKILL.md")]
 
     def test_unknown_name_close_match_hint(self, boost, installed):
         # `drift` resolves across every lock section via `_iter_installed_all`
@@ -3573,9 +3638,9 @@ class TestStoreDirsBoostDidNotInstall:
         assert "nothing to heal" not in r.out
         assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
         paths.lockfile_path().write_text(
-            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
+            json.dumps({"version": 4, "skills": {}}), encoding="utf-8")
         r = boost("heal", expect=1)
-        assert ("the lock file is schema v2, not v3, so heal cannot tell which "
+        assert ("the lock file is schema v4, not v3, so heal cannot tell which "
                 "store dirs are boost's") in _flat(r.out + r.err)
 
     def test_a_plugin_duplicate_is_an_issue_until_prune_drops_the_link(

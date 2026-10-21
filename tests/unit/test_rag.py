@@ -185,6 +185,32 @@ class TestDroppedTerms:
         assert rag.dropped_terms("") == []
 
 
+class TestIgnoredByDesign:
+    """A query the index ignores entirely without dropping a word worth naming."""
+
+    def test_stopwords_only(self):
+        assert rag.ignored_by_design("the and of") is True
+
+    def test_punctuation_only(self):
+        assert rag.ignored_by_design("--") is True
+
+    def test_stopwords_and_punctuation(self):
+        assert rag.ignored_by_design("how to & ...") is True
+
+    def test_one_real_term_makes_it_a_query(self):
+        assert rag.ignored_by_design("the brainstorming") is False
+
+    def test_a_dropped_term_is_the_other_branch(self):
+        # `R` is named by dropped_terms, which says more than this does.
+        assert rag.ignored_by_design("R") is False
+        assert rag.ignored_by_design("the R") is False
+        assert rag.ignored_by_design("代码审查") is False
+
+    def test_blank_is_a_usage_error_not_an_ignored_query(self):
+        assert rag.ignored_by_design("") is False
+        assert rag.ignored_by_design("  \t ") is False
+
+
 # ------------------------------------------------------------- chunk
 
 class TestChunk:

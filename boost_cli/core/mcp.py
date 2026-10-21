@@ -579,7 +579,7 @@ def echo(text: str, *, limit: int = QUERY_ECHO_CHARS) -> str:
 
 
 def no_results(query: str, *, tapped: int,
-               dropped: Sequence[str] = ()) -> str:
+               dropped: Sequence[str] = (), ignored: bool = False) -> str:
     """The reply for a search that returned nothing.
 
     THREE different situations wore one sentence. On a configured machine
@@ -601,7 +601,11 @@ def no_results(query: str, *, tapped: int,
     happened and the rule, so a retry is possible. The setup branch still wins:
     an untapped machine could not have matched anything either way.
 
-    Both echoing branches are bounded by :func:`echo` — see
+    ``ignored`` is the fourth: the query held only stopwords and punctuation
+    (``rag.ignored_by_design``), which ``dropped`` leaves out on purpose, so
+    `the and of` used to read as a genuine miss.
+
+    Every echoing branch is bounded by :func:`echo` — see
     :data:`QUERY_ECHO_CHARS` for why the one reply an agent hits repeatedly
     must not cost it in proportion to what it typed.
     """
@@ -612,6 +616,10 @@ def no_results(query: str, *, tapped: int,
         return ("%s did not reach the index, so nothing was searched — a term "
                 "needs 2 or more ASCII letters or digits. Retry with a "
                 "plain-word description of the task." % shown)
+    if tapped > 0 and ignored:
+        return ("%r holds only common words and punctuation, which the index "
+                "ignores, so nothing was searched. Retry with a plain-word "
+                "description of the task." % echo(query))
     if tapped > 0:
         return "no skills match %r" % echo(query)
     # Addressed to the user via the agent, and naming ONE command. Telling an

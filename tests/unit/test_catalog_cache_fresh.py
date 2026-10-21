@@ -142,3 +142,57 @@ def test_a_tap_whose_clone_is_gone_is_not_fresh(boost, tapped, monkeypatch):
     assert tap.is_cloned is False
     assert catalog.cache_is_fresh(tap) is False
     assert calls == []
+
+
+# ── stale_commit: the staleness load_tap does not repair by itself ─────────
+def test_stale_commit_names_both_commits(boost, tapped):
+    tap = _tap(boost, tapped)
+    head = gitutil.head_commit(tap.path)
+    assert catalog.stale_commit(tap) is None
+    _rewrite(tap, commit="0" * 40)
+    assert catalog.stale_commit(tap) == ("0" * 40, head)
+    assert catalog.stale_commit(tap, head="1" * 40) == ("0" * 40, "1" * 40)
+    assert catalog.stale_commit(tap, head="0" * 40) is None
+
+
+def test_stale_commit_needs_both_sides_known(boost, tapped):
+    # Two unknowns are not a mismatch, and neither is one: an unrecorded
+    # commit (an old cache) or an unresolvable HEAD says nothing either way.
+    tap = _tap(boost, tapped)
+    assert catalog.stale_commit(tap, head="") is None
+    _rewrite(tap, commit="")
+    assert catalog.stale_commit(tap) is None
+    _rewrite(tap, commit=None)
+    assert catalog.stale_commit(tap) is None
+    tap.cache_file.unlink()
+    catalog._ENTRY_CACHE.clear()
+    assert catalog.stale_commit(tap) is None
+
+
+def test_stale_commit_ignores_an_old_format(boost, tapped):
+    # load_tap rescans an old format on its own, so the format is not this
+    # fault: the answer turns on the commit alone, whatever the format says.
+    tap = _tap(boost, tapped)
+    head = gitutil.head_commit(tap.path)
+    _rewrite(tap, format=catalog.CACHE_FORMAT - 1)
+    assert catalog.cache_is_fresh(tap) is False
+    assert catalog.stale_commit(tap) is None
+    _rewrite(tap, commit="0" * 40)
+    assert catalog.stale_commit(tap) == ("0" * 40, head)
+
+
+def test_stale_commit_hint_names_the_tap_and_heal(boost, tapped):
+    tap = _tap(boost, tapped)
+    assert catalog.stale_commit_hint() is None
+    _rewrite(tap, commit="0" * 40)
+    assert catalog.stale_commit_hint() == (
+        "the catalog of fixture-tap was scanned at an older commit than its "
+        "clone — `boost heal` rescans it")
+
+
+def test_join_hints():
+    assert catalog.join_hints(None, None) is None
+    assert catalog.join_hints("", None) is None
+    assert catalog.join_hints("a", None) == "a"
+    assert catalog.join_hints(None, "b") == "b"
+    assert catalog.join_hints("a", "b") == "a; b"

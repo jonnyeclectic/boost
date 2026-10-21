@@ -11,6 +11,7 @@ a link, and a link to nothing or out of the tap is skipped and named.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -101,6 +102,82 @@ class TestInstallWithLinks:
         assert (link_tap / "shared" / "lib" / "util.py").is_file()
         assert {p.name for p in _store().iterdir()} == {
             "SKILL.md", "notes", "helper.py", "lib", "alias.txt"}
+
+
+class TestSkippedLinksAreNotDrift:
+    """The lock hashes the copy, so the tap side must hash the same view:
+    a link install skips by policy is not a change upstream."""
+
+    def _move_tap(self, tmp_path, n=0):
+        src = tmp_path / "link-tap"
+        (src / "README.md").write_text("moved %d\n" % n, encoding="utf-8")
+        _git(src, "add", "-A")
+        _git(src, "commit", "-qm", "unrelated")
+
+    def test_an_unrelated_tap_move_does_not_refresh_it(self, boost, link_tap,
+                                                       tmp_path):
+        boost("install", "linky")
+        for n in range(2):
+            self._move_tap(tmp_path, n)
+            r = boost("update")
+            flat = " ".join((r.out + r.err).split())
+            assert "refreshed linky" not in flat
+            assert "leads outside the tap" not in flat
+
+    def test_drift_calls_it_in_sync_after_a_tap_move(self, boost, link_tap,
+                                                     tmp_path):
+        boost("install", "linky")
+        self._move_tap(tmp_path)
+        boost("update")
+        r = boost("drift", "--json")
+        rows = {row["name"]: row["status"] for row in json.loads(r.out)["skills"]}
+        assert rows["linky"] == "in-sync"
+
+    def test_a_real_change_inside_the_skill_still_counts(self, boost, link_tap,
+                                                         tmp_path):
+        boost("install", "linky")
+        src = tmp_path / "link-tap"
+        (src / "skills" / "linky" / "notes" / "real.txt").write_text(
+            "changed\n", encoding="utf-8")
+        _git(src, "add", "-A")
+        _git(src, "commit", "-qm", "edit")
+        r = boost("update")
+        assert "refreshed linky v0.0.0 (source changed)" in " ".join(
+            (r.out + r.err).split())
+        assert (_store() / "notes" / "real.txt").read_text(
+            encoding="utf-8") == "changed\n"
+
+    def test_copy_view_sha_is_the_installed_copys_hash(self, boost, link_tap):
+        from boost_cli.core import lockfile, util
+        boost("install", "linky")
+        src = link_tap / "skills" / "linky"
+        want = lockfile.get_skill("linky")["sha256"]
+        assert util.sha256_dir(src) != want, "the raw tree must differ here"
+        assert store.copy_view_sha(src, link_tap) == want
+
+    def test_a_lone_dir_link_takes_the_staged_path(self, tmp_path):
+        """``rglob`` does not descend a dir link the copy holds as a real
+        dir, so a tree whose only link is a dir must not hash in place."""
+        from boost_cli.core import util
+        root = tmp_path / "repo"
+        skill = root / "skills" / "s"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("x", encoding="utf-8")
+        (root / "shared").mkdir()
+        (root / "shared" / "u.py").write_text("u", encoding="utf-8")
+        (skill / "lib").symlink_to("../../shared")
+        store._copy_tree(skill, tmp_path / "copy", root)
+        want = util.sha256_dir(tmp_path / "copy")
+        assert util.sha256_dir(skill) != want
+        assert store.copy_view_sha(skill, root) == want
+
+    def test_a_tree_without_links_hashes_in_place(self, tmp_path, monkeypatch):
+        from boost_cli.core import util
+        (tmp_path / "s").mkdir()
+        (tmp_path / "s" / "SKILL.md").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(store, "_copy_tree", None)
+        assert store.copy_view_sha(tmp_path / "s", tmp_path) == \
+            util.sha256_dir(tmp_path / "s")
 
 
 class TestCopyTree:

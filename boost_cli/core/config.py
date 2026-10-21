@@ -6,6 +6,7 @@ from __future__ import annotations
 import difflib
 import json
 import sys
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any, cast
 
@@ -414,13 +415,35 @@ def save(cfg: dict) -> None:
         util.atomic_write_text(
             p, json.dumps(cfg, indent=2, sort_keys=False) + "\n")
     except OSError as e:
-        block = paths.refuses_writes(p.parent)
-        raise BoostError(
-            "could not save %s (%s)%s"
-            % (paths.tilde(p), e.strerror or e,
-               ": " + paths.not_writable(p.parent, block) if block else ""),
-            hint="%s, then re-run" % paths.write_remedy(block)
-            if block else None) from e
+        raise paths.save_refused(p, e) from e
+
+
+def guard_path():
+    """The sidecar :func:`mutate` locks: beside config.json, never it."""
+    p = paths.config_path()
+    return p.with_name(p.name + ".lock")
+
+
+def mutate(fn: Callable[[dict], bool | None], *, raw: bool = False) -> bool:
+    """Apply ``fn`` to a fresh read of config.json and save it, atomically.
+
+    Every `load()` -> change -> `save()` used to run with nothing between
+    processes: `boost config set` in two shells reverted each other's values
+    behind a check mark, and a `boost tap` overlapping one lost its row while
+    the clone stayed on disk — so `untap` then said "no such tap". The read
+    happens *inside* an exclusive cross-process lock and bypasses the
+    stat-stamp cache, which can miss a rewrite that kept the size and the
+    mtime tick. ``raw`` reads the on-disk overrides only (:func:`_read_raw`)
+    instead of the DEFAULTS-merged view. ``fn`` returning False skips the
+    write; returns whether it wrote. Not re-entrant: ``fn`` must not call
+    another config writer.
+    """
+    with util.file_lock(guard_path(), what="the config file", strict=False):
+        cfg = _read_raw() if raw else _read()
+        if fn(cfg) is False:
+            return False
+        save(cfg)
+        return True
 
 
 def get(dotted: str, default=None):
@@ -558,15 +581,16 @@ def set_value(dotted: str, raw: str) -> None:
     """
     _refuse_managed(dotted, "set")
     value = typedvalue.coerce(dotted, raw, spec_for(dotted))
-    cfg = load()
-    node: Any = cfg
     parts = dotted.split(".")
-    for part in parts[:-1]:
-        node = node.setdefault(part, {})
-        if not isinstance(node, dict):
-            raise TypeError("config key %r is not a section" % part)
-    node[parts[-1]] = value
-    save(cfg)
+
+    def put(cfg: dict) -> None:
+        node: Any = cfg
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+            if not isinstance(node, dict):
+                raise TypeError("config key %r is not a section" % part)
+        node[parts[-1]] = value
+    mutate(put)
 
 
 def unset(dotted: str) -> bool:
@@ -581,15 +605,16 @@ def unset(dotted: str) -> bool:
     A :data:`MANAGED_KEYS` path is a :class:`BoostError`, before any read.
     """
     _refuse_managed(dotted, "unset")
-    cfg = _read_raw()
-    node: Any = cfg
     parts = dotted.split(".")
-    for part in parts[:-1]:
-        node = node.get(part)
-        if not isinstance(node, dict):
+
+    def drop(cfg: dict) -> bool:
+        node: Any = cfg
+        for part in parts[:-1]:
+            node = node.get(part)
+            if not isinstance(node, dict):
+                return False
+        if parts[-1] not in node:
             return False
-    if parts[-1] in node:
         del node[parts[-1]]
-        save(cfg)
         return True
-    return False
+    return mutate(drop, raw=True)

@@ -128,23 +128,91 @@ class TestCheck:
         paths.lockfile_path().write_bytes(raw)
         assert lockfile.check() == (False, "corrupt", None)
 
-    def test_wrong_schema_version(self, sandbox):
+    @pytest.mark.parametrize("version", [4, "3", "2", True, 0, -1, 2.0])
+    def test_a_schema_boost_never_wrote_is_refused(self, sandbox, version):
         paths.ensure_dirs()
         paths.lockfile_path().write_text(
-            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
-        integ = lockfile.check()
-        assert not integ.ok
-        assert integ.problem == "schema"
-        assert integ.version == 2
+            json.dumps({"version": version, "skills": {}}), encoding="utf-8")
+        assert lockfile.check() == (False, "schema", version)
+
+    @pytest.mark.parametrize("version", [1, 2])
+    def test_an_earlier_schema_is_older_and_ok(self, sandbox, version):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text(
+            json.dumps({"version": version, "skills": {}}), encoding="utf-8")
+        assert lockfile.check() == (True, "older", version)
+
+    def test_no_schema_version_is_older_and_ok(self, sandbox):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text('{"skills": {"a": {}}}',
+                                         encoding="utf-8")
+        assert lockfile.check() == (True, "older", None)
+
+    @pytest.mark.parametrize("section", ["skills", "rules", "workflows"])
+    def test_an_older_lock_whose_section_is_not_a_mapping_is_refused(
+            self, sandbox, section):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text(json.dumps({section: []}),
+                                         encoding="utf-8")
+        assert lockfile.check() == (False, "schema", None)
 
     def test_the_fault_of_a_corrupt_lock(self):
         assert lockfile.fault(lockfile.Integrity(False, "corrupt")) == "is corrupt"
 
-    @pytest.mark.parametrize("version", [2, "3", None])
+    @pytest.mark.parametrize("version", [2, 4, "3"])
     def test_the_fault_of_a_lock_in_another_schema(self, version):
         assert lockfile.fault(lockfile.Integrity(False, "schema", version)) == (
             "is schema v%s, not v%d" % (version, lockfile.SCHEMA_VERSION))
         assert lockfile.SCHEMA_VERSION == 3
+
+    def test_the_fault_of_a_lock_with_no_version_never_says_vNone(self):
+        assert lockfile.fault(lockfile.Integrity(True, "older", None)) == (
+            "has no schema version")
+        assert lockfile.fault(lockfile.Integrity(False, "schema", None)) == (
+            "is in no schema boost knows")
+
+
+class TestMigrate:
+    """An older lock is upgraded by being rewritten, keeping every key."""
+
+    def test_a_versionless_lock_is_recorded_as_v3_keeping_unknown_keys(
+            self, sandbox):
+        paths.ensure_dirs()
+        p = paths.lockfile_path()
+        p.write_text(json.dumps({"skills": {"a": {"tap": "t", "extra": 1}},
+                                 "someday": {"x": [1]}}), encoding="utf-8")
+        assert lockfile.migrate() == ("recorded the lock file, which had no "
+                                      "schema version, as schema v3")
+        data = json.loads(p.read_text(encoding="utf-8"))
+        assert data["version"] == 3
+        assert data["skills"] == {"a": {"tap": "t", "extra": 1}}
+        assert data["someday"] == {"x": [1]}
+        assert lockfile.check() == (True, None, 3)
+        assert lockfile.migrate() is None
+        # The old bytes are history, like any other write.
+        assert len(lockfile.history_list()) == 1
+
+    def test_an_earlier_version_is_named_by_number(self, sandbox):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text('{"version": 2, "skills": {}}',
+                                         encoding="utf-8")
+        assert lockfile.older_line(lockfile.check(), dry=True) == (
+            "would record the lock file, which was schema v2, as schema v3")
+        assert lockfile.migrate() == ("recorded the lock file, which was "
+                                      "schema v2, as schema v3")
+
+    @pytest.mark.parametrize("raw", ['{"version": 4, "skills": {}}',
+                                     "{not json"])
+    def test_nothing_else_is_migrated(self, sandbox, raw):
+        paths.ensure_dirs()
+        p = paths.lockfile_path()
+        p.write_text(raw, encoding="utf-8")
+        assert lockfile.migrate() is None
+        assert p.read_text(encoding="utf-8") == raw
+
+    def test_a_missing_lock_is_not_written(self, sandbox):
+        assert lockfile.migrate() is None
+        assert not paths.lockfile_path().exists()
 
     def test_check_does_not_mutate_or_preserve_corrupt(self, sandbox):
         # check() only reports; it must not trigger the .corrupt sidecar that

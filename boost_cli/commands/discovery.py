@@ -123,6 +123,12 @@ def cmd_search(argv):
                    help="machine-readable output")
     args = p.parse_args(argv)
     query = " ".join(args.query)
+    if not query.strip():
+        # `boost search ""` got past `nargs="+"` and was answered as a real
+        # miss, with a hint to run a bare `boost discover` — which browses the
+        # cache and searches nothing. It is the same mistake as giving no
+        # query at all, so it gets the same answer and argparse's rc 2.
+        p.error("the query is empty — give at least one search term")
     if not registry.list_taps():
         raise BoostError("no taps configured — nothing to search",
                         hint="add the recommended registries with `boost tap --defaults`")
@@ -176,14 +182,23 @@ def cmd_search(argv):
     # `catalog.search` is a substring match, so the non-RAG path discards
     # nothing; and `dense.retrieve` embeds the raw query string, so on a
     # machine with vectors built the term reached an index after all.
-    dropped = (rag.dropped_terms(query)
-               if use_rag and rag.tokenizer_is_the_only_reader() else [])
+    tokenized_only = use_rag and rag.tokenizer_is_the_only_reader()
+    dropped = rag.dropped_terms(query) if tokenized_only else []
+    # Stopwords and bare punctuation are not "dropped" (a notice on every
+    # ordinary phrase is noise), so a query of nothing else needs its own test.
+    ignored = tokenized_only and rag.ignored_by_design(query)
     if not scored:
         if args.as_json:
             print(json.dumps([]))
             _warn_dropped_terms(dropped)
+            if ignored:
+                out.warn("no searchable terms in %r — %s" % (query, _IGNORED_RULE),
+                         wrap=True, stream=sys.stderr)
             return 0
-        if dropped and not rag.tokenize(query):
+        if ignored:
+            print(out.empty_state("no searchable terms in %r" % query,
+                                  _IGNORED_RULE))
+        elif dropped and not rag.tokenize(query):
             # Nothing was searched at all, so "no matches" asserts something
             # this command never checked, and `boost discover` spends a network
             # round trip on a query that never reached an index. Measured: a
@@ -272,9 +287,9 @@ def cmd_search(argv):
     # grep owner/repo` found nothing the same search shows on a wide pane.
     # No pane (None) plans nothing to fit — see `search_layout`.
     lay = out.search_layout(out.pane_width(),
-                            [e["name"] for e, _ in shown],
+                            [out.plain(e["name"]) for e, _ in shown],
                             [str(e.get("kind") or "skill") for e, _ in shown],
-                            [str(e.get("tap") or "") for e, _ in shown])
+                            [out.plain(e.get("tap") or "") for e, _ in shown])
     for (e, _sc), frac in zip(shown, fracs, strict=True):
         out.info(out.format_search_row(
             e["name"], e.get("description") or "",
@@ -323,6 +338,11 @@ def _note_stem_expansions(query: str) -> None:
 
 #: How the index's own rule reads to someone who just lost a word to it.
 _TERM_RULE = "a term needs 2 or more ASCII letters or digits"
+
+
+#: Why a query of only stopwords or punctuation searched nothing.
+_IGNORED_RULE = ("common words (the, and, how, …) and punctuation are not "
+                 "indexed — add a word that names the task")
 
 
 def _quoted(terms: list[str]) -> str:
@@ -1316,8 +1336,8 @@ def _browse_plain(entries, why: str):
     unique = [e for e, _n in browse.dedupe(entries)]
     show_curated = any(e.get("curated") for e in unique)
     headers = ["name", "version", "tap", "kind"]
-    rows = [[e["name"], "v" + e["version"], e["tap"],
-             out.kind_label(e.get("kind", "skill"))]
+    rows = [[out.plain(e["name"]), "v" + out.plain(e["version"]),
+             out.plain(e["tap"]), out.kind_label(e.get("kind", "skill"))]
             for e in unique]
     if show_curated:
         headers.append("")
@@ -1767,7 +1787,11 @@ def _browse_tui(curses, entries, install=None, category=""):
             # `x < _w`, not `_w - 1`: the right-hand border lives in the last
             # column, and the old bound made it unwritable — the frame drew
             # with three sides. Writing the very last cell can make curses
-            # scroll, which is what the suppressed error covers.
+            # scroll, which is what the suppressed error covers. out.plain:
+            # every cell the TUI draws passes here, and its colors are curses
+            # attributes, never in-band escapes — so no byte of a tap's
+            # frontmatter can address the terminal through a row.
+            s = out.plain(s)
             if 0 <= y < _h and 0 <= x < _w and s:
                 with contextlib.suppress(curses.error):
                     scr.addnstr(y, x, s, _w - x, attr)
@@ -2398,6 +2422,9 @@ def cmd_browse(argv):
             out.warn("not %s: %s — %s, then `boost sync`"
                      % ("linked" if res.kind == "skill" else "written",
                         *store.link_refusal(adir, block)), wrap=True)
+        for adir in res.unlinkable:
+            out.warn("not linked: %s — %s, then `boost sync`"
+                     % store.symlink_refusal(adir), wrap=True)
     return 0
 
 
@@ -2520,7 +2547,8 @@ def cmd_stats(argv):
     cat = catalog.for_lock(catalog.find(args.name), lock)
     if not lock and not cat:
         raise BoostError("no skill named %r installed or in any tap" % args.name,
-                        hint="try `boost search %s`" % name)
+                        hint=catalog.join_hints("try `boost search %s`" % name,
+                                                catalog.stale_commit_hint()))
     acts = {a: len(catalog.events_for_tap(
                 journal.events(action=a, subject=name), qualifier, lock))
             for a in ("install", "update", "uninstall")}

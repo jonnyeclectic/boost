@@ -59,7 +59,10 @@ def _clear_readonly_and_retry(func, path, exc) -> None:
     """
     if os.path.islink(path) or func not in _RETRYABLE:
         raise exc
-    os.chmod(path, stat.S_IWRITE)
+    # OR the bit in: setting the mode to exactly S_IWRITE also stripped read
+    # and search, so a retry that failed anyway (a read-only *parent*) left a
+    # ``d-w-------`` directory behind that every later walk of it crashed on.
+    os.chmod(path, os.lstat(path).st_mode | stat.S_IWRITE)
     func(path)
 
 
@@ -346,8 +349,12 @@ def _replace_atomically(path: Path, text: str, encoding: str,
     files boost owns; :func:`write_user_file` passes the mode to keep.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # A short fixed prefix, not the file's own name: ``.<name>.XXXXXXXX.tmp``
+    # is 14 bytes longer than ``<name>``, so a name that fits the 255-byte
+    # component limit as a final path still failed here with ENAMETOOLONG —
+    # out of the CLI as a crash, rc 70, for a 246-character workflow.
     fd, tmp = tempfile.mkstemp(dir=str(path.parent),
-                               prefix="." + path.name + ".", suffix=".tmp")
+                               prefix=TEMP_PREFIX, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding=encoding, newline="\n") as f:
             f.write(text)
@@ -628,6 +635,30 @@ def _check_component(part: str, what: str) -> None:
             % (what, size, MAX_COMPONENT_BYTES, part[:40] + "…"),
             hint="APFS and ext4 refuse a file or directory name over %d "
                  "bytes" % MAX_COMPONENT_BYTES)
+
+
+#: What boost names its own temp files and staging dirs with. Short and
+#: fixed, so a temp beside a long final name is no longer than the name, and
+#: dot-led, so a leftover reads as nobody's skill (``store._may_hold_skill``).
+TEMP_PREFIX = ".boost-"
+
+#: The longest suffix an install appends to an item's name for a final path:
+#: a skill is a bare dir (and a bare link), a rule a Cursor ``<name>.mdc``, a
+#: workflow a Gemini ``<name>.toml``.
+_ITEM_SUFFIX = {"skill": "", "rule": ".mdc", "workflow": ".toml"}
+
+
+def check_item_name(name: str, kind: str = "skill") -> str:
+    """Return ``name``, or raise a BoostError if an install of it cannot fit.
+
+    The catalog indexes any name a frontmatter gives, and search and doctor
+    show it as installable; the OS refusing it came from deep inside the
+    install — a staging ``mkdtemp`` (hinted as "free space") or a workflow's
+    temp file (a crash). Asked up front, against the longest file name the
+    install would write for that kind.
+    """
+    _check_component(name + _ITEM_SUFFIX.get(kind, ".toml"), "%s name" % kind)
+    return name
 
 
 def check_path_length(path: Path, *, what: str = "path") -> Path:

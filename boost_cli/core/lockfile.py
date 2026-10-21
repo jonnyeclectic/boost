@@ -16,6 +16,7 @@ Skill entry schema (v3):
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import threading
@@ -176,7 +177,7 @@ def refuse_corrupt() -> None:
     write would replace every record with whatever one change added to it — a
     fresh `boost install` did exactly that and reported "lock updated". A
     missing lock is a fresh install and passes; so does one in another schema,
-    which still parses and is migrated by being rewritten.
+    which still parses (an older one is migrated by being rewritten).
     """
     p = paths.lockfile_path()
     if jsonstate.read_object(p)[1] is None:
@@ -253,8 +254,11 @@ class Integrity(NamedTuple):
     whose record vanished out from under a populated store.
     """
     ok: bool
-    problem: str | None    # None | "missing" | "corrupt" | "schema"
-    version: object = None  # the schema version actually found, for "schema"
+    # None | "missing" | "corrupt" | "schema" | "older". "older" is the one
+    # problem that is ok: a lock with no schema version, or an earlier one,
+    # still parses and is migrated by being rewritten (:func:`migrate`).
+    problem: str | None
+    version: object = None  # the schema version found, for "schema"/"older"
 
 
 def check() -> Integrity:
@@ -270,9 +274,54 @@ def check() -> Integrity:
     if raw is None:
         return Integrity(False, "missing")
     version = raw.get("version")
-    if version != SCHEMA_VERSION:
-        return Integrity(False, "schema", version)
-    return Integrity(True, None, version)
+    if version == SCHEMA_VERSION:
+        return Integrity(True, None, version)
+    # The sections an older lock holds must be the ones :func:`read` hands
+    # on, or every reader that walks one would trip over what it holds.
+    if migratable(version) and all(isinstance(raw.get(section, {}), dict)
+                                   for _kind, section in SECTIONS):
+        return Integrity(True, "older", version)
+    return Integrity(False, "schema", version)
+
+
+def migratable(version: object) -> bool:
+    """Whether a lock of schema ``version`` is one boost upgrades by rewriting.
+
+    No version is the oldest format there is, and an earlier integer is one
+    boost wrote before: :func:`read` hands back every record either holds and
+    :func:`write` stamps the current schema over them, keeping every other
+    key. A newer version, or one that is not an integer at all, was written
+    by something boost has never seen, so nothing may write over it. Refusing
+    the older ones sent `verify`, `drift`, `sync` and `heal` to `boost replay`,
+    whose rollback undoes the last install, while the next install migrated
+    the same lock without a word.
+    """
+    if version is None:
+        return True
+    return (isinstance(version, int) and not isinstance(version, bool)
+            and 0 < version < SCHEMA_VERSION)
+
+
+def older_line(integ: Integrity, dry: bool = False) -> str:
+    """The sync/heal line for migrating an ``"older"`` lock."""
+    was = ("had no schema version" if integ.version is None
+           else "was schema v%s" % integ.version)
+    return "%s the lock file, which %s, as schema v%d" % (
+        "would record" if dry else "recorded", was, SCHEMA_VERSION)
+
+
+def migrate() -> str | None:
+    """Rewrite an ``"older"`` lock as the current schema; the line saying so.
+
+    Under :func:`exclusive`, so the check and the write see one lock. None
+    when there is nothing to migrate.
+    """
+    with exclusive():
+        integ = check()
+        if integ.problem != "older":
+            return None
+        write(read())
+        return older_line(integ)
 
 
 def fault(integ: Integrity) -> str:
@@ -283,6 +332,11 @@ def fault(integ: Integrity) -> str:
     """
     if integ.problem == "corrupt":
         return "is corrupt"
+    if integ.version is None:
+        # "older" with no version; "schema" with none is a section that is
+        # not a mapping, which no schema boost wrote holds.
+        return ("has no schema version" if integ.problem == "older"
+                else "is in no schema boost knows")
     return "is schema v%s, not v%d" % (integ.version, SCHEMA_VERSION)
 
 
@@ -329,8 +383,21 @@ def write(lock: dict) -> None:
             _snapshot(p)
         lock["version"] = SCHEMA_VERSION
         lock["updated"] = util.now_iso()
-        util.atomic_write_text(
-            p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
+        try:
+            util.atomic_write_text(
+                p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
+        except OSError as e:
+            # A full disk, an immutable lock or a read-only store: say which
+            # file and why, as config.save does, instead of a crash report
+            # naming a temp path.
+            block = paths.refuses_writes(p.parent)
+            raise BoostError(
+                "could not save %s (%s)%s"
+                % (paths.tilde(p), e.strerror or e,
+                   ": " + paths.not_writable(p.parent, block) if block else ""),
+                hint="%s, then re-run" % paths.write_remedy(block)
+                if block else "free space or clear the file's immutable flag, "
+                              "then re-run") from e
 
 
 def _snapshot(p) -> None:
@@ -386,6 +453,41 @@ def _put(section: str, name: str, entry: dict) -> None:
     def put(lock: dict) -> None:
         lock[section][name] = entry
     mutate(put)
+
+
+def _section(kind: str) -> str:
+    section = dict(SECTIONS).get(kind)
+    if section is None:
+        raise ValueError("unknown lock kind %r" % kind)
+    return section
+
+
+def update_entry(kind: str, name: str,
+                 fn: Callable[[dict], bool | None]) -> bool:
+    """Apply ``fn`` to ``name``'s row as it is *under the lock*, and persist.
+
+    The way a command changes the fields it owns without writing back the
+    rest of a row it read earlier. `boost tag`, `pin` and `edit` each used to
+    read the row, do their work, and hand the whole row to :func:`set_entry`:
+    a pin made while `boost edit` sat in the editor was reverted when it
+    exited, and an uninstall in that window came back as a ghost row.
+    ``fn`` mutates the fresh row in place; returning False writes nothing.
+    A row that is gone by now is not recreated: ``fn`` is not called and
+    nothing is written. Returns whether it wrote.
+    """
+    section = _section(kind)
+
+    def apply(lock: dict) -> bool | None:
+        row = lock[section].get(name)
+        if row is None:
+            return False
+        return fn(row)
+    return mutate(apply)
+
+
+def update_skill(name: str, fn: Callable[[dict], bool | None]) -> bool:
+    """:func:`update_entry` for a skill row."""
+    return update_entry("skill", name, fn)
 
 
 def _drop(section: str, name: str) -> bool:
@@ -489,7 +591,7 @@ def installed_workflows() -> dict:
     return read()["workflows"]
 
 
-def portable(lock: dict) -> dict:
+def portable(lock: dict, base=None) -> dict:
     """Deep copy of ``lock`` with machine-specific materialization paths dropped.
 
     A rule or workflow entry's ``materializations[].path`` is written absolute,
@@ -499,16 +601,48 @@ def portable(lock: dict) -> dict:
     keeping the useful part (which agent, which file) while dropping the
     username that would otherwise churn the committed file on every
     teammate's own run.
+
+    ``base`` is the repo the snapshot is for. The user lock also records every
+    ``--local`` rule and workflow from *every* checkout on the machine, each
+    tagged with its absolute ``base`` — so without a filter, onboarding one repo
+    committed another repo's installs into it, absolute path and all. With
+    ``base`` given, a project-scope row survives only when this repo owns it
+    (:func:`scopes.owns`), and its ``base`` and paths become repo-relative.
+    Without one, project rows are kept but their ``base`` is contracted too.
     """
+    from . import scopes
     projected = json.loads(json.dumps(lock))
+    want = None if base is None else os.path.realpath(base)
     for _kind, section in SECTIONS:
-        for entry in projected.get(section, {}).values():
+        entries = projected.get(section, {})
+        for name in list(entries):
+            entry = entries[name]
+            local = (isinstance(entry, dict)
+                     and entry.get("scope") == scopes.SCOPE_PROJECT)
+            if local and base is not None and not scopes.owns(entry, base):
+                del entries[name]
+                continue
+            # Any string ``base``, not only a project row's: ``update`` can
+            # write one back without ``scope``, and it names $HOME all the same.
+            if isinstance(entry, dict) and isinstance(entry.get("base"), str):
+                entry["base"] = ("." if local and want is not None
+                                 else paths.tilde(entry["base"]))
             # A workflow's ``foreign`` rows name a path under $HOME too.
             for m in (*(entry.get("materializations") or ()),
                       *(entry.get("foreign") or ())):
                 if isinstance(m, dict) and "path" in m:
-                    m["path"] = paths.tilde(m["path"])
+                    m["path"] = _portable_path(m["path"], want if local else None)
     return projected
+
+
+def _portable_path(p, want: str | None) -> str:
+    """``p`` relative to the repo ``want`` when it sits inside it, else ``~``-contracted."""
+    if want is not None and isinstance(p, str) and os.path.isabs(p):
+        real = os.path.realpath(p)
+        if real.startswith(want.rstrip(os.sep) + os.sep):
+            return real[len(want.rstrip(os.sep)) + 1:].replace(os.sep, "/")
+    return paths.tilde(p)
+
 
 def agent_names(kind: str, entry: dict | None) -> list[str]:
     """Sorted, deduplicated agent names an installed item of ``kind`` reaches.
@@ -559,10 +693,7 @@ def find_any(name: str) -> tuple[str, dict] | None:
 
 def set_entry(kind: str, name: str, entry: dict) -> None:
     """Insert or replace the lock entry for ``name`` of ``kind`` and persist."""
-    section = dict(SECTIONS).get(kind)
-    if section is None:
-        raise ValueError("unknown lock kind %r" % kind)
-    _put(section, name, entry)
+    _put(_section(kind), name, entry)
 
 
 def all_installed() -> dict[str, dict]:

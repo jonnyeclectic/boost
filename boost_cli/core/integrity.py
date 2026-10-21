@@ -115,6 +115,24 @@ def skill_modified(name: str, entry: dict | None) -> bool:
     return status(name, entry) == STATUS_MODIFIED
 
 
+def modified_remedy(name: str, kind: str = "skill") -> tuple[str, str]:
+    """``(command, purpose)`` that resolves item ``name`` reading MODIFIED.
+
+    Two faults share that status and have different fixes. A store dir with
+    no ``SKILL.md`` left is what `heal`'s plan reads as a missing store and
+    reinstalls (``store.sync_plan``), so it is named for heal. Anything else
+    is a local edit, which ``boost reinstall`` discards. Doctor used to name
+    ``boost verify`` for both, which prints "modified" and stops -- a remedy
+    that leads nowhere. Every surface (`doctor`, `verify`, `drift`, the MCP
+    doctor) asks this one function, so none can name a different next step.
+    A rule or workflow has no store copy to lose: its edit is always the
+    materialized file, which a reinstall rewrites.
+    """
+    if kind == "skill" and not (_store_dir(name) / "SKILL.md").is_file():
+        return "boost heal", "to restore its missing SKILL.md"
+    return "boost reinstall %s" % name, "to discard local edits"
+
+
 def reaches_no_agent(kind: str | None, entry: dict) -> bool:
     """Whether every materialization row names an agent boost no longer writes.
 
@@ -703,7 +721,16 @@ def set_commit_pin(name: str, entry: dict, kind: str = "skill") -> str:
             "%s has no recorded source commit to pin" % name,
             hint="commit pinning needs an item installed from a tapped repo")
     entry["commit_pin"] = commit
-    lockfile.set_entry(kind, name, entry)
+
+    # Only `commit_pin` is ours: the rest of the row is taken as it is under
+    # the lock, so a tag or pin landed since `entry` was read survives.
+    def freeze(row: dict) -> None:
+        row["commit_pin"] = commit
+    if not lockfile.update_entry(kind, name, freeze):
+        # Reporting a pin on a row that is gone would promise a `boost
+        # verify` check that has nothing to check.
+        raise BoostError("%s was uninstalled while commit-pinning it" % name,
+                         hint="see what is with `boost list`")
     return commit
 
 
@@ -712,5 +739,8 @@ def clear_commit_pin(name: str, entry: dict, kind: str = "skill") -> bool:
     if not entry.get("commit_pin"):
         return False
     del entry["commit_pin"]
-    lockfile.set_entry(kind, name, entry)
-    return True
+
+    def release(row: dict) -> None:
+        row.pop("commit_pin", None)
+    # A row gone by now has no pin left to report as released.
+    return lockfile.update_entry(kind, name, release)

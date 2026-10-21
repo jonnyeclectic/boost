@@ -515,7 +515,10 @@ class TestProfile:
         p.write_text(json.dumps(lock), encoding="utf-8")
         r = boost("profile", "use", "pin")
         assert "brainstorming (version differs)" in r.out
-        assert "switched to profile pin" in r.out
+        # not "switched": the machine is not the profile
+        assert "switched to profile" not in r.out
+        assert ("applied profile pin, but 1 skill differs from it — compare "
+                "with `boost profile diff pin`") in " ".join(r.out.split())
 
     def test_save_notes_uncaptured_rules_and_workflows(self, boost, installed):
         # Profiles carry skills only — with a rule and workflow installed the
@@ -581,8 +584,9 @@ class TestProfile:
         assert data[0]["name"] == "daily" and data[0]["skills"] == 1
         r = boost("profile", "show", "daily", "--json")
         prof = json.loads(r.out)
-        assert prof["skills"]["brainstorming"] == {"tap": "fixture-tap",
-                                                   "version": "1.4.0"}
+        assert prof["skills"]["brainstorming"] == {
+            "tap": "fixture-tap", "version": "1.4.0",
+            "commit": lockfile.get_skill("brainstorming")["commit"]}
         assert prof["user"] == USER
 
     def test_save_json(self, boost, installed):
@@ -617,7 +621,7 @@ class TestProfile:
         r = json.loads(boost("profile", "use", "solo", "--json").out)
         assert r == {"name": "solo", "installed": [], "not_found": [],
                      "uninstalled": [], "sidelined": ["cowboy-coding"],
-                     "kept_extras": False, "other_kind": {}}
+                     "kept_extras": False, "other_kind": {}, "differs": []}
 
         # cowboy-coding stays in the lock (sidelined, not uninstalled), so a
         # second `use --prune` still sees it as an extra to remove.
@@ -725,6 +729,88 @@ class TestProfile:
 
 
 # ---------------------------------------------------------------- protocol
+
+class TestProfileRestoresWhatItSaved:
+    """`profile use` puts a missing skill back the way the profile recorded
+    it — its agent scope and pin — and says so when the tap has moved."""
+
+    def test_use_reinstalls_into_the_recorded_agents_with_the_pin(
+            self, boost, tapped):
+        boost("install", "tdd-workflow", "--agent", "cursor")
+        boost("pin", "tdd-workflow")
+        boost("profile", "save", "p1")
+        saved = json.loads(boost("profile", "show", "p1", "--json").out)
+        assert saved["skills"]["tdd-workflow"]["only_agents"] == ["cursor"]
+        assert saved["skills"]["tdd-workflow"]["pinned"] is True
+        boost("uninstall", "tdd-workflow")
+
+        r = boost("profile", "use", "p1")
+        assert "installed tdd-workflow → cursor" in r.out
+        assert "switched to profile p1" in r.out
+        row = lockfile.get_skill("tdd-workflow")
+        assert row["only_agents"] == ["cursor"]
+        assert row["pinned"] is True
+        assert (paths.home() / ".cursor" / "skills" / "tdd-workflow").is_symlink()
+        assert not (paths.home() / ".claude" / "skills" / "tdd-workflow").exists()
+        assert boost("profile", "diff", "p1").out.strip().endswith(
+            "current setup matches profile p1")
+
+    def test_a_skill_the_tap_moved_is_not_reported_switched(
+            self, boost, fixture_tap_src, tmp_path):
+        src = tmp_path / "moving-tap"
+        shutil.copytree(fixture_tap_src, src)
+        boost("tap", src)
+        boost("install", "brainstorming")
+        old_commit = lockfile.get_skill("brainstorming")["commit"]
+        boost("profile", "save", "p1")
+        boost("uninstall", "brainstorming")
+        md = src / "skills" / "brainstorming" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8").replace(
+            "version: 1.4.0", "version: 1.5.0"), encoding="utf-8")
+        subprocess.run(["git", "-C", str(src), "commit", "-aqm", "bump"],
+                       check=True, capture_output=True)
+        boost("update")
+
+        r = boost("profile", "use", "p1")
+        new_commit = lockfile.get_skill("brainstorming")["commit"]
+        flat = " ".join(r.out.split())
+        assert ("brainstorming (version differs): profile has v1.4.0 @%s, "
+                "installed v1.5.0 @%s — its tap has moved since the profile "
+                "was saved" % (old_commit[:7], new_commit[:7])) in flat
+        assert "switched to profile" not in r.out
+        assert ("applied profile p1, but 1 skill differs from it — compare "
+                "with `boost profile diff p1`") in flat
+        # and `diff` agrees with what `use` just said
+        assert "~ brainstorming  (version differs)" in boost(
+            "profile", "diff", "p1").out
+        js = json.loads(boost("profile", "use", "p1", "--json").out)
+        assert js["differs"] == ["brainstorming"]
+
+    def test_a_commit_that_moved_under_one_version_is_a_difference(
+            self, boost, installed):
+        boost("profile", "save", "p1")
+
+        def move(row):
+            row["commit"] = "f" * 40
+        lockfile.update_skill("brainstorming", move)
+        r = boost("profile", "diff", "p1")
+        assert "~ brainstorming  (commit differs)" in r.out
+        assert json.loads(boost("profile", "diff", "p1", "--json").out)[
+            "changed"] == ["brainstorming"]
+
+    def test_an_older_profile_without_the_new_fields_still_switches(
+            self, boost, installed):
+        boost("profile", "save", "p1")
+        path = paths.profiles_dir() / "p1.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["skills"] = {"brainstorming": {"tap": "fixture-tap",
+                                            "version": "1.4.0"}}
+        path.write_text(json.dumps(data), encoding="utf-8")
+        boost("uninstall", "brainstorming")
+        r = boost("profile", "use", "p1")
+        assert "switched to profile p1" in r.out
+        assert lockfile.get_skill("brainstorming").get("only_agents") is None
+
 
 class TestProtocol:
     def test_status_lists_url_forms(self, boost, sandbox, monkeypatch):

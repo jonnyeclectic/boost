@@ -7,10 +7,12 @@ Consulted by store.install() (when config policy_enforce is true) and by
 """
 from __future__ import annotations
 
+import copy
 import json
 import sys
+from collections.abc import Callable
 
-from . import config, jsonstate, output, paths, typedvalue
+from . import config, jsonstate, output, paths, typedvalue, util
 
 # Once per process: install consults the policy several times, and the fault
 # is the same each time.
@@ -149,7 +151,7 @@ def load() -> dict:
     reported by :func:`invalid_values` — never
     raised into the middle of an install, and never silently obeyed either.
     """
-    base = DEFAULTS.copy()
+    base = copy.deepcopy(DEFAULTS)     # its lists are mutated by mutate()
     for key, value in _read_file().items():
         if key not in DEFAULTS:
             base[key] = value
@@ -187,14 +189,41 @@ def save(pol: dict) -> None:
     :func:`jsonstate.quarantine` first, so the rules it still held are kept
     rather than overwritten by a file built from the defaults.
     """
-    paths.ensure_dirs()
     p = paths.policy_path()
-    if jsonstate.is_corrupt(p):
-        dest = jsonstate.quarantine(p)
-        output.warn("%s was corrupt and has been moved to %s before writing "
-                    "the new policy" % (p, dest), stream=sys.stderr, wrap=True)
     known = {k: pol.get(k, DEFAULTS[k]) for k in DEFAULTS}
-    p.write_text(json.dumps(known, indent=2) + "\n", encoding="utf-8")
+    jsonstate.save(p, json.dumps(known, indent=2) + "\n",
+                   corrupt=jsonstate.is_corrupt(p), noun="policy", wrap=True)
+
+
+def guard_path():
+    """The sidecar :func:`mutate` locks: beside policy.json, never it."""
+    p = paths.policy_path()
+    return p.with_name(p.name + ".lock")
+
+
+def mutate(fn: Callable[[dict], bool | None]) -> bool:
+    """Apply ``fn`` to a fresh :func:`load` and :func:`save` it, atomically.
+
+    `boost policy set` used to `load()`, change one key and `save()` the
+    whole file with nothing between processes, so two shells setting
+    different keys reverted each other behind a check mark — and a
+    blocklist entry another shell had just added could vanish, failing the
+    policy open. The read happens inside an exclusive cross-process lock.
+    ``fn`` returning False skips the write; returns whether it wrote.
+    """
+    with util.file_lock(guard_path(), what="the policy file", strict=False):
+        pol = load()
+        if fn(pol) is False:
+            return False
+        save(pol)
+        return True
+
+
+def set_key(key: str, value) -> None:
+    """Set one policy key on a fresh read, under :func:`mutate`."""
+    def put(pol: dict) -> None:
+        pol[key] = value
+    mutate(put)
 
 
 def is_blocked(name: str, tap: str | None, blocked) -> bool:

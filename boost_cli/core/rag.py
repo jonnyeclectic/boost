@@ -209,6 +209,21 @@ def dropped_terms(text: str) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def ignored_by_design(text: str) -> bool:
+    """True when ``text`` has content and the index ignores all of it on purpose.
+
+    :func:`dropped_terms` leaves stopwords and bare punctuation out
+    deliberately, so a query made of nothing else (`the and of`, `--`) never
+    reached the "no searchable terms" branch: it tokenized to nothing, named
+    nothing as dropped, and was reported as a real miss with a hint to search
+    GitHub for it. This is the complement — no token survived, and nothing
+    the user would recognise as a lost word was dropped either. Blank text is
+    False: an empty query is a usage error for the caller to refuse, not a
+    query that happened to match nothing.
+    """
+    return bool(text.strip()) and not tokenize(text) and not dropped_terms(text)
+
+
 def tokenizer_is_the_only_reader() -> bool:
     """True when nothing but BM25 could have seen this query.
 

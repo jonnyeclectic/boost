@@ -976,13 +976,9 @@ def _state_read() -> dict:
 
 
 def _state_write(d: dict) -> None:
-    paths.ensure_dirs()
     p = _state_path()
-    if _state_load()[1] is not None:
-        dest = jsonstate.quarantine(p)
-        out.warn("%s was corrupt and has been moved to %s before writing "
-                 "the new file" % (p, dest), stream=sys.stderr)
-    p.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+    jsonstate.save(p, json.dumps(d, indent=2) + "\n",
+                   corrupt=_state_load()[1] is not None)
 
 
 SESSIONS_KEPT = 200

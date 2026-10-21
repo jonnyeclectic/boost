@@ -302,7 +302,7 @@ def _upstream_reason(name, lk, tap_name, head):
     src_sha = None
     if not util.semver_gt(latest, installed_v) and head and head != lk.get("commit"):
         try:
-            src_sha = util.sha256_dir(store.source_dir_for(entry))
+            src_sha = store.skill_source_sha(entry)
         except BoostError:
             return None  # source checkout is gone; `verify` owns that finding
     return staleness.upstream_reason(installed_v, latest, lk.get("commit", ""),
@@ -451,11 +451,18 @@ def cmd_verify(argv):
             if status == integrity.STATUS_UNLOCKED:
                 missing_fields.append("materialization sha256")
         commit_pin = integrity.commit_status(name, entry)
-        row = {"name": name, "kind": kind, "status": status,
-               "scope": "user", "missing_fields": missing_fields,
-               "commit_pin": commit_pin,
-               "passed": integrity.verification_passed(
-                   status, missing_fields, commit_pin)}
+        # An intact copy no agent is shown: the agent's link leads to another
+        # skill's store dir, so it loads that skill under this name.
+        wrong = store.misdirected_links(name) if kind == "skill" else []
+        row: dict[str, Any] = {
+            "name": name, "kind": kind, "status": status,
+            "scope": "user", "missing_fields": missing_fields,
+            "commit_pin": commit_pin,
+            "passed": integrity.verification_passed(
+                status, missing_fields, commit_pin) and not wrong}
+        if wrong:
+            row["misdirected_links"] = [
+                {"agent": a, "target": paths.tilde(t)} for a, t in wrong]
         # A rule or workflow installed `--local` is recorded here, in the
         # user lock, and graded from wherever verify runs -- its rows are
         # absolute paths. Saying "user" for it is the one claim about the
@@ -506,6 +513,24 @@ def cmd_verify(argv):
                         "the record" % r["name"])
         if r["missing_fields"]:
             bits.append("missing lock fields: " + ", ".join(r["missing_fields"]))
+        # Installed before rows carried a hash: `boost sync` records it for a
+        # file that still holds what boost wrote, and only a reinstall for one
+        # edited since. Naming sync alone sent the user round verify -> sync
+        # -> verify over an edited file, which sync can never record.
+        if "materialization sha256" in r["missing_fields"]:
+            bits.append("`boost sync` records it, or `boost reinstall %s` "
+                        "if a file was edited" % r["name"])
+        bits.extend("linked for %s to %s — `boost heal` relinks it"
+                    % (m["agent"], m["target"])
+                    for m in r.get("misdirected_links", []))
+        # The next step, not just the verdict: verify was where doctor sent a
+        # modified skill, and it stopped at "modified" with rc 1.
+        # Not a vendored project skill: its copy is the repo's, not a
+        # reinstall's.
+        if (r["status"] == integrity.STATUS_MODIFIED
+                and not (r["kind"] == "skill" and r["scope"] == "project")):
+            bits.append("`%s` %s" % integrity.modified_remedy(r["name"],
+                                                             r["kind"]))
         if r["commit_pin"] == integrity.STATUS_OK:
             bits.append("commit-pinned")
         elif r["commit_pin"] == integrity.STATUS_MODIFIED:
@@ -551,6 +576,9 @@ def cmd_quarantine(argv):
     if modes != 1:
         raise BoostError("specify a skill to quarantine, --release NAME, or --list",
                         hint="e.g. `boost quarantine cowboy-coding`")
+    if args.as_json and not args.list_mode:
+        # Accepting it and printing prose would hand `| jq` a parse error.
+        ap.error("--json is only supported with --list")
 
     if args.list_mode:
         rows, items = [], []

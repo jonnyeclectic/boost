@@ -656,20 +656,17 @@ def cmd_policy(argv) -> int:
         if args.value is None:
             raise BoostError("policy set requires a VALUE",
                             hint="e.g. `boost policy set min_quality_score 60`")
-        pol = policy.load()
-        pol[args.key] = _parse_policy_value(args.key, args.value)
-        policy.save(pol)
+        value = _parse_policy_value(args.key, args.value)
+        policy.set_key(args.key, value)
         journal.log("policy", args.key, op="set")
         if args.json:
-            print(json.dumps({"key": args.key, "value": pol[args.key]}))
+            print(json.dumps({"key": args.key, "value": value}))
             return 0
-        out.ok("set %s = %s" % (args.key, json.dumps(pol[args.key])))
+        out.ok("set %s = %s" % (args.key, json.dumps(value)))
         return 0
 
     if args.action == "unset":
-        pol = policy.load()
-        pol[args.key] = policy.DEFAULTS[args.key]
-        policy.save(pol)
+        policy.set_key(args.key, policy.DEFAULTS[args.key])
         journal.log("policy", args.key, op="unset")
         if args.json:
             print(json.dumps({"key": args.key, "value": policy.DEFAULTS[args.key]}))
@@ -920,7 +917,9 @@ def cmd_onboard(argv) -> int:
     p = cliparse.parser(
         prog="boost onboard",
         description="Add skill-tracker telemetry to a repo (optionally open a PR with --pr)")
-    p.add_argument("--repo", default=".", help="repository directory (default: .)")
+    p.add_argument("--repo", default=None,
+                   help="repository directory (default: the enclosing "
+                        "project root)")
     p.add_argument("--pr", action="store_true",
                    help="commit on a branch and open a PR with `gh`")
     p.add_argument("--dry-run", action="store_true",
@@ -930,7 +929,10 @@ def cmd_onboard(argv) -> int:
     p.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
     args = p.parse_args(argv)
 
-    repo = paths.expand(args.repo).resolve()
+    # The project root, not the cwd: GitHub only runs workflows from
+    # <root>/.github/workflows, so one written from `src/` is dead on arrival.
+    repo = (paths.expand(args.repo) if args.repo is not None
+            else scopes.project_dir()).resolve()
     if not repo.is_dir():
         raise BoostError("%s is not a directory" % _tilde(repo),
                         hint="point --repo at a checked-out repository")
@@ -944,7 +946,7 @@ def cmd_onboard(argv) -> int:
     files = [(_TELEMETRY_REL, telemetry), (_WORKFLOW_REL, _WORKFLOW_YML)]
     if repo != paths.store_dir().resolve():
         files.append((".skill-lock.json",
-                      json.dumps(lockfile.portable(lockfile.read()),
+                      json.dumps(lockfile.portable(lockfile.read(), base=repo),
                                 indent=2, sort_keys=True) + "\n"))
 
     # Preconditions FIRST so a real run never leaves the repo mid-state — and
@@ -1546,6 +1548,11 @@ def _hit_paths(entries: list[dict]) -> list[str | None]:
 
 def _tool_search(args: dict):
     query = mcp.str_arg(args, "query") or ""
+    if not query.strip():
+        # The CLI refuses this as a usage error; answering "no skills match ''"
+        # told the agent the catalogue was missing something it never asked.
+        return ("boost_search needs a query — pass a plain-word description "
+                "of the task"), True
     rag.ensure()  # build the full-content index on first use (BM25 by default)
     # smart=True is stated, not inherited. It is `rag.search`'s default, so this
     # path was spending an LLM call per search by accident of a signature —
@@ -1582,10 +1589,12 @@ def _tool_search(args: dict):
         # every word of which fell out of the tokenizer. The third is asked
         # only of the RAG branch — `catalog.search` is a substring match and
         # discards nothing, so a notice there would describe another engine.
-        dropped = (rag.dropped_terms(query)
-                   if rag_result is not None
-                   and rag.tokenizer_is_the_only_reader() else [])
-        return mcp.no_results(query, tapped=tapped, dropped=dropped), False
+        tokenized_only = (rag_result is not None
+                          and rag.tokenizer_is_the_only_reader())
+        dropped = rag.dropped_terms(query) if tokenized_only else []
+        ignored = tokenized_only and rag.ignored_by_design(query)
+        return mcp.no_results(query, tapped=tapped, dropped=dropped,
+                              ignored=ignored), False
     # Name-keyed, the same test `lockfile.find_any` and `store.install` apply —
     # those are the tools this marker is advising about. mcp.hit_line's
     # docstring records why the imprecision is disclosed rather than removed,
@@ -1830,6 +1839,8 @@ def _install_lines(res: store.InstallResult, entry: dict) -> list[str]:
         lines.append("not %s: %s — ask the user to %s, then `boost sync`"
                      % ("linked" if res.kind == "skill" else "written",
                         *store.link_refusal(adir, block)))
+    lines.extend("not linked: %s — ask the user to %s, then `boost sync`"
+                 % store.symlink_refusal(adir) for adir in res.unlinkable)
     # The same prompt-injection and secret scan `boost install` runs. This path
     # needs it more, not less: nobody is watching a terminal here, and the skill
     # was chosen and installed by an agent acting on its own. The install still
@@ -1969,7 +1980,8 @@ def _tool_doctor(args: dict):
     # Skills too, by the test CLI `boost doctor` asks: without it a skill
     # edited in place left this reply "healthy" while the CLI flagged it.
     skill_drift = [
-        "skill %s: modified since install (run `boost verify`)" % n
+        "skill %s: modified since install (run `%s` %s)"
+        % (n, *integrity.modified_remedy(n))
         for n, e in sorted(everything["skill"].items())
         if integrity.skill_modified(n, e)]
     lines.extend(skill_drift)

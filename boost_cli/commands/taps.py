@@ -507,7 +507,7 @@ def cmd_outdated(argv) -> int:
             head = heads[tap_name]
             if head and head != lk.get("commit"):
                 try:
-                    src_sha = util.sha256_dir(store.source_dir_for(entry))
+                    src_sha = store.skill_source_sha(entry)
                 except BoostError:
                     src_missing = True
         base = {"name": name, "kind": "skill", "installed": installed_v,
@@ -578,6 +578,8 @@ def cmd_outdated(argv) -> int:
     # A missing row whose tap is still configured lost the item upstream;
     # re-tapping it would restore nothing, so it is worded and counted apart.
     configured = frozenset(t.name for t in registry.list_taps())
+    # Both version columns are a tap's frontmatter: display copies only.
+    results = out.plain_fields(results)
     rows = [(r["name"] + _outdated_qualifier(r),
              r["installed"] + (" (pinned)" if r["pinned"] else ""),
              _outdated_display(r, configured), r["tap"]) for r in results]

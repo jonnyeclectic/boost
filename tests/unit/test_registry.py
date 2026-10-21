@@ -89,6 +89,19 @@ class TestParseSpec:
         (d / ".git").mkdir()
         assert registry.parse_spec(str(d)) == ("my-tap", str(d.resolve()))
 
+    def test_local_dir_whitespace_folds_to_a_dash(self, tmp_path):
+        # A space in the name broke `tap:skill` and every Boostfile line.
+        d = tmp_path / "my  tap x"
+        d.mkdir()
+        (d / ".git").mkdir()
+        assert registry.parse_spec(str(d)) == ("my-tap-x", str(d.resolve()))
+
+    def test_local_dir_non_ascii_name_kept(self, tmp_path):
+        d = tmp_path / "\u65e5\u672c"
+        d.mkdir()
+        (d / ".git").mkdir()
+        assert registry.parse_spec(str(d)) == ("\u65e5\u672c", str(d.resolve()))
+
     def test_local_dir_trailing_slash(self, tmp_path):
         d = tmp_path / "my-tap"
         d.mkdir()

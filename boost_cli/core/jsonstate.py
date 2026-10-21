@@ -18,6 +18,7 @@ before it writes the replacement.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 
@@ -178,3 +179,31 @@ def quarantine(path: Path) -> Path:
         n += 1
     path.rename(dest)
     return dest
+
+
+def save(path: Path, text: str, *, corrupt: bool, noun: str = "file",
+         show=str, wrap: bool = False) -> None:
+    """Replace state file `path` with `text`, moving a `corrupt` one aside first.
+
+    Every small state writer (focus and context, policy, trusted keys,
+    cohorts, profiles, bmad) used to end in a bare ``write_text``: under a
+    ``~/.boost/state`` that refuses writes each one crashed at exit 70 with a
+    ``PermissionError`` traceback. Here the quarantine and the write share one
+    ``try``, so a refusal is a :class:`BoostError` naming the file and the
+    ``chmod`` that clears it (:func:`paths.save_refused`, the wording
+    ``config.save`` uses), and the write is atomic, so a reader never sees a
+    half-written file. `noun` and `show` word the quarantine warning the way
+    each caller always has.
+    """
+    from . import output, paths, util
+    paths.create_dirs((*paths.boost_dirs(), path.parent))
+    try:
+        if corrupt:
+            dest = quarantine(path)
+            output.warn("%s was corrupt and has been moved to %s before "
+                        "writing the new %s" % (show(path), show(dest), noun),
+                        stream=sys.stderr, wrap=wrap)
+        util.atomic_write_text(path, text)
+    except OSError as e:
+        raise paths.save_refused(path, e) from e
+

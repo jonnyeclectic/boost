@@ -131,7 +131,12 @@ def parse_spec(spec: str):
                 "%s is not a git repository" % p,
                 hint="`git init` it, or `boost import %s` to copy it in "
                      "without a tap" % spec)
-        return _checked(p.resolve().name, str(p.resolve()), spec)
+        # Whitespace folded to `-`: a tap name is one token in `tap:skill` and
+        # in a Boostfile line, so `boost tap "my tap"` named it `my tap` and
+        # `bundle dump` wrote a `tap my tap …` line that its own `bundle
+        # install` read as a tap called `my`.
+        return _checked(_WHITESPACE.sub("-", p.resolve().name),
+                        str(p.resolve()), spec)
     # A spec shaped like a path (starts with ./, ../, ~, or a root separator,
     # or is absolute) that is not an actual directory must not fall through to
     # the owner/repo branch below — that branch prepends
@@ -168,6 +173,7 @@ def parse_spec(spec: str):
                     hint="use owner/repo, a git URL, or a local directory")
 
 
+_WHITESPACE = re.compile(r"\s+")
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 
 
@@ -452,15 +458,34 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
             "tap %s failed provenance policy: %s" % (name, "; ".join(problems)),
             hint="add its key with `boost trust add <name> <key>`, "
                  "or relax `boost policy set require_signed_taps false`")
-    cfg = config.load()
     row = _row(name, url, curated, by_user=curated)
     if at:
         row["pin"] = at
-    cfg.setdefault("taps", []).append(row)
-    config.save(cfg)
+
+    config.mutate(lambda cfg: _append_rows(cfg, [row]))
     start_refresh_clock()
     tap.pin = at or ""
     return tap
+
+
+def _append_rows(cfg: dict, rows: list[dict]) -> bool:
+    """Append tap ``rows`` to a fresh config; False when none was new.
+
+    Runs inside :func:`config.mutate`. The duplicate check in :func:`add`
+    happens before the clone, outside any lock, so two processes tapping
+    one name both pass it — re-checking here keeps the second from adding
+    the same tap twice.
+    """
+    taps = cfg.setdefault("taps", [])
+    have = {name_key(str(t.get("name"))) for t in taps
+            if isinstance(t, dict) and t.get("name")}
+    added = False
+    for row in rows:
+        if name_key(row["name"]) not in have:
+            taps.append(row)
+            have.add(name_key(row["name"]))
+            added = True
+    return added
 
 
 def _already_configured(name: str, spec: str, at: str | None) -> BoostError:
@@ -523,14 +548,16 @@ def unstar(names: list[str]) -> list[str]:
     todo = set(names)
     if not todo:
         return []
-    cfg = config.load()
     done: list[str] = []
-    for t in cfg.get("taps") or []:
-        if isinstance(t, dict) and t.get("name") in todo and t.get("curated"):
-            t["curated"] = False
-            done.append(str(t["name"]))
-    if done:
-        config.save(cfg)
+
+    def clear(cfg: dict) -> bool:
+        for t in cfg.get("taps") or []:
+            if (isinstance(t, dict) and t.get("name") in todo
+                    and t.get("curated")):
+                t["curated"] = False
+                done.append(str(t["name"]))
+        return bool(done)
+    config.mutate(clear)
     return done
 
 
@@ -740,8 +767,7 @@ def add_many(specs: list[str], curated: bool = False,
     # lose taps, and 463 sequential rewrites of the same file is its own cost.
     fresh = [r for r in results if r.get("ok")]
     if fresh:
-        cfg = config.load()
-        rows = cfg.setdefault("taps", [])
+        new_rows = []
         for r in fresh:
             row = _row(r["name"], r["url"], r["tap"].curated,
                        by_user=curated)
@@ -749,8 +775,9 @@ def add_many(specs: list[str], curated: bool = False,
             if pin:
                 row["pin"] = pin
                 r["tap"].pin = pin
-            rows.append(row)
-        config.save(cfg)
+            new_rows.append(row)
+
+        config.mutate(lambda cfg: _append_rows(cfg, new_rows))
         start_refresh_clock()
     # First occurrence, not last: a dict comprehension over `specs` keeps the
     # LAST index for a repeated spec, which pushed the duplicate — and so its
@@ -833,11 +860,12 @@ def last_refresh_at() -> str | None:
 def pin(name: str, commit: str) -> Tap:
     """Record `commit` as the tap's pin, so `update` leaves it alone."""
     tap = get(name)
-    cfg = config.load()
-    for row in cfg.get("taps", []) or []:
-        if isinstance(row, dict) and row.get("name") == tap.name:
-            row["pin"] = commit
-    config.save(cfg)
+
+    def put(cfg: dict) -> None:
+        for row in cfg.get("taps", []) or []:
+            if isinstance(row, dict) and row.get("name") == tap.name:
+                row["pin"] = commit
+    config.mutate(put)
     tap.pin = commit
     return tap
 
@@ -845,11 +873,12 @@ def pin(name: str, commit: str) -> Tap:
 def unpin(name: str) -> Tap:
     """Drop a tap's pin so it tracks its default branch again."""
     tap = get(name)
-    cfg = config.load()
-    for row in cfg.get("taps", []) or []:
-        if isinstance(row, dict) and row.get("name") == tap.name:
-            row.pop("pin", None)
-    config.save(cfg)
+
+    def drop(cfg: dict) -> None:
+        for row in cfg.get("taps", []) or []:
+            if isinstance(row, dict) and row.get("name") == tap.name:
+                row.pop("pin", None)
+    config.mutate(drop)
     tap.pin = ""
     return tap
 
@@ -911,18 +940,19 @@ def remove(name: str) -> Tap:
     Returns the removed Tap; raises BoostError if it does not exist.
     """
     tap = get(name)
-    cfg = config.load()
-    rows = cfg.get("taps") or []
-    # Drop only the row this is, and keep every other row as it was — a
-    # malformed one included. `list_taps` reads a nameless or non-dict row as
-    # no tap, so indexing `t["name"]` here crashed the one command that could
-    # take the real tap out, and untap has no business deleting data it does
-    # not own.
-    if isinstance(rows, list):
-        cfg["taps"] = [t for t in rows
-                       if not (isinstance(t, dict)
-                               and t.get("name") == tap.name)]
-    config.save(cfg)
+
+    def drop(cfg: dict) -> None:
+        rows = cfg.get("taps") or []
+        # Drop only the row this is, and keep every other row as it was — a
+        # malformed one included. `list_taps` reads a nameless or non-dict
+        # row as no tap, so indexing `t["name"]` here crashed the one command
+        # that could take the real tap out, and untap has no business
+        # deleting data it does not own.
+        if isinstance(rows, list):
+            cfg["taps"] = [t for t in rows
+                           if not (isinstance(t, dict)
+                                   and t.get("name") == tap.name)]
+    config.mutate(drop)
     # A config written before names were case-folded can hold `foo` and
     # `FOO`, which on a case-insensitive filesystem share one clone and one
     # cache. Deleting either would strip the tap that stays configured.
@@ -972,6 +1002,15 @@ def _remove_cache(tap: Tap) -> None:
 WHEEL_SCHEME = "builtin:"
 
 
+def _update_needs_git(tap: Tap, force: bool) -> bool:
+    """Whether :func:`update` runs git for `tap`: not for boost's own wheel
+    tap, and not for a pinned clone it leaves alone."""
+    if tap.url.startswith(WHEEL_SCHEME):
+        return False
+    cloned = tap.is_cloned and not tap.is_broken_clone
+    return not (cloned and tap.pin and not force)
+
+
 def update(name: str | None = None,
            force: bool = False) -> tuple[dict, dict]:
     """git-pull one tap (or all). Returns ``({name: summary}, {name: error})``.
@@ -1002,6 +1041,10 @@ def update(name: str | None = None,
     used to cost one network round trip per tap, serially.
     """
     targets = [get(name)] if name else list_taps()
+    if any(_update_needs_git(t, force) for t in targets):
+        # Once, up front: per tap, a missing git became N copies of the same
+        # failure and a summary advising `boost untap` for every healthy tap.
+        gitutil.require_git()
     results: dict = {}
     failures: dict = {}
 
@@ -1107,11 +1150,12 @@ def update(name: str | None = None,
         # registries, and for the same reason: N threads each doing their own
         # `config.load()`/`save()` would lose each other's drops at random.
         wanted = set(to_clear)
-        cfg = config.load()
-        for row in cfg.get("taps", []) or []:
-            if isinstance(row, dict) and row.get("name") in wanted:
-                row.pop("pin", None)
-        config.save(cfg)
+
+        def drop_pins(cfg: dict) -> None:
+            for row in cfg.get("taps", []) or []:
+                if isinstance(row, dict) and row.get("name") in wanted:
+                    row.pop("pin", None)
+        config.mutate(drop_pins)
 
     if results:
         # Stamped on any successful sweep, including one where every tap was

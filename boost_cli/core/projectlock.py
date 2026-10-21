@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from ..errors import BoostError
@@ -44,6 +45,57 @@ RECOVER_HINT = ("it is tracked by the repo, so `git checkout -- %s` restores "
 def lock_path(base) -> Path:
     """Path of the project lock for the repo at ``base``."""
     return Path(base) / LOCK_DIRNAME / LOCK_FILENAME
+
+
+def guard_path(base) -> Path:
+    """The sidecar :func:`mutate` locks for the repo at ``base``.
+
+    ``util.file_lock`` never deletes its sidecar, and the project lock is a
+    committed file, so a sidecar beside it would be a permanent untracked
+    entry in every teammate's ``git status``. Inside ``.git/`` nothing sees
+    it — the place `gitutil` already keeps its own lock. A linked worktree's
+    ``.git`` is a file naming its private git dir, which serves the same.
+    With no git dir at all it falls back to ``.boost/skill-lock.json.lock``.
+    """
+    git = _git_dir(Path(base))
+    if git is not None:
+        return git / "boost-skill-lock.lock"
+    p = lock_path(base)
+    return p.with_name(p.name + ".lock")
+
+
+def _git_dir(base: Path) -> Path | None:
+    """``base``'s git directory: ``.git`` itself, or where a ``.git`` file points."""
+    dot = base / ".git"
+    if dot.is_dir():
+        return dot
+    try:
+        text = dot.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not text.startswith("gitdir:"):
+        return None
+    target = base / text[len("gitdir:"):].strip()
+    return target if target.is_dir() else None
+
+
+def mutate(base, fn: Callable[[dict], bool | None]) -> bool:
+    """Apply ``fn`` to a fresh read of ``base``'s project lock and persist it.
+
+    The read happens under an exclusive cross-process lock, so ``fn`` sees
+    every write another boost process finished first: two `install --scope
+    project` runs used to each read, add their row and write, and the second
+    write dropped the first's row — leaving a copy on disk that install then
+    refused and uninstall disowned. ``fn`` returning False skips the write;
+    returns whether it wrote. Refuses over a corrupt lock (:func:`write`).
+    """
+    with util.file_lock(guard_path(base), what="the project lock",
+                        strict=False):
+        lock = read(base)
+        if fn(lock) is False:
+            return False
+        write(base, lock)
+        return True
 
 
 def exists(base) -> bool:
@@ -113,7 +165,8 @@ def refuse_corrupt(base) -> None:
 def write(base, lock: dict) -> None:
     """Stamp version/updated onto ``lock`` and write it atomically.
 
-    Refuses over a corrupt lock (:func:`refuse_corrupt`).
+    Refuses over a corrupt lock (:func:`refuse_corrupt`). Takes no lock: a
+    read-modify-write goes through :func:`mutate`, which calls this.
     """
     refuse_corrupt(base)
     p = lock_path(base)
@@ -135,9 +188,9 @@ def get_skill(base, name: str) -> dict | None:
 
 def set_skill(base, name: str, entry: dict) -> None:
     """Insert or replace the project lock entry for ``name`` and persist."""
-    lock = read(base)
-    lock["skills"][name] = entry
-    write(base, lock)
+    def put(lock: dict) -> None:
+        lock["skills"][name] = entry
+    mutate(base, put)
 
 
 def remove_skill(base, name: str) -> bool:
@@ -151,9 +204,12 @@ def remove_skill(base, name: str) -> bool:
     "not present" would be a false answer about a record boost cannot read.
     """
     refuse_corrupt(base)
-    lock = read(base)
-    if name in lock["skills"]:
+    if not exists(base):
+        return False    # nothing to remove, and no reason to create .boost/
+
+    def drop(lock: dict) -> bool:
+        if name not in lock["skills"]:
+            return False
         del lock["skills"][name]
-        write(base, lock)
         return True
-    return False
+    return mutate(base, drop)

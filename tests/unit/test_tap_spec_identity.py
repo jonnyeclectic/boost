@@ -115,7 +115,7 @@ class TestFileUrlOfALocalDirectory:
         a = _repo(sandbox / "my tap")
         spec = a.as_uri().replace("file://", "file://localhost", 1)
         assert "%20" in spec
-        assert registry.parse_spec(spec) == ("my tap", str(a.resolve()))
+        assert registry.parse_spec(spec) == ("my-tap", str(a.resolve()))
 
     def test_add_after_bare_path_is_already_configured(self, sandbox):
         a = _repo(sandbox / "a" / "fixture-tap")

@@ -267,13 +267,11 @@ def _drift_from_copy(name: str, entry: dict, copy_sha: str | None) -> str:
     source_sha = None
     if copy_sha is not None and copy_sha == lock_sha and not is_local:
         try:
-            src = store.source_dir_for(
+            source_sha = store.skill_source_sha(
                 {"name": name, "tap": entry.get("tap", ""),
                  "rel_dir": entry.get("source_dir", ".")})
         except BoostError:
             source_sha = None
-        else:
-            source_sha = util.sha256_dir(src)
     return staleness.drift_state(copy_sha, lock_sha, is_local, source_sha)
 
 
@@ -349,7 +347,8 @@ _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
                "upstream-moved": "accent", "source-missing": "danger",
                "store-missing": "danger", "n/a": "muted",
                "quarantined": "muted", "unreachable": "warn",
-               "stranded": "danger", "outdated": "warn"}
+               "stranded": "danger", "outdated": "warn",
+               "misdirected-link": "warn"}
 
 
 def _drift_hint(name: str, status: str, tap: str = "",
@@ -367,7 +366,7 @@ def _drift_hint(name: str, status: str, tap: str = "",
         # The name is not a spec, so the hint re-taps the recorded source.
         return ("boost update" if registry.is_tapped(tap)
                 else registry.retap_hint(tap, tap_url))
-    if status == "store-missing":
+    if status in ("store-missing", "misdirected-link"):
         return "boost heal"
     if status == "outdated":
         return "boost sync"
@@ -544,7 +543,8 @@ def _drifted(kind: str, name: str, entry: dict, bad) -> int:
     """
     if integrity.materialized_status(name, entry, kind) != integrity.STATUS_MODIFIED:
         return 0
-    bad(kind, "%s %s modified since install — run `boost verify`" % (kind, name))
+    bad(kind, "%s %s modified since install — run `%s` %s"
+        % (kind, name, *integrity.modified_remedy(name, kind)), wrap=True)
     return 1
 
 
@@ -647,6 +647,12 @@ def cmd_doctor(argv):
                 % (tap.name, tap.name, " once %s is %s"
                    % (_tilde(cache_block), "moved aside" if cache_moved
                       else "writable") if cache_block else ""), wrap=True)
+        elif (moved := catalog.stale_commit(tap)) is not None:
+            # load_tap serves a cache from another commit as-is, so every
+            # lookup answers from the old tree until something rescans it.
+            bad("tap", "tap %s catalog is stale (scanned at %s, clone at %s) "
+                "— run `boost heal`" % (tap.name, moved[0][:7], moved[1][:7]),
+                wrap=True)
         else:
             tap_ok += 1
     if taps and cache_block:
@@ -696,7 +702,14 @@ def cmd_doctor(argv):
     # sync` re-records, and the store-dirs block below names the rest. Not
     # without agents, whose dirs are what say whose a store dir is.
     unrec = store.sort_unrecorded(skills, integ) if agents_ok else None
-    if integ.ok:
+    if integ.problem == "older":
+        # Readable, and every record in it counts: only the schema stamp is
+        # behind, and the next write — `boost sync` makes one — records it.
+        rep.note("lockfile", "lock file parses, but %s — `boost sync` records "
+                 "it as v%d" % (lockfile.fault(integ), lockfile.SCHEMA_VERSION),
+                 wrap=True)
+        lock_ok = True
+    elif integ.ok:
         rep.ok("lockfile", "lock file parses (v%d)" % lockfile.SCHEMA_VERSION)
         lock_ok = True
     elif integ.problem == "missing":
@@ -723,8 +736,9 @@ def cmd_doctor(argv):
         bad("lockfile", "lock file is corrupt — restore with `boost replay`")
         lock_ok = False
     else:  # "schema"
-        bad("lockfile", "lock file schema is v%s, expected v%d"
-            % (integ.version, lockfile.SCHEMA_VERSION))
+        bad("lockfile", "lock file schema is %s, expected v%d"
+            % ("unreadable" if integ.version is None
+               else "v%s" % integ.version, lockfile.SCHEMA_VERSION))
         lock_ok = False
 
     # linking_agents, not enabled_agents, for the same reason `sync_plan` uses
@@ -782,7 +796,9 @@ def cmd_doctor(argv):
         # only `boost verify` ever re-checked it — surface content drift here too.
         # `integrity.skill_modified` is the test `boost_doctor` asks too.
         if integrity.skill_modified(name, entry):
-            bad("skill", "skill %s modified since install — run `boost verify`" % name)
+            cmd, why = integrity.modified_remedy(name)
+            bad("skill", "skill %s modified since install — run `%s` %s"
+                % (name, cmd, why), wrap=True)
             skill_issues += 1
         # A deliberate sideline (`focus`, `profile use`, `context apply`)
         # unlinked this skill on purpose, and `sidelined_by` says so. Without
@@ -809,6 +825,15 @@ def cmd_doctor(argv):
             # ``os.path``: under a dotdir with no search bit ``Path.is_symlink``
             # raises on Python 3.12 and 3.13, and doctor exited 70 on it.
             if os.path.islink(link) and os.path.exists(link):  # noqa: FURB141
+                # Live is not enough: one into another skill's store dir has
+                # the agent load that skill under this name (`sync_plan`
+                # lists it as a missing link, and heal replaces it).
+                wrong = store.misdirected(name, link)
+                if wrong is not None:
+                    bad("skill-link", "skill %s linked for %s to %s, not its "
+                        "own store dir — run `boost heal`"
+                        % (name, agent, paths.tilde(wrong)), wrap=True)
+                    skill_issues += 1
                 continue
             if not os.path.lexists(link) and paths.refuses_writes(adir):
                 # Not one `boost sync` can make until the dir allows it: the
@@ -827,13 +852,12 @@ def cmd_doctor(argv):
             else:
                 bad("skill-link", "skill %s not linked for %s — run `boost sync`" % (name, agent))
             skill_issues += 1
-        # The other direction. `agents` records what is linked and `only_agents`
-        # what was asked for, so a link the declaration excludes is pure lock
-        # arithmetic here — no second walk of the agent dirs. Doctor has to say
-        # it because `boost sync` does: a "healthy" that contradicts the
-        # command it tells you to run is worse than no check at all.
+        # The other direction, read from disk as `sync_plan` reads it. Doctor
+        # has to say it because `boost sync` does: a "healthy" that
+        # contradicts the command it tells you to run is worse than no check
+        # at all. The lock's `agents` missed a link made by hand.
         scope = entry.get("only_agents")
-        stray = [a for a in entry.get("agents", []) if scope and a not in scope]
+        stray = store.out_of_scope_agents(name, entry, enabled)
         if stray:
             bad("skill-scope", "skill %s is linked for %s, outside its declared scope (%s) — "
                 "run `boost sync --prune`"
@@ -964,7 +988,8 @@ def cmd_doctor(argv):
                 elif m.get("stale"):
                     bad(kind, "%s %s for %s is older than the installed v%s — "
                         "run `boost sync`" % (kind, name, m.get("agent", "?"),
-                                              entry.get("version", "?")),
+                                              out.plain(entry.get("version",
+                                                                  "?"))),
                         wrap=True)
                     mat_issues += 1
             # An agent enabled after the install has no row at all, so the
@@ -1005,6 +1030,14 @@ def cmd_doctor(argv):
             if not present:
                 bad("rule", "rule %s missing its %s materialization — run "
                     "`boost reinstall %s`" % (name, m.get("agent", "?"), name))
+                mat_issues += 1
+        # As for a workflow below: the user's own rules-dir file held the path.
+        for r in store.foreign_rows(entry):
+            if (store.materialization_is_written("rule", entry, r)
+                    and not os.path.lexists(r["path"])):
+                bad("rule", "rule %s was not written for %s: a file boost did "
+                    "not write held %s, and it is gone now — run `boost sync`"
+                    % (name, r["agent"], _tilde(r["path"])), wrap=True)
                 mat_issues += 1
         if mat_issues == before:
             mat_issues += _drifted("rule", name, entry, bad)
@@ -1185,6 +1218,17 @@ def cmd_doctor(argv):
     if broken:
         bad("broken-links", "%d broken symlink%s in agent dirs — run `boost heal`"
             % (len(broken), _s(len(broken))))
+    # A live link into the store named for no installed skill: heal and
+    # sync remove it (`store.stale_links`), so doctor names it too. The
+    # dangling ones are the broken links above.
+    live_stale = [p for p in (store.stale_links(skills, store.lock_vouches(integ))
+                              if agents_ok else [])
+                  if os.path.exists(p)]  # noqa: FURB141
+    if live_stale:
+        bad("stale-links", "%d stale link%s into the store in agent dirs, for "
+            "no installed skill (%s) — run `boost heal`"
+            % (len(live_stale), _s(len(live_stale)),
+               ", ".join(paths.tilde(p) for p in live_stale)), wrap=True)
     if strays:
         # `out.info`, not `bad`: this does not raise the issue count, because
         # boost will not fix it and `heal` deliberately leaves it — counting it
@@ -1614,14 +1658,24 @@ def cmd_drift(argv):
             user_names if names else None):
         status = (_drift_status(name, entry) if kind == "skill"
                   else _drift_status_materialized(kind, name, entry))
+        # A copy that matches its source is still not what an agent runs when
+        # the agent's link leads to another skill's copy (`store.misdirected`).
+        # Content drift outranks it: its remedy is the one to take first.
+        if (kind == "skill" and status in ("in-sync", staleness.NA)
+                and store.misdirected_links(name)):
+            status = "misdirected-link"
         # A rule or workflow installed `--local` is recorded in the user lock
         # with its own `scope`, which is the one to report (as verify does).
         scope = (entry.get("scope") or scopes.SCOPE_USER) if kind != "skill" \
             else scopes.SCOPE_USER
+        # A skill's local edit may be a deleted SKILL.md, which heal (not a
+        # reinstall) is the repair for — the split doctor and verify name.
+        hint = (" ".join(integrity.modified_remedy(name))
+                if kind == "skill" and status == "local-edits"
+                else _drift_hint(name, status, entry.get("tap", ""),
+                                 str(entry.get("tap_url") or "")))
         rows.append({"name": name, "kind": kind, "scope": scope,
-                     "status": status,
-                     "hint": _drift_hint(name, status, entry.get("tap", ""),
-                                         str(entry.get("tap_url") or ""))})
+                     "status": status, "hint": hint})
     for name, entry in sorted(pskills.items()):
         if pbase is None or (names and name not in names):
             continue
@@ -1749,7 +1803,7 @@ def cmd_decay(argv):
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
-    rows = _decay_rows(Path.cwd())
+    rows = _decay_rows(scopes.project_dir())
     if args.json:
         print(json.dumps({"skills": rows}))
         return 0
@@ -1837,7 +1891,7 @@ def cmd_heal(argv):
             out.info("would remove broken link %s" % _tilde(link))
         else:
             link.unlink()
-            out.ok("removed broken link %s" % _tilde(link))
+            out.ok("removed broken link %s" % out.plain(_tilde(link)))
         actions.append("unlink %s" % link.name)
     plan = store.sync_plan()
     # One where a recorded skill's link goes is named below, as a link it
@@ -1923,7 +1977,8 @@ def cmd_heal(argv):
     if plan["not_skill_store"]:
         out.info(store.not_skill_line(plan["not_skill_store"]), wrap=True)
     if plan["misnamed_store"]:
-        out.info(store.misnamed_line(plan["misnamed_store"]), wrap=True)
+        out.info(out.plain(store.misnamed_line(plan["misnamed_store"])),
+                 wrap=True)
     declined_copies = bool(plan["foreign_store"]) or any(
         store.plugin_serves(r[3]) for r in plan["plugin_duplicates"])
 
@@ -2003,11 +2058,17 @@ def cmd_heal(argv):
             out.warn(registry.broken_clone_line(tap.name), wrap=True)
             continue
         had_cache = tap.cache_file.exists()
+        # One HEAD for both freshness questions below, before and after.
+        head = gitutil.head_commit(tap.path)
+        fresh = had_cache and catalog.cache_is_fresh(tap, head=head)
         if dry:
-            if not had_cache and not cache_stuck:
+            # A cache scanned at another commit is rebuilt by the real run,
+            # so the preview names it too; an unresolvable HEAD never reads
+            # fresh, and the run claims nothing for it, so neither does this.
+            if not fresh and not cache_stuck and (head or not had_cache):
                 out.info("would rebuild catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
-        elif not (had_cache and catalog.cache_is_fresh(tap)):
+        elif not fresh:
             # Only a missing, unreadable or stale cache (older CACHE_FORMAT,
             # or scanned at another commit) — what the dry run promises. An
             # unconditional rescan made "nothing to heal" cost a full scan of
@@ -2017,7 +2078,10 @@ def cmd_heal(argv):
             # rebuild_tap survives a cache it cannot write and warns; claiming
             # the rebuild under that warning would certify a file that is
             # still missing, and every later run would claim it again.
-            if not had_cache and tap.cache_file.exists():
+            # Fresh *now* is the test for a stale cache that was replaced:
+            # its old file still exists when the write failed.
+            if tap.cache_file.exists() and (
+                    not had_cache or catalog.cache_is_fresh(tap, head=head)):
                 out.ok("rebuilt catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
 
@@ -2114,12 +2178,22 @@ def cmd_heal(argv):
                     "move files" if paths.in_the_way(block)
                     else "change permissions",
                     paths.write_remedy(block)), wrap=True)
+    # A link outside a declared `--agent` scope works and is in use, so heal
+    # leaves it to `sync --prune` as sync does — but names it, because doctor
+    # does, and a bare "nothing to heal" under doctor's warning contradicted it.
+    oos = plan["out_of_scope_links"]
+    if oos:
+        out.warn("%d link%s outside the declared scope: %s — remove with "
+                 "`boost sync --prune`"
+                 % (len(oos), _s(len(oos)),
+                    ", ".join("%s → %s" % (n, a) for n, a in oos)), wrap=True)
     if not actions and not stuck and not cfg_err:
         # A duplicate this run declined to prune is something `heal` saw, can
         # fix, and deliberately left. A bare "nothing to heal" printed under
         # the line offering the flag contradicts it.
         out.ok("nothing to heal automatically"
-               if declined_duplicates or declined_copies else "nothing to heal")
+               if declined_duplicates or declined_copies or oos
+               else "nothing to heal")
     if actions and not dry:
         journal.log("heal", "%d actions" % len(actions))
     return 1 if cfg_err or stuck or unrepaired else 0
@@ -2348,7 +2422,8 @@ def cmd_health(argv):
         # with the links it found, is not missing from the others.
         due = [n for n, e in expected if agent in store.scoped_agents(e, linking)]
         linked = sum(1 for n in due
-                     if (os.path.islink(adir / n) and os.path.exists(adir / n))  # noqa: FURB141, FURB146
+                     if (os.path.islink(adir / n) and os.path.exists(adir / n)  # noqa: FURB141, FURB146
+                         and store.misdirected(n, adir / n) is None)
                      or store.left_to_plugin(n, agent, adir / n, covered))
         full = linked == len(due)
         coverage_ok = coverage_ok and full
@@ -2382,7 +2457,7 @@ def cmd_health(argv):
                            for s, n in sorted(drift_counts.items())) or "—",
        drift_counts)
 
-    decay_n = sum(1 for r in _decay_rows(Path.cwd()) if r["verdict"] == "decay")
+    decay_n = sum(1 for r in _decay_rows(scopes.project_dir()) if r["verdict"] == "decay")
     kv("decay", "%d candidate%s" % (decay_n, _s(decay_n)), decay_n)
 
     broken, strays = _broken_links()

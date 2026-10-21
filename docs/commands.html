@@ -312,6 +312,7 @@
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show what install would do, touching nothing</span></div>
         </div>
+        <p class="epilog">Boostfile lines: `tap NAME [URL] [--at SHA]` and `skill [TAP:]NAME[@VERSION] [--local] [--agent A]... [--pin] [--commit-pin SHA] [--tag T]...`; `#` starts a comment. `--at` holds the tap at a commit, as `boost tap --at` does; the skill options replay `boost install --local/--agent`, `boost pin [--commit]` and `boost tag +T`. Every option is optional, so older Boostfiles still install.</p>
       </section>
       <section class="cmd" id="cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a -y, --yes url_or_path">
         <h3><span class="cname">import</span><span class="gtag">pkg</span></h3>
@@ -1123,7 +1124,7 @@
         <pre class="syn">boost onboard [--repo REPO] [--pr] [--dry-run] [-f]</pre>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--repo REPO</code><span>repository directory (default: .)</span></div>
+          <div class="arg"><code>--repo REPO</code><span>repository directory (default: the enclosing project root)</span></div>
           <div class="arg"><code>--pr</code><span>commit on a branch and open a PR with `gh`</span></div>
           <div class="arg"><code>--dry-run</code><span>preview the files without writing anything</span></div>
           <div class="arg"><code>-f, --force</code><span>overwrite existing files without confirming</span></div>

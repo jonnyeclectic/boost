@@ -767,6 +767,33 @@ class TestAtomicWriteText:
         leftovers = [q.name for q in tmp_path.iterdir() if q.name != "f.txt"]
         assert leftovers == []
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="a 255-byte name under tmp_path passes MAX_PATH")
+    def test_temp_name_fits_the_component_limit(self, tmp_path, monkeypatch):
+        # A legal 255-byte target used to get a 269-byte temp name and fail
+        # ENAMETOOLONG; the cut must not split a multi-byte character either.
+        import tempfile
+        seen = []
+        real = tempfile.mkstemp
+
+        def spy(*a, **k):
+            fd, tmp = real(*a, **k)
+            seen.append(Path(tmp).name.encode("utf-8"))
+            return fd, tmp
+        monkeypatch.setattr(tempfile, "mkstemp", spy)
+        short, ascii_, wide = "a" * 200, "b" * 255, "\u00e9" * 127 + "x"
+        for name in (short, ascii_, wide):
+            util.atomic_write_text(tmp_path / name, name)
+            assert (tmp_path / name).read_text(encoding="utf-8") == name
+        # The temp is named for boost, not for the target, so its length does
+        # not grow with the name beside it.
+        assert len(seen) == 3
+        assert len(set(map(len, seen))) == 1
+        for tmp in seen:
+            assert tmp.startswith(util.TEMP_PREFIX.encode())
+            assert tmp.endswith(b".tmp")
+            assert len(tmp) < 32
+
     def test_honours_encoding(self, tmp_path):
         p = tmp_path / "f.txt"
         util.atomic_write_text(p, "café", encoding="utf-8")
@@ -1093,8 +1120,28 @@ class TestRmtreeRetryHook:
         # The listing reported after it is raised, not retried: the dir keeps
         # its mode rather than losing its search bit to chmod(S_IWRITE).
         assert stat.S_IMODE(stubborn.stat().st_mode) == 0o500
-        assert stat.S_IMODE(target.stat().st_mode) == stat.S_IMODE(
-            stat.S_IWRITE)
+        # The write bit is ORed in, not the whole mode replaced by it.
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+    def test_a_failed_retry_keeps_a_directory_listable(self, tmp_path, sealed):
+        """A dir under a read-only parent keeps its read and search bits.
+
+        Its contents go and its own ``rmdir`` fails on the parent. Setting the
+        mode to exactly ``S_IWRITE`` left it ``d-w-------``, and every later
+        walk of the store (`boost snapshot save`) crashed on it.
+        """
+        parent = tmp_path / "store"
+        child = parent / "skill"
+        child.mkdir(parents=True)
+        (child / "SKILL.md").write_text("x", encoding="utf-8")
+        child.chmod(0o755)
+        sealed(parent)
+
+        with pytest.raises(OSError):
+            util.rmtree(child)
+
+        assert stat.S_IMODE(child.stat().st_mode) == 0o755
+        assert list(child.iterdir()) == []
 
     def test_a_failed_listing_is_raised_not_retried(self, tmp_path):
         """Only a removal is retried.
