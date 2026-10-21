@@ -16,11 +16,13 @@ own type. This module turns that table into a parser: ``coerce("pin_only",
 raises :class:`ValueTypeError` at the setter instead of exit 70 at the next
 install.
 
-The one deliberate asymmetry is :data:`LIST`, which never raises. A list key's
-documented surface is a comma list (``blocked_skills a,b``), so anything that
-is not already a JSON array is split on commas rather than refused — which is
-also what turns ``blocked_skills 42`` from a stored ``42`` (and a later
-``TypeError: argument of type 'int' is not iterable``) into ``["42"]``.
+The one deliberate asymmetry is :data:`LIST`, which almost never raises. A
+list key's documented surface is a comma list (``blocked_skills a,b``), so
+text that is not already a JSON array is split on commas rather than refused —
+which is also what turns ``blocked_skills 42`` from a stored ``42`` (and a
+later ``TypeError: argument of type 'int' is not iterable``) into ``["42"]``.
+The exception is text that opens like JSON (``{`` or ``[``) and is not an
+array: split, ``{"a": true}`` became a one-item blocklist naming no skill.
 """
 from __future__ import annotations
 
