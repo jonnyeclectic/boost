@@ -1620,7 +1620,8 @@ def cmd_lint(argv):
                        if n not in path_names]
         for n in path_names:
             p = catalog.resolve_path_target(n)
-            targets.append((p.name, p))
+            # Label it with the name boost installs it under, not its dir.
+            targets.append((util.lint_label(p), p))
         if not names or other_names:
             targets += [(r.name, row_dir(r))
                         for r in _iter_installed_rows(other_names or None)]
@@ -1647,6 +1648,9 @@ def cmd_lint(argv):
         notes = [n for n in notes
                  if "missing `name`" not in n and "missing `description`" not in n
                  and n != "missing SKILL.md" and n != frontmatter.UNCLOSED_NOTE]
+        mismatch = util.name_dir_note(sdir)
+        if mismatch and not errors:
+            notes.append(mismatch)
         results.append({"name": name, "score": score, "notes": notes,
                         "errors": errors, "path": str(sdir)})
 
