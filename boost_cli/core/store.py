@@ -1125,6 +1125,34 @@ def restore_store_copy(name: str) -> None:
     shutil.move(str(src), str(dest))
 
 
+_SIDELINE_RETURN = {
+    "focus": "`boost focus --clear` puts it back",
+    "context": "`boost context disable` puts it back",
+    "profile": "a `boost profile use` that includes it puts it back",
+}
+
+
+def held_refusal(name: str, entry: dict | None) -> BoostError | None:
+    """The error for a command that writes ``name``'s store copy while it is
+    held aside, or None when it is in the store.
+
+    "SKILL.md missing — repair the store with `boost sync`" was the wrong
+    answer for it: sync leaves a held skill alone by design, so the hint
+    looped. This names why it is away and the command that brings it back.
+    """
+    if entry is None or not is_held(entry):
+        return None
+    if entry.get("quarantined"):
+        why = "quarantined"
+        back = "`boost quarantine --release %s` puts it back" % name
+    else:
+        by = str(entry.get("sidelined_by") or "")
+        why = "sidelined by `boost %s`" % by if by else "sidelined"
+        back = _SIDELINE_RETURN.get(by, "relinking it puts it back")
+    return BoostError("%s is %s — its store copy is held aside" % (name, why),
+                      hint="%s first" % back)
+
+
 def drop_held_copy(name: str) -> None:
     """Remove a held copy no lock row will restore; a leftover is harmless."""
     with contextlib.suppress(OSError):
@@ -1150,8 +1178,11 @@ def sideline(name: str, by: str) -> list[str]:
     lockfile.write() itself does not read.
     """
     removed = unlink_agents(name)
-    # Out of the store too, or Gemini CLI and Codex keep loading it.
-    held = hold_store_copy(name)
+    # Out of the store too, or Gemini CLI and Codex keep loading it — but
+    # only a skill the lock records: a store dir with no row (one `boost
+    # sync` has not recorded yet) would be moved where nothing restores it.
+    held = (hold_store_copy(name) if lockfile.get_skill(name) is not None
+            else None)
 
     def aside(entry: dict) -> None:
         entry["sidelined_by"] = by

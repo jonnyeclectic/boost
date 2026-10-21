@@ -613,6 +613,14 @@ class TestHeldStoreCopy:
         assert util.sha256_dir(self._store()) == before
         assert not os.path.lexists(self._held())
 
+    def test_an_unrecorded_store_dir_is_not_held(self, sandbox):
+        mine = paths.store_dir() / "brainstorming"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        assert store.sideline("brainstorming", "focus") == []
+        assert (mine / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
+        assert not os.path.lexists(self._held())
+
     def test_uninstall_removes_the_held_copy(self, brainstorming):
         store.quarantine_skill("brainstorming",
                                lockfile.get_skill("brainstorming"))
@@ -7027,3 +7035,37 @@ class TestSourceMissingMessage:
         assert store.source_missing_message("x", "x", {"tap": "gone"}) == (
             "x: source missing — tap gone is no longer tapped and `boost "
             "update` can't restore it; re-tap it, or `boost uninstall x`")
+
+
+class TestHeldRefusal:
+    """A command that writes the store copy names why a held one is away."""
+
+    def test_not_held_is_no_refusal(self):
+        assert store.held_refusal("x", None) is None
+        assert store.held_refusal("x", {"quarantined": True}) is None
+
+    def test_quarantined(self):
+        err = store.held_refusal("x", {"held_at": "/h", "quarantined": True,
+                                       "sidelined_by": "focus"})
+        assert err is not None
+        assert err.message == "x is quarantined — its store copy is held aside"
+        assert err.hint == "`boost quarantine --release x` puts it back first"
+
+    @pytest.mark.parametrize(("by", "hint"), [
+        ("focus", "`boost focus --clear` puts it back first"),
+        ("context", "`boost context disable` puts it back first"),
+        ("profile", "a `boost profile use` that includes it puts it back "
+                    "first"),
+    ])
+    def test_sidelined(self, by, hint):
+        err = store.held_refusal("x", {"held_at": "/h", "sidelined_by": by})
+        assert err is not None
+        assert err.message == (
+            "x is sidelined by `boost %s` — its store copy is held aside" % by)
+        assert err.hint == hint
+
+    def test_sidelined_by_nothing_recorded(self):
+        err = store.held_refusal("x", {"held_at": "/h"})
+        assert err is not None
+        assert err.message == "x is sidelined — its store copy is held aside"
+        assert err.hint == "relinking it puts it back first"
