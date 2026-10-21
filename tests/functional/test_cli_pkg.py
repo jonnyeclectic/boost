@@ -1823,7 +1823,8 @@ class TestBundle:
         vf = tmp_path / "Boostfile"
         vf.write_text("florp what\n", encoding="utf-8")
         r = boost("bundle", "install", vf, expect=1)
-        assert "line 1: unrecognised: florp what" in r.out
+        # FILE:LINE, so the reader can jump to it
+        assert "Boostfile:1: unrecognised: florp what" in r.out
         assert "1 failed" in r.out
 
 
@@ -2837,12 +2838,14 @@ class TestBundleEdges:
                       "skill fixture-tap:ghost@1.0.0\n"
                       "skill fixture-tap:brainstorming@9.9.9\n", encoding="utf-8")
         r = boost("bundle", "install", bf, expect=1)
-        assert "tap @@bad@@ failed: cannot parse tap spec" in r.out
-        assert "ghost not found in tap fixture-tap — skipped" in r.out
-        assert ("brainstorming: Boostfile wants @9.9.9, tap has 1.4.0 — "
+        assert "bf:1: tap @@bad@@ failed: cannot parse tap spec" in r.out
+        assert "bf:2: ghost not found in tap fixture-tap — skipped" in r.out
+        assert ("bf:3: brainstorming: Boostfile wants @9.9.9, tap has 1.4.0 — "
                 "installing that") in r.out
         assert "installed brainstorming v1.4.0 (fixture-tap)" in r.out
-        assert "Installed 1 skill, 2 failed" in r.out
+        # installed, but not the version asked for: a difference, not silence
+        assert ("Installed 1 skill, 1 differs from the Boostfile, 2 failed"
+                in r.out)
 
     def test_unqualified_name_in_two_taps_is_refused(self, boost, tapped,
                                                      tmp_path):
@@ -4289,3 +4292,227 @@ class TestRequiresFilteredOnTheInstallPath:
         text = boost("deps", "rooty").out
         assert "leafy" in text
         assert "GitHub CLI" not in text and "torch" not in text
+
+
+# ── bundle: what a Boostfile claims to carry, it carries ────────────────
+
+def _head(repo):
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                          check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def _config_taps():
+    cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
+    return {t["name"]: t for t in cfg.get("taps", [])}
+
+
+_KEPT = ("tap", "version", "commit", "only_agents", "pinned", "tags",
+         "commit_pin")
+
+
+def _held(row):
+    return {k: row.get(k) for k in _KEPT}
+
+
+class TestBundleRoundTrip:
+    """A Boostfile is a reproducibility contract: dump -> install puts back the
+    tap's commit pin and each skill's agent scope, pins and tags, not just
+    `tap:name@version`."""
+
+    @pytest.fixture()
+    def pinned_setup(self, boost, fixture_tap_src, tmp_path):
+        src = _copy_tap(fixture_tap_src, tmp_path / "rt-tap")
+        first = _head(src)
+        _bump(src, "brainstorming", "1.4.0", "1.5.0")   # upstream moved on
+        boost("tap", src, "--at", first)
+        boost("install", "brainstorming", "--agent", "claude-code")
+        boost("install", "tdd-workflow")
+        boost("pin", "--commit", "tdd-workflow")
+        boost("tag", "brainstorming", "+work", "+daily")
+        return src, first
+
+    def test_dump_writes_every_pin_scope_and_tag(self, boost, pinned_setup,
+                                                 tmp_path):
+        src, first = pinned_setup
+        lines = boost("bundle", "dump").out.splitlines()
+        assert lines[1:] == [
+            "tap rt-tap %s --at %s" % (src, first),
+            "skill rt-tap:brainstorming@1.4.0 --agent claude-code "
+            "--tag daily --tag work",
+            "skill rt-tap:tdd-workflow@3.0.1 --pin --commit-pin %s" % first]
+
+    def test_install_on_a_fresh_machine_reproduces_the_lock(
+            self, boost, pinned_setup, tmp_path):
+        _src, first = pinned_setup
+        bf = tmp_path / "Boostfile"
+        boost("bundle", "dump", bf)
+        before = {n: _held(e) for n, e in _lock().items()}
+        boost("uninstall", "brainstorming")
+        boost("uninstall", "tdd-workflow")
+        boost("untap", "rt-tap", "--force")
+
+        r = boost("bundle", "install", bf)
+        assert "tapped rt-tap @ %s" % first[:7] in r.out
+        assert "Boostfile wants" not in r.out    # 1.4.0 was there to install
+        assert "Installed 2 skills, added 1 tap" in r.out
+        assert {n: _held(e) for n, e in _lock().items()} == before
+        assert before["brainstorming"]["only_agents"] == ["claude-code"]
+        assert before["tdd-workflow"]["commit_pin"] == first
+        assert _config_taps()["rt-tap"]["pin"] == first
+        home = paths.home()
+        assert (home / ".claude" / "skills" / "brainstorming").is_symlink()
+        assert not (home / ".cursor" / "skills" / "brainstorming").exists()
+
+    def test_the_dry_run_names_the_tap_commit(self, boost, pinned_setup,
+                                              tmp_path):
+        _src, first = pinned_setup
+        bf = tmp_path / "Boostfile"
+        boost("bundle", "dump", bf)
+        boost("uninstall", "brainstorming")
+        boost("uninstall", "tdd-workflow")
+        boost("untap", "rt-tap", "--force")
+        r = boost("bundle", "install", bf, "--dry-run")
+        assert "would tap rt-tap @ %s" % first[:7] in r.out
+
+    def test_an_existing_tap_on_another_commit_is_drift(
+            self, boost, fixture_tap_src, tmp_path):
+        src = _copy_tap(fixture_tap_src, tmp_path / "mv-tap")
+        first = _head(src)
+        _bump(src, "brainstorming", "1.4.0", "1.5.0")
+        boost("tap", src)                               # at HEAD, not `first`
+        bf = tmp_path / "bf"
+        bf.write_text("tap mv-tap %s --at %s\n" % (src, first),
+                      encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert ("bf:1: tap mv-tap is at %s, Boostfile wants --at %s — kept "
+                "as tapped" % (_head(src)[:7], first[:7])) in _flat(r.out)
+        assert "Installed 0 skills, 1 differs from the Boostfile" in r.out
+
+    def test_an_existing_tap_at_the_pinned_commit_is_quiet(
+            self, boost, fixture_tap_src, tmp_path):
+        src = _copy_tap(fixture_tap_src, tmp_path / "ok-tap")
+        boost("tap", src)
+        bf = tmp_path / "bf"
+        bf.write_text("tap ok-tap %s --at %s\n" % (src, _head(src)),
+                      encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert r.out.strip().splitlines()[-1].endswith("Installed 0 skills")
+
+    def test_a_commit_pin_the_install_cannot_meet_is_not_written(
+            self, boost, tapped, tmp_path):
+        bf = tmp_path / "bf"
+        bf.write_text("skill fixture-tap:brainstorming --commit-pin %s\n"
+                      % ("a" * 40), encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert ("bf:1: brainstorming: installed at %s, Boostfile commit-pins "
+                "%s — not commit-pinned"
+                % (_lock()["brainstorming"]["commit"][:12], "a" * 12)
+                ) in _flat(r.out)
+        assert "Installed 1 skill, 1 differs from the Boostfile" in r.out
+        assert "commit_pin" not in _lock()["brainstorming"]
+
+    def test_an_old_style_boostfile_still_installs(self, boost, tapped,
+                                                   tmp_path):
+        bf = tmp_path / "bf"
+        bf.write_text("# Boostfile — generated by boost bundle dump\n"
+                      "tap fixture-tap %s\n"
+                      "skill fixture-tap:brainstorming@1.4.0\n" % tapped,
+                      encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert "Installed 1 skill" in r.out
+        row = _lock()["brainstorming"]
+        assert row.get("only_agents") is None and not row.get("pinned")
+
+
+class TestBundleTapConflict:
+    """`tap NAME URL` for a NAME already configured from another repository
+    is refused aloud, and its skill lines with it — installing from the
+    configured repo under the Boostfile's names reproduces a different setup."""
+
+    LINES = ("tap fixture-tap https://github.com/someone-else/fixture-tap\n"
+             "skill fixture-tap:brainstorming@1.4.0\n")
+
+    def _expect(self, out, src):
+        flat = _flat(out)
+        assert ("bf:1: tap fixture-tap is configured as %s, but the Boostfile "
+                "wants https://github.com/someone-else/fixture-tap — not "
+                "re-tapped, and its skill lines are skipped" % src) in flat
+        assert ("bf:2: brainstorming skipped — tap fixture-tap is not the "
+                "repository the Boostfile names") in flat
+
+    def test_real_run(self, boost, tapped, tmp_path):
+        bf = tmp_path / "bf"
+        bf.write_text(self.LINES, encoding="utf-8")
+        r = boost("bundle", "install", bf, expect=1)
+        self._expect(r.out, tapped)
+        assert "Installed 0 skills, 2 failed" in r.out
+        assert "brainstorming" not in lockfile.installed()
+
+    def test_dry_run(self, boost, tapped, tmp_path):
+        bf = tmp_path / "bf"
+        bf.write_text(self.LINES, encoding="utf-8")
+        r = boost("bundle", "install", bf, "--dry-run", expect=1)
+        self._expect(r.out, tapped)
+        assert "would install 0 skills, 2 would fail" in r.out
+
+    @pytest.mark.parametrize("dry", [False, True])
+    def test_an_unqualified_line_resolving_to_it_is_skipped(
+            self, boost, tapped, tmp_path, dry):
+        bf = tmp_path / "bf"
+        bf.write_text("tap fixture-tap https://github.com/someone-else/"
+                      "fixture-tap\nskill brainstorming@1.4.0\n",
+                      encoding="utf-8")
+        r = boost("bundle", "install", bf, *(["--dry-run"] if dry else []),
+                  expect=1)
+        assert ("bf:2: brainstorming skipped — it resolves to tap fixture-tap, "
+                "which is not the repository the Boostfile names") in _flat(r.out)
+        assert "brainstorming" not in lockfile.installed()
+
+    def test_another_spelling_of_the_same_repo_is_no_conflict(
+            self, boost, tapped, tmp_path):
+        bf = tmp_path / "bf"
+        bf.write_text("tap fixture-tap %s/\nskill fixture-tap:brainstorming\n"
+                      % tapped, encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert "configured as" not in r.out
+        assert "Installed 1 skill" in r.out
+
+
+class TestBundleLineDiagnostics:
+    """Every bad line is named FILE:LINE with the token at fault, and an
+    option the grammar does not know fails the line rather than installing it
+    at a scope nobody asked for."""
+
+    @pytest.mark.parametrize("line, message", [
+        ("skill fixture-tap:", "no skill name in 'fixture-tap:'"),
+        ("skill fixture-tap:@1.0", "no skill name in 'fixture-tap:@1.0'"),
+        ("skill fixture-tap:tdd-workflow --locl", "unknown option '--locl'"),
+        ("skill fixture-tap:tdd-workflow extra", "unexpected 'extra'"),
+        ("skill fixture-tap:tdd-workflow --agent", "--agent needs a value"),
+        ("skill fixture-tap:tdd-workflow --agent nosuch", "unknown agent: nosuch"),
+        ("skill fixture-tap:tdd-workflow --commit-pin abc",
+         "--commit-pin needs a full 40-character commit SHA, got 'abc'"),
+        ("skill fixture-tap:tdd-workflow --local --tag x",
+         "--tag applies to user-scope skills, not a --local one"),
+        ("tap fixture-tap --at", "--at needs a commit SHA"),
+    ])
+    def test_a_malformed_line_is_named_and_skipped(self, boost, tapped,
+                                                   tmp_path, line, message):
+        bf = tmp_path / "bf"
+        bf.write_text("# first\n%s\n" % line, encoding="utf-8")
+        r = boost("bundle", "install", bf, expect=1)
+        assert "bf:2: %s — skipped" % message in _flat(r.out)
+        assert "Installed 0 skills, 1 failed" in r.out
+        assert "tdd-workflow" not in lockfile.installed()
+
+    def test_resolution_failures_carry_the_line_too(self, boost, tapped,
+                                                    rival_tap, tmp_path):
+        bf = tmp_path / "bf"
+        bf.write_text("skill fixture-tap:nope\nskill brainstorming\n",
+                      encoding="utf-8")
+        r = boost("bundle", "install", bf, expect=1)
+        flat = _flat(r.out)
+        assert "bf:1: nope not found in tap fixture-tap — skipped" in flat
+        assert ("bf:2: brainstorming is ambiguous — in fixture-tap, rival-tap; "
+                "qualify it as owner/repo:brainstorming") in flat

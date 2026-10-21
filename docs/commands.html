@@ -312,6 +312,7 @@
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show what install would do, touching nothing</span></div>
         </div>
+        <p class="epilog">Boostfile lines: `tap NAME [URL] [--at SHA]` and `skill [TAP:]NAME[@VERSION] [--local] [--agent A]... [--pin] [--commit-pin SHA] [--tag T]...`; `#` starts a comment. `--at` holds the tap at a commit, as `boost tap --at` does; the skill options replay `boost install --local/--agent`, `boost pin [--commit]` and `boost tag +T`. Every option is optional, so older Boostfiles still install.</p>
       </section>
       <section class="cmd" id="cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a -y, --yes url_or_path">
         <h3><span class="cname">import</span><span class="gtag">pkg</span></h3>
