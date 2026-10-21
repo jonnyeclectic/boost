@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import config, paths, policy, projectlock, registry, util
+from boost_cli.core import builtin, config, paths, policy, projectlock, registry, util
 from boost_cli.errors import BoostError
 
 # Every child's cwd: under the mutation gate the child's import is mutmut's
@@ -340,3 +340,32 @@ class TestRegistryRows:
         assert registry._append_rows(cfg, [{"name": "a"}]) is True
         assert registry._append_rows(cfg, [{"name": "A"}]) is False
         assert cfg == {"taps": [{"name": "a"}]}
+
+
+ROW = {"name": builtin.BUILTIN_TAP, "url": builtin.BUILTIN_URL,
+       "curated": True}
+
+
+class TestBuiltinRegister:
+
+    def test_skips_when_already_registered(self):
+        cfg = {"taps": [dict(ROW, url="other")]}
+        assert builtin._register(cfg) is False
+        assert cfg == {"taps": [dict(ROW, url="other")]}
+
+    def test_appends_to_an_empty_config(self):
+        cfg: dict = {}
+        assert builtin._register(cfg) is True
+        assert cfg == {"taps": [ROW]}
+
+    def test_keeps_a_malformed_row(self):
+        cfg = {"taps": ["junk"]}
+        assert builtin._register(cfg) is True
+        assert cfg == {"taps": ["junk", ROW]}
+
+    def test_ensure_tap_writes_once(self, sandbox):
+        builtin.ensure_tap()
+        before = paths.config_path().read_bytes()
+        builtin.ensure_tap()
+        assert paths.config_path().read_bytes() == before
+        assert [t.name for t in registry.list_taps()] == [builtin.BUILTIN_TAP]
