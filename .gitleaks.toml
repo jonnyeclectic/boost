@@ -15,3 +15,9 @@ description = "boost's own secret-scanner tests ship synthetic private keys / to
 paths = [
     '''tests/unit/test_secretscan\.py''',
 ]
+
+[[allowlists]]
+description = "a minisign-shaped *public* key the state-dir tests pass to `boost trust add`; public, synthetic, and never a credential"
+paths = [
+    '''tests/functional/test_state_dir_refuses_writes\.py''',
+]
