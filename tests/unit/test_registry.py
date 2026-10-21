@@ -710,7 +710,7 @@ class TestUpdateConcurrency:
         state = {"live": 0, "peak": 0}
         lock = threading.Lock()
 
-        def pull(path):
+        def pull(path, verify=None):
             with lock:
                 state["live"] += 1
                 state["peak"] = max(state["peak"], state["live"])

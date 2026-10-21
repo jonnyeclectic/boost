@@ -407,7 +407,8 @@ def check_source(name: str, clone_dir) -> list[str]:
                                                                what="source")
 
 
-def check_tap_signing(clone_dir, what: str = "tap") -> list[str]:
+def check_tap_signing(clone_dir, what: str = "tap",
+                      commit: str | None = None) -> list[str]:
     """Return provenance violations for a tap clone (empty = allowed).
 
     No-op unless ``require_signed_taps`` is on. When on, anything short of a
@@ -415,6 +416,10 @@ def check_tap_signing(clone_dir, what: str = "tap") -> list[str]:
     violation, worded with the reason so ``boost tap`` can explain the refusal.
     ``what`` is the noun the reason starts with (``source`` for an import).
     Honors the ``policy_enforce`` master switch.
+
+    ``commit`` checks that commit's signed files, read from the clone's object
+    store, instead of the working tree — so ``boost update`` can refuse a
+    fetched commit before the clone moves onto it.
     """
     if not config.get("policy_enforce", True):
         return []
@@ -428,7 +433,8 @@ def check_tap_signing(clone_dir, what: str = "tap") -> list[str]:
     if not pol["require_signed_taps"]:
         return []
     from . import provenance
-    result = provenance.verify_dir(clone_dir)
+    result = (provenance.verify_dir(clone_dir) if commit is None
+              else provenance.verify_commit(clone_dir, commit))
     if result.ok:
         return []
     reason = {

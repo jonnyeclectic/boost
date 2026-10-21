@@ -563,15 +563,7 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     problems = policy.check_tap_signing(tap.path)
     if problems:
         util.rmtree(tap.path)  # leave no half-added tap behind
-        # An unreadable policy.json refuses every tap; trusting a key or
-        # relaxing signing would not repair it, so say what would.
-        hint = ("repair policy.json first — `boost policy` names each "
-                "unreadable value" if policy.unreadable_violation("tap")
-                else "add its key with `boost trust add <name> <key>`, "
-                     "or relax `boost policy set require_signed_taps false`")
-        raise BoostError(
-            "tap %s failed provenance policy: %s" % (name, "; ".join(problems)),
-            hint=hint)
+        raise _signing_refused(name, problems)
     row = _row(name, url, curated, by_user=curated)
     if at:
         row["pin"] = at
@@ -580,6 +572,54 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     start_refresh_clock()
     tap.pin = at or ""
     return tap
+
+
+#: The phrase every provenance refusal carries, so `boost update` can tell a
+#: refused tap (a security answer, worth a non-zero exit) from a dead one.
+POLICY_REFUSAL = "failed provenance policy"
+
+
+def _signing_hint() -> str:
+    """What repairs a provenance refusal.
+
+    An unreadable policy.json refuses every tap; trusting a key or relaxing
+    signing would not repair it, so say what would.
+    """
+    if policy.unreadable_violation("tap"):
+        return ("repair policy.json first — `boost policy` names each "
+                "unreadable value")
+    return ("add its key with `boost trust add <name> <key>`, "
+            "or relax `boost policy set require_signed_taps false`")
+
+
+def _signing_refused(name: str, problems: list[str],
+                     kept: str = "") -> BoostError:
+    """The error for a tap whose tree fails ``require_signed_taps``.
+
+    ``kept`` is the commit the clone stays on when the refused tree was a
+    move rather than a first clone — said, because "refused" alone leaves the
+    reader to wonder whether the tap is now broken.
+    """
+    msg = "tap %s %s: %s" % (name, POLICY_REFUSAL, "; ".join(problems))
+    if kept:
+        msg += " — kept at %s" % kept[:7]
+    return BoostError(msg, hint=_signing_hint())
+
+
+def _signing_guard(tap: Tap):
+    """A ``verify`` callback for :func:`gitutil.pull`/``checkout_commit``.
+
+    Called with the fetched commit before the clone moves onto it, so a new
+    upstream commit that drops the signature (or swaps the signer) is refused
+    with the clone still on the tree that passed — `boost tap` checked the
+    first tree only, and every update after it was taken on trust.
+    """
+    def verify(commit: str) -> None:
+        problems = policy.check_tap_signing(tap.path, commit=commit)
+        if problems:
+            raise _signing_refused(tap.name, problems,
+                                   kept=gitutil.head_commit(tap.path))
+    return verify
 
 
 def _append_rows(cfg: dict, rows: list[dict]) -> bool:
@@ -755,6 +795,15 @@ def _reclone(tap: Tap, pin: str | None) -> None:
         gitutil.clone_shallow(tap.url, staging)
         if pin:
             gitutil.checkout_commit(staging, pin)
+        # Checked on the staging tree, before it replaces anything: a
+        # re-clone is a fresh download, so it gets the same provenance gate
+        # `boost tap` applies — or a tap whose clone went missing would come
+        # back from an upstream that dropped its signature.
+        problems = policy.check_tap_signing(staging)
+        if problems:
+            raise _signing_refused(
+                tap.name, problems,
+                kept=gitutil.head_commit(tap.path) if tap.is_cloned else "")
     except BoostError:
         with suppress(OSError):
             util.remove_path(staging)
@@ -1050,7 +1099,7 @@ def retarget(name: str, commit: str) -> Tap:
     skipping the tap forever.
     """
     tap = get(name)
-    gitutil.checkout_commit(tap.path, commit)
+    gitutil.checkout_commit(tap.path, commit, verify=_signing_guard(tap))
     return pin(name, commit)
 
 
@@ -1275,11 +1324,13 @@ def update(name: str | None = None,
             # move, so the caller rescans the catalog and resyncs vectors.
             head = off_pin(tap)
             if head:
-                gitutil.checkout_commit(tap.path, tap.pin)
+                gitutil.checkout_commit(tap.path, tap.pin,
+                                        verify=_signing_guard(tap))
                 return ("%s → %s (back on its pin)"
                         % (head[:7], tap.pin[:7]), False)
             return "pinned at %s (skipped)" % tap.pin[:7], False
-        return gitutil.pull(tap.path), bool(tap.pin)
+        return (gitutil.pull(tap.path, verify=_signing_guard(tap)),
+                bool(tap.pin))
 
     to_clear: list[str] = []
 

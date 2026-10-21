@@ -452,9 +452,9 @@ class TestPull:
     def test_pull_issues_reset_sequence_and_falls_back_to_fetch_head(
             self, tmp_path, monkeypatch):
         # Drive pull() through a recorder so the exact git argv is asserted.
-        # rev-parse returns the SAME sha before and after the origin/HEAD reset,
-        # which forces the FETCH_HEAD fallback branch; the final rev-parse moves.
-        shas = iter(["a" * 40, "a" * 40, "b" * 40])
+        # origin/HEAD resolves to the SAME sha as HEAD, which forces the
+        # FETCH_HEAD fallback; the clone is then reset to that resolved sha.
+        shas = iter(["a" * 40, "a" * 40, "b" * 40, "b" * 40])
         calls = []
 
         def rec(args, **kw):
@@ -473,12 +473,14 @@ class TestPull:
         # every subcommand targets the given repo, never str(None)
         assert all(a[1] == str(repo) for a in argvs)
         assert ["-C", str(repo), "fetch", "--depth", "1", "--quiet", "origin"] in argvs
-        # the origin/HEAD reset is non-fatal (check=False), exact tokens
-        oh = ["-C", str(repo), "reset", "--hard", "--quiet", "origin/HEAD"]
-        assert oh in argvs
-        assert calls[[a for a, _ in calls].index(oh)][1].get("check") is False
-        # fallback fired: FETCH_HEAD reset must be present
-        assert ["-C", str(repo), "reset", "--hard", "--quiet", "FETCH_HEAD"] in argvs
+        assert ["-C", str(repo), "rev-parse", "--verify", "--quiet",
+                "origin/HEAD^{commit}"] in argvs
+        # fallback fired: FETCH_HEAD resolved, and the reset names its sha
+        assert ["-C", str(repo), "rev-parse", "--verify", "--quiet",
+                "FETCH_HEAD^{commit}"] in argvs
+        resets = [a for a in argvs if "reset" in a]
+        assert resets == [["-C", str(repo), "reset", "--hard", "--quiet",
+                           "b" * 40]]
 
     def test_pull_keeps_a_complete_clone_complete(self, tmp_path, monkeypatch):
         calls = _record_run(monkeypatch, stdout="a" * 40 + "\n")
@@ -487,8 +489,8 @@ class TestPull:
             a for a, _ in calls]
 
     def test_pull_skips_fallback_when_origin_head_moves(self, tmp_path, monkeypatch):
-        # When the origin/HEAD reset already advances HEAD, the FETCH_HEAD
-        # fallback must NOT run (guards the == before condition, not !=).
+        # When origin/HEAD already names a new commit, FETCH_HEAD is never
+        # consulted (guards the == before condition, not !=).
         shas = iter(["a" * 40, "b" * 40, "b" * 40])
         calls = []
 
@@ -498,8 +500,82 @@ class TestPull:
             return FakeProc(rc=0, stdout=out)
         monkeypatch.setattr("boost_cli.core.gitutil.run", rec)
 
-        gitutil.pull(tmp_path / "clone")
-        assert not any("FETCH_HEAD" in a for a in calls)
+        assert gitutil.pull(tmp_path / "clone") == "aaaaaaa → bbbbbbb"
+        assert not any("FETCH_HEAD^{commit}" in a for a in calls)
+        assert ["-C", str(tmp_path / "clone"), "reset", "--hard", "--quiet",
+                "b" * 40] in calls
+
+    def test_verify_sees_the_fetched_commit_before_the_clone_moves(
+            self, tmp_path):
+        origin = _make_repo(tmp_path / "origin")
+        clone = tmp_path / "clone"
+        gitutil.clone_shallow(str(origin), clone)
+        before = gitutil.head_commit(clone)
+        (origin / "b.md").write_text("two\n", encoding="utf-8")
+        _git("add", "-A", cwd=origin)
+        _git("commit", "-qm", "add b", cwd=origin)
+        new = gitutil.head_commit(origin)
+        seen = []
+
+        def refuse(commit):
+            seen.append((commit, gitutil.head_commit(clone),
+                         (clone / "b.md").exists()))
+            raise BoostError("no")
+        with pytest.raises(BoostError, match="no"):
+            gitutil.pull(clone, verify=refuse)
+        assert seen == [(new, before, False)]     # judged before any move
+        assert gitutil.head_commit(clone) == before
+        assert not (clone / "b.md").exists()
+
+        assert gitutil.pull(clone, verify=lambda c: None) == "%s → %s" % (
+            before[:7], new[:7])
+        assert (clone / "b.md").is_file()
+
+    def test_verify_is_not_asked_when_nothing_moved(self, tmp_path):
+        origin = _make_repo(tmp_path / "origin")
+        clone = tmp_path / "clone"
+        gitutil.clone_shallow(str(origin), clone)
+        seen = []
+        assert gitutil.pull(clone, verify=seen.append) == "already up to date"
+        assert seen == []
+
+    def test_checkout_commit_verify_refusal_moves_nothing(self, tmp_path):
+        origin = _make_repo(tmp_path / "origin")
+        first = gitutil.head_commit(origin)
+        (origin / "b.md").write_text("two\n", encoding="utf-8")
+        _git("add", "-A", cwd=origin)
+        _git("commit", "-qm", "add b", cwd=origin)
+        clone = tmp_path / "clone"
+        gitutil.clone_shallow(str(origin), clone)
+        head = gitutil.head_commit(clone)
+        seen = []
+
+        def refuse(commit):
+            seen.append(commit)
+            raise BoostError("no")
+        with pytest.raises(BoostError):
+            gitutil.checkout_commit(clone, first, verify=refuse)
+        assert seen == [first]
+        assert gitutil.head_commit(clone) == head
+        gitutil.checkout_commit(clone, first, verify=seen.append)
+        assert gitutil.head_commit(clone) == first
+
+
+class TestReadBlob:
+    def test_returns_exact_bytes_at_a_commit(self, tmp_path):
+        repo = _make_repo(tmp_path / "repo")
+        (repo / ".boost").mkdir()
+        (repo / ".boost" / "m").write_bytes(b"line\r\nnext\n")
+        _git("-c", "core.autocrlf=false", "add", "-A", cwd=repo)
+        _git("commit", "-qm", "m", cwd=repo)
+        sha = gitutil.head_commit(repo)
+        (repo / ".boost" / "m").write_bytes(b"changed\n")   # tree, not index
+        assert gitutil.read_blob(repo, sha, ".boost/m") == b"line\r\nnext\n"
+
+    def test_missing_path_is_none(self, tmp_path):
+        repo = _make_repo(tmp_path / "repo")
+        assert gitutil.read_blob(repo, gitutil.head_commit(repo),
+                                 ".boost/nope") is None
 
 
 def _git_out(*args, cwd):

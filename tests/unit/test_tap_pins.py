@@ -36,10 +36,10 @@ def fake_clone(monkeypatch):
         (dest / ".git").mkdir(exist_ok=True)
         (dest / "SKILL.md").write_text("---\nname: x\n---\nb\n", encoding="utf-8")
 
-    def checkout(repo, sha):
+    def checkout(repo, sha, verify=None):
         state["checkouts"].append((repo.name, sha))
 
-    def pull(repo):
+    def pull(repo, verify=None):
         state["pulls"].append(repo.name)
         return "1111111 → 2222222"
 

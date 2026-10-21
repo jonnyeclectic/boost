@@ -199,3 +199,23 @@ def verify_dir(clone: Path) -> Result:
     return Result(UNTRUSTED, fingerprint=minisign.key_id_hex(sig.key_id),
                   trusted_comment=sig.trusted_comment,
                   detail="no trusted key verifies this signature")
+
+
+def verify_commit(clone: Path, commit: str) -> Result:
+    """:func:`verify_dir` for the tree at ``commit`` in the git clone ``clone``.
+
+    The signed files are read from the object store into a scratch directory,
+    so a commit can be judged before the working tree moves onto it.
+    """
+    import tempfile
+
+    from . import gitutil
+    with tempfile.TemporaryDirectory(prefix="boost-verify-") as tmp:
+        root = Path(tmp)
+        for rel in (SIGNED_FILE, SIGNATURE_FILE):
+            data = gitutil.read_blob(clone, commit, rel)
+            if data is not None:
+                dest = root / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(data)
+        return verify_dir(root)
