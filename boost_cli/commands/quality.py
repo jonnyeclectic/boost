@@ -1468,6 +1468,13 @@ def cmd_doctor(argv):
             bad("log", "diagnostic log %s is not writable — every invocation is "
                 "failing to record; fix its permissions (chmod u+w)"
                 % _tilde(lp))
+    if not logs.dir_writable():
+        # The append-open above passes in a read-only directory, but rotation
+        # (a rename) and crash reports (a new file) both need to create
+        # entries there — rotation failing is what silently froze the log.
+        bad("logs", "logs directory %s is not writable — crash reports and "
+            "log rotation cannot be written; fix its permissions (chmod u+w)"
+            % _tilde(paths.logs_dir()))
     crashes = sorted(paths.logs_dir().glob("crash-*.log")) \
         if paths.logs_dir().is_dir() else []
     if crashes:
