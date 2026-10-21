@@ -1946,11 +1946,19 @@ def cmd_update(argv: list[str]) -> int:
     # reads as one line of bad news rather than as the whole command failing.
     for tname, err in failures.items():
         out.warn("%s: %s" % (tname, err))
-    if failures:
+    refused = [t for t, e in failures.items() if registry.POLICY_REFUSAL in e]
+    if refused:
+        out.info(out.role(
+            "%d tap%s refused by provenance policy and left on %s last "
+            "verified commit — `boost trust verify` shows why"
+            % (len(refused), "s" if len(refused) != 1 else "",
+               "their" if len(refused) != 1 else "its"), "muted"))
+    if len(failures) > len(refused):
         out.info(out.role(
             "%d of %d taps could not be refreshed — the rest are up to date. "
             "Drop a dead one with `boost untap <name>`."
-            % (len(failures), len(results) + len(failures)), "muted"))
+            % (len(failures) - len(refused), len(results) + len(failures)),
+            "muted"))
     if pinned_skips:
         out.info(out.role(
             "%d tap%s pinned and left alone — `boost update --force` moves "
@@ -1968,7 +1976,7 @@ def cmd_update(argv: list[str]) -> int:
         # nothing was refreshed at all. This early return predates that rule
         # and kept answering 0 with every tap dead — and a cron'd
         # `boost update --taps-only` exists precisely to notice that morning.
-        return 1 if failures and not results else 0
+        return 1 if refused or (failures and not results) else 0
 
     # Before any comparison: a row with no `tap_url` is one
     # `registry.source_changed` cannot protect.
@@ -2031,7 +2039,9 @@ def cmd_update(argv: list[str]) -> int:
     # Non-zero only when nothing was refreshed at all. A partial run did the job
     # it could do, and failing it would put us back to one dead upstream
     # breaking `boost update` for the other 79.
-    return 1 if failures and not results else 0
+    # A tap refused by provenance policy is the exception: that is a security
+    # answer, not a flaky upstream, and a cron'd update must not read it as 0.
+    return 1 if refused or (failures and not results) else 0
 
 
 # ── reinstall ────────────────────────────────────────────────────────────
@@ -3125,10 +3135,16 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
     # store.restore_preserve_newer_lock_sections.
     pre_rules = lockfile.installed_rules().copy()
     pre_workflows = lockfile.installed_workflows().copy()
+    pre_skills = set(lockfile.installed())
     # Extracted into a staging dir and swapped in only once that succeeded,
     # so a corrupt or refused snapshot can never leave an emptied store.
     snapshot.restore(tar_path, root, snap_id)
     kept = store.restore_preserve_newer_lock_sections(pre_rules, pre_workflows)
+    # Before anything links: a skill blocklisted since the snapshot was saved
+    # is declined here, as `replay rollback` and `install` decline it.
+    declined = store.decline_restored_by_policy(pre_skills)
+    for line in declined:
+        out.warn(line, wrap=True)
     actions = store.sync_apply(store.sync_plan())
     for action in actions:
         out.ok(action)
@@ -3150,7 +3166,9 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
         if extra:
             msg += " (%s)" % "; ".join(extra)
         out.warn(msg)
-    return 0
+    # Partial on purpose, and said so in the exit code: a declined skill is
+    # what `replay rollback` and `install` fail on too.
+    return 1 if declined else 0
 
 
 # ── export ───────────────────────────────────────────────────────────────

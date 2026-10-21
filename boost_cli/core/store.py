@@ -14,7 +14,7 @@ import os
 import shutil
 import stat
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -4209,6 +4209,93 @@ def quarantine_skill(name: str, entry: dict) -> tuple[list[str], dict[str, Path]
     if fresh:
         journal.log("quarantine", name)
     return removed, blocked
+
+
+def _recorded_policy_entry(kind: str, name: str, entry: dict) -> dict:
+    """The catalog-shaped entry the install policy weighs a recorded item by.
+
+    For an item coming back from boost's own records — a quarantine release,
+    a snapshot restore — rather than from a tap. The description is read
+    from the skill's copy (store or held aside); one that cannot be read, or
+    a rule's or workflow's, which the lock does not record, is *not checked*
+    rather than counted as missing (see :func:`read_skill_meta`): a failed
+    read is not evidence the item declares none.
+    """
+    meta = read_skill_meta(name) if kind == "skill" else None
+    desc = (meta[0].get("description") if meta is not None
+            else entry.get("description") or "(not checked)")
+    return {"name": name, "tap": entry.get("tap", ""),
+            "version": str(entry.get("version") or "0.0.0"),
+            "description": desc}
+
+
+def recorded_policy_violations(kind: str, name: str, entry: dict,
+                               installed: dict | None = None) -> list[str]:
+    """Install-policy violations for bringing back a recorded item.
+
+    The install gate applied when the item went in; a skill or tap
+    blocklisted since must not come back through a side door that skips it —
+    `quarantine --release` and `snapshot restore` re-activated one with exit
+    0 while `replay rollback` refused the same skill. ``installed`` is the
+    skill map ``max_skills`` is weighed against (default: the lock's), and
+    the item is counted as already in it, as for a reinstall.
+    """
+    if installed is None:
+        installed = lockfile.installed()
+    return policy.check_install(
+        _recorded_policy_entry(kind, name, entry),
+        _count_others(installed, name, replaces=name in installed
+                      or kind != "skill"))
+
+
+def refuse_release_by_policy(kind: str, name: str, entry: dict) -> None:
+    """Raise, naming the rule, when policy refuses releasing ``name``.
+
+    Raised before anything moves, so a refused release leaves the item
+    quarantined exactly as it was.
+    """
+    violations = recorded_policy_violations(kind, name, entry)
+    if violations:
+        raise BoostError(
+            "policy blocks releasing %s: %s — it stays quarantined"
+            % (name, "; ".join(violations)),
+            hint="inspect with `boost policy list`; `boost uninstall %s` "
+                 "removes it" % name)
+
+
+def decline_restored_by_policy(pre_skills: Collection[str]) -> list[str]:
+    """Take back every skill a snapshot restore just brought back that the
+    install policy refuses. Returns one line per skill declined.
+
+    Only skills absent before the restore are weighed, as `replay rollback`
+    weighs only the skills it reinstalls: one installed all along is not
+    being installed, and `boost policy check` is what reports it. Called
+    after the swap and before :func:`sync_plan` links anything, so a declined
+    skill never reaches an agent. Its extracted copy and lock row are dropped;
+    the snapshot archive still holds it. ``max_skills`` counts the skills
+    accepted so far, as the installs a rollback runs one by one would.
+    """
+    restored = lockfile.installed()
+    accepted = {n: e for n, e in restored.items() if n in pre_skills}
+    declined: list[str] = []
+    for name in sorted(n for n in restored if n not in pre_skills):
+        entry = restored[name]
+        if entry.get("quarantined") or is_held(entry):
+            # Restored as held: nothing is activated, and its held copy is
+            # not in the archive, so deleting it would lose it for good.
+            accepted[name] = entry
+            continue
+        violations = recorded_policy_violations("skill", name, entry,
+                                                installed=accepted)
+        if not violations:
+            accepted[name] = entry
+            continue
+        with contextlib.suppress(OSError):
+            util.remove_path(skill_store_dir(name))
+        lockfile.remove_skill(name)
+        declined.append("not restored %s: policy blocks installing %s: %s"
+                        % (name, name, "; ".join(violations)))
+    return declined
 
 
 def release_skill(name: str, entry: dict) -> InstallResult:

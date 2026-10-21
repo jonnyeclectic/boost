@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -110,7 +111,7 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True,
 
 
 def _exec(argv: list[str], *, cwd: str | None, timeout: float,
-          env: dict[str, str]) -> subprocess.CompletedProcess:
+          env: dict[str, str], text: bool = True) -> subprocess.CompletedProcess:
     """`subprocess.run(argv, capture_output=True, text=True)`, except that a
     timeout (or an interrupt) kills git's whole process tree, not only git.
 
@@ -125,7 +126,7 @@ def _exec(argv: list[str], *, cwd: str | None, timeout: float,
     kwargs: dict = {}
     if sys.platform != "win32":
         kwargs["start_new_session"] = True
-    with subprocess.Popen(argv, cwd=cwd, env=env, text=True,
+    with subprocess.Popen(argv, cwd=cwd, env=env, text=text,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           **kwargs) as proc:
         try:
@@ -649,9 +650,43 @@ def follow_default_branch(repo: Path) -> str:
     return branch
 
 
-def pull(repo: Path) -> str:
+def read_blob(repo: Path, rev: str, path: str) -> bytes | None:
+    """The exact bytes of ``path`` at commit ``rev``, or ``None`` if absent.
+
+    Read from the object store, not the working tree, so a fetched commit can
+    be inspected before the clone moves onto it. Bytes, not text: a signature
+    covers the manifest's bytes, and text mode would translate its newlines.
+    A blobless clone fetches the blob on demand; a blob it cannot fetch reads
+    as absent, which a signature check treats as unsigned — failing closed.
+    """
+    require_git()
+    try:
+        proc = _exec(["git", "-C", str(repo), "cat-file", "blob",
+                      "%s:%s" % (rev, path)], cwd=None, timeout=300,
+                     env=os.environ | {"GIT_TERMINAL_PROMPT": "0"}, text=False)
+    except subprocess.TimeoutExpired:
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _rev(repo: Path, ref: str) -> str:
+    """``ref`` resolved to a commit hash in ``repo``, or "" if it does not."""
+    proc = run(["-C", str(repo), "rev-parse", "--verify", "--quiet",
+                ref + "^{commit}"], check=False)
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def pull(repo: Path, verify: Callable[[str], None] | None = None) -> str:
     """Update a clone to the remote's current default branch, keeping it as
-    shallow as it is. Returns a one-line summary."""
+    shallow as it is. Returns a one-line summary.
+
+    ``verify`` is called with the fetched commit **before** the clone moves
+    onto it; raising from it leaves the working tree and HEAD exactly where
+    they were. It is how a tap's provenance is checked on update: resetting
+    first and checking after would put an unverified tree on disk, scannable
+    and installable, for as long as the check took — or for good, if it
+    crashed.
+    """
     before = head_commit(repo)
     branch = follow_default_branch(repo)
     proc = run(["-C", str(repo), "fetch", *_depth(repo), "--quiet", "origin"],
@@ -664,19 +699,24 @@ def pull(repo: Path) -> str:
         # reset below lands on what was just fetched, not on the old branch.
         run(["-C", str(repo), "symbolic-ref", "refs/remotes/origin/HEAD",
              "refs/remotes/origin/" + branch], check=False)
-    run(["-C", str(repo), "reset", "--hard", "--quiet", "origin/HEAD"], check=False)
     # origin/HEAD may be unset on old git; fall back to the fetched head
-    if head_commit(repo) == before:
-        # An upstream with no commits fetches nothing, and resetting to the
-        # FETCH_HEAD it never wrote surfaced as git's "ambiguous argument
-        # 'FETCH_HEAD'" — true, and no help to anyone holding a tap.
-        if not before and run(["-C", str(repo), "rev-parse", "--verify",
-                               "--quiet", "FETCH_HEAD"],
-                              check=False).returncode != 0:
+    target = _rev(repo, "origin/HEAD")
+    if not target or target == before:
+        fetched = _rev(repo, "FETCH_HEAD")
+        if not fetched and not before:
+            # An upstream with no commits fetches nothing, and resetting to the
+            # FETCH_HEAD it never wrote surfaced as git's "ambiguous argument
+            # 'FETCH_HEAD'" — true, and no help to anyone holding a tap.
             raise BoostError(
                 "%s has no commits" % (remote_url(repo) or repo),
                 hint="commit to it first — a tap indexes committed content only")
-        run(["-C", str(repo), "reset", "--hard", "--quiet", "FETCH_HEAD"])
+        target = fetched or target
+    if target:
+        if verify is not None and target != before:
+            verify(target)
+        # Reset even when nothing moved: it is also what puts a hand-edited
+        # clone back to the commit it claims to be at.
+        run(["-C", str(repo), "reset", "--hard", "--quiet", target])
     after = head_commit(repo)
     return "already up to date" if before == after else "%s → %s" % (
         before[:7] or "(no commits)", after[:7])
@@ -696,7 +736,8 @@ def head_commit(repo: Path) -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def checkout_commit(repo: Path, sha: str) -> None:
+def checkout_commit(repo: Path, sha: str,
+                    verify: Callable[[str], None] | None = None) -> None:
     """Detach `repo` at `sha`, fetching that commit first if it is absent.
 
     A tap is cloned `--depth 1`, so the commit a published shard was built from
@@ -718,6 +759,10 @@ def checkout_commit(repo: Path, sha: str) -> None:
     if have.returncode != 0:
         run(["-C", str(repo), "fetch", "--quiet", *_depth(repo),
              "--filter=blob:none", "origin", sha])
+    if verify is not None:
+        # As in `pull`: the commit is checked while the tree is still on the
+        # old one, so a refusal moves nothing.
+        verify(sha)
     run(["-C", str(repo), "checkout", "--quiet", "--detach", sha])
     # A detached checkout leaves the sparse cone as it was, but re-applying is
     # cheap and keeps a pinned clone byte-identical to a freshly cloned one.

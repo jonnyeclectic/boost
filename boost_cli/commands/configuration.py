@@ -445,6 +445,16 @@ def cmd_compact(argv) -> int:
                         # failure; this is the path that gets there first.
                         util.rmtree(tap.path)
                         raise
+                try:
+                    # A re-clone is a fresh download, so it gets the
+                    # provenance gate `boost tap` and `boost update` apply.
+                    # The old clone is already gone; removing the unverified
+                    # one leaves a tap `doctor` names and `update` re-clones
+                    # through the same gate.
+                    registry.require_signed_clone(tap.name, tap.path)
+                except BoostError:
+                    util.rmtree(tap.path)
+                    raise
                 # The re-clone can change what's on disk even when the byte
                 # count doesn't (a pinned tap's tree is identical, but the
                 # cache's recorded commit and mtime are now stale either way).
