@@ -435,7 +435,34 @@ def read_reply(name: str, text: str, *, kind: str = "skill",
 _KINDS = ("skill", "rule", "workflow")
 
 
-def coverage_line(installed: dict, *, tapped: int) -> str:
+def config_problem(cfg_err: str) -> str:
+    """The sentence for an unreadable config.json, shared by every tool.
+
+    ``cfg_err`` is :func:`config.check`'s answer. With the file unreadable the
+    tap list reads as DEFAULTS' empty one, so a surface keyed on
+    ``tapped == 0`` would call the machine fresh and send the agent to
+    ``boost tap --defaults`` — a write that moves the user's file aside and
+    leaves a tap list holding only what it just added. ``boost_doctor`` named
+    the real fix while ``boost_search`` and ``boost_list`` gave that advice in
+    the same session, so all three take this one sentence.
+    """
+    return ("%s — boost is running on defaults, so the user's taps are not "
+            "listed; ask the user to repair the file or re-add their taps "
+            "(run `boost doctor` for details)" % cfg_err)
+
+
+def needs_name(tool: str) -> str:
+    """The refusal for a blank ``name`` on a tool whose schema requires one.
+
+    Treating ``""`` as a lookup answered "no skill named ''" — and on
+    boost_install offered the first three catalog names as "closest matches",
+    a suggestion with nothing behind it.
+    """
+    return "%s needs a name — pass one as boost_search returned it" % tool
+
+
+def coverage_line(installed: dict, *, tapped: int,
+                  config_error: str | None = None) -> str:
     """``boost_list``'s closing footer: what this machine holds, per kind.
 
     ``installed`` is the ``lockfile.all_installed()`` shape — ``{kind: {name:
@@ -467,6 +494,9 @@ def coverage_line(installed: dict, *, tapped: int) -> str:
     body = " · ".join(
         "%d %s%s" % (n, kind, "" if n == 1 else "s")
         for kind, n in ((k, len(installed.get(k) or {})) for k in _KINDS))
+    # An unreadable config.json reads as no taps; see :func:`config_problem`.
+    if config_error:
+        return "%s installed here. %s." % (body, config_problem(config_error))
     if tapped > 0:
         return ("%s installed here — what this machine holds, not what exists. "
                 "boost_search reads the tapped registries themselves, across "
@@ -579,7 +609,8 @@ def echo(text: str, *, limit: int = QUERY_ECHO_CHARS) -> str:
 
 
 def no_results(query: str, *, tapped: int,
-               dropped: Sequence[str] = (), ignored: bool = False) -> str:
+               dropped: Sequence[str] = (), ignored: bool = False,
+               config_error: str | None = None) -> str:
     """The reply for a search that returned nothing.
 
     THREE different situations wore one sentence. On a configured machine
@@ -608,7 +639,13 @@ def no_results(query: str, *, tapped: int,
     Every echoing branch is bounded by :func:`echo` — see
     :data:`QUERY_ECHO_CHARS` for why the one reply an agent hits repeatedly
     must not cost it in proportion to what it typed.
+
+    ``config_error`` wins over all of them: with config.json unreadable no
+    tap is listed, and the setup branch's `boost tap --defaults` would
+    replace the user's real list (:func:`config_problem`).
     """
+    if config_error:
+        return ("nothing was searched: %s." % config_problem(config_error))
     if tapped > 0 and dropped:
         shown = ", ".join("%r" % echo(t) for t in dropped[:ECHO_TERMS])
         if len(dropped) > ECHO_TERMS:

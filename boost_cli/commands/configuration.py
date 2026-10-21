@@ -1641,7 +1641,8 @@ def _tool_search(args: dict):
         dropped = rag.dropped_terms(query) if tokenized_only else []
         ignored = tokenized_only and rag.ignored_by_design(query)
         return mcp.no_results(query, tapped=tapped, dropped=dropped,
-                              ignored=ignored), False
+                              ignored=ignored,
+                              config_error=config.check()), False
     # Name-keyed, the same test `lockfile.find_any` and `store.install` apply —
     # those are the tools this marker is advising about. mcp.hit_line's
     # docstring records why the imprecision is disclosed rather than removed,
@@ -1678,7 +1679,8 @@ def _tool_list(args: dict):
     # have" is least useful on its own. A name installed in both scopes is
     # two installs, so the skill count takes both.
     counted = everything | {"skill": [*everything["skill"], *project]}
-    footer = mcp.coverage_line(counted, tapped=builtin.configured_tap_count())
+    footer = mcp.coverage_line(counted, tapped=builtin.configured_tap_count(),
+                               config_error=config.check())
     if not any(everything.values()) and not project:
         return "nothing installed\n" + footer, False
     lines = []
@@ -1701,6 +1703,8 @@ def _tool_list(args: dict):
 @_path_hint
 def _tool_info(args: dict):
     name = mcp.str_arg(args, "name") or ""
+    if not name.strip():
+        return mcp.needs_name("boost_info"), True
     path = mcp.str_arg(args, "path")
     # The resolver `boost info` uses: split a `tap:name`, hold the qualifier
     # against the installed record, and ask the project lock too. The unsplit
@@ -1785,7 +1789,7 @@ def _tool_read(args: dict):
     name = mcp.str_arg(args, "name") or ""
     path = mcp.str_arg(args, "path")
     if not name.strip():
-        return "boost_read needs a name — pass one as boost_search returned it", True
+        return mcp.needs_name("boost_read"), True
     if path:
         # A `path` names one tap copy, so that copy is what is served — even
         # when the other one is installed, or there would be no way to read
@@ -1817,8 +1821,10 @@ def _tool_install(args: dict):
     the wrong way round — here an agent chose the item with nobody watching —
     so both now take their plan and their words from ``core.installplan``.
     """
-    entry = catalog.resolve_one(mcp.str_arg(args, "name") or "",
-                                path=mcp.str_arg(args, "path"))
+    name = mcp.str_arg(args, "name") or ""
+    if not name.strip():
+        return mcp.needs_name("boost_install"), True
+    entry = catalog.resolve_one(name, path=mcp.str_arg(args, "path"))
     # The requested item's own refusal ("already installed", "is pinned")
     # first, so a refused call changes nothing — not its dependencies either.
     store.check_existing(entry)
@@ -1875,7 +1881,10 @@ def _install_lines(res: store.InstallResult, entry: dict) -> list[str]:
         lines.append("as a skill: %s" % res.skill_copy)
     if res.skill_note:
         lines.append(res.skill_note)
-    lines.append("quality score: %d/100" % res.score)
+    # Skill-only, as `boost install` prints it: a rule or workflow has no
+    # score, and "quality score: 0/100" told the agent a valid one scored zero.
+    if res.kind == "skill":
+        lines.append("quality score: %d/100" % res.score)
     if res.conflicts:
         lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
     lines.extend("not %s: %s — ask the user to run %s, then `boost sync`"
@@ -2053,9 +2062,7 @@ def _tool_doctor(args: dict):
     cfg_err = config.check()
     if cfg_err:
         total += 1
-        lines.append("%s — boost is running on defaults, so the user's taps are "
-                     "not listed; ask the user to repair the file or re-add "
-                     "their taps (run `boost doctor` for details)" % cfg_err)
+        lines.append(mcp.config_problem(cfg_err))
     elif not tapped:
         # Same command, same order, as mcp.no_results: an agent that calls
         # both tools in one session must not see the recommendation flipped

@@ -107,3 +107,20 @@ def test_conflicts_and_warnings_coexist(monkeypatch, tmp_path):
                        conflicts=["~/.claude/skills/evil-skill"])
     assert "conflicts (left in place)" in text
     assert "suspicious pattern" in text
+
+
+def test_a_skill_reports_its_quality_score(monkeypatch, tmp_path):
+    text, _ = _install(monkeypatch, tmp_path, "# Tidy", kind="skill")
+    assert "\nquality score: 70/100" in text
+
+
+def test_a_rule_or_workflow_has_no_quality_score(monkeypatch, tmp_path):
+    """The CLI omits the score for anything but a skill (pkg.py); this reply
+    said "quality score: 0/100" for every valid rule and workflow."""
+    for kind in ("rule", "workflow"):
+        sub = tmp_path / kind
+        sub.mkdir()
+        text, is_err = _install(monkeypatch, sub, "# Tidy", kind=kind)
+        assert is_err is False
+        assert "installed evil-skill" in text
+        assert "quality score" not in text
