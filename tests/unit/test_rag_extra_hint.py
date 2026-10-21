@@ -60,8 +60,8 @@ def installed_with(monkeypatch):
 
 class TestOneCommand:
     @pytest.mark.parametrize("method", [selfupdate.PIP, selfupdate.PIPX,
-                                        selfupdate.UV_TOOL, selfupdate.GIT,
-                                        selfupdate.UNKNOWN])
+                                        selfupdate.UV_TOOL, selfupdate.UV_PIP,
+                                        selfupdate.GIT, selfupdate.UNKNOWN])
     def test_every_surface_prints_the_same_command(self, installed_with,
                                                    method):
         installed_with(method)
@@ -92,6 +92,16 @@ class TestOneCommand:
         monkeypatch.setattr(dense.sys, "executable", "/opt/py/bin/python3")
         installed_with(selfupdate.PIP)
         want = '/opt/py/bin/python3 -m pip install "boost-skill-cli[rag]"'
+        assert dense.install_extra() == want
+        assert "`%s`" % want in dense.fix_hint("no-backend")
+
+    def test_a_uv_pip_install_is_told_uv_pip_for_this_interpreter(
+            self, installed_with, monkeypatch):
+        # `uv pip install` leaves a venv that may have no pip to run at all.
+        monkeypatch.setattr(dense.sys, "executable", "/opt/py/bin/python3")
+        installed_with(selfupdate.UV_PIP)
+        want = ('uv pip install --python /opt/py/bin/python3 '
+                '"boost-skill-cli[rag]"')
         assert dense.install_extra() == want
         assert "`%s`" % want in dense.fix_hint("no-backend")
 
@@ -139,8 +149,8 @@ class TestItRunsInZsh:
     """zsh globs an unquoted `[rag]`, and a failed glob is an error there."""
 
     @pytest.mark.parametrize("method", [selfupdate.PIP, selfupdate.PIPX,
-                                        selfupdate.UV_TOOL, selfupdate.GIT,
-                                        selfupdate.UNKNOWN])
+                                        selfupdate.UV_TOOL, selfupdate.UV_PIP,
+                                        selfupdate.GIT, selfupdate.UNKNOWN])
     def test_every_surface_command_survives_zsh(self, installed_with, method):
         installed_with(method)
         want = ("%s[rag]" % dense.paths.repo_root()
