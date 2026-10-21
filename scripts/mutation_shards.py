@@ -732,7 +732,26 @@ def measured_partition(root: Path, path: Path) -> list[str]:
         return []
     if not set(recorded) <= set(names):
         return []
+    # Methods are the mutants the per-function patterns cannot reach: mutmut
+    # names them `<module>.xǁ<Class>ǁ<method>__mutmut_<n>`, so a module split
+    # into `x_<fn>` units with a class that has methods left those unrun — and
+    # the merge, correctly, refused to gate (catalog.py: "6/1403 mutants
+    # unrun", the first method there to carry any). One more unit addresses
+    # every method at once; `ǁ` can never follow `x_`, so it stays disjoint.
+    if _has_methods(tree):
+        names.append(METHODS)
     return names
+
+
+#: The ``Unit.symbol`` that stands for every method of every class in a file.
+METHODS = "ǁ"
+
+
+def _has_methods(tree: ast.Module) -> bool:
+    """Whether any top-level class in ``tree`` defines a method."""
+    return any(isinstance(node, ast.ClassDef) and any(
+        isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for m in node.body) for node in tree.body)
 
 
 def unit_weight(root: Path, unit: Unit) -> int:
@@ -831,6 +850,8 @@ def pattern_for(root: Path, path: Path):
     dotted = "%s.%s" % (SOURCE.as_posix().replace("/", "."), rel.replace("/", "."))
     if unit.symbol is None:
         return "%s.*" % dotted
+    if unit.symbol == METHODS:
+        return "%s.x%s*" % (dotted, METHODS)
     # mutmut mangles `install` to `x_install` and `_install_rule` to
     # `x__install_rule`, then appends `__mutmut_<n>`. Anchoring on that suffix
     # rather than trailing straight off the name is what keeps `install` from
