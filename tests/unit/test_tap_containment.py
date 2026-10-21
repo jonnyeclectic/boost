@@ -1,6 +1,6 @@
 # Copyright the boost contributors.
 # SPDX-License-Identifier: Apache-2.0
-"""Functional tests: nothing outside a tap's clone is indexed, read or installed.
+"""Nothing outside a tap's clone is indexed, read or installed.
 
 A tap is somebody else's repo, and git stores a symlink as a symlink. A
 ``skills/ssh-helper/SKILL.md -> ../../../../../.ssh/id_rsa`` put the key in the
@@ -190,6 +190,14 @@ class TestReadsRefuseAnEscapingFile:
         assert r.rc != 0
         assert _REFUSED in r.err
         assert MARKER not in r.out + r.err
+
+    def test_adapt_refuses(self, tapped_evil):
+        from boost_cli.commands import pkg
+        _plant_stale("abs-leak", "skills/abs-leak/SKILL.md")
+        with pytest.raises(BoostError) as ei:
+            pkg._resolve_skill("abs-leak")
+        assert str(ei.value) == _REFUSED
+        assert MARKER not in str(ei.value)
 
     def test_a_rule_read_refuses(self, tapped_evil):
         _plant_stale("leak", "rules/leak.mdc", kind="rule")
