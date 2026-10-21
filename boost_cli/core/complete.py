@@ -240,9 +240,7 @@ def _values_taken(action: argparse.Action) -> int:
     """How many following words an option consumes: 0 for a switch, -1 for
     "every word up to the next flag" (``nargs='*'``/``'+'``)."""
     nargs = action.nargs
-    if nargs == 0:
-        return 0
-    if isinstance(nargs, int):
+    if isinstance(nargs, int):                  # 0 for store_true and kin
         return nargs
     if nargs in ("*", "+", argparse.REMAINDER):
         return -1
@@ -280,7 +278,8 @@ def _walk(parser: argparse.ArgumentParser, words: Sequence[str]) -> _Walk:
             state.pending = action if owed else None
             continue
         if owed:
-            owed -= 1 if owed > 0 else 0
+            if owed > 0:
+                owed -= 1
             if not owed:
                 state.pending = None
             continue

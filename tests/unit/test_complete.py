@@ -862,8 +862,24 @@ class TestFlagsAreNotPositionals:
         two = ap.add_argument("--two", nargs=2)
         many = ap.add_argument("--many", nargs="*")
         some = ap.add_argument("--some", nargs="+")
-        assert [complete._values_taken(a) for a in (sw, one, opt, two, many,
-                                                    some)] == [0, 1, 1, 2, -1, -1]
+        exact = ap.add_argument("--exact", nargs=1)
+        rest = ap.add_argument("--rest", nargs=argparse.REMAINDER)
+        assert [complete._values_taken(a) for a in (
+            sw, one, opt, two, many, some, exact, rest)] == [
+            0, 1, 1, 2, -1, -1, 1, -1]
+
+    def test_a_subcommand_word_in_an_earlier_positional_slot_is_a_value(self):
+        # argparse fills `name` first, so `map` there is a name, not the
+        # subcommand — only the word at the subparsers' own slot switches.
+        import argparse
+        ap = argparse.ArgumentParser()
+        ap.add_argument("name")
+        sub = ap.add_subparsers(dest="action")
+        sp = sub.add_parser("map")
+        walk = complete._walk(ap, ["map"])
+        assert walk.parser is ap and walk.positionals == ["map"]
+        walk = complete._walk(ap, ["map", "map"])
+        assert walk.parser is sp and walk.positionals == []
 
     def test_a_fixed_arity_flag_consumes_exactly_its_values(self):
         import argparse
