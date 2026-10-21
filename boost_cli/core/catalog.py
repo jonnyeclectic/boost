@@ -445,8 +445,10 @@ def drop_case_collisions(entries: list[dict], groups: list[list[str]]
     one item, named the other, and installed a mix of the two that doctor and
     verify called healthy. An item is dropped when its defining file is one
     of the colliding paths, or a colliding path sits inside its directory
-    (a skill at the repo root holds them all), since neither spelling can be
-    told from the copy on disk. The second value lists the colliding paths
+    (a skill at the repo root holds them all), or its directory is itself
+    one of a group of colliding dirs (``skills/Lint/`` beside
+    ``skills/lint/``, which merge with no file colliding), since neither
+    spelling can be told from the copy on disk. The second value lists the colliding paths
     that touched a dropped item, for the warning.
     """
     if not groups:
@@ -458,7 +460,11 @@ def drop_case_collisions(entries: list[dict], groups: list[list[str]]
         own = _fold(e["skill_md"])
         if (e.get("kind") or KIND_SKILL) == KIND_SKILL:
             inside = "" if e["rel_dir"] == "." else _fold(e["rel_dir"]) + "/"
-            touched = [k for k in folded if k.startswith(inside)]
+            # A file key inside the dir, or the dir itself spelled twice; a
+            # dir key nested deeper only merges this skill's own subdirs.
+            touched = [k for k in folded
+                       if (k == inside if k.endswith("/")
+                           else k.startswith(inside))]
         else:
             touched = [own] if own in folded else []
         if touched:

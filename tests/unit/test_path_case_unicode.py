@@ -180,7 +180,29 @@ class TestCaseCollisionsInOneTap:
     def test_a_case_insensitive_clone_names_the_twins(self, clone):
         _ignorecase(clone, True)
         assert gitutil.case_collisions(clone) == [
-            ["skills/Lint/SKILL.md", "skills/lint/SKILL.md"]]
+            ["skills/Lint/", "skills/lint/"],
+            ["skills/Lint/SKILL.md", "skills/lint/SKILL.md"],
+            ["skills/Lint/scripts/", "skills/lint/scripts/"]]
+
+    def test_dirs_sharing_no_file_name_still_collide(self, tmp_path):
+        """No file collides, yet ``skills/Lint`` checks out holding
+        ``skills/lint``'s script: the skill would install another's file."""
+        src = plumbing_repo(tmp_path / "src", {
+            "skills/Lint/SKILL.md": _skill("Lint"),
+            "skills/lint/scripts/lower.sh": "echo lower\n",
+            "Skills/other/SKILL.md": _skill("other"),
+        })
+        clone = tmp_path / "c"
+        gitutil.clone_shallow(str(src), clone)
+        _ignorecase(clone, True)
+        groups = gitutil.case_collisions(clone)
+        assert groups == [["Skills/", "skills/"],
+                          ["skills/Lint/", "skills/lint/"]]
+        kept, hit = catalog.drop_case_collisions(
+            [_e("skills/Lint", "skills/Lint/SKILL.md"),
+             _e("Skills/other", "Skills/other/SKILL.md")], groups)
+        assert [e["rel_dir"] for e in kept] == ["Skills/other"]
+        assert hit == ["skills/Lint/", "skills/lint/"]
 
     def test_a_case_sensitive_clone_has_none(self, clone):
         _ignorecase(clone, False)
@@ -224,7 +246,8 @@ class TestCaseCollisionsInOneTap:
         err = " ".join(capsys.readouterr().err.split())
         assert ("skipped 1 item in tap casetap whose paths differ only by "
                 "case, which this filesystem cannot hold apart: "
-                "skills/Lint/SKILL.md, skills/lint/SKILL.md") in err
+                "skills/Lint/, skills/Lint/SKILL.md, skills/lint/, "
+                "skills/lint/SKILL.md") in err
         with pytest.raises(BoostError):
             catalog.resolve_one("lint")
 
@@ -274,6 +297,17 @@ class TestDropCaseCollisions:
         kept, _ = catalog.drop_case_collisions(
             [_e(".", "SKILL.md")], LINT_GROUPS)
         assert kept == []
+
+    def test_a_dir_key_drops_only_the_skill_it_names(self):
+        """A twin dir is the skill's own dir (dropped), an ancestor of it or
+        a subdir inside it (each merges dirs, not two skills: kept)."""
+        groups = [["Skills/", "skills/"], ["skills/a/X/", "skills/a/x/"],
+                  ["skills/B/", "skills/b/"]]
+        kept, hit = catalog.drop_case_collisions(
+            [_e("skills/a", "skills/a/SKILL.md"),
+             _e("skills/b", "skills/b/SKILL.md")], groups)
+        assert [e["rel_dir"] for e in kept] == ["skills/a"]
+        assert hit == ["skills/B/", "skills/b/"]
 
     def test_a_workflow_is_dropped_only_for_its_own_file(self):
         groups = [["a/commands/Ship.md", "a/commands/ship.md"]]

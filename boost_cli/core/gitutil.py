@@ -590,14 +590,24 @@ def case_collisions(repo: Path) -> list[list[str]]:
     collided", which boost captures and never shows. Empty unless the clone
     records ``core.ignorecase`` (git sets it per clone after probing the
     filesystem), because on a case-sensitive one each path is its own file.
+
+    Directories are grouped too, each spelling with a trailing ``/``
+    (``["skills/Lint/", "skills/lint/"]``): two dirs that share no file name
+    still check out as one, so ``skills/Lint`` holds ``skills/lint``'s
+    scripts without any file colliding.
     """
     if not _ignorecase(Path(repo)):
         return []
     proc = run([*_RAW_PATHS, "-C", str(repo), "ls-files", "-z"], check=False)
     groups: dict[str, set[str]] = {}
     for path in (proc.stdout or "").split("\0"):
-        if path:
-            groups.setdefault(_fold(path), set()).add(path)
+        if not path:
+            continue
+        groups.setdefault(_fold(path), set()).add(path)
+        parts = path.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            spelled = "/".join(parts[:i]) + "/"
+            groups.setdefault(_fold(spelled), set()).add(spelled)
     return sorted(sorted(g) for g in groups.values() if len(g) > 1)
 
 
