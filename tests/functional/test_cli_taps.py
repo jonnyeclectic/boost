@@ -852,7 +852,7 @@ def _old_untap(name):
     def drop(cfg):
         cfg["taps"] = [t for t in cfg["taps"] if t["name"] != name]
     config.mutate(drop)
-    shutil.rmtree(paths.repos_dir() / name)
+    util.rmtree(paths.repos_dir() / name)
 
 
 class TestLegacyRowSource:
