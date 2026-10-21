@@ -131,7 +131,12 @@ def parse_spec(spec: str):
                 "%s is not a git repository" % p,
                 hint="`git init` it, or `boost import %s` to copy it in "
                      "without a tap" % spec)
-        return _checked(p.resolve().name, str(p.resolve()), spec)
+        # Whitespace folded to `-`: a tap name is one token in `tap:skill` and
+        # in a Boostfile line, so `boost tap "my tap"` named it `my tap` and
+        # `bundle dump` wrote a `tap my tap …` line that its own `bundle
+        # install` read as a tap called `my`.
+        return _checked(_WHITESPACE.sub("-", p.resolve().name),
+                        str(p.resolve()), spec)
     # A spec shaped like a path (starts with ./, ../, ~, or a root separator,
     # or is absolute) that is not an actual directory must not fall through to
     # the owner/repo branch below — that branch prepends
@@ -168,6 +173,7 @@ def parse_spec(spec: str):
                     hint="use owner/repo, a git URL, or a local directory")
 
 
+_WHITESPACE = re.compile(r"\s+")
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 
 

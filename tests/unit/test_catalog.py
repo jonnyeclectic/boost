@@ -118,6 +118,54 @@ class TestScanDir:
         (e,) = catalog.scan_dir(root)
         assert e["name"] == "my-cool-skill"
 
+    def test_two_cjk_names_get_two_names_from_their_dirs(self, tmp_path):
+        # Every non-ASCII name slugged to `skill`, so one tap shipping two
+        # different names read as one name shipped twice.
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "jp", "---\nname: \u65e5\u672c\u8a9e\n---")
+        write_skill(root / "skills" / "kr", "---\nname: \ud55c\uad6d\uc5b4\n---")
+        assert [e["name"] for e in catalog.scan_dir(root)] == ["jp", "kr"]
+
+    def test_original_non_ascii_name_resolves(self, tmp_path):
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "jp", "---\nname: \u65e5\u672c\u8a9e\n---")
+        entries = catalog.scan_dir(root, tap_name="t")
+        (hit,) = catalog.find("\u65e5\u672c\u8a9e", entries=entries)
+        assert hit["name"] == "jp"
+        assert catalog.find("t:\u65e5\u672c\u8a9e", entries=entries) == [hit]
+        assert catalog.find("jp", entries=entries) == [hit]
+
+    def test_alias_never_indexes_a_safe_name(self, tmp_path):
+        # A safe frontmatter name IS the entry name; indexing it as an alias of
+        # a differently-named entry would let it shadow that name.
+        e = _entry("x", "t", meta={"name": "other"})
+        assert catalog.find("other", entries=[e]) == []
+        assert catalog.find("x", entries=[e]) == [e]
+
+    def test_alias_ignores_non_dict_meta(self):
+        e = dict(_entry("x", "t"), meta="garbage")
+        assert catalog.find("x", entries=[e]) == [e]
+
+    def test_entry_slug_cases(self):
+        slug = catalog._entry_slug
+        assert slug("ok_name-1.2", "d") == "ok_name-1.2"
+        assert slug("My Cool Skill", "d") == "my-cool-skill"
+        assert slug("caf\u00e9", "d") == "cafe"
+        # Nothing slug-able at all is the no-survivor case too, not `skill`.
+        assert slug("!!!", "d") == "d"
+        assert slug("\U0001f680", "e1") == "e1"
+        assert slug("\U0001f680", "..") != slug("\U0001f525", "..")
+        assert slug("\U0001f680", "..").startswith("skill-")
+        assert slug("\u65e5\u672c\u8a9e", "jp") == "jp"
+        # A directory that is no safe name either: a stable hash of the name.
+        assert slug("\u65e5\u672c\u8a9e", "\u65e5\u672c") == "skill-77710aed"
+        assert slug("\u65e5\u672c\u8a9e", "..") == "skill-77710aed"
+        # Partly lost: what survives, plus the hash, so two do not collide.
+        assert slug("\u65e5\u672c\u8a9e tools", "d") == "tools-0bb94d74"
+        assert slug("\ud55c\uad6d\uc5b4 tools", "d") != "tools-0bb94d74"
+        # Hash of the name as written, not of its accent-folded form.
+        assert slug("caf\u00e9 \u65e5\u672c", "d") == "cafe-5ce3bbb3"
+
     def test_name_without_spaces_kept_verbatim(self, tmp_path):
         root = tmp_path / "tap"
         write_skill(root / "s", "---\nname: WeirdCase\n---")

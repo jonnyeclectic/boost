@@ -27,6 +27,7 @@ import os
 import re
 import sys
 import threading
+import unicodedata
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -55,7 +56,10 @@ from . import (
 #        under its parent key instead of hoisting its keys to the top level,
 #        so a BOM file's meta/description/digest and a nested `author:` /
 #        `metadata:` file's name/version both change on rescan
-CACHE_FORMAT = 3
+#   4 -- a non-ASCII name is slugged by `_entry_slug` (accents folded, a
+#        name with no ASCII left takes its directory or a hash) instead of
+#        every CJK/Cyrillic name collapsing to `skill`
+CACHE_FORMAT = 4
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -200,6 +204,36 @@ def _entry_category(meta: dict, tap_category: str) -> str:
     return tap_category
 
 
+def _entry_slug(name: str, default_name: str) -> str:
+    """The catalog name for frontmatter ``name``: safe as a path component,
+    and distinct for distinct names.
+
+    ``util.safe_component`` keeps ``[a-z0-9-]`` and nothing else, so every CJK
+    or Cyrillic name became the generic ``skill`` — two in one tap read as one
+    name shipped twice, and neither was installable by what the tap calls it.
+    Accents are folded first (``café`` -> ``cafe``). A name that still loses
+    letters takes its directory (``skills/jp`` -> ``jp``) when nothing of it
+    survives, and otherwise keeps what survives plus a hash of the original,
+    so ``日本語 tools`` and ``한국어 tools`` are not both ``tools``. A name with
+    nothing slug-able at all (``🚀``, ``!!!``) is the same no-survivor case:
+    two emoji names must not both read as ``skill``. The hash is
+    of the name alone, so the slug is stable across scans and machines.
+    """
+    if util.is_safe_component(name):
+        return name
+    folded = "".join(c for c in unicodedata.normalize("NFKD", name)
+                     if not unicodedata.combining(c))
+    survived = util._slug_or_none(folded)
+    if survived and not any(c.isalnum() and not c.isascii() for c in folded):
+        return survived
+    digest = hashlib.sha256(name.encode("utf-8", "surrogateescape")).hexdigest()[:8]
+    if survived:
+        return survived + "-" + digest
+    if util.is_safe_component(default_name):
+        return default_name
+    return "skill-" + digest
+
+
 def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
                 tap_name: str, curated: bool, meta: dict, body: str,
                 tap_category: str = "") -> dict:
@@ -207,7 +241,7 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
     # Slugify anything that is not already a safe path component, not just names
     # containing a space: this name becomes a rule/workflow filename, so
     # `../../..` has to be neutralized at index time too, not only at the sinks.
-    slug = util.safe_component(name)
+    slug = _entry_slug(name, default_name)
     description = _description(meta, body)
     item_dir = defining_file.parent
     return {
@@ -759,6 +793,15 @@ def _name_index(pool: list[dict]) -> dict[str, list[dict]]:
         index: dict[str, list[dict]] = {}
         for e in pool:
             index.setdefault(e["name"], []).append(e)
+            # The name the tap wrote, when the catalog had to slug it
+            # (`日本語` -> `jp`), so `boost install 日本語` finds what the tap
+            # calls it. Only an unsafe original is indexed, and no slug is
+            # ever unsafe, so an alias can never shadow another entry's name.
+            meta = e.get("meta")
+            original = _text(meta, "name") if isinstance(meta, dict) else ""
+            if original and original != e["name"] \
+                    and not util.is_safe_component(original):
+                index.setdefault(original, []).append(e)
         _NAME_INDEX.pop(key, None)
         while len(_NAME_INDEX) >= _NAME_INDEX_SLOTS:
             del _NAME_INDEX[next(iter(_NAME_INDEX))]
