@@ -221,9 +221,11 @@ class TestMaterialize:
         gitutil.materialize(tmp_path / "repo", "skills/foo")
 
         argv = seen["argv"]
-        assert "sparse-checkout" in argv
-        assert "add" in argv, "materialize must not clobber the existing cone"
-        assert "/skills/foo/*" in argv
+        add = next(c for c in seen["calls"] if "sparse-checkout" in c)
+        assert "add" in add, "materialize must not clobber the existing cone"
+        assert "/skills/foo/*" in add
+        assert argv[-3:] == ["ls-files", "-t", "-z"], (
+            "the widened dir must be checked before anything copies it")
 
     def test_materializing_the_repo_root_is_a_noop(self, monkeypatch, tmp_path):
         """rel_dir "." means the whole repo is the skill; nothing to narrow."""
@@ -373,8 +375,8 @@ class TestMaterializePaths:
         repo = self._repo(tmp_path)
         gitutil.materialize_paths(repo, ["/shared/helper.py", "lib", ".", ""])
         assert seen["calls"] == [[
-            "git", "-C", str(repo), "sparse-checkout", "add",
-            "/shared/helper.py", "/shared/helper.py/*", "/lib", "/lib/*"]]
+            "git", "-c", "core.precomposeunicode=false", "-C", str(repo),
+            "sparse-checkout", "add", "/shared/helper.py", "/shared/helper.py/*", "/lib", "/lib/*"]]
 
     def test_patterns_already_present_are_not_added_again(self, monkeypatch,
                                                           tmp_path):
@@ -395,8 +397,8 @@ class TestMaterializePaths:
         assert "calls" not in seen, "an escaped pattern must count as present"
         gitutil.materialize_paths(repo, ["s/h?.py"])
         assert seen["calls"] == [[
-            "git", "-C", str(repo), "sparse-checkout", "add",
-            "/s/h\\?.py", "/s/h\\?.py/*"]]
+            "git", "-c", "core.precomposeunicode=false", "-C", str(repo),
+            "sparse-checkout", "add", "/s/h\\?.py", "/s/h\\?.py/*"]]
 
     def test_a_full_clone_is_left_alone(self, monkeypatch, tmp_path):
         seen = _clone_argv(monkeypatch)
@@ -456,8 +458,11 @@ class TestSparseLock:
         stale.write_text("", encoding="utf-8")
         calls = self._git(monkeypatch, self.BUSY)
         gitutil.materialize(repo, "skills/a")
-        assert calls == [["-C", str(repo), "sparse-checkout", "add",
-                          "/skills/a/*"]] * 2
+        add = ["-c", "core.precomposeunicode=false", "-C", str(repo),
+               "sparse-checkout", "add", "/skills/a/*"]
+        verify = ["-c", "core.precomposeunicode=false", "-C", str(repo),
+                  "ls-files", "-t", "-z"]
+        assert calls == [add, add, verify]
         assert not stale.exists()
 
     def test_a_lock_that_comes_back_says_so_not_network(self, monkeypatch,
@@ -519,8 +524,8 @@ class TestSparseLock:
             "*.md\n/skills/a/*\n", encoding="utf-8")
         calls = self._git(monkeypatch)
         gitutil._sparse_add(repo, ["/skills/a/*", "/skills/b/*"], "x")
-        assert calls == [["-C", str(repo), "sparse-checkout", "add",
-                          "/skills/b/*"]]
+        assert calls == [["-c", "core.precomposeunicode=false", "-C",
+                          str(repo), "sparse-checkout", "add", "/skills/b/*"]]
         calls.clear()
         gitutil._sparse_add(repo, ["/skills/a/*"], "x")
         assert calls == []
