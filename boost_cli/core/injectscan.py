@@ -227,7 +227,7 @@ def _joinable(ch: str) -> bool:
     """True for a non-ASCII letter, combining mark or emoji-ish symbol.
 
     ASCII is excluded on purpose: a joiner between two Latin letters has no
-    rendering job to do, so ``ig<ZWNJ>nore`` stays a finding.
+    rendering job to do, so ``ignore`` split by a ZWNJ stays a finding.
     """
     if ord(ch) < 0x80:
         return False
