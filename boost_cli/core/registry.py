@@ -656,6 +656,37 @@ def _reclone(tap: Tap, pin: str | None) -> None:
             hint="retry `boost update %s`" % tap.name) from exc
 
 
+def ensure_cloned(tap: Tap) -> bool:
+    """Clone a registered tap that has no clone, **at its pin**. True if it
+    cloned.
+
+    The path every consumer of a tap's files takes when the clone is missing
+    (`store.source_dir_for`, so `drift`, `info`, `install`). It used to be a
+    bare `clone_shallow`, which landed on HEAD while config.json kept the pin:
+    a read-only `boost drift` moved the tap, `update` then answered "pinned at
+    <pin> (skipped)" for a clone that was not, and `heal` rescanned the catalog
+    to match the wrong tree. Routed through :func:`_reclone`, the same staged,
+    sparse, pinned clone `update` uses for a missing clone.
+    """
+    if tap.is_cloned:
+        return False
+    _reclone(tap, tap.pin or None)
+    return True
+
+
+def off_pin(tap: Tap) -> str | None:
+    """The clone's HEAD when ``tap`` is pinned and its clone is not at the
+    pin, else ``None``.
+
+    ``None`` too when the answer is unknowable (no git, no clone, an
+    unresolvable HEAD): an unread HEAD is not evidence of a move.
+    """
+    if not tap.pin or not tap.is_cloned or not gitutil.has_git():
+        return None
+    head = gitutil.head_commit(tap.path)
+    return head if head and head.lower() != tap.pin.lower() else None
+
+
 def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
     """Clone one tap without touching config. Never raises.
 
@@ -1100,6 +1131,17 @@ def update(name: str | None = None,
             # like nothing at all. Not an error, because "update
             # everything" over 400 taps should not fail because three are
             # pinned.
+            #
+            # Unless the clone is not *at* the pin (a hand checkout, or a
+            # clone some older path made at HEAD): "skipped" would then name
+            # a commit the tree does not sit on, forever. Put it back — the
+            # remedy doctor prints for exactly this — and report it as a
+            # move, so the caller rescans the catalog and resyncs vectors.
+            head = off_pin(tap)
+            if head:
+                gitutil.checkout_commit(tap.path, tap.pin)
+                return ("%s → %s (back on its pin)"
+                        % (head[:7], tap.pin[:7]), False)
             return "pinned at %s (skipped)" % tap.pin[:7], False
         return gitutil.pull(tap.path), bool(tap.pin)
 

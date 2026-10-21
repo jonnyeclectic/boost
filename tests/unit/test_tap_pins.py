@@ -299,3 +299,120 @@ class TestPinFailureStillCleansUp:
         # have every shard for it refused later, three steps from the cause.
         assert registry.list_taps() == []
         assert not (paths.repos_dir() / "o__a").exists()
+
+
+class TestEnsureClonedHonoursThePin:
+    """`store.source_dir_for` re-clones a missing tap through this, so a
+    read-only `boost drift` must not move a pinned tap onto HEAD."""
+
+    def test_a_missing_pinned_clone_lands_on_its_pin(self, sandbox,
+                                                     fake_clone):
+        registry.add("o/a", at=SHA)
+        tap = registry.list_taps()[0]
+        util.rmtree(tap.path)
+        fake_clone["checkouts"].clear()
+
+        assert registry.ensure_cloned(tap) is True
+
+        assert tap.is_cloned
+        assert fake_clone["checkouts"] == [("o__a.boost-reclone", SHA)]
+        assert registry.list_taps()[0].pin == SHA
+
+    def test_an_unpinned_missing_clone_checks_nothing_out(self, sandbox,
+                                                          fake_clone):
+        registry.add("o/a")
+        tap = registry.list_taps()[0]
+        util.rmtree(tap.path)
+
+        assert registry.ensure_cloned(tap) is True
+
+        assert tap.is_cloned
+        assert fake_clone["checkouts"] == []
+
+    def test_a_present_clone_is_left_alone(self, sandbox, fake_clone,
+                                           monkeypatch):
+        registry.add("o/a", at=SHA)
+        tap = registry.list_taps()[0]
+        calls = []
+        monkeypatch.setattr(gitutil, "clone_shallow",
+                            lambda *a, **k: calls.append(a))
+
+        assert registry.ensure_cloned(tap) is False
+
+        assert calls == []
+
+
+class TestOffPin:
+    def _tap(self, pin=SHA):
+        registry.add("o/a", at=pin or None)
+        return registry.list_taps()[0]
+
+    def test_head_elsewhere_is_reported(self, sandbox, fake_clone,
+                                        monkeypatch):
+        tap = self._tap()
+        monkeypatch.setattr(gitutil, "head_commit", lambda repo: "b" * 40)
+        assert registry.off_pin(tap) == "b" * 40
+
+    def test_head_on_the_pin_is_none(self, sandbox, fake_clone, monkeypatch):
+        tap = self._tap()
+        monkeypatch.setattr(gitutil, "head_commit", lambda repo: SHA)
+        assert registry.off_pin(tap) is None
+
+    def test_case_of_the_hash_does_not_matter(self, sandbox, fake_clone,
+                                              monkeypatch):
+        tap = self._tap()
+        monkeypatch.setattr(gitutil, "head_commit", lambda repo: SHA.upper())
+        assert registry.off_pin(tap) is None
+
+    def test_an_unreadable_head_is_not_evidence(self, sandbox, fake_clone,
+                                                monkeypatch):
+        tap = self._tap()
+        monkeypatch.setattr(gitutil, "head_commit", lambda repo: "")
+        assert registry.off_pin(tap) is None
+
+    def test_no_git_is_not_evidence(self, sandbox, fake_clone, monkeypatch):
+        tap = self._tap()
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+        monkeypatch.setattr(gitutil, "head_commit", lambda repo: "b" * 40)
+        assert registry.off_pin(tap) is None
+
+    def test_an_unpinned_tap_is_never_off_pin(self, sandbox, fake_clone,
+                                              monkeypatch):
+        tap = self._tap(pin="")
+        monkeypatch.setattr(gitutil, "head_commit", lambda repo: "b" * 40)
+        assert registry.off_pin(tap) is None
+
+    def test_a_missing_clone_is_not_off_pin(self, sandbox, fake_clone,
+                                            monkeypatch):
+        tap = self._tap()
+        util.rmtree(tap.path)
+        monkeypatch.setattr(gitutil, "head_commit", lambda repo: "b" * 40)
+        assert registry.off_pin(tap) is None
+
+
+class TestUpdateReturnsAnOffPinClone:
+    def test_checks_the_pin_back_out_and_reports_a_move(self, sandbox,
+                                                        fake_clone,
+                                                        monkeypatch):
+        registry.add("o/a", at=SHA)
+        fake_clone["checkouts"].clear()
+        monkeypatch.setattr(gitutil, "head_commit", lambda repo: "b" * 40)
+
+        results, failures = registry.update()
+
+        assert failures == {}
+        assert results["o/a"] == "bbbbbbb → aaaaaaa (back on its pin)"
+        assert fake_clone["checkouts"] == [("o__a", SHA)]
+        assert fake_clone["pulls"] == []
+        assert registry.list_taps()[0].pin == SHA
+
+    def test_a_clone_on_its_pin_is_still_skipped(self, sandbox, fake_clone,
+                                                 monkeypatch):
+        registry.add("o/a", at=SHA)
+        fake_clone["checkouts"].clear()
+        monkeypatch.setattr(gitutil, "head_commit", lambda repo: SHA)
+
+        results, _ = registry.update()
+
+        assert results["o/a"] == "pinned at aaaaaaa (skipped)"
+        assert fake_clone["checkouts"] == []

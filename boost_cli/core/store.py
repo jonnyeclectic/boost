@@ -457,8 +457,8 @@ def source_dir_for(entry: dict) -> Path:
         raise BoostError("%s is a %s, not a skill: it has no source directory"
                          % (entry["name"], kind))
     tap = registry.get(entry["tap"])
-    if not tap.is_cloned:
-        gitutil.clone_shallow(tap.url, tap.path)
+    # At its pin, never HEAD: see registry.ensure_cloned.
+    registry.ensure_cloned(tap)
     src = tap.path if entry["rel_dir"] == "." else tap.path / entry["rel_dir"]
     gitutil.materialize(tap.path, entry["rel_dir"])
     if not (src / "SKILL.md").exists():

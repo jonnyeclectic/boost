@@ -11,6 +11,7 @@ which `store.source_dir_for` does for anything with a reachable URL.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import ClassVar
 
 from boost_cli.commands import quality
@@ -30,6 +31,35 @@ class TestDriftHintSourceMissing:
         assert (quality._drift_hint("brainstorming", "source-missing",
                                     "owner/repo")
                 == "boost update")
+
+    @staticmethod
+    def _configured(monkeypatch, cloned, broken=False):
+        tap = SimpleNamespace(name="owner/repo", is_cloned=cloned,
+                              is_broken_clone=broken)
+        other = SimpleNamespace(name="owner/other", is_cloned=True,
+                                is_broken_clone=False)
+        monkeypatch.setattr(quality.registry, "is_tapped", lambda name: True)
+        monkeypatch.setattr(quality.registry, "list_taps",
+                            lambda: [other, tap])
+
+    def test_healthy_clone_without_the_entry_hints_uninstall(self,
+                                                             monkeypatch):
+        """Removed upstream: `update` answers "no longer in tap — leaving
+        as-is", so hinting it looped. Worded as `outdated` words it."""
+        self._configured(monkeypatch, cloned=True)
+        assert (quality._drift_hint("brainstorming", "source-missing",
+                                    "owner/repo")
+                == "boost uninstall brainstorming, or keep as-is")
+
+    def test_missing_clone_still_hints_update(self, monkeypatch):
+        self._configured(monkeypatch, cloned=False)
+        assert (quality._drift_hint("brainstorming", "source-missing",
+                                    "owner/repo") == "boost update")
+
+    def test_broken_clone_still_hints_update(self, monkeypatch):
+        self._configured(monkeypatch, cloned=True, broken=True)
+        assert (quality._drift_hint("brainstorming", "source-missing",
+                                    "owner/repo") == "boost update")
 
 
 class TestDriftHintOtherStatuses:
