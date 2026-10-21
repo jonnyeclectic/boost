@@ -360,6 +360,11 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
         raise BoostError("tap %s is not cloned" % tap.name,
                         hint="run `boost update %s`" % tap.name)
     entries = scan_dir(tap.path, tap.name, tap.curated)
+    if not tap.owns_cache_file:
+        # Its cache path is one of boost's own indexes (a tap configured
+        # before `add` refused the name): the scan is the answer, and writing
+        # it would replace the BM25 index. See registry.Tap.owns_cache_file.
+        return entries
     payload = json.dumps({
         "tap": tap.name,
         "url": tap.url,
@@ -415,6 +420,8 @@ def _cache_record(tap: registry.Tap) -> tuple[list[dict], bool, str] | None:
     """``(skills, is_current, commit)`` for a tap's cache, or ``None`` when
     the file is missing, unreadable or corrupt. ``commit`` is the HEAD the
     cache was scanned at (``""`` when it never recorded one)."""
+    if not tap.owns_cache_file:
+        return None     # boost's own index, never this tap's catalog
     p = tap.cache_file
     key = str(p)
     try:
