@@ -369,3 +369,40 @@ class TestBuiltinRegister:
         builtin.ensure_tap()
         assert paths.config_path().read_bytes() == before
         assert [t.name for t in registry.list_taps()] == [builtin.BUILTIN_TAP]
+
+
+class TestProjectPinRereads:
+    """`store.set_project_pin` decides on the row it reads under the lock."""
+
+    def test_a_row_removed_after_the_unlocked_check_is_not_resurrected(
+            self, sandbox, monkeypatch):
+        from boost_cli.core import store
+        repo = sandbox / "repo"
+        projectlock.set_skill(repo, "keep", {"version": "1"})
+        lock = projectlock.lock_path(repo)
+        before = lock.stat()
+        # The unlocked probe still sees "x"; another process removed it
+        # before this one took the lock.
+        monkeypatch.setattr(projectlock, "get_skill",
+                            lambda base, name: {"version": "1"})
+        assert store.set_project_pin(repo, "x", True) is None
+        # Not rewritten at all: a rewrite is an os.replace, a new inode.
+        after = lock.stat()
+        assert (after.st_ino, after.st_mtime_ns) == \
+            (before.st_ino, before.st_mtime_ns)
+
+    def test_pinning_keeps_rows_another_process_wrote(self, sandbox,
+                                                      monkeypatch):
+        from boost_cli.core import store
+        repo = sandbox / "repo"
+        projectlock.set_skill(repo, "x", {"version": "1", "commit_pin": "c"})
+        real = projectlock.get_skill
+
+        def probe(base, name):
+            row = real(base, name)
+            projectlock.set_skill(base, "other", {"version": "2"})
+            return row
+        monkeypatch.setattr(projectlock, "get_skill", probe)
+        assert store.set_project_pin(repo, "x", False) == {"version": "1"}
+        assert projectlock.installed(repo) == {
+            "x": {"version": "1"}, "other": {"version": "2"}}
