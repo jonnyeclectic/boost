@@ -603,6 +603,24 @@ class TestHeldStoreCopy:
         assert util.sha256_dir(self._store()) == before
         assert not os.path.lexists(self._held())
 
+    def test_a_failed_move_puts_the_earlier_copies_back(self, brainstorming,
+                                                         monkeypatch):
+        self._legacy_quarantine()
+        monkeypatch.setattr(store, "unheld_withheld",
+                            lambda: ["brainstorming", "second"])
+        real = store.hold_store_copy
+
+        def hold(name):
+            if name == "second":
+                raise OSError("busy")
+            return real(name)
+        monkeypatch.setattr(store, "hold_store_copy", hold)
+        with pytest.raises(OSError):
+            store.hold_legacy_copies()
+        assert os.path.isdir(self._store())
+        assert not os.path.lexists(self._held())
+        assert "held_at" not in lockfile.get_skill("brainstorming")
+
     def test_an_unreadable_lock_is_not_migrated(self, brainstorming):
         self._legacy_quarantine()
         paths.lockfile_path().write_text("{not json", encoding="utf-8")

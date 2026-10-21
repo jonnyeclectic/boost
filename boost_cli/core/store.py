@@ -5112,7 +5112,14 @@ def hold_legacy_copies(dry: bool = False) -> list[str]:
     held: dict[str, str] = {}
     for name in unheld_withheld():
         if not dry:
-            where = hold_store_copy(name)
+            try:
+                where = hold_store_copy(name)
+            except BaseException:
+                # A move that fails part way through the list must not leave
+                # the earlier copies held aside with no `held_at` to say so.
+                for done in held:
+                    restore_store_copy(done)
+                raise
             if where is None:
                 continue
             held[name] = where
