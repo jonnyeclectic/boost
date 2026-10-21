@@ -214,18 +214,21 @@ def _entry_slug(name: str, default_name: str) -> str:
     Accents are folded first (``café`` -> ``cafe``). A name that still loses
     letters takes its directory (``skills/jp`` -> ``jp``) when nothing of it
     survives, and otherwise keeps what survives plus a hash of the original,
-    so ``日本語 tools`` and ``한국어 tools`` are not both ``tools``. The hash is
+    so ``日本語 tools`` and ``한국어 tools`` are not both ``tools``. A name with
+    nothing slug-able at all (``🚀``, ``!!!``) is the same no-survivor case:
+    two emoji names must not both read as ``skill``. The hash is
     of the name alone, so the slug is stable across scans and machines.
     """
     if util.is_safe_component(name):
         return name
     folded = "".join(c for c in unicodedata.normalize("NFKD", name)
                      if not unicodedata.combining(c))
-    if not any(c.isalnum() and not c.isascii() for c in folded):
-        return util.slugify(folded)
+    survived = util._slug_or_none(folded)
+    if survived and not any(c.isalnum() and not c.isascii() for c in folded):
+        return survived
     digest = hashlib.sha256(name.encode("utf-8", "surrogateescape")).hexdigest()[:8]
-    if re.search(r"[A-Za-z0-9]", folded):
-        return util.slugify(folded) + "-" + digest
+    if survived:
+        return survived + "-" + digest
     if util.is_safe_component(default_name):
         return default_name
     return "skill-" + digest

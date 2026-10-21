@@ -151,7 +151,11 @@ class TestScanDir:
         assert slug("ok_name-1.2", "d") == "ok_name-1.2"
         assert slug("My Cool Skill", "d") == "my-cool-skill"
         assert slug("caf\u00e9", "d") == "cafe"
-        assert slug("!!!", "d") == "skill"
+        # Nothing slug-able at all is the no-survivor case too, not `skill`.
+        assert slug("!!!", "d") == "d"
+        assert slug("\U0001f680", "e1") == "e1"
+        assert slug("\U0001f680", "..") != slug("\U0001f525", "..")
+        assert slug("\U0001f680", "..").startswith("skill-")
         assert slug("\u65e5\u672c\u8a9e", "jp") == "jp"
         # A directory that is no safe name either: a stable hash of the name.
         assert slug("\u65e5\u672c\u8a9e", "\u65e5\u672c") == "skill-77710aed"
