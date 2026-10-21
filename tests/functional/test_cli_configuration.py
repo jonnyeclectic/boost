@@ -3145,6 +3145,22 @@ class TestTypedValues:
         # Shown as the default, but it is not one.
         assert "all values at defaults" not in boost("policy", "list").out
 
+    @pytest.mark.parametrize("key, raw, expected, spec", [
+        ("blocked_skills", '{"cowboy-coding": true}',
+         "a comma-separated list, or a JSON array", "list"),
+        ("pin_only", "frozen",
+         "a boolean (true/false, yes/no, on/off, 1/0)", "bool"),
+        ("max_skills", "2.5", "a whole number, or null for no limit",
+         "int-or-null"),
+    ])
+    def test_policy_set_refuses_what_policy_json_could_not_hold(
+            self, boost, sandbox, key, raw, expected, spec):
+        r = boost("policy", "set", key, raw, expect=1)
+        err = " ".join(r.err.split())
+        assert "Error: %s expects %s" % (key, expected) in err
+        assert "try `boost policy set %s <%s>`" % (key, spec) in err
+        assert not paths.policy_path().exists()
+
     def test_an_unreadable_policy_value_fails_closed(self, boost, tapped):
         # `{"blocked_skills": {...}}` read as an empty blocklist: the blocked
         # skill installed, check passed and doctor said healthy.
