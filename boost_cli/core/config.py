@@ -611,9 +611,18 @@ def check_value(dotted: str, value: Any, raw: Any = None) -> Any:
     Returns the canonical spelling of a choice. Raises
     :class:`typedvalue.ValueTypeError` naming what is allowed; ``raw`` is
     what the user typed (or what was stored), for the error, defaulting to
-    ``value``. Used by `set_value` and by readers of a stored value.
+    ``value``. Used by `set_value` and by readers of a stored value. An
+    ``agents.<name>.dir`` must not be relative (:func:`agents.check_dir`).
     """
     shown = value if raw is None else raw
+    parts = dotted.split(".")
+    if len(parts) == 3 and parts[0] == "agents" and parts[2] == "dir":
+        # Lazy: agents imports this module.
+        from . import agents
+        why = agents.check_dir(value)
+        if why:
+            raise typedvalue.ValueTypeError(dotted, shown, spec_for(dotted),
+                                            expected=why)
     choices = _choices(dotted)
     if choices is not None:
         for choice in choices:

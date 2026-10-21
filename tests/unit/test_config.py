@@ -355,8 +355,10 @@ class TestUnknownKeyWarning:
     def test_agent_keys_match_what_known_agents_reads(self, sandbox):
         # The list the warning checks against must be the one agents.py
         # actually consumes, or a real setting would be called a typo.
+        # `store_alias` is derived from the filesystem, not a setting.
         assert set(config.AGENT_KEYS) == set(
-            agents.known_agents()["claude-code"])
+            agents.known_agents()["claude-code"]) - set(agents.DERIVED_KEYS)
+        assert set(agents.FLAG_DEFAULTS) < set(config.AGENT_KEYS)
 
 
 class TestUnset:

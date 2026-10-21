@@ -2793,6 +2793,11 @@ def install(entry: dict, force: bool = False,
         return _install_project_skill(entry, force=force, only_agents=only_agents,
                                       base=base, via=via)
     name = entry["name"]
+    # Resolve the agent table before anything is written: a row it refuses (a
+    # relative or unset-${VAR} dir) used to raise after the copy, from inside
+    # the rollback's own unlink_agents, so the store kept a copy the lock did
+    # not record and the next install refused it as someone else's.
+    agents.known_agents()
     existing = check_existing(entry, force=force, kind="skill")
 
     # An upgrade or reinstall replaces a skill already counted, so it adds
@@ -6103,7 +6108,9 @@ def duplicate_discovery() -> list[DuplicateDiscovery]:
         # agents.dedupes_by_path.
         if agent in collapses:
             continue
-        if not adir.is_dir():
+        # A dir that *is* the store (agents.aliases_store) lists the store's
+        # own skills: every entry resolves into it and none is a duplicate.
+        if not adir.is_dir() or agents.aliases_store(adir):
             continue
         for entry in sorted(adir.iterdir()):
             if not resolves_into_store(entry):
