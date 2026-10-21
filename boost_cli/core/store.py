@@ -692,8 +692,10 @@ def backfill_source_dates(taps) -> list[str]:
                                  entry.get("commit") or "HEAD")
         if when is None:
             continue
-        lockfile.set_skill(name, {**entry, "source_updated_at": when})
-        done.append(name)
+        def date(row: dict, when: str = when) -> None:
+            row["source_updated_at"] = when
+        if lockfile.update_skill(name, date):
+            done.append(name)
     return done
 
 
@@ -973,8 +975,8 @@ def sideline(name: str, by: str) -> list[str]:
     lockfile.write() itself does not read.
     """
     removed = unlink_agents(name)
-    entry = lockfile.get_skill(name)
-    if entry is not None:
+
+    def aside(entry: dict) -> None:
         entry["sidelined_by"] = by
         # `agents` is defined as the links measured from disk, and the links
         # have just been removed — so leaving the old list had `boost list`
@@ -982,7 +984,7 @@ def sideline(name: str, by: str) -> list[str]:
         # `quarantine` clears it for the same reason; :func:`unsideline`
         # recomputes it, exactly as `quarantine --release` does.
         entry["agents"] = []
-        lockfile.set_skill(name, entry)
+    lockfile.update_skill(name, aside)
     return removed
 
 
@@ -996,13 +998,13 @@ def unsideline(name: str) -> InstallResult:
     the one ending it.
     """
     res = link_agents(name, keep_theirs=True)
-    entry = lockfile.get_skill(name)
-    if entry is not None:
+
+    def relinked(entry: dict) -> None:
         # Record the links this just made, since sideline() emptied the list,
         # and the agents that refused, so a later reinstall retries them.
         record_links(entry, res)
         entry.pop("sidelined_by", None)
-        lockfile.set_skill(name, entry)
+    lockfile.update_skill(name, relinked)
     return res
 
 
@@ -2040,6 +2042,27 @@ def _refuse_self_installing(entry: dict) -> None:
         hint="run the registry's own installer: %s" % cmd, wrap=True)
 
 
+def record_rebuilt(name: str, row: dict) -> None:
+    """Write skill ``name``'s rebuilt ``row``, carrying the user state of the
+    row as it is *under the lock*.
+
+    An install's ``existing`` row is read by :func:`check_existing` before a
+    copy that can take seconds, and carrying ``tags`` and ``pinned`` from it
+    dropped a `boost tag` or `pin` landed meanwhile. ``row`` holds the derived
+    fields; ``installed_at``, ``pinned``, ``tags`` and
+    :func:`carried_user_state` come from the held row here, at the write.
+    """
+    def put(lock: dict) -> None:
+        held = lock["skills"].get(name) or {}
+        new = row.copy()
+        new["installed_at"] = held.get("installed_at", row["installed_at"])
+        new["pinned"] = bool(held.get("pinned"))
+        new["tags"] = held.get("tags", [])
+        new.update(carried_user_state(held))
+        lock["skills"][name] = new
+    lockfile.mutate(put)
+
+
 def carried_user_state(existing: dict | None) -> dict:
     """The user-set lock fields a re-install must carry that it does not rebuild.
 
@@ -2258,7 +2281,7 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
     res.mcp_servers = declared_mcp_servers(dest)
 
     now = util.now_iso()
-    lockfile.set_skill(name, {
+    record_rebuilt(name, {
         "version": entry.get("version", "0.0.0"),
         "tap": entry["tap"],
         # Where the tap came from, so a drift hint can re-tap it after
@@ -2267,9 +2290,9 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
         "source_dir": entry.get("rel_dir", "."),
         "commit": gitutil.head_commit(tap.path),
         "sha256": util.sha256_dir(dest),
-        "installed_at": (existing or {}).get("installed_at", now),
+        # record_rebuilt carries the held one, with pinned/tags/commit_pin.
+        "installed_at": now,
         "updated_at": now,
-        "pinned": bool((existing or {}).get("pinned")),
         "quarantined": False,
         # `agents` is what IS linked; `only_agents` is what the user ASKED for.
         # sync needs the second: it links a skill into every enabled agent, and
@@ -2283,8 +2306,6 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
         # other symlinks lived on — a divergence no boost command could see.
         "agents": linked_agents(name),
         "only_agents": declared_agent_scope(only_agents, existing),
-        "tags": (existing or {}).get("tags", []),
-        **carried_user_state(existing),
         # The agents whose dir refused the link, so `install --force` retries
         # them once the dir is fixed (preserved_agent_scope), and those whose
         # link could not be looked at, so uninstall does not forget it.
@@ -4639,7 +4660,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
     if declared:
         res.out_of_scope = [a for a in linked if a not in declared]
     now = util.now_iso()
-    lockfile.set_skill(name, {
+    record_rebuilt(name, {
         "version": str(meta.get("version") or "0.0.0"),
         "tap": tap_label,
         "source_dir": (repo_path(remote, src_dir) if remote
@@ -4647,11 +4668,11 @@ def install_from_path(src_dir: Path, name: str | None = None,
         "source_url": remote.url if remote else "",
         "commit": remote.commit if remote else "",
         "sha256": util.sha256_dir(dest),
-        "installed_at": (existing or {}).get("installed_at", now),
+        # record_rebuilt carries the held one, with pinned/tags/commit_pin.
+        "installed_at": now,
         "updated_at": now,
-        # Was hardcoded False, which did not merely skip the pin check — a
-        # re-import silently CLEARED an existing pin. install() preserves it.
-        "pinned": bool((existing or {}).get("pinned")),
+        # `pinned` and `tags` are record_rebuilt's: a re-import once wrote a
+        # hardcoded False, which silently CLEARED an existing pin.
         "quarantined": False,
         # What is on disk, not what this run linked — see install().
         "agents": linked,
@@ -4659,8 +4680,6 @@ def install_from_path(src_dir: Path, name: str | None = None,
         # has to record the same declaration — otherwise the links are narrow
         # but sync sees no scope and widens them right back.
         "only_agents": declared,
-        "tags": (existing or {}).get("tags", []),
-        **carried_user_state(existing),
         **({"refused_agents": refused} if (refused := unrecorded_agents(name, res))
            else {}),
     })
