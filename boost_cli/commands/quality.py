@@ -830,7 +830,16 @@ def cmd_doctor(argv):
     covered = store.covered_skills(coverage)
     skill_issues = 0
     quarantined_skills = 0
+    # Withheld by an older boost, which left the copy in the store: no agent
+    # link, so nothing below sees it, but Gemini CLI and Codex read the store.
+    unheld = set(store.unheld_withheld()) if lock_ok else set()
     for name, entry in sorted(skills.items()):
+        if name in unheld:
+            bad("skill-held", "%s skill %s is still in %s, where Gemini CLI "
+                "and Codex load it — run `boost heal`"
+                % ("quarantined" if entry.get("quarantined") else "sidelined",
+                   name, _tilde(paths.store_dir())), wrap=True)
+            skill_issues += 1
         sdir = store.copy_dir(name, entry)
         if not sdir.is_dir():
             # A pin over a moved source is a repair heal declines, so naming

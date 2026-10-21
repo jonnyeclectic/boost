@@ -1087,6 +1087,8 @@ def cmd_sync(argv: list[str]) -> int:
         # writes the next `boost sync` made.
         records = ([lockfile.older_line(integ, dry=True)]
                    if integ.problem == "older" else [])
+        records += store.hold_legacy_copies(dry=True)
+        records += store.backfill_tap_urls(dry=True)
         records += store.backfill_row_hashes(dry=True)
         for line in records:
             (out.warn if store.is_unrepaired(line) else out.info)(
@@ -1515,10 +1517,15 @@ def _source_changed_hold(label: str, name: str, lk: dict, tapname: str) -> bool:
         return False
     if not registry.source_changed(lk, tap):
         return False
-    out.warn("%s: not updated — tap %s now points at %s, not %s where it was "
-             "installed; `boost reinstall %s` takes the new source's copy"
-             % (label, tapname, _tilde(tap.url),
-                _tilde(str(lk.get("tap_url"))), name), wrap=True)
+    recorded = str(lk.get("tap_url") or "")
+    # A row older than `tap_url` names no URL to compare: what it knows is
+    # that the tap was added again after it was installed.
+    was = ("not %s where it was installed" % _tilde(recorded) if recorded
+           else "and was tapped again since it was installed, from a source "
+                "it did not record")
+    out.warn("%s: not updated — tap %s now points at %s, %s; `boost "
+             "reinstall %s` takes the new source's copy"
+             % (label, tapname, _tilde(tap.url), was, name), wrap=True)
     return True
 
 
@@ -1963,6 +1970,9 @@ def cmd_update(argv: list[str]) -> int:
         # `boost update --taps-only` exists precisely to notice that morning.
         return 1 if failures and not results else 0
 
+    # Before any comparison: a row with no `tap_url` is one
+    # `registry.source_changed` cannot protect.
+    store.backfill_tap_urls()
     upgraded = held = pinned_held = quarantined_held = 0
     # Both locks, so a `--local` skill is refreshed in the repo it lives in —
     # the user lock alone left it at its old version under "everything up to

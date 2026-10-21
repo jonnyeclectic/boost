@@ -5123,6 +5123,140 @@ def backfill_row_hashes(dry: bool = False) -> list[str]:
     return lines
 
 
+def unheld_withheld() -> list[str]:
+    """Skills quarantined or sidelined with their copy still in the store.
+
+    What every quarantine and sideline left before either held the copy
+    aside (:func:`hold_store_copy`): the links went, the copy stayed in
+    ``~/.agents/skills``, and Gemini CLI and Codex kept loading it while
+    doctor said healthy and sync and heal found nothing to do.
+    """
+    return [name for name, entry in sorted(lockfile.read()["skills"].items())
+            if isinstance(entry, dict)
+            and (entry.get("quarantined") or entry.get("sidelined_by"))
+            and not is_held(entry) and util.is_safe_component(name)
+            and os.path.lexists(skill_store_dir(name))]
+
+
+def _withheld_why(entry: dict) -> str:
+    if entry.get("quarantined"):
+        return "quarantined"
+    return "sidelined by `boost %s`" % entry.get("sidelined_by")
+
+
+def hold_legacy_copies(dry: bool = False) -> list[str]:
+    """Hold aside each copy :func:`unheld_withheld` names, and record it.
+
+    The one-time migration for quarantines and sidelines an older boost
+    made: the same move :func:`quarantine_skill` and :func:`sideline` make
+    today, recorded in one lock write. A failed write puts every copy back,
+    so the lock never says held over a copy still in the store or the other
+    way round. Returns one line per skill, in the tense of ``dry``.
+    """
+    # As in :func:`backfill_row_hashes`: only a lock sync may write.
+    if not lockfile.check().ok:
+        return []
+    skills = lockfile.read()["skills"]
+    lines: list[str] = []
+    held: dict[str, str] = {}
+    for name in unheld_withheld():
+        if not dry:
+            try:
+                where = hold_store_copy(name)
+            except BaseException:
+                # A move that fails part way through the list must not leave
+                # the earlier copies held aside with no `held_at` to say so.
+                for done in held:
+                    restore_store_copy(done)
+                raise
+            if where is None:
+                continue
+            held[name] = where
+        lines.append("%s %s's store copy out of %s (it is %s, and Gemini CLI "
+                     "and Codex load the store directly)"
+                     % ("would hold" if dry else "held", name,
+                        paths.tilde(paths.store_dir()),
+                        _withheld_why(skills[name])))
+    if not held:
+        return lines
+
+    def record(lock: dict) -> bool:
+        for name, where in held.items():
+            entry = lock["skills"].get(name)
+            if isinstance(entry, dict):
+                entry[HELD_KEY] = where
+        return True
+    try:
+        lockfile.mutate(record)
+    except BaseException:
+        for name in held:
+            restore_store_copy(name)
+        raise
+    return lines
+
+
+def _tap_url_candidates() -> list[tuple[str, str, dict]]:
+    """``(section, name, row)`` for each lock row with no ``tap_url``.
+
+    Only rows installed from a tap: a `boost import` (``tap: local``) records
+    ``source_url`` instead, and a row with no tap names nothing to look up.
+    """
+    lock = lockfile.read()
+    return [(section, name, row)
+            for section in ("skills", "rules", "workflows")
+            for name, row in sorted(lock[section].items())
+            if isinstance(row, dict) and not row.get("tap_url")
+            and row.get("tap") and row.get("tap") != "local"
+            and "source_url" not in row]
+
+
+def backfill_tap_urls(dry: bool = False) -> list[str]:
+    """Record ``tap_url`` on rows installed before it was recorded.
+
+    :func:`registry.source_changed` compares it with the tap's URL now, so a
+    row without one was unprotected: untap a registry, tap an unrelated one
+    under the same name, and `boost update` called its same-named skill an
+    upgrade and installed it. While the row's tap is still configured, its
+    URL is in config.json, so it is recorded from there and never guessed. A
+    row whose tap was added after the row was written came from an earlier
+    tap of that name (:func:`registry.retapped_since`) and is left unstamped.
+    One lock write for the lot. Returns lines in the tense of ``dry``.
+    """
+    if not lockfile.check().ok:
+        return []
+    lines: list[str] = []
+    stamps: dict[tuple[str, str], str] = {}
+    for section, name, row in _tap_url_candidates():
+        try:
+            tap = registry.get(str(row["tap"]))
+        except BoostError:
+            continue
+        if tap.name != row["tap"]:
+            continue
+        # Not this tap's: `boost update` and `outdated` hold it back as a
+        # source change (:func:`registry.source_changed`), and say so.
+        if registry.retapped_since(row, tap):
+            continue
+        stamps[(section, name)] = tap.url
+    if stamps:
+        lines.append("%s the tap URL of %d lock row%s"
+                     % ("would record" if dry else "recorded", len(stamps),
+                        "" if len(stamps) == 1 else "s"))
+    if dry or not stamps:
+        return lines
+
+    def stamp(lock: dict) -> bool:
+        changed = False
+        for (section, name), url in stamps.items():
+            row = lock[section].get(name)
+            if isinstance(row, dict) and not row.get("tap_url"):
+                row["tap_url"] = url
+                changed = True
+        return changed
+    lockfile.mutate(stamp)
+    return lines
+
+
 def _backfill_candidates() -> list[tuple[str, dict, str]]:
     """``(name, entry, source text)`` for each installed workflow an install
     would give a skill copy today and that has none.
@@ -7061,6 +7195,8 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
         if repair.warning:
             lines.append(repair.warning)
         lines.append(repair.preview)
+    lines += hold_legacy_copies(dry=True)
+    lines += backfill_tap_urls(dry=True)
     lines += backfill_row_hashes(dry=True)
     return lines
 
@@ -7613,6 +7749,10 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
     migrated = lockfile.migrate()
     if migrated:
         actions.append(migrated)
+    # Then what older boosts recorded too little of: a quarantine or sideline
+    # whose copy stayed in the store, and rows with no tap URL.
+    actions.extend(hold_legacy_copies())
+    actions.extend(backfill_tap_urls())
     # First, so every re-recorded skill is in the lock before anything else
     # runs; and only when the lock is *missing* — a corrupt or other-schema
     # lock is left for `boost replay`, never overwritten.

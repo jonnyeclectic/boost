@@ -295,6 +295,11 @@ def _untap_one(name: str, force: bool) -> int:
         if not force and not out.confirm("untap %s anyway?" % tap.name):
             out.info("cancelled")
             return 1
+    if dependent:
+        # The last moment its URL is known: recorded on the rows that came
+        # from it, a later tap of another repo under this name reads as the
+        # source change it is, and `boost drift` can re-tap from it.
+        store.backfill_tap_urls()
     registry.remove(tap.name)
     complete.refresh_names()
     journal.log("untap", tap.name)

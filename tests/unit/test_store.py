@@ -555,6 +555,114 @@ class TestHeldStoreCopy:
         assert store.hold_store_copy("brainstorming") == str(self._held())
         assert util.sha256_dir(self._held()) == before
 
+    def _legacy_quarantine(self):
+        def mark(lock):
+            lock["skills"]["brainstorming"]["quarantined"] = True
+        lockfile.mutate(mark)
+
+    def test_legacy_quarantine_is_held_once(self, brainstorming):
+        before = util.sha256_dir(self._store())
+        self._legacy_quarantine()
+        assert store.unheld_withheld() == ["brainstorming"]
+        line = ("brainstorming's store copy out of ~/.agents/skills (it is "
+                "quarantined, and Gemini CLI and Codex load the store directly)")
+        assert store.hold_legacy_copies(dry=True) == ["would hold " + line]
+        assert os.path.isdir(self._store())
+        assert store.hold_legacy_copies() == ["held " + line]
+        assert util.sha256_dir(self._held()) == before
+        assert lockfile.get_skill("brainstorming")["held_at"] == str(
+            self._held())
+        assert store.unheld_withheld() == []
+        assert store.hold_legacy_copies() == []
+
+    def test_legacy_sideline_is_named_by_its_command(self, brainstorming):
+        def mark(lock):
+            lock["skills"]["brainstorming"]["sidelined_by"] = "focus"
+        lockfile.mutate(mark)
+        assert store.hold_legacy_copies(dry=True) == [
+            "would hold brainstorming's store copy out of ~/.agents/skills "
+            "(it is sidelined by `boost focus`, and Gemini CLI and Codex load "
+            "the store directly)"]
+
+    def test_live_and_storeless_rows_are_not_candidates(self, brainstorming):
+        assert store.unheld_withheld() == []
+        self._legacy_quarantine()
+        shutil.rmtree(self._store())
+        assert store.unheld_withheld() == []
+
+    def test_a_failed_lock_write_puts_the_copies_back(self, brainstorming,
+                                                      monkeypatch):
+        before = util.sha256_dir(self._store())
+        self._legacy_quarantine()
+
+        def refuse(fn):
+            raise OSError("read-only")
+        monkeypatch.setattr(store.lockfile, "mutate", refuse)
+        with pytest.raises(OSError):
+            store.hold_legacy_copies()
+        assert util.sha256_dir(self._store()) == before
+        assert not os.path.lexists(self._held())
+
+    def test_a_failed_move_puts_the_earlier_copies_back(self, brainstorming,
+                                                         monkeypatch):
+        self._legacy_quarantine()
+        monkeypatch.setattr(store, "unheld_withheld",
+                            lambda: ["brainstorming", "second"])
+        real = store.hold_store_copy
+
+        def hold(name):
+            if name == "second":
+                raise OSError("busy")
+            return real(name)
+        monkeypatch.setattr(store, "hold_store_copy", hold)
+        with pytest.raises(OSError):
+            store.hold_legacy_copies()
+        assert os.path.isdir(self._store())
+        assert not os.path.lexists(self._held())
+        assert "held_at" not in lockfile.get_skill("brainstorming")
+
+    def test_an_unreadable_lock_is_not_migrated(self, brainstorming):
+        self._legacy_quarantine()
+        paths.lockfile_path().write_text("{not json", encoding="utf-8")
+        assert store.hold_legacy_copies() == []
+        assert store.backfill_tap_urls() == []
+        assert os.path.isdir(self._store())
+
+    def test_backfill_tap_urls_only_from_the_configured_tap(
+            self, brainstorming, tap):
+        def legacy(lock):
+            row = lock["skills"]["brainstorming"]
+            row.pop("tap_url")
+            row["installed_at"] = row["updated_at"] = "2026-01-01T00:00:00Z"
+            base = {"version": "0.0.0", "installed_at": "2026-01-01T00:00:00Z"}
+            lock["skills"]["imported"] = dict(base, tap="local")
+            lock["skills"]["from-url"] = dict(base, tap="x", source_url="")
+            lock["skills"]["untapped"] = dict(base, tap="gone")
+            lock["skills"]["no-tap"] = dict(base)
+            lock["skills"]["other-case"] = dict(base, tap=tap.name.upper())
+        lockfile.mutate(legacy)
+        assert store.backfill_tap_urls(dry=True) == [
+            "would record the tap URL of 1 lock row"]
+        assert "tap_url" not in lockfile.get_skill("brainstorming")
+        assert store.backfill_tap_urls() == [
+            "recorded the tap URL of 1 lock row"]
+        skills = lockfile.read()["skills"]
+        assert skills["brainstorming"]["tap_url"] == tap.url
+        assert [n for n, r in skills.items() if "tap_url" in r] == [
+            "brainstorming"]
+        assert store.backfill_tap_urls() == []
+
+    def test_backfill_leaves_a_row_older_than_its_tap(self, brainstorming,
+                                                      tap):
+        def legacy(lock):
+            row = lock["skills"]["brainstorming"]
+            row.pop("tap_url")
+            row["installed_at"] = row["updated_at"] = "2026-01-01T00:00:00Z"
+            row["commit"] = "0" * 40
+        lockfile.mutate(legacy)
+        assert store.backfill_tap_urls() == []
+        assert "tap_url" not in lockfile.get_skill("brainstorming")
+
     def test_nothing_to_hold(self, sandbox):
         assert store.hold_store_copy("brainstorming") is None
         assert not os.path.lexists(self._held())
