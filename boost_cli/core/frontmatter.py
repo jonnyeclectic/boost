@@ -269,6 +269,15 @@ def parse_block(block: str) -> dict:
         if top_indent is not None and indent > top_indent:
             if skipping:
                 continue
+            # A deeper line under a key holding a non-empty plain string is a
+            # folded continuation even when it carries ": " — a multi-line
+            # plain scalar cannot open a mapping in YAML. Skipping it here
+            # truncated "Use this skill when\n  reviewing code: it checks…"
+            # to its first line, and dropped every line after it.
+            prev = meta.get(key)
+            if not _is_item(line) and isinstance(prev, str) and prev:
+                meta[key] = prev + " " + line
+                continue
             if nest is None and not _is_item(line) and ":" in line:
                 if meta.get(key) not in ("", None):
                     skipping = True

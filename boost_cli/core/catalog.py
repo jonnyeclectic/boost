@@ -63,7 +63,10 @@ from . import (
 #        `escapes`), so a cache that indexed one must be rescanned to drop it
 #   6 -- an item whose files collide by case with another path in the tap
 #        is dropped on a case-insensitive clone (see `drop_case_collisions`)
-CACHE_FORMAT = 6
+#   7 -- `frontmatter` folds an indented continuation carrying ": " into
+#        the plain scalar above it instead of dropping it and every line
+#        after, so a truncated description is restored on rescan
+CACHE_FORMAT = 7
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
