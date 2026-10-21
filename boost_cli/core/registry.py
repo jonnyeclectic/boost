@@ -425,6 +425,25 @@ def is_tapped(name: str) -> bool:
     return any(t.name == name for t in list_taps())
 
 
+def unfinished_clones() -> list[Path]:
+    """Dirs under `repos/` that no tap lists and whose HEAD does not resolve.
+
+    What a clone killed part-way leaves behind (a timeout, a ^C, a crash):
+    `repos/<name>/.git` and nothing recorded. `boost doctor` called that
+    machine healthy, because it only ever looked at the taps config lists.
+    A listed tap is judged by the tap checks instead, and an unlisted dir
+    with a real HEAD is someone's clone, not debris. Empty without git,
+    which is what answers whether a HEAD resolves.
+    """
+    root = paths.repos_dir()
+    if not root.is_dir() or not gitutil.has_git():
+        return []
+    listed = {t.path for t in list_taps()}
+    return sorted(d for d in root.iterdir()
+                  if d.is_dir() and d not in listed
+                  and not gitutil.head_commit(d))
+
+
 def broken_clone_line(name: str) -> str:
     """The one line doctor and heal print for a `Tap.is_broken_clone` tap.
 

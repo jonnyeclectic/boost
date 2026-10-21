@@ -235,3 +235,37 @@ class TestLockRecordsTapUrl:
         assert lock["skills"]["brainstorming"]["tap_url"] == url
         assert lock["rules"]["tapurl-rule"]["tap_url"] == url
         assert lock["workflows"]["tapurl-flow"]["tap_url"] == url
+
+
+class TestUnfinishedClones:
+    """A clone killed part-way leaves `repos/<x>/.git` that nothing lists."""
+
+    def test_names_only_unlisted_dirs_with_no_head(
+            self, boost, fixture_tap_src, tmp_path):
+        boost("tap", _copy_tap(fixture_tap_src, tmp_path, "health-listed"))
+        repos = paths.repos_dir()
+        (repos / "o__half" / ".git").mkdir(parents=True)
+        (repos / "o__bare").mkdir()
+        # Someone's real clone, unlisted: not debris, and not boost's to call so.
+        subprocess.run(["git", "clone", "-q", str(fixture_tap_src),
+                        str(repos / "o__whole")], check=True,
+                       capture_output=True)
+        (repos / "stray.txt").write_text("x", encoding="utf-8")
+        assert registry.unfinished_clones() == [repos / "o__bare",
+                                                repos / "o__half"]
+
+    def test_a_listed_tap_is_left_to_the_tap_checks(
+            self, boost, fixture_tap_src, tmp_path):
+        boost("tap", _copy_tap(fixture_tap_src, tmp_path, "health-headless"))
+        _break(registry.get("health-headless"))
+        assert registry.unfinished_clones() == []
+
+    def test_nothing_without_git_or_without_a_repos_dir(
+            self, sandbox, monkeypatch):
+        repos = paths.repos_dir()
+        if repos.exists():
+            util.rmtree(repos)
+        assert registry.unfinished_clones() == []
+        (repos / "o__half" / ".git").mkdir(parents=True)
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+        assert registry.unfinished_clones() == []

@@ -134,6 +134,51 @@ class TestDoctor:
         assert "nothing to heal" not in r.out
         assert "heal cannot repair it" in r.out.replace("\n    ", " ")
 
+    def test_missing_git_is_an_issue_not_an_abort(self, boost, installed,
+                                                  monkeypatch):
+        # doctor printed its own "git not found" row and then died on the
+        # first cached tap with "git is required" — no verdict, and with
+        # --json not a byte of JSON.
+        from boost_cli.core import gitutil
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+        r = boost("doctor", expect=1)
+        assert "git not found on PATH — install git" in r.out
+        assert "git is required" not in r.out + r.err
+        assert "1 issue needs attention" in r.out
+        d = json.loads(boost("doctor", "--json", expect=1).out)
+        assert d["ok"] is False
+        assert [c["name"] for c in d["checks"]
+                if c["status"] == "issue"] == ["git"]
+
+    @pytest.mark.parametrize("dry", [False, True])
+    def test_heal_without_git_says_so_and_still_repairs(
+            self, boost, installed, monkeypatch, dry):
+        from boost_cli.core import gitutil
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+        logs = paths.boost_home() / "logs"
+        shutil.rmtree(logs)
+        r = boost("heal", *(["--dry-run"] if dry else []), expect=1)
+        flat = " ".join(r.out.split())
+        assert ("! git not found on PATH — heal cannot check tap catalogs "
+                "against their clones; install git, then rerun `boost heal`"
+                in flat)
+        assert "nothing to heal" not in flat
+        assert "git is required" not in r.out + r.err
+        assert logs.is_dir() is not dry      # the repairs before it still ran
+
+    def test_doctor_names_a_clone_that_never_finished(self, boost, installed):
+        # A clone killed part-way (a timeout, a ^C) left repos/<x>/.git with
+        # nothing recording it, and doctor said healthy over it.
+        half = paths.repos_dir() / "o__slowtap"
+        (half / ".git").mkdir(parents=True)
+        r = boost("doctor", expect=1)
+        assert ("~/.boost/repos/o__slowtap is a clone that never finished (no "
+                "tap lists it and it has no commit checked out) — delete it"
+                in " ".join(r.out.split()))
+        d = json.loads(boost("doctor", "--json", expect=1).out)
+        assert [c["name"] for c in d["checks"]
+                if c["status"] == "issue"] == ["tap"]
+
     def test_a_config_that_is_not_utf8_is_an_issue_not_a_crash(
             self, boost, installed):
         # The decode failure is a ValueError that no guard caught, so this was
