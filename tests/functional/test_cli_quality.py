@@ -1186,6 +1186,42 @@ class TestLint:
         assert "my-skill" in r.out
         assert "1 skill passes lint (min 40)" in r.out
 
+    @staticmethod
+    def _authored(root, dirname, name_line):
+        d = root / dirname
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            "---\n%s\ndescription: %s\nversion: 1.0.0\n---\n\n"
+            "# T\n\n## Steps\n\n1. One.\n2. Two.\n%s"
+            % (name_line, "d" * 45, "body text. " * 20), encoding="utf-8")
+        return d
+
+    def test_path_target_with_a_name_import_refuses_fails(
+            self, boost, sandbox, tmp_path):
+        # Lint passed `My Fancy Skill` at 80/100 while `boost import` refused
+        # it; a pass has to mean the skill installs as written.
+        d = self._authored(tmp_path, "upper", "name: My Fancy Skill")
+        r = boost("lint", str(d), expect=1)
+        assert "error: invalid skill name 'My Fancy Skill'" in r.out
+        assert "1 of 1 skill below 40 or with errors" in r.out
+        boost("import", str(d), expect=1)
+
+    def test_path_target_with_a_non_string_name_fails(
+            self, boost, sandbox, tmp_path):
+        d = self._authored(tmp_path, "nametrue", "name: true")
+        r = boost("lint", str(d), expect=1)
+        assert "error: `name` must be a string, not a boolean" in r.out
+
+    def test_path_target_is_labelled_by_its_install_name(
+            self, boost, sandbox, tmp_path):
+        d = self._authored(tmp_path, "mismatch", "name: other-name")
+        r = boost("lint", str(d), "--json")
+        row = json.loads(r.out)["skills"][0]
+        assert row["name"] == "other-name"
+        assert row["errors"] == []
+        assert ("name 'other-name' differs from its directory 'mismatch'"
+                " — it installs as 'other-name'") in row["notes"]
+
     def test_path_target_accepts_a_skill_md_file_directly(
             self, boost, sandbox, tmp_path):
         d = tmp_path / "my-skill"

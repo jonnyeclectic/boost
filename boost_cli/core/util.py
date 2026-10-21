@@ -680,9 +680,92 @@ def check_item_name(name: str, kind: str = "skill") -> str:
     install — a staging ``mkdtemp`` (hinted as "free space") or a workflow's
     temp file (a crash). Asked up front, against the longest file name the
     install would write for that kind.
+
+    It is also the one answer to "is this a name boost installs under?":
+    a name that is not a safe path component is refused here with a hint,
+    rather than later as a bare "invalid skill name" from the store, and
+    `boost lint` asks the same question through :func:`item_name_error`.
     """
+    if not is_safe_component(name):
+        raise BoostError("invalid %s name %r" % (kind, name), hint=NAME_RULE_HINT)
     _check_component(name + _ITEM_SUFFIX.get(kind, ".toml"), "%s name" % kind)
     return name
+
+
+#: What a valid item name may contain, said once for every refusal of one.
+NAME_RULE_HINT = ("a name may use only letters, digits, '.', '_' and '-' "
+                  "(e.g. my-skill)")
+
+
+def item_name_error(name: str, kind: str = "skill") -> str | None:
+    """Why ``name`` cannot be installed as a ``kind``, or None when it can.
+
+    :func:`check_item_name` as a predicate, for a caller that reports rather
+    than raises — `boost lint`, whose pass has to mean `boost import` takes
+    the skill as written.
+    """
+    try:
+        check_item_name(name, kind)
+    except BoostError as exc:
+        return str(exc)
+    return None
+
+
+def frontmatter_text(meta: dict, key: str) -> str:
+    """A scalar frontmatter field as stripped text; a nested map reads as "".
+
+    `frontmatter.parse_block` keeps `author:`/`metadata:`-style maps as dicts,
+    and `str()` of one would put a Python repr into a name or description.
+    This is the reading the catalog indexes (`catalog._text`), so lint scores
+    the same text search will show.
+    """
+    val = meta.get(key)
+    if isinstance(val, dict):
+        return ""
+    return str(val or "").strip()
+
+
+def _yaml_kind(val: object) -> str:
+    if isinstance(val, dict):
+        return "a map"
+    if isinstance(val, list):
+        return "a list"
+    if isinstance(val, bool):
+        return "a boolean"
+    return "a number" if isinstance(val, int | float) else type(val).__name__
+
+
+def string_field_error(meta: dict, key: str) -> str | None:
+    """Why frontmatter ``key`` is not a usable string, or None when it is.
+
+    Missing (absent, empty, blank) and present-but-not-a-string are different
+    faults: `description:` written as a map, or `name: true`, is truthy, so a
+    presence check passed it, while the catalog reads a map as "" (and falls
+    back to the body's first line) and a bool as ``"True"``.
+    """
+    val = meta.get(key)
+    if val is None or (isinstance(val, str) and not val.strip()):
+        return "missing required field: %s" % key
+    if not isinstance(val, str):
+        return "`%s` must be a string, not %s" % (key, _yaml_kind(val))
+    return None
+
+
+def frontmatter_name(meta: dict, default: str) -> str:
+    """The name a local install reads from ``meta``, else ``default``.
+
+    Raises BoostError for a name that is present but not a string: `name:
+    [a, b]` used to install as ``"['a', 'b']"`` (refused as a path) and
+    `name: true` as ``True``, a name the SKILL.md never says.
+    """
+    val = meta.get("name")
+    if val is None or val == "":
+        return default
+    if not isinstance(val, str):
+        raise BoostError("frontmatter `name` must be a string, not %s"
+                         % _yaml_kind(val),
+                         hint="write it as plain text, e.g. `name: my-skill`")
+    return val.strip() or default
 
 
 def check_path_length(path: Path, *, what: str = "path") -> Path:
@@ -951,11 +1034,11 @@ def score_skill(skill_dir: Path) -> tuple[int, list[str]]:
     meta, body = frontmatter.parse(text)
     score = 20  # exists and parses
 
-    if meta.get("name"):
+    if frontmatter_text(meta, "name"):
         score += 10
     else:
         notes.append("frontmatter missing `name`")
-    desc = str(meta.get("description") or "")
+    desc = frontmatter_text(meta, "description")
     if desc:
         score += 10
         if len(desc) >= 40:
@@ -1025,12 +1108,49 @@ def lint_errors(skill_dir: Path) -> list[str]:
     if frontmatter.unclosed(text):
         return [frontmatter.UNCLOSED_NOTE]
     meta, _body = frontmatter.parse(text)
-    errors = []
-    if not meta.get("name"):
-        errors.append("missing required field: name")
-    if not meta.get("description"):
-        errors.append("missing required field: description")
+    errors = [e for e in (string_field_error(meta, "name"),
+                          string_field_error(meta, "description")) if e]
+    name = meta.get("name")
+    if isinstance(name, str) and name.strip():
+        # The name `boost import` would install under — the same check, so a
+        # pass here means import takes the skill as written (and a tap
+        # install does not silently slug it into a name the file never says).
+        bad = item_name_error(name.strip())
+        if bad:
+            errors.append(bad)
     return errors
+
+
+def lint_label(skill_dir: Path) -> str:
+    """The name to show for a skill dir in `boost lint`: the one boost installs
+    it under (its frontmatter `name`), falling back to the directory."""
+    from . import frontmatter
+
+    try:
+        text = (Path(skill_dir) / "SKILL.md").read_text(encoding="utf-8",
+                                                        errors="replace")
+    except OSError:
+        return Path(skill_dir).name
+    if frontmatter.unclosed(text):
+        return Path(skill_dir).name
+    name = frontmatter.parse(text)[0].get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return Path(skill_dir).name
+
+
+def name_dir_note(skill_dir: Path) -> str | None:
+    """A note when a skill's frontmatter `name` differs from its directory.
+
+    Not an error — boost installs under the frontmatter name either way — but
+    the Agent Skills format expects the two to match, and an author linting
+    `skills/mismatch` should learn it installs as something else.
+    """
+    label = lint_label(skill_dir)
+    if label == Path(skill_dir).name:
+        return None
+    return "name %r differs from its directory %r — it installs as %r" % (
+        label, Path(skill_dir).name, label)
 
 
 def lint_failed(skill_dir: Path, score: int, min_score: int = 40) -> bool:

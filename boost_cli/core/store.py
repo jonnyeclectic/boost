@@ -4972,7 +4972,7 @@ def _import_meta(src_dir: Path) -> dict:
 
 def import_name(src_dir: Path, name: str | None = None) -> str:
     """The name :func:`install_from_path` installs ``src_dir`` under."""
-    return name or str(_import_meta(src_dir).get("name") or Path(src_dir).name)
+    return name or util.frontmatter_name(_import_meta(src_dir), Path(src_dir).name)
 
 
 def replaces_only_copy(name: str, src_dir: Path) -> bool:
@@ -5042,7 +5042,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
         raise BoostError("%s has no SKILL.md" % src_dir)
     lockfile.refuse_corrupt()       # before the copy, as in `install`
     meta = _import_meta(src_dir)
-    name = util.check_item_name(name or str(meta.get("name") or src_dir.name))
+    name = util.check_item_name(name or util.frontmatter_name(meta, src_dir.name))
     refuse_case_collision(name, lockfile.installed())
     existing = lockfile.get_skill(name)
     # Refuse before `dest` is touched, so a rejected install leaves nothing

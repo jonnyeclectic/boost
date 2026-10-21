@@ -86,15 +86,8 @@ def _read(path: Path) -> tuple[dict, str] | None:
 
 
 def _text(meta: dict, key: str) -> str:
-    """A scalar frontmatter field as stripped text; a nested map reads as "".
-
-    `frontmatter.parse_block` keeps `author:`/`metadata:`-style maps as dicts,
-    and `str()` of one would put a Python repr into a name or description.
-    """
-    val = meta.get(key)
-    if isinstance(val, dict):
-        return ""
-    return str(val or "").strip()
+    """A scalar frontmatter field as stripped text (`util.frontmatter_text`)."""
+    return util.frontmatter_text(meta, key)
 
 
 def _description(meta: dict, body: str) -> str:
