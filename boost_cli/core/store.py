@@ -2083,16 +2083,25 @@ def set_project_pin(base, name: str, pinned: bool) -> dict | None:
     such skill. Releasing a version pin releases a commit pin with it, the
     same rule ``boost unpin`` applies at user scope.
     """
-    entry = projectlock.get_skill(base, name)
-    if entry is None:
-        return None
-    if pinned:
-        entry["pinned"] = True
-    else:
-        entry.pop("pinned", None)
-        entry.pop("commit_pin", None)
-    projectlock.set_skill(base, name, entry)
-    return entry
+    if projectlock.get_skill(base, name) is None:
+        return None     # checked unlocked first, so a miss creates nothing
+    written: list[dict] = []
+
+    def edit(lock: dict) -> bool:
+        # Re-read under the lock: another process may have dropped the row,
+        # or added others that a stale copy written back would erase.
+        entry = lock["skills"].get(name)
+        if entry is None:
+            return False
+        if pinned:
+            entry["pinned"] = True
+        else:
+            entry.pop("pinned", None)
+            entry.pop("commit_pin", None)
+        written.append(entry)
+        return True
+    projectlock.mutate(base, edit)
+    return written[0] if written else None
 
 
 def project_skills(start=None) -> tuple[Path | None, dict]:

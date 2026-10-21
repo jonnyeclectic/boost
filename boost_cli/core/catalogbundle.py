@@ -303,29 +303,35 @@ def import_bundle(src: Path) -> dict:
     except (tarfile.TarError, OSError) as exc:
         raise BoostError("cannot read bundle %s: %s" % (src, exc)) from exc
 
-    cfg = config.load()
-    existing = cfg.get("taps") or []
-    if not isinstance(existing, list):
-        existing = []
-    known = {t.get("name") for t in existing if isinstance(t, dict)}
     added = 0
     local_added: list[str] = []
-    for row in manifest.get("taps") or []:
-        name = row.get("name")
-        if not name or name in known:
-            continue
-        existing.append({"name": name, "url": row.get("url", ""),
-                         "curated": bool(row.get("curated"))})
-        known.add(name)
-        added += 1
-        # Flagged at export time (`_is_local_url`), not re-derived here: a
-        # manifest from an older boost simply carries no "local" key, and a
-        # missing flag must read as "unknown", never as "confirmed remote".
-        if row.get("local"):
-            local_added.append(name)
 
-    cfg["taps"] = existing
-    config.save(cfg)
+    def merge(cfg: dict) -> None:
+        # Under config.mutate, on a fresh read: counted here, so a rerun
+        # after a crash or a race never double-counts what is already there.
+        nonlocal added
+        added = 0
+        local_added.clear()
+        existing = cfg.get("taps") or []
+        if not isinstance(existing, list):
+            existing = []
+        known = {t.get("name") for t in existing if isinstance(t, dict)}
+        for row in manifest.get("taps") or []:
+            name = row.get("name")
+            if not name or name in known:
+                continue
+            existing.append({"name": name, "url": row.get("url", ""),
+                             "curated": bool(row.get("curated"))})
+            known.add(name)
+            added += 1
+            # Flagged at export time (`_is_local_url`), not re-derived here:
+            # a manifest from an older boost simply carries no "local" key,
+            # and a missing flag must read as "unknown", never as
+            # "confirmed remote".
+            if row.get("local"):
+                local_added.append(name)
+        cfg["taps"] = existing
+    config.mutate(merge)
 
     return {"path": str(src), "taps": len(manifest.get("taps") or []),
             "added": added, "files": written,
