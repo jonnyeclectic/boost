@@ -669,12 +669,12 @@ def _check_section(dotted: str, value: dict) -> dict:
     checked: dict = {}
     for key, leaf in value.items():
         sub = "%s.%s" % (dotted, key)
-        spec = spec_for(sub)
-        if isinstance(leaf, dict) and spec in (typedvalue.DICT, typedvalue.ANY):
-            checked[key] = _check_section(sub, leaf)
-            continue
-        checked[key] = check_value(sub, typedvalue.adapt(sub, leaf, spec),
-                                   leaf)
+        # adapt first: a section given as a JSON *string* is parsed here,
+        # and its leaves must be walked like any other dict's.
+        adapted = typedvalue.adapt(sub, leaf, spec_for(sub))
+        checked[key] = (_check_section(sub, adapted)
+                        if isinstance(adapted, dict)
+                        else check_value(sub, adapted, leaf))
     return checked
 
 

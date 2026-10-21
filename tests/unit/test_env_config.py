@@ -364,6 +364,13 @@ class TestSectionSet:
         assert stored["enabled"] == (False if agent == "claude-code"
                                      else "no")
 
+    def test_a_section_given_as_a_json_string_is_walked(self, sandbox):
+        with pytest.raises(tv.ValueTypeError) as e:
+            config.set_value("agents",
+                             json.dumps({"claude-code": '{"dir": "rel"}'}))
+        assert e.value.key == "agents.claude-code.dir"
+        assert not paths.config_path().exists()
+
     def test_unknown_leaves_pass_through(self, sandbox):
         config.set_value("ai", '{"extra": "off", "deep": {"n": 1}}')
         assert self._disk() == {"ai": {"extra": "off", "deep": {"n": 1}}}
