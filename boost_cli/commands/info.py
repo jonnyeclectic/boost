@@ -55,7 +55,8 @@ def _read(p: Path) -> str:
     try:
         return Path(p).read_text(encoding="utf-8", errors="replace")
     except OSError as e:
-        raise BoostError("cannot read %s: %s" % (_tilde(p), e)) from e
+        # strerror, not the exception: str(OSError) repeats the absolute path.
+        raise BoostError("cannot read %s: %s" % (_tilde(p), e.strerror or e)) from e
 
 
 # Moved to core so the MCP tools resolve a `tap:name` exactly as these do.
@@ -85,7 +86,9 @@ def _resolve_skill_md(name: str):
         if row.dir is not None and (row.dir / "SKILL.md").exists():
             return row.dir / "SKILL.md", lock, None
     entry = catalog.resolve_one(name)
-    return registry.get(entry["tap"]).path / entry["skill_md"], lock, entry
+    # Through store, as install is: a missing clone is re-cloned, a sparse
+    # dir widened, and a file linking out of the clone refused.
+    return store.source_file_for(entry), lock, entry
 
 
 def _materialized_text(name: str, kind: str, entry: dict):
@@ -177,7 +180,7 @@ def _resolve_text(name: str):
         if text is not None:
             return text, kind, lock, None
     cat = catalog.resolve_one(name)
-    return _read(registry.get(cat["tap"]).path / cat["skill_md"]), kind, lock, cat
+    return _read(store.source_file_for(cat)), kind, lock, cat
 
 
 def _as_list(v) -> list:
@@ -205,10 +208,13 @@ def _skill_meta(name: str, project: dict | None = None, pbase=None):
         if not matches:
             return None
         try:
-            p = registry.get(matches[0]["tap"]).path / matches[0]["skill_md"]
+            root = registry.get(matches[0]["tap"]).path
         except BoostError:
             return None
-        if not p.exists():
+        p = root / matches[0]["skill_md"]
+        # Metadata only, so no clone is worth paying for — but a file that
+        # links out of the clone is not this tap's to describe.
+        if not p.exists() or catalog.escapes(root, p):
             return None
     return frontmatter.parse(_read(p))[0]
 

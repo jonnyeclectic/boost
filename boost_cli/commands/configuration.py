@@ -1791,8 +1791,7 @@ def _tool_read(args: dict):
         # when the other one is installed, or there would be no way to read
         # the copy an agent is deciding whether to switch to.
         cat = catalog.resolve_one(name, path=path)
-        text = (registry.get(cat["tap"]).path / cat["skill_md"]).read_text(
-            encoding="utf-8", errors="replace")
+        text = info._read(store.source_file_for(cat))
         # "installed" must describe *this* copy: with a/twin installed, a read
         # of b/twin said "installed: yes" over text that is not on disk. An
         # older record without `source_dir` falls back to the tap alone.
