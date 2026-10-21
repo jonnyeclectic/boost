@@ -141,8 +141,11 @@ def _exec(argv: list[str], *, cwd: str | None, timeout: float,
 def _kill_tree(proc: subprocess.Popen) -> None:
     """Kill `proc` and every process it started, then reap it."""
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                       capture_output=True, check=False)
+        # Best effort, bounded: a taskkill that is missing or hangs must not
+        # replace the timeout being reported with an error of its own.
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, check=False, timeout=10)
         with contextlib.suppress(OSError):
             proc.kill()
     else:

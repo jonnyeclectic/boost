@@ -206,6 +206,29 @@ class TestExecKillsTheTree:
         assert calls == [["taskkill", "/F", "/T", "/PID", "77"], "kill",
                          ("communicate", 5)]
 
+    @pytest.mark.parametrize("exc", [FileNotFoundError("taskkill"),
+                                     subprocess.TimeoutExpired("taskkill", 10)])
+    def test_kill_tree_on_windows_survives_a_failing_taskkill(self, monkeypatch,
+                                                              exc):
+        calls = []
+        monkeypatch.setattr(gitutil.sys, "platform", "win32")
+
+        def run(argv, **kw):
+            calls.append(kw.get("timeout"))
+            raise exc
+        monkeypatch.setattr(gitutil.subprocess, "run", run)
+
+        class P:
+            pid = 76
+
+            def kill(self):
+                calls.append("kill")
+
+            def communicate(self, timeout=None):
+                return "", ""
+        gitutil._kill_tree(P())
+        assert calls == [10, "kill"]
+
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
     def test_kill_tree_on_posix_kills_the_group(self, monkeypatch):
         calls = []
