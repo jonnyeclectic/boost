@@ -97,6 +97,7 @@ def test_doctor_names_and_clean_removes_a_leftover_copy(boost, sandbox):
     (root / ".boost-efgh5678.new").mkdir()
     staging = root / ".boost-live0000"     # an install copying right now
     staging.mkdir()
+    (root / "notours.old").mkdir()         # a skill's name, not a swap's
 
     assert [p.name for p in store.leftover_copies()] == [
         ".boost-abcd1234.old", ".boost-efgh5678.new"]
@@ -110,6 +111,7 @@ def test_doctor_names_and_clean_removes_a_leftover_copy(boost, sandbox):
     assert "cleaned 2 item(s)" in res.out
     assert store.leftover_copies() == []
     assert staging.is_dir()
+    assert (root / "notours.old").is_dir()
 
     res = boost("doctor", expect=None)
     assert "leftover skill cop" not in res.out

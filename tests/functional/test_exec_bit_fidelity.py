@@ -145,3 +145,33 @@ def test_a_project_copy_s_mode_is_verified_too(boost, exec_tap, tmp_path,
     assert integrity.project_status(entry, repo.resolve()) == \
         integrity.STATUS_MODIFIED
     boost("verify", expect=1)
+
+
+def test_a_row_without_exec_is_refreshed_by_a_mode_only_commit(boost, tap):
+    """An install from before rows recorded ``exec`` is compared through the
+    copy on disk, so the upstream ``chmod +x`` still reaches it."""
+    boost("install", "beta")
+    _drop_exec_field()
+    (tap / "skills" / "beta" / "scripts" / "run.sh").chmod(0o755)
+    _git(tap, "commit", "-qam", "make executable")
+
+    r = boost("update")
+
+    assert "refreshed beta" in r.out
+    assert _exec(_script())
+    assert lockfile.get_skill("beta")["exec"] == ["scripts/run.sh"]
+
+
+def test_a_row_without_exec_is_not_refreshed_by_an_unrelated_commit(
+        boost, exec_tap):
+    """The tap moved but the skill did not: same bytes, same modes."""
+    boost("install", "beta")
+    _drop_exec_field()
+    (exec_tap / "README.md").write_text("other\n", encoding="utf-8")
+    _git(exec_tap, "add", "-A")
+    _git(exec_tap, "commit", "-qm", "unrelated")
+
+    r = boost("update")
+
+    assert "refreshed beta" not in r.out
+    assert "exec" not in lockfile.get_skill("beta")
