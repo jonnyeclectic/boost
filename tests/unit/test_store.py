@@ -6784,3 +6784,20 @@ class TestAReadOnlySourceImports:
         store._own_writable(root)
         assert root.stat().st_mode & 0o777 == 0o755
         assert outside.stat().st_mode & 0o777 == 0o444
+
+    def test_a_failed_copy_of_a_read_only_dir_leaves_no_staging_dir(
+            self, sandbox, ro_src):
+        # copytree stamps 0555 on the staged dir before raising the file it
+        # could not read, so the staged copy refused its own cleanup.
+        ro_src.chmod(0o755)
+        (ro_src / "secret.txt").write_text("x", encoding="utf-8")
+        (ro_src / "secret.txt").chmod(0o000)
+        ro_src.chmod(0o555)
+        try:
+            if os.access(ro_src / "secret.txt", os.R_OK):
+                pytest.skip("running as a user that ignores chmod 0o000")
+            with pytest.raises(BoostError, match="could not copy eta2"):
+                store.install_from_path(ro_src, name="eta2")
+            assert sorted(p.name for p in paths.store_dir().iterdir()) == []
+        finally:
+            (ro_src / "secret.txt").chmod(0o644)
