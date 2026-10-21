@@ -294,9 +294,15 @@ def refuse_corrupt() -> None:
             "not write over it" % (integ.version, SCHEMA_VERSION),
             hint="%s; this boost would drop what v%s records"
                  % (UPGRADE, integ.version), wrap=True)
+    # Kept now, not only by a read(): install refuses before reading, and the
+    # newest backup may hold an earlier corruption rather than these bytes.
+    try:
+        held = keep_copy(p)
+    except OSError:
+        held = corrupt_backup(p)
     raise BoostError("lock file %s — boost will not write over it" % fault(integ),
                      hint=(ROLLBACK_HINT if has_history() else REBUILD_HINT)
-                     % paths.tilde(corrupt_backup(p)),
+                     % paths.tilde(held),
                      wrap=True)
 
 
@@ -544,6 +550,7 @@ def write(lock: dict) -> None:
 
     A corrupt lock is the exception: it raises (:func:`refuse_corrupt`)
     rather than being replaced by a lock built on :func:`read`'s skeleton.
+    So does one in a schema boost does not know, a newer one included.
     """
     with exclusive():
         refuse_corrupt()

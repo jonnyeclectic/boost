@@ -238,6 +238,20 @@ class TestBackups:
         assert lockfile.unrestored_corrupt() == newest
 
 
+class TestRefusalNamesTheRightBackup:
+    def test_a_new_state_is_kept_before_it_is_named(self, sandbox):
+        _put("{first")
+        lockfile.keep_copy()
+        second = _put("{second")
+        # No read() first: install calls refuse_corrupt before anything else.
+        with pytest.raises(BoostError) as ei:
+            lockfile.refuse_corrupt()
+        assert ei.value.hint.endswith(
+            "the newest record is only in "
+            "~/.agents/skills/.skill-lock.json.corrupt.2")
+        assert lockfile.corrupt_backups()[-1].read_bytes() == second
+
+
 class TestSetAside:
     def test_a_corrupt_lock_is_kept_and_removed(self, sandbox):
         raw = _put("{oops")
@@ -310,10 +324,13 @@ class TestCli:
         r = boost("doctor", expect=1)
         assert ("lock file is corrupt — %s" % REBUILD) in " ".join(r.out.split())
         boost("list")
-        boost("heal", expect=None)
         r = boost("sync", expect=1)
         assert "Traceback" not in r.out + r.err
-        boost("outdated", expect=None)
+        # Each of these exited 70 on an AttributeError before the fix.
+        for argv in (("heal",), ("outdated",), ("update",)):
+            r = boost(*argv, expect=None)
+            assert r.rc in (0, 1), (argv, r.rc, r.err)
+            assert "Traceback" not in r.out + r.err
 
     def test_rebuild_lock_re_records_the_store(self, boost, installed):
         p = paths.lockfile_path()
@@ -336,3 +353,26 @@ class TestCli:
         r = boost("sync", "--rebuild-lock", expect=1)
         assert "nothing to rebuild" in r.err
         assert lockfile.check().ok
+
+
+class TestRollback:
+    def test_an_unknown_non_integer_schema_is_restored_not_refused(self, boost,
+                                                                  tapped):
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")        # snapshots {brainstorming}
+        hid = lockfile.history_list()[-1]["id"]
+        raw = _put({"version": "3", "skills": {}})
+        r = boost("replay", "rollback", hid, "-y")
+        assert "Error" not in r.err
+        assert lockfile.check().ok
+        assert set(lockfile.installed()) == {"brainstorming"}
+        assert lockfile.corrupt_backup().read_bytes() == raw
+
+    def test_a_newer_schema_is_not_rolled_back(self, boost, tapped):
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        hid = lockfile.history_list()[-1]["id"]
+        raw = _put({"version": 4, "skills": {}})
+        r = boost("replay", "rollback", hid, "-y", expect=1)
+        assert "boost self-update" in r.err
+        assert paths.lockfile_path().read_bytes() == raw
