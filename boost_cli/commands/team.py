@@ -838,6 +838,9 @@ def cmd_pulse(argv) -> int:
             journal.pulse_empty_state(args.action, all_events), wrap=True))
         return 0
     for e in events:
+        # A journal row repeats the tap's frontmatter (`version=`, a subject
+        # read off a SKILL.md): a display copy, terminal controls dropped.
+        e = out.plain_fields(e)
         action = e.get("action", "?")
         action_role = _ACTION_ROLE.get(action, "accent")
         extras = {k: v for k, v in e.items()

@@ -128,6 +128,11 @@ class TestInstalledText:
         flat = _clean(boost("reinstall", "fields"))
         assert "reinstalled fields v9.9[8m-hidden" in flat
 
+    def test_pulse_journal_line(self, boost, hostile_tap):
+        boost("install", "fields")
+        flat = _clean(boost("pulse"))
+        assert "install fields tap=htap version=9.9[8m-hidden" in flat
+
     def test_list_json_is_unchanged(self, boost, hostile_tap):
         boost("install", "fields")
         data = json.loads(boost("list", "--json").out)
