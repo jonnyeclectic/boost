@@ -50,6 +50,23 @@ class Tap:
         return paths.cache_dir() / (self.safe_name + ".json")
 
     @property
+    def owns_cache_file(self) -> bool:
+        """False when :attr:`cache_file` is one of boost's own indexes.
+
+        A local tap is named after its directory, so a directory called
+        ``rag_index`` mapped onto ``cache/rag_index.json`` — the BM25 index.
+        :func:`add` now refuses such a name; this guards a config written
+        before it did, so the catalog never overwrites, or `untap` deletes,
+        a file that is not the tap's.
+        """
+        return not reserved_cache_name(self.name)
+
+    @property
+    def is_wheel(self) -> bool:
+        """True for a tap that ships inside the wheel (no git clone)."""
+        return self.url.startswith(WHEEL_SCHEME)
+
+    @property
     def is_cloned(self) -> bool:
         """True if the tap's clone directory exists on disk."""
         return self.path.is_dir()
@@ -65,8 +82,26 @@ class Tap:
         healthy, heal said nothing to heal, and every `boost update` failed
         with "not a git repository" without ever re-cloning it.
         """
-        return (self.is_cloned and not self.url.startswith(WHEEL_SCHEME)
+        return (self.is_cloned and not self.is_wheel
                 and not gitutil.is_repo(self.path))
+
+
+def reserved_cache_name(name: str) -> bool:
+    """True when tap ``name``'s catalog cache would be one of boost's own
+    files in ``cache/`` (:data:`paths.INTERNAL_CACHE_FILES`).
+
+    Case-folded: on a case-insensitive filesystem ``RAG_INDEX.json`` *is*
+    ``rag_index.json``.
+    """
+    leaf = (Tap(name=name, url="").safe_name + ".json").lower()
+    return leaf in paths.INTERNAL_CACHE_FILES
+
+
+def _reserved(name: str) -> BoostError:
+    return BoostError(
+        "tap name %s is reserved: its catalog would overwrite boost's own "
+        "cache/%s.json" % (name, Tap(name=name, url="").safe_name),
+        hint="rename the directory and tap it again")
 
 
 # One path component, in BYTES. ext4, APFS and NTFS all stop at 255, and
@@ -440,6 +475,8 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     Raises BoostError if a tap with that name is already configured.
     """
     name, url = parse_spec(spec)
+    if reserved_cache_name(name):
+        raise _reserved(name)
     for existing in list_taps():
         if name_key(existing.name) == name_key(name):
             if not same_source(existing.url, url):
@@ -772,6 +809,10 @@ def add_many(specs: list[str], curated: bool = False,
             results.append({"spec": spec, "name": spec, "ok": False,
                             "error": exc.message})
             continue
+        if reserved_cache_name(name):
+            results.append({"spec": spec, "name": name, "ok": False,
+                            "error": _reserved(name).message})
+            continue
         # A different repository under a taken name is a failure, not a skip:
         # "already tapped" with nothing tapped is the answer that hid it.
         key = name_key(name)
@@ -1033,6 +1074,8 @@ def _remove_clone(tap: Tap) -> None:
 
 def _remove_cache(tap: Tap) -> None:
     """Delete `tap`'s catalog cache, warning rather than raising if it cannot."""
+    if not tap.owns_cache_file:
+        return      # boost's own index, not this tap's — see owns_cache_file
     try:
         tap.cache_file.unlink()
     except OSError as e:

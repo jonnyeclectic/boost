@@ -46,6 +46,7 @@ from ..core import (
     scopes,
     selfupdate,
     serve,
+    snapshot,
     store,
     typedvalue,
     util,
@@ -225,23 +226,28 @@ def cmd_clean(argv) -> int:
                 items.append((pth, ".DS_Store", pth.stat().st_size))
 
     declined = False
+    old_snaps: list[snapshot.Unit] = []
     if args.deep and paths.snapshots_dir().is_dir():
-        cutoff = time.time() - 90 * 86400
-        old_snaps = [s for s in sorted(paths.snapshots_dir().iterdir())
-                     if s.lstat().st_mtime < cutoff]
+        # Counted and aged per snapshot — a tarball and its sidecar are one,
+        # aged by the `created` `snapshot list` shows (see snapshot.Unit).
+        old_snaps = snapshot.older_than(paths.snapshots_dir(),
+                                        time.time() - 90 * 86400)
         # `quiet` under --json for the reason out.confirm documents: on a
         # non-TTY decline it prints a bypass hint, which would land as a stray
         # prose line ahead of the payload and stop it parsing.
         if old_snaps and not args.dry_run and not (args.yes or out.confirm(
-                "remove %d snapshot(s) older than 90 days?" % len(old_snaps),
+                "remove %d snapshot%s older than 90 days?"
+                % (len(old_snaps), _s(len(old_snaps))),
                 quiet=args.json)):
             if not args.json:
                 out.info("keeping old snapshots")
             declined = True
             old_snaps = []
-        for s in old_snaps:
-            size = util.dir_size(s) if s.is_dir() else s.lstat().st_size
-            items.append((s, "old snapshot", size))
+        for unit in old_snaps:
+            items.extend((f, "old snapshot", size)
+                         for f, size in zip(unit.files, unit.sizes, strict=True))
+    snaps_note = (" (%d old snapshot%s)" % (len(old_snaps), _s(len(old_snaps)))
+                  if old_snaps else "")
 
     if not items:
         # `declined` means the only candidate was the --deep snapshot purge
@@ -249,6 +255,7 @@ def cmd_clean(argv) -> int:
         # nothing to do when there was, and the user just declined doing it.
         if args.json:
             print(json.dumps({"items": [], "count": 0, "bytes": 0,
+                              "snapshots": 0,
                               "dry_run": args.dry_run, "removed": 0,
                               "failed": [], "declined": declined,
                               "ok": not declined}, indent=2))
@@ -263,12 +270,14 @@ def cmd_clean(argv) -> int:
         if args.json:
             print(json.dumps({"items": [row(*i) for i in items],
                               "count": len(items), "bytes": freed,
+                              "snapshots": len(old_snaps),
                               "dry_run": True, "removed": 0, "failed": [],
                               "declined": declined, "ok": True}, indent=2))
             return 0
         for pth, kind, _size in items:
             out.info("would remove %s %s" % (_tilde(pth), out.role("(%s)" % kind, "muted")))
-        out.dim("  %d item(s) · %s would be freed" % (len(items), util.human_size(freed)))
+        out.dim("  %d item(s)%s · %s would be freed"
+                % (len(items), snaps_note, util.human_size(freed)))
         return 0
 
     removed, freed, failures = util.remove_items(items)
@@ -278,7 +287,8 @@ def cmd_clean(argv) -> int:
                     freed=util.human_size(freed))
         print(json.dumps(
             {"items": [row(*i) for i in items], "count": len(items),
-             "bytes": freed, "dry_run": False, "removed": removed,
+             "bytes": freed, "snapshots": len(old_snaps),
+             "dry_run": False, "removed": removed,
              "failed": [{"path": str(pth), "error": err}
                         for pth, err in failures],
              "declined": declined, "ok": not failures}, indent=2))
@@ -324,6 +334,16 @@ def cmd_compact(argv) -> int:
     rows: list[dict] = []
 
     taps = [registry.get(n) for n in args.tap] if args.tap else registry.list_taps()
+    # boost's own tap ships inside the wheel: a plain directory with no
+    # `.git`, so there is nothing to narrow and no remote to re-clone from.
+    # Handed to git it warned on every sweep, and `--reclone` deleted it and
+    # then failed to clone `builtin:boost`. Only a named request is answered.
+    for tap in taps:
+        if tap.is_wheel and args.tap:
+            rows.append({"tap": tap.name, "skipped": "ships with boost"})
+            if not args.json:
+                out.info("%s ships with boost — nothing to compact" % tap.name)
+    taps = [t for t in taps if not t.is_wheel]
     # A named tap is a request about that one tap (`registry.update`'s
     # convention), so a missing clone is the answer to it. Filtering it out
     # silently used to fall through to a green, global "no cloned taps to
@@ -336,23 +356,20 @@ def cmd_compact(argv) -> int:
                          stream=sys.stderr if args.json else None)
     taps = [t for t in taps if t.is_cloned]
     if not taps:
+        errored = any("error" in r for r in rows)
         if args.json:
             print(json.dumps({"taps": rows, "count": 0, "bytes": 0,
-                              "dry_run": args.dry_run, "ok": not rows},
+                              "dry_run": args.dry_run, "ok": not errored},
                              indent=2))
-            return 1 if rows else 0
-        if rows:
+            return 1 if errored else 0
+        if errored:
             return 1
-        out.ok("no cloned taps to compact")
+        if not rows:            # a named wheel tap was answered above
+            out.ok("no cloned taps to compact")
         return 0
 
-    # source_dir keeps an installed skill's own assets on disk, so routine
-    # hashing (`outdated`, `doctor`) stays offline after the freight is gone.
-    keep: dict[str, list[str]] = {}
-    for section in lockfile.all_installed().values():
-        for entry in section.values():
-            if entry.get("source_dir"):
-                keep.setdefault(entry.get("tap", ""), []).append(entry["source_dir"])
+    # Installed skills' own assets stay on disk, user and project scope alike.
+    keep = compactplan.keep_dirs()
 
     freed = 0
     removed = 0                 # bytes deleted before any re-download (reclone)
