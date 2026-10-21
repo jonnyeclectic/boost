@@ -90,6 +90,28 @@ def _text(meta: dict, key: str) -> str:
     return util.frontmatter_text(meta, key)
 
 
+# What `_make_entry` stamps when the file declares no version, so the entry's
+# version field is always a sortable string.
+UNDECLARED_VERSION = "0.0.0"
+
+
+def declared_version(entry: dict) -> str:
+    """The version the item's own file declares, or ``""`` when it declares none.
+
+    ``entry["version"]`` cannot answer that: an unversioned file is stamped
+    ``0.0.0``, which is a fine sort key and a false statement in anything meant
+    for auditing — provenance read ``@ 0.0.0`` for a version that exists
+    nowhere in the source. The frontmatter (``entry["meta"]``) is the record of
+    what was declared. An entry carrying no ``meta`` (synthesised, or an old
+    cache) falls back to the field, with the placeholder read as absent.
+    """
+    meta = entry.get("meta")
+    if isinstance(meta, dict):
+        return str(entry.get("version") or "") if _text(meta, "version") else ""
+    version = str(entry.get("version") or "")
+    return "" if version == UNDECLARED_VERSION else version
+
+
 def _description(meta: dict, body: str) -> str:
     desc = _text(meta, "description")
     if desc:
@@ -240,7 +262,7 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
     return {
         "name": slug,
         "description": description,
-        "version": _text(meta, "version") or "0.0.0",
+        "version": _text(meta, "version") or UNDECLARED_VERSION,
         "tap": tap_name,
         "curated": curated,
         "kind": kind,

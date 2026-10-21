@@ -243,7 +243,7 @@ def cmd_search(argv):
     # The CLI's long-standing wording for the BM25 engine differs from the label
     # rag/eval use ("BM25 full-content"), and both are load-bearing: the latter
     # is pinned in tests/eval/baseline.json. Map instead of moving either.
-    ranker = _ENGINE_LABEL.get(engine, engine) if use_rag else "heuristic relevance"
+    ranker = _ENGINE_LABEL.get(engine, engine) if use_rag else rag.HEURISTIC_ENGINE
     if args.smart:
         reranked = None
         if ai.available():
