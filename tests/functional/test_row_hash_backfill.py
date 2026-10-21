@@ -84,9 +84,11 @@ def test_sync_records_the_hash_of_files_boost_wrote(boost, items):
     _age()
     r = boost("verify", expect=1)
     assert r.out.count("unlocked  rule · missing lock fields: "
-                       "materialization sha256 · `boost sync` records it") == 1
+                       "materialization sha256 · `boost sync` records it, "
+                       "or `boost reinstall house` if a file was edited") == 1
     assert r.out.count("unlocked  workflow · missing lock fields: "
-                       "materialization sha256 · `boost sync` records it") == 1
+                       "materialization sha256 · `boost sync` records it, "
+                       "or `boost reinstall ship-it` if a file was edited") == 1
     assert "2 of 2 items failed verification" in r.err + r.out
     nr, nw = len(items[("rules", "house")]), len(items[("workflows", "ship-it")])
     assert nr >= 2  # a CLAUDE.md block and at least one rule file
@@ -141,7 +143,10 @@ def test_an_edited_file_is_not_blessed(boost, items):
     assert rows[str(edited)] is None
     assert all(rows[p] == items[("rules", "house")][p]
                for p in rows if p != str(edited))
-    boost("verify", expect=1)
+    # verify still fails it, and names the reinstall sync just pointed at
+    # rather than sending the user back round to sync.
+    assert "`boost reinstall house` if a file was edited" in " ".join(
+        boost("verify", expect=1).out.split())
     # heal says the same thing, and does not call it healed.
     assert "boost reinstall house" in boost("heal", expect=1).out
 
