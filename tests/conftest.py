@@ -543,12 +543,15 @@ def _reset_ai_last_failure():
     next. Most tests never touch it (`sandbox` sets BOOST_NO_AI=1, which
     `unavailable_reason()` checks before ever reading it), but any test using
     `ai_on` that exercises a failing `ai.ask()` sets this module global with
-    nothing to unset it afterward.
+    nothing to unset it afterward. `ai._last_route` leaks the same way, and
+    would name a route in a ranking label no stubbed reply came from.
     """
     from boost_cli.core import ai
     ai._last_failure = None
+    ai._last_route = None
     yield
     ai._last_failure = None
+    ai._last_route = None
 
 
 @pytest.fixture(autouse=True)
