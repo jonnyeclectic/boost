@@ -545,6 +545,13 @@ class TestFlagLookupDegrades:
         monkeypatch.setattr(discovery, "cmd_search", boom)
         assert complete.candidates(["boost", "search", "--"], COMMANDS) == []
 
+    def test_without_a_parser_flags_still_are_not_positionals(
+            self, sandbox, monkeypatch):
+        from boost_cli.core import policy
+        monkeypatch.setattr(complete, "_parser_for", lambda c, r: None)
+        assert complete.candidates(["boost", "policy", "--json", "set", ""],
+                                   COMMANDS) == sorted(policy.DEFAULTS)
+
     def test_a_command_that_never_parses_has_no_flags(self, sandbox,
                                                       monkeypatch):
         from boost_cli.commands import discovery
