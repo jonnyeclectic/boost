@@ -1916,8 +1916,41 @@ def _load_sidecar(path: Path) -> tuple[dict | None, str | None]:
     return doc, None
 
 
+#: Project-lock key set when boost's install is what created ``.mcp.json``.
+SIDECAR_CREATED_KEY = "mcp_sidecar_created"
+
+
+def sidecar_style(text: str | None) -> tuple[str | int | None, str]:
+    """``(indent, end)`` that re-serialize ``text`` the way it was written.
+
+    ``.mcp.json`` is a committed file, and rewriting it as sorted, 2-space,
+    ``\\u``-escaped JSON put a reformatting diff on every server the user
+    had, for an install that added one entry. The indent is the first
+    indented line's whitespace (a tab, or that many spaces), a file with no
+    line break stays on one line, and a trailing newline stays exactly as
+    present or absent. No file yet: 2 spaces and a newline.
+    """
+    if not text:
+        return 2, "\n"
+    end = "\n" if text.endswith("\n") else ""
+    body = text.strip()
+    if "\n" not in body:
+        return None, end
+    for line in body.splitlines()[1:]:
+        rest = line.lstrip(" \t")
+        if rest and len(rest) < len(line):
+            ws = line[:len(line) - len(rest)]
+            return ("\t" if ws.startswith("\t") else len(ws)), end
+    return 2, end
+
+
 def _write_sidecar(path: Path, doc: dict) -> bool:
-    """Write the sidecar as indented JSON. False if it could not be written.
+    """Write the sidecar in the file's own style. False if it could not be
+    written.
+
+    Keys keep their order and non-ASCII stays literal (:func:`sidecar_style`
+    for the indent), so a round trip that adds and removes only boost's
+    entry leaves a ``json.dumps``-shaped file byte-identical.
 
     Best-effort on the way OUT as well as in. ``_load_sidecar`` already refuses
     to turn a corrupt file into a traceback, but the write is the half that runs
@@ -1929,7 +1962,12 @@ def _write_sidecar(path: Path, doc: dict) -> bool:
     """
     import json
     try:
-        path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
+        old = path.read_text(encoding="utf-8") if path.is_file() else None
+    except OSError:
+        old = None
+    indent, end = sidecar_style(old)
+    try:
+        path.write_text(json.dumps(doc, indent=indent, ensure_ascii=False) + end,
                         encoding="utf-8")
         return True
     except OSError:
@@ -1960,6 +1998,15 @@ def record_project_mcp(base, rows, skill: str,
     if added and not _write_sidecar(path, doc):
         # Nothing was recorded; do not claim otherwise.
         return [], "%s: could not be written" % path
+    if added and existing is None and projectlock.exists(base):
+        # Boost created the file, so the last uninstall may remove it again
+        # rather than leave a `{"mcpServers": {}}` the repo never had. Kept
+        # in the project lock the install just wrote, which is committed
+        # beside the file it describes.
+        def created(lock: dict) -> None:
+            lock[SIDECAR_CREATED_KEY] = True
+        with contextlib.suppress(OSError, BoostError):
+            projectlock.mutate(base, created)
     return added, None
 
 
@@ -2026,6 +2073,20 @@ def forget_project_mcp(base, skill: str) -> tuple[list[str], str | None]:
     # key, so a file with no (or a null) ``mcpServers`` would otherwise be
     # rewritten — and reformatted — by an uninstall that owns nothing in it.
     if doc[_decl.SERVERS_KEY] == (existing.get(_decl.SERVERS_KEY) or {}):
+        return removed, None
+    if (not doc[_decl.SERVERS_KEY] and set(doc) == {_decl.SERVERS_KEY}
+            and projectlock.read(base).get(SIDECAR_CREATED_KEY)):
+        # Empty again, and boost made it: remove it rather than leave a
+        # stray untracked file behind a round trip.
+        try:
+            path.unlink()
+        except OSError:
+            return [], "%s: could not be removed" % path
+
+        def forgot(lock: dict) -> None:
+            lock.pop(SIDECAR_CREATED_KEY, None)
+        with contextlib.suppress(OSError, BoostError):
+            projectlock.mutate(base, forgot)
         return removed, None
     if not _write_sidecar(path, doc):
         return [], "%s: could not be written" % path
