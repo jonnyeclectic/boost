@@ -58,10 +58,19 @@ def _rx(pattern: str) -> re.Pattern[str]:
 # `bash <(curl …)` or `| sudo -E bash`. Each fragment absorbs one of the
 # spellings that used to slip past: an absolute path to the shell or to sudo,
 # `env` with flags, and sudo with flags (`-E`, `-u root`).
-_SUDO = r"(?:(?:\S*/)?sudo(?:\s+(?:-u\s+\S+|-\S+))*\s+)?"
-_ENV = r"(?:(?:\S*/)?env(?:\s+-\S+)*\s+)?"
-_SHELL = r"(?:\S*/)?\b(?:sh|bash|zsh|dash|ksh)\b"
-_INTERP = (_ENV + r"(?:\S*/)?(?:sh|bash|zsh|dash|ksh|python[23]?|node|ruby|"
+#
+# The directory prefix may only START where a path cannot continue leftwards
+# (the lookbehind), and its segments exclude "/". An unanchored ``\S*/`` here
+# made the search quadratic in line length (re tried it from every offset): a
+# 20 KB line of minified JS took 2-10 s, and install now scans .js files.
+_DIR = r"(?:(?<![\w./~-])[\w.~-]*(?:/[\w.+-]*)*/)?"
+# Flag runs are bounded ({0,4}) for the same reason: `-u\s+\S+` can eat the
+# next "sudo", so an unbounded run re-walked the rest of the line from every
+# occurrence of "sudo -u ".
+_SUDO = r"(?:" + _DIR + r"sudo(?:\s+(?:-u\s+\S+|-\S+)){0,4}\s+)?"
+_ENV = r"(?:" + _DIR + r"env(?:\s+-\S+){0,4}\s+)?"
+_SHELL = _DIR + r"\b(?:sh|bash|zsh|dash|ksh)\b"
+_INTERP = (_ENV + _DIR + r"(?:sh|bash|zsh|dash|ksh|python[23]?|node|ruby|"
            r"perl)\b")
 _FETCH = r"(?:curl|wget)\b"
 
@@ -105,10 +114,10 @@ RULES: tuple = (
     # ── risky shell smuggled into instructions ───────────────────────────
     Rule("curl-pipe-shell", "high",
          _rx(r"\b(?:curl|wget|fetch)\b[^\n|]*\|\s*" + _SUDO + _INTERP
-             + r"|" + _SUDO + _SHELL + r"(?:\s+-\S+)*\s+[\"']?(?:\$\(|`)\s*"
+             + r"|" + _SUDO + _SHELL + r"(?:\s+-\S+){0,4}\s+[\"']?(?:\$\(|`)\s*"
              + _FETCH
              + r"|(?:" + _SUDO + _SHELL + r"|\bsource|(?<!\S)\.)"
-             + r"(?:\s+-\S+)*\s+(?:<\s*)?<\(\s*" + _FETCH),
+             + r"(?:\s+-\S+){0,4}\s+(?:<\s*)?<\(\s*" + _FETCH),
          "pipes a downloaded script straight into a shell"),
     Rule("base64-pipe-shell", "high",
          _rx(r"\bbase64\s+(?:-{1,2}\w+\s+)*-?[dD]\b[^\n|]*\|\s*"

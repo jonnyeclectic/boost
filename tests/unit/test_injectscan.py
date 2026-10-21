@@ -334,6 +334,18 @@ class TestCurlToShellSpellings:
         assert _ids(injectscan.scan_text('eval "$(curl x)"')) == \
             ["eval-subshell"]
 
+    @pytest.mark.parametrize("unit", ["a", "a/", "sudo -u ", "env -i "])
+    def test_a_long_line_scans_in_linear_time(self, unit):
+        # Install scans every .js a skill ships, and minified JS is one long
+        # line. An unanchored `\S*/` path prefix made this rule quadratic:
+        # 20 KB of "a/" took ~10 s, so 100 KB would take minutes. Linear is
+        # well under a tenth of a second; the budget only catches the blow-up.
+        import time
+        line = unit * (100_000 // len(unit))
+        start = time.perf_counter()
+        injectscan.scan_text(line)
+        assert time.perf_counter() - start < 3.0
+
 
 class TestInvisibleCharactersInOrdinaryText:
     """Characters that are invisible by design but do a rendering job."""
