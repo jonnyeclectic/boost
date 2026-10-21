@@ -507,7 +507,7 @@ def cmd_outdated(argv) -> int:
             head = heads[tap_name]
             if head and head != lk.get("commit"):
                 try:
-                    src_sha = util.sha256_dir(store.source_dir_for(entry))
+                    src_sha = store.skill_source_sha(entry)
                 except BoostError:
                     src_missing = True
         base = {"name": name, "kind": "skill", "installed": installed_v,

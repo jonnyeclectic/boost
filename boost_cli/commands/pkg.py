@@ -1765,7 +1765,7 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
         head = heads[tapname]
         if head and head != lk.get("commit"):
             try:
-                src_sha = util.sha256_dir(store.source_dir_for(entry))
+                src_sha = store.skill_source_sha(entry)
             except BoostError:
                 return 0, 0, 0, 0
     reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),

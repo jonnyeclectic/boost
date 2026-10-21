@@ -267,13 +267,11 @@ def _drift_from_copy(name: str, entry: dict, copy_sha: str | None) -> str:
     source_sha = None
     if copy_sha is not None and copy_sha == lock_sha and not is_local:
         try:
-            src = store.source_dir_for(
+            source_sha = store.skill_source_sha(
                 {"name": name, "tap": entry.get("tap", ""),
                  "rel_dir": entry.get("source_dir", ".")})
         except BoostError:
             source_sha = None
-        else:
-            source_sha = util.sha256_dir(src)
     return staleness.drift_state(copy_sha, lock_sha, is_local, source_sha)
 
 
