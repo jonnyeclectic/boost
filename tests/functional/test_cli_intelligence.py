@@ -61,6 +61,9 @@ def ai_on(sandbox, monkeypatch):
     from boost_cli.core import ai
     monkeypatch.delenv("BOOST_NO_AI", raising=False)
     monkeypatch.setattr(ai, "available", lambda: True)
+    # A backend exists, so a degraded reply is blamed on the reply rather
+    # than on PATH -- CI runners have no assistant CLI installed.
+    monkeypatch.setattr(ai, "has_cli", lambda: True)
 
     def set_replies(ask=None, ask_author=None):
         monkeypatch.setattr(ai, "ask", lambda *a, **k: ask)
