@@ -93,14 +93,14 @@ def reserved_cache_name(name: str) -> bool:
     Case-folded: on a case-insensitive filesystem ``RAG_INDEX.json`` *is*
     ``rag_index.json``.
     """
-    leaf = (name.replace("/", "__") + ".json").lower()
+    leaf = (Tap(name=name, url="").safe_name + ".json").lower()
     return leaf in paths.INTERNAL_CACHE_FILES
 
 
 def _reserved(name: str) -> BoostError:
     return BoostError(
         "tap name %s is reserved: its catalog would overwrite boost's own "
-        "cache/%s.json" % (name, name.replace("/", "__")),
+        "cache/%s.json" % (name, Tap(name=name, url="").safe_name),
         hint="rename the directory and tap it again")
 
 
