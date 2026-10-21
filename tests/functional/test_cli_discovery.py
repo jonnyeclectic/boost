@@ -356,6 +356,7 @@ class TestSearch:
                                                       monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         # BM25 for "workflow" returns tdd-workflow then jira-integration; the
         # rerank flips them.
         monkeypatch.setattr("boost_cli.core.ai.ask",
@@ -369,6 +370,7 @@ class TestSearch:
                                                         monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr("boost_cli.core.ai.ask",
                             lambda *a, **k: "sorry, no list here")
         r = boost("search", "workflow", "--smart")
@@ -384,6 +386,7 @@ class TestSearch:
         # A permutation of nothing: the order is BM25's, so the label must be.
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr("boost_cli.core.ai.ask",
                             lambda *a, **k: '["no-such-skill", "made-up"]')
         r = boost("search", "workflow", "--smart", "--json")
@@ -397,6 +400,7 @@ class TestSearch:
     def test_smart_junk_reply_names_the_cause(self, boost, tapped, monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr("boost_cli.core.ai.ask",
                             lambda *a, **k: "{not json [[ garbage")
         r = boost("search", "workflow", "--smart")
@@ -413,6 +417,7 @@ class TestSearch:
             return '["jira-integration", "tdd-workflow"]'
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr("boost_cli.core.ai.ask", ask)
         r = boost("search", "workflow", "--smart")
         assert "ranked by AI relevance (gemini CLI)" in r.out
@@ -421,6 +426,7 @@ class TestSearch:
                                                       monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr("boost_cli.core.ai.ask", lambda *a, **k: None)
         r = boost("search", "workflow", "--smart")
         assert r.out.index("tdd-workflow") < r.out.index("jira-integration")
@@ -440,6 +446,7 @@ class TestSearch:
         # JSON branch returned before the --smart rerank ever ran.
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr("boost_cli.core.ai.ask",
                             lambda *a, **k: '["jira-integration", "tdd-workflow"]')
         r = boost("search", "workflow", "--json", "--smart")
@@ -1571,6 +1578,7 @@ class TestRecommend:
     def test_ai_picks(self, boost, stack_tap, react_project, monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr(
             "boost_cli.core.ai.ask",
             lambda *a, **k: '[{"name": "python-style", "reason": "fits the stack"}]')
@@ -1582,6 +1590,7 @@ class TestRecommend:
     def _ai_reply(self, monkeypatch, reply):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         monkeypatch.setattr("boost_cli.core.ai.ask", lambda *a, **k: reply)
 
     def test_ai_picks_run_under_a_spinner(self, boost, stack_tap,
