@@ -242,6 +242,18 @@ class TestUpgradeCommand:
             selfupdate.upgrade_command(selfupdate.UV_PIP)
         assert err.value.message == (
             "boost was installed with uv, but uv is not on PATH")
+        assert err.value.hint == (
+            "install uv, or upgrade manually with "
+            "`uv pip install --upgrade boost-skill-cli`")
+
+    def test_uv_tool_without_uv_names_a_real_uv_command(self, monkeypatch):
+        # `uv upgrade` is not a uv subcommand; the hint must not offer it.
+        monkeypatch.setattr(selfupdate.shutil, "which", lambda t: None)
+        with pytest.raises(BoostError) as err:
+            selfupdate.upgrade_command(selfupdate.UV_TOOL)
+        assert err.value.hint == (
+            "install uv, or upgrade manually with "
+            "`uv tool upgrade boost-skill-cli`")
 
     def test_pip_uses_this_interpreter_not_the_pip_on_path(self):
         # A bare `pip` can belong to a different interpreter, in which case the

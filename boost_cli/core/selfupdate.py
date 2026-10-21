@@ -143,18 +143,20 @@ def detect(root: Path | None = None, prefix: Path | None = None,
     return PIP
 
 
-def _require(tool: str) -> str:
+def _require(tool: str, manual: str | None = None) -> str:
     """Absolute path to `tool`, or a BoostError naming what is missing.
 
     Falling back to another manager here would upgrade a different copy of
-    boost — or none at all — while reporting success.
+    boost — or none at all — while reporting success. `manual` is the
+    subcommand the hint offers; it defaults to `upgrade <dist>`, which is
+    right for pipx and does not exist in uv (`uv upgrade` is no command).
     """
     found = shutil.which(tool)
     if not found:
         raise BoostError(
             "boost was installed with %s, but %s is not on PATH" % (tool, tool),
-            hint="install %s, or upgrade manually with `%s upgrade %s`"
-                 % (tool, tool, DIST))
+            hint="install %s, or upgrade manually with `%s %s`"
+                 % (tool, tool, manual or "upgrade %s" % DIST))
     return found
 
 
@@ -179,12 +181,14 @@ def upgrade_command(method: str) -> list[str]:
         # starts with `--`.
         return [_require("pipx"), "upgrade", DIST, "--pip-args=--no-cache-dir"]
     if method == UV_TOOL:
-        return [_require("uv"), "tool", "upgrade", "--refresh", DIST]
+        return [_require("uv", "tool upgrade %s" % DIST), "tool", "upgrade",
+                "--refresh", DIST]
     if method == UV_PIP:
         # `--python sys.executable` for the same reason pip gets it below: the
         # uv default is whatever venv is active, not the one running boost.
-        return [_require("uv"), "pip", "install", "--python", sys.executable,
-                "--refresh", "--upgrade", DIST]
+        return [_require("uv", "pip install --upgrade %s" % DIST), "pip",
+                "install", "--python", sys.executable, "--refresh", "--upgrade",
+                DIST]
     if method == PIP:
         # sys.executable, never a bare `pip`: the pip first on PATH can belong
         # to a different interpreter than the one running boost, and upgrading
