@@ -6,7 +6,9 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
+import signal
 import subprocess
+import sys
 from pathlib import Path
 from typing import NamedTuple
 
@@ -74,9 +76,8 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True,
     """
     require_git()
     try:
-        proc = subprocess.run(
-            ["git", *args], cwd=str(cwd) if cwd else None,
-            capture_output=True, text=True, timeout=timeout,
+        proc = _exec(
+            ["git", *args], cwd=str(cwd) if cwd else None, timeout=timeout,
             # GIT_LFS_SKIP_SMUDGE: taps are indexed for their Markdown, and boost
             # never reads an LFS payload. Without this, tapping a repo that stores
             # large media in LFS downloads all of it on clone — heygen-com/hyperframes
@@ -97,13 +98,58 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True,
                               "GIT_TERMINAL_PROMPT": "0"},
         )
     except subprocess.TimeoutExpired:
-        raise BoostError("git %s timed out after %ds" % (args[0], timeout)) from None
+        name = _subcommand(args)
+        raise BoostError("git%s timed out after %ds"
+                         % (" " + name if name else "", timeout)) from None
     if check and proc.returncode != 0:
         name = _subcommand(args)
         raise BoostError("git%s failed: %s"
                          % (" " + name if name else "",
                             _git_error(proc.stderr or proc.stdout or "")))
     return proc
+
+
+def _exec(argv: list[str], *, cwd: str | None, timeout: float,
+          env: dict[str, str]) -> subprocess.CompletedProcess:
+    """`subprocess.run(argv, capture_output=True, text=True)`, except that a
+    timeout (or an interrupt) kills git's whole process tree, not only git.
+
+    `subprocess.run(timeout=)` SIGKILLs the direct child and nothing else, and
+    git does its network work in children — `git clone`/`fetch` over https run
+    `git remote-http` and `git-remote-http`. Measured against a server that
+    accepts and never answers: after "git clone timed out" both helpers were
+    still running, reparented to PID 1 and holding the connection, long after
+    boost had exited. So git runs as the leader of its own session (POSIX) and
+    the timeout kills the group; on Windows `taskkill /T` walks the tree.
+    """
+    kwargs: dict = {}
+    if sys.platform != "win32":
+        kwargs["start_new_session"] = True
+    with subprocess.Popen(argv, cwd=cwd, env=env, text=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          **kwargs) as proc:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except BaseException:
+            # Ctrl-C too: in its own session git no longer gets the
+            # terminal's SIGINT, and Popen's __exit__ would wait on it.
+            _kill_tree(proc)
+            raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill `proc` and every process it started, then reap it."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       capture_output=True, check=False)
+        with contextlib.suppress(OSError):
+            proc.kill()
+    else:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.communicate(timeout=5)
 
 
 def _subcommand(args: list[str]) -> str:
@@ -232,6 +278,25 @@ def clone_shallow(url: str, dest: Path, sparse: bool = True) -> None:
     base = ["clone", "--depth", "1", "--quiet",
             "-c", "core.autocrlf=false", "-c", "core.eol=lf"]
     tail = ["--", url, str(dest)]
+    existed = dest.exists()
+    try:
+        _clone(base, tail, url, dest, sparse)
+    except BaseException:
+        # A clone that failed or timed out part-way leaves `dest/.git` behind:
+        # not a tap (nothing recorded it), yet a directory under repos/ that
+        # every later look at the disk takes for one. Only a dir this call
+        # created is removed — a caller's existing tree is not ours to delete.
+        if not existed:
+            # util.remove_path, not shutil.rmtree(ignore_errors=True): git
+            # writes its objects read-only, which Windows will not unlink.
+            with contextlib.suppress(OSError):
+                util.remove_path(dest)
+        raise
+
+
+def _clone(base: list[str], tail: list[str], url: str, dest: Path,
+           sparse: bool) -> None:
+    """The body of :func:`clone_shallow`, which owns cleanup on failure."""
     if not sparse:
         _clone_or_translate([*base, *tail], url)
         _refuse_empty(dest, url)
@@ -615,7 +680,15 @@ def pull(repo: Path) -> str:
 
 
 def head_commit(repo: Path) -> str:
-    """Return the full HEAD commit hash of `repo`, or "" if unresolvable."""
+    """Return the full HEAD commit hash of `repo`, or "" if unresolvable.
+
+    "" with no git on PATH as well: this is a probe, and `run` would raise the
+    "git is required" error from inside it — which ended `boost doctor` (and
+    its `--json`) at the first cached tap, before its verdict, on the one
+    machine where doctor's own "git not found" row was the useful line.
+    """
+    if not has_git():
+        return ""
     proc = run(["-C", str(repo), "rev-parse", "HEAD"], check=False)
     return proc.stdout.strip() if proc.returncode == 0 else ""
 

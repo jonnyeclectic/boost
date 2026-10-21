@@ -55,7 +55,7 @@ def _repo_with_asset(dest, extra: str | None = None):
 
 
 def _clone_argv(monkeypatch) -> dict:
-    """Run clone_shallow with subprocess.run stubbed; return the argv it built."""
+    """Run clone_shallow with gitutil._exec stubbed; return the argv it built."""
     seen: dict = {}
 
     def fake_run(argv, **kwargs):
@@ -64,7 +64,7 @@ def _clone_argv(monkeypatch) -> dict:
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(gitutil, "has_git", lambda: True)
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(gitutil, "_exec", fake_run)
     return seen
 
 
@@ -162,7 +162,7 @@ class TestOldGitFallsBackToAFullClone:
             return subprocess.CompletedProcess(argv, 0, "", "")
 
         monkeypatch.setattr(gitutil, "has_git", lambda: True)
-        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(gitutil, "_exec", fake_run)
 
         gitutil.clone_shallow("https://example.test/r.git", tmp_path / "d")
 
