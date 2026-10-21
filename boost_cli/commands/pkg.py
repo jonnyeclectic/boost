@@ -2671,7 +2671,7 @@ def cmd_pin(argv: list[str]) -> int:
                          "to user-scope installs" % args.name,
                          hint="`boost pin %s` holds it at its version" % args.name)
     rc = _set_pin(args.name, True)
-    # Read after the pin: `set_commit_pin` writes back the row it is given.
+    # Read after the pin: `set_commit_pin` takes the commit from this row.
     found = lockfile.find_any(args.name)
     if rc == 0 and args.commit and found is not None:
         kind, entry = found

@@ -196,12 +196,12 @@ class TestInterruptedUpgrade:
         # describes, so swapping the old one back would be the mismatch.
         self._bump(origin)
         assert cli.main(["update"]) == 0
-        real_set = lockfile.set_skill
+        real_record = store.record_rebuilt
 
         def then_boom(name, entry):
-            real_set(name, entry)
+            real_record(name, entry)
             raise KeyboardInterrupt
-        monkeypatch.setattr(lockfile, "set_skill", then_boom)
+        monkeypatch.setattr(store, "record_rebuilt", then_boom)
         with pytest.raises(KeyboardInterrupt):
             store.install(catalog.resolve_one("brainstorming"), force=True)
         row = lockfile.get_skill("brainstorming")

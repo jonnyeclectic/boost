@@ -708,7 +708,11 @@ def set_commit_pin(name: str, entry: dict, kind: str = "skill") -> str:
     # the lock, so a tag or pin landed since `entry` was read survives.
     def freeze(row: dict) -> None:
         row["commit_pin"] = commit
-    lockfile.update_entry(kind, name, freeze)
+    if not lockfile.update_entry(kind, name, freeze):
+        # Reporting a pin on a row that is gone would promise a `boost
+        # verify` check that has nothing to check.
+        raise BoostError("%s was uninstalled while commit-pinning it" % name,
+                         hint="see what is with `boost list`")
     return commit
 
 
@@ -720,5 +724,5 @@ def clear_commit_pin(name: str, entry: dict, kind: str = "skill") -> bool:
 
     def release(row: dict) -> None:
         row.pop("commit_pin", None)
-    lockfile.update_entry(kind, name, release)
-    return True
+    # A row gone by now has no pin left to report as released.
+    return lockfile.update_entry(kind, name, release)

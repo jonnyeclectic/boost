@@ -307,6 +307,20 @@ class TestPinAppliesToTheFreshRow:
         assert _row()["tags"] == ["kept"]
 
 
+    def test_commit_pin_on_a_vanished_row_refuses(self, boost, installed):
+        from boost_cli.core import integrity
+        from boost_cli.errors import BoostError
+        stale = _row()
+        lockfile.remove_skill("brainstorming")
+        with pytest.raises(BoostError,
+                           match="brainstorming was uninstalled while "
+                                 "commit-pinning it"):
+            integrity.set_commit_pin("brainstorming", dict(stale))
+        assert _row() is None
+        assert integrity.clear_commit_pin(
+            "brainstorming", {**stale, "commit_pin": "abc"}) is False
+        assert _row() is None
+
 # ── install / sideline ──────────────────────────────────────────────────
 
 class TestReinstallCarriesTheFreshRow:
