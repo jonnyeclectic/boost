@@ -170,10 +170,15 @@ def test_stale_commit_needs_both_sides_known(boost, tapped):
 
 
 def test_stale_commit_ignores_an_old_format(boost, tapped):
-    # load_tap rescans that one on its own; it is not this fault.
+    # load_tap rescans an old format on its own, so the format is not this
+    # fault: the answer turns on the commit alone, whatever the format says.
     tap = _tap(boost, tapped)
+    head = gitutil.head_commit(tap.path)
     _rewrite(tap, format=catalog.CACHE_FORMAT - 1)
+    assert catalog.cache_is_fresh(tap) is False
     assert catalog.stale_commit(tap) is None
+    _rewrite(tap, commit="0" * 40)
+    assert catalog.stale_commit(tap) == ("0" * 40, head)
 
 
 def test_stale_commit_hint_names_the_tap_and_heal(boost, tapped):
