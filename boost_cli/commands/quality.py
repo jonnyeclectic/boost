@@ -1013,6 +1013,14 @@ def cmd_doctor(argv):
                 bad("rule", "rule %s missing its %s materialization — run "
                     "`boost reinstall %s`" % (name, m.get("agent", "?"), name))
                 mat_issues += 1
+        # As for a workflow below: the user's own rules-dir file held the path.
+        for r in store.foreign_rows(entry):
+            if (store.materialization_is_written("rule", entry, r)
+                    and not os.path.lexists(r["path"])):
+                bad("rule", "rule %s was not written for %s: a file boost did "
+                    "not write held %s, and it is gone now — run `boost sync`"
+                    % (name, r["agent"], _tilde(r["path"])), wrap=True)
+                mat_issues += 1
         if mat_issues == before:
             mat_issues += _drifted("rule", name, entry, bad)
     for name, entry in sorted(workflows.items()):
