@@ -88,6 +88,14 @@ class TestMisdirected:
         assert store.misdirected("brainstorming", link) == \
             paths.store_dir().resolve()
 
+    def test_a_link_into_its_own_subdir_names_the_subdir(self, two):
+        sub = store.skill_store_dir("brainstorming") / "references"
+        sub.mkdir(exist_ok=True)
+        link = _link("claude-code", "brainstorming")
+        link.unlink()
+        link.symlink_to(sub)
+        assert store.misdirected("brainstorming", link) == sub.resolve()
+
     def test_misdirected_links_lists_only_the_wrong_agent(self, crossed):
         assert store.misdirected_links("brainstorming") == [
             ("claude-code", paths.store_dir() / "tdd-workflow")]

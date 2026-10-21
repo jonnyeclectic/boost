@@ -1091,8 +1091,11 @@ def misdirected(name: str, link: Path) -> Path | None:
     with contextlib.suppress(OSError):
         if os.path.samefile(link, target):
             return None
+    # The entry's name, unless it is this skill's own: a link into a subdir
+    # of its copy is wrong too, and "linked to <its own dir>, not its own
+    # store dir" would contradict itself, so that one names the real path.
     entry = _store_entry(link)
-    return (paths.store_dir() / entry if entry
+    return (paths.store_dir() / entry if entry and entry != name
             else Path(os.path.realpath(link)))
 
 
