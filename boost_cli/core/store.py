@@ -322,7 +322,7 @@ def resolve_lock_entry(name: str) -> tuple[str, str | None, dict | None]:
     return bare, kind, entry
 
 
-def installed_name(name: str) -> str:
+def installed_name(name: str, scope: str | None = None) -> str:
     """The bare lock key a command acting on an installed ``name`` should use.
 
     ``install`` accepts ``tap:skill`` and every ambiguity hint tells the user
@@ -339,32 +339,52 @@ def installed_name(name: str) -> str:
     not reach: a bare name resolves skill-first (:func:`lockfile.find_any`),
     so ``other:x`` selecting the rule ``x`` while a skill ``x`` is installed
     would otherwise uninstall or pin the skill.
+
+    ``scope`` is the command's own ``--scope``. Given one, only that scope's
+    rows are the ones the command acts on, so only they are checked: with a
+    user ``x`` from tap A and a project ``x`` from tap B, ``B:x --local``
+    names the project copy, and ``A:x --local`` names nothing in this repo.
+    Checking both against the user row first refused the first and let the
+    second remove or reinstall tap B's copy.
     """
     qualifier, bare = catalog.split_name(name)
     if qualifier is None:
         return name
-    held = [(kind, section[bare]) for kind, section in lockfile.all_installed().items()
-            if bare in section]
-    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
-    project_entry = projectlock.get_skill(pbase, bare) if pbase is not None else None
+    held: list[tuple[str, dict]] = []
+    if scope != scopes.SCOPE_PROJECT:
+        held = [(kind, section[bare])
+                for kind, section in lockfile.all_installed().items()
+                if bare in section]
+    project_entry = None
+    if scope != scopes.SCOPE_USER:
+        pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        project_entry = (projectlock.get_skill(pbase, bare)
+                         if pbase is not None else None)
     if project_entry is not None:
         held.append(("skill", project_entry))
     if not held:
         return bare
     taps = [str(entry.get("tap") or "local") for _kind, entry in held]
+    where = {scopes.SCOPE_PROJECT: " in this repo",
+             scopes.SCOPE_USER: " in your user config"}.get(scope or "", "")
     if not any(catalog.tap_matches(t, qualifier) for t in taps):
         raise BoostError(
-            "%s is not installed — %s is installed from %s, not %s"
-            % (name, bare, ", ".join(dict.fromkeys(taps)), qualifier),
+            "%s is not installed%s — %s is installed from %s, not %s"
+            % (name, where, bare, ", ".join(dict.fromkeys(taps)), qualifier),
             hint="name it `%s` or `%s:%s`" % (bare, taps[0], bare), wrap=True)
     if not catalog.tap_matches(taps[0], qualifier):
-        kind = next(k for (k, _e), t in zip(held, taps, strict=True)
-                    if catalog.tap_matches(t, qualifier))
+        idx = next(i for i, t in enumerate(taps)
+                   if catalog.tap_matches(t, qualifier))
+        # The qualifier picks this repo's copy, which `--local` reaches:
+        # "uninstall one of the two first" would be the long way round.
+        local = project_entry is not None and idx == len(held) - 1
         raise BoostError(
             "%s is ambiguous here — it selects the %s %s, but the %s %s from %s "
             "is the one this command would act on"
-            % (name, kind, bare, held[0][0], bare, taps[0]),
-            hint="uninstall one of the two first, or see `boost list`", wrap=True)
+            % (name, held[idx][0], bare, held[0][0], bare, taps[0]),
+            hint=("add `--local` to act on this repo's copy" if local
+                  else "uninstall one of the two first, or see `boost list`"),
+            wrap=True)
     return bare
 
 

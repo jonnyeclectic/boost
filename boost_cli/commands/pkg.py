@@ -837,7 +837,7 @@ def cmd_uninstall(argv: list[str]) -> int:
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     args = ap.parse_args(argv)
-    args.names = [store.installed_name(n) for n in args.names]
+    args.names = [store.installed_name(n, args.scope) for n in args.names]
     if (args.kind not in (None, "skill")
             and args.scope == scopes.SCOPE_PROJECT):
         raise BoostError("--local removes project skills, not a %s"
@@ -2082,7 +2082,7 @@ def cmd_reinstall(argv: list[str]) -> int:
         local_help="what is installed in this repo (= --scope project)",
         global_help="what is installed in your user config (= --scope user)")
     args = ap.parse_args(argv)
-    args.names = [store.installed_name(n) for n in args.names]
+    args.names = [store.installed_name(n, args.scope) for n in args.names]
     pbase = None
     if args.scope == scopes.SCOPE_PROJECT:
         pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
