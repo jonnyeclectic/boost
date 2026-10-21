@@ -247,6 +247,7 @@ def _read_skill(skill_dir: Path) -> tuple[dict, str]:
 
 def _drift_status(name: str, entry: dict) -> str:
     """'in-sync' | 'local-edits' | 'upstream-moved' | 'source-missing'
+    | 'source-changed'
     | 'store-missing' | 'n/a' (local imports with no tap source)."""
     sdir = store.skill_store_dir(name)
     if sdir.is_dir() and integrity.self_sourced(name, entry):
@@ -265,14 +266,27 @@ def _drift_from_copy(name: str, entry: dict, copy_sha: str | None) -> str:
     is_local = entry.get("tap") == "local"
     lock_sha = entry.get("sha256", "")
     source_sha = None
+    changed = False
     if copy_sha is not None and copy_sha == lock_sha and not is_local:
-        try:
-            source_sha = store.skill_source_sha(
-                {"name": name, "tap": entry.get("tap", ""),
-                 "rel_dir": entry.get("source_dir", ".")})
-        except BoostError:
-            source_sha = None
-    return staleness.drift_state(copy_sha, lock_sha, is_local, source_sha)
+        changed = _tap_source_changed(entry)
+        if not changed:
+            try:
+                source_sha = store.skill_source_sha(
+                    {"name": name, "tap": entry.get("tap", ""),
+                     "rel_dir": entry.get("source_dir", ".")})
+            except BoostError:
+                source_sha = None
+    return staleness.drift_state(copy_sha, lock_sha, is_local, source_sha,
+                                 source_changed=changed)
+
+
+def _tap_source_changed(entry: dict) -> bool:
+    """:func:`registry.source_changed` for a lock row; False when untapped."""
+    try:
+        tap = registry.get(str(entry.get("tap", "")))
+    except BoostError:
+        return False
+    return registry.source_changed(entry, tap)
 
 
 def _drift_status_project(name: str, entry: dict, base: Path) -> str:
@@ -328,6 +342,8 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
         return "unreachable"
     if entry.get("tap") == "local":
         return "n/a"
+    if _tap_source_changed(entry):
+        return staleness.SOURCE_CHANGED
     try:
         raw = (registry.get(entry["tap"]).path / entry.get("source_file", "")
                ).read_text(encoding="utf-8", errors="replace")
@@ -345,6 +361,7 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
 #: against each other.
 _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
                "upstream-moved": "accent", "source-missing": "danger",
+               "source-changed": "warn",
                "store-missing": "danger", "n/a": "muted",
                "quarantined": "muted", "unreachable": "warn",
                "stranded": "danger", "outdated": "warn",
@@ -357,6 +374,11 @@ def _drift_hint(name: str, status: str, tap: str = "",
         return "boost quarantine --release %s to restore" % name
     if status == "upstream-moved":
         return "boost update"
+    if status == "source-changed":
+        # `boost update` holds these back on purpose: the tap's copy of the
+        # name is another repository's item, taken only when asked for.
+        return ("boost reinstall %s to take the new source's copy, or re-tap "
+                "the original" % name)
     if status == "local-edits":
         return "boost reinstall %s to discard local edits" % name
     if status == "source-missing":

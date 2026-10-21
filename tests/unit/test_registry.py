@@ -756,3 +756,32 @@ class TestGitErrorLine:
 
     def test_skips_blank_lines_when_falling_back(self):
         assert gitutil._git_error("only line\n\n\n") == "only line"
+
+
+class TestSourceChanged:
+    """A lock row's recorded `tap_url` against the tap its name resolves to
+    now: an untap + re-tap of another repo under the same name used to turn
+    that repo's same-named skill into an "upgrade"."""
+
+    def test_different_repository_is_changed(self):
+        tap = registry.Tap(name="reg", url="/src/b/reg")
+        assert registry.source_changed({"tap_url": "/src/a/reg"}, tap) is True
+
+    def test_same_url_is_not_changed(self):
+        tap = registry.Tap(name="reg", url="/src/a/reg")
+        assert registry.source_changed({"tap_url": "/src/a/reg"}, tap) is False
+
+    def test_another_spelling_of_one_remote_is_not_changed(self):
+        tap = registry.Tap(name="o/r", url="https://github.com/O/R")
+        assert registry.source_changed(
+            {"tap_url": "git@github.com:o/r.git"}, tap) is False
+
+    def test_another_host_is_changed(self):
+        tap = registry.Tap(name="o/r", url="https://gitlab.com/o/r")
+        assert registry.source_changed(
+            {"tap_url": "https://github.com/o/r"}, tap) is True
+
+    @pytest.mark.parametrize("lk", [{}, {"tap_url": ""}, {"tap_url": None}])
+    def test_row_without_tap_url_keeps_legacy_behaviour(self, lk):
+        tap = registry.Tap(name="reg", url="/src/b/reg")
+        assert registry.source_changed(lk, tap) is False

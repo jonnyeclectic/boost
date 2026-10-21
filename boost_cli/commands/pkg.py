@@ -1482,6 +1482,27 @@ def _refresh_line(label: str, old_v: str, new_v: str, edited: bool,
     return msg + (" — local edits discarded" if edited else "")
 
 
+def _source_changed_hold(label: str, name: str, lk: dict, tapname: str) -> bool:
+    """Warn and return True when ``tapname`` now names another repository.
+
+    The tap's same-named item is not this install's upstream, so refreshing
+    from it would replace one item with an unrelated one — and it would do so
+    behind the risky-diff gate that `--yes` waives. Never implicit: `boost
+    reinstall` is the explicit way to take the new source's copy.
+    """
+    try:
+        tap = registry.get(tapname)
+    except BoostError:
+        return False
+    if not registry.source_changed(lk, tap):
+        return False
+    out.warn("%s: not updated — tap %s now points at %s, not %s where it was "
+             "installed; `boost reinstall %s` takes the new source's copy"
+             % (label, tapname, _tilde(tap.url),
+                _tilde(str(lk.get("tap_url"))), name), wrap=True)
+    return True
+
+
 def _update_materialized(kind: str, installed: dict[str, dict], results,
                          discard_edits: bool = False,
                          allow_downgrade: bool = False, *,
@@ -1508,6 +1529,9 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
     for name, lk in sorted(installed.items()):
         tapname = lk.get("tap")
         if tapname in (None, "local") or tapname not in results:
+            continue
+        if _source_changed_hold("%s %s" % (kind, name), name, lk, tapname):
+            held += 1
             continue
         pool = index.get(catalog.split_name(name)[1], [])
         matches = [e for e in catalog.find(name, entries=pool)
@@ -1761,6 +1785,8 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     tapname: str = lk.get("tap") or "local"
     if tapname == "local" or tapname not in results:
         return 0, 0, 0, 0
+    if _source_changed_hold(label, name, lk, tapname):
+        return 0, 1, 0, 0
     pool = index.get(catalog.split_name(name)[1], [])
     matches = [e for e in catalog.find(name, entries=pool)
                if e["tap"] == tapname]

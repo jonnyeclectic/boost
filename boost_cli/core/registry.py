@@ -312,6 +312,20 @@ def same_source(a: str, b: str) -> bool:
     return _is_local(a) and _is_local(b) and _same_file(a, b)
 
 
+def source_changed(lk: dict, tap: Tap) -> bool:
+    """True when ``tap`` no longer names the repository ``lk`` came from.
+
+    A tap is addressed by its name, and a name is only the tail of a URL:
+    untap `~/a/reg` and tap `~/b/reg`, and the lock rows installed from the
+    first now resolve to the second. Comparing versions across that seam
+    called an unrelated skill of the same name an upgrade, and `boost update`
+    applied it. The lock's ``tap_url`` (written at install) is the source; a
+    row without one predates the field and keeps the old behaviour.
+    """
+    recorded = str(lk.get("tap_url") or "")
+    return bool(recorded) and not same_source(recorded, tap.url)
+
+
 def _is_local(url: str) -> bool:
     return not (url.startswith("git@") or _SCHEME.match(url))
 
