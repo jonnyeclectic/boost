@@ -506,6 +506,18 @@ def join_hints(*hints: str | None) -> str | None:
     return "; ".join(h for h in hints if h) or None
 
 
+NO_TAPS_HINT = "no taps configured — start with `boost tap --defaults`"
+
+
+def search_hint(name: str) -> str:
+    """The next step after a failed lookup of ``name``: ``boost search`` it,
+    unless nothing is tapped — then search fails too ("no taps configured"),
+    so the step is to tap something first."""
+    if not builtin.configured_tap_count():
+        return NO_TAPS_HINT
+    return "try `boost search %s`" % name
+
+
 def stale_commit_hint() -> str | None:
     """The remedy line for a failed lookup when some tap's cache predates its
     clone, or ``None`` when none does. Pays one git call per cloned tap, so it
@@ -1148,7 +1160,7 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 # wheel and is appended on a machine the user has tapped
                 # nothing on, which silenced this hint exactly where a new
                 # user needs it.
-                hint = "no taps configured — start with `boost tap --defaults`"
+                hint = NO_TAPS_HINT
         raise BoostError("no skill named %r in any tap" % name,
                          hint=join_hints(hint, stale_commit_hint()))
     if len(matches) > 1:

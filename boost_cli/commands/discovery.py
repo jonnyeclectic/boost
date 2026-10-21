@@ -2547,7 +2547,7 @@ def cmd_stats(argv):
     cat = catalog.for_lock(catalog.find(args.name), lock)
     if not lock and not cat:
         raise BoostError("no skill named %r installed or in any tap" % args.name,
-                        hint=catalog.join_hints("try `boost search %s`" % name,
+                        hint=catalog.join_hints(catalog.search_hint(name),
                                                 catalog.stale_commit_hint()))
     acts = {a: len(catalog.events_for_tap(
                 journal.events(action=a, subject=name), qualifier, lock))
