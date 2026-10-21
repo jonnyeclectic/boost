@@ -391,13 +391,13 @@ def info(msg: str = "", stream=None, wrap: bool = False) -> None:
 # space rather than vanish — see `plain`.
 #
 # The Unicode bidi embeddings, overrides and isolates (U+202A-202E,
-# U+2066-2069) and the Arabic letter mark (U+061C) go too. They are not
-# terminal controls, but a bidi-aware terminal obeys them: an unclosed U+202E
-# in a version cell renders the rest of the line right to left, the columns
-# boost printed after it included. RTL *letters* are untouched — only the
+# U+2066-2069) and the directional marks (U+200E/U+200F, Arabic U+061C) go
+# too. They are not terminal controls, but a bidi-aware terminal obeys them:
+# an unclosed U+202E in a version cell renders the rest of the line right to
+# left, the columns boost printed after it included. RTL *letters* are untouched — only the
 # invisible formatting characters that reorder their neighbours are removed.
 _CONTROL_RE = re.compile(
-    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u202a-\u202e\u2066-\u2069]")
+    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 _FOLD_RE = re.compile(r"[\t\n]")
 
 
