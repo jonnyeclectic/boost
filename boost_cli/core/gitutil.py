@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import signal
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
@@ -475,13 +477,67 @@ def materialize(repo: Path, rel_dir: str) -> None:
     rel = rel_dir.strip("/")
     if not rel or rel == ".":
         return
-    pattern = "/%s/*" % sparse_escape(rel)
+    patterns = ["/%s/*" % sparse_escape(form) for form in _spellings(rel)]
     have = _sparse_list(repo)
-    if have is not None and pattern in have:
+    if have is not None and all(p in have for p in patterns):
         return
     if not is_sparse(Path(repo)):
         return
-    _sparse_add(Path(repo), [pattern], rel)
+    _sparse_add(Path(repo), patterns, rel)
+    _require_checked_out(Path(repo), rel)
+
+
+#: Passed to every git call that writes or reads a sparse pattern or an index
+#: path. macOS git defaults ``core.precomposeunicode`` to true and rewrites its
+#: *argv* to NFC, so a pattern for a path the index holds in NFD (a repo
+#: authored on Linux: ``cafe\u0301``) was stored precomposed and matched
+#: nothing. The skill's ``scripts/`` stayed skip-worktree and installed as
+#: nothing, while doctor, drift and verify all called the copy healthy.
+_RAW_PATHS = ["-c", "core.precomposeunicode=false"]
+
+
+def _spellings(rel: str) -> list[str]:
+    """``rel`` in NFC and NFD, deduplicated (one entry for plain ASCII).
+
+    The name boost holds comes from a directory walk, and which form that
+    returns depends on the filesystem (HFS+ decomposes, APFS keeps what git
+    wrote), not on what the index records. A pattern in each form matches
+    whichever one the index holds.
+    """
+    return list(dict.fromkeys(unicodedata.normalize(f, rel)
+                              for f in ("NFC", "NFD")))
+
+
+def _fold(path: str) -> str:
+    """``path`` as a case- and normalization-insensitive filesystem sees it."""
+    return unicodedata.normalize("NFC", path).casefold()
+
+
+def _require_checked_out(repo: Path, rel: str) -> None:
+    """Refuse when a file under ``rel`` is still outside the sparse checkout.
+
+    Run once, right after the cone was widened for ``rel``: a pattern git
+    stored but did not match leaves the files skip-worktree, and the copy
+    that follows would install the half that exists and report success.
+    """
+    proc = run([*_RAW_PATHS, "-C", str(repo), "ls-files", "-t", "-z"],
+               check=False)
+    # Normalization only, never case: on a case-sensitive clone
+    # ``skills/Lint`` is another skill, rightly left outside the checkout
+    # that widened ``skills/lint``.
+    want = unicodedata.normalize("NFC", rel) + "/"
+    skipped = [rec[2:] for rec in (proc.stdout or "").split("\0")
+               if rec.startswith("S ")
+               and unicodedata.normalize("NFC", rec[2:]).startswith(want)]
+    if skipped:
+        raise BoostError(
+            "could not check out %d file%s of %s from the %s tap (%s), so "
+            "installing it would copy a partial skill"
+            % (len(skipped), "" if len(skipped) == 1 else "s", rel, repo.name,
+               ", ".join(sorted(skipped)[:5])),
+            hint="`boost update %s` and try again; if it persists, the tap's "
+                 "sparse checkout cannot match this path" % repo.name,
+            wrap=True)
 
 
 def materialize_paths(repo: Path, rels: list[str]) -> None:
@@ -498,13 +554,62 @@ def materialize_paths(repo: Path, rels: list[str]) -> None:
     for rel in rels:
         rel = rel.strip("/")
         if rel and rel != ".":
-            rel = sparse_escape(rel)
-            patterns += ["/%s" % rel, "/%s/*" % rel]
+            for form in _spellings(rel):
+                form = sparse_escape(form)
+                patterns += ["/%s" % form, "/%s/*" % form]
     have = _sparse_list(repo) or set()
     patterns = [p for p in dict.fromkeys(patterns) if p not in have]
     if not patterns or not is_sparse(Path(repo)):
         return
     _sparse_add(Path(repo), patterns, ", ".join(rels))
+
+
+_CORE_IGNORECASE = re.compile(
+    r"^\[core\][^\[]*?^\s*ignorecase\s*=\s*(true|yes|on|1)\s*$",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL)
+
+
+def _ignorecase(repo: Path) -> bool:
+    """Whether the clone records ``core.ignorecase = true``, read from
+    ``.git/config`` as a file: `rebuild_tap` asks once per tap, and a git
+    subprocess each time is ~40 ms over hundreds of taps."""
+    try:
+        text = (repo / ".git" / "config").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return _CORE_IGNORECASE.search(text) is not None
+
+
+def case_collisions(repo: Path) -> list[list[str]]:
+    """Index paths of ``repo`` that its checkout cannot hold apart.
+
+    Each group is two or more paths that differ only by case (or Unicode
+    normalization), sorted, e.g. ``["skills/Lint/SKILL.md",
+    "skills/lint/SKILL.md"]``. On a case-insensitive filesystem git checks
+    out one file for the lot, and every other file of each spelling lands in
+    the same directory: `git clone` warns "the following paths have
+    collided", which boost captures and never shows. Empty unless the clone
+    records ``core.ignorecase`` (git sets it per clone after probing the
+    filesystem), because on a case-sensitive one each path is its own file.
+
+    Directories are grouped too, each spelling with a trailing ``/``
+    (``["skills/Lint/", "skills/lint/"]``): two dirs that share no file name
+    still check out as one, so ``skills/Lint`` holds ``skills/lint``'s
+    scripts without any file colliding.
+    """
+    if not _ignorecase(Path(repo)):
+        return []
+    proc = run([*_RAW_PATHS, "-C", str(repo), "ls-files", "-z"], check=False)
+    groups: dict[str, set[str]] = {}
+    for path in (proc.stdout or "").split("\0"):
+        if not path:
+            continue
+        groups.setdefault(_fold(path), set()).add(path)
+        parts = path.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            spelled = "/".join(parts[:i]) + "/"
+            groups.setdefault(_fold(spelled), set()).add(spelled)
+    return sorted(sorted(g) for g in groups.values() if len(g) > 1)
 
 
 #: Words in a git failure that mean the promisor fetch could not reach the
@@ -570,7 +675,7 @@ def _sparse_add(repo: Path, patterns: list[str], what: str) -> None:
         todo = [p for p in patterns if p not in have]
         if not todo:
             return
-        argv = ["-C", str(repo), "sparse-checkout", "add", *todo]
+        argv = [*_RAW_PATHS, "-C", str(repo), "sparse-checkout", "add", *todo]
         try:
             try:
                 run(argv)

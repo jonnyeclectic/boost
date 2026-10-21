@@ -2384,7 +2384,8 @@ def _count_others(installed: dict, name: str, *,
     return len(installed) - (1 if replaces else 0)
 
 
-def refuse_case_collision(name: str, recorded: dict, where: str = "") -> None:
+def refuse_case_collision(name: str, recorded: dict, where: str = "",
+                          shares: str = "one store dir") -> None:
     """Refuse ``name`` when ``recorded`` holds a skill it differs from only
     by case.
 
@@ -2402,11 +2403,45 @@ def refuse_case_collision(name: str, recorded: dict, where: str = "") -> None:
     if other is not None:
         raise BoostError(
             "%s differs only by case from %s, which is already installed%s; "
-            "on a case-insensitive filesystem they would share one store dir"
-            % (name, other, where),
+            "on a case-insensitive filesystem they would share %s"
+            % (name, other, where, shares),
             hint="`boost uninstall %s` first if %s should replace it"
                  % (other, name),
             wrap=True)
+
+
+def refuse_copy_case_collision(name: str) -> None:
+    """Refuse skill ``name`` when a workflow's skill copy holds the store dir
+    it differs from only by case.
+
+    The copy is recorded on the workflow, so :func:`refuse_case_collision`
+    over the skills section never saw it: installing ``ship`` beside workflow
+    ``Ship``'s copy was called a dir "the lock file does not record", whose
+    ``--force`` hint replaced Ship's copy with ship's files and whose
+    uninstall then deleted it. Refused whatever ``force`` says; the remedy is
+    the one that takes the copy out of the store.
+    """
+    folded = name.casefold()
+    for wname, row in lockfile.installed_workflows().items():
+        m = _copy_row(row)
+        held = Path(m.get("path", "")).parent.name if m else ""
+        if held and held != name and held.casefold() == folded:
+            raise BoostError(
+                "%s differs only by case from %s, the skill copy of workflow "
+                "%s at %s; on a case-insensitive filesystem they would share "
+                "one store dir" % (name, held, wname,
+                                   paths.tilde(skill_store_dir(held))),
+                hint="`boost install %s --force --no-as-skill` takes the copy "
+                     "out of the store, then re-run this install" % wname,
+                wrap=True)
+
+
+def _same_place(rows: dict, scope: str, base: Path | None) -> dict:
+    """The rule/workflow ``rows`` installed at ``scope``/``base``: the ones
+    whose files share directories with an install there."""
+    want = str(base) if base is not None else None
+    return {k: v for k, v in rows.items()
+            if v.get("scope", "user") == scope and v.get("base") == want}
 
 
 def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
@@ -2428,6 +2463,15 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
     if kind in ("rule", "workflow"):
         resolved_base = _require_project_base(scope, base, "%s %s" % (kind, name))
         _refuse_stranded_base(scope, base, kind, name)
+        # Before the lock row is read: ``Ship.md`` and ``ship.md`` are one
+        # file per agent on a case-insensitive filesystem, so the second
+        # install wrote nothing, called boost's own Ship.md "not managed by
+        # boost" and still reported "Installed".
+        refuse_case_collision(
+            name, _same_place(lockfile.installed_rules() if kind == "rule"
+                              else lockfile.installed_workflows(),
+                              scope, resolved_base),
+            shares="one file per agent")
         existing = (lockfile.get_rule if kind == "rule"
                     else lockfile.get_workflow)(name)
         _check_scope_conflict(name, existing, scope, resolved_base, force)
@@ -2457,6 +2501,7 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                 hint="`boost reinstall %s --local` to force" % name)
         return existing
     refuse_case_collision(name, lockfile.installed())
+    refuse_copy_case_collision(name)
     existing = lockfile.get_skill(name)
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
@@ -5594,6 +5639,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
     meta = _import_meta(src_dir)
     name = util.check_item_name(name or util.frontmatter_name(meta, src_dir.name))
     refuse_case_collision(name, lockfile.installed())
+    refuse_copy_case_collision(name)
     existing = lockfile.get_skill(name)
     # Refuse before `dest` is touched, so a rejected install leaves nothing
     # half-copied over an existing skill.

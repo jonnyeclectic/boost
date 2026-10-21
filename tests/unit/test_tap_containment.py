@@ -147,7 +147,7 @@ class TestTheScanStaysInsideTheClone:
         assert "abs-leak" not in names
 
     def test_cache_format_was_bumped(self):
-        assert catalog.CACHE_FORMAT == 5
+        assert catalog.CACHE_FORMAT >= 5
 
 
 class TestEscapes:
