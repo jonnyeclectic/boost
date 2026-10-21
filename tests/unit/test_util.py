@@ -1105,7 +1105,8 @@ class TestRmtreeRetryHook:
         This is the case the hook was written for, and it is what keeps the
         fix from being "stop retrying": the chmod still happens, and it is
         observable because chmod needs ownership plus search on the parent,
-        not write on it.
+        not write on it. Called with no ``root``, so the sealed parent stays
+        sealed and the retry fails where the chmod can be read back.
         """
         stubborn = tmp_path / "tree2"
         stubborn.mkdir()
@@ -1113,15 +1114,77 @@ class TestRmtreeRetryHook:
         target.write_text("x", encoding="utf-8")
         target.chmod(0o400)
         sealed(stubborn)
+        planted = PermissionError(13, "planted")
 
-        with pytest.raises(OSError):
-            util.rmtree(stubborn)
+        with pytest.raises(PermissionError) as caught:
+            util._clear_readonly_and_retry(os.unlink, str(target), planted)
 
-        # The listing reported after it is raised, not retried: the dir keeps
-        # its mode rather than losing its search bit to chmod(S_IWRITE).
+        assert caught.value is not planted      # the retry's own failure
         assert stat.S_IMODE(stubborn.stat().st_mode) == 0o500
         # The write bit is ORed in, not the whole mode replaced by it.
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+    def test_a_read_only_directory_inside_the_tree_is_unlocked(
+            self, tmp_path, sealed):
+        """A skill copied from a read-only package: a 0o555 ``assets/``.
+
+        Unlinking is gated by the parent's write bit, so chmod-ing the file
+        alone retried into the same refusal and `boost uninstall` crashed
+        rc 70 with the lock row kept. The parent is inside the tree, so it
+        is the delete's to unlock.
+        """
+        tree = tmp_path / "skill"
+        sub = tree / "assets"
+        sub.mkdir(parents=True)
+        (sub / "a.txt").write_text("x", encoding="utf-8")
+        (tree / "SKILL.md").write_text("x", encoding="utf-8")
+        sealed(sub)
+        sealed(tree)
+
+        util.rmtree(tree)
+
+        assert not tree.exists()
+
+    def test_the_root_s_own_parent_is_never_unlocked(self, tmp_path, sealed):
+        """The directory holding the tree is outside it: not this delete's.
+
+        A read-only skill store is a refusal `doctor` reports; unlocking it
+        to finish one uninstall would quietly undo the user's own chmod.
+        """
+        holder = tmp_path / "store"
+        tree = holder / "skill"
+        tree.mkdir(parents=True)
+        (tree / "f.txt").write_text("x", encoding="utf-8")
+        sealed(holder)
+
+        with pytest.raises(PermissionError):
+            util.rmtree(tree)
+
+        assert stat.S_IMODE(holder.stat().st_mode) == 0o500
+
+    def test_a_parent_that_is_a_link_is_never_chmodded(self, tmp_path, sealed):
+        """`os.chmod` follows links, so a linked parent's target would change."""
+        real = tmp_path / "real"
+        real.mkdir()
+        f = real / "f.txt"
+        f.write_text("x", encoding="utf-8")
+        sealed(real)
+        link = tmp_path / "link"
+        link.symlink_to(real, target_is_directory=True)
+        planted = PermissionError(13, "planted")
+
+        with pytest.raises(PermissionError):
+            util._clear_readonly_and_retry(
+                os.unlink, str(link / "f.txt"), planted, root=str(tmp_path))
+
+        assert stat.S_IMODE(real.stat().st_mode) == 0o500
+        assert f.exists()
+
+    def test_inside_tree_is_lexical_and_bounded(self):
+        assert util._inside_tree("/a/b", "/a/b") is True
+        assert util._inside_tree("/a/b/c", "/a/b/") is True
+        assert util._inside_tree("/a/bc", "/a/b") is False
+        assert util._inside_tree("/a", "/a/b") is False
 
     def test_a_failed_retry_keeps_a_directory_listable(self, tmp_path, sealed):
         """A dir under a read-only parent keeps its read and search bits.

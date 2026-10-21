@@ -1552,7 +1552,8 @@ def _copy_skill(src: Path, dest: Path, *, within: Path | None = None,
     except BaseException:
         if backup is not None and not (dest.exists() or dest.is_symlink()):
             os.replace(backup, dest)      # swap-in failed: restore the original
-        shutil.rmtree(staged, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            util.rmtree(staged)
         if backup is not None and (backup.exists() or backup.is_symlink()):
             _remove_backup(backup)
         raise
@@ -1633,6 +1634,7 @@ def _copy_tree(src: Path, dst: Path, within: Path | None) -> list[str]:
         return skip
 
     shutil.copytree(src, dst, symlinks=True, ignore=ignore, dirs_exist_ok=True)
+    _own_dirs(dst)
     skipped: list[str] = []
     for p in escaping:
         rel = Path(os.path.relpath(p, src)).as_posix()
@@ -1655,6 +1657,27 @@ def _copy_tree(src: Path, dst: Path, within: Path | None) -> list[str]:
     return skipped
 
 
+def _own_dirs(top: Path) -> None:
+    """Give ``top`` and every directory under it at least ``u+rwx``.
+
+    ``copytree`` copies each directory's mode, so a skill imported from a
+    read-only source (a nix store path, an extracted tarball) landed with
+    0o555 directories, and the store copy could then be neither uninstalled
+    nor replaced. Directories only: a file's mode, its exec bit above all,
+    is the skill's. A link is never chmod-ed — that changes its target.
+    """
+    def own(d: str) -> None:
+        mode = os.lstat(d).st_mode
+        if not stat.S_ISLNK(mode) and mode & stat.S_IRWXU != stat.S_IRWXU:
+            os.chmod(d, mode | stat.S_IRWXU)
+
+    own(str(top))
+    # Top-down, so each directory is fixed before the walk lists it.
+    for here, dirs, _names in os.walk(top):
+        for n in dirs:
+            own(os.path.join(here, n))
+
+
 def _remove_backup(backup: Path) -> None:
     """Delete a moved-aside copy, whatever kind of thing it is.
 
@@ -1663,11 +1686,39 @@ def _remove_backup(backup: Path) -> None:
     real directory, the ``.boost-XXXXXXXX.old`` staging link was left behind
     forever. Harmless-looking, but it accumulates in the user's agent dirs and
     every one of them is a dangling pointer.
+
+    :func:`util.rmtree`, not ``shutil.rmtree(ignore_errors=True)``: a copy
+    holding a read-only directory (one installed before :func:`_copy_tree`
+    normalised modes) failed to delete in silence, and every reinstall left
+    one more ``.old`` dir in the store. Still best-effort — this runs in
+    cleanup paths, where raising would mask the error being cleaned up after
+    — and a leftover is what `boost doctor` names and `boost clean` removes
+    (:func:`leftover_copies`).
     """
     if backup.is_symlink():
         backup.unlink(missing_ok=True)
     else:
-        shutil.rmtree(backup, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            util.rmtree(backup)
+
+
+#: The suffixes of a moved-aside copy: :func:`_copy_skill`'s ``.old`` and
+#: :func:`_restore_old_copy`'s ``.new``.
+_LEFTOVER_SUFFIXES = (".old", ".new")
+
+
+def leftover_copies() -> list[Path]:
+    """Moved-aside skill copies a swap left in the store, sorted.
+
+    Only ``.boost-*.old`` / ``.boost-*.new``: a bare ``.boost-XXXXXXXX`` is
+    the staging dir of an install that may be copying right now.
+    """
+    root = paths.store_dir()
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.iterdir()
+                  if p.name.startswith(util.TEMP_PREFIX)
+                  and p.name.endswith(_LEFTOVER_SUFFIXES))
 
 
 def declared_mcp_servers(skill_dir) -> list[dict]:

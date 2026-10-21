@@ -727,6 +727,17 @@ def cmd_doctor(argv):
         bad("store", "%s — every install is refused until it is fixed; %s"
             % (paths.not_writable(store_dir, store_block),
                paths.write_remedy(store_block)), wrap=True)
+    # A swap's moved-aside copy that could not be deleted: nothing else ever
+    # names one, and each failed reinstall added another.
+    leftovers = store.leftover_copies()
+    if leftovers:
+        bad("store", "%d leftover skill cop%s in %s (%s) — `boost clean` "
+            "removes %s" % (len(leftovers),
+                            "y" if len(leftovers) == 1 else "ies",
+                            _tilde(store_dir),
+                            ", ".join(p.name for p in leftovers),
+                            "it" if len(leftovers) == 1 else "them"),
+            wrap=True)
     if configured and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
                                               "" if cache_block

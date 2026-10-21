@@ -23,7 +23,7 @@ from . import paths
 IGNORED = {".git", "__pycache__", ".DS_Store"}
 
 
-def _clear_readonly_and_retry(func, path, exc) -> None:
+def _clear_readonly_and_retry(func, path, exc, root=None) -> None:
     """Clear a read-only bit and retry the failed operation — never on a link.
 
     ``os.chmod`` follows symlinks, and the path handed to this hook is the one
@@ -59,6 +59,17 @@ def _clear_readonly_and_retry(func, path, exc) -> None:
     """
     if os.path.islink(path) or func not in _RETRYABLE:
         raise exc
+    # On POSIX the *parent's* write bit is what gates an unlink or rmdir, so
+    # a skill copied from a read-only package (a 0o555 ``assets/``) could not
+    # be uninstalled: chmod-ing the file it held changed nothing and the retry
+    # failed again. Only a parent inside ``root``, the tree being deleted: the
+    # directory that *holds* the tree is not this delete's to unlock (a
+    # read-only skill store is a refusal doctor reports, not a mode to undo),
+    # and never through a link.
+    parent = os.path.normpath(os.path.dirname(path))
+    if (root is not None and _inside_tree(parent, root)
+            and not os.path.islink(parent)):
+        os.chmod(parent, os.lstat(parent).st_mode | stat.S_IWUSR)
     # OR the bit in: setting the mode to exactly S_IWRITE also stripped read
     # and search, so a retry that failed anyway (a read-only *parent*) left a
     # ``d-w-------`` directory behind that every later walk of it crashed on.
@@ -70,6 +81,16 @@ def _clear_readonly_and_retry(func, path, exc) -> None:
 _RETRYABLE = (os.unlink, os.remove, os.rmdir)
 
 
+def _inside_tree(path: str, root: str) -> bool:
+    """True if ``path`` is ``root`` or under it, compared as spelled.
+
+    Lexical on purpose: ``shutil.rmtree`` builds every path it reports by
+    joining onto the ``root`` it was given, so no resolving is needed.
+    """
+    root = os.path.normpath(root)
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
 def rmtree(path) -> None:
     """``shutil.rmtree`` that survives read-only files.
 
@@ -77,9 +98,12 @@ def rmtree(path) -> None:
     owner unlink a read-only file (permission lives on the directory), but
     Windows refuses outright. Clear the read-only bit and retry once per
     failure. ``onexc`` is the 3.12+ spelling; the ``onerror`` branch this used
-    to carry was dead the moment the floor moved to 3.12.
+    to carry was dead the moment the floor moved to 3.12. A read-only
+    directory *inside* the tree is unlocked too; the one holding it is not.
     """
-    shutil.rmtree(str(path), onexc=_clear_readonly_and_retry)
+    root = str(path)
+    shutil.rmtree(root, onexc=lambda func, p, exc:
+                  _clear_readonly_and_retry(func, p, exc, root=root))
 
 
 def remove_path(path) -> bool:
