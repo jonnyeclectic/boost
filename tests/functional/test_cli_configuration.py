@@ -2797,10 +2797,32 @@ class TestSelfUpdate:
         monkeypatch.setattr("sys.prefix", str(sandbox))
         monkeypatch.setattr("boost_cli.core.selfupdate.installed_version",
                             lambda: "1.0.0")
+        monkeypatch.setattr("boost_cli.core.selfupdate.installer",
+                            lambda: "pip")
+        monkeypatch.setattr("boost_cli.core.selfupdate.has_pip", lambda: True)
         r = boost("self-update", "--dry-run")
         assert "installed with: pip" in r.out
         assert ("would run: %s -m pip install --no-cache-dir --upgrade "
                 "boost-skill-cli" % sys.executable) in r.out
+
+    def test_a_uv_pip_install_upgrades_with_uv_not_a_missing_pip(
+            self, boost, sandbox, monkeypatch):
+        # INSTALLER=uv in a venv made without pip: `python -m pip` there is
+        # "No module named pip", so the only command that can work is uv's.
+        self._not_a_checkout(monkeypatch, sandbox)
+        monkeypatch.setattr("sys.prefix", str(sandbox))
+        monkeypatch.setattr("boost_cli.core.selfupdate.installed_version",
+                            lambda: "1.0.9")
+        monkeypatch.setattr("boost_cli.core.selfupdate.installer",
+                            lambda: "uv")
+        monkeypatch.setattr("boost_cli.core.selfupdate.has_pip", lambda: False)
+        monkeypatch.setattr("boost_cli.core.selfupdate.shutil.which",
+                            lambda t: "/opt/bin/" + t)
+        r = boost("self-update", "--dry-run")
+        assert "installed with: uv-pip" in r.out
+        assert ("would run: /opt/bin/uv pip install --python %s --refresh "
+                "--upgrade boost-skill-cli" % sys.executable) in r.out
+        assert "-m pip" not in r.out
 
     def test_pipx_upgrade_reports_the_new_version(self, boost, sandbox,
                                                   monkeypatch):
@@ -2847,6 +2869,20 @@ class TestSelfUpdate:
         # The hint has to be actionable: a plain `upgrade` has already been
         # tried and declined, so it must pin the version and force it.
         assert "pipx install --force boost-skill-cli==99.0.0" in r.err
+
+    def test_a_dev_build_of_the_latest_release_is_not_up_to_date(
+            self, boost, sandbox, monkeypatch):
+        # 1.0.424.dev3 precedes 1.0.424 (PEP 440); comparing the release
+        # numbers alone called them equal and printed "already up to date".
+        self._no_op_upgrade(monkeypatch, sandbox, latest="1.0.424")
+        monkeypatch.setattr("boost_cli.commands.configuration.__version__",
+                            "1.0.424.dev3+g36b74ba")
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_version",
+                            lambda: "1.0.424.dev3+g36b74ba")
+        r = boost("self-update", expect=1)
+        assert "already up to date" not in r.out
+        assert ("pipx exited 0 but boost is still v1.0.424.dev3+g36b74ba — "
+                "PyPI has v1.0.424") in r.err
 
     def test_a_no_op_upgrade_at_the_latest_version_is_up_to_date(
             self, boost, sandbox, monkeypatch):
@@ -2969,11 +3005,15 @@ class TestSelfUpdate:
         # the pull fast-forwards HEAD -> report the git-described new version.
         # This path was unreachable before the fix (the old code grepped
         # __init__.py for a __version__ literal setuptools-scm never writes).
-        self._fake_git(monkeypatch, before="oldsha\n", after="newsha\n",
-                       described="v9.9.9\n")
+        calls = self._fake_git(monkeypatch, before="oldsha\n",
+                               after="newsha\n", described="v9.9.9\n")
         r = boost("self-update")
         from boost_cli import __version__
         assert ("boost v%s → v9.9.9" % __version__) in r.out
+        # Only version tags may describe the pull: a newer `shards-latest`
+        # tag otherwise reported "→ vshards-latest-1-g…".
+        assert ["-C", str(paths.repo_root()), "describe", "--tags", "--always",
+                "--dirty", "--match", "v[0-9]*"] in calls
         ev = journal.events(action="self-update")[0]
         assert ev["subject"] == "9.9.9"          # git-derived, not the stale const
         assert ev["previous"] == __version__

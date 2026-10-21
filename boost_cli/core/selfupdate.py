@@ -35,6 +35,7 @@ DIST = "boost-skill-cli"
 GIT = "git"
 PIPX = "pipx"
 UV_TOOL = "uv-tool"
+UV_PIP = "uv-pip"
 PIP = "pip"
 UNKNOWN = "unknown"
 
@@ -44,9 +45,27 @@ PYPI_JSON = "https://pypi.org/pypi/%s/json" % DIST
 # actually observe a version and must not report one.
 _VERSION_LINE = re.compile(r"^boost\s+(\S+)$", re.MULTILINE)
 
-# Leading digits of one dotted segment. Enough to read the numeric release
-# prefix out of `1.0.423` and out of a setuptools-scm `1.0.424.dev3+g36b74ba`.
-_LEADING_DIGITS = re.compile(r"\d+")
+# The public part of a PEP 440 version (the `+local` label is cut off first):
+# release, then optional pre (a/b/rc), post and dev segments, each with the
+# separators and spellings PEP 440 normalises.
+_PEP440 = re.compile(
+    r"^(?P<release>\d+(?:\.\d+)*)"
+    r"(?:[-_.]?(?P<pre>a|b|c|rc|alpha|beta|pre|preview)[-_.]?(?P<pre_n>\d*))?"
+    r"(?:-(?P<post_implicit>\d+)|[-_.]?(?:post|rev|r)[-_.]?(?P<post_n>\d*))?"
+    r"(?:[-_.]?dev[-_.]?(?P<dev_n>\d*))?$", re.IGNORECASE)
+
+# A `git describe` string: N commits past the tag `release` — what a source
+# checkout reports when no build-time version file exists.
+_DESCRIBE = re.compile(
+    r"^(?P<release>\d+(?:\.\d+)*)-(?P<ahead>\d+)-g[0-9a-f]+(?:-dirty)?$",
+    re.IGNORECASE)
+
+_PRE_RANK = {"a": 0, "alpha": 0, "b": 1, "beta": 1,
+             "c": 2, "rc": 2, "pre": 2, "preview": 2}
+# Phase ranks around the pre-releases (0..2): a bare `X.devN` sorts below every
+# pre-release of X, and a final (or post) release above them.
+_DEV_ONLY = -1
+_FINAL = 3
 
 
 def installed_version() -> str | None:
@@ -62,8 +81,33 @@ def installed_version() -> str | None:
         return None
 
 
+def installer() -> str | None:
+    """The tool that wrote this distribution's metadata (its ``INSTALLER``
+    record, e.g. ``pip`` or ``uv``), lower-cased, or None when unrecorded."""
+    try:
+        from importlib.metadata import distribution
+        # `Distribution.read_text` takes no `encoding=`: it is not a file open
+        # but a metadata accessor that decodes UTF-8 itself. Bound to a name
+        # first so the repo's unencoded-IO sweep does not read it as one.
+        read_record = distribution(DIST).read_text
+        text = read_record("INSTALLER")
+    except Exception:
+        return None
+    return (text or "").strip().lower() or None
+
+
+def has_pip() -> bool:
+    """Whether this interpreter can run ``-m pip`` at all.
+
+    A venv made by uv (``uv venv``) has no pip unless asked for one, so
+    ``sys.executable -m pip`` there is "No module named pip".
+    """
+    import importlib.util
+    return importlib.util.find_spec("pip") is not None
+
+
 def detect(root: Path | None = None, prefix: Path | None = None,
-           metadata_version=None) -> str:
+           metadata_version=None, installed_by=None, pip_present=None) -> str:
     """Resolve how this boost was installed.
 
     Order matters. A source checkout wins first — that includes `pip install
@@ -86,7 +130,17 @@ def detect(root: Path | None = None, prefix: Path | None = None,
     # including a test's, which is how a test of the "nothing installed this"
     # branch ended up running a real `pip install` against PyPI.
     lookup = installed_version if metadata_version is None else metadata_version
-    return PIP if lookup() else UNKNOWN
+    if not lookup():
+        return UNKNOWN
+    # `uv pip install` records itself as the INSTALLER and needs no pip in the
+    # venv; handing that install `python -m pip` names a module that is not
+    # there. A venv without pip can only have been filled by something else,
+    # and uv's `--python` is the one installer that targets it from outside.
+    by = installer if installed_by is None else installed_by
+    pip_ok = has_pip if pip_present is None else pip_present
+    if by() == "uv" or not pip_ok():
+        return UV_PIP
+    return PIP
 
 
 def _require(tool: str) -> str:
@@ -126,6 +180,11 @@ def upgrade_command(method: str) -> list[str]:
         return [_require("pipx"), "upgrade", DIST, "--pip-args=--no-cache-dir"]
     if method == UV_TOOL:
         return [_require("uv"), "tool", "upgrade", "--refresh", DIST]
+    if method == UV_PIP:
+        # `--python sys.executable` for the same reason pip gets it below: the
+        # uv default is whatever venv is active, not the one running boost.
+        return [_require("uv"), "pip", "install", "--python", sys.executable,
+                "--refresh", "--upgrade", DIST]
     if method == PIP:
         # sys.executable, never a bare `pip`: the pip first on PATH can belong
         # to a different interpreter than the one running boost, and upgrading
@@ -150,6 +209,9 @@ def force_command(method: str, version: str) -> list[str]:
         return [_require("pipx"), "install", "--force", spec]
     if method == UV_TOOL:
         return [_require("uv"), "tool", "install", "--force", spec]
+    if method == UV_PIP:
+        return [_require("uv"), "pip", "install", "--python", sys.executable,
+                "--refresh", "--reinstall", spec]
     if method == PIP:
         return [sys.executable, "-m", "pip", "install", "--no-cache-dir",
                 "--force-reinstall", spec]
@@ -199,23 +261,53 @@ def latest_version(timeout: float = 10.0) -> str | None:
     return version.strip()
 
 
-def _release_key(version: str) -> tuple[int, ...]:
-    """The leading numeric release segments of `version`, as ints.
+def _release_key(version: str) -> tuple | None:
+    """A sort key that orders `version` the way PEP 440 does, or None.
 
-    Deliberately not a PEP 440 parser: `packaging` is not a dependency of the
-    zero-dependency install, boost ships `1.0.N`, and the only other shape that
-    reaches here is a setuptools-scm dev string (`1.0.424.dev3+g36b74ba`).
-    Comparing the numeric release prefix answers "is PyPI ahead of me" for
-    both. An empty tuple means "not a version we can reason about".
+    Deliberately not `packaging`: it is not a dependency of the
+    zero-dependency install. boost ships `1.0.N`, but a build from a checkout
+    is a setuptools-scm `1.0.424.dev3+g36b74ba`, a candidate is `1.0.424rc1`,
+    and a bare checkout reports `git describe`'s `1.2.204-203-g9ef1d107`. Only
+    the release numbers used to count, so `1.0.424.dev3` and `1.0.424rc1` read
+    as equal to `1.0.424` — when both *precede* it — and self-update called a
+    copy behind PyPI "already up to date".
+
+    The order is PEP 440's: `X.devN` < `XaN` < `XbN` < `XrcN` < `X` <
+    `X.postN`, with a dev segment below the release it is attached to. The
+    `+local` label is ignored rather than ranked (PEP 440 puts `X+local` just
+    above `X`), so a local build never reads as behind its own release. A
+    describe string ranks as a post-release: it is that many commits past the
+    tag. Trailing zeros do not count (`1.0` == `1.0.0`). None means "not a
+    version we can reason about".
     """
-    head = version.strip().lstrip("v").split("+", 1)[0]
-    parts: list[int] = []
-    for chunk in head.split("."):
-        m = _LEADING_DIGITS.match(chunk)
+    head = version.strip().lstrip("vV").split("+", 1)[0]
+    described = _DESCRIBE.match(head)
+    if described:
+        release = described.group("release")
+        pre: tuple[int, int] = (_FINAL, 0)
+        post = int(described.group("ahead"))
+        dev: tuple[int, int] = (1, 0)
+    else:
+        m = _PEP440.match(head)
         if not m:
-            break
-        parts.append(int(m.group()))
-    return tuple(parts)
+            return None
+        release = m.group("release")
+        post_n = m.group("post_implicit") or m.group("post_n")
+        has_post = (m.group("post_implicit") is not None
+                    or m.group("post_n") is not None)
+        post = int(post_n or 0) if has_post else -1
+        dev_n = m.group("dev_n")
+        dev = (1, 0) if dev_n is None else (0, int(dev_n or 0))
+        if m.group("pre"):
+            pre = (_PRE_RANK[m.group("pre").lower()], int(m.group("pre_n") or 0))
+        elif dev_n is not None and not has_post:
+            pre = (_DEV_ONLY, 0)
+        else:
+            pre = (_FINAL, 0)
+    nums = [int(x) for x in release.split(".")]
+    while len(nums) > 1 and nums[-1] == 0:
+        nums.pop()
+    return (tuple(nums), pre, post, dev)
 
 
 def is_behind(installed: str | None, latest: str | None) -> bool:
@@ -230,7 +322,7 @@ def is_behind(installed: str | None, latest: str | None) -> bool:
     if not installed or not latest:
         return False
     here, there = _release_key(installed), _release_key(latest)
-    if not here or not there:
+    if here is None or there is None:
         return False
     return there > here
 
@@ -257,9 +349,16 @@ def observed_version(timeout: float = 30.0) -> str | None:
     This process imported its own version before the upgrade ran, so it cannot
     answer the question. None means "we did not see one" — better to say
     nothing than to report a version we never observed.
+
+    The child is *this interpreter*, the one whose environment the manager just
+    upgraded — never the `boost` first on PATH, which can be another install
+    entirely (a checkout shim ahead of the pipx bin) and would report its own
+    version as this one's new version. ``-P`` keeps the working directory off
+    ``sys.path``, so a `boost_cli/` folder under the cwd cannot answer instead.
     """
     try:
-        proc = subprocess.run([str(paths.launcher()), "--version"],
+        proc = subprocess.run([sys.executable, "-P", "-m", "boost_cli",
+                               "--version"],
                               capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         return None

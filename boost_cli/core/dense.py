@@ -535,7 +535,8 @@ def install_extra() -> str:
     it would pass single quotes through to pip.
 
     The same holds for every manager :func:`selfupdate.detect` can name: a uv
-    tool venv has no pip at all, so it is reinstalled with the extra; a pip
+    tool venv has no pip at all, so it is reinstalled with the extra; a
+    ``uv pip`` install is told ``uv pip install --python <this python>``; a pip
     install is told ``<this python> -m pip``, never a bare ``pip`` that can
     belong to another interpreter (as :func:`selfupdate.upgrade_command`
     does); and a source checkout installs its *own* extra, editable, rather
@@ -551,6 +552,10 @@ def install_extra() -> str:
     if method == selfupdate.PIP:
         return '%s -m pip install "%s"' % (_shell_word(sys.executable),
                                            EXTRA_SPEC)
+    if method == selfupdate.UV_PIP:
+        # A `uv pip install`ed boost: its venv may have no pip to run.
+        return 'uv pip install --python %s "%s"' % (_shell_word(sys.executable),
+                                                    EXTRA_SPEC)
     if method == selfupdate.GIT:
         extra = EXTRA_SPEC[len(selfupdate.DIST):]
         return '%s -m pip install -e "%s%s"' % (

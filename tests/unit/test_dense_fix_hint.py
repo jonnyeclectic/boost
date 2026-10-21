@@ -727,7 +727,8 @@ class TestFitsANarrowTerminal:
         monkeypatch.setattr(selfupdate, "detect",
                             lambda *a, **k: request.param)
 
-    @pytest.mark.parametrize("method", [selfupdate.PIP, selfupdate.GIT])
+    @pytest.mark.parametrize("method", [selfupdate.PIP, selfupdate.GIT,
+                                        selfupdate.UV_PIP])
     def test_an_interpreter_path_is_one_atomic_token(self, method,
                                                      monkeypatch):
         exe = "/" + "very-long-dir/" * 8 + "python3"
@@ -736,7 +737,10 @@ class TestFitsANarrowTerminal:
         from boost_cli.core import output
         hint = dense.fix_hint("no-backend")
         cmd = dense.install_extra()
-        assert cmd.startswith("%s -m pip install " % exe)
+        if method == selfupdate.UV_PIP:
+            assert cmd.startswith("uv pip install --python %s " % exe)
+        else:
+            assert cmd.startswith("%s -m pip install " % exe)
         # Folded to the narrow pane, the whole command is still one line.
         lines = output.wrap(hint, self.NARROW)
         assert "`%s`" % cmd in lines, lines

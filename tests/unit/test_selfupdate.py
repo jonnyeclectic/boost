@@ -26,6 +26,22 @@ def _metadata():
     return "1.2.3"
 
 
+def _by_pip():
+    return "pip"
+
+
+def _by_uv():
+    return "uv"
+
+
+def _pip_ok():
+    return True
+
+
+def _no_pip():
+    return False
+
+
 class TestDetect:
     def test_git_checkout_wins(self, tmp_path):
         (tmp_path / ".git").mkdir()
@@ -58,7 +74,57 @@ class TestDetect:
 
     def test_plain_pip_when_metadata_exists(self, tmp_path):
         assert selfupdate.detect(root=tmp_path, prefix=tmp_path,
-                                 metadata_version=_metadata) == selfupdate.PIP
+                                 metadata_version=_metadata,
+                                 installed_by=_by_pip,
+                                 pip_present=_pip_ok) == selfupdate.PIP
+
+    def test_an_install_uv_recorded_is_uv_pip(self, tmp_path):
+        # `uv pip install` writes INSTALLER=uv and leaves no pip in the venv;
+        # `python -m pip install --upgrade` there is "No module named pip".
+        assert selfupdate.detect(root=tmp_path, prefix=tmp_path,
+                                 metadata_version=_metadata,
+                                 installed_by=_by_uv,
+                                 pip_present=_pip_ok) == selfupdate.UV_PIP
+
+    def test_a_venv_without_pip_is_uv_pip(self, tmp_path):
+        assert selfupdate.detect(root=tmp_path, prefix=tmp_path,
+                                 metadata_version=_metadata,
+                                 installed_by=_by_pip,
+                                 pip_present=_no_pip) == selfupdate.UV_PIP
+
+    def test_no_installer_record_with_pip_present_is_pip(self, tmp_path):
+        assert selfupdate.detect(root=tmp_path, prefix=tmp_path,
+                                 metadata_version=_metadata,
+                                 installed_by=lambda: None,
+                                 pip_present=_pip_ok) == selfupdate.PIP
+
+    def test_no_metadata_is_unknown_even_without_pip(self, tmp_path):
+        # Nothing has a record of this boost, so no installer can move it.
+        assert selfupdate.detect(root=tmp_path, prefix=tmp_path,
+                                 metadata_version=_no_metadata,
+                                 installed_by=_by_uv,
+                                 pip_present=_no_pip) == selfupdate.UNKNOWN
+
+    def test_the_uv_receipt_still_wins_over_the_installer_record(self,
+                                                                 tmp_path):
+        (tmp_path / "uv-receipt.toml").write_text("", encoding="utf-8")
+        assert selfupdate.detect(root=tmp_path, prefix=tmp_path,
+                                 metadata_version=_metadata,
+                                 installed_by=_by_uv,
+                                 pip_present=_no_pip) == selfupdate.UV_TOOL
+
+    def test_installer_and_pip_lookups_are_resolved_at_call_time(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setattr("boost_cli.core.paths.repo_root", lambda: tmp_path)
+        monkeypatch.setattr(sys, "prefix", str(tmp_path))
+        monkeypatch.setattr(selfupdate, "installed_version", _metadata)
+        monkeypatch.setattr(selfupdate, "installer", _by_uv)
+        monkeypatch.setattr(selfupdate, "has_pip", _pip_ok)
+        assert selfupdate.detect() == selfupdate.UV_PIP
+        monkeypatch.setattr(selfupdate, "installer", _by_pip)
+        assert selfupdate.detect() == selfupdate.PIP
+        monkeypatch.setattr(selfupdate, "has_pip", _no_pip)
+        assert selfupdate.detect() == selfupdate.UV_PIP
 
     def test_unknown_when_nothing_has_a_record(self, tmp_path):
         # No .git, no venv receipt, and no installed metadata: nothing can
@@ -70,11 +136,15 @@ class TestDetect:
     def test_a_directory_named_like_the_marker_is_not_a_marker(self, tmp_path):
         (tmp_path / "pipx_metadata.json").mkdir()
         assert selfupdate.detect(root=tmp_path, prefix=tmp_path,
-                                 metadata_version=_metadata) == selfupdate.PIP
+                                 metadata_version=_metadata,
+                                 installed_by=_by_pip,
+                                 pip_present=_pip_ok) == selfupdate.PIP
 
     def test_defaults_read_the_live_process(self, monkeypatch, tmp_path):
         monkeypatch.setattr("boost_cli.core.paths.repo_root", lambda: tmp_path)
         monkeypatch.setattr(sys, "prefix", str(tmp_path))
+        monkeypatch.setattr(selfupdate, "installer", _by_pip)
+        monkeypatch.setattr(selfupdate, "has_pip", _pip_ok)
         assert selfupdate.detect(metadata_version=_metadata) == selfupdate.PIP
 
     def test_the_metadata_lookup_is_resolved_at_call_time(self, monkeypatch,
@@ -87,6 +157,62 @@ class TestDetect:
         monkeypatch.setattr(sys, "prefix", str(tmp_path))
         monkeypatch.setattr(selfupdate, "installed_version", lambda: None)
         assert selfupdate.detect() == selfupdate.UNKNOWN
+
+
+class TestInstaller:
+    class _Dist:
+        def __init__(self, text):
+            self.text, self.asked = text, []
+
+        def read_text(self, name):
+            self.asked.append(name)
+            return self.text
+
+    def _use(self, monkeypatch, dist):
+        import importlib.metadata as md
+        seen = []
+        monkeypatch.setattr(md, "distribution",
+                            lambda name: seen.append(name) or dist)
+        return seen
+
+    def test_reads_the_installer_record_of_the_pypi_distribution(
+            self, monkeypatch):
+        dist = self._Dist("uv\n")
+        seen = self._use(monkeypatch, dist)
+        assert selfupdate.installer() == "uv"
+        assert seen == ["boost-skill-cli"] and dist.asked == ["INSTALLER"]
+
+    def test_the_record_is_normalised(self, monkeypatch):
+        self._use(monkeypatch, self._Dist("  UV \n"))
+        assert selfupdate.installer() == "uv"
+
+    @pytest.mark.parametrize("text", [None, "", "  \n"])
+    def test_a_missing_or_blank_record_is_none(self, monkeypatch, text):
+        self._use(monkeypatch, self._Dist(text))
+        assert selfupdate.installer() is None
+
+    def test_no_distribution_is_none(self, monkeypatch):
+        import importlib.metadata as md
+
+        def missing(name):
+            raise md.PackageNotFoundError(name)
+        monkeypatch.setattr(md, "distribution", missing)
+        assert selfupdate.installer() is None
+
+
+class TestHasPip:
+    def test_asks_for_the_pip_module(self, monkeypatch):
+        import importlib.util
+        seen = []
+        monkeypatch.setattr(importlib.util, "find_spec",
+                            lambda name: seen.append(name) or object())
+        assert selfupdate.has_pip() is True
+        assert seen == ["pip"]
+
+    def test_false_when_pip_is_not_importable(self, monkeypatch):
+        import importlib.util
+        monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+        assert selfupdate.has_pip() is False
 
 
 class TestUpgradeCommand:
@@ -102,6 +228,20 @@ class TestUpgradeCommand:
                             lambda t: "/opt/bin/" + t)
         assert selfupdate.upgrade_command(selfupdate.UV_TOOL) == [
             "/opt/bin/uv", "tool", "upgrade", "--refresh", "boost-skill-cli"]
+
+    def test_uv_pip_targets_this_interpreter(self, monkeypatch):
+        monkeypatch.setattr(selfupdate.shutil, "which",
+                            lambda t: "/opt/bin/" + t)
+        assert selfupdate.upgrade_command(selfupdate.UV_PIP) == [
+            "/opt/bin/uv", "pip", "install", "--python", sys.executable,
+            "--refresh", "--upgrade", "boost-skill-cli"]
+
+    def test_uv_pip_without_uv_refuses(self, monkeypatch):
+        monkeypatch.setattr(selfupdate.shutil, "which", lambda t: None)
+        with pytest.raises(BoostError) as err:
+            selfupdate.upgrade_command(selfupdate.UV_PIP)
+        assert err.value.message == (
+            "boost was installed with uv, but uv is not on PATH")
 
     def test_pip_uses_this_interpreter_not_the_pip_on_path(self):
         # A bare `pip` can belong to a different interpreter, in which case the
@@ -123,6 +263,7 @@ class TestUpgradeCommand:
                             lambda t: "/opt/bin/" + t)
         refresh = {selfupdate.PIPX: "--pip-args=--no-cache-dir",
                    selfupdate.UV_TOOL: "--refresh",
+                   selfupdate.UV_PIP: "--refresh",
                    selfupdate.PIP: "--no-cache-dir"}
         for method, flag in refresh.items():
             assert flag in selfupdate.upgrade_command(method), method
@@ -249,14 +390,20 @@ class TestObservedVersion:
         monkeypatch.setattr(selfupdate.subprocess, "run", boom)
         assert selfupdate.observed_version() is None
 
-    def test_asks_the_launcher_on_path_for_captured_text(self, monkeypatch,
+    def test_asks_this_interpreter_not_the_boost_on_path(self, monkeypatch,
                                                          tmp_path):
+        # A different `boost` first on PATH (a checkout shim ahead of the pipx
+        # bin) reported its own version as the upgraded copy's: "v1.0.400 →
+        # v1.0.424" while the upgraded copy still said 1.0.400.
         rec = _Recorder(_proc(0, out="boost 1.0\n"))
+        monkeypatch.setattr(selfupdate.shutil, "which",
+                            lambda t: str(tmp_path / "other" / t))
         monkeypatch.setattr("boost_cli.core.paths.launcher",
-                            lambda: tmp_path / "boost")
+                            lambda: tmp_path / "other" / "boost")
         monkeypatch.setattr(selfupdate.subprocess, "run", rec)
         assert selfupdate.observed_version() == "1.0"
-        assert rec.calls == [([str(tmp_path / "boost"), "--version"],
+        assert rec.calls == [([sys.executable, "-P", "-m", "boost_cli",
+                               "--version"],
                               {"capture_output": True, "text": True,
                                "timeout": 30.0})]
 
@@ -304,6 +451,13 @@ class TestForceCommand:
         assert selfupdate.force_command(selfupdate.UV_TOOL, "1.0.423") == [
             "/opt/bin/uv", "tool", "install", "--force",
             "boost-skill-cli==1.0.423"]
+
+    def test_uv_pip(self, monkeypatch):
+        monkeypatch.setattr(selfupdate.shutil, "which",
+                            lambda t: "/opt/bin/" + t)
+        assert selfupdate.force_command(selfupdate.UV_PIP, "1.0.423") == [
+            "/opt/bin/uv", "pip", "install", "--python", sys.executable,
+            "--refresh", "--reinstall", "boost-skill-cli==1.0.423"]
 
     def test_pip(self):
         assert selfupdate.force_command(selfupdate.PIP, "1.0.423") == [
@@ -353,6 +507,91 @@ class TestIsBehind:
         # is 1.0.423. That install is ahead, not behind.
         assert selfupdate.is_behind("1.0.424.dev3+g36b74ba", "1.0.423") is False
 
+    def test_a_dev_build_of_the_release_pypi_has_is_behind(self):
+        # PEP 440: 1.0.424.dev3 precedes 1.0.424. Comparing release numbers
+        # alone called them equal and printed "already up to date".
+        assert selfupdate.is_behind("1.0.424.dev3+g36b74ba", "1.0.424") is True
+
+    @pytest.mark.parametrize("pre", ["1.0.424rc1", "1.0.424a1", "1.0.424b2",
+                                     "1.0.424.rc1", "1.0.424-alpha1",
+                                     "1.0.424c1", "1.0.424.preview1"])
+    def test_a_pre_release_of_the_release_pypi_has_is_behind(self, pre):
+        assert selfupdate.is_behind(pre, "1.0.424") is True
+        assert selfupdate.is_behind("1.0.424", pre) is False
+
+    @pytest.mark.parametrize("older,newer", [
+        ("1.0.424.dev1", "1.0.424a1"),
+        ("1.0.424alpha1", "1.0.424beta1"),
+        ("1.0.424beta1", "1.0.424c1"),
+        ("1.0.424b1", "1.0.424pre1"),
+        ("1.0.424b1", "1.0.424preview1"),
+        ("1.0.424a9", "1.0.424b1"),
+        ("1.0.424a1", "1.0.424a2"),
+        ("1.0.424a2", "1.0.424b1"),
+        ("1.0.424b1", "1.0.424rc1"),
+        ("1.0.424rc1.dev1", "1.0.424rc1"),
+        ("1.0.424.dev1", "1.0.424.dev2"),
+        ("1.0.424", "1.0.424.post1"),
+        ("1.0.424.post1.dev1", "1.0.424.post1"),
+        ("1.0.424.post1", "1.0.424.post2"),
+        ("1.0.424", "1.0.424-1"),
+        ("1.0.424.dev9", "1.0.424.post1"),
+        ("1.0.424", "1.0.424.r1"),
+    ])
+    def test_pep440_order_both_ways(self, older, newer):
+        assert selfupdate.is_behind(older, newer) is True
+        assert selfupdate.is_behind(newer, older) is False
+
+    def test_a_post_release_is_ahead_of_its_final_release(self):
+        # PEP 440 puts X.postN *above* X, so a post build is not behind X.
+        assert selfupdate.is_behind("1.0.424.post1", "1.0.424") is False
+
+    def test_a_local_label_is_not_ranked(self):
+        # `+local` is a build of the same release, never "behind" it.
+        assert selfupdate.is_behind("1.0.424+g36b74ba", "1.0.424") is False
+        assert selfupdate.is_behind("1.0.424", "1.0.424+g36b74ba") is False
+
+    def test_trailing_zeros_do_not_count(self):
+        assert selfupdate.is_behind("1.0", "1.0.0") is False
+        assert selfupdate.is_behind("1.0.0", "1.0") is False
+        assert selfupdate.is_behind("1.0.0", "1.0.0.1") is True
+
+    def test_a_git_describe_string_is_commits_past_its_tag(self):
+        assert selfupdate.is_behind("1.2.204-203-g9ef1d107", "1.2.204") is False
+        assert selfupdate.is_behind("1.2.204-203-g9ef1d107-dirty",
+                                    "1.2.205") is True
+        assert selfupdate.is_behind("1.2.204", "1.2.204-3-gabc") is True
+
+    @pytest.mark.parametrize("same", ["1.0.424alpha1", "1.0.424.a.1",
+                                      "1.0.424_a1"])
+    def test_pre_release_spellings_normalise(self, same):
+        assert selfupdate._release_key(same) == selfupdate._release_key(
+            "1.0.424a1")
+
+    @pytest.mark.parametrize("same", ["1.0.424c1", "1.0.424pre1",
+                                      "1.0.424preview1"])
+    def test_rc_spellings_normalise(self, same):
+        assert selfupdate._release_key(same) == selfupdate._release_key(
+            "1.0.424rc1")
+
+    def test_case_and_capital_v_are_tolerated(self):
+        assert selfupdate.is_behind("V1.0.424RC1", "1.0.424") is True
+
+    def test_the_release_key_shape(self):
+        assert selfupdate._release_key("1.0.424rc1.dev2+gx") == (
+            (1, 0, 424), (2, 1), -1, (0, 2))
+        assert selfupdate._release_key("1.0.424.dev3") == (
+            (1, 0, 424), (-1, 0), -1, (0, 3))
+        assert selfupdate._release_key("2.0.0.post4") == (
+            (2,), (3, 0), 4, (1, 0))
+        assert selfupdate._release_key("1.2-5-gabc") == (
+            (1, 2), (3, 0), 5, (1, 0))
+        assert selfupdate._release_key("0") == ((0,), (3, 0), -1, (1, 0))
+        assert selfupdate._release_key("1.0.dev") == (
+            (1,), (-1, 0), -1, (0, 0))
+        assert selfupdate._release_key("1.0.post") == ((1,), (3, 0), 0, (1, 0))
+        assert selfupdate._release_key("1.0a") == ((1,), (0, 0), -1, (1, 0))
+
     def test_a_dev_build_behind_pypi_still_reads_as_behind(self):
         assert selfupdate.is_behind("1.0.420.dev1+gabc", "1.0.423") is True
 
@@ -370,6 +609,8 @@ class TestIsBehind:
     def test_an_unparseable_version_is_never_behind(self):
         assert selfupdate.is_behind("nightly", "1.0.423") is False
         assert selfupdate.is_behind("1.0.422", "nightly") is False
+        assert selfupdate.is_behind("1.0.9foo", "1.0.10") is False
+        assert selfupdate._release_key("1.0.424.dev3x") is None
 
 
 class _Resp:
