@@ -2557,6 +2557,14 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 failed += 1
                 continue
             entry = matches[0]
+            if entry["tap"] in conflicted:
+                # An unqualified line resolves to a tap all the same, and the
+                # one it found is the repository the tap line was refused for.
+                out.warn("%s: %s skipped — it resolves to tap %s, which is not "
+                         "the repository the Boostfile names"
+                         % (where, sname, entry["tap"]))
+                failed += 1
+                continue
             if sver and str(entry.get("version")) != sver:
                 # Installed all the same — the line asked for this skill — but
                 # counted as a difference, so the summary does not report a

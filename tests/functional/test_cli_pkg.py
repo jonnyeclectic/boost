@@ -4456,6 +4456,19 @@ class TestBundleTapConflict:
         self._expect(r.out, tapped)
         assert "would install 0 skills, 2 would fail" in r.out
 
+    @pytest.mark.parametrize("dry", [False, True])
+    def test_an_unqualified_line_resolving_to_it_is_skipped(
+            self, boost, tapped, tmp_path, dry):
+        bf = tmp_path / "bf"
+        bf.write_text("tap fixture-tap https://github.com/someone-else/"
+                      "fixture-tap\nskill brainstorming@1.4.0\n",
+                      encoding="utf-8")
+        r = boost("bundle", "install", bf, *(["--dry-run"] if dry else []),
+                  expect=1)
+        assert ("bf:2: brainstorming skipped — it resolves to tap fixture-tap, "
+                "which is not the repository the Boostfile names") in _flat(r.out)
+        assert "brainstorming" not in lockfile.installed()
+
     def test_another_spelling_of_the_same_repo_is_no_conflict(
             self, boost, tapped, tmp_path):
         bf = tmp_path / "bf"
