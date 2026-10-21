@@ -1080,8 +1080,15 @@ def linked_agents(name: str) -> list[str]:
     answers False), and it raised here *after* the store copy, so the install
     exited 70 with the skill in the store and nothing in the lock. A link boost
     may not even look at is not one it can count.
+
+    ``unlinking_agents``, not ``linking_agents``: disabling an agent stops new
+    links without removing old ones, so a live link in a disabled agent's dir
+    is still linked — and still what an uninstall removes. Counting only the
+    enabled ones made a reinstall with claude-code disabled drop it from
+    ``agents`` while ``~/.claude/skills/<name>`` stayed live, and re-enabling
+    it changed nothing any command reported.
     """
-    return [agent for agent, adir in agents.linking_agents().items()
+    return [agent for agent, adir in agents.unlinking_agents().items()
             if is_boost_link(adir / name)
             and misdirected(name, adir / name) is None]
 
@@ -2476,6 +2483,7 @@ def _install_project_skill(entry: dict, force: bool = False,
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
     explicit_agents = only_agents is not None
+    asked = only_agents
     only_agents = preserved_agent_scope(only_agents, existing)
     # agents_for_scope, not enabled_agents: project scope puts each agent under
     # a repo-local dotdir, and Antigravity's user layout is two levels deep with
@@ -2561,10 +2569,14 @@ def _install_project_skill(entry: dict, force: bool = False,
         "updated_at": now,
         "agents": all_agents,
         "materializations": materializations,
+    # What the user ASKED for, beside what was written: without it an agent
+    # enabled afterwards (here or on a teammate's machine) could not be told
+    # from one narrowed away, so sync never copied into it.
+    #
     # A forced re-install (`boost reinstall`) of a pinned project skill must
     # leave it pinned: the row is rebuilt from scratch, and a flag it does not
     # name is a pin `boost update` silently stops honouring.
-    } | project_carried_state(existing))
+    } | _declared_field(asked, existing) | project_carried_state(existing))
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"),
                 scope=scopes.SCOPE_PROJECT, via=via)
 
@@ -2940,6 +2952,9 @@ def project_sync_plan(base=None) -> dict[str, list]:
             path = scopes.resolve_in_base(resolved_base, m.get("path"))
             if path is None or not path.is_dir():
                 plan["missing"].append((name, m.get("agent", "?")))
+        plan["missing"].extend(
+            (name, agent)
+            for agent in unmaterialized_project_agents(resolved_base, name, entry))
     # project_agents, and the declared dotdir: the scan must look exactly where
     # the install writes. Walking enabled_agents() reached `<repo>/antigravity-cli`,
     # a path project install never writes, and deriving the dotdir would miss
@@ -2955,6 +2970,48 @@ def project_sync_plan(base=None) -> dict[str, list]:
             if child.is_dir() and child.name not in lock:
                 plan["orphaned"].append(str(child))
     return plan
+
+
+def _project_target(base: Path, name: str, agent: str) -> Path | None:
+    """Where a project install would copy ``name`` for ``agent``, or None
+    when ``agent`` takes no project-scope skill."""
+    skills_dir = agents.project_agents().get(agent)
+    if skills_dir is None:
+        return None
+    return scopes.skill_target(skills_dir, name, base=base,
+                               dotdir=agents.project_dotdir(agent, skills_dir))
+
+
+def unmaterialized_project_agents(base: Path, name: str,
+                                  entry: dict) -> list[str]:
+    """The project-scope agents a project skill has no copy *recorded* for.
+
+    :func:`unmaterialized_agents` for a ``--local`` skill. Its rows record
+    what the install wrote, so an agent enabled afterwards had none, and
+    doctor, `sync` and `heal` all called the skill intact while the agent
+    never got it — at user scope the same sequence is a missing link that
+    sync makes.
+
+    Within a declared ``--agent`` narrowing only, so it never widens one.
+    Empty for an entry with no ``only_agents`` at all: it predates the field,
+    and its rows are the only record of a narrowing. Empty for a quarantined
+    entry. An agent whose target path already holds something is left out:
+    that is not boost's copy, and sync never writes over a directory it did
+    not put there.
+    """
+    rows = entry.get("materializations") or []
+    if not rows or "only_agents" not in entry or entry.get("quarantined"):
+        return []
+    declared = entry.get("only_agents")
+    have = {m.get("agent") for m in rows}
+    out_ = []
+    for agent in agents.project_agents():
+        if agent in have or (declared and agent not in declared):
+            continue
+        dest = _project_target(base, name, agent)
+        if dest is not None and not os.path.lexists(dest):
+            out_.append(agent)
+    return out_
 
 
 def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
@@ -3043,12 +3100,13 @@ def _restore_project_copies(resolved_base: Path, name: str, entry: dict,
                             cat_entry: dict, missing: list) -> None:
     """Copy ``cat_entry``'s source back to the recorded paths ``missing``.
 
-    Writes the directories and nothing else: no lock row (it already says
-    what is there), no ``.mcp.json`` (the install registered it), and only
-    the agents named, because the other copies are committed files a team
-    edits in place. Every destination is checked before the first copy, the
-    same two checks a project install makes. Raises :class:`BoostError`
-    when there is nothing it may write.
+    Writes the directories, and a lock row only for an agent that had none
+    (:func:`unmaterialized_project_agents`) — a recorded row already says what
+    is there. No ``.mcp.json`` (the install registered it), and only the
+    agents named, because the other copies are committed files a team edits
+    in place. Every destination is checked before the first copy, the same
+    two checks a project install makes. Raises :class:`BoostError` when there
+    is nothing it may write.
     """
     violations = _project_policy_violations(resolved_base, name, cat_entry)
     if violations:
@@ -3066,11 +3124,34 @@ def _restore_project_copies(resolved_base: Path, name: str, entry: dict,
         scopes.ensure_in_base(resolved_base, dest)
         scopes.ensure_spelled(resolved_base, dest)
         dests.append(dest)
+    recorded = {m.get("agent") for m in entry.get("materializations") or []}
+    new_rows: list[dict] = []
+    for agent in missing:
+        if agent in recorded:
+            continue
+        target = _project_target(resolved_base, name, agent)
+        if target is None or os.path.lexists(target):
+            continue
+        scopes.ensure_in_base(resolved_base, target)
+        scopes.ensure_spelled(resolved_base, target)
+        dests.append(target)
+        new_rows.append({"agent": agent, "path": scopes.relative_to_base(
+            resolved_base, target)})
     if not dests:
         raise BoostError("no recorded copy of %s to restore" % name)
     within = registry.get(cat_entry["tap"]).path
     for dest in dests:
         _copy_skill(src, dest, within=within)
+    if new_rows:
+        def record(lock: dict) -> bool | None:
+            row = lock["skills"].get(name)
+            if row is None:
+                return False
+            row.setdefault("materializations", []).extend(new_rows)
+            row["agents"] = list(dict.fromkeys(
+                [*(row.get("agents") or []), *(r["agent"] for r in new_rows)]))
+            return None
+        projectlock.mutate(resolved_base, record)
 
 
 def _project_gone(name: str) -> str:
@@ -3250,6 +3331,27 @@ def narrow_materializing(targets: dict, only_agents, name: str, kind: str,
             % (kind, name, ("--agent " + listed) if explicit
                else "its recorded agents (%s)" % listed), hint=hint)
     return kept
+
+
+def refuse_unreachable_skill(only_agents: list[str] | None, name: str) -> None:
+    """Refuse a user-scope skill install whose ``--agent`` reaches no agent.
+
+    The user-scope twin of :func:`narrow_project_agents`, in
+    :func:`narrow_materializing`'s words. :func:`link_agents` filters rather
+    than refusing, so `install X --agent cursor` with cursor disabled copied
+    into the store, linked nothing, recorded ``agents: []`` and exited 0 —
+    where the same flag on a rule, a workflow or a ``--local`` skill refuses.
+
+    Only an explicit ``--agent``: the command layer calls this, and only with
+    the flag it parsed. A narrowing the lock replays (``update``, ``sync``, a
+    profile restore) is left to install linkless, so a later `boost sync`
+    links it once the agent is enabled again rather than dropping the row.
+    A native-store agent counts as reached: it reads the store directly.
+    """
+    if not only_agents:
+        return
+    reach = agents.linking_agents() | agents.native_store_agents()
+    narrow_materializing(reach, only_agents, name, "skill", explicit=True)
 
 
 def _refuse_shared_rule_file(name: str, path: Path) -> None:
@@ -7034,10 +7136,21 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
             actions.append(how or "left %s unrecorded (no SKILL.md to record)" % name)
     for name in plan.get("adoptable_store", []):
         actions.extend(adopt_unrecorded(name))
+    relinked: set[str] = set()
     for name, agent in plan["missing_links"]:
         res = link_agents(name, only=[agent])
         if agent in res.linked:
             actions.append("linked %s → %s" % (name, agent))
+            relinked.add(name)
+    # `agents` is what IS linked (`_copy_link_record`), so a link made here
+    # is recorded here. Left alone, list, info and `list --json` went on
+    # naming the agents linked at install time while sync had linked another.
+    for name in sorted(relinked):
+        now_linked = linked_agents(name)
+
+        def rerecord(row: dict, now: list[str] = now_linked) -> None:
+            row["agents"] = now
+        lockfile.update_skill(name, rerecord)
     for path in plan["stale_links"]:
         p = Path(path)
         if p.is_symlink():

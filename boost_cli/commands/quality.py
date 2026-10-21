@@ -960,6 +960,12 @@ def cmd_doctor(argv):
             bad("project-skill", "project skill %s modified since install — "
                 "run `boost verify`" % name)
             proj_issues += 1
+        # An agent enabled after the install has no row, so the status above
+        # cannot see it; `boost sync` copies into it, as it does for a rule.
+        for agent in store.unmaterialized_project_agents(pbase, name, entry):
+            bad("project-skill", "project skill %s was never written for %s "
+                "— run `boost sync`" % (name, agent))
+            proj_issues += 1
         # Independent of the status above: a redirected row reads intact,
         # because the hash follows the symlink, and is still one uninstall
         # will leave on disk.

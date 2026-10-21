@@ -693,6 +693,8 @@ def cmd_install(argv: list[str]) -> int:
                 # past it, a seen record is one --force overwrites.
                 seen = store.check_existing(e, force=args.force,
                                             scope=args.scope)
+                # The run's refusal, ahead of the header, as the branches above.
+                store.refuse_unreachable_skill(only, e["name"])
                 verb = "reinstall" if seen else "install"
                 # The lock's recorded scope, replayed exactly as `store.install`
                 # replays it before calling `link_agents` — the same two steps
@@ -739,6 +741,9 @@ def cmd_install(argv: list[str]) -> int:
             out.heading("%s v%s (%s)"
                         % (e["name"], out.plain(e["version"]), e["tap"]))
         try:
+            if (args.scope != scopes.SCOPE_PROJECT
+                    and e.get("kind", "skill") == "skill"):
+                store.refuse_unreachable_skill(only, e["name"])
             res = store.install(e, force=args.force, only_agents=only,
                                 scope=args.scope, as_skill=args.as_skill)
         except BoostError as err:
