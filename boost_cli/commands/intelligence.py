@@ -1060,7 +1060,8 @@ def cmd_context(argv: list[str]) -> int:
         inst = lockfile.installed()
         for name in sorted(_mentioned_skills(state)):
             entry = inst.get(name)
-            if entry and entry.get("sidelined_by") == "context":
+            if (entry and entry.get("sidelined_by") == "context"
+                    and not entry.get("quarantined")):
                 _warn_unwritable(store.unsideline(name))
                 restored += 1
         state["enabled"] = False
@@ -1203,7 +1204,7 @@ def cmd_focus(argv: list[str]) -> int:
         had_session = state_path.exists()
         restored = 0
         for name, entry in sorted(lockfile.installed().items()):
-            if entry.get("sidelined_by") != "focus":
+            if entry.get("sidelined_by") != "focus" or entry.get("quarantined"):
                 continue
             _warn_unwritable(store.unsideline(name),
                              stream=sys.stderr if args.json else None)

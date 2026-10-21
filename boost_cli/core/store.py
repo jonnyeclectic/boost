@@ -1203,15 +1203,34 @@ def held_refusal(name: str, entry: dict | None) -> BoostError | None:
     """
     if entry is None or not is_held(entry):
         return None
-    if entry.get("quarantined"):
-        why = "quarantined"
-        back = "`boost quarantine --release %s` puts it back" % name
-    else:
-        by = str(entry.get("sidelined_by") or "")
-        why = "sidelined by `boost %s`" % by if by else "sidelined"
-        back = _SIDELINE_RETURN.get(by, "relinking it puts it back")
+    why, back = held_reason(name, entry)
     return BoostError("%s is %s — its store copy is held aside" % (name, why),
                       hint="%s first" % back)
+
+
+def held_reason(name: str, entry: dict) -> tuple[str, str]:
+    """``(why, back)`` for a held skill: why it is away, what returns it.
+
+    ``list`` and ``info`` word a held copy with this rather than as "missing
+    from the store": that sent the user to `boost heal`, which (rightly)
+    leaves a held skill alone and answered "nothing to heal".
+    """
+    if entry.get("quarantined"):
+        return ("quarantined",
+                "`boost quarantine --release %s` puts it back" % name)
+    by = str(entry.get("sidelined_by") or "")
+    return ("sidelined by `boost %s`" % by if by else "sidelined",
+            _SIDELINE_RETURN.get(by, "relinking it puts it back"))
+
+
+def missing_from_store(name: str, entry: dict | None) -> bool:
+    """Whether recorded skill ``name`` has no store copy and none held aside.
+
+    What ``list`` and ``info`` flag, and why :func:`sync_plan` skips a held
+    row too: a quarantined or sidelined skill's copy is away on purpose, and
+    is not damage.
+    """
+    return not is_held(entry) and not skill_store_dir(name).is_dir()
 
 
 def drop_held_copy(name: str) -> None:
@@ -1276,7 +1295,18 @@ def unsideline(name: str) -> InstallResult:
     into every agent turned a skill installed ``--agent cursor`` into one
     linked everywhere the moment a `profile use` or `focus --clear` touched it.
     """
-    declared = (lockfile.get_skill(name) or {}).get("only_agents") or None
+    current = lockfile.get_skill(name) or {}
+    if current.get("quarantined"):
+        # Quarantine owns the held copy now. Restoring and relinking it here
+        # is what had `focus --clear` and `context disable` put a quarantined
+        # skill back in every agent while the lock still said quarantined;
+        # only `quarantine --release` brings it back. The stale sideline
+        # flag is dropped so no later un-sideline tries again.
+        def unflag(entry: dict) -> None:
+            entry.pop("sidelined_by", None)
+        lockfile.update_skill(name, unflag)
+        return InstallResult(name, skill_store_dir(name))
+    declared = current.get("only_agents") or None
     # Back into the store first: the links point at it.
     restore_store_copy(name)
     res = link_agents(name, declared, keep_theirs=True)
@@ -4303,6 +4333,10 @@ def quarantine_skill(name: str, entry: dict) -> tuple[list[str], dict[str, Path]
     fresh = not entry.get("quarantined")
     entry["quarantined"] = True
     entry["agents"] = []
+    # A skill sidelined by focus/context/profile and then quarantined is
+    # quarantine's now: left set, the sideline's own undo restored the held
+    # copy and relinked a skill the lock still called quarantined.
+    entry.pop("sidelined_by", None)
     if blocked:
         entry["refused_agents"] = list(blocked)
     else:
