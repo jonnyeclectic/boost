@@ -996,7 +996,13 @@ def cmd_replay(argv) -> int:
         # Every other write refuses a corrupt lock, and the diff below would
         # read it as empty and reinstall each skill over it. Restoring is the
         # snapshot itself becoming the lock; the corrupt bytes stay aside.
-        backup = paths.tilde(lockfile.corrupt_backup())
+        # Kept now, so the name below is the backup that holds these bytes
+        # (a backup from an earlier corruption may hold another state).
+        try:
+            held = lockfile.keep_copy()
+        except OSError:
+            held = lockfile.corrupt_backup()
+        backup = paths.tilde(held)
         if not (args.yes or out.confirm(
                 "the lock file is corrupt — make snapshot %s the lock file? "
                 "It is the lock as it was before the change after it; the "

@@ -694,8 +694,8 @@ class TestSync:
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
         r = boost("sync", expect=1)
         assert ("the lock file is corrupt, so sync records nothing and leaves 1 "
-                "store dir as it is: brainstorming — restore it with `boost "
-                "replay`") in _flat(r.out + r.err)
+                "store dir as it is: brainstorming — rebuild it from the store "
+                "with `boost sync --rebuild-lock`") in _flat(r.out + r.err)
         assert "everything in sync" not in r.out
         data = json.loads(boost("sync", "--json", expect=1).out)
         assert (data["unrecorded_store"], data["lock"]) == (["brainstorming"],
@@ -703,7 +703,8 @@ class TestSync:
         # The preview words it the same way, not as a lock that was lost.
         diff = _flat(boost("sync", "--diff").out)
         assert ("the lock file is corrupt, so sync will record nothing — "
-                "restore it with `boost replay`") in diff
+                "rebuild it from the store with `boost sync --rebuild-lock`"
+                ) in diff
         assert "store dirs the lock file cannot record, left alone (1)" in diff
         assert "has lost" not in diff
         plan = json.loads(boost("sync", "--diff", "--json").out)
@@ -717,8 +718,8 @@ class TestSync:
         lock = paths.lockfile_path()
         data = json.loads(lock.read_text(encoding="utf-8"))
         lock.write_text(json.dumps(data | {"version": 4}), encoding="utf-8")
-        line = ("the lock file is schema v4, not v3, so sync %s nothing — "
-                "restore it with `boost replay`")
+        line = ("the lock file is schema v4, newer than this boost's v3, so "
+                "sync %s nothing — upgrade boost with `boost self-update`")
         r = boost("sync", expect=1)
         assert line % "records" in _flat(r.out + r.err)
         diff = boost("sync", "--diff")

@@ -1057,7 +1057,19 @@ def cmd_sync(argv: list[str]) -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the --prune confirmation prompts")
+    ap.add_argument("--rebuild-lock", action="store_true",
+                    help="set an unreadable lock file aside (its bytes are "
+                         "kept) and re-record the store into a new one")
     args = ap.parse_args(argv)
+    if args.rebuild_lock:
+        if args.diff:
+            ap.error("--rebuild-lock replaces the lock file; drop --diff")
+        # The way back from a corrupt lock with no history to roll back to:
+        # a missing lock over a populated store is what sync re-records.
+        backup = lockfile.set_aside()
+        out.info("set the unreadable lock file aside — its bytes are in %s; "
+                 "re-recording the store" % _tilde(backup),
+                 stream=sys.stderr if args.json else None, wrap=True)
     plan = store.sync_plan()
     # A checkout can be missing skills its project lock records — that is the
     # normal state right after `git clone` — so sync repairs the repo too.
@@ -1079,8 +1091,9 @@ def cmd_sync(argv: list[str]) -> int:
                              indent=2))
             return 0
         if lock_bad:
-            out.warn("the lock file %s, so sync will record nothing — restore "
-                     "it with `boost replay`" % lockfile.fault(integ), wrap=True)
+            out.warn("the lock file %s, so sync will record nothing — %s"
+                     % (lockfile.fault(integ), lockfile.remedy(integ)),
+                     wrap=True)
         # What a run writes into the lock with no plan bucket of its own: an
         # older lock's schema stamp and the hashes rows were installed
         # without. Missing here, `--diff` said "everything in sync" over the
@@ -1255,13 +1268,13 @@ def cmd_sync(argv: list[str]) -> int:
     for line in kept:
         out.warn(line, wrap=True)
     if lock_bad:
-        out.warn("the lock file %s, so sync records nothing%s — restore it "
-                 "with `boost replay`"
+        out.warn("the lock file %s, so sync records nothing%s — %s"
                  % (lockfile.fault(integ),
                     " and leaves %s as %s: %s"
                     % (_plural(len(unrecorded), "store dir"),
                        "it is" if len(unrecorded) == 1 else "they are",
-                       ", ".join(unrecorded)) if unrecorded else ""), wrap=True)
+                       ", ".join(unrecorded)) if unrecorded else "",
+                    lockfile.remedy(integ)), wrap=True)
     for name in pruned:
         out.ok("pruned %s" % _tilde(store.skill_store_dir(name)))
     for line in store.older_copy_lines(plan["older_copies"]):

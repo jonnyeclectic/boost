@@ -758,7 +758,9 @@ class TestDoctor:
         paths.lockfile_path().write_text(
             '{"version": 3, "skills": {', encoding="utf-8")
         r = boost("doctor", expect=1)
-        assert "lock file is corrupt — restore with `boost replay`" in r.out
+        # One install wrote the lock over none, so there is no history.
+        assert ("lock file is corrupt — rebuild it from the store with "
+                "`boost sync --rebuild-lock`") in " ".join(r.out.split())
         assert "lock file parses (v3)" not in r.out
         assert "lock file integrity OK" not in r.out
 
@@ -767,14 +769,17 @@ class TestDoctor:
         # list, doctor, sync, heal, install and verify all exited 70 on it.
         paths.lockfile_path().write_bytes(b"\xff\xfe")
         r = boost("doctor", expect=1)
-        assert "lock file is corrupt — restore with `boost replay`" in r.out
+        # One install wrote the lock over none, so there is no history.
+        assert ("lock file is corrupt — rebuild it from the store with "
+                "`boost sync --rebuild-lock`") in " ".join(r.out.split())
         boost("list")
 
     def test_wrong_schema_lock_rc1(self, boost, installed):
         paths.lockfile_path().write_text(
             json.dumps({"version": 4, "skills": {}}), encoding="utf-8")
         r = boost("doctor", expect=1)
-        assert "lock file schema is v4, expected v3" in r.out
+        assert ("lock file is schema v4, newer than this boost's v3 — upgrade "
+                "boost with `boost self-update`") in " ".join(r.out.split())
         assert "lock file parses (v3)" not in r.out
 
     def test_links_outside_the_declared_scope_rc1(self, boost, installed):
@@ -1517,21 +1522,24 @@ class TestVerify:
         paths.lockfile_path().write_text(
             '{"version": 3, "skills": {', encoding="utf-8")
         r = boost("verify", expect=1)
-        assert "lock file is corrupt" in r.err
-        assert "boost replay" in r.err
+        assert ("lock file is corrupt — rebuild it from the store with "
+                "`boost sync --rebuild-lock`") in " ".join(r.err.split())
+        assert "boost replay" not in r.err
 
     def test_lock_file_wrong_schema_rc1(self, boost, installed):
         paths.lockfile_path().write_text(
             json.dumps({"version": 4, "skills": {}}), encoding="utf-8")
         r = boost("verify", expect=1)
-        assert "lock file schema is v4, expected v3" in r.err
+        assert "lock file is schema v4, newer than this boost's v3" in r.err
+        assert "hint: upgrade boost with `boost self-update`" in r.err
 
     def test_a_versionless_lock_of_the_wrong_shape_never_says_vNone(
             self, boost, installed):
         paths.lockfile_path().write_text(json.dumps({"skills": []}),
                                          encoding="utf-8")
         r = boost("verify", expect=1)
-        assert "lock file schema is unreadable, expected v3" in r.err
+        # A section that is not a map is damage, not a schema.
+        assert "lock file is corrupt" in r.err
         assert "vNone" not in r.out + r.err
 
 
@@ -1616,7 +1624,7 @@ class TestDrift:
             '{"version": 3, "skills": {', encoding="utf-8")
         r = boost("drift", expect=1)
         assert "lock file is corrupt" in r.err
-        assert "boost replay" in r.err
+        assert "boost sync --rebuild-lock" in " ".join(r.err.split())
 
 
 # ── test ─────────────────────────────────────────────────────────────────
@@ -3892,15 +3900,16 @@ class TestStoreDirsBoostDidNotInstall:
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
         r = boost("heal", expect=1)
         assert ("the lock file is corrupt, so heal cannot tell which store dirs "
-                "are boost's — restore it with `boost replay`"
-                ) in _flat(r.out + r.err)
+                "are boost's — rebuild it from the store with `boost sync "
+                "--rebuild-lock`") in _flat(r.out + r.err)
         assert "nothing to heal" not in r.out
         assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
         paths.lockfile_path().write_text(
             json.dumps({"version": 4, "skills": {}}), encoding="utf-8")
         r = boost("heal", expect=1)
-        assert ("the lock file is schema v4, not v3, so heal cannot tell which "
-                "store dirs are boost's") in _flat(r.out + r.err)
+        assert ("the lock file is schema v4, newer than this boost's v3, so heal "
+                "cannot tell which store dirs are boost's — upgrade boost with "
+                "`boost self-update`") in _flat(r.out + r.err)
 
     def test_a_plugin_duplicate_is_an_issue_until_prune_drops_the_link(
             self, boost, installed, claude_plugin):

@@ -54,9 +54,23 @@ class TestReadWarns:
         assert cap.out == ""
         assert "lock file" in cap.err and "is corrupt" in cap.err
         assert ".skill-lock.json.corrupt" in cap.err
-        assert ("`boost replay rollback <id>` restores it as it was before "
-                "its last change; the newest record is only in ") in " ".join(
+        # No write ever snapshotted a lock, so there is nothing to roll back to.
+        assert ("nothing installed — `boost sync --rebuild-lock` sets it aside "
+                "and re-records the store; the newest record is only in "
+                "~/.agents/skills/.skill-lock.json.corrupt") in " ".join(
                     cap.err.split())
+        assert "replay" not in cap.err
+
+    def test_with_history_the_warning_names_the_rollback(self, sandbox, capsys):
+        lockfile.set_skill("a", {"version": "1"})
+        lockfile.set_skill("b", {"version": "1"})
+        assert lockfile.has_history()
+        _corrupt()
+        lockfile.read()
+        assert ("nothing installed — `boost replay rollback <id>` restores it "
+                "as it was before its last change; the newest record is only "
+                "in ~/.agents/skills/.skill-lock.json.corrupt") in " ".join(
+                    capsys.readouterr().err.split())
 
     def test_it_warns_once_per_process(self, sandbox, capsys):
         _corrupt()
@@ -80,10 +94,11 @@ class TestWriteRefuses:
         with pytest.raises(BoostError) as ei:
             lockfile.set_skill("new", {"version": "2.0"})
         assert paths.lockfile_path().read_bytes() == raw
-        assert "lock file is corrupt" in str(ei.value)
+        assert str(ei.value) == ("lock file is corrupt — boost will not "
+                                 "write over it")
         assert ei.value.hint == (
-            "`boost replay rollback <id>` restores the lock as it was before "
-            "its last change; the newest record is only in "
+            "`boost sync --rebuild-lock` sets it aside and re-records the "
+            "store; the newest record is only in "
             + paths.tilde(lockfile.corrupt_backup()))
         assert ".skill-lock.json.corrupt" in ei.value.hint
         assert lockfile.corrupt_backup().read_bytes() == raw

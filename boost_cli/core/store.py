@@ -2591,9 +2591,10 @@ def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
     dest = skill_store_dir(name)
     if not os.path.lexists(dest):
         return None
-    if lockfile.check().problem in ("corrupt", "schema"):
-        hint = ("the lock file cannot be read — `boost replay` restores the "
-                "lock that knows whose it is")
+    integ = lockfile.check()
+    if integ.problem in ("corrupt", "schema"):
+        hint = ("the lock file cannot be read — %s, and it will know whose "
+                "it is" % lockfile.remedy(integ))
     else:
         hint = "`boost sync` says whose it is, and records it if it is yours"
         if retry:
@@ -7644,9 +7645,9 @@ def remove_foreign_copies(rows: list) -> list[str | None]:
     """
     integ = lockfile.check()
     if not integ.ok and integ.problem != "missing":
-        unreadable = ("the lock file cannot be read, so boost cannot tell "
-                      "whether it is boost's — restore the lock with "
-                      "`boost replay`")
+        unreadable = ("boost cannot tell whether this is boost's, because "
+                      "the lock file cannot be read — %s"
+                      % lockfile.remedy(integ))
         return [unreadable for _row in rows]
     lock = lockfile.installed()
     fresh = classify_unrecorded([r[0] for r in rows if r[0] not in lock

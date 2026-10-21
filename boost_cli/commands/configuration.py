@@ -1963,8 +1963,8 @@ def _tool_doctor(args: dict):
     # answered "healthy" while CLI `doctor` and `heal` exited 1.
     lock_bad = not integ.ok and not lost
     if lock_bad:
-        lines.append("the lock file %s — ask the user to restore it with "
-                     "`boost replay`" % lockfile.fault(integ))
+        lines.append("the lock file %s — ask the user to %s"
+                     % (lockfile.fault(integ), lockfile.remedy(integ)))
 
     def unrecorded(names: list[str]) -> list[str]:
         n = len(names)
@@ -1973,8 +1973,9 @@ def _tool_doctor(args: dict):
                     "re-records %s" % (n, "" if n == 1 else "s", ", ".join(names),
                                        "it" if n == 1 else "them")]
         return ["%d store dir%s the lock file cannot be read about (%s) — "
-                "`boost replay` restores the lock that knows whose they are"
-                % (n, "" if n == 1 else "s", ", ".join(names))]
+                "%s, and it will know whose they are"
+                % (n, "" if n == 1 else "s", ", ".join(names),
+                   lockfile.remedy(integ))]
 
     # Right after `boost replay rollback` over a corrupt lock, an unrecorded
     # store dir may be what the lock's last change installed, so `boost sync`

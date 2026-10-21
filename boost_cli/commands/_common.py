@@ -64,12 +64,15 @@ def _require_lock_integrity() -> None:
             "lock file missing — the store has skills but nothing is recorded",
             hint="run `boost sync`")
     if integ.problem == "corrupt":
-        raise BoostError("lock file is corrupt — restore with `boost replay`")
+        raise BoostError("lock file is corrupt — %s" % lockfile.remedy(integ))
+    if lockfile.newer(integ):
+        raise BoostError("lock file %s" % lockfile.fault(integ),
+                         hint=lockfile.remedy(integ))
     raise BoostError(
         "lock file schema is %s, expected v%d"
         % ("unreadable" if integ.version is None else "v%s" % integ.version,
            lockfile.SCHEMA_VERSION),
-        hint="restore with `boost replay`")
+        hint=lockfile.remedy(integ))
 
 
 def _iter_installed(names: list[str] | None = None) -> list[tuple[str, dict]]:

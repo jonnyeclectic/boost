@@ -822,12 +822,18 @@ def cmd_doctor(argv):
             rep.note("lockfile", "no lock file yet — nothing installed")
             lock_ok = True
     elif integ.problem == "corrupt":
-        bad("lockfile", "lock file is corrupt — restore with `boost replay`")
+        bad("lockfile", "lock file is corrupt — %s" % lockfile.remedy(integ),
+            wrap=True)
+        lock_ok = False
+    elif lockfile.newer(integ):
+        bad("lockfile", "lock file %s — %s"
+            % (lockfile.fault(integ), lockfile.remedy(integ)), wrap=True)
         lock_ok = False
     else:  # "schema"
-        bad("lockfile", "lock file schema is %s, expected v%d"
+        bad("lockfile", "lock file schema is %s, expected v%d — %s"
             % ("unreadable" if integ.version is None
-               else "v%s" % integ.version, lockfile.SCHEMA_VERSION))
+               else "v%s" % integ.version, lockfile.SCHEMA_VERSION,
+               lockfile.remedy(integ)), wrap=True)
         lock_ok = False
 
     # linking_agents, not enabled_agents, for the same reason `sync_plan` uses
@@ -2290,7 +2296,7 @@ def cmd_heal(argv):
     if not integ.ok and integ.problem != "missing":
         stuck.append(paths.lockfile_path())
         out.warn("the lock file %s, so heal cannot tell which store dirs are "
-                 "boost's — restore it with `boost replay`" % lockfile.fault(integ),
+                 "boost's — %s" % (lockfile.fault(integ), lockfile.remedy(integ)),
                  wrap=True)
     for d, block in blocked.items():
         stuck.append(d)

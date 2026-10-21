@@ -149,21 +149,55 @@ class TestCheck:
         assert lockfile.check() == (True, "older", None)
 
     @pytest.mark.parametrize("section", ["skills", "rules", "workflows"])
-    def test_an_older_lock_whose_section_is_not_a_mapping_is_refused(
+    def test_an_older_lock_whose_section_is_not_a_mapping_is_corrupt(
             self, sandbox, section):
         paths.ensure_dirs()
         paths.lockfile_path().write_text(json.dumps({section: []}),
                                          encoding="utf-8")
-        assert lockfile.check() == (False, "schema", None)
+        assert lockfile.check() == (False, "corrupt", None)
+
+    @pytest.mark.parametrize("raw", [
+        {"version": 3, "rules": []},
+        {"version": 3, "skills": {"a": "oops"}},
+        {"version": 2, "workflows": {"w": [1]}},
+        {"version": 3, "skills": {"a": {}}, "rules": {"r": None}}])
+    def test_a_known_schema_whose_shape_is_wrong_is_corrupt(self, sandbox, raw):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text(json.dumps(raw), encoding="utf-8")
+        assert lockfile.check() == (False, "corrupt", raw["version"])
+
+    def test_a_newer_schema_is_not_shape_checked(self, sandbox):
+        # Its shape is the newer boost's business: still "schema", never
+        # "corrupt", so nothing offers to set it aside or roll it back.
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text('{"version": 4, "skills": []}',
+                                         encoding="utf-8")
+        assert lockfile.check() == (False, "schema", 4)
 
     def test_the_fault_of_a_corrupt_lock(self):
         assert lockfile.fault(lockfile.Integrity(False, "corrupt")) == "is corrupt"
 
-    @pytest.mark.parametrize("version", [2, 4, "3"])
+    @pytest.mark.parametrize("version", [2, "3", "4", True, 0])
     def test_the_fault_of_a_lock_in_another_schema(self, version):
         assert lockfile.fault(lockfile.Integrity(False, "schema", version)) == (
             "is schema v%s, not v%d" % (version, lockfile.SCHEMA_VERSION))
         assert lockfile.SCHEMA_VERSION == 3
+
+    @pytest.mark.parametrize("version", [4, 17])
+    def test_the_fault_of_a_newer_lock_says_newer(self, version):
+        integ = lockfile.Integrity(False, "schema", version)
+        assert lockfile.newer(integ) is True
+        assert lockfile.fault(integ) == (
+            "is schema v%d, newer than this boost's v3" % version)
+
+    @pytest.mark.parametrize("integ", [
+        lockfile.Integrity(False, "schema", 3),
+        lockfile.Integrity(False, "schema", "4"),
+        lockfile.Integrity(False, "schema", True),
+        lockfile.Integrity(False, "corrupt", 4),
+        lockfile.Integrity(True, "older", 2)])
+    def test_only_a_newer_integer_schema_is_newer(self, integ):
+        assert lockfile.newer(integ) is False
 
     def test_the_fault_of_a_lock_with_no_version_never_says_vNone(self):
         assert lockfile.fault(lockfile.Integrity(True, "older", None)) == (
