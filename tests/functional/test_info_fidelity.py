@@ -188,6 +188,25 @@ class TestDescriptionIsTheInstalledCopys:
         assert "latest: 1.0.0" in lines
         assert not any(ln.startswith("upstream") for ln in lines)
 
+    def test_skill_without_a_frontmatter_description(self, boost, mytap):
+        # The scanner describes it by its first prose line; the installed
+        # copy must read the same way, not as "no description, upstream X".
+        _write(mytap, "skills/plain/SKILL.md",
+               "---\nname: plain\nversion: 1.0.0\n---\n\n# Plain\n\n"
+               "Does a thing from the body.\n")
+        _commit(mytap, "plain")
+        boost("update", "--taps-only")
+        boost("install", "plain")
+        r = boost("info", "plain")
+        assert _kv(r.out, "description") == "Does a thing from the body."
+        assert _kv(r.out, "upstream") is None
+        r = boost("explain", "plain")
+        assert "Does a thing from the body." in r.out
+        assert "Upstream description" not in r.out
+        lines = _tool("boost_info", name="plain")[0].splitlines()
+        assert "description: Does a thing from the body." in lines
+        assert not any(ln.startswith("upstream") for ln in lines)
+
 
 class TestInfoReportsTheUpdateOutdatedLists:
     def test_rule_and_workflow_match_outdated(self, boost, mytap):

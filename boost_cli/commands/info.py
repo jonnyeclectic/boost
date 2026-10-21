@@ -1024,6 +1024,12 @@ def cmd_explain(argv):
         body = re.sub(r"\A#[ \t]+%s[ \t]*\n+" % re.escape(_bare), "",
                       body, count=1)
     desc = str(meta.get("description") or "").strip()
+    if not desc and _kind == "skill":
+        # A SKILL.md with no `description:` is described by its first prose
+        # line, as the scanner indexes it. This text is the installed copy, so
+        # sending it on to the catalog below labelled the item's own text as
+        # the tap's "upstream" version.
+        desc = catalog.describe(meta, body).strip()
     upstream = ""
     if not desc and _lock:
         # A claude-mode block carries no frontmatter, so ask the lock row
