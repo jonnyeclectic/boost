@@ -474,10 +474,34 @@ class TestFailureLogging:
         assert ai_log.messages == [
             "ai: claude CLI call failed: exit 3: Invalid API key · Fix external"]
 
-    def test_cli_empty_stderr_logs_bare_exit_code(self, ai_log, monkeypatch):
+    def test_cli_no_output_logs_a_next_step_not_an_empty_reason(
+            self, ai_log, monkeypatch):
         _with_cli(monkeypatch, rc=1, stderr="")
         assert ai.ask("hi") is None
-        assert ai_log.messages == ["ai: claude CLI call failed: exit 1: "]
+        assert ai_log.messages == [
+            "ai: claude CLI call failed: exit 1: no output — run `claude` by "
+            "itself to check it is logged in"]
+
+    def test_cli_reason_on_stdout_only_is_reported(self, ai_on, ai_log,
+                                                   monkeypatch):
+        """An unauthenticated `claude -p` puts its reason on stdout alone."""
+        _with_cli(monkeypatch, rc=1, stdout="Not logged in · Please run /login\n",
+                  stderr="  \n")
+        assert ai.ask("hi") is None
+        assert ai_log.messages == [
+            "ai: claude CLI call failed: exit 1: Not logged in · Please run /login"]
+        assert "Not logged in · Please run /login" in ai.unavailable_reason()
+
+    def test_cli_stderr_wins_over_stdout(self, ai_log, monkeypatch):
+        _with_cli(monkeypatch, rc=2, stdout="partial reply", stderr="bad flag")
+        assert ai.ask("hi") is None
+        assert ai_log.messages == ["ai: claude CLI call failed: exit 2: bad flag"]
+
+    def test_cli_long_stdout_reason_is_bounded(self, ai_log, monkeypatch):
+        _with_cli(monkeypatch, rc=1, stdout="z" * 500)
+        assert ai.ask("hi") is None
+        assert ai_log.messages == [
+            "ai: claude CLI call failed: exit 1: " + "z" * 200 + "..."]
 
     def test_cli_empty_reply_logged(self, ai_log, monkeypatch):
         _with_cli(monkeypatch, rc=0, stdout="   \n")
