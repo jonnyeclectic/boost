@@ -274,3 +274,70 @@ class TestUpdateHold:
     def test_both_flags_release_both_holds(self):
         assert staleness.update_hold(True, "1.5.0", "1.4.0", True, True) \
             is None
+
+
+class TestSourceChangedAndNotCloned:
+    """Rows `boost update` will not upgrade: the tap now names another
+    repository, or has no clone at all."""
+
+    def test_constant_values(self):
+        assert staleness.SOURCE_CHANGED == "source-changed"
+        assert staleness.NOT_CLONED == "not-cloned"
+        assert staleness.OUTDATED_SOURCE_CHANGED == "source changed"
+        assert staleness.OUTDATED_NOT_CLONED == "not cloned"
+
+    def test_drift_source_changed_beats_the_tap_comparison(self):
+        # Even a matching source sha says nothing once the tap is another repo.
+        assert staleness.drift_state(
+            SHA_A, SHA_A, False, SHA_A, source_changed=True
+        ) == staleness.SOURCE_CHANGED
+        assert staleness.drift_state(
+            SHA_A, SHA_A, False, None, source_changed=True
+        ) == staleness.SOURCE_CHANGED
+
+    def test_drift_local_edits_and_store_missing_still_come_first(self):
+        assert staleness.drift_state(
+            SHA_B, SHA_A, False, SHA_A, source_changed=True
+        ) == staleness.LOCAL_EDITS
+        assert staleness.drift_state(
+            None, SHA_A, False, SHA_A, source_changed=True
+        ) == staleness.STORE_MISSING
+        assert staleness.drift_state(
+            SHA_A, SHA_A, True, None, source_changed=True) == staleness.NA
+
+    def test_drift_defaults_to_unchanged(self):
+        assert staleness.drift_state(
+            SHA_A, SHA_A, False, SHA_A) == staleness.IN_SYNC
+
+    def test_footer_all_source_changed(self):
+        assert staleness.outdated_footer(1, 0, source_changed=1) == (
+            "1 outdated · 1 source changed (the tap now points at another "
+            "repo; `boost reinstall` takes its copy)")
+
+    def test_footer_all_not_cloned(self):
+        assert staleness.outdated_footer(2, 0, not_cloned=2) == (
+            "2 outdated · 2 not cloned (`boost update` clones the tap)")
+
+    def test_footer_never_counts_held_rows_as_upgradable(self):
+        assert staleness.outdated_footer(
+            5, 1, removed=0, source_changed=1, not_cloned=2) == (
+            "5 outdated · 1 upstream (`boost update` upgrades, pinned and "
+            "quarantined items stay put) · 1 source missing (re-tap or "
+            "`boost uninstall`) · 1 source changed (the tap now points at "
+            "another repo; `boost reinstall` takes its copy) · 2 not cloned "
+            "(`boost update` clones the tap)")
+
+    def test_footer_removed_upstream_alongside_not_cloned_is_itemised(self):
+        # The whole-line "removed upstream" wording is only for a footer where
+        # every row is removed upstream.
+        assert staleness.outdated_footer(
+            2, 1, removed=1, not_cloned=1) == (
+            "2 outdated · 1 removed upstream (`boost uninstall`, or keep "
+            "as-is) · 1 not cloned (`boost update` clones the tap)")
+
+    def test_footer_untapped_alongside_source_changed_is_itemised(self):
+        assert staleness.outdated_footer(
+            2, 1, source_changed=1) == (
+            "2 outdated · 1 source missing (re-tap or `boost uninstall`) · "
+            "1 source changed (the tap now points at another repo; `boost "
+            "reinstall` takes its copy)")
