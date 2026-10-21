@@ -454,10 +454,15 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     problems = policy.check_tap_signing(tap.path)
     if problems:
         util.rmtree(tap.path)  # leave no half-added tap behind
+        # An unreadable policy.json refuses every tap; trusting a key or
+        # relaxing signing would not repair it, so say what would.
+        hint = ("repair policy.json first — `boost policy` names each "
+                "unreadable value" if policy.unreadable_violation("tap")
+                else "add its key with `boost trust add <name> <key>`, "
+                     "or relax `boost policy set require_signed_taps false`")
         raise BoostError(
             "tap %s failed provenance policy: %s" % (name, "; ".join(problems)),
-            hint="add its key with `boost trust add <name> <key>`, "
-                 "or relax `boost policy set require_signed_taps false`")
+            hint=hint)
     row = _row(name, url, curated, by_user=curated)
     if at:
         row["pin"] = at
