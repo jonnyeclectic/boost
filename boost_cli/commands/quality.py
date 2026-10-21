@@ -591,6 +591,14 @@ def cmd_doctor(argv):
         bad("policy", "%s — every install is refused until it is repaired; "
             "the next `boost policy set` moves it aside to policy.json.corrupt"
             % pol_err, wrap=True)
+    else:
+        # Parsed, but a value unreadable at its type reads as its (permissive)
+        # default for display while every install is refused.
+        for key, value, expected in policy.invalid_values():
+            bad("policy", "policy.json holds %s = %s, which expects %s — "
+                "every install is refused until it is fixed with `boost "
+                "policy set %s <%s>`" % (key, json.dumps(value), expected, key,
+                                         policy.spec_for(key)), wrap=True)
 
     # One agent whose `dir` names an unset `${VAR}` makes `known_agents` raise,
     # and a dozen checks below reach it — the link loop, the materialization

@@ -3426,6 +3426,89 @@ class TestImportProvenance:
         boost("import", _URL)
         assert list(scratch.iterdir()) == []
 
+    def test_url_import_off_the_allowlist_is_refused(self, boost, sandbox,
+                                                     url_remote):
+        # Recorded as tap `local`, which the allowlist exempts, so a URL
+        # `boost tap` would refuse imported with a check mark.
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("policy", "set", "allowed_taps", "gov")
+        r = boost("import", _URL, expect=1)
+        assert ("policy blocks installing url-skill: source 'team/skills' is "
+                "not on the allowlist") in " ".join(r.err.split())
+        assert not paths.lockfile_path().exists()   # nothing recorded
+        assert not (paths.store_dir() / "url-skill").exists()
+
+    def test_url_import_on_the_allowlist_still_imports(self, boost, sandbox,
+                                                       url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("policy", "set", "allowed_taps", "team/skills")
+        assert "Imported url-skill" in boost("import", _URL).out
+        assert "policy check passed" in boost("policy", "check").out
+
+    def test_url_import_of_a_blocked_source_is_refused(self, boost, sandbox,
+                                                       url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("policy", "set", "blocked_taps", "team/skills")
+        r = boost("import", _URL, expect=1)
+        assert ("policy blocks installing url-skill: source 'team/skills' is "
+                "blocked") in " ".join(r.err.split())
+
+    def test_url_import_of_an_unsigned_repo_is_refused(self, boost, sandbox,
+                                                       url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("policy", "set", "require_signed_taps", "true")
+        r = boost("import", _URL, expect=1)
+        assert ("policy blocks installing url-skill: source is unsigned (no "
+                ".boost/tap.manifest.minisig), and policy requires a trusted "
+                "signature") in " ".join(r.err.split())
+        assert not (paths.store_dir() / "url-skill").exists()
+
+    def test_url_import_all_refuses_each_skill(self, boost, sandbox, url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo / "skills", "alpha")
+        _skill_dir(repo / "skills", "beta")
+        _commit_all(repo)
+        boost("policy", "set", "allowed_taps", "gov")
+        r = boost("import", _URL, "--all", expect=1)
+        out = " ".join((r.out + r.err).split())
+        assert "alpha: policy blocks installing alpha" in out
+        assert "beta: policy blocks installing beta" in out
+        assert "Imported 0 skills" in out
+
+    def test_reinstall_of_a_url_import_honours_the_allowlist(
+            self, boost, sandbox, url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        boost("policy", "set", "allowed_taps", "gov")
+        r = boost("reinstall", "url-skill", expect=1)
+        assert "source 'team/skills' is not on the allowlist" in " ".join(
+            (r.out + r.err).split())
+
+    def test_policy_check_flags_a_url_import_off_the_allowlist(
+            self, boost, sandbox, url_remote):
+        repo, _ = url_remote
+        _skill_dir(repo, "url-skill")
+        _commit_all(repo)
+        boost("import", _URL)
+        boost("policy", "set", "allowed_taps", "gov")
+        r = boost("policy", "check", "--json", expect=1)
+        assert json.loads(r.out)["violations"] == [
+            {"name": "url-skill", "kind": "skill", "skill": "url-skill",
+             "violation": "source 'team/skills' is not on the allowlist"}]
+        # A path import names no source, so it stays exempt.
+        boost("policy", "set", "allowed_taps", "team/skills")
+        assert "policy check passed" in boost("policy", "check").out
+
     def test_local_import_records_an_absolute_source(self, boost, sandbox,
                                                      tmp_path, monkeypatch):
         # `boost import ./x` recorded "x", which resolves only from the
