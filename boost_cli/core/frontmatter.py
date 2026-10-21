@@ -97,7 +97,7 @@ def _dump_unescape(s: str) -> str:
     character forever. Measured locally it grew 2.3 GB -> 5.0 GB in 6 s,
     against a wall-clock timeout of ~70 s for the 62 tests that reach it
     (mutmut bounds time, never memory) -- enough to exhaust a 16 GB runner,
-    which is how `mutation-shard (5)` died with "The runner has received a
+    which matches how `mutation-shard (5)` died with "The runner has received a
     shutdown signal" on #1189. ``re.sub`` walks left to right, consuming each
     escape pair whole: the same reading, with no counter to mutate.
     """
