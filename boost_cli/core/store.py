@@ -14,6 +14,7 @@ import os
 import shutil
 import stat
 import tempfile
+import time
 from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1983,6 +1984,57 @@ def leftover_copies() -> list[Path]:
                   and p.name.endswith(_LEFTOVER_SUFFIXES))
 
 
+#: How old a temp file or staging dir must be before it is called stale. No
+#: write or install holds one anywhere near this long; one younger may be in
+#: use by a boost running right now.
+STALE_TEMP_AGE = 3600.0
+
+#: The characters of the random part ``tempfile`` gives ``mkstemp``/``mkdtemp``.
+_TEMP_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+
+
+def _temp_token(name: str, suffix: str) -> bool:
+    """Whether ``name`` is ``.boost-`` + an 8-char tempfile token + ``suffix``."""
+    head = util.TEMP_PREFIX
+    if not (name.startswith(head) and name.endswith(suffix)):
+        return False
+    token = name[len(head):len(name) - len(suffix)]
+    return len(token) == 8 and set(token) <= _TEMP_CHARS
+
+
+def stale_temps(now: float | None = None) -> list[tuple[Path, str]]:
+    """What a killed boost left in the store, as ``(path, kind)``, sorted.
+
+    ``util.atomic_write_text``'s ``.boost-XXXXXXXX.tmp`` (a 0600 copy of the
+    lock file, when that was the write) and a ``_copy_skill`` staging dir
+    ``.boost-XXXXXXXX``. Neither is ever renamed into place once the process
+    that made it is gone, and doctor said "healthy" over both while the store
+    is a directory Gemini CLI and Codex read directly. Only boost's own exact
+    names (:func:`leftover_copies` has the ``.old``/``.new`` ones) and only
+    older than :data:`STALE_TEMP_AGE`, since a younger one may be a write or
+    install in progress. A symlink is never one.
+    """
+    root = paths.store_dir()
+    now = time.time() if now is None else now
+    found = []
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return []
+    for p in entries:
+        try:
+            st = p.lstat()
+        except OSError:
+            continue
+        if now - st.st_mtime <= STALE_TEMP_AGE:
+            continue
+        if stat.S_ISREG(st.st_mode) and _temp_token(p.name, ".tmp"):
+            found.append((p, "stale temp file"))
+        elif stat.S_ISDIR(st.st_mode) and _temp_token(p.name, ""):
+            found.append((p, "stale staging dir"))
+    return sorted(found)
+
+
 def declared_mcp_servers(skill_dir) -> list[dict]:
     """MCP servers an installed skill declares — ``mcpdecl.servers_for`` rows.
 
@@ -2591,9 +2643,10 @@ def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
     dest = skill_store_dir(name)
     if not os.path.lexists(dest):
         return None
-    if lockfile.check().problem in ("corrupt", "schema"):
-        hint = ("the lock file cannot be read — `boost replay` restores the "
-                "lock that knows whose it is")
+    integ = lockfile.check()
+    if integ.problem in ("corrupt", "schema"):
+        hint = ("the lock file cannot be read — %s, and it will know whose "
+                "it is" % lockfile.remedy(integ))
     else:
         hint = "`boost sync` says whose it is, and records it if it is yours"
         if retry:
@@ -7644,9 +7697,9 @@ def remove_foreign_copies(rows: list) -> list[str | None]:
     """
     integ = lockfile.check()
     if not integ.ok and integ.problem != "missing":
-        unreadable = ("the lock file cannot be read, so boost cannot tell "
-                      "whether it is boost's — restore the lock with "
-                      "`boost replay`")
+        unreadable = ("boost cannot tell whether this is boost's, because "
+                      "the lock file cannot be read — %s"
+                      % lockfile.remedy(integ))
         return [unreadable for _row in rows]
     lock = lockfile.installed()
     fresh = classify_unrecorded([r[0] for r in rows if r[0] not in lock

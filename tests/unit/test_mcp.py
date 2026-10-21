@@ -1751,14 +1751,16 @@ class TestDoctorToolOnStoreDirsBoostDidNotInstall:
 
     def test_a_corrupt_lock_is_the_users_to_restore(self, installed):
         from boost_cli.commands import configuration
-        from boost_cli.core import paths
+        from boost_cli.core import lockfile, paths
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
         text, is_error = configuration._tool_doctor({})
-        assert ("the lock file is corrupt — ask the user to restore it with "
-                "`boost replay`") in text
+        # One install, so no snapshot before it: nothing to roll back to.
+        assert not lockfile.has_history()
+        fix = "rebuild it from the store with `boost sync --rebuild-lock`"
+        assert ("the lock file is corrupt — ask the user to %s" % fix) in text
         assert ("1 store dir the lock file cannot be read about (brainstorming) "
-                "— `boost replay` restores the lock that knows whose they "
-                "are") in text
+                "— %s, and it will know whose they are" % fix) in text
+        assert "boost replay" not in text
         # Neither is sync's to fix, so the verdict must not prescribe it.
         assert ("2 issue(s) — 2 are the user's to change, and `boost sync` "
                 "leaves them") in text
@@ -1775,8 +1777,9 @@ class TestDoctorToolOnStoreDirsBoostDidNotInstall:
         raw["version"] = 4
         lock.write_text(json.dumps(raw), encoding="utf-8")
         text, is_error = configuration._tool_doctor({})
-        assert ("the lock file is schema v4, not v3 — ask the user to restore "
-                "it with `boost replay`") in text
+        assert ("the lock file is schema v4, newer than this boost's v3 — ask "
+                "the user to upgrade boost with `boost self-update`") in text
+        assert "boost replay" not in text
         assert ("1 issue(s) — 1 is the user's to change, and `boost sync` "
                 "leaves it") in text
         assert "healthy" not in text and is_error is True

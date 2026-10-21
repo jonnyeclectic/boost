@@ -766,6 +766,15 @@ def cmd_doctor(argv):
                             ", ".join(p.name for p in leftovers),
                             "it" if len(leftovers) == 1 else "them"),
             wrap=True)
+    # What a boost killed mid-write or mid-install left: a temp copy of the
+    # lock file, or a staging dir, in the dir agents read skills from.
+    temps = store.stale_temps()
+    if temps:
+        bad("store", "%d stale temp file%s or staging dir%s a killed boost "
+            "left in %s (%s) — `boost clean` removes %s"
+            % (len(temps), _s(len(temps)), _s(len(temps)), _tilde(store_dir),
+               ", ".join(p.name for p, _kind in temps),
+               "it" if len(temps) == 1 else "them"), wrap=True)
     if configured and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
                                               "" if cache_block
@@ -822,12 +831,18 @@ def cmd_doctor(argv):
             rep.note("lockfile", "no lock file yet — nothing installed")
             lock_ok = True
     elif integ.problem == "corrupt":
-        bad("lockfile", "lock file is corrupt — restore with `boost replay`")
+        bad("lockfile", "lock file is corrupt — %s" % lockfile.remedy(integ),
+            wrap=True)
+        lock_ok = False
+    elif lockfile.newer(integ):
+        bad("lockfile", "lock file %s — %s"
+            % (lockfile.fault(integ), lockfile.remedy(integ)), wrap=True)
         lock_ok = False
     else:  # "schema"
-        bad("lockfile", "lock file schema is %s, expected v%d"
+        bad("lockfile", "lock file schema is %s, expected v%d — %s"
             % ("unreadable" if integ.version is None
-               else "v%s" % integ.version, lockfile.SCHEMA_VERSION))
+               else "v%s" % integ.version, lockfile.SCHEMA_VERSION,
+               lockfile.remedy(integ)), wrap=True)
         lock_ok = False
 
     # linking_agents, not enabled_agents, for the same reason `sync_plan` uses
@@ -2290,7 +2305,7 @@ def cmd_heal(argv):
     if not integ.ok and integ.problem != "missing":
         stuck.append(paths.lockfile_path())
         out.warn("the lock file %s, so heal cannot tell which store dirs are "
-                 "boost's — restore it with `boost replay`" % lockfile.fault(integ),
+                 "boost's — %s" % (lockfile.fault(integ), lockfile.remedy(integ)),
                  wrap=True)
     for d, block in blocked.items():
         stuck.append(d)

@@ -1351,14 +1351,18 @@ class TestInstallingOverAStoreDir:
             store.install(catalog.resolve_one("tdd-workflow"))
         assert _leads_to(link, paths.home() / "gone")
 
-    def test_over_another_schema_it_names_replay(self, installed):
+    def test_over_a_newer_schema_it_refuses_naming_the_upgrade(self, installed):
+        # A newer boost's lock is refused before the store dir is looked at,
+        # like a corrupt one: rolling it back would undo that boost's change.
         _mine("tdd-workflow")
         paths.lockfile_path().write_text('{"version": 99}', encoding="utf-8")
         with pytest.raises(BoostError) as exc:
             store.install(catalog.resolve_one("tdd-workflow"))
-        assert exc.value.hint == (
-            "the lock file cannot be read — `boost replay` restores the lock "
-            "that knows whose it is")
+        assert exc.value.message == ("lock file is schema v99, newer than "
+                                     "this boost's v3 — boost will not write "
+                                     "over it")
+        assert exc.value.hint == ("upgrade boost with `boost self-update`; "
+                                  "this boost would drop what v99 records")
 
     def test_over_a_corrupt_lock_it_refuses_before_looking(self, installed):
         # A corrupt lock is refused for every install, store dir or not, so
@@ -1368,7 +1372,9 @@ class TestInstallingOverAStoreDir:
         with pytest.raises(BoostError) as exc:
             store.install(catalog.resolve_one("tdd-workflow"))
         assert exc.value.message.startswith("lock file is corrupt")
-        assert "`boost replay rollback <id>`" in exc.value.hint
+        # `installed` wrote the lock once, over none: nothing to roll back to.
+        assert not lockfile.has_history()
+        assert "`boost sync --rebuild-lock`" in exc.value.hint
         assert ".skill-lock.json.corrupt" in exc.value.hint
 
     def test_import_leaves_one_too(self, installed):
@@ -1462,9 +1468,12 @@ class TestRemoveForeignCopy:
         copy = _mine("automate", "# same\n")
         row = self._row()
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
+        line = ("boost cannot tell whether this is boost's, because the lock "
+                "file cannot be read — %s")
         assert store.remove_foreign_copies([row, row]) == [
-            "the lock file cannot be read, so boost cannot tell whether it is "
-            "boost's — restore the lock with `boost replay`"] * 2
+            line % ("restore it with `boost replay`" if lockfile.has_history()
+                    else "rebuild it from the store with "
+                         "`boost sync --rebuild-lock`")] * 2
         assert copy.is_dir()
 
     def test_kept_when_boost_has_recorded_it_since(self, installed):

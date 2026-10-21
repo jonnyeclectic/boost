@@ -992,15 +992,27 @@ def cmd_replay(argv) -> int:
     if not args.id:
         p.error("%s needs a history ID" % args.action)
     snapshot = lockfile.history_read(args.id)
-    if args.action == "rollback" and lockfile.check().problem == "corrupt":
+    integ = lockfile.check()
+    # Any lock boost cannot use but a newer boost's (whose last change a
+    # rollback would discard): through the diff below, write() refuses it,
+    # and its hint named this very command.
+    if (args.action == "rollback" and not integ.ok
+            and integ.problem != "missing" and not lockfile.newer(integ)):
         # Every other write refuses a corrupt lock, and the diff below would
         # read it as empty and reinstall each skill over it. Restoring is the
         # snapshot itself becoming the lock; the corrupt bytes stay aside.
-        backup = paths.tilde(lockfile.corrupt_backup())
+        # Kept now, so the name below is the backup that holds these bytes
+        # (a backup from an earlier corruption may hold another state).
+        try:
+            held = lockfile.keep_copy()
+        except OSError:
+            held = lockfile.corrupt_backup()
+        backup = paths.tilde(held)
         if not (args.yes or out.confirm(
-                "the lock file is corrupt — make snapshot %s the lock file? "
+                "the lock file %s — make snapshot %s the lock file? "
                 "It is the lock as it was before the change after it; the "
-                "newest record stays only in %s" % (args.id, backup),
+                "newest record stays only in %s"
+                % (lockfile.fault(integ), args.id, backup),
                 quiet=args.json)):
             if args.json:
                 print(json.dumps({"id": args.id, "cancelled": True}, indent=2))
