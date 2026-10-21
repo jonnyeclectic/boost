@@ -19,6 +19,13 @@ def has_git() -> bool:
     return shutil.which("git") is not None
 
 
+def require_git() -> None:
+    """Raise the one "install git" error when `git` is not on PATH."""
+    if not has_git():
+        raise BoostError("git is required but was not found on PATH",
+                        hint="install git, e.g. `xcode-select --install` or `brew install git`")
+
+
 class BranchState(NamedTuple):
     """cwd's git state, keeping three states separate that callers used to
     flatten into one ``None``: no git binary on PATH, cwd outside any repo,
@@ -65,9 +72,7 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True,
     Raises BoostError if git is missing, on timeout, or (when `check`)
     on nonzero exit.
     """
-    if not has_git():
-        raise BoostError("git is required but was not found on PATH",
-                        hint="install git, e.g. `xcode-select --install` or `brew install git`")
+    require_git()
     try:
         proc = subprocess.run(
             ["git", *args], cwd=str(cwd) if cwd else None,

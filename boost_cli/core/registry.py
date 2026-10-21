@@ -978,6 +978,15 @@ def _remove_cache(tap: Tap) -> None:
 WHEEL_SCHEME = "builtin:"
 
 
+def _update_needs_git(tap: Tap, force: bool) -> bool:
+    """Whether :func:`update` runs git for `tap`: not for boost's own wheel
+    tap, and not for a pinned clone it leaves alone."""
+    if tap.url.startswith(WHEEL_SCHEME):
+        return False
+    cloned = tap.is_cloned and not tap.is_broken_clone
+    return not (cloned and tap.pin and not force)
+
+
 def update(name: str | None = None,
            force: bool = False) -> tuple[dict, dict]:
     """git-pull one tap (or all). Returns ``({name: summary}, {name: error})``.
@@ -1008,6 +1017,10 @@ def update(name: str | None = None,
     used to cost one network round trip per tap, serially.
     """
     targets = [get(name)] if name else list_taps()
+    if any(_update_needs_git(t, force) for t in targets):
+        # Once, up front: per tap, a missing git became N copies of the same
+        # failure and a summary advising `boost untap` for every healthy tap.
+        gitutil.require_git()
     results: dict = {}
     failures: dict = {}
 

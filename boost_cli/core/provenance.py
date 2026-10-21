@@ -23,12 +23,11 @@ raising.
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import BoostError
-from . import jsonstate, minisign, output, paths
+from . import jsonstate, minisign, paths
 
 # Where a signed tap keeps its manifest and detached signature, relative to the
 # clone root.
@@ -82,13 +81,9 @@ def _save(keys: list[dict]) -> None:
     The reader treats a corrupt store as empty, so after a truncated write
     `trust add` used to replace every trusted key with the one being added.
     """
-    paths.ensure_dirs()
     p = paths.trusted_keys_path()
-    if jsonstate.read_list(p)[1] is not None:
-        dest = jsonstate.quarantine(p)
-        output.warn("%s was corrupt and has been moved to %s before writing "
-                    "the new store" % (p, dest), stream=sys.stderr)
-    p.write_text(json.dumps(keys, indent=2) + "\n", encoding="utf-8")
+    jsonstate.save(p, json.dumps(keys, indent=2) + "\n",
+                   corrupt=jsonstate.read_list(p)[1] is not None, noun="store")
 
 
 def parses_as_public_key(text: str) -> bool:

@@ -122,13 +122,9 @@ def _load_state(fname: str, default: dict) -> dict:
 
 
 def _save_state(fname: str, data: dict) -> None:
-    paths.ensure_dirs()
     p = paths.state_dir() / fname
-    if jsonstate.is_corrupt(p):
-        dest = jsonstate.quarantine(p)
-        out.warn("%s was corrupt and has been moved to %s before writing "
-                 "the new file" % (p, dest), stream=sys.stderr)
-    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    jsonstate.save(p, json.dumps(data, indent=2) + "\n",
+                   corrupt=jsonstate.is_corrupt(p))
 
 
 def _save_generated_fallback(name: str, text: str, reason: str) -> None:
@@ -1262,6 +1258,10 @@ def cmd_focus(argv: list[str]) -> int:
             raise BoostError("%s is quarantined" % name,
                             hint="release it first with `boost quarantine "
                                  "--release %s`" % name)
+    # Recorded before anything is sidelined: a state dir that refuses the
+    # write used to crash *after* every other skill had lost its links, and
+    # with no session on file `boost focus` then said there was none.
+    _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso()})
     sidelined = 0
     for name, entry in sorted(inst.items()):
         if name in names or entry.get("quarantined"):
@@ -1276,7 +1276,6 @@ def cmd_focus(argv: list[str]) -> int:
     for name in names:
         _warn_unwritable(store.unsideline(name),
                          stream=sys.stderr if args.json else None)
-    _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso()})
     journal.log("focus", ",".join(names))
     if args.json:
         print(json.dumps({"active": names, "sidelined": sidelined}))
