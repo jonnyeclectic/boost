@@ -1972,10 +1972,22 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
         hint="uninstall it there first — a different scope cannot force-overwrite it")
 
 
-def _count_others(installed: dict, name: str) -> int:
+def _count_others(installed: dict, name: str, *,
+                  replaces: bool | None = None) -> int:
     """How many skills ``installed`` holds besides ``name``: the count an
-    install of ``name`` is weighed against for ``max_skills``."""
-    return len(installed) - (1 if name in installed else 0)
+    install of ``name`` is weighed against for ``max_skills``.
+
+    An upgrade or reinstall replaces an item already counted, so it adds none.
+    ``replaces`` says whether this install replaces one; it defaults to
+    ``name in installed``, which is the skill case. A rule or workflow is
+    recorded in its own table, so its name is never in the skills map and its
+    caller passes ``replaces`` from the record it is replacing: passing the bare
+    skill count refused `boost update` and `boost reinstall` of every rule and
+    workflow at exactly ``max_skills``, while the same skill went through.
+    """
+    if replaces is None:
+        replaces = name in installed
+    return len(installed) - (1 if replaces else 0)
 
 
 def refuse_case_collision(name: str, recorded: dict, where: str = "") -> None:
@@ -3310,7 +3322,8 @@ def _install_rule(entry: dict, force: bool = False,
     explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 
-    violations = policy.check_install(entry, len(lockfile.installed()))
+    violations = policy.check_install(entry, _count_others(
+        lockfile.installed(), name, replaces=existing is not None))
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
@@ -3939,7 +3952,8 @@ def _install_workflow(entry: dict, force: bool = False,
     explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 
-    violations = policy.check_install(entry, len(lockfile.installed()))
+    violations = policy.check_install(entry, _count_others(
+        lockfile.installed(), name, replaces=existing is not None))
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
