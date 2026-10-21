@@ -254,10 +254,13 @@ def _drift_status(name: str, entry: dict) -> str:
         # Kept in the store itself: an edit there is the skill, not drift.
         return staleness.NA
     store_sha = util.sha256_dir(sdir) if sdir.is_dir() else None
-    return _drift_from_copy(name, entry, store_sha)
+    if store_sha is not None and integrity.exec_drifted(sdir, entry):
+        return staleness.LOCAL_EDITS
+    return _drift_from_copy(name, entry, store_sha, sdir)
 
 
-def _drift_from_copy(name: str, entry: dict, copy_sha: str | None) -> str:
+def _drift_from_copy(name: str, entry: dict, copy_sha: str | None,
+                     copy: Path | None) -> str:
     """:func:`staleness.drift_state` for an installed copy hashing to ``copy_sha``.
 
     The tap source is only read once the copy matches the lock, so a missing
@@ -266,18 +269,21 @@ def _drift_from_copy(name: str, entry: dict, copy_sha: str | None) -> str:
     is_local = entry.get("tap") == "local"
     lock_sha = entry.get("sha256", "")
     source_sha = None
-    changed = False
+    changed = exec_changed = False
     if copy_sha is not None and copy_sha == lock_sha and not is_local:
         changed = _tap_source_changed(entry)
         if not changed:
+            cat = {"name": name, "tap": entry.get("tap", ""),
+                   "rel_dir": entry.get("source_dir", ".")}
             try:
-                source_sha = store.skill_source_sha(
-                    {"name": name, "tap": entry.get("tap", ""),
-                     "rel_dir": entry.get("source_dir", ".")})
+                source_sha = store.skill_source_sha(cat)
             except BoostError:
                 source_sha = None
+            if source_sha is not None:
+                exec_changed = store.source_exec_changed(cat, entry, copy)
     return staleness.drift_state(copy_sha, lock_sha, is_local, source_sha,
-                                 source_changed=changed)
+                                 source_changed=changed,
+                                 exec_changed=exec_changed)
 
 
 def _tap_source_changed(entry: dict) -> bool:
@@ -305,7 +311,7 @@ def _drift_status_project(name: str, entry: dict, base: Path) -> str:
     d = integrity.project_skill_dir(entry, base)
     copy_sha = (entry.get("sha256", "") if st == integrity.STATUS_OK
                 else util.sha256_dir(d) if d is not None else None)
-    return _drift_from_copy(name, entry, copy_sha)
+    return _drift_from_copy(name, entry, copy_sha, d)
 
 
 def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:

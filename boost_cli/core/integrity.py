@@ -97,7 +97,23 @@ def status(name: str, entry: dict | None = None) -> str:
         return STATUS_UNLOCKED
     if self_sourced(name, entry):
         return STATUS_OK
-    return STATUS_OK if util.sha256_dir(sdir) == recorded else STATUS_MODIFIED
+    if util.sha256_dir(sdir) != recorded or exec_drifted(sdir, entry):
+        return STATUS_MODIFIED
+    return STATUS_OK
+
+
+def exec_drifted(copy: Path, entry: dict) -> bool:
+    """Whether ``copy``'s exec bits differ from those its lock row recorded.
+
+    False for a row without ``exec`` — one written before rows carried it,
+    or on Windows (:func:`util.exec_bits`) — and on Windows itself, so an existing install keeps the content-only check it always had
+    rather than reading as modified.
+    """
+    want = entry.get("exec")
+    if want is None:
+        return False
+    have = util.exec_bits(copy)
+    return have is not None and have != want
 
 
 def skill_modified(name: str, entry: dict | None) -> bool:
@@ -351,7 +367,8 @@ def project_status(entry: dict, base) -> str:
     present = project_skill_dirs(entry, base)
     if not present:
         return STATUS_MISSING
-    if recorded and any(util.sha256_dir(p) != recorded for p in present):
+    if recorded and any(util.sha256_dir(p) != recorded
+                        or exec_drifted(p, entry) for p in present):
         return STATUS_MODIFIED
     if rows:
         return STATUS_MISSING

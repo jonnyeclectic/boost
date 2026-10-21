@@ -23,19 +23,22 @@ CONTENT = "content"  # the tap HEAD moved AND the source tree's bytes changed
 
 def upstream_reason(installed_version: str, latest_version: str,
                     installed_commit: str, tap_head: str,
-                    installed_sha: str, source_sha: str | None
-                    ) -> str | None:
+                    installed_sha: str, source_sha: str | None,
+                    exec_changed: bool = False) -> str | None:
     """Why the tap's copy is newer than the installed one, else ``None``.
 
     Mirrors the historical order exactly: a higher advertised semver wins
     immediately; otherwise a *moved* tap HEAD **plus** a changed source tree
     counts as content drift. ``source_sha`` is ``None`` when the source tree
     could not be hashed (missing checkout) — treated as "no content signal",
-    i.e. not stale on that axis.
+    i.e. not stale on that axis. ``exec_changed`` says the source's exec bits
+    differ from the installed copy's (:func:`store.source_exec_changed`): a
+    mode-only commit is content drift too.
     """
     if util.semver_gt(latest_version, installed_version):
         return VERSION
-    if tap_head and tap_head != installed_commit and source_sha is not None and source_sha != installed_sha:
+    if (tap_head and tap_head != installed_commit and source_sha is not None
+            and (source_sha != installed_sha or exec_changed)):
         return CONTENT
     return None
 
@@ -110,7 +113,8 @@ NA = "n/a"
 
 def drift_state(store_sha: str | None, lock_sha: str,
                 is_local: bool, source_sha: str | None,
-                source_changed: bool = False) -> str:
+                source_changed: bool = False,
+                exec_changed: bool = False) -> str:
     """Drift of an installed skill's store copy vs its lock entry and tap.
 
     Signals (all pre-computed by the caller):
@@ -125,6 +129,8 @@ def drift_state(store_sha: str | None, lock_sha: str,
     * ``source_changed`` — the configured tap is no longer the repository the
       lock recorded (:func:`registry.source_changed`), so its copy is not
       this skill's upstream at all.
+    * ``exec_changed`` — the source's exec bits differ from the copy's, which
+      the content hash cannot see.
 
     The ordering is significant and matches the historical ``_drift_status``:
     a missing store beats local edits, which beat the local/upstream split.
@@ -139,7 +145,8 @@ def drift_state(store_sha: str | None, lock_sha: str,
         return SOURCE_CHANGED
     if source_sha is None:
         return SOURCE_MISSING
-    return IN_SYNC if source_sha == lock_sha else UPSTREAM_MOVED
+    return (IN_SYNC if source_sha == lock_sha and not exec_changed
+            else UPSTREAM_MOVED)
 
 
 # ── outdated_footer: the one-line summary `cmd_outdated` prints ────────────

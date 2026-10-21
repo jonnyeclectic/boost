@@ -495,15 +495,23 @@ def copy_view_sha(src: Path, within: Path | None) -> str:
     do. A tree with no link hashes in place; one with any is staged through
     ``_copy_tree`` itself, so the two cannot disagree about what lands.
     """
-    src = Path(src)
+    with _copy_view(Path(src), within) as view:
+        return util.sha256_dir(view)
+
+
+@contextlib.contextmanager
+def _copy_view(src: Path, within: Path | None) -> Iterator[Path]:
+    """``src`` as :func:`_copy_tree` would land it: in place when it holds
+    no link, else staged through ``_copy_tree`` itself."""
     if not any(Path(here, n).is_symlink()
                for here, dirs, names in os.walk(src)
                for n in (*dirs, *names)):
-        return util.sha256_dir(src)
+        yield src
+        return
     with tempfile.TemporaryDirectory(prefix=util.TEMP_PREFIX) as tmp:
         view = Path(tmp) / "view"
         _copy_tree(src, view, within)
-        return util.sha256_dir(view)
+        yield view
 
 
 def skill_source_sha(entry: dict) -> str:
@@ -514,6 +522,33 @@ def skill_source_sha(entry: dict) -> str:
     """
     src = source_dir_for(entry)
     return copy_view_sha(src, registry.get(entry["tap"]).path)
+
+
+def source_exec_changed(entry: dict, lk: dict, copy: Path | None) -> bool:
+    """Whether catalog ``entry``'s source has other exec bits than the install.
+
+    The content hash cannot see a mode, so a commit that only made a script
+    executable read as up to date, and `update` never copied the bit over.
+    The install's bits are what its lock row ``lk`` recorded, or — a row from
+    before rows recorded them — what the ``copy`` on disk holds: the copy is
+    made with ``copy2``, so it has the source's modes as of the install.
+    False when neither is known or the source cannot be read; the content
+    comparison beside this one reports that.
+    """
+    want = lk.get("exec")
+    if want is None:
+        if copy is None or not copy.is_dir():
+            return False
+        want = util.exec_bits(copy)
+        if want is None:
+            return False
+    try:
+        src = source_dir_for(entry)
+    except BoostError:
+        return False
+    with _copy_view(src, registry.get(entry["tap"]).path) as view:
+        have = util.exec_bits(view)
+    return have is not None and have != want
 
 
 def _inside(path: str, root: str) -> bool:
@@ -2472,6 +2507,8 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
         "source_dir": entry.get("rel_dir", "."),
         "commit": gitutil.head_commit(tap.path),
         "sha256": util.sha256_dir(dest),
+        # Modes the hash cannot see; `integrity.exec_drifted` reads them.
+        "exec": util.exec_bits(dest),
         # record_rebuilt carries the held one, with pinned/tags/commit_pin.
         "installed_at": now,
         "updated_at": now,
@@ -2615,6 +2652,7 @@ def _install_project_skill(entry: dict, force: bool = False,
         "source_dir": entry.get("rel_dir", "."),
         "commit": gitutil.head_commit(tap.path),
         "sha256": util.sha256_dir(first),
+        "exec": util.exec_bits(first),
         "scope": scopes.SCOPE_PROJECT,
         "installed_at": (existing or {}).get("installed_at", now),
         "updated_at": now,
@@ -5057,6 +5095,8 @@ def install_from_path(src_dir: Path, name: str | None = None,
         "source_url": remote.url if remote else "",
         "commit": remote.commit if remote else "",
         "sha256": util.sha256_dir(dest),
+        # Modes the hash cannot see; `integrity.exec_drifted` reads them.
+        "exec": util.exec_bits(dest),
         # record_rebuilt carries the held one, with pinned/tags/commit_pin.
         "installed_at": now,
         "updated_at": now,
@@ -6839,7 +6879,8 @@ def _record_unrecorded(name: str, why: str) -> str | None:
                "source; `boost install <tap>:%s --force` replaces it with "
                "that tap's copy)" % name
                if why == "recover" and matches else "as a local skill")
-    record.update({"sha256": have, "installed_at": now, "updated_at": now,
+    record.update({"sha256": have, "exec": util.exec_bits(sdir),
+                   "installed_at": now, "updated_at": now,
                    "pinned": False, "quarantined": False, "agents": linked,
                    "only_agents": narrowed, "tags": []})
     if unseen:

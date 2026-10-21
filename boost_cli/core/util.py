@@ -773,15 +773,41 @@ def safe_component(name: str) -> str:
     return name if is_safe_component(name) else slugify(name)
 
 
+def _hashed_files(root: Path) -> list[Path]:
+    """The files :func:`sha256_dir` and :func:`exec_bits` read, sorted."""
+    return sorted(
+        p for p in root.rglob("*")
+        if p.is_file() and not any(part in IGNORED for part in p.parts)
+    )
+
+
+def exec_bits(path: Path) -> list[str] | None:
+    """The files under ``path`` whose owner exec bit is set, as sorted
+    relative POSIX paths — the same files :func:`sha256_dir` hashes.
+
+    A mode is not content, so :func:`sha256_dir` does not see one: a script
+    made executable upstream read as up to date, and a ``chmod -x`` on the
+    store copy passed `verify`. Kept apart from the hash rather than folded
+    into it, so every lock row written before this still verifies; a row
+    records this list as ``exec`` (see :func:`integrity.exec_drifted`).
+
+    None on Windows, which has no exec bit: ``os.stat`` reports one by
+    extension, so a project lock written on a Mac would read every script
+    as modified there, and the reverse. None is recorded and compared as
+    "unknown", never as an empty list.
+    """
+    if os.name == "nt":
+        return None
+    root = Path(path)
+    return [f.relative_to(root).as_posix() for f in _hashed_files(root)
+            if f.stat().st_mode & stat.S_IXUSR]
+
+
 def sha256_dir(path: Path) -> str:
     """Deterministic content hash of a directory tree (paths + bytes)."""
     h = hashlib.sha256()
     root = Path(path)
-    files = sorted(
-        p for p in root.rglob("*")
-        if p.is_file() and not any(part in IGNORED for part in p.parts)
-    )
-    for f in files:
+    for f in _hashed_files(root):
         h.update(f.relative_to(root).as_posix().encode())
         h.update(b"\0")
         h.update(f.read_bytes())
