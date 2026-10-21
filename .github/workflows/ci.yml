@@ -354,7 +354,11 @@ jobs:
     # the `os:` list below are otherwise related only by spelling: pin that
     # list to a dated label such as windows-2025 and the equality matches
     # nothing, handing all nine cells 30 again without failing anything.
-    timeout-minutes: ${{ startsWith(matrix.os, 'windows') && 45 || 30 }}
+    # 45 ran out too, at a 15k-test suite: on 2026-10-21 windows-3.12 took
+    # 44.9 min to pass (run 39525721662) and was cancelled at 45.3 on main
+    # (run 39539922832) with no test wedged, while 3.14 on the same commit
+    # took 28.6 — runner variance, not one slow test. 60 restores headroom.
+    timeout-minutes: ${{ startsWith(matrix.os, 'windows') && 60 || 30 }}
     permissions:
       contents: write  # coverage badge push (main only)
     defaults:
