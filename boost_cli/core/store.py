@@ -4217,6 +4217,118 @@ def _installed_raw(entry: dict) -> str | None:
     return None
 
 
+#: A rule/workflow file with no recorded hash that :func:`backfill_row_hashes`
+#: could not record: it no longer holds what boost writes, or its source is
+#: gone. Not a repair, so :func:`is_unrepaired` names it.
+_NOT_VOUCHED_MARK = " with no recorded hash that boost cannot vouch for — "
+
+
+def _expected_row_text(kind: str, name: str, entry: dict, m: dict,
+                       raw: str) -> tuple[str, str | None]:
+    """``(what boost writes for row m, what the row's file holds now)``.
+
+    The same text each install hashes: a rule's verbatim file or the stripped
+    body of its managed block (what `rules.read_block` reads back), and a
+    workflow's per-agent render. The second is None when it cannot be read.
+    """
+    from . import frontmatter, rules, workflows
+    try:
+        on_disk: str | None = Path(m.get("path", "")).read_text(
+            encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        on_disk = None
+    if kind == "rule":
+        if m.get("mode") == rules.MODE_CLAUDE:
+            meta, body = frontmatter.parse(raw)
+            want = rules.render_claude_body(str(meta.get("name") or name),
+                                            body).strip("\n")
+            return want, (rules.read_block(on_disk, name)
+                          if on_disk is not None else None)
+        return raw, on_disk
+    slot = m.get("slot") or entry.get("slot") or workflows.detect_slot(
+        entry.get("source_file", ""))
+    return workflows.render(m.get("agent"), slot, name, raw), on_disk
+
+
+def _unhashed_rows(kind: str, entry: dict) -> list[dict]:
+    """The rows of a rule/workflow entry written before rows carried a hash.
+
+    Only rows whose file is there and that name an agent boost still writes:
+    a missing file is re-materialized by sync (which records its hash), and
+    a row for a disabled agent is a record `boost verify` does not grade.
+    """
+    return [m for m in entry.get("materializations") or ()
+            if isinstance(m, dict) and not m.get("sha256")
+            and not m.get("unwritable") and not lockfile.is_skill_copy(m)
+            and agents.materialization_is_written(kind, entry.get("base"),
+                                                  m.get("agent"))
+            and os.path.isfile(m.get("path", ""))]  # noqa: FURB146
+
+
+def backfill_row_hashes(dry: bool = False) -> list[str]:
+    """Record the hash of each rule/workflow file installed before rows had one.
+
+    Rules and workflows installed before per-row hashes recorded
+    ``{agent, mode|slot, path}`` and nothing to compare, so `boost verify`
+    failed them as "missing lock fields: materialization sha256" through
+    every update, sync and heal, and only a reinstall cleared it. A row's
+    hash is stamped only when its file still holds exactly what boost writes
+    for the installed source (:func:`_installed_raw`, the text whose sha256
+    the lock recorded): a file edited since is the user's, and hashing it
+    would bless the edit as boost's. Those, and items whose installed source
+    is gone, are named with the reinstall that records them. One lock write
+    for the lot. Returns one line per item, in the tense of ``dry``.
+    """
+    # Only a lock sync may write: :func:`lockfile.write` stamps the current
+    # schema, so stamping rows into a newer one (which `refuse_corrupt` lets
+    # through) rewrote a v4 lock as v3 under the line saying sync records
+    # nothing. An "older" lock is ok, and is migrated before this runs.
+    if not lockfile.check().ok:
+        return []
+    lines: list[str] = []
+    stamps: dict[tuple[str, str], dict[str, str]] = {}
+    for kind, section in (("rule", "rules"), ("workflow", "workflows")):
+        for name, entry in sorted(lockfile.read()[section].items()):
+            rows = _unhashed_rows(kind, entry)
+            if (not rows or entry.get("quarantined")
+                    or scopes.stranded(entry)):
+                continue
+            raw = _installed_raw(entry)
+            got: dict[str, str] = {}
+            if raw is not None:
+                for m in rows:
+                    want, have = _expected_row_text(kind, name, entry, m, raw)
+                    if have is not None and have == want:
+                        got[m["path"]] = _text_sha(want)
+            if got:
+                stamps[(section, name)] = got
+                lines.append("%s the hash of %s %s's %s" % (
+                    "would record" if dry else "recorded", kind, name,
+                    "file" if len(got) == 1 else "%d files" % len(got)))
+            left = len(rows) - len(got)
+            if left:
+                lines.append(
+                    ("%s %s has %s" + _NOT_VOUCHED_MARK
+                     + "`boost reinstall %s` rewrites and records %s")
+                    % (kind, name,
+                       "a file" if left == 1 else "%d files" % left,
+                       name, "it" if left == 1 else "them"))
+    if dry or not stamps:
+        return lines
+
+    def stamp(lock: dict) -> bool:
+        changed = False
+        for (section, name), got in stamps.items():
+            for m in lock[section].get(name, {}).get("materializations") or ():
+                sha = got.get(m.get("path", "")) if isinstance(m, dict) else None
+                if sha is not None and not m.get("sha256"):
+                    m["sha256"] = sha
+                    changed = True
+        return changed
+    lockfile.mutate(stamp)
+    return lines
+
+
 def _backfill_candidates() -> list[tuple[str, dict, str]]:
     """``(name, entry, source text)`` for each installed workflow an install
     would give a skill copy today and that has none.
@@ -5864,7 +5976,8 @@ def is_unrepaired(action: str) -> bool:
     make, so callers print it as a warning rather than under a check mark."""
     return any(mark in action for mark in (
         _NOT_REMATERIALIZED, _NOT_LINKED_MARK, _NOT_RECORDED_MARK,
-        _DECLINED_MARK, _NOT_CLONED_MARK, _PROJECT_GONE_MARK))
+        _DECLINED_MARK, _NOT_CLONED_MARK, _PROJECT_GONE_MARK,
+        _NOT_VOUCHED_MARK))
 
 
 #: A pin that blocks a repair. Missing from :func:`is_unrepaired` until it was
@@ -5984,6 +6097,9 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
     which filters them against the links it has already reported.
     """
     lines = []
+    integ = lockfile.check()
+    if integ.problem == "older":
+        lines.append(lockfile.older_line(integ, dry=True))
     # `sync_apply` re-records only while the lock file is *missing* — a corrupt
     # one is left for `boost replay` — and only a dir that still has a
     # SKILL.md. The preview used to say "would re-record" either way.
@@ -6011,6 +6127,7 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
         if repair.warning:
             lines.append(repair.warning)
         lines.append(repair.preview)
+    lines += backfill_row_hashes(dry=True)
     return lines
 
 
@@ -6555,6 +6672,12 @@ def not_skill_line(names: list[str]) -> str:
 def sync_apply(plan: dict[str, list]) -> list[str]:
     """Fix what sync_plan found. Returns human-readable actions taken."""
     actions = []
+    # A lock with no schema version, or an earlier one, still says what is
+    # installed: it is recorded as the current schema here, so the command
+    # doctor prescribes for it is the one that clears it.
+    migrated = lockfile.migrate()
+    if migrated:
+        actions.append(migrated)
     # First, so every re-recorded skill is in the lock before anything else
     # runs; and only when the lock is *missing* — a corrupt or other-schema
     # lock is left for `boost replay`, never overwritten.
@@ -6628,6 +6751,8 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
         # (`unwritable_agent_dirs`, `blocked_agent_dirs`), with its remedy.
         if not res.unwritable and not res.blocked and not res.conflicts:
             actions.append(mat.applied)
+    # After the re-materializations above, which record their own hashes.
+    actions.extend(backfill_row_hashes())
     if actions:
         journal.log("sync", "%d fixes" % len(actions))
     return actions

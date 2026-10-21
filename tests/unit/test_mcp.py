@@ -1754,10 +1754,10 @@ class TestDoctorToolOnStoreDirsBoostDidNotInstall:
         from boost_cli.core import paths
         lock = paths.lockfile_path()
         raw = json.loads(lock.read_text(encoding="utf-8"))
-        raw["version"] = 2
+        raw["version"] = 4
         lock.write_text(json.dumps(raw), encoding="utf-8")
         text, is_error = configuration._tool_doctor({})
-        assert ("the lock file is schema v2, not v3 — ask the user to restore "
+        assert ("the lock file is schema v4, not v3 — ask the user to restore "
                 "it with `boost replay`") in text
         assert ("1 issue(s) — 1 is the user's to change, and `boost sync` "
                 "leaves it") in text

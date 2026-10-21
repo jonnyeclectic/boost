@@ -727,9 +727,9 @@ class TestDoctor:
 
     def test_wrong_schema_lock_rc1(self, boost, installed):
         paths.lockfile_path().write_text(
-            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
+            json.dumps({"version": 4, "skills": {}}), encoding="utf-8")
         r = boost("doctor", expect=1)
-        assert "lock file schema is v2, expected v3" in r.out
+        assert "lock file schema is v4, expected v3" in r.out
         assert "lock file parses (v3)" not in r.out
 
     def test_links_outside_the_declared_scope_rc1(self, boost, installed):
@@ -1391,9 +1391,17 @@ class TestVerify:
 
     def test_lock_file_wrong_schema_rc1(self, boost, installed):
         paths.lockfile_path().write_text(
-            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
+            json.dumps({"version": 4, "skills": {}}), encoding="utf-8")
         r = boost("verify", expect=1)
-        assert "lock file schema is v2, expected v3" in r.err
+        assert "lock file schema is v4, expected v3" in r.err
+
+    def test_a_versionless_lock_of_the_wrong_shape_never_says_vNone(
+            self, boost, installed):
+        paths.lockfile_path().write_text(json.dumps({"skills": []}),
+                                         encoding="utf-8")
+        r = boost("verify", expect=1)
+        assert "lock file schema is unreadable, expected v3" in r.err
+        assert "vNone" not in r.out + r.err
 
 
 # ── drift ────────────────────────────────────────────────────────────────
@@ -3573,9 +3581,9 @@ class TestStoreDirsBoostDidNotInstall:
         assert "nothing to heal" not in r.out
         assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
         paths.lockfile_path().write_text(
-            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
+            json.dumps({"version": 4, "skills": {}}), encoding="utf-8")
         r = boost("heal", expect=1)
-        assert ("the lock file is schema v2, not v3, so heal cannot tell which "
+        assert ("the lock file is schema v4, not v3, so heal cannot tell which "
                 "store dirs are boost's") in _flat(r.out + r.err)
 
     def test_a_plugin_duplicate_is_an_issue_until_prune_drops_the_link(

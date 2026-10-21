@@ -176,7 +176,7 @@ def refuse_corrupt() -> None:
     write would replace every record with whatever one change added to it — a
     fresh `boost install` did exactly that and reported "lock updated". A
     missing lock is a fresh install and passes; so does one in another schema,
-    which still parses and is migrated by being rewritten.
+    which still parses (an older one is migrated by being rewritten).
     """
     p = paths.lockfile_path()
     if jsonstate.read_object(p)[1] is None:
@@ -253,8 +253,11 @@ class Integrity(NamedTuple):
     whose record vanished out from under a populated store.
     """
     ok: bool
-    problem: str | None    # None | "missing" | "corrupt" | "schema"
-    version: object = None  # the schema version actually found, for "schema"
+    # None | "missing" | "corrupt" | "schema" | "older". "older" is the one
+    # problem that is ok: a lock with no schema version, or an earlier one,
+    # still parses and is migrated by being rewritten (:func:`migrate`).
+    problem: str | None
+    version: object = None  # the schema version found, for "schema"/"older"
 
 
 def check() -> Integrity:
@@ -270,9 +273,54 @@ def check() -> Integrity:
     if raw is None:
         return Integrity(False, "missing")
     version = raw.get("version")
-    if version != SCHEMA_VERSION:
-        return Integrity(False, "schema", version)
-    return Integrity(True, None, version)
+    if version == SCHEMA_VERSION:
+        return Integrity(True, None, version)
+    # The sections an older lock holds must be the ones :func:`read` hands
+    # on, or every reader that walks one would trip over what it holds.
+    if migratable(version) and all(isinstance(raw.get(section, {}), dict)
+                                   for _kind, section in SECTIONS):
+        return Integrity(True, "older", version)
+    return Integrity(False, "schema", version)
+
+
+def migratable(version: object) -> bool:
+    """Whether a lock of schema ``version`` is one boost upgrades by rewriting.
+
+    No version is the oldest format there is, and an earlier integer is one
+    boost wrote before: :func:`read` hands back every record either holds and
+    :func:`write` stamps the current schema over them, keeping every other
+    key. A newer version, or one that is not an integer at all, was written
+    by something boost has never seen, so nothing may write over it. Refusing
+    the older ones sent `verify`, `drift`, `sync` and `heal` to `boost replay`,
+    whose rollback undoes the last install, while the next install migrated
+    the same lock without a word.
+    """
+    if version is None:
+        return True
+    return (isinstance(version, int) and not isinstance(version, bool)
+            and 0 < version < SCHEMA_VERSION)
+
+
+def older_line(integ: Integrity, dry: bool = False) -> str:
+    """The sync/heal line for migrating an ``"older"`` lock."""
+    was = ("had no schema version" if integ.version is None
+           else "was schema v%s" % integ.version)
+    return "%s the lock file, which %s, as schema v%d" % (
+        "would record" if dry else "recorded", was, SCHEMA_VERSION)
+
+
+def migrate() -> str | None:
+    """Rewrite an ``"older"`` lock as the current schema; the line saying so.
+
+    Under :func:`exclusive`, so the check and the write see one lock. None
+    when there is nothing to migrate.
+    """
+    with exclusive():
+        integ = check()
+        if integ.problem != "older":
+            return None
+        write(read())
+        return older_line(integ)
 
 
 def fault(integ: Integrity) -> str:
@@ -283,6 +331,11 @@ def fault(integ: Integrity) -> str:
     """
     if integ.problem == "corrupt":
         return "is corrupt"
+    if integ.version is None:
+        # "older" with no version; "schema" with none is a section that is
+        # not a mapping, which no schema boost wrote holds.
+        return ("has no schema version" if integ.problem == "older"
+                else "is in no schema boost knows")
     return "is schema v%s, not v%d" % (integ.version, SCHEMA_VERSION)
 
 

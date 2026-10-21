@@ -1037,7 +1037,8 @@ def cmd_sync(argv: list[str]) -> int:
     # still lists every skill, so no store dir looked unrecorded and sync
     # said "everything in sync" while doctor and heal exited 1. Both
     # `--json` shapes carry it as ``lock``: None, or the problem
-    # (``missing``, ``corrupt``, ``schema``) sync found.
+    # (``missing``, ``corrupt``, ``schema``) sync found — or ``older``, a
+    # lock with no or an earlier schema version, which sync migrates.
     integ = lockfile.check()
     lock_bad = not integ.ok and integ.problem != "missing"
 
@@ -1049,8 +1050,18 @@ def cmd_sync(argv: list[str]) -> int:
         if lock_bad:
             out.warn("the lock file %s, so sync will record nothing — restore "
                      "it with `boost replay`" % lockfile.fault(integ), wrap=True)
+        # What a run writes into the lock with no plan bucket of its own: an
+        # older lock's schema stamp and the hashes rows were installed
+        # without. Missing here, `--diff` said "everything in sync" over the
+        # writes the next `boost sync` made.
+        records = ([lockfile.older_line(integ, dry=True)]
+                   if integ.problem == "older" else [])
+        records += store.backfill_row_hashes(dry=True)
+        for line in records:
+            (out.warn if store.is_unrepaired(line) else out.info)(
+                line, wrap=True)
         if not any(plan.values()) and not any(pplan.values()):
-            if not lock_bad:
+            if not lock_bad and not records:
                 out.ok("everything in sync")
             return 0
         if pplan["missing"]:

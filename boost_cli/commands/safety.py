@@ -506,6 +506,13 @@ def cmd_verify(argv):
                         "the record" % r["name"])
         if r["missing_fields"]:
             bits.append("missing lock fields: " + ", ".join(r["missing_fields"]))
+        # Installed before rows carried a hash: `boost sync` records it for a
+        # file that still holds what boost wrote, and only a reinstall for one
+        # edited since. Naming sync alone sent the user round verify -> sync
+        # -> verify over an edited file, which sync can never record.
+        if "materialization sha256" in r["missing_fields"]:
+            bits.append("`boost sync` records it, or `boost reinstall %s` "
+                        "if a file was edited" % r["name"])
         if r["commit_pin"] == integrity.STATUS_OK:
             bits.append("commit-pinned")
         elif r["commit_pin"] == integrity.STATUS_MODIFIED:
