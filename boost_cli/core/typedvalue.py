@@ -27,6 +27,8 @@ array: split, ``{"a": true}`` became a one-item blocklist naming no skill.
 from __future__ import annotations
 
 import json
+import os
+import sys
 from typing import Any
 
 #: Spec names. A spec is a plain string so the tables that use it stay readable
@@ -228,3 +230,36 @@ def adapt(key: str, value: Any, spec: str) -> Any:
     if isinstance(value, str):
         return coerce(key, value, spec)
     raise ValueTypeError(key, value, spec)
+
+
+#: Variables :func:`env_flag` has already warned about, so a value read on a
+#: hot path (``use_color`` runs per painted span) warns once per process.
+_env_warned: set[str] = set()
+
+
+def env_flag(name: str) -> bool:
+    """Read a boolean environment switch (``BOOST_ASSUME_YES``, ``BOOST_NO_AI``).
+
+    Every switch used to be a bare ``os.environ.get(name)`` truthiness test, so
+    *any* non-empty value turned it on: ``BOOST_ASSUME_YES=0`` confirmed
+    destructive prompts unasked, and ``BOOST_NO_AI=false`` disabled AI. This
+    reads the value with the same vocabulary as a :data:`BOOL` config key:
+    unset, empty, or one of :data:`FALSE_WORDS` is off; one of
+    :data:`TRUE_WORDS` is on. Anything else is **off**, with one warning on
+    stderr naming the variable — off because the switch that matters most here
+    skips a confirmation, and an unreadable "yes" must not be taken as one.
+
+    ``NO_COLOR`` is deliberately not read through this: no-color.org defines it
+    as "present and not empty", whatever the value.
+    """
+    raw = os.environ.get(name) or ""
+    word = raw.strip().lower()
+    if word in TRUE_WORDS:
+        return True
+    if word and word not in FALSE_WORDS and name not in _env_warned:
+        _env_warned.add(name)
+        # Plain stderr, not core.output: output reads switches through here,
+        # and a warning that paints itself would re-enter this function.
+        sys.stderr.write("! %s=%r is not a boolean (1/0, true/false, yes/no, "
+                         "on/off) — treating it as off\n" % (name, raw))
+    return False

@@ -565,6 +565,18 @@ class TestProfile:
         assert "pass -y or set BOOST_ASSUME_YES=1" in r.out
         assert "deleted profile gone" not in r.out
 
+    def test_assume_yes_zero_does_not_confirm_a_delete(self, boost, installed,
+                                                       monkeypatch):
+        # Any non-empty BOOST_ASSUME_YES used to count as yes, so `=0` —
+        # the spelling of "off" — deleted the profile without asking.
+        boost("profile", "save", "gone")
+        monkeypatch.setenv("BOOST_ASSUME_YES", "0")
+        monkeypatch.setattr("sys.stdin", None)
+        r = boost("profile", "delete", "gone", expect=1)
+        assert "pass -y or set BOOST_ASSUME_YES=1" in r.out
+        assert "deleted profile gone" not in r.out
+        assert "gone" in boost("profile", "list").out
+
     def test_delete_and_unknown(self, boost, installed):
         boost("profile", "save", "gone")
         r = boost("profile", "delete", "gone")

@@ -276,13 +276,19 @@ Everything that changes boost's runtime behaviour, in one place:
 | `BOOST_HOME` | override `~/.boost` (state, cache, logs, repos) |
 | `BOOST_AGENTS_STORE` | override `~/.agents/skills` (the canonical store) |
 | `BOOST_DEBUG` | `=1` → console `DEBUG` + tracebacks |
-| `BOOST_LOG_LEVEL` | explicit console diagnostic level |
+| `BOOST_LOG_LEVEL` | explicit console diagnostic level — `OFF`, `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; beats config `logging.level` (`OFF` silences it) |
 | `BOOST_LOG_FORMAT` | `text` (default) or `json` — one JSON object per log line |
 | `BOOST_NO_LOG` | `=1` → don't write the diagnostic log file |
 | `BOOST_NO_AI` | `=1` → disable all AI calls (offline / deterministic) |
 | `BOOST_NO_NET` | `=1` → skip the PyPI version check in `self-update` (air-gapped) |
 | `BOOST_ASSUME_YES` | `=1` → auto-confirm prompts (also `--yes`/`-y`) |
 | `NO_COLOR` / `CLICOLOR_FORCE` | force color off / on |
+
+The on/off switches (`BOOST_DEBUG`, `BOOST_NO_LOG`, `BOOST_NO_AI`,
+`BOOST_NO_NET`, `BOOST_ASSUME_YES`, `CLICOLOR_FORCE`, …) read `1`/`true`/`yes`/`on`
+as on and unset, empty, `0`/`false`/`no`/`off` as off. Any other value is off,
+with a one-line warning naming the variable. `NO_COLOR` is the exception: per
+no-color.org, any non-empty value turns color off.
 
 Tests sandbox the whole tool by pointing `HOME`/`BOOST_HOME`/`BOOST_AGENTS_STORE`
 at a throwaway directory — the same mechanism you can use to try boost without

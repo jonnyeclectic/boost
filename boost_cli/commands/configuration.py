@@ -128,7 +128,7 @@ def cmd_config(argv) -> int:
             config.set_value(args.key, args.value)
         except typedvalue.ValueTypeError as e:
             raise _bad_value(e, "boost config set %s <%s>"
-                             % (args.key, config.spec_for(args.key))) from e
+                             % (args.key, config.placeholder(args.key))) from e
         except TypeError as e:
             raise BoostError(str(e),
                             hint="the parent key holds a plain value — "
@@ -1478,16 +1478,29 @@ def cmd_serve(argv) -> int:
     try:
         default_port = config.get_int("serve.port", 8787) or 8787
     except typedvalue.ValueTypeError as e:
-        raise _bad_value(e, "boost config set serve.port <int>") from e
+        raise _bad_value(e, "boost config set serve.port <0-65535>") from e
     p = cliparse.parser(
         prog="boost serve",
         description="Browse the catalogue in a browser: search, facets and a tap graph")
-    p.add_argument("--port", type=util.port_number, default=default_port,
+    p.add_argument("--port", type=util.port_number, default=None,
                    help="port to listen on (default: config serve.port)")
     p.add_argument("--host", default="127.0.0.1",
                    help="address to bind (default: 127.0.0.1)")
     args = p.parse_args(argv)
-    serve.serve_http(args.host, args.port)
+    port = args.port
+    if port is None:
+        # argparse never runs `type=` over a non-string default, so an
+        # out-of-range `serve.port` reached the bind and was reported as an
+        # "invalid --port" nobody passed. Checked only when it is the port in
+        # use: an explicit --port still overrides a bad stored value.
+        try:
+            port = config.check_value("serve.port", default_port)
+        except typedvalue.ValueTypeError as e:
+            raise BoostError(
+                "config serve.port is %s — must be 0-65535" % default_port,
+                hint="`boost config set serve.port <0-65535>`, or `boost "
+                     "config unset serve.port` for the default") from e
+    serve.serve_http(args.host, port)
     return 0
 
 
@@ -2502,7 +2515,7 @@ def _offer_boost_first(hosts: list[str]) -> None:
     """
     from ..core import builtin
 
-    if os.environ.get(NO_RULE_ENV):
+    if typedvalue.env_flag(NO_RULE_ENV):
         return
     # Scoped to hosts where boost actually registered a server. Offering it for
     # an agent with no boost tools would install standing text naming

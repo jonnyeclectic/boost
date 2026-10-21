@@ -48,6 +48,7 @@ from . import (
     jsonstate,
     paths,
     registry,
+    typedvalue,
     util,
 )
 
@@ -1803,7 +1804,7 @@ def rerank(query: str, hits: list[Hit], limit: int = 10,
         "- %s [%s]: %s" % (h["entry"]["name"], h["entry"].get("kind", "skill"),
                            (h["snippet"] or h["entry"].get("description", ""))[:180])
         for h in top)
-    caching = not os.environ.get("BOOST_NO_RERANK_CACHE")
+    caching = not typedvalue.env_flag("BOOST_NO_RERANK_CACHE")
     cache_key = hashlib.sha256(
         ("%s\n%d\n%s" % (query, limit, listing)).encode("utf-8", "replace")
     ).hexdigest()

@@ -3225,7 +3225,8 @@ class TestTypedValues:
     def test_config_set_rejects_a_non_number_port(self, boost, sandbox):
         r = boost("config", "set", "serve.port", "abc", expect=1)
         assert "serve.port expects a whole number" in r.err
-        assert '`boost config set serve.port <int>`' in r.err
+        # The placeholder names the range set_value enforces, not just "int".
+        assert '`boost config set serve.port <0-65535>`' in r.err
         assert not paths.config_path().exists()
 
     def test_config_set_boolean_words(self, boost, sandbox):
