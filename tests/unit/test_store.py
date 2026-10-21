@@ -20,6 +20,7 @@ from boost_cli.core import (
     catalog,
     config,
     gitutil,
+    integrity,
     journal,
     lockfile,
     paths,
@@ -479,6 +480,251 @@ class TestSideline:
         # No lock entry exists — unlink_agents finds nothing to remove and
         # there is nothing to record a flag on.
         assert store.sideline("nonexistent", "focus") == []
+
+
+class TestHeldStoreCopy:
+    """Quarantine and sideline hold the store copy out of ``~/.agents/skills``.
+
+    Gemini CLI and Codex read that dir with no link, so unlinking alone left
+    a quarantined skill loaded in both while ``info`` said "agents (none)".
+    """
+
+    def _store(self):
+        return paths.store_dir() / "brainstorming"
+
+    def _held(self):
+        return paths.held_skills_dir() / "brainstorming"
+
+    def test_held_dir_is_outside_the_store(self, sandbox):
+        assert paths.held_skills_dir() == paths.state_dir() / "held"
+        assert store.held_copy_dir("x") == paths.state_dir() / "held" / "x"
+        with pytest.raises(BoostError, match="invalid skill name"):
+            store.held_copy_dir("../x")
+
+    def test_is_held_and_copy_dir(self, sandbox):
+        assert store.is_held({"held_at": "/h"}) is True
+        assert store.is_held({"held_at": ""}) is False
+        assert store.is_held({}) is False
+        assert store.is_held(None) is False
+        assert store.copy_dir("x", {"held_at": "/h"}) == store.held_copy_dir("x")
+        assert store.copy_dir("x", {}) == paths.store_dir() / "x"
+
+    def test_quarantine_holds_and_release_restores_byte_for_byte(
+            self, brainstorming):
+        before = util.sha256_dir(self._store())
+        exec_before = util.exec_bits(self._store())
+        entry = lockfile.get_skill("brainstorming")
+        store.quarantine_skill("brainstorming", entry)
+        assert not os.path.lexists(self._store())
+        assert util.sha256_dir(self._held()) == before
+        rec = lockfile.get_skill("brainstorming")
+        assert rec["held_at"] == str(self._held())
+        assert rec["quarantined"] is True
+        # Still the installed bytes, only elsewhere: not "missing".
+        assert integrity.status("brainstorming", rec) == integrity.STATUS_OK
+        meta = store.read_skill_meta("brainstorming")
+        assert meta is not None and meta[0]["name"] == "brainstorming"
+        assert "brainstorming" not in store.sync_plan()["missing_store"]
+
+        res = store.release_skill("brainstorming", rec)
+        assert res.linked == LINKED_AGENTS
+        assert util.sha256_dir(self._store()) == before
+        assert util.exec_bits(self._store()) == exec_before
+        assert not os.path.lexists(self._held())
+        rec = lockfile.get_skill("brainstorming")
+        assert "held_at" not in rec
+        assert rec["quarantined"] is False
+        assert rec["agents"] == LINKED_AGENTS
+        for agent in LINKED_AGENTS:
+            assert _link(agent).exists()
+
+    def test_a_requarantine_keeps_the_held_copy(self, brainstorming):
+        before = util.sha256_dir(self._store())
+        store.quarantine_skill("brainstorming",
+                               lockfile.get_skill("brainstorming"))
+        store.quarantine_skill("brainstorming",
+                               lockfile.get_skill("brainstorming"))
+        assert util.sha256_dir(self._held()) == before
+        assert lockfile.get_skill("brainstorming")["held_at"] == str(
+            self._held())
+
+    def test_a_stale_held_copy_gives_way_to_the_store_copy(self, brainstorming):
+        before = util.sha256_dir(self._store())
+        self._held().mkdir(parents=True)
+        (self._held() / "SKILL.md").write_text("stale\n", encoding="utf-8")
+        assert store.hold_store_copy("brainstorming") == str(self._held())
+        assert util.sha256_dir(self._held()) == before
+
+    def test_nothing_to_hold(self, sandbox):
+        assert store.hold_store_copy("brainstorming") is None
+        assert not os.path.lexists(self._held())
+
+    def test_restore_over_a_reinstalled_store_copy_drops_the_held_one(
+            self, brainstorming):
+        before = util.sha256_dir(self._store())
+        self._held().mkdir(parents=True)
+        (self._held() / "SKILL.md").write_text("old\n", encoding="utf-8")
+        store.restore_store_copy("brainstorming")
+        assert util.sha256_dir(self._store()) == before
+        assert not os.path.lexists(self._held())
+
+    def test_restore_with_nothing_held_is_a_noop(self, brainstorming):
+        before = util.sha256_dir(self._store())
+        store.restore_store_copy("brainstorming")
+        assert util.sha256_dir(self._store()) == before
+
+    def test_sideline_holds_and_unsideline_restores(self, brainstorming):
+        before = util.sha256_dir(self._store())
+        store.sideline("brainstorming", "focus")
+        assert not os.path.lexists(self._store())
+        assert lockfile.get_skill("brainstorming")["held_at"] == str(
+            self._held())
+        assert "brainstorming" not in store.sync_plan()["missing_store"]
+        res = store.unsideline("brainstorming")
+        assert res.linked == LINKED_AGENTS
+        for agent in LINKED_AGENTS:
+            assert _link(agent).exists()
+        assert util.sha256_dir(self._store()) == before
+        assert not os.path.lexists(self._held())
+        assert "held_at" not in lockfile.get_skill("brainstorming")
+
+    def test_a_refused_sideline_write_puts_the_copy_back(
+            self, brainstorming, monkeypatch):
+        before = util.sha256_dir(self._store())
+
+        def refuse(name, fn):
+            raise OSError(errno.EROFS, "read-only")
+        monkeypatch.setattr(lockfile, "update_skill", refuse)
+        with pytest.raises(OSError):
+            store.sideline("brainstorming", "focus")
+        assert util.sha256_dir(self._store()) == before
+        assert not os.path.lexists(self._held())
+
+    def test_a_refused_quarantine_write_puts_the_copy_back(
+            self, brainstorming, monkeypatch):
+        before = util.sha256_dir(self._store())
+        entry = lockfile.get_skill("brainstorming")
+
+        def refuse(name, e):
+            raise OSError(errno.EROFS, "read-only")
+        monkeypatch.setattr(lockfile, "set_skill", refuse)
+        with pytest.raises(OSError):
+            store.quarantine_skill("brainstorming", entry)
+        assert util.sha256_dir(self._store()) == before
+        assert not os.path.lexists(self._held())
+
+    def test_an_unrecorded_store_dir_is_not_held(self, sandbox):
+        mine = paths.store_dir() / "brainstorming"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        assert store.sideline("brainstorming", "focus") == []
+        assert (mine / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
+        assert not os.path.lexists(self._held())
+
+    def test_uninstall_removes_the_held_copy(self, brainstorming):
+        store.quarantine_skill("brainstorming",
+                               lockfile.get_skill("brainstorming"))
+        store.uninstall("brainstorming")
+        assert not os.path.lexists(self._held())
+        assert not os.path.lexists(self._store())
+
+    def test_a_reinstall_drops_the_held_copy(self, brainstorming, entry):
+        store.sideline("brainstorming", "focus")
+        store.install(entry, force=True)
+        assert (self._store() / "SKILL.md").is_file()
+        assert not os.path.lexists(self._held())
+        assert "held_at" not in lockfile.get_skill("brainstorming")
+
+
+class TestUninstallKind:
+    """A name installed as several kinds is refused unless ``kind`` picks."""
+
+    def _rule(self):
+        lockfile.set_rule("brainstorming", {
+            "kind": "rule", "version": "1.0.0", "tap": "t",
+            "materializations": []})
+
+    def test_kinds_phrase(self):
+        assert store.kinds_phrase(["skill"]) == "a skill"
+        assert store.kinds_phrase(["skill", "rule"]) == "a skill and a rule"
+        assert store.kinds_phrase(["skill", "rule", "workflow"]) == (
+            "a skill, a rule and a workflow")
+
+    def test_installed_kinds(self, brainstorming):
+        assert store.installed_kinds("brainstorming") == ["skill"]
+        self._rule()
+        assert store.installed_kinds("brainstorming") == ["skill", "rule"]
+        assert store.installed_kinds("nope") == []
+
+    def test_ambiguous_name_is_refused(self, brainstorming):
+        self._rule()
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("brainstorming")
+        assert ei.value.message == (
+            "brainstorming is installed as a skill and a rule")
+        assert ei.value.hint == (
+            "say which to remove: `boost uninstall brainstorming --kind "
+            "skill` or `boost uninstall brainstorming --kind rule`")
+        assert store.installed_kinds("brainstorming") == ["skill", "rule"]
+
+    def test_kind_rule_leaves_the_skill(self, brainstorming):
+        self._rule()
+        info = store.uninstall("brainstorming", kind="rule")
+        assert info["kind"] == "rule"
+        assert store.installed_kinds("brainstorming") == ["skill"]
+        assert (paths.store_dir() / "brainstorming").is_dir()
+
+    def test_kind_skill_leaves_the_rule(self, brainstorming):
+        self._rule()
+        info = store.uninstall("brainstorming", kind="skill")
+        assert info["kind"] == "skill"
+        assert store.installed_kinds("brainstorming") == ["rule"]
+
+    def _repo_skill_beside_a_user_rule(self, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        store.install(entry, scope="project", base=str(repo))
+        self._rule()
+        monkeypatch.chdir(repo)
+        assert lockfile.get_skill("brainstorming") is None
+        assert projectlock.get_skill(repo, "brainstorming")
+        return repo
+
+    def test_kind_skill_reaches_a_repo_skill_beside_a_user_rule(
+            self, tap, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = self._repo_skill_beside_a_user_rule(entry, tmp_path, monkeypatch)
+        info = store.uninstall("brainstorming", kind="skill")
+        assert projectlock.get_skill(repo, "brainstorming") is None
+        assert info["name"] == "brainstorming"
+        assert store.installed_kinds("brainstorming") == ["rule"]
+
+    def test_a_repo_skill_beside_a_user_rule_is_ambiguous(
+            self, tap, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = self._repo_skill_beside_a_user_rule(entry, tmp_path, monkeypatch)
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("brainstorming")
+        assert ei.value.message == (
+            "brainstorming is installed as a skill and a rule")
+        assert projectlock.get_skill(repo, "brainstorming")
+        assert store.installed_kinds("brainstorming") == ["rule"]
+
+    def test_global_ignores_the_repo_skill(
+            self, tap, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = self._repo_skill_beside_a_user_rule(entry, tmp_path, monkeypatch)
+        info = store.uninstall("brainstorming", project_fallback=False)
+        assert info["kind"] == "rule"
+        assert projectlock.get_skill(repo, "brainstorming")
+
+    def test_a_kind_not_installed_names_what_is(self, brainstorming):
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("brainstorming", kind="workflow")
+        assert ei.value.message == "no workflow named brainstorming is installed"
+        assert ei.value.hint == ("it is installed as a skill — `boost "
+                                 "uninstall brainstorming --kind skill`")
 
 
 class TestNativeStoreAgents:
@@ -6801,3 +7047,64 @@ class TestAReadOnlySourceImports:
             assert sorted(p.name for p in paths.store_dir().iterdir()) == []
         finally:
             (ro_src / "secret.txt").chmod(0o644)
+
+
+class TestSourceMissingMessage:
+    """``reinstall``'s skip line tells an untapped tap from a missing item."""
+
+    def test_a_configured_tap_keeps_the_update_hint(self, tap):
+        assert store.tap_configured(tap.name) is True
+        assert store.source_missing_message(
+            "rule r", "r", {"tap": tap.name}) == (
+            "rule r not found in tap %s — skipped (try `boost update`)"
+            % tap.name)
+
+    def test_an_untapped_tap_names_re_tap_and_uninstall(self, sandbox):
+        assert store.tap_configured("gone") is False
+        assert store.tap_configured(None) is False
+        assert store.tap_configured("") is False
+        url = str(paths.home() / "src" / "gone")
+        assert store.source_missing_message(
+            "x", "x", {"tap": "gone", "tap_url": url}) == (
+            "x: source missing — tap gone is no longer tapped and `boost "
+            "update` can't restore it; re-tap it with `boost tap "
+            "~/src/gone`, or `boost uninstall x`")
+
+    def test_no_recorded_url_still_says_what_to_do(self, sandbox):
+        assert store.source_missing_message("x", "x", {"tap": "gone"}) == (
+            "x: source missing — tap gone is no longer tapped and `boost "
+            "update` can't restore it; re-tap it, or `boost uninstall x`")
+
+
+class TestHeldRefusal:
+    """A command that writes the store copy names why a held one is away."""
+
+    def test_not_held_is_no_refusal(self):
+        assert store.held_refusal("x", None) is None
+        assert store.held_refusal("x", {"quarantined": True}) is None
+
+    def test_quarantined(self):
+        err = store.held_refusal("x", {"held_at": "/h", "quarantined": True,
+                                       "sidelined_by": "focus"})
+        assert err is not None
+        assert err.message == "x is quarantined — its store copy is held aside"
+        assert err.hint == "`boost quarantine --release x` puts it back first"
+
+    @pytest.mark.parametrize(("by", "hint"), [
+        ("focus", "`boost focus --clear` puts it back first"),
+        ("context", "`boost context disable` puts it back first"),
+        ("profile", "a `boost profile use` that includes it puts it back "
+                    "first"),
+    ])
+    def test_sidelined(self, by, hint):
+        err = store.held_refusal("x", {"held_at": "/h", "sidelined_by": by})
+        assert err is not None
+        assert err.message == (
+            "x is sidelined by `boost %s` — its store copy is held aside" % by)
+        assert err.hint == hint
+
+    def test_sidelined_by_nothing_recorded(self):
+        err = store.held_refusal("x", {"held_at": "/h"})
+        assert err is not None
+        assert err.message == "x is sidelined — its store copy is held aside"
+        assert err.hint == "relinking it puts it back first"

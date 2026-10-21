@@ -830,10 +830,20 @@ def cmd_uninstall(argv: list[str]) -> int:
                        "user config, then this repo for a name only it has)",
         local_help="remove from this repo (= --scope project)",
         global_help="remove from your user config only (= --scope user)")
+    ap.add_argument("--kind", choices=("skill", "rule", "workflow"),
+                    default=None,
+                    help="which item to remove when a skill, rule or "
+                         "workflow share NAME")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     args = ap.parse_args(argv)
     args.names = [store.installed_name(n) for n in args.names]
+    if (args.kind not in (None, "skill")
+            and args.scope == scopes.SCOPE_PROJECT):
+        raise BoostError("--local removes project skills, not a %s"
+                         % args.kind,
+                         hint="drop --local: a %s installed into a repo is "
+                              "recorded in your user lock" % args.kind)
     # Ask only when someone is there to answer. out.confirm() returns its
     # `default` on a non-TTY, so gating on it unconditionally would turn every
     # scripted `boost uninstall x` — CI step, Makefile, Dockerfile — into a
@@ -842,6 +852,8 @@ def cmd_uninstall(argv: list[str]) -> int:
     if out.stdin_is_tty() and not args.yes:
         what = (args.names[0] if len(args.names) == 1 else
                 "%d skills: %s" % (len(args.names), ", ".join(args.names)))
+        if args.kind and len(args.names) == 1:
+            what = "%s %s" % (args.kind, what)
         if args.scope == scopes.SCOPE_PROJECT:
             from_repo, where = list(args.names), scopes.resolve_base(
                 scopes.SCOPE_PROJECT)
@@ -883,7 +895,8 @@ def cmd_uninstall(argv: list[str]) -> int:
                 # else: falling back to the repo would remove what the
                 # flag said to leave alone.
                 info = store.uninstall(
-                    name, project_fallback=args.scope != scopes.SCOPE_USER)
+                    name, project_fallback=args.scope != scopes.SCOPE_USER,
+                    kind=args.kind)
         except BoostError as err:
             if len(args.names) == 1:
                 raise
@@ -2033,8 +2046,7 @@ def _reinstall_project_skill(name: str, lk: dict, pbase: Path) -> bool:
     matches = [e for e in catalog.find(name)
                if e["tap"] == lk.get("tap") and e.get("kind", "skill") == "skill"]
     if not matches:
-        out.warn("%s not found in tap %s — skipped (try `boost update`)"
-                 % (name, lk.get("tap")))
+        out.warn(store.source_missing_message(name, name, lk), wrap=True)
         return False
     entry, warning = catalog.select_lock_source(matches, lk)
     entry = cast(dict, entry)                 # matches is non-empty above
@@ -2129,8 +2141,8 @@ def cmd_reinstall(argv: list[str]) -> int:
                        if e["tap"] == lk.get("tap")
                        and e.get("kind", "skill") == kind]
             if not matches:
-                out.warn("%s %s not found in tap %s — skipped (try `boost update`)"
-                         % (kind, name, lk.get("tap")))
+                out.warn(store.source_missing_message(
+                    "%s %s" % (kind, name), name, lk), wrap=True)
                 failed += 1
                 continue
             entry, warning = catalog.select_lock_source(matches, lk)
@@ -2214,8 +2226,7 @@ def cmd_reinstall(argv: list[str]) -> int:
             continue
         matches = [e for e in catalog.find(name) if e["tap"] == lk.get("tap")]
         if not matches:
-            out.warn("%s not found in tap %s — skipped (try `boost update`)"
-                     % (name, lk.get("tap")))
+            out.warn(store.source_missing_message(name, name, lk), wrap=True)
             failed += 1
             continue
         entry, warning = catalog.select_lock_source(matches, lk)

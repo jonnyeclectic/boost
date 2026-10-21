@@ -2721,6 +2721,23 @@ class TestUpdateEdges:
         assert ("brainstorming not found in tap gone-tap — skipped "
                 "(try `boost update`)") in r.out
 
+    def test_reinstall_after_untap_names_the_missing_tap(
+            self, boost, fixture_tap_src, tmp_path):
+        # "try `boost update`" looped: update answers "everything up to
+        # date", because no update restores a tap that was untapped.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "gone-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        boost("untap", "gone-tap", "-f")
+        r = boost("reinstall", "brainstorming", expect=1)
+        flat = " ".join(r.out.split())
+        assert ("brainstorming: source missing — tap gone-tap is no longer "
+                "tapped and `boost update` can't restore it; re-tap it with "
+                "`boost tap %s`, or `boost uninstall brainstorming`"
+                % paths.tilde(str(tap_dir))) in flat
+        assert "try `boost update`" not in flat
+        assert "Reinstalled 0 skills" in flat
+
 
 class TestUpdateKeepsTheChosenCopy:
     """`boost update` must refresh the copy the lock records, not the first.

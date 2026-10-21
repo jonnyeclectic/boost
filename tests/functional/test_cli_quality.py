@@ -1671,12 +1671,18 @@ class TestFingerprint:
 class TestQuarantine:
     def test_roundtrip_links_store_lock_doctor(self, boost, installed):
         store = paths.store_dir() / "brainstorming"
+        before = (store / "SKILL.md").read_bytes()
         r = boost("quarantine", "brainstorming")
-        assert "quarantined brainstorming (store intact, links removed)" in r.out
+        assert ("quarantined brainstorming (store copy held aside, links "
+                "removed)") in r.out
         for adir in (".claude", ".windsurf", ".cursor"):
             assert not (paths.home() / adir / "skills" / "brainstorming"
                         ).is_symlink()
-        assert (store / "SKILL.md").is_file()
+        # Out of the store: Gemini CLI and Codex read it with no link.
+        held = paths.held_skills_dir() / "brainstorming"
+        assert not os.path.lexists(store)
+        assert (held / "SKILL.md").read_bytes() == before
+        assert _lock()["brainstorming"]["held_at"] == str(held)
         assert _lock()["brainstorming"]["quarantined"] is True
         # The removed links must not linger in the lock — list/info/doctor
         # all read `agents` to say what's linked.
@@ -1697,7 +1703,10 @@ class TestQuarantine:
                 "(linked: claude-code, windsurf, cursor, antigravity)") in r.out
         link = paths.home() / ".claude" / "skills" / "brainstorming"
         assert link.is_symlink() and link.exists()
+        assert (store / "SKILL.md").read_bytes() == before
+        assert not os.path.lexists(held)
         entry = _lock()["brainstorming"]
+        assert "held_at" not in entry
         assert entry["quarantined"] is False
         assert entry["agents"] == ["claude-code", "windsurf", "cursor",
                                    "antigravity"]
@@ -2054,7 +2063,8 @@ class TestShadowedNames:
             self, boost, installed):
         self._seed_rule_named("brainstorming")
         r = boost("quarantine", "brainstorming")
-        assert "quarantined brainstorming (store intact, links removed)" in r.out
+        assert ("quarantined brainstorming (store copy held aside, links "
+                "removed)") in r.out
         assert ("a rule named brainstorming is also installed — this "
                 "quarantines the skill only") in r.out
 
@@ -2063,6 +2073,49 @@ class TestShadowedNames:
         r = boost("pin", "brainstorming")
         assert "pinned brainstorming" in r.out
         assert "a rule named brainstorming is also installed" in r.out
+
+    def test_uninstalling_a_shadowed_name_refuses_without_kind(
+            self, boost, installed):
+        # Skill-first resolution used to remove the skill, rc 0, and leave
+        # the rule and workflow of the same name live without a word.
+        from boost_cli.core import lockfile
+        self._seed_rule_named("brainstorming")
+        lockfile.set_workflow("brainstorming", {
+            "kind": "workflow", "version": "1.0.0", "tap": "some-tap",
+            "materializations": []})
+        r = boost("uninstall", "brainstorming", expect=1)
+        assert ("Error: brainstorming is installed as a skill, a rule and "
+                "a workflow") in r.err
+        assert ("say which to remove: `boost uninstall brainstorming --kind "
+                "skill` or `boost uninstall brainstorming --kind rule` or "
+                "`boost uninstall brainstorming --kind workflow`"
+                ) in " ".join(r.err.split())
+        assert lockfile.get_skill("brainstorming") is not None
+        assert lockfile.get_rule("brainstorming") is not None
+        assert lockfile.get_workflow("brainstorming") is not None
+
+    def test_uninstall_kind_removes_only_that_kind(self, boost, installed):
+        from boost_cli.core import lockfile
+        cm = self._seed_rule_named("brainstorming")
+        r = boost("uninstall", "brainstorming", "--kind", "rule")
+        assert "Uninstalled 1 rule" in r.out
+        assert lockfile.get_rule("brainstorming") is None
+        assert "Rule body." not in cm.read_text(encoding="utf-8")
+        assert lockfile.get_skill("brainstorming") is not None
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        # One kind left: no --kind needed any more.
+        r = boost("uninstall", "brainstorming")
+        assert "Uninstalled 1 skill" in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_uninstall_kind_that_is_not_installed_says_what_is(
+            self, boost, installed):
+        r = boost("uninstall", "brainstorming", "--kind", "workflow",
+                  expect=1)
+        assert "Error: no workflow named brainstorming is installed" in r.err
+        assert ("it is installed as a skill — `boost uninstall brainstorming "
+                "--kind skill`") in " ".join(r.err.split())
+        assert (paths.store_dir() / "brainstorming").is_dir()
 
 
 # ── decay ────────────────────────────────────────────────────────────────

@@ -802,6 +802,9 @@ def cmd_edit(argv):
             hint="a %s materializes into shared agent files, not a store "
                  "dir you can open; read it with `boost cat %s`"
                  % (kind, args.name))
+    held = store.held_refusal(name, lockfile.get_skill(name))
+    if held is not None:
+        raise held
     sdir = store.skill_store_dir(name)
     path = sdir / "SKILL.md"
     if not path.exists():

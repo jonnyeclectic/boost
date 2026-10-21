@@ -84,8 +84,8 @@ def _skill_text(name: str) -> tuple[str, str]:
     content, and answering "not installed" (or "vanished from tap") for an
     installed rule would deny what `boost list` shows.
     """
-    if lockfile.get_skill(name):
-        p = store.skill_store_dir(name) / "SKILL.md"
+    if (lk := lockfile.get_skill(name)):
+        p = store.copy_dir(name, lk) / "SKILL.md"
         if p.exists():
             return p.read_text(encoding="utf-8", errors="replace"), "installed"
     found = lockfile.find_any(name)
@@ -836,6 +836,9 @@ def cmd_evolve(argv: list[str]) -> int:
         raise BoostError("%s is not installed — evolve works on installed "
                         "skills" % args.name,
                         hint="install it first with `boost install %s`" % args.name)
+    held = store.held_refusal(args.name, lockfile.get_skill(args.name))
+    if held is not None:
+        raise held
     skill_md = store.skill_store_dir(args.name) / "SKILL.md"
     if not skill_md.exists():
         raise BoostError("%s has no SKILL.md in the store" % args.name,

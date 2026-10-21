@@ -443,11 +443,13 @@ class TestProfile:
                 "installed): cowboy-coding") in r.out
         link = paths.home() / ".claude" / "skills" / "cowboy-coding"
         assert not link.exists()
-        assert (paths.store_dir() / "cowboy-coding").is_dir()
+        assert not os.path.lexists(paths.store_dir() / "cowboy-coding")
+        assert (paths.held_skills_dir() / "cowboy-coding").is_dir()
 
         r = boost("profile", "use", "solo", "--prune")
         assert "uninstalled cowboy-coding" in r.out
         assert not (paths.store_dir() / "cowboy-coding").exists()
+        assert not os.path.lexists(paths.held_skills_dir() / "cowboy-coding")
         assert "cowboy-coding" not in json.loads(
             paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
@@ -471,7 +473,8 @@ class TestProfile:
         assert "uninstalled cowboy-coding" not in r.out
         assert "switched to profile solo" in r.out
         assert not link.exists()
-        assert (paths.store_dir() / "cowboy-coding").is_dir()
+        assert not os.path.lexists(paths.store_dir() / "cowboy-coding")
+        assert (paths.held_skills_dir() / "cowboy-coding").is_dir()
 
     def test_use_records_the_sideline_and_clears_it_on_return(self, boost, tapped):
         # `sidelined_by` is what stops `doctor`/`sync` from reading a
@@ -664,7 +667,9 @@ class TestProfile:
                 "pr-me` deletes it") in flat
         assert ("sidelined 1 skill not in the profile (unlinked, still "
                 "installed): pr-me") in flat
-        assert (mine / "SKILL.md").is_file()
+        # Its only copy is held aside, not deleted.
+        assert not os.path.lexists(mine)
+        assert (paths.held_skills_dir() / "pr-me" / "SKILL.md").is_file()
         assert not os.path.lexists(paths.home() / ".claude" / "skills" / "pr-me")
         r = json.loads(boost("profile", "use", "solo", "--prune", "--json").out)
         assert (r["uninstalled"], r["sidelined"]) == ([], ["pr-me"])

@@ -623,7 +623,7 @@ def cmd_profile(argv) -> int:
             quiet=args.json))
         if pruned:
             for n in doomed:
-                store.uninstall(n)
+                store.uninstall(n, kind="skill")
                 if not args.json:
                     out.ok("uninstalled %s" % n)
                 uninstalled.append(n)
@@ -1115,7 +1115,7 @@ def cmd_replay(argv) -> int:
         return 1
     uninstalled, restored, version_diffs = [], [], []
     for n in added:  # in current, not in snapshot
-        store.uninstall(n)
+        store.uninstall(n, kind="skill")
         if not args.json:
             out.ok("uninstalled %s" % n)
         uninstalled.append(n)
