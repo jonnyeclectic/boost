@@ -59,7 +59,9 @@ from . import (
 #   4 -- a non-ASCII name is slugged by `_entry_slug` (accents folded, a
 #        name with no ASCII left takes its directory or a hash) instead of
 #        every CJK/Cyrillic name collapsing to `skill`
-CACHE_FORMAT = 4
+#   5 -- an item file that is a link out of the clone is skipped (see
+#        `escapes`), so a cache that indexed one must be rescanned to drop it
+CACHE_FORMAT = 5
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -299,11 +301,46 @@ def _classify_workflow(path: Path, meta: dict) -> bool:
                 and (WORKFLOW_META_KEYS & set(meta)))
 
 
-def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list[dict]:
+def escapes(root: Path, path: Path) -> bool:
+    """True when ``path``, links followed, is not inside ``root``.
+
+    Both sides are resolved: on macOS a tempdir under ``/var/folders`` is
+    really ``/private/var/...``, and resolving one side only compares a real
+    path against a nominal one. A path ``realpath`` rejects counts as
+    escaping — refusing it costs one item, serving it costs a file.
+    """
+    try:
+        return not Path(os.path.realpath(path)).is_relative_to(
+            os.path.realpath(root))
+    except ValueError:      # an embedded NUL: not a path at all
+        return True
+
+
+def _escaping(root: Path, path: Path, escaped: list[str] | None) -> bool:
+    """`escapes` for one scanned file, recording it in ``escaped``.
+
+    ``os.walk`` does not follow directory links, so inside one walk the only
+    way out of the clone is the file itself being a link: the cheap
+    ``is_symlink`` gates the two ``realpath`` calls.
+    """
+    if not (path.is_symlink() and escapes(root, path)):
+        return False
+    if escaped is not None:
+        escaped.append(path.relative_to(root).as_posix())
+    return True
+
+
+def scan_dir(root: Path, tap_name: str = "local", curated: bool = False,
+             escaped: list[str] | None = None) -> list[dict]:
     """Walk `root` and index every skill/rule/workflow into entry dicts.
 
     Files inside a SKILL.md dir belong to that skill, never re-indexed;
     output is sorted by (skill_md, name) regardless of walk order.
+
+    An item file that is a link leading out of `root` is skipped, before it
+    is opened, and its path relative to `root` appended to ``escaped``. A tap
+    is somebody else's repo: a ``SKILL.md -> ../../../.ssh/id_rsa`` put the
+    key in the BM25 index, in `boost_search` results and in `boost_read`.
     """
     root = Path(root)
     entries: list[dict] = []
@@ -323,7 +360,13 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
         # A directory holding a SKILL.md is a skill: index it and remember the
         # dir so its other files are not re-indexed as loose rules/workflows.
         if "SKILL.md" in filenames:
-            parsed = _read(here / "SKILL.md")
+            # An escaping SKILL.md still marks its dir a skill dir, so its
+            # sibling .md files are not indexed as loose workflows instead.
+            if _escaping(root, here / "SKILL.md", escaped):
+                skill_dirs.add(here)
+                parsed = None
+            else:
+                parsed = _read(here / "SKILL.md")
             if parsed is not None:
                 meta, body = parsed
                 default = here.name if here != root else root.name
@@ -339,6 +382,8 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
             is_rule = _classify_rule(path)
             is_md = path.suffix.lower() == ".md" and path.name != "SKILL.md"
             if not is_rule and not is_md:
+                continue
+            if _escaping(root, path, escaped):
                 continue
             parsed = _read(path)
             if parsed is None:
@@ -364,6 +409,20 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
 #: Taps whose cache could not be saved this process — warned about once.
 _UNSAVED: set[str] = set()
 
+#: Taps whose escaping links were reported this process — warned about once.
+_ESCAPED: set[str] = set()
+
+
+def _report_escaped(tap_name: str, escaped: list[str]) -> None:
+    """Warn, once per tap per process, about item links out of its clone."""
+    if not escaped or tap_name in _ESCAPED:
+        return
+    _ESCAPED.add(tap_name)
+    n = len(escaped)
+    output.warn("skipped %d item%s in tap %s that link outside its clone: %s"
+                % (n, "" if n == 1 else "s", tap_name, ", ".join(sorted(escaped))),
+                stream=sys.stderr, wrap=True)
+
 
 def rebuild_tap(tap: registry.Tap) -> list[dict]:
     """Rescan a cloned tap and rewrite its JSON cache file -> entries.
@@ -374,7 +433,9 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
     if not tap.is_cloned:
         raise BoostError("tap %s is not cloned" % tap.name,
                         hint="run `boost update %s`" % tap.name)
-    entries = scan_dir(tap.path, tap.name, tap.curated)
+    escaped: list[str] = []
+    entries = scan_dir(tap.path, tap.name, tap.curated, escaped=escaped)
+    _report_escaped(tap.name, escaped)
     if not tap.owns_cache_file:
         # Its cache path is one of boost's own indexes (a tap configured
         # before `add` refused the name): the scan is the answer, and writing

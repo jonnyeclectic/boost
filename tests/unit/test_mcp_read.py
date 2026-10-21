@@ -327,7 +327,8 @@ class TestTheKindLabelIsTrueBeforeInstall:
         monkeypatch.setattr(info.lockfile, "get_skill", lambda n: None)
         monkeypatch.setattr(info.catalog, "resolve_one", lambda n: entry)
         monkeypatch.setattr(info.registry, "get",
-                            lambda tap: types.SimpleNamespace(path=tmp_path))
+                            lambda tap: types.SimpleNamespace(
+                                path=tmp_path, name="t", is_cloned=True))
 
         path, lock, cat = info._resolve_skill_md("x")
         assert lock is None

@@ -438,6 +438,45 @@ def _may_hold_skill(d: str) -> bool:
         return True
 
 
+def refuse_escape(tap: registry.Tap, path: Path, name: str) -> None:
+    """Raise unless ``path``, links followed, stays inside ``tap``'s clone.
+
+    `catalog.scan_dir` no longer indexes such a file, but a cache scanned
+    before it learned to (or a clone that moved under its cache) still names
+    one — and `exists()`/`is_file()` follow the link, so every reader and
+    installer would serve whatever it points at: a skill installed as an empty
+    store dir, a rule rendered from ``~/.ssh/id_rsa`` into CLAUDE.md.
+    """
+    if catalog.escapes(tap.path, path):
+        raise BoostError(
+            "refusing %s from tap %s: its file links outside the clone"
+            % (name, tap.name),
+            hint="run `boost update %s` to rescan the tap" % tap.name)
+
+
+def source_file_for(entry: dict) -> Path:
+    """The tap file a catalog entry indexes, on disk and inside its clone.
+
+    The read-side twin of :func:`source_dir_for`, for any kind: a skill goes
+    through it (so a missing clone is re-cloned and a sparse dir widened,
+    exactly as for install), a rule or workflow — one file inside the sparse
+    cone — only needs the clone. Either way a file that is gone says to run
+    `boost update` rather than surfacing an errno over an absolute path.
+    """
+    kind = entry.get("kind") or catalog.KIND_SKILL
+    if kind == catalog.KIND_SKILL:
+        return source_dir_for(entry) / "SKILL.md"
+    tap = registry.get(entry["tap"])
+    registry.ensure_cloned(tap)
+    path = tap.path / entry.get("skill_md", "")
+    if not path.is_file():
+        raise BoostError("source for %s %s vanished from tap %s"
+                         % (kind, entry["name"], tap.name),
+                         hint="run `boost update %s`" % tap.name)
+    refuse_escape(tap, path, entry["name"])
+    return path
+
+
 def source_dir_for(entry: dict) -> Path:
     """Absolute path of a catalog entry's skill dir inside its tap clone.
 
@@ -477,6 +516,7 @@ def source_dir_for(entry: dict) -> Path:
     if not (src / "SKILL.md").exists():
         raise BoostError("source for %s vanished from tap %s" % (entry["name"], tap.name),
                         hint="run `boost update %s`" % tap.name)
+    refuse_escape(tap, src / "SKILL.md", entry["name"])
     missing = link_targets_to_fetch(tap.path, src)
     if missing:
         gitutil.materialize_paths(tap.path, missing)
@@ -1578,6 +1618,15 @@ def _copy_skill(src: Path, dest: Path, *, within: Path | None = None,
                 "could not copy %s into the skill store: %d file%s failed"
                 % (dest.name, n, "" if n == 1 else "s"),
                 hint="first: %s" % first) from None
+        # A SKILL.md that is a link out of bounds is skipped by _copy_tree
+        # like any other, which left an empty store dir that install called
+        # a success and `list` showed as installed. No SKILL.md, no skill.
+        if not (staged / "SKILL.md").exists():
+            raise BoostError(
+                "refusing to install %s: no SKILL.md would reach the store"
+                % dest.name,
+                hint="a SKILL.md that links outside its source is never "
+                     "copied")
         _own_writable(staged)
         # is_symlink() as well as exists(): a dangling symlink is still
         # something in the way that has to be moved aside.
@@ -3559,6 +3608,7 @@ def _install_rule(entry: dict, force: bool = False,
     if not src.is_file():
         raise BoostError("source for rule %s vanished from tap %s" % (name, tap.name),
                         hint="run `boost update %s`" % tap.name)
+    refuse_escape(tap, src, name)
     _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
     meta, body = frontmatter.parse(raw)
@@ -4190,6 +4240,7 @@ def _install_workflow(entry: dict, force: bool = False,
     if not src.is_file():
         raise BoostError("source for workflow %s vanished from tap %s" % (name, tap.name),
                         hint="run `boost update %s`" % tap.name)
+    refuse_escape(tap, src, name)
     _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
     slot = workflows.detect_slot(source_rel)
