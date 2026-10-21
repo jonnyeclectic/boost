@@ -71,7 +71,7 @@ class TestInstall:
         assert "installed BMAD" in r.out
         # correct installer invocation
         cmd = npx[0]
-        assert cmd[:4] == ["npx", "--yes", "bmad-method@%s" % core_bmad.BMAD_VERSION,
+        assert cmd[:4] == ["/usr/bin/npx", "--yes", "bmad-method@%s" % core_bmad.BMAD_VERSION,
                            "install"]
         assert "--directory" in cmd and str(proj) in cmd
         assert cmd[cmd.index("--tools") + 1] == "claude-code"

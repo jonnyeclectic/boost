@@ -325,6 +325,7 @@ class TestRunUpgrade:
         assert selfupdate.run_upgrade(["pipx", "upgrade", "x"]).stdout == "done"
         assert rec.calls == [(["pipx", "upgrade", "x"],
                               {"capture_output": True, "text": True,
+                               "encoding": "utf-8", "errors": "replace",
                                "timeout": 300.0})]
 
     def test_caller_timeout_is_passed_through(self, monkeypatch):
@@ -417,6 +418,7 @@ class TestObservedVersion:
         assert rec.calls == [([sys.executable, "-P", "-m", "boost_cli",
                                "--version"],
                               {"capture_output": True, "text": True,
+                               "encoding": "utf-8", "errors": "replace",
                                "timeout": 30.0})]
 
     def test_caller_timeout_is_passed_through(self, monkeypatch):

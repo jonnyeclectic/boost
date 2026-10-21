@@ -27,7 +27,7 @@ import subprocess
 import urllib.error
 import urllib.request
 
-from . import aihost, config, frontmatter, logs, nethttp, typedvalue
+from . import aihost, config, frontmatter, logs, nethttp, typedvalue, util
 
 API_URL = "https://api.anthropic.com/v1/messages"
 
@@ -242,15 +242,21 @@ def _ask_cli(backend: str, prompt: str, system: str | None, model: str,
     body = aihost.fold_system(backend, system, prompt)
     who = "%s CLI" % aihost.cli(backend)
     try:
-        proc = subprocess.run(cmd, input=body, capture_output=True,
-                              text=True, timeout=timeout)
+        # UTF-8 both ways: the prompt carries tap text (arrows, CJK, emoji)
+        # the Windows code page cannot encode, and the reply is UTF-8.
+        proc = subprocess.run(util.resolve_exe(cmd), input=body,
+                              capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=timeout)
         if proc.returncode != 0 and aihost.rejected_headless(backend, proc.stderr):
             # A CLI older than the flag (Claude Code < 2.0.63): retry once
             # without it rather than lose the CLI route on every call.
             cmd = aihost.argv(backend, model, system, headless=False)
-            proc = subprocess.run(cmd, input=body, capture_output=True,
-                                  text=True, timeout=timeout)
-    except (subprocess.TimeoutExpired, OSError) as e:
+            proc = subprocess.run(util.resolve_exe(cmd), input=body,
+                                  capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace",
+                                  timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError, UnicodeError) as e:
         # The exception TYPE only, never str(e): TimeoutExpired stringifies the
         # whole argv, which carries the system-prompt text with it.
         _log_failure(who, type(e).__name__)
@@ -288,7 +294,7 @@ def _ask_api(prompt: str, system: str | None, model: str,
     )
     try:
         with nethttp.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode())
+            data = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as e:
         _log_failure("Anthropic API", "%s: %s" % (type(e).__name__, e))
         return None

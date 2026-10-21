@@ -585,7 +585,11 @@ def _run_installer(directory: Path, modules: str) -> subprocess.CompletedProcess
            "--tools", "claude-code", "--modules", modules,
            "--user-name", _whoami()]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        # The resolved path, not the bare name: npx is an npx.cmd shim on
+        # Windows, which CreateProcess cannot launch by its bare name.
+        proc = subprocess.run(util.resolve_exe(cmd), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=900)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise BoostError("bmad install failed: %s" % e,
                          hint="run it yourself: " + " ".join(cmd)) from e
