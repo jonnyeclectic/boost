@@ -3132,14 +3132,71 @@ class TestTypedValues:
         paths.policy_path().write_text(
             json.dumps({"max_skills": "abc", "blocked_skills": 42}),
             encoding="utf-8")
-        for argv in (("policy", "list"), ("policy", "check")):
-            r = boost(*argv)
-            assert ('ignoring max_skills = "abc" in policy.json — expects '
-                    "a whole number, or null for no limit") in r.out
-            assert ("ignoring blocked_skills = 42 in policy.json — expects "
-                    "a comma-separated list, or a JSON array") in r.out
-            assert ("using the default; fix it with "
-                    "`boost policy set max_skills <int-or-null>`") in r.out
+        for argv, rc in ((("policy", "list"), 0), (("policy", "check"), 1)):
+            r = boost(*argv, expect=rc)
+            out = " ".join(r.out.split())
+            assert ('cannot read max_skills = "abc" in policy.json — expects '
+                    "a whole number, or null for no limit") in out
+            assert ("cannot read blocked_skills = 42 in policy.json — expects "
+                    "a comma-separated list, or a JSON array") in out
+            assert ("installs and taps are refused until it is fixed with "
+                    "`boost policy set max_skills <int-or-null>`") in out
+            assert "using the default" not in out
+        # Shown as the default, but it is not one.
+        assert "all values at defaults" not in boost("policy", "list").out
+
+    @pytest.mark.parametrize("key, raw, expected, spec", [
+        ("blocked_skills", '{"cowboy-coding": true}',
+         "a comma-separated list, or a JSON array", "list"),
+        ("pin_only", "frozen",
+         "a boolean (true/false, yes/no, on/off, 1/0)", "bool"),
+        ("max_skills", "2.5", "a whole number, or null for no limit",
+         "int-or-null"),
+    ])
+    def test_policy_set_refuses_what_policy_json_could_not_hold(
+            self, boost, sandbox, key, raw, expected, spec):
+        r = boost("policy", "set", key, raw, expect=1)
+        err = " ".join(r.err.split())
+        assert "Error: %s expects %s" % (key, expected) in err
+        assert "try `boost policy set %s <%s>`" % (key, spec) in err
+        assert not paths.policy_path().exists()
+
+    def test_an_unreadable_policy_value_fails_closed(self, boost, tapped):
+        # `{"blocked_skills": {...}}` read as an empty blocklist: the blocked
+        # skill installed, check passed and doctor said healthy.
+        paths.ensure_dirs()
+        p = paths.policy_path()
+        p.write_text(json.dumps({"blocked_skills": {"brainstorming": True}}),
+                     encoding="utf-8")
+        why = ('policy.json holds blocked_skills = {"brainstorming": true}, '
+               "which expects a comma-separated list, or a JSON array — boost "
+               "cannot read it, so it will not install until it is fixed with "
+               "`boost policy set` or `boost policy unset`")
+        r = boost("install", "brainstorming", expect=1)
+        assert ("policy blocks installing brainstorming: %s" % why
+                in " ".join(r.err.split()))
+        r = boost("policy", "check", "--json", expect=1)
+        assert json.loads(r.out)["violations"] == [
+            {"name": None, "kind": None, "skill": "(policy)", "violation": why}]
+        r = boost("doctor", "--json", expect=None)
+        assert r.rc == 1
+        rows = [c for c in json.loads(r.out)["checks"] if c["name"] == "policy"]
+        assert [c["message"] for c in rows] == [
+            'policy.json holds blocked_skills = {"brainstorming": true}, which '
+            "expects a comma-separated list, or a JSON array — every install "
+            "is refused until it is fixed with `boost policy set "
+            "blocked_skills <list>`"]
+        # Setting another key keeps the unreadable value rather than writing
+        # the empty default over it.
+        boost("policy", "set", "require_description", "true")
+        assert json.loads(p.read_text(encoding="utf-8"))["blocked_skills"] == {
+            "brainstorming": True}
+        boost("install", "brainstorming", expect=1)
+        # Fixing the key itself is the repair, and the blocklist then holds.
+        boost("policy", "set", "blocked_skills", "brainstorming")
+        r = boost("install", "brainstorming", expect=1)
+        assert "skill 'brainstorming' is on the blocklist" in r.err
+        assert "cannot read" not in r.err
 
     def test_policy_set_and_unset_json(self, boost, sandbox):
         r = boost("policy", "set", "pin_only", "no", "--json")

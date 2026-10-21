@@ -16,11 +16,13 @@ own type. This module turns that table into a parser: ``coerce("pin_only",
 raises :class:`ValueTypeError` at the setter instead of exit 70 at the next
 install.
 
-The one deliberate asymmetry is :data:`LIST`, which never raises. A list key's
-documented surface is a comma list (``blocked_skills a,b``), so anything that
-is not already a JSON array is split on commas rather than refused — which is
-also what turns ``blocked_skills 42`` from a stored ``42`` (and a later
-``TypeError: argument of type 'int' is not iterable``) into ``["42"]``.
+The one deliberate asymmetry is :data:`LIST`, which almost never raises. A
+list key's documented surface is a comma list (``blocked_skills a,b``), so
+text that is not already a JSON array is split on commas rather than refused —
+which is also what turns ``blocked_skills 42`` from a stored ``42`` (and a
+later ``TypeError: argument of type 'int' is not iterable``) into ``["42"]``.
+The exception is text that opens like JSON (``{`` or ``[``) and is not an
+array: split, ``{"a": true}`` became a one-item blocklist naming no skill.
 """
 from __future__ import annotations
 
@@ -125,14 +127,22 @@ def _as_int(key: str, raw: str, spec: str) -> int:
         raise ValueTypeError(key, raw, spec) from e
 
 
-def _as_list(raw: str) -> list:
-    """A JSON array as written, else the comma split. Never raises."""
+def _as_list(key: str, raw: str) -> list:
+    """A JSON array as written, else the comma split.
+
+    Text that opens like JSON — ``{`` or ``[`` — and is not an array is
+    refused rather than split: ``'{"cowboy-coding": true}'`` became the
+    one-item list ``['{"cowboy-coding": true}']``, a blocklist naming no
+    skill, set behind a check mark.
+    """
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         parsed = None
     if isinstance(parsed, list):
         return parsed
+    if raw.lstrip().startswith(("{", "[")):
+        raise ValueTypeError(key, raw, LIST)
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
@@ -172,7 +182,7 @@ def coerce(key: str, raw: str, spec: str) -> Any:
     if spec == INT_OR_NONE:
         return None if raw.strip().lower() in NONE_WORDS else _as_int(key, raw, INT_OR_NONE)
     if spec == LIST:
-        return _as_list(raw)
+        return _as_list(key, raw)
     if spec == STR:
         return raw
     if spec == DICT:

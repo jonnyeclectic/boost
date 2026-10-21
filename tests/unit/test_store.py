@@ -6711,3 +6711,13 @@ def test_uninstall_without_project_fallback_still_removes_a_user_rule(
     info = store.uninstall("mine", project_fallback=False)
     assert info["kind"] == "rule"
     assert lockfile.get_rule("mine") is None
+
+
+def test_url_source_name_is_the_name_boost_tap_would_give(sandbox):
+    # What allowed_taps/blocked_taps match a `boost import <URL>` against.
+    assert store.url_source_name(
+        "https://git.example.test/team/skills.git") == "team/skills"
+    assert store.url_source_name("git@github.com:a/b.git") == "a/b"
+    # A URL parse_spec refuses is matched as itself, never as nothing.
+    bad = "https://example.test/a\x01/b"
+    assert store.url_source_name(bad) == bad

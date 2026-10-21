@@ -188,6 +188,19 @@ def local_source_dir(entry: dict) -> Path | None:
     return src if os.path.isfile(src / "SKILL.md") else None  # noqa: FURB146
 
 
+def url_source_name(url: str) -> str:
+    """The tap name ``boost tap <url>`` would give the repo ``url`` names.
+
+    What ``allowed_taps``/``blocked_taps`` are matched against for a URL
+    import. A URL ``registry.parse_spec`` cannot name is matched as itself,
+    so an allowlist still refuses it rather than letting it through unnamed.
+    """
+    try:
+        return str(registry.parse_spec(url)[0])
+    except BoostError:
+        return url
+
+
 def reinstall_from_url(name: str, entry: dict) -> InstallResult:
     """Clone a URL import's repo again and reinstall ``name`` from it.
 
@@ -4815,6 +4828,11 @@ def install_from_path(src_dir: Path, name: str | None = None,
          "description": meta.get("description")},
         # Re-importing a skill that is already counted must not trip max_skills.
         _count_others(lockfile.installed(), name))
+    if remote is not None:
+        # A clone names its source, so it gets the gates `boost tap` applies
+        # to that source; the `local` label above is exempt from the allowlist.
+        violations += [m for m in policy.check_source(
+            url_source_name(remote.url), remote.root) if m not in violations]
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")

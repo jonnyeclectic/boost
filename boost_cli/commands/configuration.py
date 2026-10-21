@@ -602,15 +602,17 @@ def _parse_policy_value(key: str, raw: str):
 def _warn_invalid_policy_values() -> None:
     """Name every stored policy value boost had to ignore, and why.
 
-    `policy.load()` substitutes the default for a value it cannot read at the
-    key's type, which is the right thing to do in the middle of an install and
-    the wrong thing to do silently. This is where it stops being silent.
+    `policy.load()` shows the default for a value it cannot read at the
+    key's type, but enforcement refuses while any such value stands
+    (`policy.invalid_violation`), so the warning says that rather than
+    "using the default" — every default is the permissive one.
     """
     for key, value, expected in policy.invalid_values():
-        out.warn("ignoring %s = %s in policy.json — expects %s"
+        out.warn("cannot read %s = %s in policy.json — expects %s"
                  % (key, json.dumps(value), expected))
-        out.dim("  using the default; fix it with `boost policy set %s <%s>`"
-                % (key, policy.spec_for(key)), wrap=True)
+        out.dim("  installs and taps are refused until it is fixed with "
+                "`boost policy set %s <%s>`" % (key, policy.spec_for(key)),
+                wrap=True)
 
 
 def cmd_policy(argv) -> int:
@@ -648,8 +650,11 @@ def cmd_policy(argv) -> int:
             _warn_invalid_policy_values()
             diff = sorted(k for k in policy.DEFAULTS
                           if pol.get(k) != policy.DEFAULTS[k])
-            out.dim("  modified from defaults: %s" % ", ".join(diff)
-                    if diff else "  all values at defaults")
+            if diff:
+                out.dim("  modified from defaults: %s" % ", ".join(diff))
+            elif not policy.invalid_values():
+                # An unreadable value displays as its default but is not one.
+                out.dim("  all values at defaults")
         return 0
 
     if args.action == "set":
@@ -709,6 +714,12 @@ def cmd_policy(argv) -> int:
         if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
             violations.append((name, kind, label,
                                "tap %s is not on the allowlist" % tap))
+        if store.is_url_import(entry):
+            # `local` is exempt above, but a URL import names its source; the
+            # clone is gone, so signing cannot be re-checked here.
+            violations.extend(
+                (name, kind, label, msg) for msg in policy.source_violations(
+                    store.url_source_name(str(entry["source_url"])), pol))
         violations.extend(
             (name, kind, label, msg)
             for msg in policy.check_installed_version(entry))
@@ -742,9 +753,10 @@ def cmd_policy(argv) -> int:
                 violations.append(
                     (name, kind, label,
                      "quality score %d < required %d" % (score, min_score)))
-    # A policy.json that does not parse read as defaults above, so every row
-    # passed; that is a failed check, whatever policy_enforce says.
-    corrupt_msg = policy.corrupt_violation()
+    # A policy.json that does not parse, or holds a value unreadable at its
+    # type, read as defaults above, so every row passed; that is a failed
+    # check, whatever policy_enforce says.
+    corrupt_msg = policy.unreadable_violation()
     if corrupt_msg:
         violations.append((None, None, "(policy)", corrupt_msg))
     max_skills_msg = policy.max_skills_violation(skill_count)
