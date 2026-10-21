@@ -116,6 +116,26 @@ class TestQuarantine:
                 assert dest.name == "f.json.corrupt.%d" % i
 
 
+class TestByteOrderMark:
+    """A UTF-8 BOM is what Windows editors save, not corruption."""
+
+    def test_object_with_a_bom_parses(self, tmp_path):
+        p = tmp_path / "f.json"
+        p.write_bytes(b'\xef\xbb\xbf{"a": 1}')
+        assert jsonstate.read_object(p) == ({"a": 1}, None)
+        assert jsonstate.is_corrupt(p) is False
+
+    def test_jsonc_object_with_a_bom_parses(self, tmp_path):
+        p = tmp_path / "f.json"
+        p.write_bytes(b'\xef\xbb\xbf{"a": 1} // c')
+        assert jsonstate.read_object(p, jsonc=True) == ({"a": 1}, None)
+
+    def test_list_with_a_bom_parses(self, tmp_path):
+        p = tmp_path / "f.json"
+        p.write_bytes(b'\xef\xbb\xbf[1]')
+        assert jsonstate.read_list(p) == ([1], None)
+
+
 class TestReadList:
     def test_missing_file_is_none_none(self, tmp_path):
         assert jsonstate.read_list(tmp_path / "nope.json") == (None, None)

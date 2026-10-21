@@ -3,7 +3,10 @@
 """Functional tests for `boost hooks` (in-process CLI)."""
 from __future__ import annotations
 
+import json
+import os
 import re
+import sys
 
 import pytest
 
@@ -306,3 +309,45 @@ class TestHooksRobustness:
         assert r.rc == 1
         assert "no project here" in r.out + r.err
         assert not (sandbox / ".claude" / "settings.json").exists()
+
+
+class TestSettingsFileOddities:
+    """`hooks` on a settings.json someone else also edits."""
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="chmod does not refuse writes on Windows or as root")
+    def test_read_only_settings_is_rc_1_not_a_crash(self, boost, sandbox):
+        p = sandbox / ".claude" / "settings.json"
+        p.parent.mkdir()
+        p.write_text('{\n  "model": "opus"\n}\n', encoding="utf-8")
+        p.chmod(0o444)
+        try:
+            r = boost("hooks", "add", "SessionStart", "-c", "echo hi",
+                      "-n", "ro", "--scope", "global", expect=1)
+        finally:
+            p.chmod(0o644)
+        assert "could not save ~/.claude/settings.json (it is read-only)" \
+            in r.err
+        assert "chmod u+w ~/.claude/settings.json" in r.err
+        assert "unexpected error" not in r.err
+
+    def test_list_survives_a_non_numeric_timeout(self, boost, sandbox):
+        p = sandbox / ".claude" / "settings.json"
+        p.parent.mkdir()
+        p.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": "x # boost:t",
+             "timeout": "ten"}]}]}}), encoding="utf-8")
+        r = boost("hooks", "list", "--host", "claude", "--json")
+        assert json.loads(r.out)["hooks"] == [{
+            "host": "claude", "scope": "global", "event": "Stop",
+            "name": "t", "matcher": None, "command": "x", "timeout": None}]
+
+    def test_gemini_sub_second_timeout_is_not_zero(self, boost, sandbox):
+        p = sandbox / ".gemini" / "settings.json"
+        p.parent.mkdir()
+        p.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": "x # boost:g",
+             "timeout": 500}]}]}}), encoding="utf-8")
+        r = boost("hooks", "list", "--host", "gemini", "--json")
+        assert [h["timeout"] for h in json.loads(r.out)["hooks"]] == [0.5]

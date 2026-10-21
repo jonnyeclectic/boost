@@ -86,11 +86,17 @@ def read_object(path: Path, jsonc: bool = False) -> tuple[dict | None, str | Non
     every command, ``boost doctor`` included. Any reader of a state file
     should come through here rather than pair its own ``read_text`` with
     ``json.loads``, so a hole like that is closed in one place.
+
+    A leading UTF-8 byte-order mark is dropped (``utf-8-sig``), not treated
+    as corruption: Windows editors save one routinely, ``json.loads`` rejects
+    it, and the corrupt-file fallback then let ``hooks add`` replace a valid
+    settings.json with a hooks-only one. A writer that must keep the mark
+    (``claude_settings.save``) checks the prior bytes for it itself.
     """
     if not path.exists():
         return None, None
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
     except OSError as exc:
         return None, "%s: %s" % (path, exc)
     except UnicodeDecodeError as exc:
@@ -111,12 +117,13 @@ def read_list(path: Path) -> tuple[list | None, str | None]:
     Same contract — ``(None, None)`` for a missing file, ``(data, None)`` for
     a valid array, ``(None, message)`` for anything else — so a writer of a
     list-shaped store (``trusted_keys.json``) can tell "nothing here yet" from
-    "something here I am about to destroy".
+    "something here I am about to destroy". A leading byte-order mark is
+    dropped here as it is there.
     """
     if not path.exists():
         return None, None
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
     except OSError as exc:
         return None, "%s: %s" % (path, exc)
     except UnicodeDecodeError as exc:

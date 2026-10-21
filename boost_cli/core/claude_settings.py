@@ -234,22 +234,82 @@ def save(scope: str, data: dict, project_dir: Path | None = None,
     rewrite an unchanged file on every host it wrote to, burning
     :data:`HISTORY_KEEP` slots (2 hosts x 2 hooks = 4 per run) on nothing a
     restore would ever need.
+
+    The file keeps what it had that ``json.dumps`` does not choose: a leading
+    UTF-8 byte-order mark is written back, and a CRLF file stays CRLF, so an
+    ``add`` then ``remove`` returns the user's bytes. The write is atomic and
+    lands on a symlink's *target* with its permission bits kept
+    (:func:`util.write_user_file`), and a write that cannot happen is a
+    :class:`BoostError` naming the file and the fix — raised before the
+    snapshot, or with the snapshot removed, so the history never holds a
+    "previous version" of a change that was not made.
     """
     p = settings_path(scope, project_dir, host)
-    prior = p.read_bytes() if p.exists() else None
-    text = prior.decode("utf-8", "replace") if prior is not None else ""
+    target = util.user_file_target(p)
+    _refuse_dangling(p, target)
+    try:
+        prior = target.read_bytes() if target.exists() else None
+    except OSError as e:
+        raise paths.save_refused(target, e) from e
+    bom = prior is not None and prior.startswith(_BOM)
+    text = prior.decode("utf-8-sig", "replace") if prior is not None else ""
     payload = _render(data, _indent_of(text))
-    # write_text writes os.linesep, so on Windows the file on disk is CRLF.
     if prior is not None and text.replace("\r\n", "\n") == payload:
         return None
     _refuse_lossy(p, text, host)
-    p.parent.mkdir(parents=True, exist_ok=True)
+    _refuse_read_only(target)
+    if "\r\n" in text:
+        payload = payload.replace("\n", "\r\n")
+    if bom:
+        payload = "\ufeff" + payload
     dest = None
     if prior is not None:
-        dest = _snapshot(p, prior, scope, host)
+        try:
+            dest = _snapshot(target, prior, scope, host)
+        except OSError as e:
+            raise paths.save_refused(_history_dir(), e) from e
+    try:
+        util.write_user_file(target, payload)
+    except OSError as e:
+        if dest is not None:
+            with contextlib.suppress(OSError):
+                dest.unlink()
+        raise paths.save_refused(target, e) from e
+    if dest is not None:
         _prune_history()
-    p.write_text(payload, encoding="utf-8")
     return dest
+
+
+_BOM = b"\xef\xbb\xbf"
+
+
+def _refuse_dangling(p: Path, target: Path) -> None:
+    """Raise when ``p`` is a symlink into a directory that does not exist.
+
+    Writing through it would create that directory — somewhere in a dotfiles
+    checkout, say — and report success; reading through it already answered
+    "no file". The link is the user's, so it is named rather than replaced.
+    """
+    if p.is_symlink() and not target.parent.is_dir():
+        raise BoostError(
+            "%s is a symlink to %s, whose directory does not exist"
+            % (paths.tilde(p), paths.tilde(target)),
+            hint="create %s, or remove the link, then re-run"
+                 % paths.tilde(target.parent))
+
+
+def _refuse_read_only(target: Path) -> None:
+    """Raise when ``target`` exists and refuses writes.
+
+    The atomic write replaces the file through its *directory*, so it would
+    succeed over a ``chmod 444`` settings.json — the one signal the user left
+    that the file is not to be changed. :func:`paths.save_refused` names a
+    refusing directory; a refusing file is this one's to name.
+    """
+    if target.exists() and not os.access(target, os.W_OK):
+        raise BoostError(
+            "could not save %s (it is read-only)" % paths.tilde(target),
+            hint="chmod u+w %s, then re-run" % paths.tilde(target))
 
 
 def _render(data: dict, indent: int | str) -> str:
