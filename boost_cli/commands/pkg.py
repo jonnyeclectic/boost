@@ -517,6 +517,10 @@ def cmd_install(argv: list[str]) -> int:
     pbase, pbase_kind = (scopes.project_base()
                          if args.scope == scopes.SCOPE_PROJECT
                          else (None, None))
+    if pbase is not None:
+        # Before the "starts a new one here" warning below, which would
+        # otherwise be the first thing said about an install that is refused.
+        scopes.refuse_managed(pbase)
     # Said once, before anything is written, and naming the directory. An
     # unmarked tree has no project root to walk up to, so this call is what
     # decides where the project *is* — and `proj/src` stays a different project

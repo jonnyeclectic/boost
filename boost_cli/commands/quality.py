@@ -1756,7 +1756,7 @@ def cmd_decay(argv):
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
-    rows = _decay_rows(Path.cwd())
+    rows = _decay_rows(scopes.project_dir())
     if args.json:
         print(json.dumps({"skills": rows}))
         return 0
@@ -2390,7 +2390,7 @@ def cmd_health(argv):
                            for s, n in sorted(drift_counts.items())) or "—",
        drift_counts)
 
-    decay_n = sum(1 for r in _decay_rows(Path.cwd()) if r["verdict"] == "decay")
+    decay_n = sum(1 for r in _decay_rows(scopes.project_dir()) if r["verdict"] == "decay")
     kv("decay", "%d candidate%s" % (decay_n, _s(decay_n)), decay_n)
 
     broken, strays = _broken_links()

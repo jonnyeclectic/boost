@@ -16,6 +16,7 @@ Skill entry schema (v3):
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import threading
@@ -590,7 +591,7 @@ def installed_workflows() -> dict:
     return read()["workflows"]
 
 
-def portable(lock: dict) -> dict:
+def portable(lock: dict, base=None) -> dict:
     """Deep copy of ``lock`` with machine-specific materialization paths dropped.
 
     A rule or workflow entry's ``materializations[].path`` is written absolute,
@@ -600,16 +601,45 @@ def portable(lock: dict) -> dict:
     keeping the useful part (which agent, which file) while dropping the
     username that would otherwise churn the committed file on every
     teammate's own run.
+
+    ``base`` is the repo the snapshot is for. The user lock also records every
+    ``--local`` rule and workflow from *every* checkout on the machine, each
+    tagged with its absolute ``base`` — so without a filter, onboarding one repo
+    committed another repo's installs into it, absolute path and all. With
+    ``base`` given, a project-scope row survives only when this repo owns it
+    (:func:`scopes.owns`), and its ``base`` and paths become repo-relative.
+    Without one, project rows are kept but their ``base`` is contracted too.
     """
+    from . import scopes
     projected = json.loads(json.dumps(lock))
+    want = None if base is None else os.path.realpath(base)
     for _kind, section in SECTIONS:
-        for entry in projected.get(section, {}).values():
+        entries = projected.get(section, {})
+        for name in list(entries):
+            entry = entries[name]
+            local = (isinstance(entry, dict)
+                     and entry.get("scope") == scopes.SCOPE_PROJECT)
+            if local and base is not None and not scopes.owns(entry, base):
+                del entries[name]
+                continue
+            if local and isinstance(entry.get("base"), str):
+                entry["base"] = "." if want is not None else paths.tilde(entry["base"])
             # A workflow's ``foreign`` rows name a path under $HOME too.
             for m in (*(entry.get("materializations") or ()),
                       *(entry.get("foreign") or ())):
                 if isinstance(m, dict) and "path" in m:
-                    m["path"] = paths.tilde(m["path"])
+                    m["path"] = _portable_path(m["path"], want if local else None)
     return projected
+
+
+def _portable_path(p, want: str | None) -> str:
+    """``p`` relative to the repo ``want`` when it sits inside it, else ``~``-contracted."""
+    if want is not None and isinstance(p, str) and os.path.isabs(p):
+        real = os.path.realpath(p)
+        if real.startswith(want.rstrip(os.sep) + os.sep):
+            return real[len(want.rstrip(os.sep)) + 1:].replace(os.sep, "/")
+    return paths.tilde(p)
+
 
 def agent_names(kind: str, entry: dict | None) -> list[str]:
     """Sorted, deduplicated agent names an installed item of ``kind`` reaches.

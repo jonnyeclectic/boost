@@ -1817,6 +1817,10 @@ def _require_project_base(scope: str, base, what: str) -> Path | None:
         raise BoostError(
             "there is no project here to install %s into" % what,
             hint="cd into a repo, or drop --local to install for your user")
+    if scope == scopes.SCOPE_PROJECT:
+        # A store dir, a tap clone or a bare repo has no project marker, so
+        # the unmarked fallback would claim it; writing there corrupts it.
+        scopes.refuse_managed(resolved)
     return resolved
 
 

@@ -917,7 +917,9 @@ def cmd_onboard(argv) -> int:
     p = cliparse.parser(
         prog="boost onboard",
         description="Add skill-tracker telemetry to a repo (optionally open a PR with --pr)")
-    p.add_argument("--repo", default=".", help="repository directory (default: .)")
+    p.add_argument("--repo", default=None,
+                   help="repository directory (default: the enclosing "
+                        "project root)")
     p.add_argument("--pr", action="store_true",
                    help="commit on a branch and open a PR with `gh`")
     p.add_argument("--dry-run", action="store_true",
@@ -927,7 +929,10 @@ def cmd_onboard(argv) -> int:
     p.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
     args = p.parse_args(argv)
 
-    repo = paths.expand(args.repo).resolve()
+    # The project root, not the cwd: GitHub only runs workflows from
+    # <root>/.github/workflows, so one written from `src/` is dead on arrival.
+    repo = (paths.expand(args.repo) if args.repo is not None
+            else scopes.project_dir()).resolve()
     if not repo.is_dir():
         raise BoostError("%s is not a directory" % _tilde(repo),
                         hint="point --repo at a checked-out repository")
@@ -941,7 +946,7 @@ def cmd_onboard(argv) -> int:
     files = [(_TELEMETRY_REL, telemetry), (_WORKFLOW_REL, _WORKFLOW_YML)]
     if repo != paths.store_dir().resolve():
         files.append((".skill-lock.json",
-                      json.dumps(lockfile.portable(lockfile.read()),
+                      json.dumps(lockfile.portable(lockfile.read(), base=repo),
                                 indent=2, sort_keys=True) + "\n"))
 
     # Preconditions FIRST so a real run never leaves the repo mid-state — and
