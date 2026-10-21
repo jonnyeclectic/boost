@@ -543,7 +543,8 @@ def _drifted(kind: str, name: str, entry: dict, bad) -> int:
     """
     if integrity.materialized_status(name, entry, kind) != integrity.STATUS_MODIFIED:
         return 0
-    bad(kind, "%s %s modified since install — run `boost verify`" % (kind, name))
+    bad(kind, "%s %s modified since install — run `%s` %s"
+        % (kind, name, *integrity.modified_remedy(name, kind)), wrap=True)
     return 1
 
 
@@ -646,6 +647,12 @@ def cmd_doctor(argv):
                 % (tap.name, tap.name, " once %s is %s"
                    % (_tilde(cache_block), "moved aside" if cache_moved
                       else "writable") if cache_block else ""), wrap=True)
+        elif (moved := catalog.stale_commit(tap)) is not None:
+            # load_tap serves a cache from another commit as-is, so every
+            # lookup answers from the old tree until something rescans it.
+            bad("tap", "tap %s catalog is stale (scanned at %s, clone at %s) "
+                "— run `boost heal`" % (tap.name, moved[0][:7], moved[1][:7]),
+                wrap=True)
         else:
             tap_ok += 1
     if taps and cache_block:
@@ -789,7 +796,9 @@ def cmd_doctor(argv):
         # only `boost verify` ever re-checked it — surface content drift here too.
         # `integrity.skill_modified` is the test `boost_doctor` asks too.
         if integrity.skill_modified(name, entry):
-            bad("skill", "skill %s modified since install — run `boost verify`" % name)
+            cmd, why = integrity.modified_remedy(name)
+            bad("skill", "skill %s modified since install — run `%s` %s"
+                % (name, cmd, why), wrap=True)
             skill_issues += 1
         # A deliberate sideline (`focus`, `profile use`, `context apply`)
         # unlinked this skill on purpose, and `sidelined_by` says so. Without
@@ -1659,10 +1668,14 @@ def cmd_drift(argv):
         # with its own `scope`, which is the one to report (as verify does).
         scope = (entry.get("scope") or scopes.SCOPE_USER) if kind != "skill" \
             else scopes.SCOPE_USER
+        # A skill's local edit may be a deleted SKILL.md, which heal (not a
+        # reinstall) is the repair for — the split doctor and verify name.
+        hint = (" ".join(integrity.modified_remedy(name))
+                if kind == "skill" and status == "local-edits"
+                else _drift_hint(name, status, entry.get("tap", ""),
+                                 str(entry.get("tap_url") or "")))
         rows.append({"name": name, "kind": kind, "scope": scope,
-                     "status": status,
-                     "hint": _drift_hint(name, status, entry.get("tap", ""),
-                                         str(entry.get("tap_url") or ""))})
+                     "status": status, "hint": hint})
     for name, entry in sorted(pskills.items()):
         if pbase is None or (names and name not in names):
             continue
@@ -2045,11 +2058,17 @@ def cmd_heal(argv):
             out.warn(registry.broken_clone_line(tap.name), wrap=True)
             continue
         had_cache = tap.cache_file.exists()
+        # One HEAD for both freshness questions below, before and after.
+        head = gitutil.head_commit(tap.path)
+        fresh = had_cache and catalog.cache_is_fresh(tap, head=head)
         if dry:
-            if not had_cache and not cache_stuck:
+            # A cache scanned at another commit is rebuilt by the real run,
+            # so the preview names it too; an unresolvable HEAD never reads
+            # fresh, and the run claims nothing for it, so neither does this.
+            if not fresh and not cache_stuck and (head or not had_cache):
                 out.info("would rebuild catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
-        elif not (had_cache and catalog.cache_is_fresh(tap)):
+        elif not fresh:
             # Only a missing, unreadable or stale cache (older CACHE_FORMAT,
             # or scanned at another commit) — what the dry run promises. An
             # unconditional rescan made "nothing to heal" cost a full scan of
@@ -2059,7 +2078,10 @@ def cmd_heal(argv):
             # rebuild_tap survives a cache it cannot write and warns; claiming
             # the rebuild under that warning would certify a file that is
             # still missing, and every later run would claim it again.
-            if not had_cache and tap.cache_file.exists():
+            # Fresh *now* is the test for a stale cache that was replaced:
+            # its old file still exists when the write failed.
+            if tap.cache_file.exists() and (
+                    not had_cache or catalog.cache_is_fresh(tap, head=head)):
                 out.ok("rebuilt catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
 

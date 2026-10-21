@@ -29,7 +29,8 @@ class TestDoctorSeesSkillDrift:
                       encoding="utf-8")
         text, is_err = _tool("boost_doctor")
         assert ("skill commit-messages: modified since install "
-                "(run `boost verify`)") in text
+                "(run `boost reinstall commit-messages` to discard local "
+                "edits)") in text
         assert "1 issue(s) — run `boost doctor` for details" in text
         assert "healthy" not in text
         assert is_err is True

@@ -478,6 +478,47 @@ def cache_is_fresh(tap: registry.Tap, head: str | None = None) -> bool:
     return bool(head) and rec[2] == head
 
 
+def stale_commit(tap: registry.Tap, head: str | None = None
+                 ) -> tuple[str, str] | None:
+    """``(scanned_at, clone_head)`` when a tap's cache records a commit other
+    than the clone's HEAD, else ``None``.
+
+    The one staleness :func:`load_tap` does *not* repair on its own: it
+    rescans an old ``CACHE_FORMAT`` but serves a cache scanned at another
+    commit as-is (checking HEAD costs a git subprocess per tap, which the
+    search path must not pay). So an update interrupted between the reset and
+    the cache rewrite, or a hand ``git pull`` in the clone, left every lookup
+    answering from the old tree — ``install`` said "no skill named" for a
+    skill on disk while ``doctor`` said healthy. ``boost heal`` rescans it.
+    Both sides must be known: an unrecorded or unresolvable commit is not
+    evidence of a mismatch.
+    """
+    rec = _cache_record(tap)
+    if rec is None or not rec[2]:
+        return None
+    if head is None:
+        head = gitutil.head_commit(tap.path) if tap.is_cloned else ""
+    return (rec[2], head) if head and head != rec[2] else None
+
+
+def join_hints(*hints: str | None) -> str | None:
+    """The non-empty ``hints`` as one ``; ``-separated line, or ``None``."""
+    return "; ".join(h for h in hints if h) or None
+
+
+def stale_commit_hint() -> str | None:
+    """The remedy line for a failed lookup when some tap's cache predates its
+    clone, or ``None`` when none does. Pays one git call per cloned tap, so it
+    belongs on a failure path only."""
+    stale = [t.name for t in registry.list_taps()
+             if t.is_cloned and stale_commit(t) is not None]
+    if not stale:
+        return None
+    return ("the catalog of %s was scanned at an older commit than %s clone "
+            "— `boost heal` rescans it" % (", ".join(stale),
+                                          "its" if len(stale) == 1 else "their"))
+
+
 def name_index(entries: list[dict]) -> dict[str, list[dict]]:
     """``{name: [entries…]}`` over ``entries``, in their order.
 
@@ -1108,7 +1149,8 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 # nothing on, which silenced this hint exactly where a new
                 # user needs it.
                 hint = "no taps configured — start with `boost tap --defaults`"
-        raise BoostError("no skill named %r in any tap" % name, hint=hint)
+        raise BoostError("no skill named %r in any tap" % name,
+                         hint=join_hints(hint, stale_commit_hint()))
     if len(matches) > 1:
         # `name` may already be tap-qualified; hints must re-qualify the BARE
         # name or they emit `t:t:x`, which can never resolve.

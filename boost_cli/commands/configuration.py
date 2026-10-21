@@ -1975,7 +1975,8 @@ def _tool_doctor(args: dict):
     # Skills too, by the test CLI `boost doctor` asks: without it a skill
     # edited in place left this reply "healthy" while the CLI flagged it.
     skill_drift = [
-        "skill %s: modified since install (run `boost verify`)" % n
+        "skill %s: modified since install (run `%s` %s)"
+        % (n, *integrity.modified_remedy(n))
         for n, e in sorted(everything["skill"].items())
         if integrity.skill_modified(n, e)]
     lines.extend(skill_drift)
