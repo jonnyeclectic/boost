@@ -203,6 +203,16 @@ class TestBackups:
                               ".skill-lock.json.corrupt.5",
                               ".skill-lock.json.corrupt.6"]
 
+    def test_a_non_ascii_digit_suffix_is_not_a_backup(self, sandbox):
+        # "²".isdigit() is True and int("²") raises: one stray name crashed
+        # every reader of a corrupt lock.
+        _put("{x")
+        d = paths.lockfile_path().parent
+        (d / ".skill-lock.json.corrupt.²").write_text("a", encoding="utf-8")
+        (d / ".skill-lock.json.corrupt.٣").write_text("b", encoding="utf-8")
+        assert lockfile.corrupt_backups() == []
+        assert lockfile.keep_copy().name == ".skill-lock.json.corrupt"
+
     def test_with_no_backup_it_names_where_the_first_goes(self, sandbox):
         _put("{x")
         assert lockfile.corrupt_backups() == []

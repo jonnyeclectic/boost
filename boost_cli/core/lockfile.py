@@ -182,7 +182,10 @@ def corrupt_backups(p=None) -> list:
             rest = f.name[len(base):] if f.name.startswith(base) else None
             if rest == "":
                 found.append((1, f))
-            elif rest and rest[0] == "." and rest[1:].isdigit():
+            # isascii too: "²".isdigit() is True and int("²") raises, so one
+            # stray name would crash every reader of a corrupt lock.
+            elif (rest and rest[0] == "." and rest[1:].isascii()
+                  and rest[1:].isdigit()):
                 found.append((int(rest[1:]), f))
     return [f for _n, f in sorted(found)]
 
