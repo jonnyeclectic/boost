@@ -59,7 +59,7 @@ class TestConfig:
         cfg = json.loads(r.out)
         assert cfg["ai"]["model"] == "claude-haiku-4-5-20251001"
         assert cfg["serve"]["port"] == 8787
-        assert cfg["telemetry"] is False
+        assert "telemetry" not in cfg   # retired: nothing read it
         # non-json variant appends the config path
         r = boost("config")
         assert "~/.boost/config.json" in r.out
@@ -75,7 +75,7 @@ class TestConfig:
     def test_list_once_config_json_exists_names_it_plainly(self, boost, sandbox):
         # The sibling of the pristine-home case: once the file is real, the
         # trailer goes back to naming it with no "not created yet" caveat.
-        boost("config", "set", "telemetry", "true")
+        boost("config", "set", "policy_enforce", "true")
         assert paths.config_path().exists()
         r = boost("config")
         assert r.out.rstrip().endswith("~/.boost/config.json")
@@ -148,8 +148,8 @@ class TestConfig:
         # used to report success and freeze all of DEFAULTS into a brand new
         # config.json.
         assert not paths.config_path().exists()
-        r = boost("config", "unset", "telemetry")
-        assert "telemetry not set" in r.out
+        r = boost("config", "unset", "policy_enforce")
+        assert "policy_enforce not set" in r.out
         assert not paths.config_path().exists()
 
     def test_stray_positionals_are_usage_errors(self, boost, sandbox):
@@ -3270,13 +3270,24 @@ class TestTypedValues:
         assert not paths.config_path().exists()
 
     def test_config_set_boolean_words(self, boost, sandbox):
-        assert "set telemetry = false" in boost("config", "set",
-                                                "telemetry", "no").out
-        assert "set telemetry = true" in boost("config", "set",
-                                               "telemetry", "on").out
-        r = boost("config", "set", "telemetry", "maybe", expect=1)
-        assert "telemetry expects a boolean" in r.err
-        assert "`boost config set telemetry <bool>`" in r.err
+        assert "set policy_enforce = false" in boost(
+            "config", "set", "policy_enforce", "no").out
+        assert "set policy_enforce = true" in boost(
+            "config", "set", "policy_enforce", "on").out
+        r = boost("config", "set", "policy_enforce", "maybe", expect=1)
+        assert "policy_enforce expects a boolean" in r.err
+        assert "`boost config set policy_enforce <bool>`" in r.err
+
+    def test_config_set_retired_telemetry_warns(self, boost, sandbox):
+        # An old config.json holding it still loads; a set saves and says so.
+        r = boost("config", "set", "telemetry", "true")
+        assert r.out.strip() == "✓ set telemetry = true"
+        assert " ".join(r.err.split()) == (
+            "! 'telemetry' has no effect — boost collects no telemetry, so "
+            "nothing reads this key (saved anyway)")
+        assert json.loads(paths.config_path().read_text(
+            encoding="utf-8")) == {"telemetry": True}
+        assert boost("config", "list", "--json").out.count('"telemetry"') == 1
 
     def test_config_set_rejects_a_scalar_for_a_section(self, boost, sandbox):
         r = boost("config", "set", "ai", "3", expect=1)
@@ -3291,17 +3302,17 @@ class TestTypedValues:
         assert boost("config", "get", "custom.flag", "--json").out.strip() == "true"
 
     def test_config_set_json(self, boost, sandbox):
-        r = boost("config", "set", "telemetry", "no", "--json")
-        assert json.loads(r.out) == {"key": "telemetry", "value": False}
+        r = boost("config", "set", "policy_enforce", "no", "--json")
+        assert json.loads(r.out) == {"key": "policy_enforce", "value": False}
         r = boost("config", "set", "ai.enabled", "true", "--json")
         assert json.loads(r.out) == {"key": "ai.enabled", "value": True}
 
     def test_config_unset_json(self, boost, sandbox):
-        boost("config", "set", "telemetry", "no")
-        r = boost("config", "unset", "telemetry", "--json")
-        assert json.loads(r.out) == {"key": "telemetry", "unset": True}
-        r = boost("config", "unset", "telemetry", "--json")
-        assert json.loads(r.out) == {"key": "telemetry", "unset": False}
+        boost("config", "set", "policy_enforce", "no")
+        r = boost("config", "unset", "policy_enforce", "--json")
+        assert json.loads(r.out) == {"key": "policy_enforce", "unset": True}
+        r = boost("config", "unset", "policy_enforce", "--json")
+        assert json.loads(r.out) == {"key": "policy_enforce", "unset": False}
 
     def test_serve_help_survives_a_hand_edited_port(self, boost, sandbox):
         # `serve --help` used to die with a bare ValueError and exit 70,

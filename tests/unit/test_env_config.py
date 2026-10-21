@@ -208,18 +208,18 @@ class TestOverridesOnly:
         return json.loads(paths.config_path().read_text(encoding="utf-8"))
 
     def test_set_writes_only_the_key(self, sandbox):
-        config.set_value("telemetry", "false")
-        assert self._disk() == {"telemetry": False}
+        config.set_value("policy_enforce", "false")
+        assert self._disk() == {"policy_enforce": False}
         config.set_value("ai.model", "m")
-        assert self._disk() == {"telemetry": False, "ai": {"model": "m"}}
+        assert self._disk() == {"policy_enforce": False, "ai": {"model": "m"}}
 
     def test_a_changed_default_reaches_a_user_who_set_something(
             self, sandbox, monkeypatch):
-        config.set_value("telemetry", "false")
+        config.set_value("policy_enforce", "false")
         monkeypatch.setitem(config.DEFAULTS["ai"], "model", "NEW-DEFAULT")
         monkeypatch.setattr(config, "_cache", None)
         assert config.get("ai.model") == "NEW-DEFAULT"
-        assert config.get("telemetry") is False
+        assert config.get("policy_enforce") is False
 
     def test_mutate_hands_the_writer_the_raw_overrides(self, sandbox):
         seen = []
@@ -233,10 +233,10 @@ class TestOverridesOnly:
         full["ai"]["model"] = "old-model"
         paths.config_path().write_text(json.dumps(full), encoding="utf-8")
         assert config.get("ai.model") == "old-model"
-        config.set_value("telemetry", "false")
+        config.set_value("policy_enforce", "false")
         disk = self._disk()
         assert disk["ai"]["model"] == "old-model"
-        assert disk["telemetry"] is False
+        assert disk["policy_enforce"] is False
 
     def test_a_defaulted_scalar_is_not_turned_into_a_section(self, sandbox):
         with pytest.raises(TypeError, match="'port' is not a section"):
@@ -289,14 +289,14 @@ class TestChoicesAndRanges:
 
     def test_check_value_leaves_other_keys_alone(self, sandbox):
         assert config.check_value("ai.model", "anything") == "anything"
-        assert config.check_value("telemetry", 5) == 5
+        assert config.check_value("policy_enforce", 5) == 5
 
     def test_placeholder(self):
         assert config.placeholder("logging.level") == (
             "OFF|DEBUG|INFO|WARNING|ERROR|CRITICAL")
         assert config.placeholder("logging.format") == "text|json"
         assert config.placeholder("serve.port") == "0-65535"
-        assert config.placeholder("telemetry") == "bool"
+        assert config.placeholder("policy_enforce") == "bool"
 
     def test_cli_names_the_choices(self, boost):
         r = boost("config", "set", "logging.level", "verbose", expect=1)

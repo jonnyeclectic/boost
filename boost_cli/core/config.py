@@ -123,7 +123,9 @@ DEFAULTS = {
     # that choice sticks; with neither flag an install follows this. See
     # store._skill_copy.
     "workflows_as_skills": True,
-    "telemetry": False,
+    # No `telemetry` key: it sat here for releases with no reader, so `config
+    # set telemetry true` reported success for a feature that does not
+    # exist. See RETIRED_KEYS.
     "logging": {
         # Console verbosity for the diagnostic log on stderr. "OFF" keeps
         # stderr clean (the default); set DEBUG/INFO/WARNING/ERROR to always
@@ -437,7 +439,7 @@ def mutate(fn: Callable[[dict], bool | None]) -> bool:
 
     ``fn`` sees the on-disk overrides only (:func:`_read_raw`), never the
     DEFAULTS-merged view. Every writer used to get the merged view, so one
-    `config set telemetry false` — or any `boost tap` — wrote the whole of
+    `config set policy_enforce true` — or any `boost tap` — wrote the whole of
     DEFAULTS to disk, and a default a later release changed (a new
     ``ai.model``, an agent's ``links_skills``) never reached that user. A
     file already written that way still reads; it just stops growing.
@@ -497,6 +499,14 @@ def _did_you_mean(dotted: str, prefix: list[str], part: str, rest: list[str],
     return msg + " (saved anyway)"
 
 
+#: Top-level keys boost once listed in DEFAULTS and no longer reads, with why.
+#: An old config.json holding one still loads (an unknown key is kept, as for
+#: any integration's section); `config set` saves it and says it does nothing.
+RETIRED_KEYS: dict[str, str] = {
+    "telemetry": "boost collects no telemetry, so nothing reads this key",
+}
+
+
 def unknown_key_warning(dotted: str) -> str | None:
     """Why `config set <dotted>` probably did not do what was meant, or None.
 
@@ -505,13 +515,17 @@ def unknown_key_warning(dotted: str) -> str | None:
     section boost owns — ``agents.claude-code.enable`` — was stored the same
     way, reported with a check mark, and changed nothing. So this stays
     silent for an invented top-level key and speaks up only below a section
-    boost reads. ``agents`` is the one open section — a user may add an agent
+    boost reads, or for a :data:`RETIRED_KEYS` entry. ``agents`` is the one
+    open section — a user may add an agent
     — so a name there is a typo only when it is close to a known agent, and a
     new agent is named when it still has no ``dir``, without which boost has
     nowhere to put its skills. Reads the saved config, so call it after the
     write.
     """
     parts = dotted.split(".")
+    if parts[0] in RETIRED_KEYS:
+        return "%r has no effect — %s (saved anyway)" % (
+            dotted, RETIRED_KEYS[parts[0]])
     if parts[0] == "agents" and len(parts) >= 2:
         name, rest = parts[1], parts[2:]
         defaults: dict = cast(dict, DEFAULTS["agents"])
