@@ -1128,7 +1128,15 @@ def _show_diagnostics(limit, as_json=False):
             return 0
         out.info("no diagnostic log yet at %s" % lp)
         return 0
-    lines = lp.read_text(encoding="utf-8", errors="replace").splitlines()
+    try:
+        lines = lp.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as e:
+        # A BoostError, not a crash: an unreadable log is the state doctor
+        # tells the user to fix, and crashing here wrote a crash report about
+        # the diagnostic tool itself.
+        raise BoostError(
+            "cannot read diagnostic log %s: %s" % (_tilde(lp), e.strerror or e),
+            hint="fix its permissions (chmod u+rw %s)" % _tilde(lp)) from e
     if as_json:
         # Raw lines, not the coloured `_diag_line` rendering: the decoration
         # is display, and a consumer parsing it would be parsing our palette.
