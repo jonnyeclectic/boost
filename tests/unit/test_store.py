@@ -7000,3 +7000,30 @@ class TestAReadOnlySourceImports:
             assert sorted(p.name for p in paths.store_dir().iterdir()) == []
         finally:
             (ro_src / "secret.txt").chmod(0o644)
+
+
+class TestSourceMissingMessage:
+    """``reinstall``'s skip line tells an untapped tap from a missing item."""
+
+    def test_a_configured_tap_keeps_the_update_hint(self, tap):
+        assert store.tap_configured(tap.name) is True
+        assert store.source_missing_message(
+            "rule r", "r", {"tap": tap.name}) == (
+            "rule r not found in tap %s — skipped (try `boost update`)"
+            % tap.name)
+
+    def test_an_untapped_tap_names_re_tap_and_uninstall(self, sandbox):
+        assert store.tap_configured("gone") is False
+        assert store.tap_configured(None) is False
+        assert store.tap_configured("") is False
+        url = str(paths.home() / "src" / "gone")
+        assert store.source_missing_message(
+            "x", "x", {"tap": "gone", "tap_url": url}) == (
+            "x: source missing — tap gone is no longer tapped and `boost "
+            "update` can't restore it; re-tap it with `boost tap "
+            "~/src/gone`, or `boost uninstall x`")
+
+    def test_no_recorded_url_still_says_what_to_do(self, sandbox):
+        assert store.source_missing_message("x", "x", {"tap": "gone"}) == (
+            "x: source missing — tap gone is no longer tapped and `boost "
+            "update` can't restore it; re-tap it, or `boost uninstall x`")

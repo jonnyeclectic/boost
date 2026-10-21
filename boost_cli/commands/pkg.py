@@ -2046,8 +2046,7 @@ def _reinstall_project_skill(name: str, lk: dict, pbase: Path) -> bool:
     matches = [e for e in catalog.find(name)
                if e["tap"] == lk.get("tap") and e.get("kind", "skill") == "skill"]
     if not matches:
-        out.warn("%s not found in tap %s — skipped (try `boost update`)"
-                 % (name, lk.get("tap")))
+        out.warn(store.source_missing_message(name, name, lk), wrap=True)
         return False
     entry, warning = catalog.select_lock_source(matches, lk)
     entry = cast(dict, entry)                 # matches is non-empty above
@@ -2142,8 +2141,8 @@ def cmd_reinstall(argv: list[str]) -> int:
                        if e["tap"] == lk.get("tap")
                        and e.get("kind", "skill") == kind]
             if not matches:
-                out.warn("%s %s not found in tap %s — skipped (try `boost update`)"
-                         % (kind, name, lk.get("tap")))
+                out.warn(store.source_missing_message(
+                    "%s %s" % (kind, name), name, lk), wrap=True)
                 failed += 1
                 continue
             entry, warning = catalog.select_lock_source(matches, lk)
@@ -2227,8 +2226,7 @@ def cmd_reinstall(argv: list[str]) -> int:
             continue
         matches = [e for e in catalog.find(name) if e["tap"] == lk.get("tap")]
         if not matches:
-            out.warn("%s not found in tap %s — skipped (try `boost update`)"
-                     % (name, lk.get("tap")))
+            out.warn(store.source_missing_message(name, name, lk), wrap=True)
             failed += 1
             continue
         entry, warning = catalog.select_lock_source(matches, lk)

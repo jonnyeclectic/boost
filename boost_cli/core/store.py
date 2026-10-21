@@ -222,6 +222,31 @@ def reinstall_from_url(name: str, entry: dict) -> InstallResult:
         return install_from_path(src, name=name, force=True, remote=remote)
 
 
+def tap_configured(tap: str | None) -> bool:
+    """Whether a lock row's ``tap`` still names a configured tap, exactly."""
+    return bool(tap) and any(t.name == tap for t in registry.list_taps())
+
+
+def source_missing_message(label: str, name: str, lk: dict) -> str:
+    """Why ``reinstall`` skipped ``label`` (``name``) with no catalog match.
+
+    Two different facts used to share "not found in tap X — try `boost
+    update`": an item a configured tap no longer ships, where an update may
+    bring it back, and a tap that was untapped, where `boost update` answers
+    "everything up to date" and the hint loops. The second names the two
+    steps that work, as `boost outdated` does for the same state.
+    """
+    tap = lk.get("tap")
+    if tap_configured(tap):
+        return ("%s not found in tap %s — skipped (try `boost update`)"
+                % (label, tap))
+    url = lk.get("tap_url")
+    how = " with `boost tap %s`" % paths.tilde(str(url)) if url else ""
+    return ("%s: source missing — tap %s is no longer tapped and `boost "
+            "update` can't restore it; re-tap it%s, or `boost uninstall %s`"
+            % (label, tap, how, name))
+
+
 def skill_store_dir(name: str) -> Path:
     """Resolve ``name`` to its dir under the canonical store.
 
