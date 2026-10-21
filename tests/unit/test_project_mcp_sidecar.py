@@ -76,13 +76,17 @@ class TestRegister:
         store.register_project_mcp(tmp_path, _rows("gh"), "sk")
         assert _read(tmp_path)["inputs"] == [1, 2]
 
-    def test_a_corrupt_sidecar_does_not_lose_the_install(self, tmp_path):
-        # Best-effort, like declared_mcp_servers: the skill is already on disk
-        # by this point, so an unreadable sidecar must not raise.
-        (tmp_path / mcpdecl.SIDECAR).write_text("{not json", encoding="utf-8")
-        added = store.register_project_mcp(tmp_path, _rows("gh"), "sk")
-        assert added == ["gh"]
-        assert "gh" in _servers(tmp_path)
+    def test_a_corrupt_sidecar_is_refused_not_rebuilt(self, tmp_path):
+        # It used to be rebuilt from an empty view, which dropped every server
+        # the user had in it. It must not raise either: the skill is already
+        # on disk by this point.
+        sidecar = tmp_path / mcpdecl.SIDECAR
+        sidecar.write_text("{not json", encoding="utf-8")
+        added, err = store.record_project_mcp(tmp_path, _rows("gh"), "sk")
+        assert added == []
+        assert err is not None and err.startswith("%s: invalid JSON (" % sidecar)
+        assert sidecar.read_text(encoding="utf-8") == "{not json"
+        assert store.register_project_mcp(tmp_path, _rows("gh"), "sk") == []
 
     def test_no_rows_writes_nothing(self, tmp_path):
         assert store.register_project_mcp(tmp_path, [], "sk") == []
@@ -141,6 +145,13 @@ class TestUnregister:
         assert (tmp_path / mcpdecl.SIDECAR).read_text(encoding="utf-8") == original, \
             "removing nothing must not rewrite the file"
 
+    @pytest.mark.parametrize("original", ['{"other": 1}', "{}",
+                                          '{"mcpServers": null}'])
+    def test_no_servers_key_is_not_given_one(self, tmp_path, original):
+        (tmp_path / mcpdecl.SIDECAR).write_text(original, encoding="utf-8")
+        assert store.forget_project_mcp(tmp_path, "sk") == ([], None)
+        assert (tmp_path / mcpdecl.SIDECAR).read_text(encoding="utf-8") == original
+
     def test_register_then_unregister_round_trips(self, tmp_path):
         store.register_project_mcp(tmp_path, _rows("a", "b"), "sk")
         assert sorted(_servers(tmp_path)) == ["a", "b"]
@@ -187,3 +198,173 @@ class TestAnUnwritableSidecarNeverCrashesAnInstall:
         assert recorded == [], \
             "claiming a server was recorded when the file could not be " \
             "written is worse than the failure itself"
+
+
+class TestAnUnusableSidecarIsNeverOverwritten:
+    """Finding: a trailing comma, or a list-valued ``mcpServers``, was rebuilt.
+
+    The file is rewritten whole from the parsed view, so an install that could
+    not parse it wrote back only its own server and the user's were gone, with
+    ``✓ recorded`` and rc 0. Refuse, name the file and the cause, and leave the
+    bytes exactly as they were — both on install and on uninstall.
+    """
+
+    TRAILING_COMMA = ('{"mcpServers": {"postgres": {"command": "pg-mcp", '
+                      '"args": ["--db","prod"]}, "sentry": {"command": '
+                      '"sentry-mcp"},}}')
+    LIST_SERVERS = '{"mcpServers": [{"name":"postgres","command":"pg"}]}'
+
+    @pytest.mark.parametrize("text, cause", [
+        (TRAILING_COMMA, "invalid JSON ("),
+        (LIST_SERVERS, "expected 'mcpServers' to be an object, found list"),
+        ("[1, 2]", "expected a JSON object, found list"),
+        ('{"mcpServers": "x"}', "expected 'mcpServers' to be an object, "
+                                "found str"),
+    ])
+    def test_register_refuses_and_keeps_the_bytes(self, tmp_path, text, cause):
+        sidecar = tmp_path / mcpdecl.SIDECAR
+        sidecar.write_bytes(text.encode("utf-8"))
+        added, err = store.record_project_mcp(tmp_path, _rows("gh"), "sk")
+        assert added == []
+        assert err is not None
+        assert err.startswith("%s: " % sidecar)
+        assert cause in err
+        assert sidecar.read_bytes() == text.encode("utf-8")
+
+    def test_unregister_refuses_and_keeps_the_bytes(self, tmp_path):
+        sidecar = tmp_path / mcpdecl.SIDECAR
+        text = '{"mcpServers": [{"x-boost-skill": "sk"}]}'
+        sidecar.write_bytes(text.encode("utf-8"))
+        removed, err = store.forget_project_mcp(tmp_path, "sk")
+        assert removed == []
+        assert err == ("%s: expected 'mcpServers' to be an object, found list"
+                       % sidecar)
+        assert sidecar.read_bytes() == text.encode("utf-8")
+
+    def test_a_null_servers_key_is_empty_not_corrupt(self, tmp_path):
+        (tmp_path / mcpdecl.SIDECAR).write_text('{"mcpServers": null}',
+                                                encoding="utf-8")
+        assert store.record_project_mcp(tmp_path, _rows("gh"), "sk") == (
+            ["gh"], None)
+        assert list(_servers(tmp_path)) == ["gh"]
+
+    def test_a_missing_file_is_not_an_error(self, tmp_path):
+        assert store.record_project_mcp(tmp_path, _rows("gh"), "sk") == (
+            ["gh"], None)
+        assert store.forget_project_mcp(tmp_path / "nowhere", "sk") == ([], None)
+
+    def test_a_failed_write_names_the_file(self, tmp_path, monkeypatch):
+        def boom(*_a, **_k):
+            raise OSError(13, "Permission denied")
+        monkeypatch.setattr(store.Path, "write_text", boom)
+        sidecar = tmp_path / mcpdecl.SIDECAR
+        assert store.record_project_mcp(tmp_path, _rows("gh"), "sk") == (
+            [], "%s: could not be written" % sidecar)
+
+    def test_already_present_is_no_error(self, tmp_path):
+        store.register_project_mcp(tmp_path, _rows("gh"), "one")
+        assert store.record_project_mcp(tmp_path, _rows("gh"), "two") == (
+            [], None)
+
+
+def _project_skill(base, name, sidecar=None, frontmatter=""):
+    """Put an installed project skill on disk and in the project lock."""
+    from boost_cli.core import projectlock
+    rel = ".claude/skills/%s" % name
+    d = base / rel
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: %s\n%s---\nbody\n"
+                                % (name, frontmatter), encoding="utf-8")
+    if sidecar is not None:
+        (d / mcpdecl.SIDECAR).write_text(json.dumps(
+            {mcpdecl.SERVERS_KEY: {s: {"command": "npx"} for s in sidecar}}),
+            encoding="utf-8")
+    projectlock.set_skill(base, name, {
+        "kind": "skill", "materializations": [{"agent": "claude-code",
+                                               "path": rel}]})
+
+
+class TestAServerAnotherSkillDeclaresSurvives:
+    """Finding: uninstalling alpha removed the server beta still declared.
+
+    ``merge_into`` skips a name already present, so beta's claim was never
+    written and ``strip_owned`` matched alpha's marker alone. Reference
+    counting is by declaration: the remaining project skills' declarations
+    keep the server, re-marked to one of them so its uninstall removes it.
+    """
+
+    def test_kept_and_re_marked_to_the_remaining_declarer(self, tmp_path):
+        _project_skill(tmp_path, "beta", sidecar=["gh"])
+        store.register_project_mcp(tmp_path, _rows("gh", "solo"), "alpha")
+        assert store.forget_project_mcp(tmp_path, "alpha") == (["solo"], None)
+        assert _servers(tmp_path) == {
+            "gh": {"command": "npx", "args": ["-y", "gh"],
+                   mcpdecl.MARKER_KEY: "beta"}}
+
+    def test_the_last_declarer_removes_it(self, tmp_path):
+        from boost_cli.core import projectlock
+        _project_skill(tmp_path, "beta", sidecar=["gh"])
+        store.register_project_mcp(tmp_path, _rows("gh"), "alpha")
+        store.forget_project_mcp(tmp_path, "alpha")
+        projectlock.remove_skill(tmp_path, "beta")
+        assert store.forget_project_mcp(tmp_path, "beta") == (["gh"], None)
+        assert _servers(tmp_path) == {}
+
+    def test_a_name_only_declaration_counts(self, tmp_path):
+        _project_skill(tmp_path, "beta", frontmatter="mcp: gh\n")
+        store.register_project_mcp(tmp_path, _rows("gh"), "alpha")
+        assert store.forget_project_mcp(tmp_path, "alpha") == ([], None)
+        assert _servers(tmp_path)["gh"][mcpdecl.MARKER_KEY] == "beta"
+
+    def test_the_first_declarer_by_name_takes_it(self, tmp_path):
+        _project_skill(tmp_path, "zeta", sidecar=["gh"])
+        _project_skill(tmp_path, "beta", sidecar=["gh"])
+        store.register_project_mcp(tmp_path, _rows("gh"), "alpha")
+        store.forget_project_mcp(tmp_path, "alpha")
+        assert _servers(tmp_path)["gh"][mcpdecl.MARKER_KEY] == "beta"
+
+    def test_an_undeclared_server_still_goes(self, tmp_path):
+        _project_skill(tmp_path, "beta", sidecar=["other"])
+        store.register_project_mcp(tmp_path, _rows("gh"), "alpha")
+        assert store.forget_project_mcp(tmp_path, "alpha") == (["gh"], None)
+
+    def test_an_unreadable_remaining_skill_removes_nothing(self, tmp_path):
+        # A teammate's clone that never synced beta: what beta declares is
+        # unknown, so nothing is removed and the file is not rewritten.
+        from boost_cli.core import projectlock
+        projectlock.set_skill(tmp_path, "beta", {
+            "kind": "skill",
+            "materializations": [{"agent": "claude-code",
+                                  "path": ".claude/skills/beta"}]})
+        store.register_project_mcp(tmp_path, _rows("gh"), "alpha")
+        before = (tmp_path / mcpdecl.SIDECAR).read_bytes()
+        assert store.forget_project_mcp(tmp_path, "alpha") == ([], None)
+        assert (tmp_path / mcpdecl.SIDECAR).read_bytes() == before
+
+    def test_a_lock_path_outside_the_repo_is_not_read(self, tmp_path):
+        from boost_cli.core import projectlock
+        outside = tmp_path / "outside"
+        (outside / "beta").mkdir(parents=True)
+        (outside / "beta" / "SKILL.md").write_text(
+            "---\nname: beta\nmcp: gh\n---\n", encoding="utf-8")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        projectlock.set_skill(repo, "beta", {
+            "kind": "skill",
+            "materializations": [{"agent": "claude-code",
+                                  "path": "../outside/beta"}]})
+        store.register_project_mcp(repo, _rows("gh"), "alpha")
+        assert store.forget_project_mcp(repo, "alpha") == ([], None), \
+            "an escaping lock path is unreadable, so nothing is removed"
+        assert _servers(repo)["gh"][mcpdecl.MARKER_KEY] == "alpha"
+
+    def test_a_second_materialization_is_tried(self, tmp_path):
+        from boost_cli.core import projectlock
+        _project_skill(tmp_path, "beta", sidecar=["gh"])
+        entry = projectlock.get_skill(tmp_path, "beta")
+        entry["materializations"].insert(
+            0, {"agent": "cursor", "path": ".cursor/skills/beta"})
+        projectlock.set_skill(tmp_path, "beta", entry)
+        store.register_project_mcp(tmp_path, _rows("gh"), "alpha")
+        assert store.forget_project_mcp(tmp_path, "alpha") == ([], None)
+        assert _servers(tmp_path)["gh"][mcpdecl.MARKER_KEY] == "beta"

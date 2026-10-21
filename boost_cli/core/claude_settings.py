@@ -55,6 +55,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -208,7 +209,7 @@ def load(scope: str, project_dir: Path | None = None,
     if scope == "project" and project_base(project_dir) is None:
         return {}
     p = settings_path(scope, project_dir, host)
-    data, err = jsonstate.read_object(p)
+    data, err = jsonstate.read_object(p, jsonc=hookhost.jsonc(host))
     if err:
         output.warn(
             "%s — reading as empty; the file is left on disk but the next "
@@ -235,24 +236,95 @@ def save(scope: str, data: dict, project_dir: Path | None = None,
     restore would ever need.
     """
     p = settings_path(scope, project_dir, host)
-    payload = json.dumps(data, indent=2) + "\n"
-    if p.exists() and p.read_text(encoding="utf-8") == payload:
+    prior = p.read_bytes() if p.exists() else None
+    text = prior.decode("utf-8", "replace") if prior is not None else ""
+    payload = _render(data, _indent_of(text))
+    # write_text writes os.linesep, so on Windows the file on disk is CRLF.
+    if prior is not None and text.replace("\r\n", "\n") == payload:
         return None
+    _refuse_lossy(p, text, host)
     p.parent.mkdir(parents=True, exist_ok=True)
     dest = None
-    if p.exists():
-        hist = _history_dir()
-        hist.mkdir(parents=True, exist_ok=True)
-        stamp = util.now_iso().replace(":", "").replace("-", "")
-        pre = hookhost.history_prefix(host)
-        dest = hist / ("%s%s-%s.json" % (pre, scope, stamp))
-        n = 2
-        while dest.exists():
-            dest = hist / ("%s%s-%s-%d.json" % (pre, scope, stamp, n))
-            n += 1
-        dest.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+    if prior is not None:
+        dest = _snapshot(p, prior, scope, host)
         _prune_history()
     p.write_text(payload, encoding="utf-8")
+    return dest
+
+
+def _render(data: dict, indent: int | str) -> str:
+    """``data`` as the settings text :func:`save` writes, non-ASCII verbatim.
+
+    Falls back to ``\\u`` escapes when the text cannot be encoded as UTF-8 —
+    a lone surrogate, which JSON's ``"\\ud83d"`` parses to. Writing it raw
+    raises *after* ``write_text`` has truncated the file, which empties the
+    user's settings; the escaped form is what the file already held.
+    """
+    payload = json.dumps(data, indent=indent, ensure_ascii=False) + "\n"
+    try:
+        payload.encode("utf-8")
+    except UnicodeEncodeError:
+        payload = json.dumps(data, indent=indent) + "\n"
+    return payload
+
+
+def _indent_of(text: str) -> int | str:
+    """The indent ``text``'s first nested line uses, else 2.
+
+    A tab-indented or 4-space settings file stays that way through a ``hooks
+    add``: re-indenting every line boost does not own is a noisy diff in a
+    committed project file, for a change of one key.
+    """
+    m = re.search(r"^\{[ \t]*\r?\n([ \t]+)\S", text)
+    if not m:
+        return 2
+    ws = m.group(1)
+    return ws if "\t" in ws else len(ws)
+
+
+def _refuse_lossy(p: Path, text: str, host: str) -> None:
+    """Raise rather than rewrite a commented settings file.
+
+    A JSONC host (Gemini CLI) reads comments, so boost reads them too — but
+    :func:`json.dumps` cannot put them back, and writing the parsed data would
+    delete every one. Leaving the file untouched and saying so is the only
+    lossless answer; the user can drop the comments or edit the file by hand.
+    """
+    if not hookhost.jsonc(host) or jsonstate.strip_comments(text) == text:
+        return
+    raise BoostError(
+        "%s has comments, which %s reads but boost cannot write back — "
+        "rewriting it would drop them, so it was left unchanged"
+        % (p, hookhost.label(host)),
+        hint="remove the comments from %s and run this again, or make the "
+             "change by hand" % p)
+
+
+def _snapshot(p: Path, prior: bytes, scope: str, host: str) -> Path:
+    """Copy ``p``'s current bytes into the history dir; return the copy.
+
+    A settings file routinely holds secrets under ``env``, so the copy keeps
+    the source's permission bits — created ``0600`` and then set to the
+    source's mode, never widened by the umask — in a ``0700`` directory. A
+    snapshot of a private file used to be world-readable, fifty times over.
+    """
+    hist = _history_dir()
+    hist.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(hist, 0o700)
+    stamp = util.now_iso().replace(":", "").replace("-", "")
+    pre = hookhost.history_prefix(host)
+    dest = hist / ("%s%s-%s.json" % (pre, scope, stamp))
+    n = 2
+    while dest.exists():
+        dest = hist / ("%s%s-%s-%d.json" % (pre, scope, stamp, n))
+        n += 1
+    # O_BINARY: a Windows fd opens in text mode and would turn \n into \r\n.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    fd = os.open(dest, flags, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(prior)
+    os.chmod(dest, p.stat().st_mode & 0o777)
     return dest
 
 

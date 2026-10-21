@@ -1223,21 +1223,11 @@ def cmd_doctor(argv):
         # them (see `core/prereq`), so counting it would leave doctor
         # permanently red on something no boost command clears on its own.
         #
-        # One line, truncated, like `orphans` above — not one per item. The
-        # census found 1,323 `skills:` values across 18 taps, so a note per
-        # declaring item buries the rest of the report and repeats a single
-        # `name` down the whole `--json` `checks` array. The hint stays
-        # whole: it is a command, and a truncated command does not run.
-        missing = sorted({m.spec for row in prereq_rows for m in row.unmet})
-        rep.note("unmet-prerequisite",
-                 "%d installed item%s declare%s %d prerequisite%s not "
-                 "installed (%s%s) — `%s`"
-                 % (len(prereq_rows), _s(len(prereq_rows)),
-                    "" if len(prereq_rows) > 1 else "s",
-                    len(missing), _s(len(missing)),
-                    ", ".join(missing[:5]),
-                    ", …" if len(missing) > 5 else "",
-                    prereq.install_hint(prereq_rows)), wrap=True)
+        # One line, truncated, like `orphans` above — not one per item; a
+        # note per declaring item would repeat a single `name` down the whole
+        # `--json` `checks` array (see `prereq.summary_line`).
+        rep.note("unmet-prerequisite", prereq.summary_line(prereq_rows),
+                 wrap=True)
 
     stars = registry.overstarred()
     if stars:
@@ -1976,9 +1966,9 @@ def cmd_heal(argv):
                      % _tilde(dup.path))
 
     # A ★ the catalogue no longer gives. Cleared before the cache loop below,
-    # which rebuilds every cloned tap's cache: the flag is stamped onto each
-    # entry at scan time, so flipping config alone would leave browse and the
-    # curated fallback reading the old star. One line, not one per tap — a
+    # which rebuilds a cache whose stamped ★ no longer matches: the flag is
+    # stamped onto each entry at scan time, so flipping config alone would
+    # leave browse and the curated fallback reading the old star. One line, not one per tap — a
     # catalogue machine has ~420 of them.
     stars = registry.overstarred()
     if stars:
@@ -2017,7 +2007,12 @@ def cmd_heal(argv):
             if not had_cache and not cache_stuck:
                 out.info("would rebuild catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
-        else:
+        elif not (had_cache and catalog.cache_is_fresh(tap)):
+            # Only a missing, unreadable or stale cache (older CACHE_FORMAT,
+            # or scanned at another commit) — what the dry run promises. An
+            # unconditional rescan made "nothing to heal" cost a full scan of
+            # every tap and, by bumping each cache mtime, the next search a
+            # BM25 index rebuild.
             catalog.rebuild_tap(tap)
             # rebuild_tap survives a cache it cannot write and warns; claiming
             # the rebuild under that warning would certify a file that is

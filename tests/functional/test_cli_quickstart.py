@@ -244,8 +244,10 @@ class TestQuickstartWithoutTheExtra:
         dry = _flat(boost("quickstart", "--dry-run").out)
         live = _flat(boost("quickstart").out)
         assert cmd in dry and cmd in live
-        assert (dry.count("boost-skill-cli[rag]")
-                == live.count("boost-skill-cli[rag]") == 1)
+        # Counted by the command itself: a source checkout names its extra
+        # as `<root>[rag]`, not `boost-skill-cli[rag]`.
+        extra = dense.install_extra()
+        assert dry.count(extra) == live.count(extra) == 1
 
     def test_zero_shards_says_why_it_is_zero(self, boost, monkeypatch):
         """"import 0 shard(s)" reads as "none are published".
@@ -259,7 +261,7 @@ class TestQuickstartWithoutTheExtra:
         monkeypatch.setattr(dense, "have_backend", lambda: False)
         out = _flat(boost("quickstart", "--dry-run").out)
         assert "import 0 shard(s)" in out
-        assert "boost-skill-cli[rag]" in out
+        assert dense.install_extra() in out
         # Named as the working default, not as a downgrade — BM25 is what
         # ships and what the required eval gate floors.
         assert "keyword search works without it" in out

@@ -575,7 +575,14 @@ def visible_len(s: str) -> int:
     which is what silently misaligned a table the moment a cell held an emoji
     or CJK text — the column budget was measured a codepoint short of what
     the terminal actually draws.
+
+    ASCII skips the per-character walk: no ASCII codepoint is wide or
+    combining, so its width *is* its length once escapes are gone. The walk
+    through ``unicodedata`` was most of a non-TTY ``boost browse`` of a
+    63k-row catalogue (752k calls here, 7.4M ``_char_width`` calls).
     """
+    if s.isascii():
+        return len(_ANSI_RE.sub("", s)) if "\033" in s else len(s)
     return sum(_char_width(ch) for ch in _ANSI_RE.sub("", s))
 
 

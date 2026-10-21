@@ -23,25 +23,22 @@ from ..core import (
     catalog,
     complete,
     config,
-    deps,
     foreign,
     frontmatter,
     gitutil,
+    installplan,
     installscan,
     integrity,
     journal,
     lockfile,
     paths,
-    prereq,
     projectlock,
     rag,
     registry,
-    resolve,
     scopes,
     snapshot,
     staleness,
     store,
-    typosquat,
     updatediff,
     util,
 )
@@ -58,19 +55,10 @@ def _plural(n: int, word: str) -> str:
 
 def _warn_confusions(entries: list[dict]) -> None:
     """Warn when a skill about to be installed is confusable with one from a
-    *different* tap — the typosquat / owner-confusion guard (core.typosquat).
-
-    Quiet by default: it only speaks up when a near-identical name resolves to
-    another owner, which is exactly the fat-finger-into-a-look-alike case.
-    """
-    if not entries:
-        return
-    all_entries = catalog.all_entries()
-    for e in entries:
-        for other in typosquat.find_confusions(e, all_entries)[:3]:
-            out.warn("%s (%s) closely resembles %s (%s) — double-check you "
-                     "meant this one" % (e["name"], e["tap"],
-                                         other["name"], other["tap"]))
+    *different* tap — the typosquat / owner-confusion guard. The words live in
+    ``core.installplan`` so ``boost_install`` over MCP says the same thing."""
+    for line in installplan.confusion_lines(entries):
+        out.warn(line)
 
 
 def _check_agents(names: list[str] | None) -> list[str] | None:
@@ -153,11 +141,18 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
                       mcpdecl.SIDECAR))
             out.dim("  %s — commit it to share with the team"
                     % ", ".join(res.mcp_recorded))
-        else:
-            out.warn("could not write %s — %s not registered"
+        elif res.mcp_error:
+            # Refused rather than rebuilt: the file is the user's, and
+            # rewriting an unparseable one from an empty view loses every
+            # server in it.
+            out.warn("%s left unchanged — %s not recorded"
                      % (mcpdecl.SIDECAR, ", ".join(wanted)))
-            out.dim("  the skill is installed; fix the file's permissions and "
-                    "reinstall to record them", wrap=True)
+            out.dim("  %s" % res.mcp_error)
+            out.dim("  the skill is installed; fix %s and reinstall to record "
+                    "them" % mcpdecl.SIDECAR, wrap=True)
+        else:
+            # Every server was already there — another skill's or the user's.
+            out.dim("  %s already in %s" % (", ".join(wanted), mcpdecl.SIDECAR))
         return
     out.info("")
     out.warn("%s needs %s to work:" % (res.name, _plural(len(rows), "MCP server")))
@@ -436,106 +431,16 @@ def _others_installed() -> str:
     return " and ".join(parts)
 
 
-def _rel_list(meta: dict, key: str) -> list[str]:
-    """A skill's `requires:`/`conflicts:` frontmatter as a clean name list."""
-    val = meta.get(key)
-    if val in (None, "", False) or isinstance(val, dict):
-        return []
-    if isinstance(val, list):
-        return [str(x).strip() for x in val if str(x).strip()]
-    return [s.strip() for s in str(val).split(",") if s.strip()]
-
-
-def _skill_relations(name: str, key: str) -> list[str]:
-    """`requires:`/`conflicts:` for a skill by name, from its catalog entry.
-
-    ``requires:`` goes through :func:`deps.requirement_names`, the same
-    filter ``boost deps`` applies, so the two cannot disagree about what a
-    requirement *is*. Without it this path still fed prose and package
-    coordinates to the resolver: `requires: ["gh (GitHub CLI)", "python3"]`
-    printed "required skill 'gh (GitHub CLI)' is in no tap — skipped" while
-    `boost deps` on the same skill, post-filter, listed nothing. A qualified
-    `tap:name` survives the filter verbatim, because this feeds
-    ``catalog.find``.
-    """
-    matches = catalog.find(name)
-    if not matches:
-        return []
-    meta = matches[0].get("meta") or {}
-    if key == "requires":
-        return deps.requirement_names(meta)
-    return _rel_list(meta, key)
-
-
 def _report_prerequisites(entries: list[dict], *, pbase=None,
                           would: bool = False) -> None:
-    """Name the catalogued items an install's own frontmatter says it needs.
-
-    Advisory and after the fact: the ``requires:`` closure is installed for
-    you (above), and everything the wider spellings declare — ``skills:``,
-    ``dependencies:``, ``prerequisites:``, … — is reported here instead. See
-    :mod:`boost_cli.core.prereq` for why reporting rather than installing is
-    the answer, and for the census the key set comes from.
-
-    ``pbase`` is the project base for a ``--local`` install, so a sibling
-    installed into *this repo* counts as present. Without it every
-    project-scope user got a prerequisite line naming something already
-    beside it.
-    """
-    try:
-        rows = prereq.for_entries(entries, pbase=pbase)
-    except BoostError:
-        # A missing or unreadable catalog must not fail an install that has
-        # already happened; the prerequisite line is advice, not a step.
-        return
-    for row in rows:
-        out.warn("%s declares %s boost cannot see installed: %s"
-                 % (row.name, _plural(len(row.unmet), "prerequisite"),
-                    ", ".join("%s (%s)" % (m.name, m.tap) for m in row.unmet)),
-                 wrap=True)
-    if rows:
-        out.info(("would meet them with: %s" if would else "meet them with: %s")
-                 % prereq.install_hint(rows), wrap=True)
-
-
-def _expand_dependencies(entries: list[dict], pbase=None
-                         ) -> tuple[list[dict], resolve.Resolution]:
-    """Grow the requested entries into their full `requires:` closure.
-
-    Returns ``(ordered_entries, resolution)`` — the entries to install in
-    dependency-first order (roots plus any pulled-in dependencies that are not
-    already installed), and the :class:`resolve.Resolution` carrying what was
-    added, any advisory conflicts, and unresolved (dangling) requirements.
-
-    ``pbase`` is the project a ``--local`` install targets. Its lock counts as
-    installed too: without it, ``install --local needy`` re-planned a ``helper``
-    already in the repo, the forced-off reinstall refused it, and the command
-    exited 1 over a requirement that was met.
-    """
-    # All three lock sections, not just skills: a rule or workflow already
-    # installed under a required name must not be re-added to the plan.
-    installed = prereq.installed_names(pbase)
-    res = resolve.resolve(
-        [e["name"] for e in entries],
-        lambda n: _skill_relations(n, "requires"),
-        lambda n: _skill_relations(n, "conflicts"),
-        installed=installed,
-        known=lambda n: bool(catalog.find(n)),
-    )
-    by_name = {e["name"]: e for e in entries}
-    ordered: list[dict] = []
-    for name in res.order:
-        if name in by_name:
-            ordered.append(by_name[name])
-            continue
-        try:
-            ordered.append(catalog.resolve_one(name))
-        except BoostError:
-            # A dep that resolves nowhere unambiguously is reported via
-            # res.unresolved; skip it here rather than abort the whole install.
-            if name not in res.unresolved:
-                res.unresolved.append(name)
-    return ordered, res
+    """Name the catalogued items an install's own frontmatter says it needs
+    (``core.installplan.prerequisite_lines``, shared with MCP install)."""
+    warnings, hint = installplan.prerequisite_lines(entries, pbase=pbase,
+                                                    would=would)
+    for line in warnings:
+        out.warn(line, wrap=True)
+    if hint:
+        out.info(hint, wrap=True)
 
 
 # ── install ──────────────────────────────────────────────────────────────
@@ -658,38 +563,13 @@ def cmd_install(argv: list[str]) -> int:
     # unless the caller opted out. Only skills carry dependency frontmatter;
     # rules/workflows pass through unchanged.
     if not args.no_deps and entries:
-        entries, dep_res = _expand_dependencies(entries, pbase=pbase)
-        if dep_res.added:
-            out.info("pulling in %s required by your selection: %s"
-                     % (_plural(len(dep_res.added), "dependency"),
-                        ", ".join(dep_res.added)))
-        for name in dep_res.unresolved:
-            # "in no tap" is only true when the catalog has no row for it.
-            # `_expand_dependencies` also lands here when `resolve_one`
-            # refuses a name *several* taps carry, and calling that absent
-            # contradicted the prerequisite line printed a few lines below,
-            # which names a tap and gives a command that works. 77% of the
-            # ambiguous values in the census resolve this way, so the
-            # contradiction was the common case, not the corner.
-            cands = catalog.distinct_candidates(catalog.find(name))
-            if not cands:
-                out.warn("required skill %r is in no tap — skipped "
-                         "(install it manually or `boost tap` its source)"
-                         % name)
-                continue
-            taps = sorted({str(e.get("tap") or "") for e in cands})
-            # Only offer `tap:name` when that would actually disambiguate:
-            # one tap vendoring the same name twice is ambiguous too, and
-            # there `tap:name` is as unresolvable as the bare name.
-            fix = ("name one of %s" % ", ".join("%s:%s" % (t, name)
-                                                for t in taps)
-                   if len(taps) == len(cands)
-                   else "`boost search %s` and install the one you want"
-                        % name)
-            out.warn("required skill %r matches %d catalog entries — "
-                     "skipped (%s)" % (name, len(cands), fix), wrap=True)
-        for skill, clash in dep_res.conflicts:
-            out.warn("%s declares a conflict with %s (also present)" % (skill, clash))
+        entries, dep_res = installplan.expand_dependencies(entries,
+                                                           pbase=pbase)
+        added = installplan.added_line(dep_res)
+        if added:
+            out.info(added)
+        for line in installplan.dependency_warnings(dep_res):
+            out.warn(line, wrap=True)
         # Pulling in dependencies can turn a single-name request into a multi-item
         # install (per-item headings); it must never *lower* multi (e.g. when an
         # unknown co-requested name was dropped), so OR rather than reassign.
@@ -732,7 +612,7 @@ def cmd_install(argv: list[str]) -> int:
             # exited 1 out of the whole command — no plan for anything after
             # `b`, and not even the "dry run — nothing was changed" line —
             # while the run installs `a`, warns about `b` and exits 1. A
-            # single name reaches this too, since `_expand_dependencies` can
+            # single name reaches this too, since `expand_dependencies` can
             # raise `multi` on a `requires:` closure.
             try:
                 if args.scope == scopes.SCOPE_PROJECT and e.get("kind", "skill") == "skill":
@@ -1076,6 +956,11 @@ def cmd_uninstall(argv: list[str]) -> int:
                 from ..core import mcpdecl
                 out.ok("removed %s from %s"
                        % (_plural(len(unregistered), "MCP server"), mcpdecl.SIDECAR))
+            if info.get("mcp_error"):
+                from ..core import mcpdecl
+                out.warn("%s left unchanged — remove %s's servers by hand"
+                         % (mcpdecl.SIDECAR, name), wrap=True)
+                out.dim("  %s" % info["mcp_error"])
         elif kind == "skill":
             out.ok("removed %s" % _tilde(store.skill_store_dir(name)))
         # A rule/workflow never had a store dir to begin with — the
@@ -1567,7 +1452,8 @@ def _refresh_line(label: str, old_v: str, new_v: str, edited: bool,
 
 def _update_materialized(kind: str, installed: dict[str, dict], results,
                          discard_edits: bool = False,
-                         allow_downgrade: bool = False
+                         allow_downgrade: bool = False, *,
+                         index: dict[str, list[dict]],
                          ) -> tuple[int, int, int, int]:
     """Re-materialize installed rules/workflows whose tap source moved.
 
@@ -1583,6 +1469,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
     they were held rather than that everything is up to date. ``held`` also
     counts an update that was attempted and refused (a policy block, a
     declined diff), which is just as much "not up to date".
+    ``index`` is the run's :func:`catalog.name_index`, as in ``_update_skill``.
     """
     import hashlib
     n = held = pinned = quarantined = 0
@@ -1590,7 +1477,8 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
         tapname = lk.get("tap")
         if tapname in (None, "local") or tapname not in results:
             continue
-        matches = [e for e in catalog.find(name)
+        pool = index.get(catalog.split_name(name)[1], [])
+        matches = [e for e in catalog.find(name, entries=pool)
                    if e["tap"] == tapname and e.get("kind", "skill") == kind]
         if not matches:
             out.warn("%s %s is no longer in tap %s — leaving as-is"
@@ -1824,18 +1712,26 @@ def _ingest_shards(args) -> int:
 
 
 def _update_skill(name: str, lk: dict, scope: str, pbase, results,
-                  args) -> tuple[int, int, int, int]:
+                  args, *, heads: dict[str, str],
+                  index: dict[str, list[dict]]) -> tuple[int, int, int, int]:
     """Refresh one installed skill: ``(upgraded, held, pinned, quarantined)``.
 
     ``scope``/``pbase`` say which install this row is: a project row is judged
     against its copy in the repo and reinstalled there (``--local --force``),
     and recorded in that repo's lock rather than the user's.
+
+    ``heads`` memoises each tap's HEAD and ``index`` is the catalogue keyed by
+    name (:func:`catalog.name_index`), both shared across the whole run: per
+    skill, they were a git subprocess and a full ``all_entries`` + linear scan,
+    O(installed x catalogue) — 308 skills over 63k entries spent ~9 s there.
     """
     label = name + (" (project)" if scope == scopes.SCOPE_PROJECT else "")
     tapname: str = lk.get("tap") or "local"
     if tapname == "local" or tapname not in results:
         return 0, 0, 0, 0
-    matches = [e for e in catalog.find(name) if e["tap"] == tapname]
+    pool = index.get(catalog.split_name(name)[1], [])
+    matches = [e for e in catalog.find(name, entries=pool)
+               if e["tap"] == tapname]
     if not matches:
         out.warn("%s is no longer in tap %s — leaving as-is" % (label, tapname))
         return 0, 0, 0, 0
@@ -1850,7 +1746,9 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     new_v = str(entry.get("version", "0.0.0"))
     head, src_sha = "", None
     if not util.semver_gt(new_v, old_v):
-        head = gitutil.head_commit(registry.get(tapname).path)
+        if tapname not in heads:
+            heads[tapname] = gitutil.head_commit(registry.get(tapname).path)
+        head = heads[tapname]
         if head and head != lk.get("commit"):
             try:
                 src_sha = util.sha256_dir(store.source_dir_for(entry))
@@ -1934,9 +1832,19 @@ def cmd_update(argv: list[str]) -> int:
         return 0
     moved = []
     pinned_skips = 0
+    heads: dict[str, str] = {}
     for tname, summary in results.items():
         if "skipped" not in summary:
-            catalog.rebuild_tap(registry.get(tname))
+            # Rescan only a tap that moved, or whose cache is missing, from an
+            # older CACHE_FORMAT, or scanned at another commit. Rescanning all
+            # of them cost a full scan per tap on "already up to date", and the
+            # rewrite bumped every cache mtime, so the next search rebuilt the
+            # BM25 index too (rag.stale is stat-only).
+            tap = registry.get(tname)
+            heads[tname] = gitutil.head_commit(tap.path)
+            if "→" in summary or not catalog.cache_is_fresh(tap,
+                                                            heads[tname]):
+                catalog.rebuild_tap(tap)
         else:
             pinned_skips += 1
         # "abc1234 → def5678" is a tap whose tree changed; "already up to date"
@@ -1977,8 +1885,10 @@ def cmd_update(argv: list[str]) -> int:
     # Both locks, so a `--local` skill is refreshed in the repo it lives in —
     # the user lock alone left it at its old version under "everything up to
     # date" while `boost info` said it had an update.
+    index = catalog.name_index(catalog.all_entries())
     for name, lk, scope, pbase in integrity.installed_skill_rows():
-        n, h, p, q = _update_skill(name, lk, scope, pbase, results, args)
+        n, h, p, q = _update_skill(name, lk, scope, pbase, results, args,
+                                   heads=heads, index=index)
         upgraded += n
         held += h
         pinned_held += p
@@ -1991,7 +1901,7 @@ def cmd_update(argv: list[str]) -> int:
                           ("workflow", lockfile.installed_workflows())):
         n, h, p, q = _update_materialized(
             kind, section, results, discard_edits=args.discard_edits,
-            allow_downgrade=args.allow_downgrade)
+            allow_downgrade=args.allow_downgrade, index=index)
         upgraded += n
         held += h
         pinned_held += p

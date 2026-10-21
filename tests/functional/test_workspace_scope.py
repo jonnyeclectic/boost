@@ -779,6 +779,64 @@ def test_uninstall_leaves_a_hand_written_server_alone(boost, tapped, repo):
         "boost must only reverse what boost wrote"
 
 
+def test_a_server_two_skills_declare_survives_the_first_uninstall(
+        boost, tapped, repo):
+    """Finding: uninstalling alpha dropped the server beta still declared.
+
+    Reference counting is by declaration, so the server stays while any
+    project skill declares it, and the last declarer's uninstall removes it.
+    """
+    from boost_cli.core import mcpdecl
+    _declare_mcp(tapped, "brainstorming", "github")
+    _declare_mcp(tapped, "tdd-workflow", "github")
+    boost("install", "brainstorming", "--local")
+    res = boost("install", "tdd-workflow", "--local")
+    assert "github already in .mcp.json" in res.out
+    assert "could not write" not in res.out
+
+    def servers():
+        return json.loads((repo / mcpdecl.SIDECAR).read_text(
+            encoding="utf-8"))[mcpdecl.SERVERS_KEY]
+
+    res = boost("uninstall", "brainstorming", "--local")
+    assert "MCP server" not in res.out
+    assert servers()["github"][mcpdecl.MARKER_KEY] == "tdd-workflow"
+    res = boost("uninstall", "tdd-workflow", "--local")
+    assert "removed 1 MCP server from .mcp.json" in res.out
+    assert servers() == {}
+
+
+def test_an_unparseable_sidecar_is_refused_not_overwritten(boost, tapped, repo):
+    from boost_cli.core import mcpdecl
+    text = ('{"mcpServers": {"postgres": {"command": "pg-mcp"}, '
+            '"sentry": {"command": "sentry-mcp"},}}')
+    sidecar = repo / mcpdecl.SIDECAR
+    sidecar.write_bytes(text.encode("utf-8"))
+    _declare_mcp(tapped, "brainstorming")
+    res = boost("install", "brainstorming", "--local")
+    assert ".mcp.json left unchanged — gh not recorded" in res.out
+    assert "invalid JSON" in res.out
+    assert "recorded 1 MCP server" not in res.out
+    assert sidecar.read_bytes() == text.encode("utf-8")
+    res = boost("uninstall", "brainstorming", "--local")
+    assert (".mcp.json left unchanged — remove brainstorming's servers by hand"
+            in res.out)
+    assert sidecar.read_bytes() == text.encode("utf-8")
+
+
+def test_a_list_valued_servers_key_is_refused_not_dictified(boost, tapped,
+                                                            repo):
+    from boost_cli.core import mcpdecl
+    text = '{"mcpServers": [{"name":"postgres","command":"pg"}]}'
+    sidecar = repo / mcpdecl.SIDECAR
+    sidecar.write_bytes(text.encode("utf-8"))
+    _declare_mcp(tapped, "brainstorming")
+    res = boost("install", "brainstorming", "--local")
+    assert ".mcp.json left unchanged — gh not recorded" in res.out
+    assert "expected 'mcpServers' to be an object, found list" in res.out
+    assert sidecar.read_bytes() == text.encode("utf-8")
+
+
 def test_a_user_install_writes_no_sidecar_into_the_repo(boost, tapped, repo):
     # The complement: user scope must not start scattering .mcp.json files into
     # whatever directory the install happened to run from.

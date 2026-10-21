@@ -453,3 +453,59 @@ class TestStripOwned:
         doc, removed = mcpdecl.strip_owned(doc, "sk")
         assert removed == ["gh"]
         assert doc["mcpServers"] == {}
+
+
+class TestSidecarProblem:
+    def test_a_rewritable_document(self):
+        assert mcpdecl.sidecar_problem({}) is None
+        assert mcpdecl.sidecar_problem({"mcpServers": None}) is None
+        assert mcpdecl.sidecar_problem({"mcpServers": {}}) is None
+
+    def test_a_non_object_document(self):
+        assert mcpdecl.sidecar_problem([]) == \
+            "expected a JSON object, found list"
+
+    def test_a_non_object_servers_key(self):
+        assert mcpdecl.sidecar_problem({"mcpServers": []}) == \
+            "expected 'mcpServers' to be an object, found list"
+        assert mcpdecl.sidecar_problem({"mcpServers": ""}) == \
+            "expected 'mcpServers' to be an object, found str"
+
+
+class TestAListOfServersIsNeverDictified:
+    """``dict()`` of ``[{name, command}]`` made ``{"name": "command"}``."""
+
+    ROWS = ({"name": "gh", "spec": {"command": "npx"}, "source": "sidecar"},)
+
+    def test_merge_adds_nothing_and_changes_nothing(self):
+        existing = {"mcpServers": [{"name": "pg", "command": "pg"}], "k": 1}
+        doc, added = mcpdecl.merge_into(existing, self.ROWS, "sk")
+        assert added == []
+        assert doc == existing
+
+    def test_strip_removes_nothing_and_changes_nothing(self):
+        existing = {"mcpServers": [{mcpdecl.MARKER_KEY: "sk"}]}
+        doc, removed = mcpdecl.strip_owned(existing, "sk")
+        assert removed == []
+        assert doc == existing
+
+
+class TestStripOwnedKeep:
+    def test_a_kept_entry_moves_to_its_new_owner(self):
+        existing = {"mcpServers": {
+            "gh": {"command": "x", mcpdecl.MARKER_KEY: "alpha"},
+            "solo": {"command": "y", mcpdecl.MARKER_KEY: "alpha"}}}
+        doc, removed = mcpdecl.strip_owned(existing, "alpha", {"gh": "beta"})
+        assert removed == ["solo"]
+        assert doc == {"mcpServers": {
+            "gh": {"command": "x", mcpdecl.MARKER_KEY: "beta"}}}
+        assert existing["mcpServers"]["gh"][mcpdecl.MARKER_KEY] == "alpha"
+
+    def test_keep_never_claims_an_unmarked_or_foreign_entry(self):
+        existing = {"mcpServers": {
+            "gh": {"command": "x"},
+            "pg": {"command": "y", mcpdecl.MARKER_KEY: "other"}}}
+        doc, removed = mcpdecl.strip_owned(existing, "alpha",
+                                           {"gh": "beta", "pg": "beta"})
+        assert removed == []
+        assert doc == existing

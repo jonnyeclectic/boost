@@ -469,11 +469,17 @@ def eval_script(shell: str) -> str:
     return _ZSH_EVAL if shell == "zsh" else script(shell)
 
 
+# Fish auto-loads this path, but only once the directory exists, and fish
+# creates it on first launch — so a fresh HOME has none, and the redirect
+# alone fails with "No such file or directory".
+_FISH_FILE = "~/.config/fish/completions/boost.fish"
+_FISH_WRITE = "boost completions fish > " + _FISH_FILE
+
 INSTALL_HINT = {
     "bash": "boost completions --install   (or by hand: boost completions bash >> ~/.bashrc)",
     "zsh": "boost completions --install   (or by hand: boost completions zsh > ~/.zfunc/_boost, "
            "with fpath+=~/.zfunc before compinit)",
-    "fish": "boost completions fish > ~/.config/fish/completions/boost.fish",
+    "fish": "mkdir -p ~/.config/fish/completions && " + _FISH_WRITE,
 }
 
 # Shells `--install`/`--uninstall` know how to wire up, and the rc file each
@@ -577,8 +583,12 @@ def _rc_path(shell: str) -> Path:
     if shell not in RC_FILE:
         raise BoostError(
             "no one-shot install for %s yet" % shell,
-            hint="fish needs none: boost completions fish > "
-                 "~/.config/fish/completions/boost.fish"
+            # Backtick spans, so the hint wraps around each command rather
+            # than through it: split at the `>`, the first line is a redirect
+            # with no target. One hint answers --install and --uninstall,
+            # which both land here.
+            hint="fish needs none — install: `%s`, remove: `rm %s`"
+                 % (INSTALL_HINT["fish"], _FISH_FILE)
             if shell == "fish" else "supported: %s" % ", ".join(RC_FILE))
     return paths.expand("~/" + RC_FILE[shell])
 

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -1855,3 +1856,147 @@ class TestSelectLockSource:
             matches, {"source_file": "two/x.mdc", "source_dir": "one"})
         assert entry["skill_md"] == "two/x.mdc"
         assert warning is None
+
+
+class TestCatalogueLookupIndex:
+    """`find` resolves a name through a per-corpus index, not a scan of the
+    whole catalogue per name — `boost outdated` over 308 installed skills spent
+    1.2 s of 1.4 s in those scans. The answers must not change."""
+
+    def test_unchanged_taps_return_the_same_concatenation(self, sandbox):
+        _fake_taps(("t1", [_entry("a", "t1")]), ("t2", [_entry("b", "t2")]))
+        first = catalog.all_entries()
+        assert [e["name"] for e in first] == ["a", "b"]
+        assert catalog.all_entries() is first
+
+    def test_an_empty_uncached_tap_does_not_defeat_the_memo(self, sandbox):
+        # load_tap hands back a fresh [] for an uncloned tap with no cache;
+        # compared by identity alone, one such tap would mean no hit ever.
+        _fake_taps(("t1", [_entry("a", "t1")]), ("t2", [_entry("b", "t2")]))
+        registry.Tap(name="t2", url="").cache_file.unlink()
+        first = catalog.all_entries()
+        assert [e["name"] for e in first] == ["a"]
+        assert catalog.all_entries() is first
+
+    def test_a_rewritten_cache_is_seen_by_the_next_lookup(self, sandbox):
+        _fake_taps(("t1", [_entry("a", "t1")]), ("t2", [_entry("b", "t2")]))
+        before = catalog.all_entries()
+        assert catalog.find("c") == []
+        registry.Tap(name="t2", url="").cache_file.write_text(
+            json.dumps({"skills": [_entry("b", "t2"), _entry("c", "t2")]}),
+            encoding="utf-8")
+        after = catalog.all_entries()
+        assert after is not before
+        assert [e["name"] for e in after] == ["a", "b", "c"]
+        assert [e["tap"] for e in catalog.find("c")] == ["t2"]
+
+    def test_a_dropped_tap_is_not_served_from_the_memo(self, sandbox):
+        _fake_taps(("t1", [_entry("a", "t1")]), ("t2", [_entry("b", "t2")]))
+        catalog.all_entries()
+        _fake_taps(("t1", [_entry("a", "t1")]))
+        assert [e["name"] for e in catalog.all_entries()] == ["a"]
+        assert catalog.find("b") == []
+
+    def test_many_lookups_read_each_tap_cache_once(self, sandbox, monkeypatch):
+        _fake_taps(("t1", [_entry("a", "t1"), _entry("dup", "t1")]),
+                   ("t2", [_entry("dup", "t2"), _entry("b", "t2")]))
+        real = catalog.jsonstate.read_object
+        reads = []
+        monkeypatch.setattr(catalog.jsonstate, "read_object",
+                            lambda p, *a, **k: reads.append(p) or real(p, *a, **k))
+        for _ in range(5):
+            assert [e["tap"] for e in catalog.find("dup")] == ["t1", "t2"]
+            assert [e["tap"] for e in catalog.find("b")] == ["t2"]
+        cache = paths.cache_dir()
+        assert sorted(p.name for p in reads if p.parent == cache) == [
+            "t1.json", "t2.json"]
+
+    def test_the_index_is_built_once_per_corpus(self):
+        pool = [_entry("a", "t"), _entry("b", "t")]
+        index = catalog._name_index(pool)
+        assert catalog._name_index(pool) is index
+        assert {k: [e["tap"] for e in v] for k, v in index.items()} == {
+            "a": ["t"], "b": ["t"]}
+
+    def test_an_appended_corpus_is_reindexed(self):
+        pool = [_entry("a", "t")]
+        assert catalog.find("b", None, pool) == []
+        pool.append(_entry("b", "u"))
+        assert [e["tap"] for e in catalog.find("b", None, pool)] == ["u"]
+
+    def test_matches_are_a_copy_the_caller_may_mutate(self):
+        pool = [_entry("a", "t1"), _entry("a", "t2")]
+        got = catalog.find("a", None, pool)
+        got.clear()
+        assert [e["tap"] for e in catalog.find("a", None, pool)] == ["t1", "t2"]
+
+    def test_results_match_a_linear_scan_in_order(self):
+        pool = [_entry("dup", "owner/alpha", rel_dir="x"),
+                _entry("solo", "beta"),
+                _entry("dup", "beta"),
+                _entry("dup", "owner/alpha", rel_dir="y"),
+                _entry("Dup", "beta"),
+                _entry("dup", "gamma/alpha")]
+
+        def linear(name, tap=None):
+            q, bare = catalog.split_name(name)
+            if q is not None:
+                tap, name = q, bare
+            m = [e for e in pool if e["name"] == name]
+            if tap:
+                m = ([e for e in m if e["tap"] == tap]
+                     or [e for e in m if e["tap"].split("/")[-1] == tap])
+            return m
+
+        for name, tap in (("dup", None), ("Dup", None), ("solo", None),
+                          ("dup", "alpha"), ("dup", "owner/alpha"),
+                          ("beta:dup", None), ("alpha:dup", None),
+                          ("dup", "nowhere"), ("missing", None)):
+            got = catalog.find(name, tap, pool)
+            assert got == linear(name, tap), (name, tap)
+            assert [id(e) for e in got] == [id(e) for e in linear(name, tap)]
+        assert [e["rel_dir"] for e in catalog.find("dup", "owner/alpha", pool)
+                ] == ["x", "y"]
+
+    def test_the_index_keeps_a_bounded_number_of_corpora(self, monkeypatch):
+        monkeypatch.setattr(catalog, "_NAME_INDEX", {})
+        pools = [[_entry("n%d" % i, "t")] for i in range(6)]
+        for pool in pools:
+            catalog._name_index(pool)
+        assert len(catalog._NAME_INDEX) == catalog._NAME_INDEX_SLOTS == 4
+        # Oldest out first; the most recent corpora stay indexed.
+        assert [v[0] for v in catalog._NAME_INDEX.values()] == pools[2:]
+        # A hit on a held corpus neither evicts nor grows anything.
+        held = catalog._name_index(pools[5])
+        assert catalog._name_index(pools[5]) is held
+        assert len(catalog._NAME_INDEX) == 4
+
+    def test_concurrent_eviction_does_not_raise(self, monkeypatch):
+        # `boost serve` answers from a ThreadingHTTPServer, so two requests
+        # can evict the same oldest slot at once; unlocked, one of them got a
+        # KeyError instead of its skill.
+        monkeypatch.setattr(catalog, "_NAME_INDEX", {})
+        old = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        pools = [[_entry("n%d" % i, "t")] for i in range(12)]
+        errors: list[str] = []
+
+        def hammer():
+            try:
+                for _ in range(400):
+                    for i, pool in enumerate(pools):
+                        got = catalog._name_index(pool)
+                        assert list(got) == ["n%d" % i]
+            except Exception as exc:
+                errors.append(repr(exc))
+
+        threads = [threading.Thread(target=hammer) for _ in range(8)]
+        try:
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        finally:
+            sys.setswitchinterval(old)
+        assert errors == []
+        assert len(catalog._NAME_INDEX) == catalog._NAME_INDEX_SLOTS

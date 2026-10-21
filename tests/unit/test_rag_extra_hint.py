@@ -29,8 +29,9 @@ from boost_cli.core import dense, embed, selfupdate
 
 PKG = Path(dense.__file__).resolve().parent.parent
 
-#: A backtick span that names the extra: the command a user would paste.
-_SPAN = re.compile(r"`([^`]*boost-skill-cli\[rag\][^`]*)`")
+#: A backtick span that names the extra: the command a user would paste. A
+#: checkout names it as ``<root>[rag]``, so the span is keyed on the extra.
+_SPAN = re.compile(r"`([^`]* [^`]*\[rag\][^`]*)`")
 
 
 def _commands(text: str) -> list[str]:
@@ -58,22 +59,59 @@ def installed_with(monkeypatch):
 
 
 class TestOneCommand:
-    def test_every_surface_prints_the_same_command(self, monkeypatch):
-        monkeypatch.delenv("BOOST_NO_EMBED", raising=False)
+    @pytest.mark.parametrize("method", [selfupdate.PIP, selfupdate.PIPX,
+                                        selfupdate.UV_TOOL, selfupdate.GIT,
+                                        selfupdate.UNKNOWN])
+    def test_every_surface_prints_the_same_command(self, installed_with,
+                                                   method):
+        installed_with(method)
         found = {name: _commands(text) for name, text in _surfaces().items()}
         for name, cmds in found.items():
-            assert len(cmds) == 1, (name, cmds)
-        assert len({c[0] for c in found.values()}) == 1, found
+            assert cmds == [dense.install_extra()], (name, cmds)
 
-    @pytest.mark.parametrize("method", [selfupdate.PIP, selfupdate.GIT,
-                                        selfupdate.UNKNOWN,
-                                        selfupdate.UV_TOOL])
-    def test_a_pip_style_install_is_told_to_pip_install_it(
-            self, installed_with, method):
-        installed_with(method)
+    def test_an_unrecorded_install_is_told_to_pip_install_it(
+            self, installed_with):
+        installed_with(selfupdate.UNKNOWN)
         want = '`pip install "boost-skill-cli[rag]"`'
         assert want in dense.fix_hint("no-backend")
         assert want in embed.fallback_note()
+        assert dense.install_extra() == want.strip("`")
+
+    def test_a_uv_tool_install_is_reinstalled_with_the_extra(
+            self, installed_with):
+        # A uv tool venv has no pip, so any `pip install` lands elsewhere.
+        installed_with(selfupdate.UV_TOOL)
+        want = '`uv tool install "boost-skill-cli[rag]"`'
+        for name, text in _surfaces().items():
+            assert want in text, name
+        assert dense.install_extra() == want.strip("`")
+
+    def test_a_pip_install_uses_this_interpreters_pip(
+            self, installed_with, monkeypatch):
+        # Never a bare `pip`: the one on PATH can belong to another Python.
+        monkeypatch.setattr(dense.sys, "executable", "/opt/py/bin/python3")
+        installed_with(selfupdate.PIP)
+        want = '/opt/py/bin/python3 -m pip install "boost-skill-cli[rag]"'
+        assert dense.install_extra() == want
+        assert "`%s`" % want in dense.fix_hint("no-backend")
+
+    def test_a_checkout_installs_its_own_extra_editable(
+            self, installed_with, monkeypatch):
+        monkeypatch.setattr(dense.sys, "executable", "/opt/py/bin/python3")
+        monkeypatch.setattr(dense.paths, "repo_root",
+                            lambda: Path("/src/boost"))
+        installed_with(selfupdate.GIT)
+        assert dense.install_extra() == (
+            '/opt/py/bin/python3 -m pip install -e "%s[rag]"'
+            % Path("/src/boost"))
+
+    def test_an_interpreter_path_with_a_space_is_quoted(
+            self, installed_with, monkeypatch):
+        monkeypatch.setattr(dense.sys, "executable",
+                            "/Program Files/py/python")
+        installed_with(selfupdate.PIP)
+        assert dense.install_extra() == (
+            '"/Program Files/py/python" -m pip install "boost-skill-cli[rag]"')
 
     def test_a_pipx_install_is_told_to_inject_it(self, installed_with):
         # `pip install` under pipx lands the extra in some other Python.
@@ -100,9 +138,13 @@ class TestOneCommand:
 class TestItRunsInZsh:
     """zsh globs an unquoted `[rag]`, and a failed glob is an error there."""
 
-    @pytest.mark.parametrize("method", [selfupdate.PIP, selfupdate.PIPX])
+    @pytest.mark.parametrize("method", [selfupdate.PIP, selfupdate.PIPX,
+                                        selfupdate.UV_TOOL, selfupdate.GIT,
+                                        selfupdate.UNKNOWN])
     def test_every_surface_command_survives_zsh(self, installed_with, method):
         installed_with(method)
+        want = ("%s[rag]" % dense.paths.repo_root()
+                if method == selfupdate.GIT else "boost-skill-cli[rag]")
         for name, text in _surfaces().items():
             for cmd in _commands(text):
                 # `print -rl` stands in for the program: zsh expands the words
@@ -112,7 +154,7 @@ class TestItRunsInZsh:
                                      encoding="utf-8", timeout=30,
                                      stdin=subprocess.DEVNULL, check=False)
                 assert res.returncode == 0, (name, cmd, res.stderr)
-                assert "boost-skill-cli[rag]" in res.stdout.splitlines(), name
+                assert want in res.stdout.splitlines(), name
 
 
 def _docstrings(tree: ast.AST) -> set[int]:

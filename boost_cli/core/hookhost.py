@@ -226,6 +226,7 @@ HOSTS: dict[str, dict] = {
         "timeout_scale": 1,
         "timeout_unit": "seconds",
         "history_prefix": "",
+        "jsonc": False,
         "names_hooks": False,
     },
     GEMINI: {
@@ -242,6 +243,7 @@ HOSTS: dict[str, dict] = {
         "timeout_scale": 1000,
         "timeout_unit": "milliseconds",
         "history_prefix": "gemini-",
+        "jsonc": True,
         "names_hooks": True,
     },
     CODEX: {
@@ -258,6 +260,7 @@ HOSTS: dict[str, dict] = {
         "timeout_scale": 1,
         "timeout_unit": "seconds",
         "history_prefix": "codex-",
+        "jsonc": False,
         "names_hooks": False,
     },
 }
@@ -342,6 +345,16 @@ def strict_events(host: str) -> bool:
     the two hosts whose warn-but-add path is safe.
     """
     return bool(_spec(host)["strict_events"])
+
+
+def jsonc(host: str) -> bool:
+    """Whether ``host`` reads its settings file with comments allowed.
+
+    True for Gemini CLI, whose bundle loads settings.json as
+    ``JSON.parse(stripJsonComments(content))``: a commented file is valid there
+    and must be read as such, not as corrupt and empty.
+    """
+    return bool(_spec(host)["jsonc"])
 
 
 def history_prefix(host: str) -> str:
