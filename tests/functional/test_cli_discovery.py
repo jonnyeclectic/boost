@@ -1676,6 +1676,23 @@ class TestBrowse:
         # ESC quits without a pick
         assert discovery._browse_tui(_FakeCurses([27]), entries) is None
 
+    def test_tui_cells_carry_no_control_bytes(self, boost, tapped):
+        """Every cell the TUI draws goes through one `put`, so that is where
+        a tap's text loses its control bytes — the TUI's colors are curses
+        attributes, so no escape in a drawn string is ever boost's own."""
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+
+        entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
+        entries[0] = dict(entries[0], version="1.4\x1b[8m-hidden",
+                          description="Clean \x1b]0;PWNED\x07\x1b[2Jdesc")
+        fake = _FakeCurses([27])
+        assert discovery._browse_tui(fake, entries) is None
+        drawn = "".join(fake.drawn)
+        for ch in ("\x1b", "\x07", "\x9b", "\r"):
+            assert ch not in drawn
+        assert "Clean ]0;PWNED[2Jdesc" in drawn
+
     def test_tab_selects_multiple_for_batch_install(self, boost, tapped):
         """Selection moved from SPACE to TAB so a space can reach the query."""
         from boost_cli.commands import discovery

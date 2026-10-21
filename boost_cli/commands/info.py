@@ -350,6 +350,11 @@ def cmd_list(argv):
                           "workflows": workflows, "project": project},
                          indent=2, sort_keys=True))
         return 0
+    # Every row below is a tap's frontmatter by way of the lock (version,
+    # tags, a rule's slot): display copies, with terminal controls dropped.
+    skills, rules, workflows, project = (
+        out.plain_fields(skills), out.plain_fields(rules),
+        out.plain_fields(workflows), out.plain_fields(project))
     if not skills and not rules and not workflows and not project:
         # Name the kind that was asked for. "no skills installed" in answer to
         # `--kind rule` sends you looking for a skill that was never the point.
@@ -435,6 +440,7 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         print(json.dumps({"name": name, "kind": kind, "description": desc,
                          "stranded": stranded, "installed": entry}, indent=2))
         return 0
+    desc, entry = out.plain(desc), out.plain_fields(entry)
     out.heading(name)
     badges = [out.badge("installed %s" % kind, "green")]
     if entry.get("pinned"):
@@ -594,6 +600,12 @@ def cmd_info(argv):
         }, indent=2))
         return 0
 
+    # Below here everything is for the terminal, and nearly every field is a
+    # tap's frontmatter (by way of the catalog, the SKILL.md, or the lock row
+    # install copied it into). Display copies, terminal controls dropped.
+    cat, lock, plock, meta = (out.plain_fields(cat), out.plain_fields(lock),
+                              out.plain_fields(plock), out.plain_fields(meta))
+    desc = out.plain(desc)
     out.heading(name)
     # The record to read the shared rows off, user scope winning — the same
     # `lock or plock` the --json payload above already uses. A project install
@@ -724,7 +736,8 @@ def cmd_info(argv):
     if mcp_servers:
         # A skill that needs an MCP server is useless without it, so this belongs
         # next to capabilities: both answer "what does this expect of my setup?"
-        out.kv("mcp servers", ", ".join(r["name"] for r in mcp_servers))
+        out.kv("mcp servers", ", ".join(out.plain(r["name"])
+                                       for r in mcp_servers))
     # All three are set together under `if skill_dir` above; naming that here
     # states the invariant instead of leaving it for a reader to reconstruct.
     if score is not None and size is not None and files is not None:

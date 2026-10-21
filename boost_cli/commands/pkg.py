@@ -327,7 +327,7 @@ def _warn_unwritable(res, stream=None) -> None:
     # A link in the skill the copy left out: the rest installed, and this
     # names the file the skill may still expect.
     for line in getattr(res, "skipped_links", None) or ():
-        out.warn("%s: not copied — the link %s" % (res.name, line),
+        out.warn("%s: not copied — the link %s" % (res.name, out.plain(line)),
                  stream=stream, wrap=True)
     conflicts, refused = _skipped_agent_lines(res)
     for line in conflicts:
@@ -638,7 +638,8 @@ def cmd_install(argv: list[str]) -> int:
                         explicit=only is not None)
                     out.info("would %s %s v%s from %s into %s"
                              % ("reinstall" if seen else "install", e["name"],
-                                e["version"], e["tap"], _tilde(pbase)))
+                                out.plain(e["version"]), e["tap"],
+                                _tilde(pbase)))
                     for agent_name, sdir in chosen.items():
                         out.info("  copy  → %s"
                                  % _tilde(scopes.skill_target(
@@ -670,9 +671,9 @@ def cmd_install(argv: list[str]) -> int:
                     mat = store.narrow_materializing(
                         mat_sets[k], store.preserved_agent_scope(only, seen),
                         e["name"], k, explicit=only is not None)
-                    out.info("would %s %s %s v%s from %s (%s)" % (verb, k, e["name"],
-                                                                  e["version"], e["tap"],
-                                                                  where))
+                    out.info("would %s %s %s v%s from %s (%s)"
+                             % (verb, k, e["name"], out.plain(e["version"]),
+                                e["tap"], where))
                     out.info("  materialize → %s" % " · ".join(mat))
                     if k == "workflow":
                         _preview_skill_copy(e, seen, args.as_skill,
@@ -694,8 +695,8 @@ def cmd_install(argv: list[str]) -> int:
                 scoped = store.preserved_agent_scope(only, seen)
                 link_targets = [a for a in agents.linking_agents()
                                 if not scoped or a in scoped]
-                out.info("would %s %s v%s from %s" % (verb, e["name"],
-                                                      e["version"], e["tap"]))
+                out.info("would %s %s v%s from %s"
+                         % (verb, e["name"], out.plain(e["version"]), e["tap"]))
                 out.info("  copy  %s → %s" % (_tilde(store.source_dir_for(e)),
                                               _tilde(store.skill_store_dir(e["name"]))))
                 out.info("  link  → %s" % (" · ".join(link_targets)
@@ -725,7 +726,8 @@ def cmd_install(argv: list[str]) -> int:
     results = []
     for e in entries:
         if multi:
-            out.heading("%s v%s (%s)" % (e["name"], e["version"], e["tap"]))
+            out.heading("%s v%s (%s)"
+                        % (e["name"], out.plain(e["version"]), e["tap"]))
         try:
             res = store.install(e, force=args.force, only_agents=only,
                                 scope=args.scope, as_skill=args.as_skill)
@@ -1246,7 +1248,8 @@ def cmd_sync(argv: list[str]) -> int:
     if plan["unreadable_store"]:
         out.warn(store.unreadable_line(plan["unreadable_store"]), wrap=True)
     if plan["misnamed_store"]:
-        out.info(store.misnamed_line(plan["misnamed_store"]), wrap=True)
+        out.info(out.plain(store.misnamed_line(plan["misnamed_store"])),
+                 wrap=True)
     for line in store.workflow_copy_lines(plan["workflow_copies"]):
         out.warn(line, wrap=True)
     for line in store.rule_block_lines(plan["rule_blocks"]):
@@ -1448,19 +1451,24 @@ def _hold_update(label: str, name: str, lk: dict, kind: str, old_v: str,
     elif hold == staleness.HOLD_DOWNGRADE:
         out.warn("%s: upstream is at v%s, behind your v%s — update skipped; "
                  "`boost update --allow-downgrade` downgrades"
-                 % (label, new_v, old_v), wrap=True)
+                 % (label, out.plain(new_v), out.plain(old_v)), wrap=True)
     return hold is not None, edited
 
 
 def _refresh_line(label: str, old_v: str, new_v: str, edited: bool,
                   bumped: bool) -> str:
-    """The success line for a refresh, saying which way the version moved."""
+    """The success line for a refresh, saying which way the version moved.
+
+    Both versions are the tap's frontmatter, so they are compared raw and
+    printed through :func:`out.plain`."""
+    shown_old, shown_new = out.plain(old_v), out.plain(new_v)
     if bumped:
-        msg = "upgraded %s v%s → v%s" % (label, old_v, new_v)
+        msg = "upgraded %s v%s → v%s" % (label, shown_old, shown_new)
     elif new_v and util.semver_gt(old_v, new_v):
-        msg = "downgraded %s v%s → v%s" % (label, old_v, new_v)
+        msg = "downgraded %s v%s → v%s" % (label, shown_old, shown_new)
     else:
-        msg = "refreshed %s v%s (source changed)" % (label, new_v or old_v)
+        msg = "refreshed %s v%s (source changed)" % (label,
+                                                     shown_new or shown_old)
     return msg + (" — local edits discarded" if edited else "")
 
 
@@ -1996,7 +2004,7 @@ def _reinstall_project_skill(name: str, lk: dict, pbase: Path) -> bool:
                  wrap=True)
         return False
     out.ok("reinstalled %s v%s (this repo)"
-           % (name, entry.get("version", "0.0.0")))
+           % (name, out.plain(entry.get("version", "0.0.0"))))
     _warn_unwritable(res)
     return True
 
@@ -2100,7 +2108,7 @@ def cmd_reinstall(argv: list[str]) -> int:
             # Success first, then what it skipped: the same order as every
             # other branch, so a `--all` run reads the same line to line.
             out.ok("reinstalled %s %s v%s"
-                   % (kind, name, entry.get("version", "0.0.0")))
+                   % (kind, name, out.plain(entry.get("version", "0.0.0"))))
             _warn_unwritable(res)
             done += 1
             done_kinds.add(kind)
@@ -2178,7 +2186,8 @@ def cmd_reinstall(argv: list[str]) -> int:
                      wrap=True)
             failed += 1
             continue
-        out.ok("reinstalled %s v%s" % (name, entry.get("version", "0.0.0")))
+        out.ok("reinstalled %s v%s"
+               % (name, out.plain(entry.get("version", "0.0.0"))))
         _warn_unwritable(res)
         done += 1
         done_kinds.add("skill")
@@ -2433,12 +2442,13 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
             entry = matches[0]
             if sver and str(entry.get("version")) != sver:
                 out.warn("%s: Boostfile wants @%s, tap has %s — %s that"
-                         % (sname, sver, entry.get("version"),
+                         % (sname, sver, out.plain(entry.get("version")),
                             "would install" if dry_run else "installing"))
             entry_kind = entry.get("kind", "skill")
             if dry_run:
                 out.info("would install %s v%s (%s)%s%s"
-                         % (sname, entry.get("version"), entry["tap"],
+                         % (sname, out.plain(entry.get("version")),
+                            entry["tap"],
                             "" if entry_kind == "skill"
                             else " [%s]" % entry_kind,
                             " at project scope" if local else ""))
@@ -2456,7 +2466,8 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 out.warn("%s: %s" % (sname, err.message))
                 failed += 1
                 continue
-            out.ok("installed %s v%s (%s)%s" % (sname, entry.get("version"),
+            out.ok("installed %s v%s (%s)%s" % (sname,
+                                                out.plain(entry.get("version")),
                                                 entry["tap"],
                                                 " at project scope" if local
                                                 else ""))
@@ -2631,7 +2642,8 @@ def _import_root(root: Path, name: str | None, do_all: bool,
                 out.warn("%s: %s" % (e["name"], err.message))
                 refused += 1
                 continue
-            out.ok("imported %s v%s (score %d/100)" % (res.name, e["version"],
+            out.ok("imported %s v%s (score %d/100)" % (res.name,
+                                                       out.plain(e["version"]),
                                                        res.score))
             _warn_unwritable(res)
             _warn_injection(res)
@@ -2644,7 +2656,7 @@ def _import_root(root: Path, name: str | None, do_all: bool,
     # Whole descriptions: `out.table` fits the widest column to the pane and
     # clips it there with an ellipsis, so cutting first only wasted columns.
     # One line each, and no control bytes — this is a foreign repo's frontmatter.
-    out.table([(e["name"], "v" + e["version"],
+    out.table([(e["name"], "v" + out.plain(e["version"]),
                 " ".join(out.plain(e["description"] or "").split()))
                for e in entries],
               whole=(0,))  # the NAME the hint's `--name NAME` takes
@@ -2717,7 +2729,7 @@ def _set_project_pin(row: integrity.InstalledSkill, pinned: bool) -> int:
     ``_update_skill`` reads its ``pinned`` from for a project skill.
     """
     label = "%s (project)" % row.name
-    version = row.entry.get("version", "0.0.0")
+    version = out.plain(row.entry.get("version", "0.0.0"))
     if bool(row.entry.get("pinned")) == pinned:
         out.info("%s is already %s" % (label, "pinned at v%s" % version
                                        if pinned else "unpinned"))
@@ -2749,7 +2761,7 @@ def _set_pin(name: str, pinned: bool) -> int:
         out.warn("a %s named %s is also installed — this pins the %s only"
                  % (other, name, kind))
     label = name if kind == "skill" else "%s %s" % (kind, name)
-    version = entry.get("version", "0.0.0")
+    version = out.plain(entry.get("version", "0.0.0"))
     if bool(entry.get("pinned")) == pinned:
         out.info("%s is already %s" % (label, "pinned at v%s" % version
                                        if pinned else "unpinned"))

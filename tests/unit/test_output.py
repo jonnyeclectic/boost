@@ -1472,13 +1472,62 @@ class TestPlain:
         assert output.plain("a\x00b\x07c\x7fd\x9be") == "abcde"
 
     def test_ordinary_text_is_untouched(self):
-        # Including the whitespace the table layer folds itself, and non-ASCII,
-        # which must not be mistaken for a control byte.
-        assert output.plain("skills/naïve-café/SKILL.md — 3\tcopies\n") == (
-            "skills/naïve-café/SKILL.md — 3\tcopies\n")
+        # Non-ASCII must not be mistaken for a control byte.
+        assert output.plain("skills/naïve-café/SKILL.md — 3 copies") == (
+            "skills/naïve-café/SKILL.md — 3 copies")
+
+    def test_tab_and_newline_become_one_space_each(self):
+        # Not dropped: the word boundary survives. Not kept: frontmatter
+        # decodes a quoted "\n", and a newline in a one-line field starts a
+        # fresh line that can impersonate boost's own `✓ installed` output.
+        assert output.plain("ok\n✓ installed evil\tx\n") == (
+            "ok ✓ installed evil x ")
+
+    def test_carriage_return_is_dropped(self):
+        # \r returns the cursor to column 0, so the text after it overwrites
+        # the line boost just printed.
+        assert output.plain("ok\rFAKE") == "okFAKE"
+
+    def test_an_osc_title_and_csi_sequences_leave_inert_text(self):
+        raw = "Clean desc \x1b]0;PWNED\x07\x1b[2J\x1b[31mRED\x1b[0m end"
+        assert output.plain(raw) == "Clean desc ]0;PWNED[2J[31mRED[0m end"
+
+    def test_a_one_byte_c1_csi_goes(self):
+        assert output.plain("1.0.0\x9b2J") == "1.0.02J"
 
     def test_a_non_string_is_coerced(self):
         assert output.plain(42) == "42"
+
+
+class TestPlainFields:
+    """Display copies of whole records, for render paths reading many fields."""
+
+    def test_strings_are_sanitised_at_every_depth(self):
+        rec = {"version": "9.9\x1b[8m-hidden",
+               "tags": ["a\x1b[41m", "b"],
+               "meta": {"category": ("x\x07y",)}}
+        assert output.plain_fields(rec) == {
+            "version": "9.9[8m-hidden", "tags": ["a[41m", "b"],
+            "meta": {"category": ("xy",)}}
+
+    def test_keys_are_sanitised_too(self):
+        assert output.plain_fields({"a\x1bb": 1}) == {"ab": 1}
+
+    def test_non_strings_pass_through_unchanged(self):
+        rec = {"pinned": True, "n": 3, "none": None}
+        got = output.plain_fields(rec)
+        assert got == rec
+        assert got["pinned"] is True and got["none"] is None
+
+    def test_containers_keep_their_type(self):
+        assert type(output.plain_fields(("a",))) is tuple
+        assert type(output.plain_fields(["a"])) is list
+        assert output.plain_fields(None) is None
+
+    def test_the_input_is_not_mutated(self):
+        rec = {"tags": ["a\x1b"]}
+        output.plain_fields(rec)
+        assert rec == {"tags": ["a\x1b"]}
 
     def test_info_empty_is_blank_line(self, capsys):
         output.info()
@@ -2388,6 +2437,17 @@ class TestFormatSearchRow:
                     + "[skill]".ljust(len("[workflow]")) + "  "
                     + output.truncate(self.DESC, self._lay(60).desc_w))
         assert row == expected
+
+    def test_tap_text_is_sanitised_before_it_is_measured(self):
+        """Name, description and tap are a tap's text. A raw `\\x1b[31m` was
+        also counted as zero cells by `visible_len`, so the row was laid out
+        as if the escape were boost's own color."""
+        lay = output.search_layout(None, ["raw[1Aansi"], ["skill"], ["tap"])
+        row = output.format_search_row(
+            "raw\x1b[1Aansi", "Clean \x1b]0;PWNED\x07\x1b[2Jend", "skill",
+            "t\x07ap", 1.0, curated=False, installed=False, lay=lay)
+        assert row == ("▰▰▰▰   raw[1Aansi  [skill]  tap  "
+                       "Clean ]0;PWNED[2Jend")
 
     def test_curated_tail_is_verbatim_with_two_space_lead(self):
         row = output.format_search_row(
