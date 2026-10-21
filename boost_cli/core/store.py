@@ -1069,7 +1069,64 @@ def linked_agents(name: str) -> list[str]:
     may not even look at is not one it can count.
     """
     return [agent for agent, adir in agents.linking_agents().items()
-            if is_boost_link(adir / name)]
+            if is_boost_link(adir / name)
+            and misdirected(name, adir / name) is None]
+
+
+def misdirected(name: str, link: Path) -> Path | None:
+    """Where a live boost link for ``name`` leads, when it is not ``name``'s copy.
+
+    None for a link that leads to ``name``'s own store dir, and for anything
+    that is not a live boost link (:func:`is_boost_link`): a dangling one is
+    stale, and a user's own link is the user's. Containment in the store was
+    the only question every check asked, so ``~/.claude/skills/brainstorming
+    -> ~/.agents/skills/tdd-workflow`` read as healthy to doctor, heal and
+    sync while Claude loaded tdd-workflow under brainstorming's name.
+
+    The answer is the store dir it leads into when there is one, so a message
+    can name the skill the agent really gets.
+    """
+    if not is_boost_link(link) or _dangles(link):
+        return None
+    target = skill_store_dir(name)
+    if _already_links(link, target):
+        return None
+    # By inode too: on a case-insensitive volume a link to ``~/.Agents/...``
+    # is the right copy under a spelling ``resolve()`` keeps.
+    with contextlib.suppress(OSError):
+        if os.path.samefile(link, target):
+            return None
+    # The entry's name, unless it is this skill's own: a link into a subdir
+    # of its copy is wrong too, and "linked to <its own dir>, not its own
+    # store dir" would contradict itself, so that one names the real path.
+    entry = _store_entry(link)
+    return (paths.store_dir() / entry if entry and entry != name
+            else Path(os.path.realpath(link)))
+
+
+def misdirected_links(name: str) -> list[tuple[str, Path]]:
+    """``(agent, where)`` for each linking agent whose ``name`` link is
+    :func:`misdirected`."""
+    return [(agent, wrong) for agent, adir in agents.linking_agents().items()
+            if (wrong := misdirected(name, adir / name)) is not None]
+
+
+def out_of_scope_agents(name: str, entry: dict,
+                        linking: dict[str, Path]) -> list[str]:
+    """The agents in ``linking`` holding a boost link for ``name`` outside
+    the ``--agent`` narrowing ``entry`` declares, read from disk.
+
+    Empty without a narrowing: :func:`scoped_agents` fails open, so every
+    agent is in scope. boost's links only, so the user's own link is not
+    offered to ``--prune``. ``sync_plan`` and ``doctor`` both ask this: doctor
+    used to read the lock's ``agents`` instead, and missed a link made by hand
+    that sync went on to report.
+    """
+    if not entry.get("only_agents"):
+        return []
+    in_scope = scoped_agents(entry, linking)
+    return [agent for agent, adir in linking.items()
+            if agent not in in_scope and is_boost_link(adir / name)]
 
 
 def refusing_dir(path: Path) -> Path:
@@ -5681,7 +5738,8 @@ def sync_plan() -> dict[str, list]:
     Returns {missing_store, missing_links, blocked_links, stale_links, ...}
       missing_store:  lock entries whose store dir is gone
       missing_links:  (skill, agent) pairs that should be linked but aren't,
-                      and that sync *can* create
+                      and that sync *can* create — including a live boost
+                      link into another skill's store dir (:func:`misdirected`)
       blocked_links:  (skill, agent, path) where something that is not a boost
                       symlink occupies the link path — sync will not clobber it
       stale_links:    paths in agent dirs that are broken/unmanaged symlinks
@@ -5802,7 +5860,12 @@ def sync_plan() -> dict[str, list]:
             # ``os.path``: under a dotdir with no search bit ``Path.is_symlink``
             # raises on Python 3.12 and 3.13, and `boost sync`, `heal` and
             # `doctor` all exited 70 on it.
+            # A live link into another skill's store dir is boost's, and
+            # wrong: the agent loads that skill under this one's name. It is
+            # a missing link, which `link_agents` repairs by replacing it.
             if os.path.islink(link) and os.path.exists(link):  # noqa: FURB141
+                if not missing_store and misdirected(name, link) is not None:
+                    plan["missing_links"].append((name, agent))
                 continue
             if os.path.lexists(link) and not is_boost_link(link):
                 plan["blocked_links"].append((name, agent, str(link)))
@@ -5817,12 +5880,24 @@ def sync_plan() -> dict[str, list]:
         # fails open and every agent is in scope by definition.
         # boost's links only: the user's own link where adoption left it is
         # the user's, and `--prune` removed it as out of scope.
-        if entry.get("only_agents"):
-            for agent, adir in linking.items():
-                if agent not in in_scope and is_boost_link(adir / name):
-                    plan["out_of_scope_links"].append((name, agent))
+        plan["out_of_scope_links"].extend(
+            (name, agent) for agent in out_of_scope_agents(name, entry, linking))
     plan.update(sort_unrecorded(lock, integ))
     plan["plugin_duplicates"] = plugin_duplicates(lock, coverage)
+    plan["stale_links"] = stale_links(lock, vouches)
+    return _plan_materializations(plan)
+
+
+def stale_links(lock: dict, vouches: bool) -> list[str]:
+    """Paths in agent dirs that ``boost sync`` and ``heal`` remove as stale.
+
+    A boost link (:func:`points_into_store`) that dangles, or — while the lock
+    can vouch — one named for no installed skill. One function so ``doctor``
+    reports exactly what heal will remove: it counted the dangling ones only,
+    called a live ``~/.claude/skills/ghost -> ~/.agents/skills/x`` healthy,
+    and the next heal deleted it.
+    """
+    found: list[str] = []
     # A live link into a store dir the lock does not record leads to that
     # dir, whoever's it is, so it is not stale: the sweep used to exempt only
     # the skills sync was about to record, and removed the links into a copy
@@ -5842,19 +5917,24 @@ def sync_plan() -> dict[str, list]:
     for adir in agents.sweep_dirs():
         if not os.path.isdir(adir):  # noqa: FURB146
             continue
-        for link in adir.iterdir():
-            # Ownership first, for broken links too: the old test short-circuited
-            # on `not link.exists()`, so any dangling symlink a user happened to
-            # keep in ~/.claude/skills was swept up by `boost sync`.
-            #
-            # "Not in the lock" means "not installed" only while the lock can
-            # vouch. Without that guard a missing lock made every live link
-            # into an intact store look stale, and sync removed them all.
+        # Ownership first, for broken links too: the old test short-circuited
+        # on `not link.exists()`, so any dangling symlink a user happened to
+        # keep in ~/.claude/skills was swept up by `boost sync`.
+        #
+        # "Not in the lock" means "not installed" only while the lock can
+        # vouch. Without that guard a missing lock made every live link
+        # into an intact store look stale, and sync removed them all.
+        found.extend(
+            str(link) for link in adir.iterdir()
             if (link.is_symlink() and points_into_store(link)
-                    and (_dangles(link)
-                         or (vouches and link.name not in lock
-                             and _store_entry(link) not in unrecorded))):
-                plan["stale_links"].append(str(link))
+                and (_dangles(link)
+                     or (vouches and link.name not in lock
+                         and _store_entry(link) not in unrecorded))))
+    return found
+
+
+def _plan_materializations(plan: dict[str, list]) -> dict[str, list]:
+    """Fill ``plan["missing_materializations"]`` and return ``plan``."""
     # Rules/workflows don't live in the store — they materialize into agent dirs.
     # A materialization whose file (or CLAUDE.md block) is gone can be repaired
     # by re-materializing from the tap, same as a missing skill store dir.
