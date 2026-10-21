@@ -148,9 +148,13 @@ class TestProjectSkillReachesNewAgent:
         assert "re-materialized tdd-workflow from fixture" in res.out
         assert (repo / ".cursor" / "skills" / "tdd-workflow" / "SKILL.md").is_file()
         entry = projectlock.get_skill(repo, "tdd-workflow")
-        assert entry["agents"][-1] == "cursor"
-        assert {"agent": "cursor", "path": ".cursor/skills/tdd-workflow"} in \
-            entry["materializations"]
+        before = [m["agent"] for m in entry["materializations"]
+                  if m["agent"] != "cursor"]
+        assert entry["agents"] == [*before, "cursor"]
+        cursor_rows = [m for m in entry["materializations"]
+                       if m["agent"] == "cursor"]
+        assert cursor_rows == [
+            {"agent": "cursor", "path": ".cursor/skills/tdd-workflow"}]
         assert store.project_sync_plan()["missing"] == []
         assert "never written" not in boost("doctor", expect=None).out
 
@@ -177,6 +181,23 @@ class TestProjectSkillReachesNewAgent:
         theirs = repo / ".cursor" / "skills" / "tdd-workflow"
         theirs.mkdir(parents=True)
         assert store.project_sync_plan()["missing"] == []
+
+    def test_apply_rechecks_a_dir_that_appeared_after_the_plan(
+            self, boost, tapped, repo):
+        # `_copy_skill` swaps its copy in over whatever is there, so the
+        # apply-time check is the only thing between a stale plan and a
+        # hand-written skill that landed after it was made.
+        self._install(boost)
+        plan = store.project_sync_plan()
+        assert plan["missing"] == [("tdd-workflow", "cursor")]
+        theirs = repo / ".cursor" / "skills" / "tdd-workflow"
+        theirs.mkdir(parents=True)
+        (theirs / "notes.md").write_text("mine\n", encoding="utf-8")
+        store.project_sync_apply(plan)
+        assert sorted(p.name for p in theirs.iterdir()) == ["notes.md"]
+        entry = projectlock.get_skill(repo, "tdd-workflow")
+        assert "cursor" not in entry["agents"]
+        assert all(m["agent"] != "cursor" for m in entry["materializations"])
 
     def test_quarantined_and_rowless_entries_are_skipped(self, repo):
         assert store.unmaterialized_project_agents(
