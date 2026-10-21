@@ -214,6 +214,18 @@ def test_portable_project_path_outside_the_repo_is_tilded(sandbox):
     assert [m["path"] for m in mats] == ["~/code/oss-x/r.mdc", "relative/r.md"]
 
 
+def test_portable_contracts_a_scopeless_rows_base(sandbox):
+    # `update` can write a row back with `base` and no `scope`: it is not this
+    # repo's project row, so it stays — but its $HOME path must not.
+    home = paths.home()
+    this = home / "code" / "oss"
+    this.mkdir(parents=True)
+    lock = {"version": 3, "skills": {}, "workflows": {}, "rules": {
+        "r": {"kind": "rule", "base": str(home / "code" / "other")}}}
+    out = lockfile.portable(lock, base=this)
+    assert out["rules"]["r"]["base"] == "~/code/other"
+
+
 def test_portable_drops_a_project_row_with_no_usable_base(sandbox):
     this = paths.home() / "code" / "oss"
     this.mkdir(parents=True)

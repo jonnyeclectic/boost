@@ -622,8 +622,11 @@ def portable(lock: dict, base=None) -> dict:
             if local and base is not None and not scopes.owns(entry, base):
                 del entries[name]
                 continue
-            if local and isinstance(entry.get("base"), str):
-                entry["base"] = "." if want is not None else paths.tilde(entry["base"])
+            # Any string ``base``, not only a project row's: ``update`` can
+            # write one back without ``scope``, and it names $HOME all the same.
+            if isinstance(entry, dict) and isinstance(entry.get("base"), str):
+                entry["base"] = ("." if local and want is not None
+                                 else paths.tilde(entry["base"]))
             # A workflow's ``foreign`` rows name a path under $HOME too.
             for m in (*(entry.get("materializations") or ()),
                       *(entry.get("foreign") or ())):
