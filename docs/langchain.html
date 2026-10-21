@@ -347,9 +347,10 @@ chain.<span class="fn">invoke</span>(<span class="s">"how should this repo handl
           <thead><tr><th>key</th><th>what it holds</th></tr></thead>
           <tbody>
             <tr><td><code>name</code> / <code>kind</code></td><td>the item's name and which of the three kinds it is</td></tr>
-            <tr><td><code>tap</code> / <code>path</code> / <code>version</code></td><td>provenance: registry, in-repo path (tap-relative, so it reads the same on every machine), frontmatter version</td></tr>
-            <tr><td><code>source</code></td><td>the same file, <b>resolved</b> against the tap's clone — the path boost itself opens to read the item, and what LangChain's convention means by <code>source</code>. Quote <code>path</code> in a citation; open <code>source</code></td></tr>
-            <tr><td><code>engine</code></td><td>which engine actually answered — <code>"BM25 full-content"</code>, <code>"dense vectors"</code>, or <code>"hybrid RRF (BM25 + dense)"</code></td></tr>
+            <tr><td><code>tap</code> / <code>path</code> / <code>version</code></td><td>provenance: registry, in-repo path (tap-relative, so it reads the same on every machine), and the version the file declares (<code>""</code> when it declares none)</td></tr>
+            <tr><td><code>source</code></td><td>the same file, <b>resolved</b> against the tap's clone — the path boost itself opens to read the item, and what LangChain's convention means by <code>source</code>. Quote <code>path</code> in a citation; open <code>source</code>. <code>""</code> when the file is not on disk</td></tr>
+            <tr><td><code>has_body</code></td><td>whether <code>page_content</code> carries the item's body: False for <code>full_content=False</code>, and for a hit whose file is missing (it ranks on name and description)</td></tr>
+            <tr><td><code>engine</code></td><td>which engine actually answered — <code>"BM25 full-content"</code>, <code>"dense vectors"</code>, <code>"hybrid RRF (BM25 + dense)"</code>, or <code>"heuristic relevance"</code> when no index could be built</td></tr>
           </tbody>
         </table>
 

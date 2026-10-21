@@ -90,7 +90,7 @@ def skill_context_node(
             # full_content=False. Presented unlabelled, a one-line summary
             # reads to the model as the whole instruction.
             if meta.get("has_body") is False:
-                prov = "%s; body unavailable, description only" % prov
+                prov = "%s; description only, body not included" % prov
             blocks.append("### %s (%s — %s)\n\n%s" % (
                 meta.get("name") or "unnamed",
                 meta.get("kind") or "skill",

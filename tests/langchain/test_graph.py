@@ -175,6 +175,6 @@ def test_a_description_only_hit_is_labelled(indexed, tmp_path):
     content = _content(skill_context_node(k=1)({
         "messages": [HumanMessage(query)]}))
     assert ("### brainstorming (skill — fixture-tap:skills/brainstorming/"
-            "SKILL.md @ 1.4.0; body unavailable, description only)\n\n"
+            "SKILL.md @ 1.4.0; description only, body not included)\n\n"
             "brainstorming\nStructured ideation & divergent-thinking "
             "facilitation") in content
