@@ -606,6 +606,19 @@ def _signing_refused(name: str, problems: list[str],
     return BoostError(msg, hint=_signing_hint())
 
 
+def require_signed_clone(name: str, clone: Path) -> None:
+    """Raise :func:`_signing_refused` when the working tree at ``clone``
+    fails ``require_signed_taps``; a no-op when the policy is off.
+
+    For a caller that downloads a tap afresh outside this module —
+    `boost compact --reclone` — so a fresh download is gated the way
+    `boost tap` gates the first one.
+    """
+    problems = policy.check_tap_signing(clone)
+    if problems:
+        raise _signing_refused(name, problems)
+
+
 def _signing_guard(tap: Tap):
     """A ``verify`` callback for :func:`gitutil.pull`/``checkout_commit``.
 

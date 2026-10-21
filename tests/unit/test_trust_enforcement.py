@@ -137,6 +137,15 @@ class TestUpdateRefusesAnUnsignedCommit:
         assert gitutil.head_commit(tap.path) == head
         assert registry.get("stap").pin == ""
 
+    def test_require_signed_clone_checks_the_working_tree(self, signed):
+        _src, tap, _head = signed
+        registry.require_signed_clone("stap", tap.path)     # signed: passes
+        (tap.path / provenance.SIGNATURE_FILE).unlink()
+        with pytest.raises(BoostError) as exc:
+            registry.require_signed_clone("stap", tap.path)
+        assert exc.value.message == _UNSIGNED
+        assert "boost trust add" in exc.value.hint
+
     def test_unreadable_policy_hint_names_the_repair(self, signed):
         src, _tap, _head = signed
         _unsign(src)

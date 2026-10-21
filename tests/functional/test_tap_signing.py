@@ -380,3 +380,23 @@ def test_retarget_refuses_an_unsigned_commit_and_keeps_the_pin_off(
     assert exc.value.message.startswith("tap stap failed provenance policy")
     assert gitutil.head_commit(clone) == before
     assert registry.get("stap").pin == ""
+
+
+def test_compact_reclone_refuses_an_unsigned_upstream(boost, signed_tapped):
+    # `compact --reclone` deletes the clone and downloads it afresh; that
+    # download is gated like `boost tap`, and the unverified tree is removed
+    # rather than left scannable and installable.
+    src, clone, _before = signed_tapped
+    _drop_signature_upstream(src)
+    r = boost("compact", "--reclone", "stap", expect=1)
+    assert "tap stap failed provenance policy: tap is unsigned" in r.out + r.err
+    assert not clone.exists()
+    boost("install", "evil", expect=1)
+
+
+def test_compact_reclone_keeps_a_signed_upstream(boost, signed_tapped):
+    from boost_cli.core import gitutil
+    src, clone, _before = signed_tapped
+    boost("compact", "--reclone", "stap")
+    assert gitutil.head_commit(clone) == gitutil.head_commit(src)
+    assert (clone / ".boost" / "tap.manifest.minisig").is_file()
