@@ -44,6 +44,7 @@ class TestStringFieldError:
         ({"name": {"en": "x"}}, "`name` must be a string, not a map"),
         ({"name": 3}, "`name` must be a string, not a number"),
         ({"name": 2.5}, "`name` must be a string, not a number"),
+        ({"name": b"x"}, "`name` must be a string, not bytes"),
         ({"name": "ok"}, None),
     ])
     def test_reports_each_shape(self, meta, want):
