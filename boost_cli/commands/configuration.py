@@ -656,20 +656,17 @@ def cmd_policy(argv) -> int:
         if args.value is None:
             raise BoostError("policy set requires a VALUE",
                             hint="e.g. `boost policy set min_quality_score 60`")
-        pol = policy.load()
-        pol[args.key] = _parse_policy_value(args.key, args.value)
-        policy.save(pol)
+        value = _parse_policy_value(args.key, args.value)
+        policy.set_key(args.key, value)
         journal.log("policy", args.key, op="set")
         if args.json:
-            print(json.dumps({"key": args.key, "value": pol[args.key]}))
+            print(json.dumps({"key": args.key, "value": value}))
             return 0
-        out.ok("set %s = %s" % (args.key, json.dumps(pol[args.key])))
+        out.ok("set %s = %s" % (args.key, json.dumps(value)))
         return 0
 
     if args.action == "unset":
-        pol = policy.load()
-        pol[args.key] = policy.DEFAULTS[args.key]
-        policy.save(pol)
+        policy.set_key(args.key, policy.DEFAULTS[args.key])
         journal.log("policy", args.key, op="unset")
         if args.json:
             print(json.dumps({"key": args.key, "value": policy.DEFAULTS[args.key]}))

@@ -189,6 +189,9 @@ def test_a_non_dict_skills_key_degrades_to_empty(tmp_path):
 
 def test_there_is_no_history_directory(tmp_path):
     # git is this file's history — a .boost/lock-history would be litter.
+    # A real repo, so the write's lock sidecar goes in .git/ (see
+    # projectlock.guard_path); only a git-less dir gets one in .boost/.
+    (tmp_path / ".git").mkdir()
     projectlock.set_skill(tmp_path, "a", _entry())
     projectlock.set_skill(tmp_path, "a", _entry("2.0.0"))
     assert sorted(p.name for p in (tmp_path / ".boost").iterdir()) == \
