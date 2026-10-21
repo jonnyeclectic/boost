@@ -766,6 +766,15 @@ def cmd_doctor(argv):
                             ", ".join(p.name for p in leftovers),
                             "it" if len(leftovers) == 1 else "them"),
             wrap=True)
+    # What a boost killed mid-write or mid-install left: a temp copy of the
+    # lock file, or a staging dir, in the dir agents read skills from.
+    temps = store.stale_temps()
+    if temps:
+        bad("store", "%d stale temp file%s or staging dir%s a killed boost "
+            "left in %s (%s) — `boost clean` removes %s"
+            % (len(temps), _s(len(temps)), _s(len(temps)), _tilde(store_dir),
+               ", ".join(p.name for p, _kind in temps),
+               "it" if len(temps) == 1 else "them"), wrap=True)
     if configured and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
                                               "" if cache_block

@@ -216,6 +216,10 @@ def cmd_clean(argv) -> int:
     leftovers = store.leftover_copies()
     items.extend((pth, "leftover skill copy", util.dir_size(pth))
                  for pth in leftovers)
+    temps = store.stale_temps()
+    items.extend((pth, kind, util.dir_size(pth) if pth.is_dir()
+                  else pth.stat().st_size) for pth, kind in temps)
+    leftovers += [pth for pth, _kind in temps if pth.is_dir()]
     if paths.store_dir().is_dir():
         for pth in sorted(paths.store_dir().rglob("*")):
             if any(pth.is_relative_to(d) for d in leftovers):
