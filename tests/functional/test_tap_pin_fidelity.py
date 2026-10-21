@@ -16,7 +16,7 @@ import json
 import shutil
 import subprocess
 
-from boost_cli.core import gitutil, registry
+from boost_cli.core import gitutil, registry, util
 
 
 def _git(cwd, *args):
@@ -52,7 +52,7 @@ class TestPinnedTapReclone:
         boost("tap", src, "--at", pin)
         boost("install", "four:cowboy-coding")
         tap = registry.get("four")
-        shutil.rmtree(tap.path)
+        util.rmtree(tap.path)   # git objects are read-only on Windows
 
         boost("drift")
 
