@@ -28,10 +28,10 @@ nothing. Silence degrades; a stack trace corrupts the line the user is typing.
 """
 from __future__ import annotations
 
-import ast
-import inspect
+import argparse
+import contextlib
+import importlib
 import os
-import re
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -88,7 +88,10 @@ def refresh_names() -> int:
     # back to the in-place write. If neither lands, the completion list is a
     # convenience, and failing to keep one never fails the command asking.
     try:
-        paths.ensure_dirs()
+        # Only the one directory this file lives in: paths.ensure_dirs()
+        # here made a single TAB in a HOME boost never ran create the whole
+        # ~/.boost tree and ~/.agents/skills, the store Gemini CLI discovers.
+        path.parent.mkdir(parents=True, exist_ok=True)
         util.atomic_write_text(path, text)
     except OSError:
         try:
@@ -113,6 +116,11 @@ def _cached_names() -> list[str]:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
+        if not path.parent.is_dir():
+            # No cache dir means nothing was ever tapped here, so there is
+            # nothing to offer — and a keystroke must not be what creates
+            # boost's state on a machine where boost never ran.
+            return []
         # Missing, or unreadable: the root-owned 0600 copy a `sudo boost` run
         # leaves emptied TAB silently while doctor said healthy. Rebuilding
         # replaces it whenever the dir is writable; when it is not, TAB offers
@@ -145,143 +153,171 @@ def _tap_names() -> list[str]:
     return sorted(t.name for t in registry.list_taps())
 
 
-# Long flags a command documents, read from its own parser rather than a shared
-# list — a global flag list would offer flags the command rejects.
-def _command_func(command: str, commands: Registry):
+class _Captured(BaseException):
+    """Carries a command's parser out of its ``cmd_*`` function.
+
+    A ``BaseException`` rather than an ``Exception`` so a command body's own
+    ``except Exception`` cannot swallow it on the way out.
+    """
+
+    def __init__(self, parser: argparse.ArgumentParser) -> None:
+        super().__init__()
+        self.parser = parser
+
+
+_PARSE_METHODS = ("parse_args", "parse_known_args", "parse_intermixed_args",
+                  "parse_known_intermixed_args")
+
+
+def _capture(_self: argparse.ArgumentParser, *_a: object, **_k: object):
+    raise _Captured(_self)
+
+
+def _parser_for(command: str,
+                commands: Registry) -> argparse.ArgumentParser | None:
+    """The parser ``command`` really parses with, or None if unavailable.
+
+    Every command builds its parser inside its ``cmd_*`` function, so there is
+    no object to ask without running it. This runs it with argparse's parse
+    methods swapped for a raise that hands back the parser — the very object
+    that decides what the command accepts, shared helpers like
+    :func:`cliparse.add_scope_flags` included. It replaced a regex over the
+    function's source, which never saw a helper's flags (`install --s<TAB>`
+    offered nothing, although `--scope` is valid) and picked up `--x` strings
+    from git argv lists the parser rejects (`onboard --fill`).
+
+    Nothing runs past parser construction: every ``cmd_*`` parses first, and
+    ``tests/unit/test_complete.py`` pins, per command, that building the
+    parser this way writes nothing into ``$HOME``.
+    """
     row = next((r for r in commands if r[0] == command), None)
     if row is None:
         return None
-    module = __import__("boost_cli.commands." + row[2], fromlist=["x"])
-    return getattr(module, "cmd_" + command.replace("-", "_"), None)
-
-
-def _command_source(command: str, commands: Registry) -> str:
-    """The source of ``command``'s ``cmd_*`` function, or "" if unavailable.
-
-    The parser is built inside the command function, so there is no object to
-    interrogate without running it. The source is the cheap, dependency-free
-    text both `_flags_for` and the positional-choices scraper below read.
-    """
-    func = _command_func(command, commands)
+    module = importlib.import_module("boost_cli.commands." + row[2])
+    func = getattr(module, "cmd_" + command.replace("-", "_"), None)
     if func is None:
-        return ""
-    try:
-        return inspect.getsource(func)
-    except (OSError, TypeError):
-        return ""
-
-
-def _flags_for(command: str, commands: Registry) -> list[str]:
-    src = _command_source(command, commands)
-    return sorted(set(re.findall(r'"(--[a-z][a-z0-9-]*)"', src)))
-
-
-def _add_argument_calls(src: str) -> list[str]:
-    """The raw argument text inside each ``.add_argument(...)`` call in
-    ``src``, in source order.
-
-    Paren-balanced rather than a regex match, because a ``choices=(...)``
-    tuple (or a quoted default) can itself contain the ``)`` a naive regex
-    would stop at.
-    """
-    calls = []
-    for m in re.finditer(r"\.add_argument\(", src):
-        depth, i = 1, m.end()
-        while i < len(src) and depth:
-            if src[i] == "(":
-                depth += 1
-            elif src[i] == ")":
-                depth -= 1
-            i += 1
-        calls.append(src[m.end():i - 1])
-    return calls
-
-
-def _split_top_level(text: str) -> list[str]:
-    """Split ``text`` on commas at bracket depth 0, respecting quotes — so an
-    argparse call's arguments separate cleanly even when one of them (a
-    ``choices=(...)`` tuple) contains commas of its own."""
-    parts: list[str] = []
-    current: list[str] = []
-    depth = 0
-    quote: str | None = None
-    i = 0
-    while i < len(text):
-        ch = text[i]
-        if quote:
-            current.append(ch)
-            if ch == "\\" and i + 1 < len(text):
-                i += 1
-                current.append(text[i])
-            elif ch == quote:
-                quote = None
-        elif ch in "'\"":
-            quote = ch
-            current.append(ch)
-        elif ch in "([{":
-            depth += 1
-            current.append(ch)
-        elif ch in ")]}":
-            depth -= 1
-            current.append(ch)
-        elif ch == "," and depth == 0:
-            parts.append("".join(current))
-            current = []
-        else:
-            current.append(ch)
-        i += 1
-    if current:
-        parts.append("".join(current))
-    return [p.strip() for p in parts if p.strip()]
-
-
-def _is_positional_literal(token: str) -> bool:
-    """True for a quoted argument-name literal like ``"action"`` — false for
-    a flag spelling (``"--json"``, ``"-s"``) or anything not a bare string
-    literal (an f-string, a variable)."""
-    if len(token) < 3 or token[0] not in "'\"" or token[-1] != token[0]:
-        return False
-    return not token[1:-1].startswith("-")
-
-
-def _literal_choices(part: str) -> list[str] | None:
-    """The values of a ``choices=...`` keyword, when they are a literal tuple
-    or list of strings — ``None`` for anything dynamic (a name, a call, a
-    starred expression like ``(*hookhost.hosts(), "auto")``) so a candidate
-    is only ever an exact string this scraper can see, never a guess."""
-    m = re.match(r"choices\s*=\s*(.*)$", part, re.DOTALL)
-    if not m:
         return None
+    saved = {n: getattr(argparse.ArgumentParser, n) for n in _PARSE_METHODS}
     try:
-        value = ast.literal_eval(m.group(1))
-    except (ValueError, SyntaxError, TypeError):
+        for name in _PARSE_METHODS:
+            setattr(argparse.ArgumentParser, name, _capture)
+        with open(os.devnull, "w", encoding="utf-8") as sink, \
+                contextlib.redirect_stdout(sink), \
+                contextlib.redirect_stderr(sink):
+            func([])
+    except _Captured as c:
+        return c.parser
+    except (Exception, SystemExit):
         return None
-    if isinstance(value, (tuple, list)) and value and all(isinstance(v, str) for v in value):
-        return list(value)
+    finally:
+        for name, method in saved.items():
+            setattr(argparse.ArgumentParser, name, method)
     return None
 
 
-def _positional_choices(src: str) -> list[list[str] | None]:
-    """Static ``choices=(...)`` values for each positional argument a
-    command's parser declares, in declaration order.
+def _long_flags(parser: argparse.ArgumentParser) -> list[str]:
+    # Long spellings only: `-k` and friends mean different things across
+    # commands, and the long form is what docs and muscle memory use. A
+    # `help=SUPPRESS` option is accepted but deliberately undocumented (a
+    # compatibility alias), so TAB keeps it as quiet as --help does.
+    return sorted({o for a in parser._actions for o in a.option_strings
+                   if o.startswith("--") and a.help != argparse.SUPPRESS})
 
-    A position with no ``choices=`` kwarg, or one whose value is not a
-    literal tuple/list of strings, is ``None`` — degrading to nothing is the
-    point: offering a plausible-looking wrong value teaches the wrong thing.
+
+def _flags_for(command: str, commands: Registry) -> list[str]:
+    """The long options ``command``'s top-level parser accepts."""
+    parser = _parser_for(command, commands)
+    return _long_flags(parser) if parser is not None else []
+
+
+def _subparsers(parser: argparse.ArgumentParser
+                ) -> argparse._SubParsersAction | None:
+    return next((a for a in parser._actions
+                 if isinstance(a, argparse._SubParsersAction)), None)
+
+
+def _values_taken(action: argparse.Action) -> int:
+    """How many following words an option consumes: 0 for a switch, -1 for
+    "every word up to the next flag" (``nargs='*'``/``'+'``)."""
+    nargs = action.nargs
+    if isinstance(nargs, int):                  # 0 for store_true and kin
+        return nargs
+    if nargs in ("*", "+", argparse.REMAINDER):
+        return -1
+    return 1                                    # None or "?"
+
+
+@dataclass
+class _Walk:
+    """Where a command line stands once its typed words are read."""
+    parser: argparse.ArgumentParser
+    positionals: list[str]                      # in the active (sub)parser
+    pending: argparse.Action | None             # option awaiting a value
+
+
+def _walk(parser: argparse.ArgumentParser, words: Sequence[str]) -> _Walk:
+    """Read ``words`` (the command's own, before the one being typed) the way
+    argparse would, as far as completion needs: options and their values are
+    not positionals, and a subcommand word switches to its own parser.
+
+    Counting flags as positionals put every later position off by one per
+    flag: `completions --eval <TAB>` offered nothing and `install --scope
+    <TAB>` offered skill names where only user/project is valid.
     """
-    result: list[list[str] | None] = []
-    for call in _add_argument_calls(src):
-        parts = _split_top_level(call)
-        if not parts or not _is_positional_literal(parts[0]):
+    state = _Walk(parser, [], None)
+    owed = 0                  # values still owed to state.pending; -1 = open
+    only_positionals = False
+    for word in words:
+        if not only_positionals and word.startswith("-") and word != "-":
+            if word == "--":
+                only_positionals, state.pending, owed = True, None, 0
+                continue
+            flag, eq, _value = word.partition("=")
+            action = state.parser._option_string_actions.get(flag)
+            owed = _values_taken(action) if action is not None and not eq else 0
+            state.pending = action if owed else None
             continue
-        choices = None
-        for part in parts[1:]:
-            found = _literal_choices(part)
-            if found is not None:
-                choices = found
-                break
-        result.append(choices)
-    return result
+        if owed:
+            if owed > 0:
+                owed -= 1
+            if not owed:
+                state.pending = None
+            continue
+        sub = _subparsers(state.parser)
+        if sub is not None and word in sub.choices and \
+                len(state.positionals) == _positional_index(state.parser, sub):
+            state = _Walk(sub.choices[word], [], None)
+            continue
+        state.positionals.append(word)
+    return state
+
+
+def _positional_actions(parser: argparse.ArgumentParser) -> list[argparse.Action]:
+    return [a for a in parser._actions if not a.option_strings]
+
+
+def _positional_index(parser: argparse.ArgumentParser,
+                      target: argparse.Action) -> int:
+    return _positional_actions(parser).index(target)
+
+
+def _positional_at(parser: argparse.ArgumentParser,
+                   position: int) -> argparse.Action | None:
+    """The positional action that takes the word at ``position``, letting a
+    variadic one (``nargs='*'``/``'+'``) absorb every word after it."""
+    actions = _positional_actions(parser)
+    for i, action in enumerate(actions):
+        if i == position:
+            return action
+        if _values_taken(action) == -1:
+            return action
+    return None
+
+
+def _choices(action: argparse.Action | None) -> list[str] | None:
+    if action is None or not action.choices:
+        return None
+    return [str(c) for c in action.choices]
 
 
 def _dotted_keys(node: object, prefix: str = "") -> list[str]:
@@ -307,9 +343,9 @@ def _policy_keys() -> list[str]:
 
 
 # A positional whose candidates come from `policy.DEFAULTS` / `config.DEFAULTS`
-# rather than from a literal `choices=(...)` in the parser — `policy set KEY`
-# and `config {get,set,unset} KEY` validate the key against that dict in the
-# command body, not through argparse, so there is no tuple here to scrape.
+# rather than from `choices=` in the parser — `policy set KEY` and
+# `config {get,set,unset} KEY` validate the key against that dict in the
+# command body, not through argparse, so the parser has no choices to read.
 # Keyed by command; the value names which already-typed action word (position
 # 0) unlocks it, and the source itself. Only position 1 (the word right after
 # the action) is covered — a value in position 2 is never a static choice.
@@ -318,9 +354,15 @@ _ACTION_KEY_SOURCE: dict[str, tuple[frozenset[str], Callable[[], list[str]]]] = 
     "config": (frozenset({"get", "set", "unset"}), _config_keys),
 }
 
+# What `cli._route` answers before any command is named, besides the global
+# flags `cli.main` peels (passed in as `global_flags`): `boost --help` and
+# `boost --version`. Literal here because core cannot import cli.
+_TOP_LEVEL_OPTIONS = frozenset({"--help", "-h", "--version", "-V"})
+
 
 def _source_for(command: str, position: int, prior: tuple[str, ...],
-                 commands: Registry) -> Callable[[], list[str]] | None:
+                 parser: argparse.ArgumentParser | None
+                 ) -> Callable[[], list[str]] | None:
     """What TAB offers for the positional at ``position`` (0-indexed among a
     command's own arguments) after ``prior`` — the positional words already
     typed for this command, oldest first.
@@ -343,11 +385,11 @@ def _source_for(command: str, position: int, prior: tuple[str, ...],
             return source
         return None
 
-    choices = _positional_choices(_command_source(command, commands))
-    if position < len(choices):
-        values = choices[position]
-        if values:
-            return lambda: values
+    if parser is None:
+        return None
+    values = _choices(_positional_at(parser, position))
+    if values:
+        return lambda: values
     return None
 
 
@@ -377,6 +419,10 @@ def candidates(words: list[str], commands: Registry,
         words = [words[0], *words[lead:]]
         current = words[-1]
         if len(words) == 2:                     # completing the command itself
+            if current.startswith("-"):
+                # `boost --deb<TAB>`: what cli.main accepts before a command.
+                return sorted(f for f in global_flags | _TOP_LEVEL_OPTIONS
+                              if f.startswith(current))
             return [c for c in _command_names(commands) if c.startswith(current)]
         command = words[1]
         if command in ("help", "-h", "--help"):
@@ -386,10 +432,24 @@ def candidates(words: list[str], commands: Registry,
             if len(words) != 3:
                 return []
             return [c for c in _command_names(commands) if c.startswith(current)]
+        parser = _parser_for(command, commands)
+        if parser is None:
+            walk = None
+            prior = tuple(w for w in words[2:-1] if not w.startswith("-"))
+        else:
+            walk = _walk(parser, words[2:-1])
+            prior = tuple(walk.positionals)
         if current.startswith("-"):
-            return [f for f in _flags_for(command, commands) if f.startswith(current)]
-        prior = tuple(words[2:-1])
-        source = _source_for(command, len(prior), prior, commands)
+            if walk is None:
+                return []
+            return [f for f in _long_flags(walk.parser) if f.startswith(current)]
+        if walk is not None and walk.pending is not None:
+            # The word is an option's value: its choices, or nothing — never
+            # the command's positional source (skill names after `--scope`).
+            return [c for c in _choices(walk.pending) or []
+                    if c.startswith(current)]
+        source = _source_for(command, len(prior), prior,
+                             walk.parser if walk is not None else None)
         if source is None:
             return []
         return [c for c in source() if c.startswith(current)]
@@ -402,8 +462,13 @@ def candidates(words: list[str], commands: Registry,
 _BASH = """# boost bash completion — delegates to `boost __complete`, so the
 # candidate rules live in Python and cannot drift from the CLI.
 _boost_complete() {
+  # The slice is copied into an array *before* IFS changes: on bash 3.2
+  # (macOS's /bin/bash) a quoted "${COMP_WORDS[@]:0:N}" under IFS=$'\\n'
+  # expands to ONE word, so `boost __complete` got 'boost install br' as a
+  # single argument and every TAB completed nothing.
+  local -a words=( "${COMP_WORDS[@]:0:$((COMP_CWORD+1))}" )
   local IFS=$'\\n'
-  COMPREPLY=( $(boost __complete "${COMP_WORDS[@]:0:$((COMP_CWORD+1))}" 2>/dev/null) )
+  COMPREPLY=( $(boost __complete "${words[@]}" 2>/dev/null) )
 }
 complete -F _boost_complete boost
 """
@@ -428,7 +493,12 @@ _ZSH = """#compdef boost
 _boost "$@"
 """ % _ZSH_FUNC
 
+# `compdef` exists only once compinit has run, and stock macOS zsh never runs
+# it: without this guard every shell start printed `command not found:
+# compdef` and TAB stayed dead. Loading the completion system is what
+# `compdef` needs, so load it rather than skip registering.
 _ZSH_EVAL = """%s
+(( $+functions[compdef] )) || { autoload -Uz compinit && compinit -i; }
 compdef _boost boost
 """ % _ZSH_FUNC
 
