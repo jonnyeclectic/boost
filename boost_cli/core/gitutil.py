@@ -128,7 +128,13 @@ def _exec(argv: list[str], *, cwd: str | None, timeout: float,
     kwargs: dict = {}
     if sys.platform != "win32":
         kwargs["start_new_session"] = True
+    # Git emits UTF-8 paths and messages on every platform; without an
+    # explicit encoding, text mode decodes with the locale code page (cp1252
+    # on en-US Windows), where a Cyrillic or CJK file name raises
+    # UnicodeDecodeError out of `ls-files -z`.
     with subprocess.Popen(argv, cwd=cwd, env=env, text=text,
+                          encoding="utf-8" if text else None,
+                          errors="replace" if text else None,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           **kwargs) as proc:
         try:

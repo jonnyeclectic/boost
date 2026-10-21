@@ -686,7 +686,7 @@ class TestOnboard:
         real_run = subprocess.run
 
         def fake_run(cmd, **kw):  # intercept only gh; git must stay real
-            if cmd and cmd[0] == "gh":
+            if cmd and cmd[0] == "/usr/bin/gh":
                 calls.append(list(cmd))
                 return _proc(cmd, 0, out="https://github.com/o/r/pull/7\n")
             return real_run(cmd, **kw)
@@ -695,7 +695,9 @@ class TestOnboard:
                             fake_run)
         r = boost("onboard", "--repo", repo, "--pr")
         assert "opened PR https://github.com/o/r/pull/7" in r.out
-        assert calls == [["gh", "pr", "create", "--fill"]]
+        # launched by the path `which` found (a .cmd shim on Windows cannot
+        # be started by its bare name), with the git calls left alone
+        assert calls == [["/usr/bin/gh", "pr", "create", "--fill"]]
         head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
                               cwd=str(repo), capture_output=True, text=True)
         assert head.stdout.strip() == "boost/onboard-skill-tracker"
@@ -711,7 +713,7 @@ class TestOnboard:
         monkeypatch.setattr(
             "boost_cli.commands.configuration.subprocess.run",
             lambda cmd, **kw: _proc(cmd, 1, err="boom")
-            if cmd and cmd[0] == "gh" else real_run(cmd, **kw))
+            if cmd and cmd[0] == "/usr/bin/gh" else real_run(cmd, **kw))
         r = boost("onboard", "--repo", repo, "--pr", expect=1)
         assert "gh pr create failed: boom" in r.err
         assert "boost/onboard-skill-tracker" in r.err  # hint names the branch
@@ -725,7 +727,7 @@ class TestOnboard:
         monkeypatch.setattr(
             "boost_cli.commands.configuration.subprocess.run",
             lambda cmd, **kw: _proc(cmd, 1, err="boom")
-            if cmd and cmd[0] == "gh" else real_run(cmd, **kw))
+            if cmd and cmd[0] == "/usr/bin/gh" else real_run(cmd, **kw))
         boost("onboard", "--repo", repo, "--pr", expect=1)
         main = subprocess.run(["git", "rev-parse", "--abbrev-ref", "@{-1}"],
                               cwd=str(repo), capture_output=True, text=True)
@@ -899,7 +901,7 @@ class TestOnboardOverwrite:
         monkeypatch.setattr(
             "boost_cli.commands.configuration.subprocess.run",
             lambda cmd, **kw: _proc(cmd, 0, out="https://github.com/o/r/pull/9\n")
-            if cmd and cmd[0] == "gh" else real_run(cmd, **kw))
+            if cmd and cmd[0] == "/usr/bin/gh" else real_run(cmd, **kw))
         monkeypatch.delenv("BOOST_ASSUME_YES")     # decline the lock overwrite
         boost("onboard", "--repo", repo, "--pr")
 
@@ -2028,7 +2030,11 @@ class TestMcp:
         calls = []
 
         def fake_run(cmd, **kw):
-            calls.append(list(cmd))
+            # Launched by the path `which` resolved, never the bare name:
+            # Windows cannot start an npm `.cmd` shim by its bare name.
+            cli = pathlib.PurePosixPath(cmd[0]).name
+            assert cmd[0] == "/usr/local/bin/" + cli
+            calls.append([cli, *cmd[1:]])
             return _proc(cmd, 0, out="Added stdio MCP server boost\n")
 
         monkeypatch.setattr("boost_cli.commands.configuration.subprocess.run",
@@ -2174,8 +2180,9 @@ class TestMcp:
                 self.returncode, self.stderr, self.stdout = rc, err, ""
 
         def fake_run(cmd, **kw):
-            seen.append(cmd[0])
-            return _P(*results[cmd[0]])
+            cli = pathlib.PurePosixPath(cmd[0]).name
+            seen.append(cli)
+            return _P(*results[cli])
 
         monkeypatch.setattr("boost_cli.commands.configuration.subprocess.run",
                             fake_run)
@@ -2568,12 +2575,13 @@ class TestMcp:
         calls = []
 
         def fake_run(cmd, **kw):
+            cli = pathlib.PurePosixPath(cmd[0]).name
             target = pathlib.Path(mcphost.user_config_path(
-                cmd[0], os.environ, os.environ["HOME"]))
+                cli, os.environ, os.environ["HOME"]))
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text('{"mcpServers": {"boost": {}}}',
                               encoding="utf-8")
-            calls.append(list(cmd))
+            calls.append([cli, *cmd[1:]])
             return _proc(cmd, 0, out="Added stdio MCP server boost\n")
 
         monkeypatch.setattr("boost_cli.commands.configuration.subprocess.run",

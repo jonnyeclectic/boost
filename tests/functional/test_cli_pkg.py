@@ -3949,7 +3949,7 @@ class TestMcpAwareSkills:
         # BOOST_ASSUME_YES (set by the sandbox fixture) accepts the prompt.
         r = boost("import", d)
         assert "registered MCP server github with Claude Code" in r.out
-        assert calls == [["claude", "mcp", "add", "github", "--scope", "user",
+        assert calls == [["/usr/bin/claude", "mcp", "add", "github", "--scope", "user",
                           "--", "npx", "-y", "srv"]]
         # gemini's CLI is not installed, so it is not offered a registration
         assert "with Gemini CLI" not in r.out
@@ -3972,11 +3972,11 @@ class TestMcpAwareSkills:
         # that was wrong: before the shared builder it inherited Claude's
         # shape, and the unit layer is the only other place it is pinned.
         assert calls == [
-            ["claude", "mcp", "add", "github", "--scope", "user",
+            ["/usr/bin/claude", "mcp", "add", "github", "--scope", "user",
              "--", "npx", "-y", "srv"],
-            ["gemini", "mcp", "add", "--scope", "user",
+            ["/usr/bin/gemini", "mcp", "add", "--scope", "user",
              "github", "npx", "--", "-y", "srv"],
-            ["agy", "mcp", "add", "github", "--", "npx", "-y", "srv"]]
+            ["/usr/bin/agy", "mcp", "add", "github", "--", "npx", "-y", "srv"]]
         assert "registered MCP server github with Claude Code" in r.out
         assert "registered MCP server github with Gemini CLI" in r.out
 
@@ -3991,7 +3991,7 @@ class TestMcpAwareSkills:
             sidecar={"mcpServers": {"github": {"command": "npx",
                                                "args": ["-y", "srv"]}}})
         r = boost("import", d)
-        assert calls == [["gemini", "mcp", "add", "--scope", "user",
+        assert calls == [["/usr/bin/gemini", "mcp", "add", "--scope", "user",
                           "github", "npx", "--", "-y", "srv"]]
         assert "registered MCP server github with Gemini CLI" in r.out
         assert "Claude Code" not in r.out

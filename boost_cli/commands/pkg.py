@@ -242,7 +242,9 @@ def _register_mcp_server(name: str, spec: dict, host: str = "claude",
         out.info("  run it yourself: " + mcphost.shell_line(argv))
         return
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(util.resolve_exe(argv), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         out.warn("could not register %s: %s" % (name, e))
         out.info("  run it yourself: " + mcphost.shell_line(argv))

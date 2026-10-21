@@ -29,7 +29,8 @@ def _describe(root) -> str | None:
         proc = subprocess.run(
             ["git", "-C", str(root), "describe", "--tags", "--always",
              "--dirty", "--match", "v[0-9]*"],
-            capture_output=True, text=True, timeout=3)
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=3)
         described = proc.stdout.strip()
         if proc.returncode == 0 and described:
             return described.lstrip("v")

@@ -527,6 +527,21 @@ def score_int(s: str) -> int:
     return v
 
 
+def resolve_exe(argv: list[str]) -> list[str]:
+    """``argv`` with ``argv[0]`` swapped for the path ``shutil.which`` finds.
+
+    On Windows npm installs ``npx``, ``gemini`` and an npm-installed
+    ``claude`` only as ``.cmd`` shims. ``shutil.which`` honours PATHEXT and
+    finds them, but ``CreateProcess`` appends only ``.exe`` to a bare name, so
+    launching the bare name raises ``FileNotFoundError`` right after the
+    ``which`` check said the tool exists. Launching the resolved path runs the
+    shim. Unresolvable names pass through unchanged, so the caller's own
+    ``OSError`` handling still reports them. Returns a new list.
+    """
+    found = shutil.which(argv[0]) if argv else None
+    return [found, *argv[1:]] if found else argv.copy()
+
+
 def now_iso() -> str:
     """Return UTC now as ``'2026-07-16T01:00:00Z'`` (what ``rel_time`` parses)."""
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

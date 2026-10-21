@@ -77,7 +77,8 @@ def test_git_describe_strips_leading_v(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "run", lambda argv, **k: (
         seen.append(k) or _Proc(0, "v2.3.4-1-gabcdef\n")))
     assert boost_cli._describe(tmp_path) == "2.3.4-1-gabcdef"
-    assert seen == [{"capture_output": True, "text": True, "timeout": 3}]
+    assert seen == [{"capture_output": True, "text": True,
+                     "encoding": "utf-8", "errors": "replace", "timeout": 3}]
 
 
 def test_git_failure_returns_sentinel(monkeypatch, tmp_path):

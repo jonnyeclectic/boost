@@ -335,6 +335,7 @@ def run_upgrade(cmd: list[str], timeout: float = 300.0):
     """Run the upgrade, raising BoostError with the manager's own last words."""
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
                               timeout=timeout)
     except (OSError, subprocess.SubprocessError) as err:
         raise BoostError("could not run %s" % " ".join(cmd),
@@ -363,7 +364,9 @@ def observed_version(timeout: float = 30.0) -> str | None:
     try:
         proc = subprocess.run([sys.executable, "-P", "-m", "boost_cli",
                                "--version"],
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:

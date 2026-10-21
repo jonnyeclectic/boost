@@ -1073,9 +1073,11 @@ def cmd_onboard(argv) -> int:
         gitutil.run(["-C", str(repo), "commit", "-m",
                      "chore: add boost skill tracking (boost onboard)"])
         try:
-            proc = subprocess.run(["gh", "pr", "create", "--fill"],
+            proc = subprocess.run(util.resolve_exe(["gh", "pr", "create",
+                                                    "--fill"]),
                                   cwd=str(repo), capture_output=True,
-                                  text=True, timeout=120)
+                                  text=True, encoding="utf-8",
+                                  errors="replace", timeout=120)
         except (subprocess.TimeoutExpired, OSError) as e:
             raise BoostError("gh pr create failed: %s" % e,
                             hint="branch %s is committed — push it and open the PR manually" % branch) from e
@@ -1264,7 +1266,7 @@ def _crontab_lines():
     """Current crontab lines, [] when empty, None when crontab is unusable."""
     try:
         proc = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
-                              timeout=30)
+                              encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
@@ -1416,9 +1418,11 @@ def cmd_schedule(argv) -> int:
             out.ok("wrote %s" % _tilde(plist))
             try:
                 subprocess.run(["launchctl", "unload", str(plist)],
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=30)
                 proc = subprocess.run(["launchctl", "load", "-w", str(plist)],
-                                      capture_output=True, text=True, timeout=30)
+                                      capture_output=True, text=True,
+                                      encoding="utf-8", errors="replace", timeout=30)
                 if proc.returncode != 0:
                     tail = (proc.stderr or "").strip().splitlines()
                     out.warn("launchctl load failed: %s"
@@ -1439,7 +1443,8 @@ def cmd_schedule(argv) -> int:
                 try:
                     proc = subprocess.run(["crontab", "-"],
                                           input="\n".join([*kept, entry]) + "\n",
-                                          capture_output=True, text=True, timeout=30)
+                                          capture_output=True, text=True,
+                                          encoding="utf-8", errors="replace", timeout=30)
                 except (OSError, subprocess.TimeoutExpired):
                     proc = None
                 if proc is None or proc.returncode != 0:
@@ -1457,7 +1462,8 @@ def cmd_schedule(argv) -> int:
         if plist.exists():
             try:
                 subprocess.run(["launchctl", "unload", "-w", str(plist)],
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=30)
             except (OSError, subprocess.TimeoutExpired):
                 out.warn("launchctl unavailable — removed the plist only")
             plist.unlink()
@@ -1470,7 +1476,8 @@ def cmd_schedule(argv) -> int:
                 try:
                     proc = subprocess.run(["crontab", "-"],
                                           input="\n".join(kept) + ("\n" if kept else ""),
-                                          capture_output=True, text=True, timeout=30)
+                                          capture_output=True, text=True,
+                                          encoding="utf-8", errors="replace", timeout=30)
                     removed = proc.returncode == 0
                 except (OSError, subprocess.TimeoutExpired):
                     pass
@@ -2499,7 +2506,9 @@ def _run_mcp_host(host: str, action: str, cmd, *,
     if cfg:
         return "refused", cfg
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(util.resolve_exe(cmd), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return "failed", str(e)
     for ln in (proc.stdout or "").strip().splitlines():

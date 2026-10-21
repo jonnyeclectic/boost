@@ -36,11 +36,14 @@ def clis(monkeypatch):
 
     def fake_run(cmd, **kw):
         import os
+        # launched by its resolved path; the host is that path's basename
+        cli = pathlib.PurePosixPath(cmd[0]).name
+        assert cmd[0] == "/usr/local/bin/" + cli
         target = pathlib.Path(mcphost.user_config_path(
-            cmd[0], os.environ, os.environ["HOME"]))
+            cli, os.environ, os.environ["HOME"]))
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("{}", encoding="utf-8")
-        calls.append(list(cmd))
+        calls.append([cli, *cmd[1:]])
 
         class _P:
             returncode, stdout, stderr = 0, "", ""

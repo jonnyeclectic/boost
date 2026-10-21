@@ -114,6 +114,7 @@ class TestAsk:
                           run=run, env=DISPLAY) is True
         assert seen["argv"][0] == "zenity"
         assert seen["kw"] == {"capture_output": True, "text": True,
+                              "encoding": "utf-8", "errors": "replace",
                               "timeout": dialog.TIMEOUT + 30}
 
     def test_a_decline_is_false(self):

@@ -906,10 +906,12 @@ def cmd_index(argv):
             time.sleep(1)  # stay under the code-search rate limit
         try:
             proc = subprocess.run(
-                ["gh", "api", "-H", "Accept: application/vnd.github+json",
-                 "search/code?q=%s&per_page=100&page=%d"
-                 % (urllib.parse.quote(q, safe=":"), page)],
-                capture_output=True, text=True, timeout=120)
+                util.resolve_exe(
+                    ["gh", "api", "-H", "Accept: application/vnd.github+json",
+                     "search/code?q=%s&per_page=100&page=%d"
+                     % (urllib.parse.quote(q, safe=":"), page)]),
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=120)
         except (subprocess.TimeoutExpired, OSError) as e:
             spin.progress_clear()
             raise BoostError("gh api timed out on page %d" % page, hint=str(e)) from e
@@ -990,10 +992,12 @@ def github_skill_search(query="", limit=20):
     per_page = max(1, min(int(limit), 100))
     try:
         proc = subprocess.run(
-            ["gh", "api", "-H", "Accept: application/vnd.github+json",
-             "search/code?q=%s&per_page=%d&page=1"
-             % (urllib.parse.quote(q, safe=":"), per_page)],
-            capture_output=True, text=True, timeout=120)
+            util.resolve_exe(
+                ["gh", "api", "-H", "Accept: application/vnd.github+json",
+                 "search/code?q=%s&per_page=%d&page=1"
+                 % (urllib.parse.quote(q, safe=":"), per_page)]),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=120)
     except (subprocess.TimeoutExpired, OSError):
         return None
     if proc.returncode != 0:
