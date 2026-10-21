@@ -451,11 +451,18 @@ def cmd_verify(argv):
             if status == integrity.STATUS_UNLOCKED:
                 missing_fields.append("materialization sha256")
         commit_pin = integrity.commit_status(name, entry)
-        row = {"name": name, "kind": kind, "status": status,
-               "scope": "user", "missing_fields": missing_fields,
-               "commit_pin": commit_pin,
-               "passed": integrity.verification_passed(
-                   status, missing_fields, commit_pin)}
+        # An intact copy no agent is shown: the agent's link leads to another
+        # skill's store dir, so it loads that skill under this name.
+        wrong = store.misdirected_links(name) if kind == "skill" else []
+        row: dict[str, Any] = {
+            "name": name, "kind": kind, "status": status,
+            "scope": "user", "missing_fields": missing_fields,
+            "commit_pin": commit_pin,
+            "passed": integrity.verification_passed(
+                status, missing_fields, commit_pin) and not wrong}
+        if wrong:
+            row["misdirected_links"] = [
+                {"agent": a, "target": paths.tilde(t)} for a, t in wrong]
         # A rule or workflow installed `--local` is recorded here, in the
         # user lock, and graded from wherever verify runs -- its rows are
         # absolute paths. Saying "user" for it is the one claim about the
@@ -513,6 +520,9 @@ def cmd_verify(argv):
         if "materialization sha256" in r["missing_fields"]:
             bits.append("`boost sync` records it, or `boost reinstall %s` "
                         "if a file was edited" % r["name"])
+        bits.extend("linked for %s to %s — `boost heal` relinks it"
+                    % (m["agent"], m["target"])
+                    for m in r.get("misdirected_links", []))
         if r["commit_pin"] == integrity.STATUS_OK:
             bits.append("commit-pinned")
         elif r["commit_pin"] == integrity.STATUS_MODIFIED:
