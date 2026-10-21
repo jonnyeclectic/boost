@@ -2907,15 +2907,18 @@ def cmd_pin(argv: list[str]) -> int:
                     help="installed skill, rule or workflow")
     ap.add_argument("--commit", action="store_true",
                     help="also freeze the exact source commit (integrity pin)")
+    _add_pin_scope(ap, "pin")
     args = ap.parse_args(argv)
-    args.name = store.installed_name(args.name)
-    if (args.commit and lockfile.find_any(args.name) is None
-            and _project_row(args.name) is not None):
+    args.name = store.installed_name(args.name, args.scope)
+    row = _pin_target(args.name, args.scope, "pin")
+    if args.commit and row is not None:
         # `verify` never grades a project row's commit pin, so writing one
         # would promise a check that does not exist.
         raise BoostError("%s is installed at project scope — --commit applies "
                          "to user-scope installs" % args.name,
                          hint="`boost pin %s` holds it at its version" % args.name)
+    if row is not None:
+        return _set_project_pin(row, True)
     rc = _set_pin(args.name, True)
     # Read after the pin: `set_commit_pin` takes the commit from this row.
     found = lockfile.find_any(args.name)
@@ -2933,6 +2936,7 @@ def cmd_unpin(argv: list[str]) -> int:
                                  description="Allow a pinned skill, rule or workflow to update again")
     ap.add_argument("name", metavar="NAME",
                     help="pinned skill, rule or workflow")
+    _add_pin_scope(ap, "unpin")
     args = ap.parse_args(argv)
     # Releasing the version pin releases the commit pin with it — a commit pin
     # only makes sense while the skill is otherwise frozen. The commit pin is
@@ -2940,7 +2944,10 @@ def cmd_unpin(argv: list[str]) -> int:
     # trailer prints after — it qualifies `_set_pin`'s own "unpinned" line, so
     # printing it first would leave the trailer describing a line that has
     # not appeared yet (mirrors `cmd_pin`'s ok-line-then-trailer order).
-    args.name = store.installed_name(args.name)
+    args.name = store.installed_name(args.name, args.scope)
+    row = _pin_target(args.name, args.scope, "unpin")
+    if row is not None:
+        return _set_project_pin(row, False)
     found = lockfile.find_any(args.name)
     cleared_commit_pin = bool(
         found and integrity.clear_commit_pin(args.name, found[1], kind=found[0]))
@@ -2948,6 +2955,50 @@ def cmd_unpin(argv: list[str]) -> int:
     if cleared_commit_pin:
         out.dim("  released the commit pin too", wrap=True)
     return rc
+
+
+def _add_pin_scope(ap, verb: str) -> None:
+    """``pin``/``unpin``'s ``--scope``/``--local``/``--global``, as install's."""
+    cliparse.add_scope_flags(
+        ap, scope_help="%s the copy in your user config or in this repo "
+                       "(needed when both hold the name)" % verb,
+        local_help="the copy installed in this repo (= --scope project)",
+        global_help="the copy in your user config (= --scope user)")
+
+
+def _pin_target(name: str, scope: str | None,
+                verb: str) -> integrity.InstalledSkill | None:
+    """The project row ``pin``/``unpin`` acts on, or None for the user lock.
+
+    Unscoped, a name only this repo holds is the project row, as before. A
+    name both scopes hold is refused: acting on the user row alone pinned it
+    while `boost update` moved the repo's copy, with nothing said about it.
+    """
+    base, project = integrity.project_skills()
+    prow = project.get(name)
+    if scope == scopes.SCOPE_PROJECT:
+        if base is None:
+            raise BoostError("not in a project — --local %ss what this repo "
+                             "has installed" % verb,
+                             hint="cd into the repo, or drop --local")
+        if prow is None:
+            raise BoostError("%s is not installed in this repo" % name,
+                             hint="see what is with `boost list`")
+        return integrity.InstalledSkill(
+            name, prow, scopes.SCOPE_PROJECT, base, None)
+    if scope == scopes.SCOPE_USER:
+        if lockfile.find_any(name) is None:
+            raise BoostError("%s is not installed in your user config" % name,
+                             hint="see what is with `boost list`")
+        return None
+    if prow is None:
+        return None
+    if lockfile.find_any(name) is not None:
+        raise BoostError("%s is installed in your user config and in this "
+                         "repo — say which to %s" % (name, verb),
+                         hint="`boost %s %s --global` or `boost %s %s --local`"
+                              % (verb, name, verb, name))
+    return integrity.InstalledSkill(name, prow, scopes.SCOPE_PROJECT, base, None)
 
 
 def _project_row(name: str) -> integrity.InstalledSkill | None:
@@ -2983,11 +3034,9 @@ def _set_pin(name: str, pinned: bool) -> int:
     # update loops (skills at cmd_update, rules/workflows at
     # _update_materialized) each honour it. A skill installed `--local` lives
     # in the project lock instead, which the same update loop also reads.
+    # A project row never reaches here: `_pin_target` routes it first.
     found = lockfile.find_any(name)
     if not found:
-        row = _project_row(name)
-        if row is not None:
-            return _set_project_pin(row, pinned)
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     kind, entry = found

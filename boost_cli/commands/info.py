@@ -357,7 +357,7 @@ def cmd_list(argv):
             workflows = {}
     # A row whose store dir is gone is a skill no agent can load: doctor says
     # so, and list printed it beside the healthy ones with an empty FLAGS.
-    gone = {n for n in skills if not store.skill_store_dir(n).is_dir()}
+    gone = {n for n, e in skills.items() if store.missing_from_store(n, e)}
     if args.json:
         # Marked on a copy, and only when true, so a healthy row is still
         # the lock's row byte for byte.
@@ -389,7 +389,7 @@ def cmd_list(argv):
         return 0
     if skills:
         out.heading("installed skills")
-        rows: list[tuple] = []   # 5 columns here, 4 for project skills below
+        rows: list[tuple] = []   # 5 columns, as for project skills below
         for name in sorted(skills):
             e = skills[name]
             # Aurora-tinted flags — now that table() aligns by visible width,
@@ -423,10 +423,14 @@ def cmd_list(argv):
                         "it" if len(gone) == 1 else "them"), wrap=True)
     if project:
         out.heading("project skills (%s)" % paths.tilde(pbase))
+        # FLAGS as in the user table: a project pin (`boost pin --local`)
+        # holds `update` off this row, and a pinned row that looked like any
+        # other was visible only in --json.
         rows = [(name, e.get("version", "?"), e.get("tap", "?"),
-                 "·".join(a.split("-")[0] for a in e.get("agents") or []))
+                 "·".join(a.split("-")[0] for a in e.get("agents") or []),
+                 out.aurora("pinned", "yellow") if e.get("pinned") else "")
                 for name, e in sorted(project.items())]
-        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS"),
+        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"),
                   whole=("NAME",))
         print("  " + out.role("committed with the repo — %s/%s"
                               % (projectlock.LOCK_DIRNAME,
@@ -637,7 +641,8 @@ def cmd_info(argv):
             "tap": (lock or plock or cat or {}).get("tap"),
             "category": (cat or {}).get("category") or None,
             "store": str(sdir) if lock and sdir.is_dir() else None,
-            "missing_from_store": bool(lock) and not sdir.is_dir(),
+            "missing_from_store": bool(lock) and store.missing_from_store(
+                name, lock),
             "quality": score, "size": size, "files": files,
         }, indent=2))
         return 0
@@ -666,7 +671,7 @@ def cmd_info(argv):
         if entry and cat else None)
     if lock:
         badges.append(out.badge("installed", "green"))
-        if not sdir.is_dir():
+        if store.missing_from_store(name, lock):
             badges.append(out.badge("missing from store", "pink"))
         if lock.get("pinned"):
             badges.append(out.badge("pinned", "yellow"))
@@ -680,6 +685,8 @@ def cmd_info(argv):
             badges.append(out.badge("also in this project", "green"))
     elif plock:
         badges.append(out.badge("installed in this project", "green"))
+        if plock.get("pinned"):
+            badges.append(out.badge("pinned", "yellow"))
     else:
         # A not-installed rule/workflow says so in its own badge — previously
         # this printed the same bare "not installed" a not-yet-tapped skill
@@ -730,6 +737,13 @@ def cmd_info(argv):
         out.kv("category", category)
     if lock and sdir.is_dir():
         out.kv("store", _tilde(sdir))
+    elif lock and store.is_held(lock):
+        # Away on purpose: `boost heal` leaves a held copy alone, so naming
+        # it here sent the reader to a command that answered "nothing to heal".
+        # Plain text, so kv can wrap it: the remedy names the skill and runs
+        # past a narrow pane, and wrapping colored text splits its codes.
+        out.kv("store", "held aside — %s" % store.held_reason(name, lock)[1],
+               wrap=True)
     elif lock:
         # Kept short: kv does not wrap, and the path is in `boost doctor`.
         out.kv("store", out.role("missing", "danger")
@@ -766,7 +780,9 @@ def cmd_info(argv):
     # are user-scope only: there is no canonical store in a repo, and a project
     # entry has no such keys (single writer, `store._install_project_skill`).
     # Omitting them is the honest answer; "pinned no" would assert a field that
-    # cannot exist. If `boost pin --local` is ever added, revisit this guard.
+    # cannot exist — except `pinned`, which `boost pin --local` writes there.
+    if plock and not lock:
+        out.kv("pinned", "yes" if plock.get("pinned") else "no")
     if lock:
         out.kv("pinned", "yes" if lock.get("pinned") else "no")
         out.kv("quarantined", "yes" if lock.get("quarantined") else "no")
