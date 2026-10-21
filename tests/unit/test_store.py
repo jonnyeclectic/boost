@@ -680,6 +680,45 @@ class TestUninstallKind:
         assert info["kind"] == "skill"
         assert store.installed_kinds("brainstorming") == ["rule"]
 
+    def _repo_skill_beside_a_user_rule(self, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        store.install(entry, scope="project", base=str(repo))
+        self._rule()
+        monkeypatch.chdir(repo)
+        assert lockfile.get_skill("brainstorming") is None
+        assert projectlock.get_skill(repo, "brainstorming")
+        return repo
+
+    def test_kind_skill_reaches_a_repo_skill_beside_a_user_rule(
+            self, tap, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = self._repo_skill_beside_a_user_rule(entry, tmp_path, monkeypatch)
+        info = store.uninstall("brainstorming", kind="skill")
+        assert projectlock.get_skill(repo, "brainstorming") is None
+        assert info["name"] == "brainstorming"
+        assert store.installed_kinds("brainstorming") == ["rule"]
+
+    def test_a_repo_skill_beside_a_user_rule_is_ambiguous(
+            self, tap, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = self._repo_skill_beside_a_user_rule(entry, tmp_path, monkeypatch)
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("brainstorming")
+        assert ei.value.message == (
+            "brainstorming is installed as a skill and a rule")
+        assert projectlock.get_skill(repo, "brainstorming")
+        assert store.installed_kinds("brainstorming") == ["rule"]
+
+    def test_global_ignores_the_repo_skill(
+            self, tap, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = self._repo_skill_beside_a_user_rule(entry, tmp_path, monkeypatch)
+        info = store.uninstall("brainstorming", project_fallback=False)
+        assert info["kind"] == "rule"
+        assert projectlock.get_skill(repo, "brainstorming")
+
     def test_a_kind_not_installed_names_what_is(self, brainstorming):
         with pytest.raises(BoostError) as ei:
             store.uninstall("brainstorming", kind="workflow")

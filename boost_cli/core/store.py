@@ -5487,6 +5487,13 @@ def uninstall(name: str, *, project_fallback: bool = True,
     """
     name = installed_name(name)
     held = installed_kinds(name)
+    if (project_fallback and "skill" not in held
+            and (pb := scopes.resolve_base(scopes.SCOPE_PROJECT)) is not None
+            and projectlock.get_skill(pb, name)):
+        # A repo skill is what a user-lock miss falls back to below, so it is
+        # one of the kinds the name means: leaving it out refused `--kind
+        # skill` for it whenever a user rule shared the name.
+        held = ["skill", *held]
     if kind is None and len(held) > 1:
         raise BoostError(
             "%s is installed as %s" % (name, kinds_phrase(held)),
