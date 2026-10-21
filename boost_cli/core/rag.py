@@ -2003,7 +2003,7 @@ def retrieve_or_fallback(query: str, k: int, kind: str | None = None,
             return hits, engine
     scored = [(e, s) for e, s in catalog.search(query)
               if kind is None or e.get("kind", "skill") == kind]
-    return ([{"entry": e, "score": float(s)} for e, s in scored[:k]],
+    return ([Hit(entry=e, score=float(s)) for e, s in scored[:k]],
             HEURISTIC_ENGINE)
 
 
