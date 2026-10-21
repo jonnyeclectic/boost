@@ -639,6 +639,31 @@ def check_value(dotted: str, value: Any, raw: Any = None) -> Any:
     return value
 
 
+def _check_section(dotted: str, value: dict) -> dict:
+    """``value`` with every leaf read and checked as if set by its dotted key.
+
+    `config set ai '{"enabled": "off"}'` used to store the string ``"off"``,
+    which :func:`ai.enabled` reads as truthy, so AI stayed on behind a check
+    mark; `logging {"level": "verbose"}` and `serve {"port": 99999}` were
+    stored too, while their dotted forms are refused. Each leaf goes through
+    :func:`typedvalue.adapt` at its own spec and then :func:`check_value`, so
+    a section and its dotted keys accept exactly the same values, stored in
+    the same canonical form. Nested dicts are walked whatever their spec:
+    ``agents.<new>.dir`` is described by no default but still checked.
+    Raises :class:`typedvalue.ValueTypeError` keyed by the offending leaf.
+    """
+    checked: dict = {}
+    for key, leaf in value.items():
+        sub = "%s.%s" % (dotted, key)
+        spec = spec_for(sub)
+        if isinstance(leaf, dict) and spec in (typedvalue.DICT, typedvalue.ANY):
+            checked[key] = _check_section(sub, leaf)
+            continue
+        checked[key] = check_value(sub, typedvalue.adapt(sub, leaf, spec),
+                                   leaf)
+    return checked
+
+
 def set_value(dotted: str, raw: str) -> None:
     """Set a dotted key, reading the value at the type :data:`DEFAULTS` declares.
 
@@ -646,7 +671,8 @@ def set_value(dotted: str, raw: str) -> None:
     that type. Keys with no default keep the old lenient behaviour: JSON when
     it parses, the string otherwise. A :data:`MANAGED_KEYS` path is a
     :class:`BoostError`, before anything is written. A key with
-    :func:`_choices` or :data:`RANGES` is checked against them too.
+    :func:`_choices` or :data:`RANGES` is checked against them too, and so
+    is every leaf of a JSON object (:func:`_check_section`).
 
     Writes the one key into the on-disk overrides (see :func:`mutate`). A
     parent that holds a plain value is a :class:`TypeError` whether that
@@ -656,6 +682,8 @@ def set_value(dotted: str, raw: str) -> None:
     _refuse_managed(dotted, "set")
     value = check_value(dotted,
                         typedvalue.coerce(dotted, raw, spec_for(dotted)), raw)
+    if isinstance(value, dict):
+        value = _check_section(dotted, value)
     parts = dotted.split(".")
     missing = object()
     for i in range(1, len(parts)):

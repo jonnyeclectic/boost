@@ -309,6 +309,78 @@ class TestChoicesAndRanges:
         assert "`boost config set serve.port <0-65535>`" in _flat(r.err)
 
 
+class TestSectionSet:
+    """`config set <section> <json>` checks every leaf like its dotted key."""
+
+    def _disk(self):
+        return json.loads(paths.config_path().read_text(encoding="utf-8"))
+
+    def test_bool_word_is_stored_as_a_bool(self, sandbox):
+        config.set_value("ai", '{"enabled": "off", "model": "m"}')
+        assert self._disk() == {"ai": {"enabled": False, "model": "m"}}
+        assert config.get("ai.enabled") is False
+        assert ai.enabled() is False
+
+    def test_choice_is_stored_in_canonical_case(self, sandbox):
+        config.set_value("logging", '{"level": "debug", "format": "JSON", '
+                                    '"file": "no"}')
+        assert self._disk() == {"logging": {"level": "DEBUG",
+                                            "format": "json", "file": False}}
+
+    @pytest.mark.parametrize("key,raw,leaf,bad,expected", [
+        ("logging", '{"level": "verbose", "file": "no"}', "logging.level",
+         "verbose", "one of OFF, DEBUG, INFO, WARNING, ERROR, CRITICAL"),
+        ("logging", '{"file": "maybe"}', "logging.file", "maybe",
+         tv.describe(tv.BOOL)),
+        ("serve", '{"port": 99999}', "serve.port", 99999,
+         "a whole number from 0 to 65535"),
+        ("serve", '{"port": true}', "serve.port", True, tv.describe(tv.INT)),
+        ("ai", '{"enabled": {"x": 1}}', "ai.enabled", {"x": 1},
+         tv.describe(tv.BOOL)),
+        ("ai", '{"model": 5}', "ai.model", 5, tv.describe(tv.STR)),
+        ("agents", '{"claude-code": 5}', "agents.claude-code", 5,
+         tv.describe(tv.DICT)),
+    ])
+    def test_a_bad_leaf_refuses_the_whole_value(self, sandbox, key, raw, leaf,
+                                                bad, expected):
+        with pytest.raises(tv.ValueTypeError) as e:
+            config.set_value(key, raw)
+        assert e.value.key == leaf
+        assert e.value.raw == bad
+        assert e.value.expected == expected
+        assert not paths.config_path().exists()
+
+    @pytest.mark.parametrize("agent", ["claude-code", "brand-new"])
+    def test_nested_agent_dir_is_checked(self, sandbox, agent):
+        with pytest.raises(tv.ValueTypeError) as e:
+            config.set_value("agents", '{"%s": {"dir": "rel"}}' % agent)
+        assert e.value.key == "agents.%s.dir" % agent
+        assert not paths.config_path().exists()
+        config.set_value("agents", '{"%s": {"dir": "~/x", "enabled": "no"}}'
+                         % agent)
+        stored = self._disk()["agents"][agent]
+        assert stored["dir"] == "~/x"
+        # an agent DEFAULTS describes types `enabled`; a new one does not
+        assert stored["enabled"] == (False if agent == "claude-code"
+                                     else "no")
+
+    def test_unknown_leaves_pass_through(self, sandbox):
+        config.set_value("ai", '{"extra": "off", "deep": {"n": 1}}')
+        assert self._disk() == {"ai": {"extra": "off", "deep": {"n": 1}}}
+        config.set_value("custom", '{"a": {"b": "off"}}')
+        assert self._disk()["custom"] == {"a": {"b": "off"}}
+
+    def test_cli_names_the_leaf(self, boost):
+        r = boost("config", "set", "serve", '{"port": 99999}', expect=1)
+        assert "serve.port expects a whole number from 0 to 65535" in r.err
+        assert ("got 99999 — try `boost config set serve.port <0-65535>`"
+                in _flat(r.err))
+        assert not paths.config_path().exists()
+        r = boost("config", "set", "ai", '{"enabled": "off"}')
+        assert r.out.lstrip().startswith('✓ set ai = {"enabled": false, ')
+        assert self._disk() == {"ai": {"enabled": False}}
+
+
 class TestLogLevelEnv:
     def test_off_silences_a_configured_level(self, sandbox, monkeypatch,
                                              capsys):
