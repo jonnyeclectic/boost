@@ -76,29 +76,47 @@ class TestFindPython:
         assert r.stdout.startswith("boost ")
         assert "is required" not in r.stderr
 
-    def test_versioned_names_are_tried_newest_first(self, sandbox, tmp_path):
+    def test_python3_that_passes_wins_over_versioned_names(self, sandbox,
+                                                            tmp_path):
+        """An activated venv shadows `python3`, not `python3.14`: a versioned
+        name tried first would skip the venv the `[rag]` extra went into."""
         d = _bin(tmp_path)
         logs = {}
-        for name in ("python3.14", "python3.13", "python3.12", "python3"):
+        for name in ("python3", "python3.15", "python3.14", "python3.13",
+                     "python3.12", "python"):
             logs[name] = tmp_path / ("%s.log" % name)
             _recording_python(d, name, logs[name])
         r = _run(d, "--version")
         assert r.returncode == 0, r.stderr
-        assert logs["python3.14"].is_file()
+        assert logs["python3"].is_file()
+        assert not any(logs[n].exists() for n in logs if n != "python3")
+
+    def test_versioned_names_are_tried_newest_first(self, sandbox, tmp_path):
+        d = _bin(tmp_path)
+        _stub(d, "python3", "exit 1")
+        logs = {}
+        for name in ("python3.15", "python3.14", "python3.13", "python3.12"):
+            logs[name] = tmp_path / ("%s.log" % name)
+            _recording_python(d, name, logs[name])
+        r = _run(d, "--version")
+        assert r.returncode == 0, r.stderr
+        assert logs["python3.15"].is_file()
         assert not any(logs[n].exists()
-                       for n in ("python3.13", "python3.12", "python3"))
+                       for n in ("python3.14", "python3.13", "python3.12"))
 
     def test_each_too_old_candidate_is_skipped_in_order(self, sandbox,
                                                         tmp_path):
         d = _bin(tmp_path)
         seen = tmp_path / "seen.log"
-        for name in ("python3.14", "python3.13", "python3.12", "python3"):
+        order = ["python3", "python3.15", "python3.14", "python3.13",
+                 "python3.12"]
+        for name in order:
             _stub(d, name, 'echo %s >> "%s"; exit 1' % (name, seen))
         _recording_python(d, "python", tmp_path / "python.log")
         r = _run(d, "--version")
         assert r.returncode == 0, r.stderr
-        assert seen.read_text(encoding="utf-8").split() == [
-            "python3.14", "python3.13", "python3.12", "python3"]
+        assert seen.read_text(encoding="utf-8").split() == order
+        assert (tmp_path / "python.log").is_file()
 
     def test_none_found_hint_matches_readme(self, sandbox, tmp_path):
         d = _bin(tmp_path)
