@@ -106,3 +106,119 @@ class TestHomonymPicksTheInstalledKind:
         assert is_err is False
         assert "description: Dup SKILL desc" in text.splitlines()
         assert "kind: workflow" not in text
+
+
+class TestDescriptionIsTheInstalledCopys:
+    @pytest.fixture()
+    def moved(self, boost, mytap):
+        for n in ("alpha", "style", "ship"):
+            boost("install", n)
+        _bump(mytap)
+        boost("update", "--taps-only")
+        return mytap
+
+    def test_skill_info_text_and_json(self, boost, moved):
+        r = boost("info", "alpha")
+        assert _kv(r.out, "description") == "Alpha old description"
+        assert _kv(r.out, "upstream") == "Alpha NEW description"
+        assert _kv(r.out, "version") == "1.0.0"
+        data = json.loads(boost("info", "alpha", "--json").out)
+        assert data["description"] == "Alpha old description"
+        assert data["upstream_description"] == "Alpha NEW description"
+        assert data["latest"] == "2.0.0"
+
+    @pytest.mark.parametrize(("name", "old", "new"),
+                             [("style", "Style rule old", "Style rule NEW"),
+                              ("ship", "Ship old", "Ship NEW")])
+    def test_rule_and_workflow_info(self, boost, moved, name, old, new):
+        r = boost("info", name)
+        assert _kv(r.out, "description") == old
+        assert _kv(r.out, "upstream") == new
+        data = json.loads(boost("info", name, "--json").out)
+        assert data["description"] == old
+        assert data["upstream_description"] == new
+
+    def test_mcp_boost_info(self, boost, moved):
+        for name, old, new in (("alpha", "Alpha old description",
+                                "Alpha NEW description"),
+                               ("style", "Style rule old", "Style rule NEW"),
+                               ("ship", "Ship old", "Ship NEW")):
+            lines = _tool("boost_info", name=name)[0].splitlines()
+            assert "version: 1.0.0" in lines
+            assert "description: %s" % old in lines
+            assert "upstream description: %s" % new in lines
+            assert "latest: 2.0.0 (update available)" in lines
+
+    def test_explain_does_not_mix_versions(self, boost, moved):
+        r = boost("explain", "style")
+        assert "Style rule old" in r.out
+        assert "NEW" not in r.out
+        assert "Always use tabs." in r.out
+
+    def test_old_lock_without_description_labels_the_tap_text(self, boost,
+                                                               moved):
+        from boost_cli.core import lockfile
+        for get, put, name in ((lockfile.get_rule, lockfile.set_rule, "style"),
+                               (lockfile.get_workflow, lockfile.set_workflow,
+                                "ship")):
+            row = get(name)
+            del row["description"]
+            put(name, row)
+        r = boost("info", "style")
+        assert _kv(r.out, "description") is None
+        assert _kv(r.out, "upstream") == "Style rule NEW"
+        r = boost("explain", "style")
+        assert ("Upstream description (the tap's current version, not the "
+                "installed one): Style rule NEW") in " ".join(r.out.split())
+        lines = _tool("boost_info", name="ship")[0].splitlines()
+        assert not any(ln.startswith("description:") for ln in lines)
+        assert "upstream description: Ship NEW" in lines
+
+    def test_unmoved_tap_shows_one_description(self, boost, mytap):
+        boost("install", "alpha")
+        boost("install", "style")
+        r = boost("info", "style")
+        assert _kv(r.out, "description") == "Style rule old"
+        assert _kv(r.out, "upstream") is None
+        assert _kv(r.out, "latest") is None
+        assert "update available" not in r.out
+        r = boost("info", "alpha")
+        assert _kv(r.out, "upstream") is None
+        lines = _tool("boost_info", name="style")[0].splitlines()
+        assert "latest: 1.0.0" in lines
+        assert not any(ln.startswith("upstream") for ln in lines)
+
+
+class TestInfoReportsTheUpdateOutdatedLists:
+    def test_rule_and_workflow_match_outdated(self, boost, mytap):
+        boost("install", "style")
+        boost("install", "ship")
+        _bump(mytap)
+        boost("update", "--taps-only")
+        rows = {r["name"]: r for r in json.loads(boost("outdated", "--json").out)}
+        assert rows["style"]["latest"] == "2.0.0"
+        assert rows["ship"]["latest"] == "2.0.0"
+        for name, kind in (("style", "rule"), ("ship", "workflow")):
+            r = boost("info", name)
+            assert "update available" in r.out.splitlines()[1]
+            assert _kv(r.out, "latest") == "2.0.0  (update available)"
+            data = json.loads(boost("info", name, "--json").out)
+            assert data["latest"] == "2.0.0"
+            assert data["update_available"] is True
+            assert data["kind"] == kind
+
+    def test_content_change_without_a_version_bump(self, boost, mytap):
+        boost("install", "style")
+        _write(mytap, "rules/style.mdc", _item("style", "Style rule old",
+                                               body="Always use spaces."))
+        _commit(mytap, "body only")
+        boost("update", "--taps-only")
+        rows = json.loads(boost("outdated", "--json").out)
+        assert [(r["name"], r["reason"]) for r in rows] == [("style", "content")]
+        r = boost("info", "style")
+        assert _kv(r.out, "latest") == "1.0.0  (content changed)"
+        assert json.loads(boost("info", "style", "--json").out)[
+            "update_available"] is True
+        assert "latest: 1.0.0 (content changed)" in _tool(
+            "boost_info", name="style")[0].splitlines()
+

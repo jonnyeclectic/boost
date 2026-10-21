@@ -28,6 +28,7 @@ from ..core import (
     frontmatter,
     gitutil,
     imperative,
+    installedview,
     integrity,
     journal,
     lockfile,
@@ -424,20 +425,6 @@ def cmd_list(argv):
     return 0
 
 
-def _catalog_description(name: str, kind: str, lk: dict) -> str:
-    """The tap's description for the installed ``kind`` named ``name``.
-
-    A rule/workflow's lock entry carries no description of its own (unlike a
-    skill's SKILL.md frontmatter, nothing about a materialized block is
-    self-describing), so the catalog is the only place left to ask — same
-    source `cmd_stats` already reads for a not-installed item's description.
-    The row is the installed item's own (`catalog.installed_row`): a skill
-    namesake in the same tap is a different item.
-    """
-    cat = catalog.installed_row(catalog.find(name), kind, lk)
-    return str((cat or {}).get("description") or "")
-
-
 def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
     """The identity card for an installed rule/workflow — the lock facts,
     plus the catalog description when a tap still carries this entry.
@@ -445,26 +432,48 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
     No store dir, quality score or file counts here: those describe a skill's
     directory, which these kinds do not have.
     """
-    desc = _catalog_description(name, kind, entry)
+    matches = catalog.find(name)
+    cat = catalog.installed_row(matches, kind, entry)
+    # The comparison `boost outdated` makes, so `info` never hides the
+    # update it lists. `latest` is the catalog row's version, as for a skill.
+    reason, _ = installedview.installed_update(kind, entry, matches)
+    update = reason in (staleness.VERSION, staleness.CONTENT)
+    latest = str((cat or {}).get("version") or "")
+    # The installed copy's description; the tap's HEAD only as "upstream".
+    desc, upstream = installedview.materialized_description(entry, cat, reason)
     stranded = scopes.stranded(entry)
     if as_json:
         print(json.dumps({"name": name, "kind": kind, "description": desc,
-                         "stranded": stranded, "installed": entry}, indent=2))
+                          "upstream_description": upstream or None,
+                          "latest": latest or None,
+                          "update_available": update,
+                          "stranded": stranded, "installed": entry}, indent=2))
         return 0
-    desc, entry = out.plain(desc), out.plain_fields(entry)
+    desc, upstream = out.plain(desc), out.plain(upstream)
+    latest, entry = out.plain(latest), out.plain_fields(entry)
     out.heading(name)
     badges = [out.badge("installed %s" % kind, "green")]
     if entry.get("pinned"):
         badges.append(out.badge("pinned", "yellow"))
     if entry.get("quarantined"):
         badges.append(out.badge("quarantined", "pink"))
+    if update:
+        badges.append(out.badge("update available", "yellow"))
     if entry.get("tap"):
         badges.append(out.badge(str(entry["tap"]), "violet"))
     out.info(" ".join(badges))
     out.kv("kind", kind)
     if desc:
         out.kv("description", desc, wrap=True)
+    if upstream:
+        out.kv("upstream", upstream, wrap=True)
     out.kv("version", str(entry.get("version", "?")))
+    if reason == staleness.VERSION:
+        out.kv("latest", out.role(latest, "warn", bold=True)
+               + out.role("  (update available)", "muted"))
+    elif reason == staleness.CONTENT:
+        out.kv("latest", (latest or "?")
+               + out.role("  (content changed)", "muted"))
     out.kv("tap", entry.get("tap", "?"))
     if kind == "workflow" and entry.get("slot"):
         out.kv("slot", str(entry["slot"]))
@@ -570,18 +579,26 @@ def cmd_info(argv):
     skill_dir = sdir if lock and sdir.is_dir() else None
     if skill_dir is None and plock:
         skill_dir = integrity.project_skill_dir(plock, pbase)
+    installed_dir = skill_dir
     if skill_dir is None and cat:
         try:
             skill_dir = store.source_dir_for(cat)
         except BoostError:
             skill_dir = None
     desc = str((cat or {}).get("description") or "")
+    upstream = ""
+    if lock or plock:
+        # The installed copy's own description. The catalog row is the tap's
+        # HEAD, which `update --taps-only` moves past the installed version,
+        # so its text is shown only as "upstream", and only when it differs.
+        desc, upstream = installedview.skill_description(installed_dir, cat)
     meta: dict = {}
     skill_text = ""
     if skill_dir and (skill_dir / "SKILL.md").exists():
         skill_text = _read(skill_dir / "SKILL.md")
         meta, _body = frontmatter.parse(skill_text)
-        desc = desc or str(meta.get("description") or "")
+        if not (lock or plock):
+            desc = desc or str(meta.get("description") or "")
     declared_caps = sorted(capabilities.declared(meta))
     detected_extra = sorted(capabilities.detect(skill_text)
                             - set(declared_caps)) if skill_text else []
@@ -599,6 +616,7 @@ def cmd_info(argv):
     if args.json:
         print(json.dumps({
             "name": name, "kind": kind, "description": desc,
+            "upstream_description": upstream or None,
             "installed": lock, "project": plock,
             "capabilities": declared_caps, "detected_capabilities": detected_extra,
             "mcp_servers": [r["name"] for r in mcp_servers],
@@ -615,7 +633,7 @@ def cmd_info(argv):
     # install copied it into). Display copies, terminal controls dropped.
     cat, lock, plock, meta = (out.plain_fields(cat), out.plain_fields(lock),
                               out.plain_fields(plock), out.plain_fields(meta))
-    desc = out.plain(desc)
+    desc, upstream = out.plain(desc), out.plain(upstream)
     out.heading(name)
     # The record to read the shared rows off, user scope winning — the same
     # `lock or plock` the --json payload above already uses. A project install
@@ -674,6 +692,8 @@ def cmd_info(argv):
         # replaced hardcoded width=62 (a hand copy of kv's default 16-column
         # lead against a fixed 78-column pane) and ignored COLUMNS entirely.
         out.kv("description", desc, wrap=True)
+    if upstream:
+        out.kv("upstream", upstream, wrap=True)
     if entry:
         inst_v = str(entry.get("version", "?"))
         out.kv("version", inst_v)
@@ -1007,13 +1027,24 @@ def cmd_explain(argv):
         body = re.sub(r"\A#[ \t]+%s[ \t]*\n+" % re.escape(_bare), "",
                       body, count=1)
     desc = str(meta.get("description") or "").strip()
+    upstream = ""
     if not desc and _lock:
-        # The lock has no description field of its own for a rule/workflow
-        # (unlike a skill's SKILL.md frontmatter), and its materialized text
-        # carries none either — the catalog is the only place left to ask.
-        desc = _catalog_description(_bare, _kind, _lock)
+        # A claude-mode block carries no frontmatter, so ask the lock row
+        # install wrote, then the catalog -- but the catalog is the tap's
+        # HEAD, and a summary must not put the next version's description
+        # over this version's body. Unless it still describes the installed
+        # copy it is shown labelled as upstream.
+        matches = catalog.find(_bare)
+        cat = catalog.installed_row(matches, _kind, _lock)
+        reason = (installedview.installed_update(_kind, _lock, matches)[0]
+                  if _kind != "skill" else staleness.SOURCE_MISSING)
+        desc, upstream = installedview.materialized_description(
+            _lock, cat, reason)
     if desc:
         _print_wrapped(desc)
+    elif upstream:
+        _print_wrapped("Upstream description (the tap's current version, "
+                       "not the installed one): " + upstream)
     headings = re.findall(r"^(#{1,6})\s+(.*)$", body, re.MULTILINE)
     if headings:
         print()
