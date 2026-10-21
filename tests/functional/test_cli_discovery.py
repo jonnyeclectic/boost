@@ -2346,6 +2346,15 @@ class TestStats:
         assert "no skill named 'nope' installed or in any tap" in r.err
         assert "try `boost search nope`" in r.err
 
+    def test_unknown_with_no_taps_hints_tapping_first(self, boost):
+        # `boost search` fails too on an untapped machine, so pointing at it
+        # sent a new user from one error to another.
+        r = boost("stats", "brainstorming", expect=1)
+        assert "no skill named 'brainstorming' installed or in any tap" in r.err
+        assert "hint: no taps configured — start with `boost tap --defaults`" \
+            in r.err
+        assert "boost search" not in r.err
+
     def test_installed_rule_reports_lock_facts(self, boost, tapped):
         # Before find_any this raised "no skill named 'house-style'" for a
         # name `boost list` shows installed.

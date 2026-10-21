@@ -145,6 +145,19 @@ def _stderr_excerpt(text: str | None) -> str:
     return (s[:STDERR_LOG_CHARS] + "...") if len(s) > STDERR_LOG_CHARS else s
 
 
+def _exit_reason(backend: str, proc: subprocess.CompletedProcess) -> str:
+    """Why a CLI exited non-zero, as one bounded line — never an empty one.
+
+    Stderr first; then stdout, because an unauthenticated ``claude -p`` exits
+    1 with "Not logged in · Please run /login" on stdout and nothing on
+    stderr, which left the warning and the log it points at both reading
+    ``exit 1: ``. With neither, name the one step that usually explains it.
+    """
+    return (_stderr_excerpt(proc.stderr) or _stderr_excerpt(proc.stdout)
+            or "no output — run `%s` by itself to check it is logged in"
+            % aihost.cli(backend))
+
+
 def _ask_cli(backend: str, prompt: str, system: str | None, model: str,
              timeout: int) -> str | None:
     cmd = aihost.argv(backend, model, system)
@@ -167,7 +180,7 @@ def _ask_cli(backend: str, prompt: str, system: str | None, model: str,
         return None
     if proc.returncode != 0:
         _log_failure(who, "exit %d: %s"
-                     % (proc.returncode, _stderr_excerpt(proc.stderr)))
+                     % (proc.returncode, _exit_reason(backend, proc)))
         return None
     out = proc.stdout.strip()
     if not out:
