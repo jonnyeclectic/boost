@@ -6,8 +6,10 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import shutil
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -35,7 +37,7 @@ class TestLoadDefaults:
         assert cfg["ai"]["author_model"] == "claude-sonnet-5"
         assert cfg["serve"]["port"] == 8787
         assert cfg["policy_enforce"] is True
-        assert cfg["telemetry"] is False
+        assert "telemetry" not in cfg   # retired: nothing read it
         assert cfg["taps"] == []
         # Order is load-bearing: agents are iterated (and linked/reported) in
         # declaration order, and each new agent is appended so an existing
@@ -201,9 +203,9 @@ class TestCaching:
         assert config.get("serve.port") == 22222
 
     def test_save_visible_to_get(self, sandbox):
-        assert config.get("telemetry") is False  # warm the cache
-        config.save({"telemetry": True})
-        assert config.get("telemetry") is True
+        assert config.get("policy_enforce") is True  # warm the cache
+        config.save({"policy_enforce": False})
+        assert config.get("policy_enforce") is False
 
     def test_get_returns_isolated_container(self, sandbox):
         agents = config.get("agents")
@@ -311,6 +313,33 @@ class TestUnknownKeyWarning:
         # The documented lenient path: integrations write their own sections.
         assert config.unknown_key_warning("brand.new.key") is None
         assert config.unknown_key_warning("myplugin") is None
+
+    @pytest.mark.parametrize("key", ["telemetry", "telemetry.x"])
+    def test_a_retired_key_says_it_does_nothing(self, sandbox, key):
+        assert config.unknown_key_warning(key) == (
+            "%r has no effect — boost collects no telemetry, so nothing "
+            "reads this key (saved anyway)" % key)
+        assert "telemetry" not in config.DEFAULTS
+        assert config.spec_for(key) == typedvalue.ANY
+
+    def test_an_old_file_holding_a_retired_key_still_loads(self, sandbox):
+        paths.ensure_dirs()
+        paths.config_path().write_text('{"telemetry": false}',
+                                       encoding="utf-8")
+        assert config.check() is None
+        assert config.get("telemetry") is False
+        assert config.get("ai.enabled") is True
+
+    def test_every_default_section_has_a_reader(self):
+        # A DEFAULTS key nothing reads is a setting that reports success and
+        # does nothing — `telemetry` was one for releases.
+        pkg = Path(config.__file__).resolve().parents[1]
+        text = "\n".join(p.read_text(encoding="utf-8")
+                         for p in pkg.rglob("*.py") if p.name != "config.py")
+        for key in config.DEFAULTS:
+            pat = r"""get(?:_int)?\(\s*["']%s[."']|\[\s*["']%s["']\s*\]""" % (
+                re.escape(key), re.escape(key))
+            assert re.search(pat, text), "nothing reads config key %r" % key
 
     def test_a_typo_under_a_known_section_names_the_close_key(self, sandbox):
         w = config.unknown_key_warning("serve.prot")
@@ -499,7 +528,7 @@ class TestRegistryCategories:
 
 class TestSpecFor:
     def test_a_key_is_typed_by_its_default(self, sandbox):
-        assert config.spec_for("telemetry") == typedvalue.BOOL
+        assert config.spec_for("workflows_as_skills") == typedvalue.BOOL
         assert config.spec_for("policy_enforce") == typedvalue.BOOL
         assert config.spec_for("serve.port") == typedvalue.INT
         assert config.spec_for("taps") == typedvalue.LIST
@@ -523,16 +552,16 @@ class TestSpecFor:
 
 class TestSetValueIsTyped:
     def test_a_boolean_key_reads_the_word_the_user_typed(self, sandbox):
-        config.set_value("telemetry", "no")
-        assert config.get("telemetry") is False
-        config.set_value("telemetry", "on")
-        assert config.get("telemetry") is True
+        config.set_value("policy_enforce", "no")
+        assert config.get("policy_enforce") is False
+        config.set_value("policy_enforce", "on")
+        assert config.get("policy_enforce") is True
 
     def test_a_bad_boolean_is_refused_and_nothing_is_written(self, sandbox):
         with pytest.raises(typedvalue.ValueTypeError):
-            config.set_value("telemetry", "maybe")
+            config.set_value("policy_enforce", "maybe")
         assert not paths.config_path().exists()
-        assert config.get("telemetry") is False   # still the default
+        assert config.get("policy_enforce") is True   # still the default
 
     def test_a_bad_number_is_refused(self, sandbox):
         with pytest.raises(typedvalue.ValueTypeError) as e:

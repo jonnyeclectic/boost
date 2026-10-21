@@ -96,10 +96,48 @@ def tilde(p) -> str:
     return s.replace(os.sep, "/")
 
 
+def env_dir(name: str) -> Path | None:
+    """The directory an environment override names, or None when it is unset.
+
+    ``BOOST_HOME`` and ``BOOST_AGENTS_STORE`` were taken as ``Path(value)``,
+    so a quoted ``'~/store'`` (the shell expands no tilde inside quotes) or a
+    relative ``store`` resolved against the working directory: measured, an
+    install from ``w1/`` created ``w1/~/store/brainstorming``, linked
+    ``~/.claude/skills`` at it with a relative symlink that dangled, and from
+    ``w2/`` `boost list` said nothing was installed. State that moves with
+    ``cd`` is no state at all, so the value goes through :func:`expand` (a
+    leading ``~`` or ``${VAR}``) and a value still relative after that is a
+    :class:`BoostError` naming the variable — the same answer
+    ``agents.check_dir`` gives a relative ``agents.<name>.dir``. An empty
+    value is unset, as before.
+    """
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    p = expand(raw)
+    if not p.is_absolute():
+        raise BoostError(
+            "%s=%r is a relative path, so it would resolve against the "
+            "working directory" % (name, raw),
+            hint="export %s=/an/absolute/path (or ~/path)" % name,
+            wrap=True)
+    return p
+
+
+def check_env() -> None:
+    """Raise :class:`BoostError` if a path override in the environment is unusable.
+
+    `cli.main` calls this before anything opens the log or the config, both of
+    which sit under :func:`boost_home` and run outside the command's own
+    error handler.
+    """
+    boost_home()
+    store_dir()
+
+
 def boost_home() -> Path:
     """Resolve boost's state root: ``$BOOST_HOME`` if set, else ``~/.boost``."""
-    override = os.environ.get("BOOST_HOME")
-    return Path(override) if override else home() / ".boost"
+    return env_dir("BOOST_HOME") or home() / ".boost"
 
 
 def repos_dir() -> Path:
@@ -197,8 +235,7 @@ def config_path() -> Path:
 
 def store_dir() -> Path:
     """Canonical store for installed skills."""
-    override = os.environ.get("BOOST_AGENTS_STORE")
-    return Path(override) if override else home() / ".agents" / "skills"
+    return env_dir("BOOST_AGENTS_STORE") or home() / ".agents" / "skills"
 
 
 def lockfile_path() -> Path:

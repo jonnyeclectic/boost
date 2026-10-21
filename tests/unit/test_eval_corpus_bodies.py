@@ -44,6 +44,7 @@ from pathlib import Path
 import pytest
 
 from boost_cli.core import catalog, rag, registry
+from boost_cli.errors import BoostError
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "eval_retrieval.py"
@@ -132,11 +133,8 @@ class TestTheGateRefusesABodylessCorpus:
         assert "CORPUS INCOMPLETE" in err
         assert "2 of 2 indexed documents carry no body" in err
 
-    # Relative too: the line is for pasting, possibly from another directory.
-    @pytest.mark.parametrize("relative", [False, True])
     def test_the_remedy_names_the_home_it_repairs(self, corpus, capsys,
-                                                  tmp_path, monkeypatch,
-                                                  relative):
+                                                  tmp_path, monkeypatch):
         """`make eval` sets BOOST_HOME inside its recipe and nowhere else.
 
         So a bare `FORCE=1 bash scripts/ensure_eval_corpus.sh` pasted from the
@@ -149,7 +147,7 @@ class TestTheGateRefusesABodylessCorpus:
         m = _load()
         home = tmp_path / "eval-home"
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("BOOST_HOME", "eval-home" if relative else str(home))
+        monkeypatch.setenv("BOOST_HOME", str(home))
         golden = corpus(with_bodies=False)
         assert m.main(["--golden", str(golden), "-k", "1", *_GATE]) == 66
         line = capsys.readouterr().err.splitlines()[-1]
@@ -158,6 +156,22 @@ class TestTheGateRefusesABodylessCorpus:
             shlex.quote(str(_ENSURE)))
         assert want in line
         assert str(Path.home() / ".boost") not in line
+
+    def test_a_relative_home_is_refused(self, corpus, tmp_path, monkeypatch):
+        """A relative BOOST_HOME used to be resolved here for the remedy line.
+
+        boost now refuses one outright (`paths.env_dir`), since it resolved
+        against whatever directory a command ran from; `make eval` passes
+        ``$(CURDIR)/.eval-home``, which is absolute.
+        """
+        m = _load()
+        monkeypatch.chdir(tmp_path)
+        golden = corpus(with_bodies=False)
+        monkeypatch.setenv("BOOST_HOME", "eval-home")
+        with pytest.raises(BoostError, match="BOOST_HOME='eval-home' is a "
+                                             "relative path"):
+            m.main(["--golden", str(golden), "-k", "1", *_GATE])
+        assert not (tmp_path / "eval-home").exists()
 
     def test_nothing_is_scored_before_the_refusal(self, corpus, capsys):
         """A printed GATE table over a body-less corpus is the false green.

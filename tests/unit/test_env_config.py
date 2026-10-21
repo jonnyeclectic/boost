@@ -208,18 +208,18 @@ class TestOverridesOnly:
         return json.loads(paths.config_path().read_text(encoding="utf-8"))
 
     def test_set_writes_only_the_key(self, sandbox):
-        config.set_value("telemetry", "false")
-        assert self._disk() == {"telemetry": False}
+        config.set_value("policy_enforce", "false")
+        assert self._disk() == {"policy_enforce": False}
         config.set_value("ai.model", "m")
-        assert self._disk() == {"telemetry": False, "ai": {"model": "m"}}
+        assert self._disk() == {"policy_enforce": False, "ai": {"model": "m"}}
 
     def test_a_changed_default_reaches_a_user_who_set_something(
             self, sandbox, monkeypatch):
-        config.set_value("telemetry", "false")
+        config.set_value("policy_enforce", "false")
         monkeypatch.setitem(config.DEFAULTS["ai"], "model", "NEW-DEFAULT")
         monkeypatch.setattr(config, "_cache", None)
         assert config.get("ai.model") == "NEW-DEFAULT"
-        assert config.get("telemetry") is False
+        assert config.get("policy_enforce") is False
 
     def test_mutate_hands_the_writer_the_raw_overrides(self, sandbox):
         seen = []
@@ -233,10 +233,10 @@ class TestOverridesOnly:
         full["ai"]["model"] = "old-model"
         paths.config_path().write_text(json.dumps(full), encoding="utf-8")
         assert config.get("ai.model") == "old-model"
-        config.set_value("telemetry", "false")
+        config.set_value("policy_enforce", "false")
         disk = self._disk()
         assert disk["ai"]["model"] == "old-model"
-        assert disk["telemetry"] is False
+        assert disk["policy_enforce"] is False
 
     def test_a_defaulted_scalar_is_not_turned_into_a_section(self, sandbox):
         with pytest.raises(TypeError, match="'port' is not a section"):
@@ -289,14 +289,14 @@ class TestChoicesAndRanges:
 
     def test_check_value_leaves_other_keys_alone(self, sandbox):
         assert config.check_value("ai.model", "anything") == "anything"
-        assert config.check_value("telemetry", 5) == 5
+        assert config.check_value("policy_enforce", 5) == 5
 
     def test_placeholder(self):
         assert config.placeholder("logging.level") == (
             "OFF|DEBUG|INFO|WARNING|ERROR|CRITICAL")
         assert config.placeholder("logging.format") == "text|json"
         assert config.placeholder("serve.port") == "0-65535"
-        assert config.placeholder("telemetry") == "bool"
+        assert config.placeholder("policy_enforce") == "bool"
 
     def test_cli_names_the_choices(self, boost):
         r = boost("config", "set", "logging.level", "verbose", expect=1)
@@ -307,6 +307,85 @@ class TestChoicesAndRanges:
         r = boost("config", "set", "serve.port", "99999", expect=1)
         assert "serve.port expects a whole number from 0 to 65535" in r.err
         assert "`boost config set serve.port <0-65535>`" in _flat(r.err)
+
+
+class TestSectionSet:
+    """`config set <section> <json>` checks every leaf like its dotted key."""
+
+    def _disk(self):
+        return json.loads(paths.config_path().read_text(encoding="utf-8"))
+
+    def test_bool_word_is_stored_as_a_bool(self, sandbox):
+        config.set_value("ai", '{"enabled": "off", "model": "m"}')
+        assert self._disk() == {"ai": {"enabled": False, "model": "m"}}
+        assert config.get("ai.enabled") is False
+        assert ai.enabled() is False
+
+    def test_choice_is_stored_in_canonical_case(self, sandbox):
+        config.set_value("logging", '{"level": "debug", "format": "JSON", '
+                                    '"file": "no"}')
+        assert self._disk() == {"logging": {"level": "DEBUG",
+                                            "format": "json", "file": False}}
+
+    @pytest.mark.parametrize("key,raw,leaf,bad,expected", [
+        ("logging", '{"level": "verbose", "file": "no"}', "logging.level",
+         "verbose", "one of OFF, DEBUG, INFO, WARNING, ERROR, CRITICAL"),
+        ("logging", '{"file": "maybe"}', "logging.file", "maybe",
+         tv.describe(tv.BOOL)),
+        ("serve", '{"port": 99999}', "serve.port", 99999,
+         "a whole number from 0 to 65535"),
+        ("serve", '{"port": true}', "serve.port", True, tv.describe(tv.INT)),
+        ("ai", '{"enabled": {"x": 1}}', "ai.enabled", {"x": 1},
+         tv.describe(tv.BOOL)),
+        ("ai", '{"model": 5}', "ai.model", 5, tv.describe(tv.STR)),
+        ("agents", '{"claude-code": 5}', "agents.claude-code", 5,
+         tv.describe(tv.DICT)),
+    ])
+    def test_a_bad_leaf_refuses_the_whole_value(self, sandbox, key, raw, leaf,
+                                                bad, expected):
+        with pytest.raises(tv.ValueTypeError) as e:
+            config.set_value(key, raw)
+        assert e.value.key == leaf
+        assert e.value.raw == bad
+        assert e.value.expected == expected
+        assert not paths.config_path().exists()
+
+    @pytest.mark.parametrize("agent", ["claude-code", "brand-new"])
+    def test_nested_agent_dir_is_checked(self, sandbox, agent):
+        with pytest.raises(tv.ValueTypeError) as e:
+            config.set_value("agents", '{"%s": {"dir": "rel"}}' % agent)
+        assert e.value.key == "agents.%s.dir" % agent
+        assert not paths.config_path().exists()
+        config.set_value("agents", '{"%s": {"dir": "~/x", "enabled": "no"}}'
+                         % agent)
+        stored = self._disk()["agents"][agent]
+        assert stored["dir"] == "~/x"
+        # an agent DEFAULTS describes types `enabled`; a new one does not
+        assert stored["enabled"] == (False if agent == "claude-code"
+                                     else "no")
+
+    def test_a_section_given_as_a_json_string_is_walked(self, sandbox):
+        with pytest.raises(tv.ValueTypeError) as e:
+            config.set_value("agents",
+                             json.dumps({"claude-code": '{"dir": "rel"}'}))
+        assert e.value.key == "agents.claude-code.dir"
+        assert not paths.config_path().exists()
+
+    def test_unknown_leaves_pass_through(self, sandbox):
+        config.set_value("ai", '{"extra": "off", "deep": {"n": 1}}')
+        assert self._disk() == {"ai": {"extra": "off", "deep": {"n": 1}}}
+        config.set_value("custom", '{"a": {"b": "off"}}')
+        assert self._disk()["custom"] == {"a": {"b": "off"}}
+
+    def test_cli_names_the_leaf(self, boost):
+        r = boost("config", "set", "serve", '{"port": 99999}', expect=1)
+        assert "serve.port expects a whole number from 0 to 65535" in r.err
+        assert ("got 99999 — try `boost config set serve.port <0-65535>`"
+                in _flat(r.err))
+        assert not paths.config_path().exists()
+        r = boost("config", "set", "ai", '{"enabled": "off"}')
+        assert r.out.lstrip().startswith('✓ set ai = {"enabled": false, ')
+        assert self._disk() == {"ai": {"enabled": False}}
 
 
 class TestLogLevelEnv:

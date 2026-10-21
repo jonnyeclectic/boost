@@ -129,8 +129,9 @@ def cmd_config(argv) -> int:
         try:
             config.set_value(args.key, args.value)
         except typedvalue.ValueTypeError as e:
+            # e.key is the leaf when a JSON object held the bad value.
             raise _bad_value(e, "boost config set %s <%s>"
-                             % (args.key, config.placeholder(args.key))) from e
+                             % (e.key, config.placeholder(e.key))) from e
         except TypeError as e:
             raise BoostError(str(e),
                             hint="the parent key holds a plain value — "

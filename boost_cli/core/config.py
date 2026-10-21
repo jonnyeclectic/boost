@@ -123,7 +123,9 @@ DEFAULTS = {
     # that choice sticks; with neither flag an install follows this. See
     # store._skill_copy.
     "workflows_as_skills": True,
-    "telemetry": False,
+    # No `telemetry` key: it sat here for releases with no reader, so `config
+    # set telemetry true` reported success for a feature that does not
+    # exist. See RETIRED_KEYS.
     "logging": {
         # Console verbosity for the diagnostic log on stderr. "OFF" keeps
         # stderr clean (the default); set DEBUG/INFO/WARNING/ERROR to always
@@ -437,7 +439,7 @@ def mutate(fn: Callable[[dict], bool | None]) -> bool:
 
     ``fn`` sees the on-disk overrides only (:func:`_read_raw`), never the
     DEFAULTS-merged view. Every writer used to get the merged view, so one
-    `config set telemetry false` — or any `boost tap` — wrote the whole of
+    `config set policy_enforce true` — or any `boost tap` — wrote the whole of
     DEFAULTS to disk, and a default a later release changed (a new
     ``ai.model``, an agent's ``links_skills``) never reached that user. A
     file already written that way still reads; it just stops growing.
@@ -497,6 +499,14 @@ def _did_you_mean(dotted: str, prefix: list[str], part: str, rest: list[str],
     return msg + " (saved anyway)"
 
 
+#: Top-level keys boost once listed in DEFAULTS and no longer reads, with why.
+#: An old config.json holding one still loads (an unknown key is kept, as for
+#: any integration's section); `config set` saves it and says it does nothing.
+RETIRED_KEYS: dict[str, str] = {
+    "telemetry": "boost collects no telemetry, so nothing reads this key",
+}
+
+
 def unknown_key_warning(dotted: str) -> str | None:
     """Why `config set <dotted>` probably did not do what was meant, or None.
 
@@ -505,13 +515,17 @@ def unknown_key_warning(dotted: str) -> str | None:
     section boost owns — ``agents.claude-code.enable`` — was stored the same
     way, reported with a check mark, and changed nothing. So this stays
     silent for an invented top-level key and speaks up only below a section
-    boost reads. ``agents`` is the one open section — a user may add an agent
+    boost reads, or for a :data:`RETIRED_KEYS` entry. ``agents`` is the one
+    open section — a user may add an agent
     — so a name there is a typo only when it is close to a known agent, and a
     new agent is named when it still has no ``dir``, without which boost has
     nowhere to put its skills. Reads the saved config, so call it after the
     write.
     """
     parts = dotted.split(".")
+    if parts[0] in RETIRED_KEYS:
+        return "%r has no effect — %s (saved anyway)" % (
+            dotted, RETIRED_KEYS[parts[0]])
     if parts[0] == "agents" and len(parts) >= 2:
         name, rest = parts[1], parts[2:]
         defaults: dict = cast(dict, DEFAULTS["agents"])
@@ -639,6 +653,31 @@ def check_value(dotted: str, value: Any, raw: Any = None) -> Any:
     return value
 
 
+def _check_section(dotted: str, value: dict) -> dict:
+    """``value`` with every leaf read and checked as if set by its dotted key.
+
+    `config set ai '{"enabled": "off"}'` used to store the string ``"off"``,
+    which :func:`ai.enabled` reads as truthy, so AI stayed on behind a check
+    mark; `logging {"level": "verbose"}` and `serve {"port": 99999}` were
+    stored too, while their dotted forms are refused. Each leaf goes through
+    :func:`typedvalue.adapt` at its own spec and then :func:`check_value`, so
+    a section and its dotted keys accept exactly the same values, stored in
+    the same canonical form. Nested dicts are walked whatever their spec:
+    ``agents.<new>.dir`` is described by no default but still checked.
+    Raises :class:`typedvalue.ValueTypeError` keyed by the offending leaf.
+    """
+    checked: dict = {}
+    for key, leaf in value.items():
+        sub = "%s.%s" % (dotted, key)
+        # adapt first: a section given as a JSON *string* is parsed here,
+        # and its leaves must be walked like any other dict's.
+        adapted = typedvalue.adapt(sub, leaf, spec_for(sub))
+        checked[key] = (_check_section(sub, adapted)
+                        if isinstance(adapted, dict)
+                        else check_value(sub, adapted, leaf))
+    return checked
+
+
 def set_value(dotted: str, raw: str) -> None:
     """Set a dotted key, reading the value at the type :data:`DEFAULTS` declares.
 
@@ -646,7 +685,8 @@ def set_value(dotted: str, raw: str) -> None:
     that type. Keys with no default keep the old lenient behaviour: JSON when
     it parses, the string otherwise. A :data:`MANAGED_KEYS` path is a
     :class:`BoostError`, before anything is written. A key with
-    :func:`_choices` or :data:`RANGES` is checked against them too.
+    :func:`_choices` or :data:`RANGES` is checked against them too, and so
+    is every leaf of a JSON object (:func:`_check_section`).
 
     Writes the one key into the on-disk overrides (see :func:`mutate`). A
     parent that holds a plain value is a :class:`TypeError` whether that
@@ -656,6 +696,8 @@ def set_value(dotted: str, raw: str) -> None:
     _refuse_managed(dotted, "set")
     value = check_value(dotted,
                         typedvalue.coerce(dotted, raw, spec_for(dotted)), raw)
+    if isinstance(value, dict):
+        value = _check_section(dotted, value)
     parts = dotted.split(".")
     missing = object()
     for i in range(1, len(parts)):
