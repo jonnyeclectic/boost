@@ -433,3 +433,60 @@ class TestTheWheelTapIsNotACloneToCompact:
         assert d == {"taps": [{"tap": "boost/builtin",
                                "skipped": "ships with boost"}],
                      "count": 0, "bytes": 0, "dry_run": False, "ok": True}
+
+
+class TestAProjectInstallKeepsItsAssets:
+    """compact's keep list read only the user lock, so a project-scope
+    install's `assets/` were narrowed away, `drift` put them back through
+    `store.source_dir_for`, and each compact "freed" the same bytes again."""
+
+    @staticmethod
+    def _project(boost, tmp_path, monkeypatch):
+        src = _repo(tmp_path / "src")
+        boost("tap", str(src))
+        proj = tmp_path / "proj"
+        (proj / ".git").mkdir(parents=True)
+        monkeypatch.chdir(proj)
+        boost("install", "demo", "--scope", "project")
+        clone = registry.list_taps()[0].path
+        return clone / "skills" / "demo" / "assets" / "blob.bin", proj
+
+    def test_compact_is_a_no_op_and_stays_one_after_drift(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        blob, _proj = self._project(boost, tmp_path, monkeypatch)
+        assert blob.is_file()
+        assert "every tap is already compact" in boost("compact").out
+        assert blob.is_file()
+        boost("drift", expect=None)
+        assert "every tap is already compact" in boost("compact").out
+        assert blob.is_file()
+
+    def test_keep_dirs_merges_both_locks(self, boost, sandbox, tmp_path,
+                                         monkeypatch):
+        from boost_cli.core import compact, lockfile, projectlock
+        _blob, proj = self._project(boost, tmp_path, monkeypatch)
+        lockfile.set_skill("u", {"tap": "other", "source_dir": "skills/u"})
+        lockfile.set_skill("nodir", {"tap": "other"})
+        assert compact.keep_dirs() == {"other": ["skills/u"],
+                                       "src": ["skills/demo"]}
+        # A second record of one dir is kept once.
+        projectlock.set_skill(proj, "twin", {"tap": "src",
+                                             "source_dir": "skills/demo"})
+        assert compact.keep_dirs()["src"] == ["skills/demo"]
+
+    def test_keep_dirs_outside_a_project_is_the_user_lock(self, sandbox,
+                                                           monkeypatch):
+        from boost_cli.core import compact, lockfile
+        monkeypatch.chdir(paths.home())          # $HOME is never a project
+        lockfile.set_skill("u", {"tap": "t", "source_dir": "a"})
+        assert compact.keep_dirs() == {"t": ["a"]}
+
+    def test_keep_dirs_ignores_malformed_records(self, sandbox, tmp_path):
+        from boost_cli.core import compact, projectlock
+        proj = tmp_path / "p"
+        (proj / ".git").mkdir(parents=True)
+        projectlock.write(proj, {"skills": {"a": "junk",
+                                            "b": {"tap": "t", "source_dir": 7},
+                                            "c": {"tap": "t", "source_dir": ""},
+                                            "d": {"source_dir": "x"}}})
+        assert compact.keep_dirs(start=proj) == {"": ["x"]}

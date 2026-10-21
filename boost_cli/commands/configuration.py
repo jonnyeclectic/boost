@@ -353,13 +353,8 @@ def cmd_compact(argv) -> int:
             out.ok("no cloned taps to compact")
         return 0
 
-    # source_dir keeps an installed skill's own assets on disk, so routine
-    # hashing (`outdated`, `doctor`) stays offline after the freight is gone.
-    keep: dict[str, list[str]] = {}
-    for section in lockfile.all_installed().values():
-        for entry in section.values():
-            if entry.get("source_dir"):
-                keep.setdefault(entry.get("tap", ""), []).append(entry["source_dir"])
+    # Installed skills' own assets stay on disk, user and project scope alike.
+    keep = compactplan.keep_dirs()
 
     freed = 0
     removed = 0                 # bytes deleted before any re-download (reclone)
