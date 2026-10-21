@@ -299,14 +299,17 @@ def _upstream_reason(name, lk, tap_name, head):
     entry = cast(dict, entry)                 # matches is non-empty above
     latest = str(entry.get("version") or "0.0.0")
     installed_v = str(lk.get("version") or "0.0.0")
-    src_sha = None
+    src_sha, exec_changed = None, False
     if not util.semver_gt(latest, installed_v) and head and head != lk.get("commit"):
         try:
             src_sha = store.skill_source_sha(entry)
         except BoostError:
             return None  # source checkout is gone; `verify` owns that finding
+        exec_changed = store.source_exec_changed(
+            entry, lk, store.skill_store_dir(name))
     return staleness.upstream_reason(installed_v, latest, lk.get("commit", ""),
-                                     head, lk.get("sha256", ""), src_sha)
+                                     head, lk.get("sha256", ""), src_sha,
+                                     exec_changed)
 
 
 def _installed_conflicts(names):

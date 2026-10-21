@@ -212,8 +212,13 @@ def cmd_clean(argv) -> int:
             for old in snaps[:-50]
         )
 
+    leftovers = store.leftover_copies()
+    items.extend((pth, "leftover skill copy", util.dir_size(pth))
+                 for pth in leftovers)
     if paths.store_dir().is_dir():
         for pth in sorted(paths.store_dir().rglob("*")):
+            if any(pth.is_relative_to(d) for d in leftovers):
+                continue    # removed whole, above
             if pth.name == "__pycache__" and pth.is_dir():
                 items.append((pth, "__pycache__", util.dir_size(pth)))
             elif pth.name == ".DS_Store" and pth.is_file():

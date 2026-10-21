@@ -495,15 +495,23 @@ def copy_view_sha(src: Path, within: Path | None) -> str:
     do. A tree with no link hashes in place; one with any is staged through
     ``_copy_tree`` itself, so the two cannot disagree about what lands.
     """
-    src = Path(src)
+    with _copy_view(Path(src), within) as view:
+        return util.sha256_dir(view)
+
+
+@contextlib.contextmanager
+def _copy_view(src: Path, within: Path | None) -> Iterator[Path]:
+    """``src`` as :func:`_copy_tree` would land it: in place when it holds
+    no link, else staged through ``_copy_tree`` itself."""
     if not any(Path(here, n).is_symlink()
                for here, dirs, names in os.walk(src)
                for n in (*dirs, *names)):
-        return util.sha256_dir(src)
+        yield src
+        return
     with tempfile.TemporaryDirectory(prefix=util.TEMP_PREFIX) as tmp:
         view = Path(tmp) / "view"
         _copy_tree(src, view, within)
-        return util.sha256_dir(view)
+        yield view
 
 
 def skill_source_sha(entry: dict) -> str:
@@ -514,6 +522,33 @@ def skill_source_sha(entry: dict) -> str:
     """
     src = source_dir_for(entry)
     return copy_view_sha(src, registry.get(entry["tap"]).path)
+
+
+def source_exec_changed(entry: dict, lk: dict, copy: Path | None) -> bool:
+    """Whether catalog ``entry``'s source has other exec bits than the install.
+
+    The content hash cannot see a mode, so a commit that only made a script
+    executable read as up to date, and `update` never copied the bit over.
+    The install's bits are what its lock row ``lk`` recorded, or — a row from
+    before rows recorded them — what the ``copy`` on disk holds: the copy is
+    made with ``copy2``, so it has the source's modes as of the install.
+    False when neither is known or the source cannot be read; the content
+    comparison beside this one reports that.
+    """
+    want = lk.get("exec")
+    if want is None:
+        if copy is None or not copy.is_dir():
+            return False
+        want = util.exec_bits(copy)
+        if want is None:
+            return False
+    try:
+        src = source_dir_for(entry)
+    except BoostError:
+        return False
+    with _copy_view(src, registry.get(entry["tap"]).path) as view:
+        have = util.exec_bits(view)
+    return have is not None and have != want
 
 
 def _inside(path: str, root: str) -> bool:
@@ -1555,7 +1590,8 @@ def _copy_skill(src: Path, dest: Path, *, within: Path | None = None,
             os.replace(backup, dest)      # swap-in failed: restore the original
         with contextlib.suppress(OSError):
             _own_writable(staged)     # a half-copied 0555 dir refuses rmtree
-        shutil.rmtree(staged, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            util.rmtree(staged)
         if backup is not None and (backup.exists() or backup.is_symlink()):
             _remove_backup(backup)
         raise
@@ -1655,6 +1691,7 @@ def _copy_tree(src: Path, dst: Path, within: Path | None) -> list[str]:
         return skip
 
     shutil.copytree(src, dst, symlinks=True, ignore=ignore, dirs_exist_ok=True)
+    _own_dirs(dst)
     skipped: list[str] = []
     for p in escaping:
         rel = Path(os.path.relpath(p, src)).as_posix()
@@ -1677,6 +1714,27 @@ def _copy_tree(src: Path, dst: Path, within: Path | None) -> list[str]:
     return skipped
 
 
+def _own_dirs(top: Path) -> None:
+    """Give ``top`` and every directory under it at least ``u+rwx``.
+
+    ``copytree`` copies each directory's mode, so a skill imported from a
+    read-only source (a nix store path, an extracted tarball) landed with
+    0o555 directories, and the store copy could then be neither uninstalled
+    nor replaced. Directories only: a file's mode, its exec bit above all,
+    is the skill's. A link is never chmod-ed — that changes its target.
+    """
+    def own(d: str) -> None:
+        mode = os.lstat(d).st_mode
+        if not stat.S_ISLNK(mode) and mode & stat.S_IRWXU != stat.S_IRWXU:
+            os.chmod(d, mode | stat.S_IRWXU)
+
+    own(str(top))
+    # Top-down, so each directory is fixed before the walk lists it.
+    for here, dirs, _names in os.walk(top):
+        for n in dirs:
+            own(os.path.join(here, n))
+
+
 def _remove_backup(backup: Path) -> None:
     """Delete a moved-aside copy, whatever kind of thing it is.
 
@@ -1685,11 +1743,39 @@ def _remove_backup(backup: Path) -> None:
     real directory, the ``.boost-XXXXXXXX.old`` staging link was left behind
     forever. Harmless-looking, but it accumulates in the user's agent dirs and
     every one of them is a dangling pointer.
+
+    :func:`util.rmtree`, not ``shutil.rmtree(ignore_errors=True)``: a copy
+    holding a read-only directory (one installed before :func:`_copy_tree`
+    normalised modes) failed to delete in silence, and every reinstall left
+    one more ``.old`` dir in the store. Still best-effort — this runs in
+    cleanup paths, where raising would mask the error being cleaned up after
+    — and a leftover is what `boost doctor` names and `boost clean` removes
+    (:func:`leftover_copies`).
     """
     if backup.is_symlink():
         backup.unlink(missing_ok=True)
     else:
-        shutil.rmtree(backup, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            util.rmtree(backup)
+
+
+#: The suffixes of a moved-aside copy: :func:`_copy_skill`'s ``.old`` and
+#: :func:`_restore_old_copy`'s ``.new``.
+_LEFTOVER_SUFFIXES = (".old", ".new")
+
+
+def leftover_copies() -> list[Path]:
+    """Moved-aside skill copies a swap left in the store, sorted.
+
+    Only ``.boost-*.old`` / ``.boost-*.new``: a bare ``.boost-XXXXXXXX`` is
+    the staging dir of an install that may be copying right now.
+    """
+    root = paths.store_dir()
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.iterdir()
+                  if p.name.startswith(util.TEMP_PREFIX)
+                  and p.name.endswith(_LEFTOVER_SUFFIXES))
 
 
 def declared_mcp_servers(skill_dir) -> list[dict]:
@@ -2443,6 +2529,8 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
         "source_dir": entry.get("rel_dir", "."),
         "commit": gitutil.head_commit(tap.path),
         "sha256": util.sha256_dir(dest),
+        # Modes the hash cannot see; `integrity.exec_drifted` reads them.
+        "exec": util.exec_bits(dest),
         # record_rebuilt carries the held one, with pinned/tags/commit_pin.
         "installed_at": now,
         "updated_at": now,
@@ -2586,6 +2674,7 @@ def _install_project_skill(entry: dict, force: bool = False,
         "source_dir": entry.get("rel_dir", "."),
         "commit": gitutil.head_commit(tap.path),
         "sha256": util.sha256_dir(first),
+        "exec": util.exec_bits(first),
         "scope": scopes.SCOPE_PROJECT,
         "installed_at": (existing or {}).get("installed_at", now),
         "updated_at": now,
@@ -5028,6 +5117,8 @@ def install_from_path(src_dir: Path, name: str | None = None,
         "source_url": remote.url if remote else "",
         "commit": remote.commit if remote else "",
         "sha256": util.sha256_dir(dest),
+        # Modes the hash cannot see; `integrity.exec_drifted` reads them.
+        "exec": util.exec_bits(dest),
         # record_rebuilt carries the held one, with pinned/tags/commit_pin.
         "installed_at": now,
         "updated_at": now,
@@ -6810,7 +6901,8 @@ def _record_unrecorded(name: str, why: str) -> str | None:
                "source; `boost install <tap>:%s --force` replaces it with "
                "that tap's copy)" % name
                if why == "recover" and matches else "as a local skill")
-    record.update({"sha256": have, "installed_at": now, "updated_at": now,
+    record.update({"sha256": have, "exec": util.exec_bits(sdir),
+                   "installed_at": now, "updated_at": now,
                    "pinned": False, "quarantined": False, "agents": linked,
                    "only_agents": narrowed, "tags": []})
     if unseen:

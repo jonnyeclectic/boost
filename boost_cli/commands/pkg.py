@@ -1807,7 +1807,7 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
         out.warn("%s: %s" % (label, warning))
     old_v = str(lk.get("version", "0.0.0"))
     new_v = str(entry.get("version", "0.0.0"))
-    head, src_sha = "", None
+    head, src_sha, exec_changed = "", None, False
     if not util.semver_gt(new_v, old_v):
         if tapname not in heads:
             heads[tapname] = gitutil.head_commit(registry.get(tapname).path)
@@ -1817,8 +1817,13 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
                 src_sha = store.skill_source_sha(entry)
             except BoostError:
                 return 0, 0, 0, 0
+            exec_changed = store.source_exec_changed(
+                entry, lk, integrity.project_skill_dir(lk, pbase)
+                if scope == scopes.SCOPE_PROJECT
+                else store.skill_store_dir(name))
     reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
-                                       head, lk.get("sha256", ""), src_sha)
+                                       head, lk.get("sha256", ""), src_sha,
+                                       exec_changed)
     if reason is None:
         return 0, 0, 0, 0
     if lk.get("quarantined"):

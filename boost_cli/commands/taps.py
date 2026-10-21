@@ -537,7 +537,7 @@ def cmd_outdated(argv) -> int:
         entry = cast(dict, entry)             # matches is non-empty above
         latest = str(entry.get("version") or "0.0.0")
         installed_v = str(lk.get("version") or "0.0.0")
-        head, src_sha, src_missing = "", None, False
+        head, src_sha, src_missing, exec_changed = "", None, False, False
         if not util.semver_gt(latest, installed_v):
             if tap_name not in heads:
                 # Configured and cloned: `_held_tap_reason` returned above
@@ -551,6 +551,11 @@ def cmd_outdated(argv) -> int:
                     src_sha = store.skill_source_sha(entry)
                 except BoostError:
                     src_missing = True
+                else:
+                    exec_changed = store.source_exec_changed(
+                        entry, lk, integrity.project_skill_dir(lk, _base)
+                        if scope == scopes.SCOPE_PROJECT
+                        else store.skill_store_dir(name))
         base = {"name": name, "kind": "skill", "installed": installed_v,
                 "tap": tap_name, "pinned": bool(lk.get("pinned")),
                 "scope": scope}
@@ -561,7 +566,7 @@ def cmd_outdated(argv) -> int:
         else:
             reason = staleness.upstream_reason(
                 installed_v, latest, lk.get("commit", ""), head,
-                lk.get("sha256", ""), src_sha)
+                lk.get("sha256", ""), src_sha, exec_changed)
             if reason == staleness.VERSION:
                 results.append(base | {"latest": latest,
                                        "reason": staleness.VERSION,
