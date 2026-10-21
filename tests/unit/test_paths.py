@@ -206,7 +206,7 @@ class TestTilde:
             "%s=%r is a relative path, so it would resolve against the "
             "working directory" % (var, raw))
         assert ei.value.hint == (
-            "export %s=/an/absolute/path (or ~/path, unquoted)" % var)
+            "export %s=/an/absolute/path (or ~/path)" % var)
         with pytest.raises(BoostError):
             paths.check_env()
         # nothing was created under the working directory

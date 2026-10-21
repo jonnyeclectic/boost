@@ -119,7 +119,7 @@ def env_dir(name: str) -> Path | None:
         raise BoostError(
             "%s=%r is a relative path, so it would resolve against the "
             "working directory" % (name, raw),
-            hint="export %s=/an/absolute/path (or ~/path, unquoted)" % name,
+            hint="export %s=/an/absolute/path (or ~/path)" % name,
             wrap=True)
     return p
 
