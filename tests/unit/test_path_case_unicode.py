@@ -10,6 +10,9 @@ drift and verify called it healthy:
   ``scripts/`` stay outside the checkout;
 * ``skills/Lint`` and ``skills/lint`` in one tap: a case-insensitive checkout
   holds one dir with one SKILL.md and both skills' scripts.
+
+And two store installs a case-insensitive filesystem merged: a skill beside a
+workflow's skill copy that differs only by case, and two workflows that do.
 """
 from __future__ import annotations
 
@@ -19,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import catalog, gitutil, registry, store
+from boost_cli.core import catalog, gitutil, lockfile, paths, registry, store
 from boost_cli.errors import BoostError
 
 NFD_DIR = unicodedata.normalize("NFD", "skills/café-dir")
@@ -251,4 +254,121 @@ class TestDropCaseCollisions:
             [{"rel_dir": "skills/lint", "skill_md": "skills/lint/SKILL.md"}],
             LINT_GROUPS)
         assert kept == []
+
+
+def make_tap(root: Path, *, skills: dict[str, str] | None = None,
+             commands: dict[str, str] | None = None):
+    files = {"skills/%s/SKILL.md" % d: _skill(n)
+             for d, n in (skills or {}).items()}
+    files.update({"commands/%s.md" % stem:
+                  "---\nname: %s\ndescription: a command\n---\n\n%s body\n"
+                  % (n, n) for stem, n in (commands or {}).items()})
+    tap = registry.add(str(plumbing_repo(root, files)))
+    catalog.rebuild_tap(tap)
+    return tap
+
+
+def _entry(tap, name):
+    return next(e for e in catalog.load_tap(tap) if e["name"] == name)
+
+
+class TestSkillBesideAWorkflowCopy:
+    MESSAGE = ("ship differs only by case from Ship, the skill copy of "
+               "workflow Ship at %s; on a case-insensitive filesystem they "
+               "would share one store dir")
+    HINT = ("`boost install Ship --force --no-as-skill` takes the copy out "
+            "of the store, then re-run this install")
+
+    @pytest.fixture()
+    def taps(self, sandbox, tmp_path):
+        wf = make_tap(tmp_path / "wftap", commands={"Ship": "Ship"})
+        sk = make_tap(tmp_path / "sktap", skills={"ship": "ship"})
+        store.install(_entry(wf, "Ship"), as_skill=True)
+        assert store.skill_copy_owner("Ship") == "Ship"
+        return wf, sk
+
+    @pytest.mark.parametrize("force", [False, True])
+    def test_the_skill_is_refused(self, taps, force):
+        copy = store.skill_store_dir("Ship") / "SKILL.md"
+        before = copy.read_text(encoding="utf-8")
+
+        with pytest.raises(BoostError) as exc:
+            store.install(_entry(taps[1], "ship"), force=force)
+
+        assert exc.value.message == self.MESSAGE % paths.tilde(
+            store.skill_store_dir("Ship"))
+        assert exc.value.hint == self.HINT
+        assert lockfile.get_skill("ship") is None
+        assert copy.read_text(encoding="utf-8") == before
+        assert store.skill_copy_owner("Ship") == "Ship"
+
+    def test_an_import_is_refused(self, taps, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("---\nname: ship\n---\n",
+                                      encoding="utf-8")
+        with pytest.raises(BoostError) as exc:
+            store.install_from_path(src, force=True)
+        assert exc.value.message == self.MESSAGE % paths.tilde(
+            store.skill_store_dir("Ship"))
+
+    def test_the_cli_never_offers_force(self, taps, boost):
+        res = boost("install", "sktap:ship", expect=1)
+        err = " ".join(res.err.split())
+        assert "differs only by case from Ship, the skill copy" in err
+        assert "does not record it" not in err
+        assert "install ship --force" not in err
+
+    def test_the_copy_itself_is_not_a_collision(self, taps):
+        store.refuse_copy_case_collision("Ship")
+        store.refuse_copy_case_collision("unrelated")
+
+
+class TestWorkflowCaseTwins:
+    MESSAGE = ("ship differs only by case from Ship, which is already "
+               "installed; on a case-insensitive filesystem they would share "
+               "one file per agent")
+
+    @pytest.fixture()
+    def taps(self, sandbox, tmp_path):
+        a = make_tap(tmp_path / "tapa", commands={"Ship": "Ship"})
+        b = make_tap(tmp_path / "tapb", commands={"ship": "ship"})
+        store.install(_entry(a, "Ship"), as_skill=False)
+        return a, b
+
+    @pytest.mark.parametrize("force", [False, True])
+    def test_the_second_is_refused_before_any_write(self, taps, force):
+        with pytest.raises(BoostError) as exc:
+            store.install(_entry(taps[1], "ship"), force=force,
+                          as_skill=False)
+
+        assert exc.value.message == self.MESSAGE
+        assert exc.value.hint == ("`boost uninstall Ship` first if ship "
+                                  "should replace it")
+        assert lockfile.get_workflow("ship") is None
+        assert list(lockfile.installed_workflows()) == ["Ship"]
+
+    def test_the_cli_exits_1(self, taps, boost):
+        res = boost("install", "ship", expect=1)
+        assert "differs only by case from Ship" in " ".join(res.err.split())
+        assert "Installed" not in res.out
+
+    def test_the_same_name_still_reinstalls(self, taps):
+        store.install(_entry(taps[0], "Ship"), force=True, as_skill=False)
+        assert list(lockfile.installed_workflows()) == ["Ship"]
+
+
+SAME_PLACE_ROWS = {"A": {"scope": "user"}, "B": {},
+                   "C": {"scope": "project", "base": str(Path("/r"))},
+                   "D": {"scope": "project", "base": str(Path("/s"))}}
+
+
+class TestSamePlace:
+
+    def test_user_scope_includes_unscoped_rows(self):
+        assert list(store._same_place(SAME_PLACE_ROWS, "user", None)) == ["A", "B"]
+
+    def test_project_scope_matches_the_base(self):
+        assert list(store._same_place(SAME_PLACE_ROWS, "project",
+                                      Path("/r"))) == ["C"]
 
