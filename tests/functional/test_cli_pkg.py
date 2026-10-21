@@ -346,7 +346,7 @@ class TestUninstall:
         assert "unlinked ← claude-code · windsurf · cursor" in r.out
         assert "Uninstalled 2 skills" in r.out
         assert "╭─ removed" in r.out               # D13: framed summary card
-        assert _lock() == {}
+        assert not paths.lockfile_path().exists()
         assert not (paths.store_dir() / "brainstorming").exists()
         assert not (paths.store_dir() / "commit-messages").exists()
 
@@ -372,7 +372,7 @@ class TestUninstall:
         r = boost("uninstall", "brainstorming")
         assert "uninstall brainstorming? [y/N]" in r.out
         assert "Uninstalled 1 skill" in r.out
-        assert _lock() == {}
+        assert not paths.lockfile_path().exists()
 
     def test_the_prompt_says_when_the_store_holds_the_only_copy(
             self, boost, installed, monkeypatch):
@@ -411,7 +411,7 @@ class TestUninstall:
         r = boost("uninstall", "brainstorming", "-y")
         assert "uninstall brainstorming?" not in r.out
         assert "Uninstalled 1 skill" in r.out
-        assert _lock() == {}
+        assert not paths.lockfile_path().exists()
 
     def test_non_interactive_uninstall_still_works(self, boost, installed,
                                                    monkeypatch):
@@ -425,7 +425,7 @@ class TestUninstall:
         assert "uninstall brainstorming?" not in r.out
         assert "cancelled" not in r.out
         assert "Uninstalled 1 skill" in r.out
-        assert _lock() == {}
+        assert not paths.lockfile_path().exists()
 
     def test_closed_stdin_uninstall_proceeds(self, boost, installed,
                                              monkeypatch):
@@ -438,7 +438,7 @@ class TestUninstall:
         assert r.rc == 0
         assert "uninstall brainstorming?" not in r.out
         assert "Uninstalled 1 skill" in r.out
-        assert _lock() == {}
+        assert not paths.lockfile_path().exists()
 
     def test_rule_uninstall_says_removed_from_not_unlinked(
             self, boost, fixture_tap_src, tmp_path):
@@ -1867,6 +1867,52 @@ class TestImport:
         assert "pr-me" in prompt and "pr-too" in prompt
         assert "fresh" not in _lock()
 
+    def _mixed_repo(self, tmp_path, skills=("alpha",)):
+        root = tmp_path / "repo1"
+        for n in skills:
+            _skill_dir(root / "skills", n)
+        (root / "commands").mkdir(parents=True)
+        (root / "commands" / "deploy.md").write_text(
+            "---\ndescription: a deploy command\n---\n\nDeploy.\n",
+            encoding="utf-8")
+        return root
+
+    def test_a_workflow_beside_one_skill_is_skipped_by_name(
+            self, boost, sandbox, tmp_path):
+        # It was counted as a second skill, so the run stopped at
+        # "multiple skills found" and listed `deploy` as one.
+        root = self._mixed_repo(tmp_path)
+        r = boost("import", root)
+        assert _flat(r.out).startswith(
+            "skipping deploy (workflow) — boost import takes skills; rules "
+            "and workflows install from a tap: `boost tap %s`, then "
+            "`boost install NAME`" % root)
+        assert sorted(_lock()) == ["alpha"]
+
+    def test_import_all_imports_exactly_the_skills(self, boost, sandbox,
+                                                   tmp_path):
+        # `--all` crashed rc 70 reading commands/SKILL.md, before any skill.
+        root = self._mixed_repo(tmp_path, skills=("alpha", "beta"))
+        r = boost("import", root, "--all")
+        assert "Imported 2 skills" in r.out
+        assert sorted(_lock()) == ["alpha", "beta"]
+
+    def test_name_of_a_workflow_is_an_error_not_a_crash(self, boost, sandbox,
+                                                        tmp_path):
+        root = self._mixed_repo(tmp_path, skills=("alpha", "beta"))
+        r = boost("import", root, "--name", "deploy", expect=1)
+        assert "Error: deploy is a workflow, and boost import takes skills" \
+            in r.err
+        assert "unexpected error" not in r.err
+        assert not paths.lockfile_path().exists()
+
+    def test_a_repo_of_only_workflows_says_where_they_install_from(
+            self, boost, sandbox, tmp_path):
+        root = self._mixed_repo(tmp_path, skills=())
+        r = boost("import", root, expect=1)
+        assert "Error: no SKILL.md found under %s" % root in r.err
+        assert "`boost install NAME`" in _flat(r.err)
+
     def test_dir_with_skill_md(self, boost, sandbox, tmp_path):
         d = _skill_dir(tmp_path, "my-skill")
         r = boost("import", d)
@@ -2026,7 +2072,7 @@ class TestSnapshot:
         assert snap_id in r.out and "before-wipe" in r.out
 
         boost("uninstall", "brainstorming")
-        assert _lock() == {}
+        assert not paths.lockfile_path().exists()
         assert not (paths.store_dir() / "brainstorming").exists()
 
         r = boost("snapshot", "restore", snap_id)
