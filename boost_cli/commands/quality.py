@@ -711,6 +711,11 @@ def cmd_doctor(argv):
                 wrap=True)
         else:
             tap_ok += 1
+    # With config.json unreadable no tap is listed, so every clone would read
+    # as unlisted; the config row above already names them.
+    for half in [] if cfg_err else registry.unfinished_clones():
+        bad("tap", "%s is a clone that never finished (no tap lists it and it "
+            "has no commit checked out) — delete it" % _tilde(half), wrap=True)
     if taps and cache_block:
         bad("cache", "%s — every command rescans its taps and cannot keep the "
             "result; %s"
@@ -2123,6 +2128,15 @@ def cmd_heal(argv):
     cache_dir = paths.cache_dir()
     cache_stuck = paths.refuses_writes(cache_dir) is not None
     broken_taps = []
+    # Without git no clone's HEAD can be read, so no cache can be judged
+    # fresh or stale: this used to end heal at the first tap with "git is
+    # required", after it had already created directories. Said once, and
+    # never under an all-clear — doctor counts it as an issue too.
+    no_git = not gitutil.has_git()
+    if no_git:
+        out.warn("git not found on PATH — heal cannot check tap catalogs "
+                 "against their clones; install git, then rerun `boost heal`",
+                 wrap=True)
     for tap in registry.list_taps():
         if not tap.is_cloned:
             out.warn("tap %s not cloned — skipped (run `boost update`)" % tap.name)
@@ -2133,6 +2147,8 @@ def cmd_heal(argv):
             # names it and does not answer "nothing to heal" beneath it.
             broken_taps.append(tap.path)
             out.warn(registry.broken_clone_line(tap.name), wrap=True)
+            continue
+        if no_git:
             continue
         had_cache = tap.cache_file.exists()
         # One HEAD for both freshness questions below, before and after.
@@ -2264,7 +2280,7 @@ def cmd_heal(argv):
                  "`boost sync --prune`"
                  % (len(oos), _s(len(oos)),
                     ", ".join("%s → %s" % (n, a) for n, a in oos)), wrap=True)
-    if not actions and not stuck and not cfg_err:
+    if not actions and not stuck and not cfg_err and not no_git:
         # A duplicate this run declined to prune is something `heal` saw, can
         # fix, and deliberately left. A bare "nothing to heal" printed under
         # the line offering the flag contradicts it.
@@ -2273,7 +2289,7 @@ def cmd_heal(argv):
                else "nothing to heal")
     if actions and not dry:
         journal.log("heal", "%d actions" % len(actions))
-    return 1 if cfg_err or stuck or unrepaired else 0
+    return 1 if cfg_err or stuck or unrepaired or no_git else 0
 
 
 def cmd_conflict(argv):
