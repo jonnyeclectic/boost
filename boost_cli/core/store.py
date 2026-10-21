@@ -4725,6 +4725,17 @@ def _materialized_result(name: str, removed: list[str], entry: dict,
     return res
 
 
+def _path_policy_entry(name: str, meta: dict, tap_label: str = "local") -> dict:
+    """The catalog-shaped entry the install policy weighs a local install by.
+
+    Shared by :func:`install_from_path` and the `sync` repair that calls it,
+    so the dry run refuses a restore the run would refuse, in the same words.
+    """
+    return {"name": name, "tap": tap_label,
+            "version": str(meta.get("version") or "0.0.0"),
+            "description": meta.get("description")}
+
+
 def _import_meta(src_dir: Path) -> dict:
     """The frontmatter of the SKILL.md a local install reads its name from."""
     from . import frontmatter
@@ -4824,9 +4835,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
     disowned = _refuse_unrecorded(name, existing, force)
     violations = policy.check_install(
-        {"name": name, "tap": tap_label,
-         "version": str(meta.get("version") or "0.0.0"),
-         "description": meta.get("description")},
+        _path_policy_entry(name, meta, tap_label),
         # Re-importing a skill that is already counted must not trip max_skills.
         _count_others(lockfile.installed(), name))
     if violations:
@@ -6214,9 +6223,11 @@ class StoreRepair:
     that never fired. Tense is still each caller's business; the decision is not.
 
     ``preview`` is a prediction, not a promise: an install can still fail (a
-    tap clone removed between the two calls), and a failed install falls
-    through to the drop. That residue is the honest kind — it names the branch
-    the run will *attempt*, rather than listing both and committing to neither.
+    tap clone removed between the two calls). A failed install falls through
+    to the drop only when its source is in fact gone; any other refusal keeps
+    the lock row and is reported as not restored. That residue is the honest
+    kind — it names the branch the run will *attempt*, rather than listing
+    both and committing to neither.
     """
 
     action: str                     #: local | tap | declined | drop
@@ -6238,7 +6249,7 @@ def is_unrepaired(action: str) -> bool:
     return any(mark in action for mark in (
         _NOT_REMATERIALIZED, _NOT_LINKED_MARK, _NOT_RECORDED_MARK,
         _DECLINED_MARK, _NOT_CLONED_MARK, _PROJECT_GONE_MARK,
-        _NOT_VOUCHED_MARK))
+        _NOT_VOUCHED_MARK, _NOT_RESTORED_MARK))
 
 
 #: A pin that blocks a repair. Missing from :func:`is_unrepaired` until it was
@@ -6250,6 +6261,11 @@ _DECLINED_MARK = " — repair declined "
 _PROJECT_GONE_MARK = " is missing from the project but its source is gone"
 #: A URL import's store dir, which sync never re-clones -- also a decline.
 _NOT_CLONED_MARK = "'s store dir is missing — `boost reinstall "
+#: A missing skill the source is still there for, whose reinstall was refused
+#: (a policy, a capability, a store that refuses the write). Its lock row is
+#: kept: dropping it, as sync did, discarded the record of a skill a policy
+#: change had only paused, and reported "source gone" over a source in place.
+_NOT_RESTORED_MARK = " not restored: "
 
 
 _DROPPED = "dropped %s from lock (store dir missing, source gone)"
@@ -6261,6 +6277,51 @@ def _declined(label: str, where: str, name: str) -> str:
     return ("%s is pinned and its %s source has moved%s"
             "(`boost unpin %s`, then `boost reinstall %s` to accept the new "
             "content)" % (label, where, _DECLINED_MARK, name, name))
+
+
+def _not_restored(name: str, why: str, hint: str | None = None) -> str:
+    """A missing skill sync leaves missing, with its lock row kept."""
+    return "%s%s%s%s (its lock row is kept)" % (
+        name, _NOT_RESTORED_MARK, why, " — %s" % hint if hint else "")
+
+
+def _policy_declined(name: str, policy_entry: dict,
+                     warning: str | None = None) -> StoreRepair | None:
+    """The decline for restoring ``name`` when the install policy refuses it.
+
+    The install a repair replaces applied the policy, so a skill or tap
+    blocklisted since then must not come back through `sync` or `heal` --
+    and the dry run asks the same question, so it does not promise a
+    reinstall the run then refuses. ``name`` is still in the lock, so the
+    count is the others' (`_count_others`): a plain ``len`` would refuse every
+    restore at exactly ``max_skills``.
+    """
+    violations = policy.check_install(
+        policy_entry, _count_others(lockfile.installed(), name))
+    if not violations:
+        return None
+    msg = _not_restored(
+        name, "policy blocks installing %s: %s" % (name, "; ".join(violations)),
+        "inspect with `boost policy list`")
+    return StoreRepair("declined", msg, msg, warning=warning)
+
+
+def _repair_source_present(repair: StoreRepair) -> bool:
+    """Whether the source a failed repair reinstalls from is still there.
+
+    Decides drop vs. keep after an install refused: only a source that has
+    gone justifies dropping the lock row. SKILL.md sits inside every tap's
+    sparse cone, so its presence needs no materialization.
+    """
+    if repair.src is not None:
+        return (repair.src / "SKILL.md").is_file()
+    if repair.cat_entry is None:
+        return False
+    try:
+        tap = registry.get(repair.cat_entry["tap"])
+    except BoostError:
+        return False
+    return (tap.path / repair.cat_entry.get("skill_md", "")).is_file()
 
 
 def _lock_source(name: str, tap_name: str, entry: dict,
@@ -6297,6 +6358,10 @@ def plan_missing_store(name: str) -> StoreRepair:
             if _pin_blocks_repair(entry, lambda: _local_source_sha(src)):
                 msg = _declined(name, "local", name)
                 return StoreRepair("declined", msg, msg)
+            blocked = _policy_declined(
+                name, _path_policy_entry(name, _import_meta(src)))
+            if blocked is not None:
+                return blocked
             return StoreRepair(
                 "local", src=src,
                 preview="would reinstall %s from local source %s" % (name, src),
@@ -6307,6 +6372,9 @@ def plan_missing_store(name: str) -> StoreRepair:
             if _pin_blocks_repair(entry, lambda: _skill_source_sha(cat_entry)):
                 msg = _declined(name, "tap", name)
                 return StoreRepair("declined", msg, msg, warning=warning)
+            blocked = _policy_declined(name, cat_entry, warning)
+            if blocked is not None:
+                return blocked
             return StoreRepair(
                 "tap", cat_entry=cat_entry, warning=warning,
                 preview="would reinstall %s from %s" % (name, tap_name),
@@ -6979,11 +7047,16 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
                 install(repair.cat_entry, force=True)
                 actions.append(repair.applied)
                 continue
-        except BoostError:
+        except BoostError as err:
             # The one place the preview can be wrong, and deliberately: a
-            # source readable a moment ago is gone now, so the run falls
-            # through to the drop.
-            pass
+            # source readable a moment ago may be gone now, and only then
+            # does the run fall through to the drop. Any other refusal (a
+            # capability policy, a store refusing the write) keeps the row:
+            # dropping it reported "source gone" over a source in place and
+            # threw away the version, scope and tags the row recorded.
+            if _repair_source_present(repair):
+                actions.append(_not_restored(name, err.message, err.hint))
+                continue
         lockfile.remove_skill(name)
         actions.append(_DROPPED % name)
     for kind, name in plan.get("missing_materializations", []):
