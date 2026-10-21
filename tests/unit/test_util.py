@@ -785,11 +785,14 @@ class TestAtomicWriteText:
         for name in (short, ascii_, wide):
             util.atomic_write_text(tmp_path / name, name)
             assert (tmp_path / name).read_text(encoding="utf-8") == name
-        assert seen[0].startswith(b"." + short.encode() + b".")
-        assert len(seen[1]) == util.MAX_COMPONENT_BYTES
-        assert seen[1].startswith(b"." + b"b" * 241 + b".")
-        assert seen[2].startswith(("." + "\u00e9" * 120 + ".").encode("utf-8"))
-        assert len(seen[2]) == util.MAX_COMPONENT_BYTES - 1
+        # The temp is named for boost, not for the target, so its length does
+        # not grow with the name beside it.
+        assert len(seen) == 3
+        assert len(set(map(len, seen))) == 1
+        for tmp in seen:
+            assert tmp.startswith(util.TEMP_PREFIX.encode())
+            assert tmp.endswith(b".tmp")
+            assert len(tmp) < 32
 
     def test_honours_encoding(self, tmp_path):
         p = tmp_path / "f.txt"
