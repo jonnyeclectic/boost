@@ -658,6 +658,20 @@ def cmd_doctor(argv):
             "with `boost config set agents.%s.dir <dir>`, or remove the row "
             "with `boost config unset agents.%s`" % (aname, aname, aname),
             wrap=True)
+    for aname, key, value in agents.bad_flags(claim=True):
+        bad("agent-config", "agents.%s.%s is %s, not a boolean, so boost reads "
+            "it as %s — fix it with `boost config set agents.%s.%s "
+            "<true|false>`" % (aname, key, json.dumps(value),
+                               str(agents.flag_default(aname, key)).lower(), aname,
+                               key), wrap=True)
+    if agents_ok:
+        for aname, spec in agents.known_agents().items():
+            if spec["store_alias"]:
+                rep.note("agent-config", "agents.%s.dir (%s) is the canonical "
+                         "store, so %s reads every skill there directly — "
+                         "boost does not link into it"
+                         % (aname, _tilde(spec["dir"]),
+                            agents.display_name(aname)), wrap=True)
     for aname, err in agent_errs:
         key = "agents.%s.dir" % aname
         bad("agent-config", "%s: %s — %s, or set a path with `boost config set "

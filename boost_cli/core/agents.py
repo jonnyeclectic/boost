@@ -3,11 +3,13 @@
 """AI agent targets: where installed skills get symlinked."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from ..errors import BoostError
-from . import config, output, paths, util
+from . import config, output, paths, typedvalue, util
 
 DISPLAY = {"claude-code": "Claude Code", "windsurf": "Windsurf",
            "cursor": "Cursor", "gemini": "Gemini CLI",
@@ -17,6 +19,120 @@ DISPLAY = {"claude-code": "Claude Code", "windsurf": "Windsurf",
 # Rows already warned about in this process: known_agents runs dozens of
 # times per command, and one warning per row is the message.
 _WARNED_DIRLESS: set[str] = set()
+# ``agents.<name>.<flag>`` keys already warned about, for the same reason.
+_WARNED_FLAGS: set[str] = set()
+
+#: The boolean settings of an agent row, with the default each falls back to.
+#: Read through :func:`_flag`, never ``bool()``: ``config.json``'s ``agents``
+#: section is the one open section users edit by hand, and ``bool("false")``
+#: is True — a hand-written ``"enabled": "false"`` linked the agent anyway,
+#: and ``"links_skills": "false"`` gave Gemini the duplicate links the flag
+#: exists to prevent while doctor said healthy.
+FLAG_DEFAULTS: dict[str, bool] = {
+    "enabled": True, "links_skills": True, "project_scope": True,
+    "skills_only": False, "workflows": True, "dedupes_by_path": False,
+}
+
+
+#: Keys :func:`known_agents` adds that no one sets: worked out from the
+#: filesystem, so ``config set`` must not offer them (:data:`config.AGENT_KEYS`).
+DERIVED_KEYS = ("store_alias",)
+
+
+def _read_flag(name: str, key: str, value: Any) -> bool:
+    """``value`` read as a boolean, or raise :class:`typedvalue.ValueTypeError`.
+
+    The vocabulary is ``config set``'s (:func:`typedvalue.adapt`): a real
+    JSON boolean as-is, and a string such as ``"false"``/``"no"``/``"0"`` read
+    as what it says. A JSON ``0``/``1`` is read as its digit.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    return typedvalue.adapt("agents.%s.%s" % (name, key), value,
+                            typedvalue.BOOL)
+
+
+def flag_default(name: str, key: str) -> bool:
+    """What ``agents.<name>.<key>`` means when it is left out: the agent's own
+    :data:`config.DEFAULTS` row first (gemini's ``links_skills`` is False),
+    then :data:`FLAG_DEFAULTS`."""
+    defaults: dict[str, dict] = config.DEFAULTS["agents"]  # type: ignore[assignment]
+    row = defaults.get(name)
+    if isinstance(row, dict) and isinstance(row.get(key), bool):
+        return row[key]
+    return FLAG_DEFAULTS[key]
+
+
+def _flag(name: str, spec: dict, key: str) -> bool:
+    """One boolean setting of an agent row; junk warns once and reads as
+    :func:`flag_default` — what the row would mean with the key left out."""
+    if key not in spec:
+        return FLAG_DEFAULTS[key]
+    default = flag_default(name, key)
+    try:
+        return _read_flag(name, key, spec[key])
+    except typedvalue.ValueTypeError as e:
+        dotted = "agents.%s.%s" % (name, key)
+        if dotted not in _WARNED_FLAGS:
+            _WARNED_FLAGS.add(dotted)
+            output.warn("%s — boost reads it as %s; fix it with `boost config "
+                        "set %s <true|false>`"
+                        % (e, str(default).lower(), dotted),
+                        stream=sys.stderr, wrap=True)
+        return default
+
+
+def bad_flags(claim: bool = False) -> list[tuple[str, str, Any]]:
+    """``(agent, key, stored value)`` for every agent flag that is not a
+    boolean, in ``config.json`` order.
+
+    :func:`known_agents` reads each as its default, with a warning. ``claim``
+    is :func:`dirless`'s: a caller that reports them itself (``boost doctor``)
+    takes the warning over.
+    """
+    found = []
+    for name, spec in (config.get("agents") or {}).items():
+        if not isinstance(spec, dict):
+            continue
+        for key in FLAG_DEFAULTS:
+            if key not in spec:
+                continue
+            try:
+                _read_flag(name, key, spec[key])
+            except typedvalue.ValueTypeError:
+                found.append((name, key, spec[key]))
+    if claim:
+        _WARNED_FLAGS.update("agents.%s.%s" % (n, k) for n, k, _v in found)
+    return found
+
+
+def aliases_store(adir: Path) -> bool:
+    """True when ``adir`` *is* the canonical store, through a symlink or not.
+
+    ``~/.cursor/skills -> ~/.agents/skills`` already shows that agent every
+    installed skill. Treated as a linking agent, every entry in its dir was a
+    real directory "not managed by boost", so install, doctor, sync and heal
+    each told the user to move or delete it — and each of those paths was the
+    store's only copy of the skill. Resolves **both** sides (a macOS ``$HOME``
+    under ``/var`` resolves to ``/private/var``), then asks by inode, which is
+    what catches a case-insensitive volume spelling the store differently.
+    Fails closed: a dir ``resolve()`` refuses is not the store.
+    """
+    try:
+        mine = adir.resolve()
+        store = paths.store_dir().resolve()
+    except (OSError, RuntimeError):
+        return False
+    if mine == store:
+        return True
+    try:
+        return os.path.samefile(mine, store)
+    except OSError:
+        return False
+
+
+class RelativeAgentDir(BoostError):
+    """An agent ``dir`` that expands to a relative path."""
 
 
 def _row_dir(spec: dict) -> Path | None:
@@ -26,13 +142,45 @@ def _row_dir(spec: dict) -> Path | None:
     ``agents.curosr.enabled``, or an agent enabled before its dir was set)
     used to resolve to the working directory, so `boost install` symlinked the
     skill into whatever directory it ran from and called that agent linked.
-    Raises what :func:`paths.expand` raises for an unset ``${VAR}``.
+    Raises what :func:`paths.expand` raises for an unset ``${VAR}``, and
+    :class:`RelativeAgentDir` for a dir that is not absolute once expanded: a
+    relative one resolved against the working directory, so each directory
+    boost ran from got its own copy of that agent's skills tree. A relative
+    dir is refused, not read against ``$HOME``, because ``config set``
+    refuses it too (:func:`check_dir`) and a guessed base is a second meaning
+    for the same text.
     """
     raw = str(spec.get("dir") or "").strip()
     if not raw:
         return None
     p = paths.expand(raw)
-    return None if p == Path() else p
+    if p == Path():
+        return None
+    if not p.is_absolute():
+        raise RelativeAgentDir(
+            "%r is a relative path, which would resolve against whatever "
+            "directory boost runs from" % raw,
+            hint="use an absolute path, or one starting with ~ or ${VAR}")
+    return p
+
+
+def check_dir(raw: Any) -> str | None:
+    """Why ``raw`` cannot be an agent's ``dir``, or None when it can.
+
+    ``config set agents.<name>.dir`` asks this before saving. Only the
+    relative case is refused here: an unset ``${VAR}`` may be set by the time
+    boost reads it, and doctor names it if not.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        _row_dir({"dir": raw})
+    except RelativeAgentDir:
+        return ("an absolute path, or one starting with ~ or ${VAR} — a "
+                "relative dir resolves against the working directory")
+    except BoostError:
+        return None
+    return None
 
 
 def dirless(claim: bool = False) -> list[str]:
@@ -57,11 +205,20 @@ def dirless(claim: bool = False) -> list[str]:
 def known_agents() -> dict[str, dict]:
     """{name: {"dir": Path, "enabled": bool, "links_skills": bool}} per agent.
 
-    A row with no ``dir`` is skipped, with a warning (:func:`_row_dir`).
+    A row with no ``dir`` is skipped, with a warning (:func:`_row_dir`). A
+    row whose dir is the canonical store (:func:`aliases_store`) is read as a
+    native-store agent — ``links_skills`` False, ``store_alias`` True — so
+    nothing links into it, unlinks from it, or sweeps it.
     """
     out = {}
     for name, spec in (config.get("agents") or {}).items():
-        adir = _row_dir(spec)
+        try:
+            adir = _row_dir(spec)
+        except RelativeAgentDir as e:
+            # check() keys the error by name for doctor; a command that stops
+            # here has only this line, so it names the key to edit.
+            raise BoostError("agents.%s.dir: %s" % (name, e.message),
+                             hint=e.hint) from e
         if adir is None:
             if name not in _WARNED_DIRLESS:
                 _WARNED_DIRLESS.add(name)
@@ -70,32 +227,37 @@ def known_agents() -> dict[str, dict]:
                             "remove the row with `boost config unset agents.%s`"
                             % (name, name, name), stream=sys.stderr, wrap=True)
             continue
+        alias = aliases_store(adir)
         out[name] = {
             "dir": adir,
-            "enabled": bool(spec.get("enabled", True)),
+            "enabled": _flag(name, spec, "enabled"),
             # Defaults True: an agent only reads the canonical store if it
             # implements the Agent Skills standard's `~/.agents/skills` path,
             # which most do not, so the symlink is the safe assumption.
-            "links_skills": bool(spec.get("links_skills", True)),
+            "links_skills": (_flag(name, spec, "links_skills")
+                             and not alias),
+            # The dir resolves to the canonical store: the agent reads every
+            # installed skill already. See :func:`aliases_store`.
+            "store_alias": alias,
             # Defaults True: nearly every agent reads a repo-local copy of its
             # own dotdir, so a project install lands in `<repo>/.claude/skills`
             # and its siblings. False marks an agent whose project layout boost
             # does not know — see :func:`project_agents`.
-            "project_scope": bool(spec.get("project_scope", True)),
+            "project_scope": _flag(name, spec, "project_scope"),
             # Defaults False: most agents take all three kinds. True marks an
             # agent where only the skills surface is known — see
             # :func:`materializing_agents`.
-            "skills_only": bool(spec.get("skills_only", False)),
+            "skills_only": _flag(name, spec, "skills_only"),
             # Defaults True. False marks an agent whose *rules* surface is
             # verified but whose slash-command format is not, so it takes rules
             # and skills but no workflows — a finer cut than `skills_only`,
             # which turns both off. See :func:`workflow_agents`.
-            "workflows": bool(spec.get("workflows", True)),
+            "workflows": _flag(name, spec, "workflows"),
             # Defaults False: assume an agent shown the same skill through two
             # of its discovery tiers will complain about it, because Gemini CLI
             # does. True marks one that collapses them instead — see
             # :func:`dedupes_by_path`.
-            "dedupes_by_path": bool(spec.get("dedupes_by_path", False)),
+            "dedupes_by_path": _flag(name, spec, "dedupes_by_path"),
             # Defaults "": derive the repo-local dotdir from the user dir, as
             # every agent with a fixed path can. A non-empty value declares it
             # — see :func:`project_dotdir`.
@@ -255,6 +417,9 @@ def former_link_dirs() -> list[tuple[str, Path]]:
     that is now a native-store agent's is left out, for the reason
     :func:`linking_agents` gives: boost never links there, so what it holds
     belongs to someone else.
+
+    A dir that resolves to the store itself (:func:`aliases_store`) is left
+    out too: a sweep there walks the store.
     """
     known = known_agents()
     current = {str(d) for d in unlinking_agents().values()}
@@ -267,8 +432,10 @@ def former_link_dirs() -> list[tuple[str, Path]]:
     for agent, dirs in _remembered_link_dirs().items():
         for d in dirs:
             found.setdefault(d, agent)
+    # A dir that is the store holds the store's own skills, never a link.
     return [(agent, Path(d)) for d, agent in found.items()
-            if d not in current and d not in native]
+            if d not in current and d not in native
+            and not aliases_store(Path(d))]
 
 
 def sweep_dirs() -> list[Path]:
