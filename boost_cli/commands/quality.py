@@ -972,7 +972,8 @@ def cmd_doctor(argv):
                 elif m.get("stale"):
                     bad(kind, "%s %s for %s is older than the installed v%s — "
                         "run `boost sync`" % (kind, name, m.get("agent", "?"),
-                                              entry.get("version", "?")),
+                                              out.plain(entry.get("version",
+                                                                  "?"))),
                         wrap=True)
                     mat_issues += 1
             # An agent enabled after the install has no row at all, so the
@@ -1845,7 +1846,7 @@ def cmd_heal(argv):
             out.info("would remove broken link %s" % _tilde(link))
         else:
             link.unlink()
-            out.ok("removed broken link %s" % _tilde(link))
+            out.ok("removed broken link %s" % out.plain(_tilde(link)))
         actions.append("unlink %s" % link.name)
     plan = store.sync_plan()
     # One where a recorded skill's link goes is named below, as a link it
@@ -1931,7 +1932,8 @@ def cmd_heal(argv):
     if plan["not_skill_store"]:
         out.info(store.not_skill_line(plan["not_skill_store"]), wrap=True)
     if plan["misnamed_store"]:
-        out.info(store.misnamed_line(plan["misnamed_store"]), wrap=True)
+        out.info(out.plain(store.misnamed_line(plan["misnamed_store"])),
+                 wrap=True)
     declined_copies = bool(plan["foreign_store"]) or any(
         store.plugin_serves(r[3]) for r in plan["plugin_duplicates"])
 

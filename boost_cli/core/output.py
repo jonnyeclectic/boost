@@ -381,25 +381,61 @@ def info(msg: str = "", stream=None, wrap: bool = False) -> None:
     print("  " + msg if msg else "", file=stream)
 
 
-# C0 and C1 controls, minus the tab/newline the table layer already folds. ESC
-# is the one that matters: `\x1b[1A\x1b[2K` moves the cursor up and erases, so a
-# single crafted field can rewrite rows already printed above it.
+# C0 and C1 controls and DEL. ESC is the one that matters: `\x1b[1A\x1b[2K`
+# moves the cursor up and erases, so a single crafted field can rewrite rows
+# already printed above it; `\x1b]0;…\x07` retitles the window, `\x1b[8m`
+# hides what follows, and C1 `\x9b` is a one-byte CSI on terminals that honor
+# 8-bit controls. Tab and newline are matched separately so they can become a
+# space rather than vanish — see `plain`.
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_FOLD_RE = re.compile(r"[\t\n]")
 
 
 def plain(text: object) -> str:
-    """Strip terminal control characters from text boost did not author.
+    """Make text boost did not author safe to print to a terminal.
 
-    Anything that arrives from a network response, a tapped repo's frontmatter,
-    or a filename is untrusted for display purposes even when it is harmless as
-    data. Rendering it into a table is what makes it executable-ish: the
-    terminal, not boost, decides what an escape sequence means.
+    The one helper for every print path that echoes tap data: frontmatter
+    name, description, version, tags and category, file and symlink names,
+    and anything from a network response. Harmless as data, such text is
+    executable-ish once rendered — the terminal, not boost, decides what an
+    escape sequence means — so it is sanitised at the point of display and
+    never at scan time, which would change what ``--json`` reports.
+
+    The control *byte* is removed, not the whole sequence: every CSI/OSC/DCS
+    needs its ESC (or C1) introducer, so dropping that one byte leaves the rest
+    inert text (``]0;PWNED``, ``[31m``) and is not bypassable the way a parser
+    of each terminator grammar would be. Tab and newline become one space
+    rather than passing through: frontmatter decodes ``"a\\nb"`` in a quoted
+    scalar, and a newline in a one-line field would let it start a fresh line
+    that impersonates boost's own ``✓ installed`` output; a space keeps the
+    word boundary either way. ``\r`` is a control like any other and goes.
+
+    Apply it to the raw field *before* coloring, truncating or padding it —
+    boost's own SGR codes must be the only escapes in the result.
 
     Typed ``object`` rather than ``str`` because the callers are feeding it
     parsed JSON — a field that is documented as a string is still whatever the
     remote sent, and coercing here beats a TypeError at render time.
     """
-    return _CONTROL_RE.sub("", str(text))
+    return _CONTROL_RE.sub("", _FOLD_RE.sub(" ", str(text)))
+
+
+def plain_fields(value):
+    """:func:`plain` over every string inside a catalog entry or lock row.
+
+    For a render path that reads many fields off one record (``boost info``,
+    ``boost list``), where wrapping each read is how one gets missed. Dicts,
+    lists and tuples are rebuilt with their strings sanitised, keys included;
+    numbers, bools and None pass through untouched, so ``e.get("pinned")``
+    still reads the same. Display copies only — never write one back.
+    """
+    if isinstance(value, str):
+        return plain(value)
+    if isinstance(value, dict):
+        return {plain_fields(k): plain_fields(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(plain_fields(v) for v in value)
+    return value
 
 
 def dim(msg: str, wrap: bool = False, indent: int = 0) -> None:
@@ -964,7 +1000,11 @@ def format_search_row(name: str, desc: str, kind: str, tap: str, frac: float,
     meter glyph count never varies with color state; the installed mark's
     column is reserved either way so names align; a curated row pays for its
     pinned ``  ★ curated`` tail out of its own description.
+
+    ``name``, ``desc`` and ``tap`` are a tap's own text, so each goes through
+    :func:`plain` before it is measured or colored.
     """
+    name, desc, tap = plain(name), plain(desc), plain(tap)
     row = (aurora(meter(frac), meter_hue(frac)) + " "
            + (role("●", "success") if installed else " ") + " "
            + _pad(role(truncate(name, lay.name_w), "accent"), lay.name_w))

@@ -277,3 +277,22 @@ def test_emit_pretty_prints_with_the_indent_every_other_json_flag_uses(capsys):
     rep.ok("git", "git on PATH")
     rep.emit()
     assert capsys.readouterr().out == json.dumps(rep.payload(), indent=2) + "\n"
+
+
+def test_prose_drops_control_bytes_but_the_payload_keeps_the_message(capsys):
+    """A doctor message can carry an on-disk name — a store dir called
+    `st\\x1b[31mray` — so the terminal copy goes through `out.plain`. The
+    payload is what `--json` emits, and JSON already escapes it."""
+    rep = report.Report()
+    rep.ok("a", "ok \x1b]0;T\x07")
+    rep.issue("b", "dir st\x1b[31mray")
+    rep.warn("c", "w\x9bx")
+    rep.note("d", "n\x1b[2Jo")
+    assert capsys.readouterr().out == (
+        "  ✓ ok ]0;T\n"
+        "  ! dir st[31mray\n"
+        "  ! wx\n"
+        "  n[2Jo\n"
+    )
+    assert [c["message"] for c in rep.payload()["checks"]] == [
+        "ok \x1b]0;T\x07", "dir st\x1b[31mray", "w\x9bx", "n\x1b[2Jo"]

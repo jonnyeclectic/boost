@@ -272,9 +272,9 @@ def cmd_search(argv):
     # grep owner/repo` found nothing the same search shows on a wide pane.
     # No pane (None) plans nothing to fit — see `search_layout`.
     lay = out.search_layout(out.pane_width(),
-                            [e["name"] for e, _ in shown],
+                            [out.plain(e["name"]) for e, _ in shown],
                             [str(e.get("kind") or "skill") for e, _ in shown],
-                            [str(e.get("tap") or "") for e, _ in shown])
+                            [out.plain(e.get("tap") or "") for e, _ in shown])
     for (e, _sc), frac in zip(shown, fracs, strict=True):
         out.info(out.format_search_row(
             e["name"], e.get("description") or "",
@@ -1316,8 +1316,8 @@ def _browse_plain(entries, why: str):
     unique = [e for e, _n in browse.dedupe(entries)]
     show_curated = any(e.get("curated") for e in unique)
     headers = ["name", "version", "tap", "kind"]
-    rows = [[e["name"], "v" + e["version"], e["tap"],
-             out.kind_label(e.get("kind", "skill"))]
+    rows = [[out.plain(e["name"]), "v" + out.plain(e["version"]),
+             out.plain(e["tap"]), out.kind_label(e.get("kind", "skill"))]
             for e in unique]
     if show_curated:
         headers.append("")
@@ -1767,7 +1767,11 @@ def _browse_tui(curses, entries, install=None, category=""):
             # `x < _w`, not `_w - 1`: the right-hand border lives in the last
             # column, and the old bound made it unwritable — the frame drew
             # with three sides. Writing the very last cell can make curses
-            # scroll, which is what the suppressed error covers.
+            # scroll, which is what the suppressed error covers. out.plain:
+            # every cell the TUI draws passes here, and its colors are curses
+            # attributes, never in-band escapes — so no byte of a tap's
+            # frontmatter can address the terminal through a row.
+            s = out.plain(s)
             if 0 <= y < _h and 0 <= x < _w and s:
                 with contextlib.suppress(curses.error):
                     scr.addnstr(y, x, s, _w - x, attr)
