@@ -342,8 +342,16 @@ def _sparse_list(repo: Path) -> set[str] | None:
                 / "sparse-checkout").read_text(encoding="utf-8")
     except OSError:
         return None
-    return {ln.strip() for ln in text.splitlines()
+    return {_pattern_line(ln) for ln in text.splitlines()
             if ln.strip() and not ln.startswith("#")}
+
+
+def _pattern_line(line: str) -> str:
+    """One sparse-checkout line as git reads it: an escaped trailing space
+    (``\\ ``, which :func:`sparse_escape` writes) is part of the pattern."""
+    body = line.strip()
+    tail = line.rstrip("\r")
+    return tail.lstrip() if tail.endswith("\\ ") else body
 
 
 def is_sparse(repo: Path) -> bool:
@@ -354,6 +362,27 @@ def is_sparse(repo: Path) -> bool:
                    check=False)
         _SPARSE[key] = proc.stdout.strip().lower() == "true"
     return _SPARSE[key]
+
+
+#: What git's no-cone sparse-checkout (gitignore) syntax reads as a wildcard
+#: or an escape rather than as itself.
+_PATTERN_SPECIAL = frozenset("\\[]*?")
+
+
+def sparse_escape(rel: str) -> str:
+    """``rel`` spelled as a sparse-checkout pattern matching only itself.
+
+    The cone is no-cone (gitignore syntax), and `sparse-checkout add` writes
+    a pattern verbatim, so a skill dir named ``glob[1]`` added as
+    ``/skills/glob[1]/*`` was a character class matching ``glob1``: the real
+    dir was never checked out and its ``scripts/`` installed as nothing,
+    with no error. Each metacharacter takes a backslash, and so does a
+    trailing space, which gitignore otherwise strips. A leading ``!`` or
+    ``#`` needs nothing: every pattern built from this starts with ``/``.
+    """
+    out = "".join("\\" + c if c in _PATTERN_SPECIAL else c for c in rel)
+    stripped = out.rstrip(" ")
+    return stripped + "\\ " * (len(out) - len(stripped))
 
 
 def materialize(repo: Path, rel_dir: str) -> None:
@@ -377,7 +406,7 @@ def materialize(repo: Path, rel_dir: str) -> None:
     rel = rel_dir.strip("/")
     if not rel or rel == ".":
         return
-    pattern = "/%s/*" % rel
+    pattern = "/%s/*" % sparse_escape(rel)
     have = _sparse_list(repo)
     if have is not None and pattern in have:
         return
@@ -400,6 +429,7 @@ def materialize_paths(repo: Path, rels: list[str]) -> None:
     for rel in rels:
         rel = rel.strip("/")
         if rel and rel != ".":
+            rel = sparse_escape(rel)
             patterns += ["/%s" % rel, "/%s/*" % rel]
     have = _sparse_list(repo) or set()
     patterns = [p for p in dict.fromkeys(patterns) if p not in have]
