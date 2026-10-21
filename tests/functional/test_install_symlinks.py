@@ -155,6 +155,22 @@ class TestSkippedLinksAreNotDrift:
         assert util.sha256_dir(src) != want, "the raw tree must differ here"
         assert store.copy_view_sha(src, link_tap) == want
 
+    def test_a_lone_dir_link_takes_the_staged_path(self, tmp_path):
+        """``rglob`` does not descend a dir link the copy holds as a real
+        dir, so a tree whose only link is a dir must not hash in place."""
+        from boost_cli.core import util
+        root = tmp_path / "repo"
+        skill = root / "skills" / "s"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("x", encoding="utf-8")
+        (root / "shared").mkdir()
+        (root / "shared" / "u.py").write_text("u", encoding="utf-8")
+        (skill / "lib").symlink_to("../../shared")
+        store._copy_tree(skill, tmp_path / "copy", root)
+        want = util.sha256_dir(tmp_path / "copy")
+        assert util.sha256_dir(skill) != want
+        assert store.copy_view_sha(skill, root) == want
+
     def test_a_tree_without_links_hashes_in_place(self, tmp_path, monkeypatch):
         from boost_cli.core import util
         (tmp_path / "s").mkdir()
