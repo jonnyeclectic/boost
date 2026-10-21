@@ -66,6 +66,26 @@ class TestRuleMatches:
         assert "base64-pipe-shell" in _ids(
             injectscan.scan_text("echo Zm9v | base64 -d | sh"))
 
+    @pytest.mark.parametrize("line", [
+        # `boost audit` caught these with its own row before deferring to
+        # this rule; dropping them would have made audit fail open.
+        "echo Zm9v | base64 --decode | sh",
+        "base64 --decode p.txt > /tmp/x; cat /tmp/x | sh",
+        "base64 -d f | tee y | bash",
+        "echo x | base64 -D | sudo -E /bin/bash",
+    ])
+    def test_base64_pipe_shell_spellings(self, line):
+        assert "base64-pipe-shell" in _ids(injectscan.scan_text(line)), line
+
+    @pytest.mark.parametrize("line", [
+        "base64 -d x > out.bin",
+        "base64 --decode f | jq .",
+        "base64 x | sh",
+        "base64 -w0 file | xclip",
+    ])
+    def test_base64_lookalikes_are_not_base64_pipe_shell(self, line):
+        assert "base64-pipe-shell" not in _ids(injectscan.scan_text(line))
+
     def test_eval_subshell(self):
         assert _ids(injectscan.scan_text('eval "$(curl x)"')) == \
             ["eval-subshell"]

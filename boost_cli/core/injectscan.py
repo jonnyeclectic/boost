@@ -120,8 +120,10 @@ RULES: tuple = (
              + r"(?:\s+-\S+){0,4}\s+(?:<\s*)?<\(\s*" + _FETCH),
          "pipes a downloaded script straight into a shell"),
     Rule("base64-pipe-shell", "high",
-         _rx(r"\bbase64\s+(?:-{1,2}\w+\s+)*-?[dD]\b[^\n|]*\|\s*"
-             r"(?:sudo\s+)?(?:sh|bash|zsh)\b"),
+         # `--decode` and a pipe anywhere later on the line are the spellings
+         # `boost audit`'s own row caught before it deferred to this rule.
+         _rx(r"\bbase64\s+(?:-{1,2}\w+\s+)*(?:-?d|--decode)\b[^\n]*\|\s*"
+             + _SUDO + _SHELL),
          "decodes an obfuscated blob and runs it"),
     Rule("eval-subshell", "medium",
          _rx(r"\beval\s+[\"']?\$\("),
