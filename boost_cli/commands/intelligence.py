@@ -362,7 +362,9 @@ def cmd_simulate(argv: list[str]) -> int:
     _, bare = catalog.split_name(args.name)
     text, origin = _skill_text(args.name)
     task = args.task or "a typical coding task in this repo"
-    out.heading("simulating %s  %s" % (bare, out.role("(%s)" % origin, "muted")))
+    out.heading("simulating %s  %s" % (out.plain(bare),
+                                       out.role("(%s)" % out.plain(origin),
+                                                "muted")))
 
     if ai.available():
         reply = ai.ask(
@@ -372,7 +374,7 @@ def cmd_simulate(argv: list[str]) -> int:
             "skill on that task. Be concrete and terse." % (text, task))
         if reply:
             for line in reply.splitlines():
-                out.info(line)
+                out.info(out.plain(line))
             return 0
     _note_fallback()
 
@@ -380,15 +382,16 @@ def cmd_simulate(argv: list[str]) -> int:
     out.kv("task", task)
     rules = imperative.imperative_rules(body)
     out.info("Without it: default behavior — none of the rules below are enforced.")
-    out.info(out.c("With %s active, Claude would:" % bare, out.BOLD))
+    out.info(out.c("With %s active, Claude would:" % out.plain(bare), out.BOLD))
     if rules:
         for rule in rules[:8]:
-            out.info("  • " + rule)
+            out.info("  • " + out.plain(rule))
         if len(rules) > 8:
             out.info(out.role("  … and %d more rules" % (len(rules) - 8), "muted"))
     else:
         out.info("  • (no imperative rules found in the skill body)")
-    desc = str(meta.get("description") or "").strip()
+    # Sanitised before the clip, so the 100 counts characters that print.
+    desc = out.plain(meta.get("description") or "").strip()
     if desc:
         # Clipped to 100 characters, which is a length and not a width: at
         # 80 columns the quoted description ran seven past the pane. Wrapping
@@ -1410,12 +1413,15 @@ def _print_reply(reply: chat_engine.Reply, show_sources: bool) -> None:
     is the qualified ``owner/repo:name``, which already names the tap, so
     repeating it would be noise.
     """
+    # The extractive answer is built from catalogue descriptions, and a model
+    # reply quotes them — tap text either way, so every line is sanitised.
     for line in reply.text.splitlines():
-        out.info(line)
+        out.info(out.plain(line))
     if show_sources and reply.skills:
         out.info("")
         out.info(out.role("sources · ranked by %s" % reply.engine, "muted"))
-        for n, cite in enumerate(chat_engine.citations(reply.skills), 1):
+        for n, cite in enumerate(out.plain_fields(
+                chat_engine.citations(reply.skills)), 1):
             tail = "" if cite["ref"] != cite["name"] else "  (%s)" % cite["tap"]
             out.info(out.role("  %d. %s  %s%s"
                               % (n, cite["ref"], cite["kind"], tail), "muted"))
@@ -1515,4 +1521,4 @@ def _chat_session(args) -> int:
         _print_reply(reply, not args.no_sources)
         history.append(chat_engine.Turn(question, reply.text, reply.skills))
         for follow in chat_engine.suggest_followups(reply.skills, with_ai=have_ai)[:2]:
-            out.info(out.role("  try: %s" % follow, "muted"))
+            out.info(out.role("  try: %s" % out.plain(follow), "muted"))
