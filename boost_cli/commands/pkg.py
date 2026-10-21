@@ -2779,9 +2779,26 @@ def _import_root(root: Path, name: str | None, do_all: bool,
 
     if (root / "SKILL.md").exists():
         return one(root, rename=name)
-    entries = catalog.scan_dir(root)
+    # import copies SKILL.md dirs: a rule or workflow is one file with no
+    # SKILL.md, and offering one crashed every path that read it as a skill.
+    entries: list[dict] = []
+    others: list[dict] = []
+    for e in catalog.scan_dir(root):
+        (entries if e.get("kind", "skill") == "skill" else others).append(e)
+    other_hint = "rules and workflows install from a tap: `boost tap %s`, " \
+        "then `boost install NAME`" % display
+    if name and not do_all:
+        clash = [e for e in others if e["name"] == name]
+        if clash and not any(e["name"] == name for e in entries):
+            raise BoostError("%s is a %s, and boost import takes skills"
+                             % (name, clash[0]["kind"]), hint=other_hint)
     if not entries:
-        raise BoostError("no SKILL.md found under %s" % display)
+        raise BoostError("no SKILL.md found under %s" % display,
+                         hint=other_hint if others else None)
+    if others:
+        out.info("skipping %s — boost import takes skills; %s" % (
+            ", ".join("%s (%s)" % (e["name"], e["kind"]) for e in others),
+            other_hint), wrap=True)
 
     def dir_of(e: dict) -> Path:
         return root if e["rel_dir"] == "." else root / e["rel_dir"]
