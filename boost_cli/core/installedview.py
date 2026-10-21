@@ -90,8 +90,8 @@ def skill_description(skill_dir: Path | None, cat: dict | None
         text = md.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return "", upstream
-    meta = frontmatter.parse(text)[0]
-    return split(str(meta.get("description") or ""), upstream)
+    meta, body = frontmatter.parse(text)
+    return split(catalog.describe(meta, body), upstream)
 
 
 def materialized_description(lk: dict, cat: dict | None,

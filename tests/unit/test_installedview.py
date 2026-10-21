@@ -128,8 +128,18 @@ class TestSkillDescription:
         assert installedview.skill_description(
             tmp_path, {"description": "new"}) == ("", "new")
 
-    def test_copy_without_a_description(self, tmp_path):
-        (tmp_path / "SKILL.md").write_text("---\nname: a\n---\nbody\n",
+    def test_copy_without_a_description_reads_as_the_scanner_does(
+            self, tmp_path):
+        # The scanner describes a SKILL.md with no `description:` by its
+        # first prose line. Reading only the frontmatter reported a fresh,
+        # unchanged install as having no description and an "upstream" one.
+        (tmp_path / "SKILL.md").write_text(
+            "---\nname: a\n---\n# a\n\nDoes a thing.\n", encoding="utf-8")
+        assert installedview.skill_description(
+            tmp_path, {"description": "Does a thing."}) == ("Does a thing.", "")
+        assert installedview.skill_description(
+            tmp_path, {"description": "new"}) == ("Does a thing.", "new")
+        (tmp_path / "SKILL.md").write_text("---\nname: a\n---\n# a\n",
                                            encoding="utf-8")
         assert installedview.skill_description(
             tmp_path, {"description": "new"}) == ("", "new")

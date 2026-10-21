@@ -127,6 +127,17 @@ def _description(meta: dict, body: str) -> str:
     return ""
 
 
+def describe(meta: dict, body: str) -> str:
+    """The description the scanner indexes for an item with this frontmatter.
+
+    Public so a reader of an installed copy (``installedview``) derives the
+    same text a scan does: a SKILL.md with no ``description:`` is described by
+    its first prose line, and reading only the frontmatter there reported an
+    unchanged install as having no description and an "upstream" one.
+    """
+    return _description(meta, body)
+
+
 def _content_digest(name: str, description: str, body: str) -> str:
     """Content identity for an item: what it *is*, independent of where it sits.
 
