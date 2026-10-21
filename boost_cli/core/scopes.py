@@ -410,6 +410,20 @@ def stranded(entry: dict) -> bool:
             and not os.path.isdir(cast(str, base)))  # noqa: FURB146
 
 
+def project_label(entry: dict) -> str | None:
+    """Where a ``--local`` rule/workflow row lives, for display, else None.
+
+    The tilde'd base, with ``(gone)`` when the directory no longer exists.
+    These rows sit in the user lock beside user-scope ones, so a surface that
+    does not say this reads a rule in another checkout as active here.
+    """
+    if (entry.get("scope") != SCOPE_PROJECT
+            or not names_a_directory(entry.get("base"))):
+        return None
+    where = paths.tilde(Path(entry["base"]))
+    return where + " (gone)" if stranded(entry) else where
+
+
 def check_scope(scope: str) -> str:
     """Return ``scope`` if it is one boost knows, else raise BoostError."""
     if scope not in SCOPES:

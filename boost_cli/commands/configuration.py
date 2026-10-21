@@ -30,6 +30,7 @@ from ..core import (
     config,
     frontmatter,
     gitutil,
+    installedview,
     installplan,
     installscan,
     integrity,
@@ -47,6 +48,7 @@ from ..core import (
     selfupdate,
     serve,
     snapshot,
+    staleness,
     store,
     typedvalue,
     util,
@@ -1700,9 +1702,11 @@ def _tool_list(args: dict):
     lines = []
     for kind, section in everything.items():
         for n, e in sorted(section.items()):
-            lines.append("%s v%s (%s)%s%s"
+            where = scopes.project_label(e) if kind != "skill" else None
+            lines.append("%s v%s (%s)%s%s%s"
                          % (n, e.get("version", "?"), e.get("tap", "?"),
                             "" if kind == "skill" else " [%s]" % kind,
+                            " [project %s]" % where if where else "",
                             " [pinned]" if e.get("pinned") else ""))
     if project:
         lines.append("project skills (%s):" % _tilde(pbase))
@@ -1712,6 +1716,41 @@ def _tool_list(args: dict):
                      for n, e in sorted(project.items()))
     lines.append(footer)
     return "\n".join(lines), False
+
+
+def _installed_facts(name: str, kind: str, entry: dict, pbase, src: dict,
+                     matches: list[dict]) -> list[str]:
+    """``description``/``latest`` lines for an installed item, as `info` gives.
+
+    The description is the installed copy's; the catalog row is the tap's
+    HEAD, so its text is labelled upstream when it differs, and its version
+    is ``latest`` with the same update verdict `boost info` and `boost
+    outdated` reach.
+    """
+    if kind == "skill":
+        bare = catalog.split_name(name)[1]
+        sdir = (integrity.project_skill_dir(entry, pbase) if pbase is not None
+                else store.skill_store_dir(bare))
+        desc, upstream = installedview.skill_description(sdir, src)
+        note = {staleness.BEHIND: " (update available)",
+                staleness.AHEAD: " (older than installed)"}.get(
+            staleness.catalog_relation(str(entry.get("version") or ""),
+                                       str(src.get("version") or "")) or "",
+            "")
+    else:
+        reason, _ = installedview.installed_update(kind, entry, matches)
+        desc, upstream = installedview.materialized_description(
+            entry, src, reason)
+        note = {staleness.VERSION: " (update available)",
+                staleness.CONTENT: " (content changed)"}.get(reason or "", "")
+    lines = []
+    if desc:
+        lines.append("description: %s" % desc)
+    if upstream:
+        lines.append("upstream description: %s" % upstream)
+    if src.get("version"):
+        lines.append("latest: %s%s" % (src["version"], note))
+    return lines
 
 
 @_path_hint
@@ -1730,8 +1769,10 @@ def _tool_info(args: dict):
         # The installed copy's own catalog row, never another tap's: version
         # and tap came from the lock while the description came from
         # whichever tap sorted first, one reply describing two items.
-        src = next((e for e in catalog.find(name)
-                    if e["tap"] == entry.get("tap")), {})
+        # Its kind and recorded source too: one tap can ship a name as a
+        # skill and as a workflow, and the first row by tap was either.
+        matches = catalog.find(name)
+        src = catalog.installed_row(matches, kind, entry) or {}
     elif not catalog.find(name):
         return "no skill named %r (installed or in any tap)" % name, True
     else:
@@ -1744,7 +1785,9 @@ def _tool_info(args: dict):
         lines.append("kind: %s" % kind_label)
     lines.extend(("version: %s" % (entry or src).get("version", "?"),
                   "tap: %s" % (entry or src).get("tap", "?")))
-    if src.get("description"):
+    if entry:
+        lines.extend(_installed_facts(name, kind, entry, pbase, src, matches))
+    elif src.get("description"):
         lines.append("description: %s" % src["description"])
     if entry:
         # Only the agents boost still writes for: a recorded row whose agent
@@ -1753,8 +1796,10 @@ def _tool_info(args: dict):
             integrity.written_agent_names(kind, entry)) or "none"
         lines.extend(("installed: yes (%s)" % entry.get("installed_at", "?"),
                       "agents: %s" % agents_s))
-        if pbase is not None:
-            lines.append("scope: project (%s)" % _tilde(pbase))
+        where = (_tilde(pbase) if pbase is not None
+                 else scopes.project_label(entry))
+        if where:
+            lines.append("scope: project (%s)" % where)
         if entry.get("pinned"):
             lines.append("pinned: yes")
         if entry.get("quarantined"):
@@ -1819,9 +1864,11 @@ def _tool_read(args: dict):
                 and rec.get("source_dir", cat.get("rel_dir"))
                 == cat.get("rel_dir"))
         return mcp.read_reply(name, text, kind=cat.get("kind") or "skill",
-                              installed=here), False
+                              installed=here,
+                              where=scopes.project_label(rec or {})), False
     text, kind, lock, _cat = info._resolve_text(name)
-    return mcp.read_reply(name, text, kind=kind, installed=lock is not None), False
+    return mcp.read_reply(name, text, kind=kind, installed=lock is not None,
+                          where=scopes.project_label(lock or {})), False
 
 
 @_path_hint

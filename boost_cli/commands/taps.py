@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from contextlib import suppress
 from pathlib import Path
@@ -16,6 +15,7 @@ from ..core import (
     complete,
     config,
     gitutil,
+    installedview,
     integrity,
     journal,
     lockfile,
@@ -601,27 +601,17 @@ def cmd_outdated(argv) -> int:
                                        "latest_commit": None})
                 continue
             tap = tap_memo[tap_name]
-            try:
-                if tap is None:
-                    raise OSError("tap %s is not configured" % tap_name)
-                raw = (tap.path / lk.get("source_file", "")
-                       ).read_text(encoding="utf-8", errors="replace")
-            except OSError:
+            if tap is None:
                 results.append(base | {"latest": None,
                                        "reason": staleness.SOURCE_MISSING,
                                        "latest_commit": None})
                 continue
-            if hashlib.sha256(raw.encode("utf-8")).hexdigest() == lk.get("sha256"):
+            # The one comparison `boost info` makes too, so the two cannot
+            # disagree about whether a rule or workflow has an update.
+            reason, r_latest = installedview.update_of(
+                kind, lk, tap, catalog.find(name, entries=entries))
+            if reason is None:
                 continue
-            matches = [e for e in catalog.find(name, entries=entries)
-                       if e["tap"] == tap_name
-                       and e.get("kind", "skill") == kind]
-            entry, _warning = catalog.select_lock_source(matches, lk)
-            r_latest: str | None = (str(entry.get("version"))
-                                    if entry and entry.get("version") else None)
-            reason = (staleness.VERSION
-                      if r_latest and util.semver_gt(r_latest, installed_v)
-                      else staleness.CONTENT)
             # Rules/workflows carry no tap-HEAD commit here (only a source-file
             # sha comparison), so `latest_commit` stays unset — `_outdated_display`
             # falls back to the same "(content changed)" wording skills used to

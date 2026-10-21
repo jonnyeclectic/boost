@@ -4071,6 +4071,10 @@ def _install_rule(entry: dict, force: bool = False,
     lockfile.set_rule(name, {
         "kind": "rule",
         "version": entry.get("version", "0.0.0"),
+        # What the installed copy says it is. The catalog moves with the
+        # tap's HEAD, so after `update --taps-only` it describes the next
+        # version; `boost info` reads this instead (core.installedview).
+        "description": str(entry.get("description") or ""),
         "tap": entry["tap"],
         "tap_url": tap.url,
         "source_file": entry.get("skill_md", ""),
@@ -4794,6 +4798,10 @@ def _install_workflow(entry: dict, force: bool = False,
         "kind": "workflow",
         "slot": slot,
         "version": entry.get("version", "0.0.0"),
+        # What the installed copy says it is. The catalog moves with the
+        # tap's HEAD, so after `update --taps-only` it describes the next
+        # version; `boost info` reads this instead (core.installedview).
+        "description": str(entry.get("description") or ""),
         "tap": entry["tap"],
         "tap_url": tap.url,
         "source_file": source_rel,
