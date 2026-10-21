@@ -32,6 +32,7 @@ is only usable while the tap sits at that commit, which is what
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import time
@@ -95,12 +96,31 @@ def _open(url: str, timeout: float):
             hint="shard URLs must be https (or file: for a local mirror)")
     try:
         return urllib.request.urlopen(url, timeout=timeout)  # noqa: S310  scheme checked above
-    except (urllib.error.URLError, OSError) as exc:
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         raise BoostError("cannot reach %s: %s" % (url, exc),
                          hint=LOCAL_EMBED_HINT) from exc
 
 
-def _read_capped(resp, cap: int) -> bytes:
+def _read(resp, n: int, url: str) -> bytes:
+    """``resp.read(n)``, with a failure part-way through the body made a
+    BoostError like a failure to connect.
+
+    :func:`_open` only guards the connect. A connection cut mid-body raises
+    ``http.client.IncompleteRead`` — an ``HTTPException`` and, since CPython
+    3.14, *only* that, not an ``OSError`` — and a server that stalls after the
+    headers raises ``TimeoutError`` from the socket. Both escaped as "boost hit
+    an unexpected error", exit 70, from `reindex --fetch-index`, `update
+    --shards` and `quickstart`.
+    """
+    try:
+        return resp.read(n)
+    except (OSError, http.client.HTTPException) as exc:
+        raise BoostError("cannot read %s: %s"
+                         % (url, str(exc) or type(exc).__name__),
+                         hint=LOCAL_EMBED_HINT) from exc
+
+
+def _read_capped(resp, cap: int, url: str) -> bytes:
     """Read the whole response, stopping once it exceeds `cap` bytes.
 
     THE LOOP IS THE POINT. ``HTTPResponse.read(amt)`` returns *up to* `amt`
@@ -122,7 +142,7 @@ def _read_capped(resp, cap: int) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while total <= cap:
-        buf = resp.read(min(_CHUNK, cap + 1 - total))
+        buf = _read(resp, min(_CHUNK, cap + 1 - total), url)
         if not buf:
             break
         chunks.append(buf)
@@ -171,7 +191,7 @@ def fetch_manifest(url: str | None = None, timeout: float = 30.0) -> dict:
     """
     url = url or manifest_url()
     with _open(url, timeout) as resp:
-        raw = _read_capped(resp, MAX_MANIFEST_BYTES)
+        raw = _read_capped(resp, MAX_MANIFEST_BYTES, url)
         # Size ceiling first, completeness second: a manifest larger than the
         # cap is also "shorter than declared", and reporting that one as a
         # truncated download would name the wrong problem.
@@ -418,7 +438,7 @@ def download(row: dict, dest: Path, manifest: dict,
     try:
         with _open(url, timeout) as resp, tmp.open("wb") as fh:
             while True:
-                buf = resp.read(_CHUNK)
+                buf = _read(resp, _CHUNK, url)
                 if not buf:
                     break
                 size += len(buf)
