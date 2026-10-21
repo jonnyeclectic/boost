@@ -302,7 +302,7 @@ def _upstream_reason(name, lk, tap_name, head):
     src_sha = None
     if not util.semver_gt(latest, installed_v) and head and head != lk.get("commit"):
         try:
-            src_sha = util.sha256_dir(store.source_dir_for(entry))
+            src_sha = store.skill_source_sha(entry)
         except BoostError:
             return None  # source checkout is gone; `verify` owns that finding
     return staleness.upstream_reason(installed_v, latest, lk.get("commit", ""),

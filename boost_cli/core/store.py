@@ -470,6 +470,39 @@ def source_dir_for(entry: dict) -> Path:
     return src
 
 
+def copy_view_sha(src: Path, within: Path | None) -> str:
+    """``sha256_dir`` of what :func:`_copy_tree` puts in the store from ``src``.
+
+    The lock records the hash of the *copy*, so the source side of every
+    "did the tap move this skill?" comparison has to hash the same view. A
+    raw ``sha256_dir(src)`` reads a link out of the tap as its target's
+    bytes, a link install skips by policy, so a skill holding one compared
+    unequal forever: `update` re-copied it as "source changed" on every tap
+    move and `drift` called it upstream-moved after `update` had nothing to
+    do. A tree with no link hashes in place; one with any is staged through
+    ``_copy_tree`` itself, so the two cannot disagree about what lands.
+    """
+    src = Path(src)
+    if not any(Path(here, n).is_symlink()
+               for here, dirs, names in os.walk(src)
+               for n in (*dirs, *names)):
+        return util.sha256_dir(src)
+    with tempfile.TemporaryDirectory(prefix=util.TEMP_PREFIX) as tmp:
+        view = Path(tmp) / "view"
+        _copy_tree(src, view, within)
+        return util.sha256_dir(view)
+
+
+def skill_source_sha(entry: dict) -> str:
+    """:func:`copy_view_sha` of a catalog entry's tap source.
+
+    Raises ``BoostError`` as :func:`source_dir_for` does. Bounded by the tap
+    clone, as a tap install's copy is.
+    """
+    src = source_dir_for(entry)
+    return copy_view_sha(src, registry.get(entry["tap"]).path)
+
+
 def _inside(path: str, root: str) -> bool:
     """Whether ``path`` is ``root`` or under it (both already normalized)."""
     try:
@@ -5836,7 +5869,7 @@ def prune_out_of_scope_links(plan: dict[str, list]) -> list[str]:
 def _skill_source_sha(cat_entry: dict) -> str | None:
     """sha256 of a catalog entry's tap source directory, or None if unreadable."""
     try:
-        return util.sha256_dir(source_dir_for(cat_entry))
+        return skill_source_sha(cat_entry)
     except BoostError:
         return None
 

@@ -29,6 +29,7 @@ path. Old git without `--sparse` is, and falls back to a plain shallow clone.
 from __future__ import annotations
 
 import subprocess
+import sys
 
 import pytest
 
@@ -286,6 +287,40 @@ class TestSparseCloneAgainstARealRepo:
 
         assert not (clone / "skills" / "other" / "scripts" / "run.js").exists()
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows forbids * ? \\ in file names")
+    def test_a_dir_named_with_glob_characters_is_fetched_whole(self, tmp_path):
+        """``glob[1]`` added verbatim is a character class matching ``glob1``:
+        the real dir never checked out and its scripts installed as nothing."""
+        src = tmp_path / "src"
+        for name in ("glob[1]", "a*b?c\\d"):
+            d = src / "skills" / name
+            (d / "scripts").mkdir(parents=True)
+            (d / "SKILL.md").write_text("---\nname: g\ndescription: g\n---\n",
+                                        encoding="utf-8")
+            (d / "scripts" / "run.sh").write_text("echo\n", encoding="utf-8")
+        (src / "skills" / "glob1" / "scripts").mkdir(parents=True)
+        (src / "skills" / "glob1" / "scripts" / "decoy.sh").write_text(
+            "echo\n", encoding="utf-8")
+        for argv in (["init", "-q", "-b", "main"], ["add", "-A"],
+                     ["-c", "user.email=t@t", "-c", "user.name=t",
+                      "commit", "-qm", "init"]):
+            subprocess.run(["git", *argv], cwd=src, check=True,
+                           capture_output=True)
+        clone = tmp_path / "c"
+        gitutil.clone_shallow(str(src), clone)
+
+        gitutil.materialize(clone, "skills/glob[1]")
+        gitutil.materialize(clone, "skills/a*b?c\\d/")
+
+        assert (clone / "skills" / "glob[1]" / "scripts" / "run.sh").is_file()
+        assert (clone / "skills" / "a*b?c\\d" / "scripts" / "run.sh").is_file()
+        assert not (clone / "skills" / "glob1" / "scripts" / "decoy.sh").exists()
+        cone = (clone / ".git" / "info" / "sparse-checkout").read_text(
+            encoding="utf-8").splitlines()
+        assert "/skills/glob\\[1\\]/*" in cone
+        assert "/skills/a\\*b\\?c\\\\d/*" in cone
+
     def test_pull_preserves_the_sparse_checkout(self, tmp_path, fixture_tap_src):
         clone = tmp_path / "c"
         gitutil.clone_shallow(str(fixture_tap_src), clone)
@@ -294,6 +329,30 @@ class TestSparseCloneAgainstARealRepo:
 
         assert gitutil.is_sparse(clone)
         assert list(clone.rglob("SKILL.md")), "update must not empty the checkout"
+
+
+class TestSparseEscape:
+    """A literal path spelled in git's no-cone (gitignore) pattern syntax."""
+
+    @pytest.mark.parametrize(("rel", "want"), [
+        ("skills/plain-name", "skills/plain-name"),
+        ("glob[1]", "glob\\[1\\]"),
+        ("a*b?c", "a\\*b\\?c"),
+        ("back\\slash", "back\\\\slash"),
+        ("!bang/#hash", "!bang/#hash"),
+        ("trail  ", "trail\\ \\ "),
+        ("mid dle", "mid dle"),
+    ])
+    def test_escapes_only_what_git_reads_as_special(self, rel, want):
+        assert gitutil.sparse_escape(rel) == want
+
+    def test_an_escaped_trailing_space_survives_reading_the_cone(self,
+                                                                 tmp_path):
+        info = tmp_path / ".git" / "info"
+        info.mkdir(parents=True)
+        (info / "sparse-checkout").write_text(
+            "  /a\\ \n/b  \r\n# note\n\n", encoding="utf-8")
+        assert gitutil._sparse_list(tmp_path) == {"/a\\ ", "/b"}
 
 
 class TestMaterializePaths:
@@ -327,6 +386,17 @@ class TestMaterializePaths:
         gitutil.materialize_paths(repo, ["lib", "x"])
         assert seen["calls"][0][-2:] == ["/x", "/x/*"]
         assert "/lib" not in seen["calls"][0]
+
+    def test_each_path_is_escaped_as_a_literal(self, monkeypatch, tmp_path):
+        seen = _clone_argv(monkeypatch)
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        repo = self._repo(tmp_path, "/x\\[1\\]\n/x\\[1\\]/*\n")
+        gitutil.materialize_paths(repo, ["x[1]"])
+        assert "calls" not in seen, "an escaped pattern must count as present"
+        gitutil.materialize_paths(repo, ["s/h?.py"])
+        assert seen["calls"] == [[
+            "git", "-C", str(repo), "sparse-checkout", "add",
+            "/s/h\\?.py", "/s/h\\?.py/*"]]
 
     def test_a_full_clone_is_left_alone(self, monkeypatch, tmp_path):
         seen = _clone_argv(monkeypatch)
