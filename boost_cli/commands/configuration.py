@@ -2842,9 +2842,12 @@ def _self_update_git(dry_run: bool) -> int:
     # stale until a reinstall. Ask git for the freshly-pulled version directly
     # (mirrors boost_cli._detect_version()'s git-checkout fallback), and treat a
     # moved HEAD as the unambiguous "an update landed" signal — independent of
-    # how the two version strings happen to be formatted.
+    # how the two version strings happen to be formatted. `--match v[0-9]*`
+    # as there and in pyproject: unmatched, a newer `shards-latest` tag made
+    # this report `vshards-latest-1-g…` as the version just pulled.
     new = gitutil.run(
-        ["-C", str(root), "describe", "--tags", "--always", "--dirty"],
+        ["-C", str(root), "describe", "--tags", "--always", "--dirty",
+         "--match", "v[0-9]*"],
         check=False, timeout=10).stdout.strip().lstrip("v") or old
     updated = bool(after) and after != before
     journal.log("self-update", new if updated else old, previous=old)
