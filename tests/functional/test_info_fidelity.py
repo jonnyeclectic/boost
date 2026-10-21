@@ -270,3 +270,22 @@ class TestMcpCarriesTheProjectScope:
         assert "style v1.0.0 (mytap) [rule] [project %s (gone)]" % where in listed
         assert "scope: project (%s (gone))" % where in _tool(
             "boost_info", name="style")[0].splitlines()
+
+
+def test_a_rule_without_frontmatter_description_records_the_catalogs(
+        boost, mytap):
+    # The scanner derives a description from the body when the frontmatter
+    # has none; the lock records that same text, so info shows it once.
+    _write(mytap, "rules/bare.mdc",
+           "---\nname: bare\nversion: 1.0.0\n---\n\nAlways be bare.\n")
+    _commit(mytap, "bare")
+    boost("update", "--taps-only")
+    boost("install", "bare")
+    from boost_cli.core import catalog, lockfile
+    want = catalog.find("bare")[0]["description"]
+    assert lockfile.get_rule("bare")["description"] == want
+    r = boost("info", "bare")
+    assert _kv(r.out, "upstream") is None
+    data = json.loads(boost("info", "bare", "--json").out)
+    assert data["description"] == want
+    assert data["upstream_description"] is None
