@@ -127,8 +127,13 @@ def _toml_str(s: str) -> str:
     bodies containing ``\"\"\"`` or a trailing quote cannot be embedded in the
     multi-line form without escaping anyway. Correctness for every input beats
     readability for most of them.
+
+    The subset trick has one gap: JSON escapes U+0000-U+001F but passes DEL
+    (U+007F) through raw, and TOML forbids a raw DEL in a basic string, so a
+    description holding one produced a file Gemini could not parse while
+    install, verify and doctor all said ok. It is escaped by hand.
     """
-    return json.dumps(s, ensure_ascii=False)
+    return json.dumps(s, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
 # Claude's whole-input placeholder, not a longer identifier that starts with

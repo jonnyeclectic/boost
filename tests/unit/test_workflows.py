@@ -306,6 +306,29 @@ class TestRenderGeminiCommand:
         assert "caf\u00e9 \u2603" in out
         assert "\\u" not in out
 
+    def test_del_is_escaped(self):
+        out = workflows.render_gemini_command(
+            "x", "---\ndescription: a\x7fb\n---\nbody\x7f")
+        assert out == 'description = "a\\u007fb"\nprompt = "body\\u007f"\n'
+        assert _toml_loads(out) == {"description": "a\x7fb",
+                                    "prompt": "body\x7f"}
+
+    def test_every_control_char_round_trips_through_toml_str(self):
+        hostile = "".join(chr(c) for c in [*range(0x20), 0x7F]) + "zé"
+        lit = workflows._toml_str(hostile)
+        assert "\x7f" not in lit
+        assert all(ord(ch) >= 0x20 for ch in lit)
+        assert _toml_loads("k = %s\n" % lit) == {"k": hostile}
+
+    def test_control_chars_in_a_body_round_trip(self):
+        # The ones the frontmatter splitter leaves inside a line.
+        ctl = "".join(chr(c) for c in [*range(0x09), 0x09,
+                                       *range(0x0E, 0x1C), 0x1F, 0x7F])
+        raw = "---\ndescription: d%s\n---\nb%sz\n" % (ctl.strip(), ctl)
+        data = _toml_loads(workflows.render_gemini_command("x", raw))
+        assert data == {"description": "d" + ctl.strip(),
+                        "prompt": "b%sz" % ctl}
+
     def test_name_does_not_leak_into_the_output(self):
         # the filename carries the command name; the TOML body must not repeat
         # it (Gemini derives the slash command from the path).
