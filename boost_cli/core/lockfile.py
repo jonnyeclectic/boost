@@ -11,7 +11,9 @@ Skill entry schema (v3):
   (+ source_url on a `boost import`: the git URL, or "" for a local path; when
   set, source_dir is the skill's directory inside that repo)
   (tap_url is the tap's own URL or local path at install time, absent on
-  entries written before it was recorded: `drift` re-taps from it)
+  entries written before it was recorded: `drift` re-taps from it, and
+  `sync`, `heal`, `update` and `untap` backfill it from config.json while
+  the tap is still configured — `store.backfill_tap_urls`)
 """
 from __future__ import annotations
 

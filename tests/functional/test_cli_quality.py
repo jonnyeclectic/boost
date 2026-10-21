@@ -1770,6 +1770,91 @@ class TestQuarantine:
         assert "outside its declared scope" not in r.out
 
 
+def _unhold(name):
+    """What a quarantine or sideline made before either held the copy aside
+    looks like: the row says withheld, the copy is in the store, no held_at."""
+    shutil.move(str(paths.held_skills_dir() / name),
+                str(paths.store_dir() / name))
+
+    def strip(lock):
+        lock["skills"][name].pop("held_at")
+    lockfile.mutate(strip)
+
+
+_HOLD = ("%s %s's store copy out of ~/.agents/skills (it is %s, and Gemini "
+         "CLI and Codex load the store directly)")
+
+
+class TestLegacyWithheldCopy:
+    """A skill quarantined or sidelined by an older boost: its copy stayed in
+    ~/.agents/skills, which Gemini CLI and Codex read directly, while doctor
+    said healthy and sync and heal found nothing to do."""
+
+    def test_doctor_names_it_and_heal_holds_it_aside(self, boost, installed):
+        boost("quarantine", "brainstorming")
+        _unhold("brainstorming")
+        store = paths.store_dir() / "brainstorming"
+        held = paths.held_skills_dir() / "brainstorming"
+        before = (store / "SKILL.md").read_bytes()
+
+        r = boost("doctor", expect=1)
+        assert ("quarantined skill brainstorming is still in ~/.agents/skills,"
+                " where Gemini CLI and Codex load it — run `boost heal`"
+                in " ".join(r.out.split()))
+        assert "healthy" not in r.out.splitlines()[-1]
+
+        r = boost("sync", "--diff")
+        assert (_HOLD % ("would hold", "brainstorming", "quarantined")
+                in " ".join(r.out.split()))
+        assert "everything in sync" not in r.out
+        r = boost("heal", "--dry-run")
+        assert _HOLD % ("would hold", "brainstorming", "quarantined") in r.out
+        assert os.path.isdir(store) and not os.path.lexists(held)
+
+        r = boost("heal")
+        assert _HOLD % ("held", "brainstorming", "quarantined") in r.out
+        assert not os.path.lexists(store)
+        assert (held / "SKILL.md").read_bytes() == before
+        assert _lock()["brainstorming"]["held_at"] == str(held)
+        assert _lock()["brainstorming"]["quarantined"] is True
+
+        # Once: the next run has nothing left to migrate.
+        r = boost("heal")
+        assert "store copy out of" not in r.out
+        r = boost("doctor")
+        assert "still in ~/.agents/skills" not in r.out
+
+        # And release puts back the copy the migration held.
+        boost("quarantine", "--release", "brainstorming")
+        assert (store / "SKILL.md").read_bytes() == before
+        assert "held_at" not in _lock()["brainstorming"]
+
+    def test_sync_holds_a_sidelined_copy(self, boost, installed):
+        boost("install", "tdd-workflow")
+        boost("focus", "tdd-workflow")
+        assert _lock()["brainstorming"]["sidelined_by"] == "focus"
+        _unhold("brainstorming")
+        r = boost("doctor", expect=1)
+        assert ("sidelined skill brainstorming is still in ~/.agents/skills"
+                in " ".join(r.out.split()))
+        r = boost("sync")
+        assert (_HOLD % ("held", "brainstorming", "sidelined by `boost focus`")
+                in " ".join(r.out.split()))
+        held = paths.held_skills_dir() / "brainstorming"
+        assert _lock()["brainstorming"]["held_at"] == str(held)
+        assert not os.path.lexists(paths.store_dir() / "brainstorming")
+        assert "everything in sync" in boost("sync").out
+        boost("focus", "--clear")
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert "held_at" not in _lock()["brainstorming"]
+
+    def test_a_held_copy_is_left_alone(self, boost, installed):
+        boost("quarantine", "brainstorming")
+        r = boost("heal")
+        assert "store copy out of" not in r.out
+        assert "nothing to heal" in r.out
+
+
 class TestQuarantineMaterialized:
     """The CLI round trip for the kinds quarantine used to deny existed."""
 

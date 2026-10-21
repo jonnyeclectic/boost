@@ -33,6 +33,11 @@ class Tap:
     #: moved the clone to HEAD — silently invalidating any prebuilt vectors
     #: imported for that commit, which is the whole reason the pin exists.
     pin: str = ""
+    #: When this tap was added (``util.now_iso``), or "" for a config row
+    #: written before it was recorded. A lock row with no ``tap_url`` that
+    #: predates it was installed from an earlier tap of the same name
+    #: (:func:`source_changed`).
+    added_at: str = ""
 
     @property
     def safe_name(self) -> str:
@@ -289,7 +294,8 @@ def list_taps() -> list[Tap]:
     if not isinstance(taps, list):
         return []
     return [Tap(name=t["name"], url=t.get("url", ""),
-                curated=bool(t.get("curated")), pin=str(t.get("pin") or ""))
+                curated=bool(t.get("curated")), pin=str(t.get("pin") or ""),
+                added_at=str(t.get("added_at") or ""))
             for t in taps if isinstance(t, dict) and t.get("name")]
 
 
@@ -354,11 +360,34 @@ def source_changed(lk: dict, tap: Tap) -> bool:
     untap `~/a/reg` and tap `~/b/reg`, and the lock rows installed from the
     first now resolve to the second. Comparing versions across that seam
     called an unrelated skill of the same name an upgrade, and `boost update`
-    applied it. The lock's ``tap_url`` (written at install) is the source; a
-    row without one predates the field and keeps the old behaviour.
+    applied it. The lock's ``tap_url`` (written at install) is the source.
+
+    A row without one predates the field. While its tap stays configured
+    :func:`store.backfill_tap_urls` records the URL from config; once it was
+    untapped and the name tapped again, nothing says which repository it came
+    from, so a tap added after the row was last written (``added_at``) is a
+    change unless the clone still sits at the commit the row recorded. A
+    legacy row under a tap row that predates ``added_at`` cannot be told
+    apart and keeps the old behaviour.
     """
     recorded = str(lk.get("tap_url") or "")
-    return bool(recorded) and not same_source(recorded, tap.url)
+    if recorded:
+        return not same_source(recorded, tap.url)
+    return retapped_since(lk, tap)
+
+
+def retapped_since(lk: dict, tap: Tap) -> bool:
+    """Whether ``tap`` was added after lock row ``lk`` was last written.
+
+    Strictly after, so a tap and an install in the same second are one
+    source. A clone still at the row's ``commit`` is the same repository.
+    """
+    written = max(str(lk.get("installed_at") or ""),
+                  str(lk.get("updated_at") or ""))
+    if not (tap.added_at and written and written < tap.added_at):
+        return False
+    commit = str(lk.get("commit") or "")
+    return not (commit and gitutil.head_commit(tap.path) == commit)
 
 
 def _is_local(url: str) -> bool:
@@ -566,7 +595,8 @@ CURATED_BY_USER = "user"
 
 
 def _row(name: str, url: str, curated: bool, by_user: bool) -> dict:
-    row: dict = {"name": name, "url": url, "curated": curated}
+    row: dict = {"name": name, "url": url, "curated": curated,
+                 "added_at": util.now_iso()}
     if curated and by_user:
         row["curated_by"] = CURATED_BY_USER
     return row
