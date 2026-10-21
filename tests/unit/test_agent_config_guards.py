@@ -164,11 +164,14 @@ class TestRelativeDir:
         config.set_value("agents.cursor.project_dir", "rel")
         assert config.get("agents.cursor.project_dir") == "rel"
 
-    @pytest.mark.parametrize("raw", [None, 3, "", "  ", "~/x", "/abs/x",
+    @pytest.mark.parametrize("raw", [None, 3, "", "  ", "~/x",
                                      "${BOOST_TEST_REL_NOPE}/x"])
     def test_check_dir_passes(self, monkeypatch, raw):
         monkeypatch.delenv("BOOST_TEST_REL_NOPE", raising=False)
         assert agents.check_dir(raw) is None
+
+    def test_check_dir_passes_an_absolute_path(self, tmp_path):
+        assert agents.check_dir(str(tmp_path / "x")) is None
 
     @pytest.mark.parametrize("raw", ["rel", "./rel/skills", "../up/skills",
                                      "${BOOST_TEST_REL_NOPE:-rel}/skills"])
@@ -226,6 +229,27 @@ class TestDirAliasesTheStore:
         assert agents.aliases_store(sandbox / ".agents" / "skills") is True
         assert agents.aliases_store(sandbox / ".claude" / "skills") is False
         assert agents.aliases_store(tmp_path / "nowhere" / "skills") is False
+
+    def test_aliases_store_asks_by_inode(self, sandbox, tmp_path,
+                                         monkeypatch):
+        other = tmp_path / "Other"
+        other.mkdir()
+        monkeypatch.setattr(agents.os.path, "samefile", lambda a, b: True)
+        assert agents.aliases_store(other) is True
+
+    def test_aliases_store_samefile_error_is_false(self, sandbox, tmp_path,
+                                                   monkeypatch):
+        def boom(a, b):
+            raise OSError("gone")
+        monkeypatch.setattr(agents.os.path, "samefile", boom)
+        assert agents.aliases_store(tmp_path) is False
+
+    def test_aliases_store_resolve_error_is_false(self, sandbox, tmp_path,
+                                                  monkeypatch):
+        def boom(self, strict=False):
+            raise RuntimeError("loop")
+        monkeypatch.setattr(agents.Path, "resolve", boom)
+        assert agents.aliases_store(tmp_path) is False
 
     def test_aliases_store_fails_closed(self, sandbox, tmp_path):
         loop = tmp_path / "loop"
