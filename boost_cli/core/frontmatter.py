@@ -15,6 +15,7 @@ Supports the subset actually used by skill files:
 """
 from __future__ import annotations
 
+import re
 from contextlib import suppress
 
 BOM = "\ufeff"
@@ -84,19 +85,24 @@ def _dump_escape(s: str) -> str:
     return "".join(out)
 
 
+#: One escape `_dump_escape` writes: a backslash and the character it guards.
+_DUMP_ESCAPE = re.compile(r'\\([n"\\])')
+
+
 def _dump_unescape(s: str) -> str:
-    """Inverse of `_dump_escape`, applied to a double-quoted scalar's inside."""
-    out = []
-    i, n = 0, len(s)
-    while i < n:
-        ch = s[i]
-        if ch == "\\" and i + 1 < n and s[i + 1] in ("n", '"', "\\"):
-            out.append("\n" if s[i + 1] == "n" else s[i + 1])
-            i += 2
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out)
+    """Inverse of `_dump_escape`, applied to a double-quoted scalar's inside.
+
+    A regex rather than a hand-stepped ``while i < n`` scan, because of what a
+    mutant of the scan did: ``i += 1`` mutated to ``i = 1`` re-appends one
+    character forever. Measured locally it grew 2.3 GB -> 5.0 GB in 6 s,
+    against a wall-clock timeout of ~70 s for the 62 tests that reach it
+    (mutmut bounds time, never memory) -- enough to exhaust a 16 GB runner,
+    which is how `mutation-shard (5)` died with "The runner has received a
+    shutdown signal" on #1189. ``re.sub`` walks left to right, consuming each
+    escape pair whole: the same reading, with no counter to mutate.
+    """
+    return _DUMP_ESCAPE.sub(
+        lambda m: "\n" if m.group(1) == "n" else m.group(1), s)
 
 
 _BLOCK_SCALAR_TOKENS = frozenset({"|", "|-", "|+", ">", ">-", ">+"})

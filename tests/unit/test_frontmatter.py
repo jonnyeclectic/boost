@@ -619,3 +619,32 @@ class TestTagsOf:
     def test_parsed_scalar_frontmatter_round_trip(self):
         meta, _ = frontmatter.parse("---\nname: x\ntags: testing\n---\nbody\n")
         assert frontmatter.tags_of(meta) == ["testing"]
+
+
+class TestDumpUnescape:
+    """`_dump_unescape` is a regex, not an index-stepped scan: a scan's
+    ``i += 1`` mutant (``i = 1``) grew a list without bound and took the CI
+    runner down. These pin the reading the scan defined, edge cases included."""
+
+    @pytest.mark.parametrize("raw, want", [
+        ("", ""),
+        ("plain", "plain"),
+        (r"a\nb", "a\nb"),
+        (r"say \"hi\"", 'say "hi"'),
+        (r"back\\slash", "back\\slash"),
+        # an escaped backslash is consumed whole: the n after it stays an n
+        (r"\\n", "\\n"),
+        (r"\\\n", "\\\n"),
+        # not one of the three escapes: both characters kept verbatim
+        (r"tab\t", "tab\\t"),
+        # a lone trailing backslash has nothing to guard
+        ("end\\", "end\\"),
+    ])
+    def test_reads_each_escape_once(self, raw, want):
+        assert frontmatter._dump_unescape(raw) == want
+
+    @pytest.mark.parametrize("value", [
+        "", "x", 'q"uote', "back\\slash", "two\nlines", '\\"\n\\\\', "\\n",
+    ])
+    def test_inverts_dump_escape(self, value):
+        assert frontmatter._dump_unescape(frontmatter._dump_escape(value)) == value
