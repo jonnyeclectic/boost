@@ -1816,15 +1816,30 @@ def rerank(query: str, hits: list[Hit], limit: int = 10,
             system="You rank AI coding skills by how well they fit a task.",
             max_tokens=400)
         order = _json_array(reply)
-        if not order:
-            # The model answered but not with a JSON array, so the ordering
-            # falls back to whatever retrieval produced — and so must the
+        if not order or not names_any(hits, order, lambda h: h["entry"]["name"]):
+            # The model answered but not with a JSON array — or with one that
+            # names no candidate, which reorders nothing — so the ordering
+            # falls back to whatever retrieval produced, and so must the
             # label. Not cached: a degrade reply is a retry, not an answer.
+            if reply:
+                ai.note_bad_reply("no JSON array of names" if not order
+                                  else "named none of the candidates", reply)
             return hits[:limit], engine
         if caching:
             _rerank_cache_put(cache_key, [str(n) for n in order])
     return (reorder_by_names(hits, order, lambda h: h["entry"]["name"])[:limit],
             LLM_RANKER)
+
+
+def names_any(items: list, order: Sequence, name_of) -> bool:
+    """True when the LLM's name ``order`` names at least one of ``items``.
+
+    :func:`reorder_by_names` always returns a permutation, so a reply of
+    invented names hands back the input order unchanged — and a caller that
+    labelled that "ranked by the AI" credited it with retrieval's order.
+    """
+    names = {str(name_of(it)) for it in items}
+    return any(str(n) in names for n in order)
 
 
 def reorder_by_names(items: list, order: Sequence, name_of) -> list:
