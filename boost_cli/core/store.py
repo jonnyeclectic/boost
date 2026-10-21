@@ -1322,8 +1322,8 @@ def _refused_materializations(existing: dict | None, linked: list[str],
     return refused + out
 
 
-def _copy_skill(src: Path, dest: Path, *, within: Path | None = None
-                ) -> list[str]:
+def _copy_skill(src: Path, dest: Path, *, within: Path | None = None,
+                keep_old: list[Path] | None = None) -> list[str]:
     """Copy a skill tree into ``dest`` atomically; return the links skipped.
 
     Symlinks follow :func:`_copy_tree`: one that stays inside the skill is
@@ -1339,6 +1339,10 @@ def _copy_skill(src: Path, dest: Path, *, within: Path | None = None
     filesystem, then swap it in with directory renames: the existing copy stays
     untouched until the new one is complete, the failure window shrinks to two
     fast renames, and a failed swap rolls back to the original.
+
+    With ``keep_old`` a list, the moved-aside original is appended to it
+    rather than deleted, so a caller whose later step fails can swap it back
+    (:func:`_restore_old_copy`); deleting it is then that caller's job.
     """
     dest = Path(dest)
     # Staging needs to *write* next to dest, and a store that cannot be written
@@ -1395,8 +1399,32 @@ def _copy_skill(src: Path, dest: Path, *, within: Path | None = None
             _remove_backup(backup)
         raise
     if backup is not None:
-        _remove_backup(backup)
+        if keep_old is None:
+            _remove_backup(backup)
+        else:
+            keep_old.append(backup)
     return skipped
+
+
+def _restore_old_copy(old: Path, dest: Path) -> None:
+    """Put the moved-aside original back at ``dest``, the new copy aside.
+
+    Renames only, so an interrupt mid-restore cannot lose both copies: the
+    new copy goes to its own ``.new`` name before the old one comes back.
+    """
+    if os.path.lexists(dest):
+        aside = old.with_name(old.name[:-len(".old")] + ".new")
+        os.replace(dest, aside)
+        try:
+            os.replace(old, dest)
+        except BaseException:
+            # Put the new copy back: install's cleanup deletes ``old`` next,
+            # and an empty ``dest`` would lose both copies.
+            os.replace(aside, dest)
+            raise
+        _remove_backup(aside)
+    else:
+        os.replace(old, dest)
 
 
 #: The names a skill copy never takes, at any depth (:data:`util.IGNORED`).
@@ -2111,28 +2139,39 @@ def install(entry: dict, force: bool = False,
     # recorded, which the rerun then refused to touch.
     dated = source_updated_at(entry["tap"], entry.get("rel_dir", "."))
     fresh = not dest.exists()
+    old: list[Path] = []
     try:
         res = _copy_link_record(entry, name, src, dest, tap, existing,
-                                only_agents, dated)
+                                only_agents, dated, keep_old=old)
     except BaseException:
         # Nothing recorded it, so nothing else would ever clean it up: undo a
         # fresh install whole, so a plain rerun starts from where it began.
-        # An upgrade's old copy is already gone; its lock row still names it.
         if fresh and lockfile.get_skill(name) is None:
             with contextlib.suppress(OSError):
                 unlink_agents(name)
             with contextlib.suppress(OSError):
                 util.rmtree(dest)
+        # An upgrade whose new row never landed swaps the old copy back. Left
+        # in place, the new copy no longer matched the row's sha256, so every
+        # later `update`, `verify` and `drift` called it a local edit.
+        elif old and lockfile.get_skill(name) == existing:
+            with contextlib.suppress(OSError):
+                _restore_old_copy(old[0], dest)
         raise
+    finally:
+        for b in old:
+            if os.path.lexists(b):
+                _remove_backup(b)
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
     return res
 
 
 def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
                       existing: dict | None, only_agents: list[str] | None,
-                      dated: str | None) -> InstallResult:
+                      dated: str | None, *,
+                      keep_old: list[Path] | None = None) -> InstallResult:
     """:func:`install`'s copy, link and lock-row steps, in that order."""
-    skipped = _copy_skill(src, dest, within=tap.path)
+    skipped = _copy_skill(src, dest, within=tap.path, keep_old=keep_old)
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
                       updated_at=dated)
     res.skipped_links = skipped
@@ -4442,6 +4481,23 @@ def existing_skill_owner(name: str) -> str | None:
     return existing.get("tap") if existing else None
 
 
+def _check_store_removable(name: str) -> None:
+    """Refuse a skill uninstall the store directory would stop halfway.
+
+    Deleting the copy needs the store itself writable, and so does the lock
+    file that lives in it. Under a read-only ``~/.agents/skills`` the links
+    went, then ``SKILL.md``, then the rmtree failed on the directory and
+    uninstall crashed at exit 70 with the lock row still in place. The same
+    refusal as :func:`_require_writable`, asked before anything is removed.
+    """
+    d = paths.store_dir()
+    block = paths.refuses_writes(d)
+    if block is not None:
+        raise BoostError("cannot uninstall %s: %s"
+                         % (name, paths.not_writable(d, block)),
+                         hint="%s, then re-run" % paths.write_remedy(block))
+
+
 def _check_links_removable(name: str, entry: dict) -> None:
     """Refuse a skill uninstall that would leave one of its links behind.
 
@@ -4542,9 +4598,17 @@ def uninstall(name: str, *, project_fallback: bool = True) -> dict:
                               "--local %s`" % name) if in_repo
                         else "see what is with `boost list`")
     _check_links_removable(name, entry)
-    removed_links = unlink_agents(name)
-    util.remove_path(skill_store_dir(name))
+    _check_store_removable(name)
+    # The row goes first: a lock that refuses the write (full disk, immutable
+    # file) then fails before anything is deleted, rather than after the copy
+    # and its links are gone with the row still claiming them.
     lockfile.remove_skill(name)
+    try:
+        removed_links = unlink_agents(name)
+        util.remove_path(skill_store_dir(name))
+    except BaseException:
+        lockfile.set_skill(name, entry)
+        raise
     journal.log("uninstall", name)
     return {"name": name, "unlinked": removed_links, "entry": entry, "kind": "skill"}
 
