@@ -143,6 +143,17 @@ OUTDATED_SOURCE_MISSING = "source missing"
 OUTDATED_REMOVED_UPSTREAM = "removed upstream"
 
 
+def removed_upstream_remedy(name: str = "", quote: bool = False) -> str:
+    """What to do about an item its still-configured tap no longer ships.
+
+    One source for the words, so `outdated`'s footer and `drift`'s hint
+    cannot drift apart: `boost update` restores nothing here (it answers
+    "no longer in tap — leaving as-is"), so neither may suggest it.
+    """
+    cmd = "boost uninstall %s" % name if name else "boost uninstall"
+    return "%s, or keep as-is" % ("`%s`" % cmd if quote else cmd)
+
+
 def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
     """Summary line for `boost outdated`, worded so it never promises
     `boost update` can fix a row whose source is gone.
@@ -175,6 +186,6 @@ def outdated_footer(total: int, source_missing: int, removed: int = 0) -> str:
         parts.append("%d source missing (re-tap or `boost uninstall`)"
                      % untapped)
     if removed:
-        parts.append("%d removed upstream (`boost uninstall`, or keep as-is)"
-                     % removed)
+        parts.append("%d removed upstream (%s)"
+                     % (removed, removed_upstream_remedy(quote=True)))
     return " · ".join(parts)

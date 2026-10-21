@@ -364,8 +364,18 @@ def _drift_hint(name: str, status: str, tap: str = "",
         # tap has been untapped, that command is a guaranteed no-op — the
         # only remedy that can actually restore the source is re-tapping it.
         # The name is not a spec, so the hint re-taps the recorded source.
-        return ("boost update" if registry.is_tapped(tap)
-                else registry.retap_hint(tap, tap_url))
+        #
+        # Still tapped is two states. A clone that is missing or broken is
+        # what `update` repairs. A healthy clone without the entry means it
+        # was removed upstream, which `update` answers "no longer in tap —
+        # leaving as-is" — so hinting it looped. `outdated` words that state
+        # through the same helper.
+        if not registry.is_tapped(tap):
+            return registry.retap_hint(tap, tap_url)
+        t = next((t for t in registry.list_taps() if t.name == tap), None)
+        if t is not None and t.is_cloned and not t.is_broken_clone:
+            return staleness.removed_upstream_remedy(name)
+        return "boost update"
     if status in ("store-missing", "misdirected-link"):
         return "boost heal"
     if status == "outdated":
@@ -642,6 +652,16 @@ def cmd_doctor(argv):
             bad("tap", "tap %s not cloned — run `boost update`" % tap.name)
         elif tap.is_broken_clone:
             bad("tap", registry.broken_clone_line(tap.name), wrap=True)
+        elif (head := registry.off_pin(tap)) is not None:
+            # Before the stale-catalog check: its remedy, `heal`, rescans the
+            # cache to match the off-pin tree and turns this line green with
+            # the clone still on the wrong commit. `update <name>` checks the
+            # pin back out (and rescans); `--force` is the other honest exit.
+            bad("tap", "tap %s is pinned at %s but its clone is at %s — run "
+                "`boost update %s` to return it, or `boost update --force %s` "
+                "to follow its default branch"
+                % (tap.name, tap.pin[:7], head[:7], tap.name, tap.name),
+                wrap=True)
         elif not tap.cache_file.exists():
             bad("tap", "tap %s has no catalog cache — run `boost update %s`%s"
                 % (tap.name, tap.name, " once %s is %s"

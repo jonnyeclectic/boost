@@ -187,6 +187,22 @@ class TestOutdatedFooterRemovedUpstream:
         assert "source missing" not in footer
 
 
+class TestRemovedUpstreamRemedy:
+    """One source for `outdated`'s footer and `drift`'s hint."""
+
+    def test_named_and_plain_for_a_drift_hint(self):
+        assert (staleness.removed_upstream_remedy("brainstorming")
+                == "boost uninstall brainstorming, or keep as-is")
+
+    def test_unnamed_and_quoted_for_the_footer(self):
+        assert (staleness.removed_upstream_remedy(quote=True)
+                == "`boost uninstall`, or keep as-is")
+
+    def test_named_and_quoted(self):
+        assert (staleness.removed_upstream_remedy("x", quote=True)
+                == "`boost uninstall x`, or keep as-is")
+
+
 class TestCatalogRelation:
     """`boost info`'s installed-vs-catalog decision, compared as versions."""
 
