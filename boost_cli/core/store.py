@@ -1543,6 +1543,7 @@ def _copy_skill(src: Path, dest: Path, *, within: Path | None = None,
                 "could not copy %s into the skill store: %d file%s failed"
                 % (dest.name, n, "" if n == 1 else "s"),
                 hint="first: %s" % first) from None
+        _own_writable(staged)
         # is_symlink() as well as exists(): a dangling symlink is still
         # something in the way that has to be moved aside.
         if dest.exists() or dest.is_symlink():
@@ -1552,6 +1553,8 @@ def _copy_skill(src: Path, dest: Path, *, within: Path | None = None,
     except BaseException:
         if backup is not None and not (dest.exists() or dest.is_symlink()):
             os.replace(backup, dest)      # swap-in failed: restore the original
+        with contextlib.suppress(OSError):
+            _own_writable(staged)     # a half-copied 0555 dir refuses rmtree
         shutil.rmtree(staged, ignore_errors=True)
         if backup is not None and (backup.exists() or backup.is_symlink()):
             _remove_backup(backup)
@@ -1562,6 +1565,25 @@ def _copy_skill(src: Path, dest: Path, *, within: Path | None = None,
         else:
             keep_old.append(backup)
     return skipped
+
+
+def _own_writable(root: Path) -> None:
+    """Give the owner write on every directory and file of a fresh copy.
+
+    ``copytree`` copies modes, so a skill imported from a read-only source
+    (``chmod 555``, a read-only mount, a package manager's tree) arrived in
+    the store read-only — and the store copy is boost's to write. ``import
+    --name`` then crashed writing the renamed frontmatter beside SKILL.md, and
+    the cleanup that should have removed the unrecorded copy could not unlink
+    anything inside it either, so every rerun refused the stranded dir. Links
+    are left alone: ``chmod`` follows them, out of the copy.
+    """
+    for d, dirs, files in os.walk(root):
+        for n in (*dirs, *files):
+            p = Path(d, n)
+            if not p.is_symlink():
+                p.chmod(p.lstat().st_mode | stat.S_IWUSR)
+    Path(root).chmod(Path(root).lstat().st_mode | stat.S_IWUSR)
 
 
 def _restore_old_copy(old: Path, dest: Path) -> None:

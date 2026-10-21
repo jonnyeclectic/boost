@@ -6721,3 +6721,66 @@ def test_url_source_name_is_the_name_boost_tap_would_give(sandbox):
     # A URL parse_spec refuses is matched as itself, never as nothing.
     bad = "https://example.test/a\x01/b"
     assert store.url_source_name(bad) == bad
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="chmod can't make a directory unwritable on Windows")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root ignores mode bits")
+class TestAReadOnlySourceImports:
+    """`boost import ro/eta --name eta2` of a 0555 dir crashed rc 70 writing
+    the renamed frontmatter, and the cleanup could not delete the read-only
+    copy either, so every rerun refused the unrecorded store dir."""
+
+    @pytest.fixture
+    def ro_src(self, tmp_path):
+        src = tmp_path / "ro" / "eta"
+        (src / "scripts").mkdir(parents=True)
+        (src / "SKILL.md").write_text("---\nname: eta\n---\n\n# eta\n",
+                                      encoding="utf-8")
+        (src / "scripts" / "run.sh").write_text("echo\n", encoding="utf-8")
+        for p in (src / "SKILL.md", src / "scripts" / "run.sh"):
+            p.chmod(0o444)
+        for d in (src / "scripts", src):
+            d.chmod(0o555)
+        yield src
+        for d in (src, src / "scripts"):
+            d.chmod(0o755)
+
+    def test_a_renamed_import_of_a_read_only_dir_lands_writable(
+            self, sandbox, ro_src):
+        res = store.install_from_path(ro_src, name="eta2")
+        dest = store.skill_store_dir("eta2")
+        assert res.name == "eta2"
+        assert (dest / "SKILL.md").read_text(encoding="utf-8") == (
+            "---\nname: eta2\n---\n\n# eta\n")
+        assert lockfile.get_skill("eta2") is not None
+        for p in (dest, dest / "scripts"):
+            assert p.stat().st_mode & 0o777 == 0o755
+        assert (dest / "scripts" / "run.sh").stat().st_mode & 0o777 == 0o644
+        # the source is the user's, and keeps its modes
+        assert ro_src.stat().st_mode & 0o777 == 0o555
+        assert (ro_src / "SKILL.md").stat().st_mode & 0o777 == 0o444
+
+    def test_a_failed_read_only_import_leaves_no_store_dir(
+            self, sandbox, ro_src, monkeypatch):
+        def refuse(*a, **k):
+            raise BoostError("link refused")
+        monkeypatch.setattr(store, "link_agents", refuse)
+        with pytest.raises(BoostError, match="link refused"):
+            store.install_from_path(ro_src, name="eta2")
+        assert not os.path.lexists(store.skill_store_dir("eta2"))
+        assert [p.name for p in paths.store_dir().iterdir()
+                if p.name.startswith(util.TEMP_PREFIX)] == []
+
+    def test_own_writable_leaves_a_links_target_alone(self, tmp_path):
+        outside = tmp_path / "outside.txt"
+        outside.write_text("x", encoding="utf-8")
+        outside.chmod(0o444)
+        root = tmp_path / "copy"
+        root.mkdir()
+        (root / "link").symlink_to(outside)
+        root.chmod(0o555)
+        store._own_writable(root)
+        assert root.stat().st_mode & 0o777 == 0o755
+        assert outside.stat().st_mode & 0o777 == 0o444
