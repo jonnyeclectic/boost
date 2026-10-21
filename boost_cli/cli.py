@@ -16,7 +16,7 @@ import sys
 import time
 
 from . import PRODUCT, TAGLINE, __version__
-from .core import logs, nethttp
+from .core import logs, nethttp, paths
 from .core import output as out
 from .errors import BoostError
 
@@ -456,6 +456,14 @@ def main(argv: list[str] | None = None) -> int:
     # `_route`), and configuring the file handler creates ~/.boost/logs — so
     # one TAB on a machine where boost never ran would create boost's state.
     if not (argv and argv[0] in _PLUMBING):
+        # Before logs.configure: the log and the config both live under
+        # BOOST_HOME, and this runs outside `_route`'s BoostError handler, so
+        # a relative override would otherwise surface as a traceback.
+        try:
+            paths.check_env()
+        except BoostError as e:
+            out.err(e.message, hint=e.hint, wrap=True)
+            return 1
         logs.configure(verbose=opts["verbose"], debug=opts["debug"],
                        quiet=opts["quiet"])
     try:
