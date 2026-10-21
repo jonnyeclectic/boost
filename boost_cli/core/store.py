@@ -54,7 +54,11 @@ class InstallResult:
     # clears that, so it is kept apart from `unwritable` and worded with
     # `link_refusal`.
     blocked: list[tuple[str, str]] = field(default_factory=list)
-    # The agents behind `unwritable` and `blocked` for a skill: the ones whose
+    # Agent dirs where the OS refused to make any symlink at all (Windows
+    # without Developer Mode, a FAT or exFAT mount): no chmod or move clears
+    # it, so it is worded apart, with :func:`symlink_refusal`.
+    unlinkable: list[str] = field(default_factory=list)
+    # The agents behind `unwritable`, `blocked` and `unlinkable` for a skill: the ones whose
     # dir refused the link. Recorded in the lock as ``refused_agents`` so a
     # later re-install retries them (:func:`preserved_agent_scope`).
     refused: list[str] = field(default_factory=list)
@@ -583,7 +587,15 @@ def link_agents(name: str, only: list[str] | None = None, *,
             res.unwritable.append(str(paths.refuses_writes(adir) or adir))
             res.refused.append(agent)
             continue
-        except OSError:
+        except OSError as exc:
+            # No symlink can be made here at all: every install used to exit
+            # 70 from the line above. Skip the agent, as for an unwritable
+            # dir; the store copy still reaches the agents that read it
+            # directly, and `boost sync` links the rest once links work.
+            if symlinks_unsupported(exc):
+                res.unlinkable.append(str(adir))
+                res.refused.append(agent)
+                continue
             # A dangling symlink or a file where the agent dir belongs: the
             # mkdir raises FileExistsError or NotADirectoryError. It escaped
             # here after `_copy_skill` had run, so the install exited 70 with
@@ -600,6 +612,32 @@ def link_agents(name: str, only: list[str] | None = None, *,
         agents.remember_link_dir(agent, adir)
         res.linked.append(agent)
     return res
+
+
+#: What a filesystem or OS that cannot make a symlink at all raises: EINVAL
+#: from Windows without Developer Mode (ERROR_PRIVILEGE_NOT_HELD arrives as a
+#: plain OSError, not a PermissionError), ENOTSUP/EOPNOTSUPP/ENOSYS from FAT
+#: and exFAT mounts. EPERM is left out on purpose: it is a PermissionError,
+#: and :func:`link_agents` already reads that as an unwritable agent dir.
+_NO_SYMLINK_ERRNOS = frozenset({errno.EINVAL, errno.ENOTSUP,
+                                errno.EOPNOTSUPP, errno.ENOSYS})
+_ERROR_PRIVILEGE_NOT_HELD = 1314
+
+
+def symlinks_unsupported(exc: OSError) -> bool:
+    """Whether ``exc``, raised making a symlink, means none can be made."""
+    if getattr(exc, "winerror", None) == _ERROR_PRIVILEGE_NOT_HELD:
+        return True
+    return (not isinstance(exc, PermissionError)
+            and exc.errno in _NO_SYMLINK_ERRNOS)
+
+
+def symlink_refusal(adir: str) -> tuple[str, str]:
+    """Why a dir from ``res.unlinkable`` refused, and what clears it."""
+    return ("this system refused to create a symlink in %s" % paths.tilde(adir),
+            "on Windows turn on Developer Mode (Settings > System > For "
+            "developers) or use an administrator shell; on a FAT or exFAT "
+            "drive keep your home on a filesystem with symlinks")
 
 
 def _lock_date(name: str, updated_at: str | None) -> str | None:
@@ -1353,8 +1391,11 @@ def _copy_skill(src: Path, dest: Path, *, within: Path | None = None,
     # report for it. Name the directory instead: that is the whole diagnosis.
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
+        # util.TEMP_PREFIX, not ``.<name>.tmp``: the name embedded made the
+        # staging dir 13 bytes longer than the skill's own, so a name that
+        # fits as a store dir could not be staged.
         staged = Path(tempfile.mkdtemp(dir=str(dest.parent),
-                                       prefix="." + dest.name + ".tmp"))
+                                       prefix=util.TEMP_PREFIX))
     except PermissionError as exc:
         raise BoostError(
             "cannot write to the skill store at %s" % dest.parent,
@@ -1502,7 +1543,7 @@ def _remove_backup(backup: Path) -> None:
 
     ``shutil.rmtree`` on a symlink raises, and with ``ignore_errors=True`` it
     fails silently — so when the displaced ``dest`` was a symlink rather than a
-    real directory, the ``.<name>.tmpXXXX.old`` staging link was left behind
+    real directory, the ``.boost-XXXXXXXX.old`` staging link was left behind
     forever. Harmless-looking, but it accumulates in the user's agent dirs and
     every one of them is a dangling pointer.
     """
@@ -1836,6 +1877,31 @@ def _count_others(installed: dict, name: str) -> int:
     return len(installed) - (1 if name in installed else 0)
 
 
+def refuse_case_collision(name: str, recorded: dict, where: str = "") -> None:
+    """Refuse ``name`` when ``recorded`` holds a skill it differs from only
+    by case.
+
+    On a case-insensitive filesystem (macOS, Windows) ``Foo`` and ``foo`` are
+    one store dir and one link per agent, so installing the second wrote over
+    the first: ``--force`` replaced Foo's files with foo's, the lock recorded
+    both as healthy, and uninstalling either deleted the dir both rows name.
+    Refused on every filesystem, and whatever ``force`` says, so the answer
+    does not depend on which machine asks — and ``--force`` is never the hint,
+    because what it would replace is a different skill.
+    """
+    folded = name.casefold()
+    other = next((k for k in recorded if k != name and k.casefold() == folded),
+                 None)
+    if other is not None:
+        raise BoostError(
+            "%s differs only by case from %s, which is already installed%s; "
+            "on a case-insensitive filesystem they would share one store dir"
+            % (name, other, where),
+            hint="`boost uninstall %s` first if %s should replace it"
+                 % (other, name),
+            wrap=True)
+
+
 def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                    base=None, kind: str | None = None) -> dict | None:
     """The lock record an install of ``entry`` would replace, or its refusal.
@@ -1851,7 +1917,7 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
     fresh install); a returned record therefore means ``force`` let it through.
     """
     kind = kind or entry.get("kind", "skill")
-    name = entry["name"]
+    name = util.check_item_name(entry["name"], kind)
     if kind in ("rule", "workflow"):
         resolved_base = _require_project_base(scope, base, "%s %s" % (kind, name))
         _refuse_stranded_base(scope, base, kind, name)
@@ -1863,6 +1929,8 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
         resolved_base = _require_project_base(scope, base, name)
         if resolved_base is None:         # _require_project_base already raised
             raise BoostError("there is no project here to install %s into" % name)
+        refuse_case_collision(name, projectlock.installed(resolved_base),
+                              " in this project")
         existing = projectlock.get_skill(resolved_base, name)
         if existing and not force:
             raise BoostError(
@@ -1873,6 +1941,7 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                 # so it answers "not installed" for the very skill this is about.
                 hint="`boost install %s --local --force` to force" % name)
         return existing
+    refuse_case_collision(name, lockfile.installed())
     existing = lockfile.get_skill(name)
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
@@ -4385,7 +4454,8 @@ def install_from_path(src_dir: Path, name: str | None = None,
         raise BoostError("%s has no SKILL.md" % src_dir)
     lockfile.refuse_corrupt()       # before the copy, as in `install`
     meta = _import_meta(src_dir)
-    name = name or str(meta.get("name") or src_dir.name)
+    name = util.check_item_name(name or str(meta.get("name") or src_dir.name))
+    refuse_case_collision(name, lockfile.installed())
     existing = lockfile.get_skill(name)
     # Refuse before `dest` is touched, so a rejected install leaves nothing
     # half-copied over an existing skill.
@@ -4416,15 +4486,28 @@ def install_from_path(src_dir: Path, name: str | None = None,
     _require_writable(name)
     if disowned:
         _drop_skill_copy_row(disowned)
-    # A URL import is bounded by its clone, as a tap install is by its tap; a
-    # path import copies what the user's own links lead to.
-    skipped = _copy_skill(src_dir, dest,
-                          within=remote.root if remote else None)
-    _rename_frontmatter(dest / "SKILL.md", name, meta)
-    # An import records no date, so the one a tap install left in the lock
-    # must not stand for these files.
-    res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
-                      updated_at=None)
+    fresh = not os.path.lexists(dest)
+    try:
+        # A URL import is bounded by its clone, as a tap install is by its
+        # tap; a path import copies what the user's own links lead to.
+        skipped = _copy_skill(src_dir, dest,
+                              within=remote.root if remote else None)
+        _rename_frontmatter(dest / "SKILL.md", name, meta)
+        # An import records no date, so the one a tap install left in the
+        # lock must not stand for these files.
+        res = link_agents(name,
+                          only=preserved_agent_scope(only_agents, existing),
+                          updated_at=None)
+    except BaseException:
+        # As in install(): nothing recorded a fresh copy, so nothing else
+        # would ever clean it up — a refused link left an unrecorded store
+        # dir that the rerun then refused to touch.
+        if fresh and lockfile.get_skill(name) is None:
+            with contextlib.suppress(OSError):
+                unlink_agents(name)
+            with contextlib.suppress(OSError):
+                util.rmtree(dest)
+        raise
     res.skipped_links = skipped
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)

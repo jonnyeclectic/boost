@@ -365,6 +365,9 @@ def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
     refused += ["%s: %s — %s, then `boost sync` %s"
                 % (what[0], *store.link_refusal(adir, block), what[1])
                 for adir, block in getattr(res, "blocked", None) or ()]
+    refused += ["%s: %s — %s, then `boost sync` %s"
+                % (what[0], *store.symlink_refusal(adir), what[1])
+                for adir in getattr(res, "unlinkable", None) or ()]
     # A rule's or workflow's conflict is a directory where its file goes
     # (`store.occupied`): "not linked" named an action that kind never takes,
     # and its remedy is a move, worded the way sync, heal and doctor word it.
