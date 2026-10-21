@@ -575,6 +575,15 @@ class TestHeldStoreCopy:
         assert store.unheld_withheld() == []
         assert store.hold_legacy_copies() == []
 
+    def test_legacy_sideline_is_named_by_its_command(self, brainstorming):
+        def mark(lock):
+            lock["skills"]["brainstorming"]["sidelined_by"] = "focus"
+        lockfile.mutate(mark)
+        assert store.hold_legacy_copies(dry=True) == [
+            "would hold brainstorming's store copy out of ~/.agents/skills "
+            "(it is sidelined by `boost focus`, and Gemini CLI and Codex load "
+            "the store directly)"]
+
     def test_live_and_storeless_rows_are_not_candidates(self, brainstorming):
         assert store.unheld_withheld() == []
         self._legacy_quarantine()
@@ -624,6 +633,17 @@ class TestHeldStoreCopy:
         assert [n for n, r in skills.items() if "tap_url" in r] == [
             "brainstorming"]
         assert store.backfill_tap_urls() == []
+
+    def test_backfill_leaves_a_row_older_than_its_tap(self, brainstorming,
+                                                      tap):
+        def legacy(lock):
+            row = lock["skills"]["brainstorming"]
+            row.pop("tap_url")
+            row["installed_at"] = row["updated_at"] = "2026-01-01T00:00:00Z"
+            row["commit"] = "0" * 40
+        lockfile.mutate(legacy)
+        assert store.backfill_tap_urls() == []
+        assert "tap_url" not in lockfile.get_skill("brainstorming")
 
     def test_nothing_to_hold(self, sandbox):
         assert store.hold_store_copy("brainstorming") is None
