@@ -2058,7 +2058,6 @@ def record_rebuilt(name: str, row: dict) -> None:
         new["installed_at"] = held.get("installed_at", row["installed_at"])
         new["pinned"] = bool(held.get("pinned"))
         new["tags"] = held.get("tags", [])
-        new.pop("commit_pin", None)
         new.update(carried_user_state(held))
         lock["skills"][name] = new
     lockfile.mutate(put)
@@ -2282,9 +2281,9 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
         "source_dir": entry.get("rel_dir", "."),
         "commit": gitutil.head_commit(tap.path),
         "sha256": util.sha256_dir(dest),
-        "installed_at": now,          # record_rebuilt carries the held one
+        # record_rebuilt carries the held one, with pinned/tags/commit_pin.
+        "installed_at": now,
         "updated_at": now,
-        "pinned": False,              # ditto
         "quarantined": False,
         # `agents` is what IS linked; `only_agents` is what the user ASKED for.
         # sync needs the second: it links a skill into every enabled agent, and
@@ -2298,7 +2297,6 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
         # other symlinks lived on — a divergence no boost command could see.
         "agents": linked_agents(name),
         "only_agents": declared_agent_scope(only_agents, existing),
-        "tags": [],                   # ditto, and commit_pin
         # The agents whose dir refused the link, so `install --force` retries
         # them once the dir is fixed (preserved_agent_scope), and those whose
         # link could not be looked at, so uninstall does not forget it.
@@ -4661,11 +4659,11 @@ def install_from_path(src_dir: Path, name: str | None = None,
         "source_url": remote.url if remote else "",
         "commit": remote.commit if remote else "",
         "sha256": util.sha256_dir(dest),
-        "installed_at": now,          # record_rebuilt carries the held one
+        # record_rebuilt carries the held one, with pinned/tags/commit_pin.
+        "installed_at": now,
         "updated_at": now,
-        # Was hardcoded False, which did not merely skip the pin check — a
-        # re-import silently CLEARED an existing pin. install() preserves it.
-        "pinned": False,              # ditto
+        # `pinned` and `tags` are record_rebuilt's: a re-import once wrote a
+        # hardcoded False, which silently CLEARED an existing pin.
         "quarantined": False,
         # What is on disk, not what this run linked — see install().
         "agents": linked,
@@ -4673,7 +4671,6 @@ def install_from_path(src_dir: Path, name: str | None = None,
         # has to record the same declaration — otherwise the links are narrow
         # but sync sees no scope and widens them right back.
         "only_agents": declared,
-        "tags": [],                   # ditto, and commit_pin
         **({"refused_agents": refused} if (refused := unrecorded_agents(name, res))
            else {}),
     })
