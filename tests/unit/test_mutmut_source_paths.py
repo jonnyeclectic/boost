@@ -228,3 +228,27 @@ def test_the_conftest_hook_is_registered():
     # would leave every assertion above passing while the fix never runs.
     assert hasattr(load_conftest(), "pytest_configure")
     assert os.path.basename(str(CONFTEST)) == "conftest.py"
+
+
+class TestMutantAddressCap:
+    """A mutmut worker's address space is capped so a mutant that allocates
+    in an endless loop dies as killed instead of exhausting the runner."""
+
+    def test_a_mutant_run_is_capped_relative_to_its_mapping(self):
+        cap = load_conftest().mutant_address_cap(
+            "boost_cli.core.frontmatter.x__dump_unescape__mutmut_36",
+            1000, headroom=50)
+        assert cap == 1050
+
+    @pytest.mark.parametrize("mutant", [None, "", "stats", "fail"])
+    def test_no_mutant_no_cap(self, mutant):
+        assert load_conftest().mutant_address_cap(mutant, 1000) is None
+
+    def test_an_unreadable_mapping_is_no_cap(self):
+        assert load_conftest().mutant_address_cap(
+            "boost_cli.core.x_f__mutmut_1", None) is None
+
+    def test_the_default_headroom_is_three_gib(self):
+        mod = load_conftest()
+        assert mod.MUTANT_HEADROOM == 3 << 30
+        assert mod.mutant_address_cap("m.x_f__mutmut_1", 0) == 3 << 30

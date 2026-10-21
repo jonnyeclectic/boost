@@ -389,6 +389,59 @@ def absolutize_source_paths(config) -> list:
     return config.source_paths
 
 
+#: Address space a mutant's test run may add on top of what it forked with.
+#: A worker forks from mutmut's ~2.3 GB parent (VmHWM, measured in a
+#: python:3.13-bookworm container) and ran at ~140 MB RSS on a local shard-5
+#: run, so 3 GiB is ample -- and four workers each capped at it still fit a
+#: 16 GB ubuntu-latest runner beside that parent.
+MUTANT_HEADROOM = 3 << 30
+
+
+def mutant_address_cap(mutant: str | None, mapped: int | None,
+                       headroom: int = MUTANT_HEADROOM) -> int | None:
+    """The ``RLIMIT_AS`` to set in a mutmut worker, or ``None`` for no cap.
+
+    mutmut bounds a mutant by CPU and wall time only. A mutant that turns a
+    loop's step into an assignment (``i += 1`` -> ``i = 1``) and appends as it
+    spins grows ~0.45 GB/s, which fills a 16 GB runner well inside the ~70 s
+    wall timeout its tests earn; GitHub then kills the whole job ("The runner
+    has received a shutdown signal") and the shard reports nothing. Capped, the
+    allocation raises ``MemoryError``, the test fails, and the mutant is
+    recorded killed like any other.
+
+    Only a run with a *mutant* active is capped -- mutmut's ``stats`` and
+    clean-test passes and an ordinary ``pytest`` are not -- and the cap is
+    relative to ``mapped``, the address space the worker already holds, since
+    a fork inherits the parent's whole mapping. ``mapped`` is ``None`` where it
+    cannot be read (no ``/proc``: macOS, which does not enforce
+    ``RLIMIT_AS`` anyway).
+    """
+    if not mutant or "__mutmut_" not in mutant or mapped is None:
+        return None
+    return mapped + headroom
+
+
+def _mapped_bytes() -> int | None:
+    """This process's virtual size from ``/proc/self/statm``, or ``None``."""
+    try:
+        pages = int(Path("/proc/self/statm").read_text(encoding="ascii").split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    return pages * os.sysconf("SC_PAGE_SIZE")
+
+
+def _cap_mutant_memory() -> None:
+    cap = mutant_address_cap(os.environ.get("MUTANT_UNDER_TEST"),
+                             _mapped_bytes())
+    if cap is None:
+        return
+    import resource
+    _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    if hard != resource.RLIM_INFINITY:
+        cap = min(cap, hard)
+    resource.setrlimit(resource.RLIMIT_AS, (cap, hard))
+
+
 def pytest_configure(config):
     """Make mutmut's ``source_paths`` absolute before any test can chdir.
 
@@ -424,6 +477,7 @@ def pytest_configure(config):
     see its docstring.
     """
     del config
+    _cap_mutant_memory()
     if not os.environ.get("MUTANT_UNDER_TEST"):
         return          # not a mutmut run — nothing to normalize
     cfg = _mutmut_config()
