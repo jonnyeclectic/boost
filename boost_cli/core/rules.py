@@ -187,9 +187,9 @@ def block_span(text: str, name: str) -> tuple[int, int] | None:
     what an orphan start becomes after one more install — merge_block appends
     a whole block below it, and "first start to first end" then spans the
     user's own text in between. A body cannot forge an end marker: merge_block
-    neutralises marker text before writing (`neutralize_markers`). Every reader and writer of the block goes
-    through here so they agree on what the block is; `require_well_formed`
-    tells the two Nones apart.
+    neutralises marker text before writing (`neutralize_markers`). Every
+    reader and writer of the block goes through here so they agree on what
+    the block is; `require_well_formed` tells the two Nones apart.
     """
     start, end = markers(name)
     i = text.find(start)
