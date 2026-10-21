@@ -327,7 +327,8 @@ class TestADotdirWithNoSearchBit:
         boost("uninstall", "brainstorming", expect=1)
         cursor.chmod(0o700)
         link = cursor / "skills" / "brainstorming"
-        assert link.is_symlink() and link.exists()
+        # Still there, but dangling: the copy it led to is held aside.
+        assert link.is_symlink() and not link.exists()
         boost("uninstall", "brainstorming")
         assert not os.path.lexists(link)
 
@@ -340,7 +341,8 @@ class TestADotdirWithNoSearchBit:
         boost("uninstall", "brainstorming", expect=1)
         cursor.chmod(0o700)
         link = cursor / "skills" / "brainstorming"
-        assert link.is_symlink() and link.exists()
+        # Still there, but dangling: the copy it led to is held aside.
+        assert link.is_symlink() and not link.exists()
         boost("uninstall", "brainstorming")
         assert not os.path.lexists(link)
 
@@ -920,7 +922,7 @@ class TestQuarantineSaysWhatItCouldNotUnlink:
         rec["refused_agents"] = ["cursor"]
         lockfile.set_skill("brainstorming", rec)
         res = boost("quarantine", "brainstorming")
-        assert "quarantined brainstorming (store intact, links removed)" \
+        assert "quarantined brainstorming (store copy held aside, links removed)" \
             in res.out
         assert "may still load" not in res.out + res.err
         assert not any(self._links().values())

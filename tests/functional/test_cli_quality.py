@@ -1671,12 +1671,18 @@ class TestFingerprint:
 class TestQuarantine:
     def test_roundtrip_links_store_lock_doctor(self, boost, installed):
         store = paths.store_dir() / "brainstorming"
+        before = (store / "SKILL.md").read_bytes()
         r = boost("quarantine", "brainstorming")
-        assert "quarantined brainstorming (store intact, links removed)" in r.out
+        assert ("quarantined brainstorming (store copy held aside, links "
+                "removed)") in r.out
         for adir in (".claude", ".windsurf", ".cursor"):
             assert not (paths.home() / adir / "skills" / "brainstorming"
                         ).is_symlink()
-        assert (store / "SKILL.md").is_file()
+        # Out of the store: Gemini CLI and Codex read it with no link.
+        held = paths.held_skills_dir() / "brainstorming"
+        assert not os.path.lexists(store)
+        assert (held / "SKILL.md").read_bytes() == before
+        assert _lock()["brainstorming"]["held_at"] == str(held)
         assert _lock()["brainstorming"]["quarantined"] is True
         # The removed links must not linger in the lock — list/info/doctor
         # all read `agents` to say what's linked.
@@ -1697,7 +1703,10 @@ class TestQuarantine:
                 "(linked: claude-code, windsurf, cursor, antigravity)") in r.out
         link = paths.home() / ".claude" / "skills" / "brainstorming"
         assert link.is_symlink() and link.exists()
+        assert (store / "SKILL.md").read_bytes() == before
+        assert not os.path.lexists(held)
         entry = _lock()["brainstorming"]
+        assert "held_at" not in entry
         assert entry["quarantined"] is False
         assert entry["agents"] == ["claude-code", "windsurf", "cursor",
                                    "antigravity"]
@@ -2054,7 +2063,8 @@ class TestShadowedNames:
             self, boost, installed):
         self._seed_rule_named("brainstorming")
         r = boost("quarantine", "brainstorming")
-        assert "quarantined brainstorming (store intact, links removed)" in r.out
+        assert ("quarantined brainstorming (store copy held aside, links "
+                "removed)") in r.out
         assert ("a rule named brainstorming is also installed — this "
                 "quarantines the skill only") in r.out
 

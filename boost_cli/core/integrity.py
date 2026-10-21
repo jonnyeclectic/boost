@@ -50,6 +50,15 @@ def _store_dir(name: str) -> Path:
     return paths.store_dir() / name
 
 
+def copy_dir(name: str, entry: dict | None) -> Path:
+    """Where skill ``name``'s copy is: held aside while quarantined or
+    sidelined (``store.hold_store_copy``), else the store. The held copy is
+    still the installed bytes, so it is what integrity checks read."""
+    if (entry or {}).get("held_at"):
+        return paths.held_skills_dir() / name
+    return _store_dir(name)
+
+
 def self_sourced(name: str, entry: dict | None) -> bool:
     """Whether ``entry`` records skill ``name`` as its own source.
 
@@ -89,7 +98,7 @@ def status(name: str, entry: dict | None = None) -> str:
     if not entry:
         # Not an installed skill at all — nothing this module can assert about.
         return STATUS_UNLOCKED
-    sdir = _store_dir(name)
+    sdir = copy_dir(name, entry)
     if not sdir.is_dir():
         return STATUS_MISSING
     recorded = entry.get("sha256")
@@ -532,7 +541,7 @@ def _skill_row(name: str, entry: dict, scope: str,
     if scope == scopes.SCOPE_PROJECT:
         d = project_skill_dir(entry, base)
     else:
-        sd = paths.store_dir() / name
+        sd = copy_dir(name, entry)
         d = sd if util.is_safe_component(name) and sd.is_dir() else None
     return InstalledSkill(name, entry, scope, base, d)
 

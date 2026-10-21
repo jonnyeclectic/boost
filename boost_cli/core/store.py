@@ -251,6 +251,9 @@ def read_skill_meta(name: str, skill_dir: Path | None = None
 
     skill_md = (skill_dir if skill_dir is not None
                 else skill_store_dir(name)) / "SKILL.md"
+    if skill_dir is None and not skill_md.exists():
+        # Quarantined or sidelined: the installed copy is held aside.
+        skill_md = held_copy_dir(name) / "SKILL.md"
     if not skill_md.exists():
         return None
     try:
@@ -1037,6 +1040,72 @@ def unlink_agents(name: str) -> list[str]:
     return removed
 
 
+#: Lock field naming where a withheld skill's store copy is held aside.
+HELD_KEY = "held_at"
+
+
+def held_copy_dir(name: str) -> Path:
+    """Where skill ``name``'s store copy sits while it is held aside."""
+    if not util.is_safe_component(name):
+        raise BoostError("invalid skill name %r" % name)
+    return paths.held_skills_dir() / name
+
+
+def is_held(entry: dict | None) -> bool:
+    """Whether ``entry`` records its store copy as held aside."""
+    return bool((entry or {}).get(HELD_KEY))
+
+
+def copy_dir(name: str, entry: dict | None) -> Path:
+    """The dir that holds skill ``name``'s copy: held aside, or the store."""
+    return held_copy_dir(name) if is_held(entry) else skill_store_dir(name)
+
+
+def hold_store_copy(name: str) -> str | None:
+    """Move ``name``'s store copy out of the canonical store.
+
+    Unlinking is all a linking agent needs, but Gemini CLI and Codex read
+    ``~/.agents/skills`` itself (:func:`agents.native_store_agents`), so a
+    quarantined or sidelined skill whose copy stayed there stayed loaded in
+    both while ``boost info`` said "agents (none)". Held aside always, not
+    only while such an agent is enabled: enabling one later must not
+    resurface the skill. Returns the held path to record, or None when there
+    is no copy in either place. A re-run finds the copy already held; a held
+    copy beside a store copy is a stale one and the store copy replaces it.
+    """
+    src, dest = skill_store_dir(name), held_copy_dir(name)
+    if os.path.lexists(src):
+        if os.path.lexists(dest):
+            util.remove_path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+    elif not os.path.lexists(dest):
+        return None
+    return str(dest)
+
+
+def restore_store_copy(name: str) -> None:
+    """Put back what :func:`hold_store_copy` moved, before anything relinks.
+
+    A store copy that exists again (an install since) is the current one, so
+    the held copy is dropped rather than moved over it.
+    """
+    src, dest = held_copy_dir(name), skill_store_dir(name)
+    if not os.path.lexists(src):
+        return
+    if os.path.lexists(dest):
+        util.remove_path(src)
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dest))
+
+
+def drop_held_copy(name: str) -> None:
+    """Remove a held copy no lock row will restore; a leftover is harmless."""
+    with contextlib.suppress(OSError):
+        util.remove_path(held_copy_dir(name))
+
+
 def sideline(name: str, by: str) -> list[str]:
     """Unlink ``name`` and record *why*, so other commands stop fighting it.
 
@@ -1056,16 +1125,24 @@ def sideline(name: str, by: str) -> list[str]:
     lockfile.write() itself does not read.
     """
     removed = unlink_agents(name)
+    # Out of the store too, or Gemini CLI and Codex keep loading it.
+    held = hold_store_copy(name)
 
     def aside(entry: dict) -> None:
         entry["sidelined_by"] = by
+        if held:
+            entry[HELD_KEY] = held
         # `agents` is defined as the links measured from disk, and the links
         # have just been removed — so leaving the old list had `boost list`
         # keep advertising the skill to agents that could no longer see it.
         # `quarantine` clears it for the same reason; :func:`unsideline`
         # recomputes it, exactly as `quarantine --release` does.
         entry["agents"] = []
-    lockfile.update_skill(name, aside)
+    try:
+        lockfile.update_skill(name, aside)
+    except BaseException:
+        restore_store_copy(name)
+        raise
     return removed
 
 
@@ -1083,6 +1160,8 @@ def unsideline(name: str) -> InstallResult:
     linked everywhere the moment a `profile use` or `focus --clear` touched it.
     """
     declared = (lockfile.get_skill(name) or {}).get("only_agents") or None
+    # Back into the store first: the links point at it.
+    restore_store_copy(name)
     res = link_agents(name, declared, keep_theirs=True)
 
     def relinked(entry: dict) -> None:
@@ -1090,6 +1169,7 @@ def unsideline(name: str) -> InstallResult:
         # and the agents that refused, so a later reinstall retries them.
         record_links(entry, res)
         entry.pop("sidelined_by", None)
+        entry.pop(HELD_KEY, None)
     lockfile.update_skill(name, relinked)
     return res
 
@@ -2512,6 +2592,9 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
                       keep_old: list[Path] | None = None) -> InstallResult:
     """:func:`install`'s copy, link and lock-row steps, in that order."""
     skipped = _copy_skill(src, dest, within=tap.path, keep_old=keep_old)
+    # The install resets `quarantined` and `sidelined_by`, so no row will
+    # restore a held copy any more.
+    drop_held_copy(name)
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
                       updated_at=dated)
     res.skipped_links = skipped
@@ -3847,7 +3930,11 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
 
 
 def quarantine_skill(name: str, entry: dict) -> tuple[list[str], dict[str, Path]]:
-    """Withhold skill ``name`` from every agent that links it; keep the store.
+    """Withhold skill ``name`` from every agent; hold its store copy aside.
+
+    The copy moves out of the canonical store (:func:`hold_store_copy`) so
+    the agents that read it directly lose it too; ``quarantine --release``
+    puts it back byte-for-byte (:func:`release_skill`).
 
     Returns ``(removed, blocked)``: the agents unlinked, and each agent whose
     link is, or may be, still there, mapped to the dir that has to change.
@@ -3885,6 +3972,11 @@ def quarantine_skill(name: str, entry: dict) -> tuple[list[str], dict[str, Path]
             blocked[agent] = refusing_dir(link.parent)
             continue
         removed.append(agent)
+    # Out of the store too: Gemini CLI and Codex read it with no link.
+    was_held = is_held(entry)
+    held = hold_store_copy(name)
+    if held:
+        entry[HELD_KEY] = held
     fresh = not entry.get("quarantined")
     entry["quarantined"] = True
     entry["agents"] = []
@@ -3892,16 +3984,36 @@ def quarantine_skill(name: str, entry: dict) -> tuple[list[str], dict[str, Path]
         entry["refused_agents"] = list(blocked)
     else:
         entry.pop("refused_agents", None)
-    lockfile.set_skill(name, entry)
+    try:
+        lockfile.set_skill(name, entry)
+    except BaseException:
+        if not was_held:
+            restore_store_copy(name)
+        raise
     if fresh:
         journal.log("quarantine", name)
     return removed, blocked
 
 
+def release_skill(name: str, entry: dict) -> InstallResult:
+    """Undo :func:`quarantine_skill`: restore the held copy, then relink.
+
+    Restored first, because every link points into the store. Persists
+    ``entry`` with the links measured and the hold cleared.
+    """
+    restore_store_copy(name)
+    res = link_agents(name, only=entry.get("only_agents"))
+    entry["quarantined"] = False
+    entry.pop(HELD_KEY, None)
+    record_links(entry, res)
+    lockfile.set_skill(name, entry)
+    return res
+
+
 def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
     """Remove every recorded materialization of a rule/workflow, stashing it.
 
-    The counterpart of skill quarantine's "store intact, links removed". These
+    The counterpart of skill quarantine's "store copy held aside". These
     kinds have no store copy — the materialization IS the only artifact — so
     what gets removed is stashed on the lock entry and
     :func:`release_materialized` restores it byte-for-byte. Restoring from the
@@ -5283,6 +5395,7 @@ def uninstall(name: str, *, project_fallback: bool = True) -> dict:
     except BaseException:
         lockfile.set_skill(name, entry)
         raise
+    drop_held_copy(name)
     journal.log("uninstall", name)
     return {"name": name, "unlinked": removed_links, "entry": entry, "kind": "skill"}
 
@@ -6082,7 +6195,10 @@ def sync_plan() -> dict[str, list]:
         # agent as one step, and that reinstall runs *after* this plan is
         # built, so a `missing_links` entry here would have `sync_apply` try
         # to link a store directory that does not exist yet.
-        missing_store = not sdir.is_dir() or not (sdir / "SKILL.md").is_file()
+        # A held copy is out of the store on purpose (`hold_store_copy`):
+        # reinstalling it would hand it back to Gemini CLI and Codex.
+        missing_store = not is_held(entry) and (
+            not sdir.is_dir() or not (sdir / "SKILL.md").is_file())
         if missing_store:
             plan["missing_store"].append(name)
         if entry.get("quarantined"):

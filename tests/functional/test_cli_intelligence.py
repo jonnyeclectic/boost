@@ -1051,7 +1051,9 @@ class TestContext:
         r = boost("context", "apply")
         assert "sidelined: tdd-workflow" in r.out
         assert not link.exists()
-        assert (paths.store_dir() / "tdd-workflow").is_dir()  # store intact
+        # Held aside, out of the store Gemini CLI and Codex read directly.
+        assert not os.path.lexists(paths.store_dir() / "tdd-workflow")
+        assert (paths.held_skills_dir() / "tdd-workflow" / "SKILL.md").is_file()
         # brainstorming was never mapped, so it keeps its links
         assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
 
@@ -1134,7 +1136,10 @@ class TestFocus:
         jira_link = paths.home() / ".claude" / "skills" / "jira-integration"
         assert not jira_link.exists()
         assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
-        assert (paths.store_dir() / "jira-integration").is_dir()  # store intact
+        # Held aside, out of the store Gemini CLI and Codex read directly.
+        assert not os.path.lexists(paths.store_dir() / "jira-integration")
+        assert (paths.held_skills_dir() / "jira-integration" / "SKILL.md"
+                ).is_file()
 
         r = boost("focus", "--status")
         assert "focus: brainstorming" in r.out

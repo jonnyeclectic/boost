@@ -249,7 +249,7 @@ def _drift_status(name: str, entry: dict) -> str:
     """'in-sync' | 'local-edits' | 'upstream-moved' | 'source-missing'
     | 'source-changed'
     | 'store-missing' | 'n/a' (local imports with no tap source)."""
-    sdir = store.skill_store_dir(name)
+    sdir = store.copy_dir(name, entry)
     if sdir.is_dir() and integrity.self_sourced(name, entry):
         # Kept in the store itself: an edit there is the skill, not drift.
         return staleness.NA
@@ -823,7 +823,7 @@ def cmd_doctor(argv):
     skill_issues = 0
     quarantined_skills = 0
     for name, entry in sorted(skills.items()):
-        sdir = store.skill_store_dir(name)
+        sdir = store.copy_dir(name, entry)
         if not sdir.is_dir():
             # A pin over a moved source is a repair heal declines, so naming
             # heal sent the user round doctor -> heal -> doctor. Whether the
@@ -2514,15 +2514,17 @@ def cmd_health(argv):
     # called store-missing. Stat the store instead. They are listed even when
     # full, because an agent silently absent from a health report reads as
     # "boost is not wired up for it".
-    store_present = sum(1 for n, _e in expected if store.skill_store_dir(n).is_dir())
-    store_full = store_present == len(expected)
+    # A sidelined skill's copy is held out of the store on purpose.
+    in_store = [n for n, e in expected if not store.is_held(e)]
+    store_present = sum(1 for n in in_store if store.skill_store_dir(n).is_dir())
+    store_full = store_present == len(in_store)
     for agent in agents.native_store_agents():
         coverage_ok = coverage_ok and store_full
         kv(agent, "%d/%d %s (reads the store directly)"
-           % (store_present, len(expected),
+           % (store_present, len(in_store),
               out.role("✓", "success") if store_full
               else out.role("!", "warn")),
-           {"linked": store_present, "expected": len(expected),
+           {"linked": store_present, "expected": len(in_store),
             "ok": store_full, "native_store": True})
 
     drift_counts: dict = {}

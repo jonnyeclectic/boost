@@ -143,6 +143,16 @@ def state_dir() -> Path:
     return boost_home() / "state"
 
 
+def held_skills_dir() -> Path:
+    """Where a quarantined or sidelined skill's store copy is held aside.
+
+    Outside :func:`store_dir` on purpose: Gemini CLI and Codex read the
+    canonical store directly, so a copy left there stays loaded whatever
+    links boost removes.
+    """
+    return state_dir() / "held"
+
+
 def tap_refresh_marker() -> Path:
     """File whose mtime records when the taps were last refreshed.
 
