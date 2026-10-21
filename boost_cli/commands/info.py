@@ -356,8 +356,15 @@ def cmd_list(argv):
             rules = {}
         if args.kind != "workflow":
             workflows = {}
+    # A row whose store dir is gone is a skill no agent can load: doctor says
+    # so, and list printed it beside the healthy ones with an empty FLAGS.
+    gone = {n for n in skills if not store.skill_store_dir(n).is_dir()}
     if args.json:
-        print(json.dumps({"skills": skills, "rules": rules,
+        # Marked on a copy, and only when true, so a healthy row is still
+        # the lock's row byte for byte.
+        shown = {n: (e | {"missing_from_store": True} if n in gone else e)
+                 for n, e in skills.items()}
+        print(json.dumps({"skills": shown, "rules": rules,
                           "workflows": workflows, "project": project},
                          indent=2, sort_keys=True))
         return 0
@@ -389,7 +396,8 @@ def cmd_list(argv):
             # Aurora-tinted flags — now that table() aligns by visible width,
             # colored cells stay in their column: pinned amber, quarantined pink,
             # tags dim.
-            flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
+            flags = ([out.role("missing", "danger")] if name in gone else []) + \
+                    ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
                     ([out.aurora("quarantined", "pink")] if e.get("quarantined")
                      else []) + \
                     ([out.role("sidelined:" + e["sidelined_by"], "muted")]
@@ -406,6 +414,14 @@ def cmd_list(argv):
                                 % (len(rows), "" if len(rows) == 1 else "s",
                                    " with tag #%s" % args.tag.lstrip("#")
                                    if args.tag else ""), "cyan"))
+        if gone:
+            out.warn("%s missing from the store, so no agent can load %s "
+                     "(%s) — `boost heal` restores %s"
+                     % ("1 skill is" if len(gone) == 1
+                        else "%d skills are" % len(gone),
+                        "it" if len(gone) == 1 else "them",
+                        ", ".join(sorted(gone)),
+                        "it" if len(gone) == 1 else "them"), wrap=True)
     if project:
         out.heading("project skills (%s)" % paths.tilde(pbase))
         rows = [(name, e.get("version", "?"), e.get("tap", "?"),
@@ -607,6 +623,7 @@ def cmd_info(argv):
             "tap": (lock or plock or cat or {}).get("tap"),
             "category": (cat or {}).get("category") or None,
             "store": str(sdir) if lock and sdir.is_dir() else None,
+            "missing_from_store": bool(lock) and not sdir.is_dir(),
             "quality": score, "size": size, "files": files,
         }, indent=2))
         return 0
@@ -635,6 +652,8 @@ def cmd_info(argv):
         if entry and cat else None)
     if lock:
         badges.append(out.badge("installed", "green"))
+        if not sdir.is_dir():
+            badges.append(out.badge("missing from store", "pink"))
         if lock.get("pinned"):
             badges.append(out.badge("pinned", "yellow"))
         if lock.get("quarantined"):
@@ -695,6 +714,10 @@ def cmd_info(argv):
         out.kv("category", category)
     if lock and sdir.is_dir():
         out.kv("store", _tilde(sdir))
+    elif lock:
+        # Kept short: kv does not wrap, and the path is in `boost doctor`.
+        out.kv("store", out.role("missing", "danger")
+               + out.role("  (`boost heal` restores it)", "muted"))
     # A skill's catalog `rel_dir` is its own directory — the right thing to
     # show as "source". A rule/workflow's `rel_dir` is the tap's whole
     # commands/rules directory shared by every item of that kind; `skill_md`
