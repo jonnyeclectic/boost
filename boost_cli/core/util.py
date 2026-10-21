@@ -365,6 +365,32 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     _replace_atomically(Path(path), text, encoding, mode=None)
 
 
+#: How often, and how far apart, :func:`replace` retries on Windows.
+REPLACE_ATTEMPTS = 20
+REPLACE_PAUSE = 0.05
+
+
+def replace(src: str | Path, dst: str | Path) -> None:
+    """``os.replace``, retried briefly where Windows refuses it.
+
+    Windows will not replace a file another process holds open without
+    ``FILE_SHARE_DELETE`` -- which is every plain ``open()`` -- and says
+    ``PermissionError`` (WinError 5) for what is only a reader of the old
+    lock mid-``read``. Two boost processes, one reading the project lock and
+    one rewriting it, failed the write outright. The reader lets go within
+    milliseconds, so wait for it rather than fail; anywhere else the error
+    is real and raised at once.
+    """
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if sys.platform != "win32" or attempt == REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(REPLACE_PAUSE)
+
+
 def _replace_atomically(path: Path, text: str, encoding: str,
                         mode: int | None) -> None:
     """The temp-file + fsync + ``os.replace`` core of both writers.
@@ -386,7 +412,7 @@ def _replace_atomically(path: Path, text: str, encoding: str,
             os.fsync(f.fileno())
         if mode is not None:
             os.chmod(tmp, mode)
-        os.replace(tmp, str(path))
+        replace(tmp, str(path))
     except BaseException:
         # Never leave a temp turd behind, and never mask the original error.
         with contextlib.suppress(OSError):
