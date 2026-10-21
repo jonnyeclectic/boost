@@ -66,7 +66,9 @@ class TestDriftSeesProjectSkills:
         assert data == {"skills": [{
             "name": "brainstorming", "kind": "skill", "scope": "project",
             "status": "local-edits",
-            "hint": "boost reinstall brainstorming to discard local edits"}]}
+            # --local: bare `reinstall` reads the user lock, not this repo.
+            "hint": "boost reinstall brainstorming --local to discard local "
+                    "edits"}]}
         r = boost("drift")
         assert "brainstorming (project)" in r.out
         assert "1 local-edits" in _said(r)

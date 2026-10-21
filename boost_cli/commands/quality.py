@@ -375,7 +375,10 @@ _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
 
 
 def _drift_hint(name: str, status: str, tap: str = "",
-                tap_url: str = "") -> str:
+                tap_url: str = "", scope: str | None = None) -> str:
+    # A reinstall of a project row needs `--local`: bare `reinstall` reads the
+    # user lock and, given a same-named user install, reinstalls that instead.
+    local = " --local" if scope == scopes.SCOPE_PROJECT else ""
     if status == "quarantined":
         return "boost quarantine --release %s to restore" % name
     if status == "upstream-moved":
@@ -383,10 +386,10 @@ def _drift_hint(name: str, status: str, tap: str = "",
     if status == "source-changed":
         # `boost update` holds these back on purpose: the tap's copy of the
         # name is another repository's item, taken only when asked for.
-        return ("boost reinstall %s to take the new source's copy, or re-tap "
-                "the original" % name)
+        return ("boost reinstall %s%s to take the new source's copy, or "
+                "re-tap the original" % (name, local))
     if status == "local-edits":
-        return "boost reinstall %s to discard local edits" % name
+        return "boost reinstall %s%s to discard local edits" % (name, local)
     if status == "source-missing":
         # `boost update` only refreshes configured taps. When the entry's
         # tap has been untapped, that command is a guaranteed no-op — the
@@ -975,7 +978,8 @@ def cmd_doctor(argv):
             proj_issues += 1
         elif st == integrity.STATUS_MODIFIED:
             bad("project-skill", "project skill %s modified since install — "
-                "run `boost verify`" % name)
+                "run `%s` %s" % (name, *integrity.modified_remedy(
+                    name, scope=scopes.SCOPE_PROJECT)), wrap=True)
             proj_issues += 1
         # An agent enabled after the install has no row, so the status above
         # cannot see it; `boost sync` copies into it, as it does for a rule.
@@ -1761,7 +1765,8 @@ def cmd_drift(argv):
         # (`store.project_sync_plan`), not by heal's user-store repair.
         hint = ("boost sync" if status == staleness.STORE_MISSING
                 else _drift_hint(name, status, entry.get("tap", ""),
-                                 str(entry.get("tap_url") or "")))
+                                 str(entry.get("tap_url") or ""),
+                                 scope=scopes.SCOPE_PROJECT))
         rows.append({"name": name, "kind": "skill",
                      "scope": scopes.SCOPE_PROJECT, "status": status,
                      "hint": hint})

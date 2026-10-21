@@ -953,6 +953,15 @@ def test_modified_remedy_for_a_deleted_skill_md_is_heal(installed):
         "boost heal", "to restore its missing SKILL.md")
 
 
+def test_modified_remedy_for_a_project_skill_carries_local(sandbox):
+    # No user store copy to probe: even a name with no store SKILL.md is
+    # a reinstall, and one that reads this repo's lock.
+    assert integrity.modified_remedy("p", scope="project") == (
+        "boost reinstall p --local", "to discard local edits")
+    assert integrity.modified_remedy("p", "skill", "user") == (
+        "boost heal", "to restore its missing SKILL.md")
+
+
 def test_modified_remedy_for_a_rule_or_workflow_is_a_reinstall(sandbox):
     # No store copy to lose: a store dir with no SKILL.md says nothing
     # about a rule of the same name.
