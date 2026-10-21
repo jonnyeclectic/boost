@@ -1029,8 +1029,13 @@ def unsideline(name: str) -> InstallResult:
     disable``. Clears the flag regardless of which mechanism set it — only
     one can be true of a skill at a time, and whichever command relinks it is
     the one ending it.
+
+    Only into the agents the install declared (``only_agents``): relinking
+    into every agent turned a skill installed ``--agent cursor`` into one
+    linked everywhere the moment a `profile use` or `focus --clear` touched it.
     """
-    res = link_agents(name, keep_theirs=True)
+    declared = (lockfile.get_skill(name) or {}).get("only_agents") or None
+    res = link_agents(name, declared, keep_theirs=True)
 
     def relinked(entry: dict) -> None:
         # Record the links this just made, since sideline() emptied the list,
