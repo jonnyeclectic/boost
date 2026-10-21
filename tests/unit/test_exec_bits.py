@@ -84,3 +84,11 @@ def test_drift_state_counts_a_mode_change_as_upstream_moved():
     # A local edit still outranks it.
     assert staleness.drift_state("x", "s", False, "s", exec_changed=True) \
         == staleness.LOCAL_EDITS
+
+
+@posix
+def test_source_exec_changed_with_an_unreadable_source_is_false(sandbox):
+    """A tap that is not configured is no exec signal, not a crash: the
+    content check beside this one owns the missing-source finding."""
+    entry = {"name": "beta", "tap": "no-such-tap", "rel_dir": "."}
+    assert store.source_exec_changed(entry, {"exec": []}, None) is False

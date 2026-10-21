@@ -105,8 +105,9 @@ def status(name: str, entry: dict | None = None) -> str:
 def exec_drifted(copy: Path, entry: dict) -> bool:
     """Whether ``copy``'s exec bits differ from those its lock row recorded.
 
-    False for a row without ``exec`` — one written before rows carried it,
-    or on Windows (:func:`util.exec_bits`) — and on Windows itself, so an existing install keeps the content-only check it always had
+    False for a row without ``exec`` (one written before rows carried it,
+    or written on Windows) and on Windows itself (:func:`util.exec_bits`),
+    so an existing install keeps the content-only check it always had
     rather than reading as modified.
     """
     want = entry.get("exec")
