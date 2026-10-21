@@ -122,18 +122,40 @@ def rule_target(agent: str, skills_dir: Path, name: str,
     return MODE_FILE, root / "rules" / (name + ext)
 
 
+# What every block marker opens with, and what `neutralize_markers` turns it
+# into. `block_span` finds markers by exact substring, so text that cannot
+# contain this prefix cannot contain a marker either.
+MARKER_PREFIX = BLOCK_START.split("%s")[0]
+_MARKER_DEFANGED = "&lt;" + MARKER_PREFIX[1:]
+
+
+def neutralize_markers(text: str) -> str:
+    """``text`` with every block-marker prefix defanged (``<`` → ``&lt;``).
+
+    A rule body is tap-controlled, and one carrying its own
+    ``<!-- boost:rule:NAME end -->`` closed its block early: `block_span` stops
+    at the first end marker, so uninstall removed only the head of the rule
+    and left the rest standing in the user's CLAUDE.md, while doctor reported
+    healthy. Defanging keeps the prose readable and makes the block's only
+    markers the two `merge_block` writes. Idempotent — the output holds no
+    prefix left to defang.
+    """
+    return text.replace(MARKER_PREFIX, _MARKER_DEFANGED)
+
+
 def render_claude_body(title: str, body: str) -> str:
     """The block body for CLAUDE.md: a title header + the rule prose.
 
     Frontmatter is already stripped by the caller — CLAUDE.md is plain Markdown,
     not a frontmatter-carrying rule file, so only the human-readable rule text
-    belongs here.
+    belongs here. Marker text in either part is neutralised
+    (`neutralize_markers`), so what verify hashes is what merge_block writes.
     """
     title = title.strip()
     body = body.strip("\n")
     if body:
-        return "# %s\n\n%s" % (title, body)
-    return "# %s" % title
+        return neutralize_markers("# %s\n\n%s" % (title, body))
+    return neutralize_markers("# %s" % title)
 
 
 def block_names(text: str) -> list[str]:
@@ -164,9 +186,10 @@ def block_span(text: str, name: str) -> tuple[int, int] | None:
     after it, or a second start marker before that end. The second shape is
     what an orphan start becomes after one more install — merge_block appends
     a whole block below it, and "first start to first end" then spans the
-    user's own text in between. Every reader and writer of the block goes
-    through here so they agree on what the block is; `require_well_formed`
-    tells the two Nones apart.
+    user's own text in between. A body cannot forge an end marker: merge_block
+    neutralises marker text before writing (`neutralize_markers`). Every
+    reader and writer of the block goes through here so they agree on what
+    the block is; `require_well_formed` tells the two Nones apart.
     """
     start, end = markers(name)
     i = text.find(start)
@@ -257,7 +280,8 @@ def merge_block(text: str, name: str, body: str) -> str:
     """
     eol = line_ending(text)
     start, end = markers(name)
-    lines = body.replace("\r\n", "\n").strip("\n").replace("\n", eol)
+    lines = (neutralize_markers(body).replace("\r\n", "\n").strip("\n")
+             .replace("\n", eol))
     block = start + eol + lines + eol + end
     require_well_formed(text, name)
     span = block_span(text, name)

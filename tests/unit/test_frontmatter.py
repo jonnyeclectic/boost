@@ -438,11 +438,11 @@ class TestMutationPrecision:
         meta, _ = frontmatter.parse("---\ndesc: hello\n world\n---\n")
         assert meta["desc"] == "hello world"         # indent > 0, not > 1
 
-    def test_indented_colon_line_is_not_a_fold(self):
-        # Not folded into `desc`, and (since `desc` already has a value, so
-        # this cannot open a nested map) not a key anywhere either.
+    def test_indented_colon_line_under_a_value_is_a_fold(self):
+        # `desc` already has a value, so this cannot open a nested map, and
+        # it is not a key anywhere either: it is the next line of the scalar.
         meta, _ = frontmatter.parse("---\ndesc: hello\n  key: val\n---\n")
-        assert meta == {"desc": "hello"}
+        assert meta == {"desc": "hello key: val"}
 
     def test_unindented_colonless_word_is_skipped_not_terminal(self):
         # a bare word at indent 0 is skipped; parsing continues past it
@@ -560,10 +560,18 @@ class TestNestedMaps:
         assert meta == {"name": "s", "metadata": {"notes": "", "deep": ""},
                         "description": "yes"}
 
-    def test_indented_key_under_a_valued_key_is_skipped_with_its_subtree(self):
+    def test_indented_key_under_a_valued_key_folds_into_the_value(self):
+        # Never a nested key and never dropped: the lines fold into the
+        # scalar, deeper ones included.
         meta = frontmatter.parse_block(
-            "name: s\n  extra: x\n    - y\n  more\nversion: 2\n")
-        assert meta == {"name": "s", "version": 2}
+            "name: s\n  extra: x\n    deeper: y\n  more\nversion: 2\n")
+        assert meta == {"name": "s extra: x deeper: y more", "version": 2}
+
+    def test_a_non_string_value_still_skips_an_indented_key(self):
+        # Only a plain string can be continued; a flow list or number cannot.
+        meta = frontmatter.parse_block(
+            "tags: [a]\n  k: v\n  more\nn: 3\n  k: v\nname: s\n")
+        assert meta == {"tags": ["a"], "n": 3, "name": "s"}
 
     def test_a_list_parent_is_not_turned_into_a_map(self):
         meta = frontmatter.parse_block("tags:\n  - a\n  k: v\nname: s\n")
@@ -619,3 +627,63 @@ class TestTagsOf:
     def test_parsed_scalar_frontmatter_round_trip(self):
         meta, _ = frontmatter.parse("---\nname: x\ntags: testing\n---\nbody\n")
         assert frontmatter.tags_of(meta) == ["testing"]
+
+
+class TestColonInFoldedContinuation:
+    """A continuation line carrying ``: `` stays part of the scalar.
+
+    Expectations are written as literals. Where the YAML is valid (``b:c``,
+    no space after the colon) they are what PyYAML returns; where it is not
+    (``Note: slow``) PyYAML raises "mapping values are not allowed here", and
+    this best-effort parser keeps the author's text rather than dropping it.
+    """
+
+    def test_finding_repro_keeps_every_line(self):
+        meta = frontmatter.parse_block(
+            "name: colon\ndescription: Use this skill when\n"
+            "  reviewing code: it checks style\n"
+            "  and correctness carefully\nversion: 1.0.0")
+        assert meta == {
+            "name": "colon",
+            "description": "Use this skill when reviewing code: it checks "
+                           "style and correctness carefully",
+            "version": "1.0.0"}
+
+    def test_lines_after_the_colon_line_still_fold(self):
+        meta = frontmatter.parse_block(
+            "description: Review code\n  for bugs. Note: slow\n"
+            "  and thorough\nversion: 1.0.0")
+        assert meta == {
+            "description": "Review code for bugs. Note: slow and thorough",
+            "version": "1.0.0"}
+
+    def test_colon_without_space_matches_pyyaml(self):
+        # yaml.safe_load("d: a\n  b:c\n") == {"d": "a b:c"}
+        assert frontmatter.parse_block("d: a\n  b:c\n") == {"d": "a b:c"}
+
+    def test_empty_value_still_opens_a_nested_map(self):
+        # YAML agrees: under an empty value an indented `k: v` is a mapping.
+        assert frontmatter.parse_block(
+            "description:\n  Use when: reviewing PRs\nversion: 1.0.0") == {
+            "description": {"Use when": "reviewing PRs"}, "version": "1.0.0"}
+
+    def test_a_nested_map_entry_is_unchanged(self):
+        meta = frontmatter.parse_block(
+            "author:\n  name: Jane\n  site: x\nversion: 2.0.1\n")
+        assert meta == {"author": {"name": "Jane", "site": "x"},
+                        "version": "2.0.1"}
+
+    def test_description_survives_into_the_catalog(self, sandbox, tmp_path):
+        from boost_cli.core import catalog
+        skill = tmp_path / "skills" / "colon"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: colon\ndescription: Use this skill when\n"
+            "  reviewing code: it checks style\n"
+            "  and correctness carefully\nversion: 1.0.0\n---\n\nBody.\n",
+            encoding="utf-8")
+        entries = [e for e in catalog.scan_dir(tmp_path)
+                   if e["name"] == "colon"]
+        assert [e["description"] for e in entries] == [
+            "Use this skill when reviewing code: it checks style and "
+            "correctness carefully"]
