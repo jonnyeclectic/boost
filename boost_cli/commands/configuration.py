@@ -1726,8 +1726,9 @@ def _tool_info(args: dict):
         # The installed copy's own catalog row, never another tap's: version
         # and tap came from the lock while the description came from
         # whichever tap sorted first, one reply describing two items.
-        src = next((e for e in catalog.find(name)
-                    if e["tap"] == entry.get("tap")), {})
+        # Its kind and recorded source too: one tap can ship a name as a
+        # skill and as a workflow, and the first row by tap was either.
+        src = catalog.installed_row(catalog.find(name), kind, entry) or {}
     elif not catalog.find(name):
         return "no skill named %r (installed or in any tap)" % name, True
     else:

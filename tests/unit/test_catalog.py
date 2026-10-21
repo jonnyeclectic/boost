@@ -1859,6 +1859,47 @@ class TestMatchesAndFilterByCategory:
         assert catalog.filter_by_category(entries, "") == entries
 
 
+class TestInstalledRow:
+    """One tap can ship a name as a skill and a workflow; the installed one's
+    row is the one with its tap, its kind and its recorded source."""
+
+    def _matches(self):
+        return [{"name": "wf", "tap": "t", "kind": "skill", "rel_dir": "skills/wf",
+                 "skill_md": "skills/wf/SKILL.md", "description": "skill"},
+                {"name": "wf", "tap": "t", "kind": "workflow", "rel_dir": "a",
+                 "skill_md": "a/wf.md", "description": "first workflow"},
+                {"name": "wf", "tap": "t", "kind": "workflow", "rel_dir": "b",
+                 "skill_md": "b/wf.md", "description": "second workflow"},
+                {"name": "wf", "tap": "other", "kind": "workflow",
+                 "rel_dir": "b", "skill_md": "b/wf.md",
+                 "description": "other tap"}]
+
+    def test_kind_and_source_file_pick_the_row(self):
+        row = catalog.installed_row(self._matches(), "workflow",
+                                    {"tap": "t", "source_file": "b/wf.md"})
+        assert row is not None
+        assert row["description"] == "second workflow"
+
+    def test_a_skill_never_takes_a_workflow_row(self):
+        row = catalog.installed_row(self._matches()[1:], "skill",
+                                    {"tap": "t", "source_dir": "skills/wf"})
+        assert row is None
+
+    def test_a_kindless_row_counts_as_a_skill(self):
+        matches = [{"name": "x", "tap": "t", "rel_dir": "x", "description": "d"}]
+        assert catalog.installed_row(matches, "skill",
+                                     {"tap": "t", "source_dir": "x"}) is matches[0]
+        assert catalog.installed_row(matches, "workflow", {"tap": "t"}) is None
+
+    def test_another_taps_row_is_not_this_items(self):
+        row = catalog.installed_row(self._matches(), "workflow",
+                                    {"tap": "other", "source_file": "b/wf.md"})
+        assert row is not None
+        assert row["description"] == "other tap"
+        assert catalog.installed_row(self._matches(), "workflow",
+                                     {"tap": "gone"}) is None
+
+
 class TestSelectLockSource:
     """A tap can vendor the same name into more than one directory — the lock
     records exactly which copy was installed, and select_lock_source must

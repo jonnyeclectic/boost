@@ -1081,6 +1081,20 @@ def select_lock_source(matches: list[dict], lk: dict) -> tuple[dict | None, str 
                       % (fallback.get("name", "?"), wanted, fallback.get(field, "?")))
 
 
+def installed_row(matches: list[dict], kind: str, lk: dict) -> dict | None:
+    """The catalog row an installed item came from, or None.
+
+    Same tap, same kind, then the recorded source (:func:`select_lock_source`).
+    One tap can ship one name as a skill *and* a workflow, and a row picked
+    by tap alone described whichever of the two sorted first, so `boost info`
+    on an installed workflow printed its skill namesake's description.
+    """
+    same = [e for e in matches
+            if e.get("tap") == lk.get("tap")
+            and (e.get("kind") or "skill") == kind]
+    return select_lock_source(same, lk)[0]
+
+
 def upstream_path(entry: dict) -> str:
     """The path inside its tap that *is* this item, for a lock or catalog entry.
 

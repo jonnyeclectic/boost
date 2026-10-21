@@ -424,17 +424,17 @@ def cmd_list(argv):
     return 0
 
 
-def _catalog_description(name: str, tap: str | None) -> str:
-    """The tap's description for ``name``, preferring an entry from ``tap``.
+def _catalog_description(name: str, kind: str, lk: dict) -> str:
+    """The tap's description for the installed ``kind`` named ``name``.
 
     A rule/workflow's lock entry carries no description of its own (unlike a
     skill's SKILL.md frontmatter, nothing about a materialized block is
     self-describing), so the catalog is the only place left to ask — same
     source `cmd_stats` already reads for a not-installed item's description.
+    The row is the installed item's own (`catalog.installed_row`): a skill
+    namesake in the same tap is a different item.
     """
-    matches = catalog.find(name)
-    same_tap = [e for e in matches if e.get("tap") == tap]
-    cat = (same_tap or matches)[0] if (same_tap or matches) else None
+    cat = catalog.installed_row(catalog.find(name), kind, lk)
     return str((cat or {}).get("description") or "")
 
 
@@ -445,7 +445,7 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
     No store dir, quality score or file counts here: those describe a skill's
     directory, which these kinds do not have.
     """
-    desc = _catalog_description(name, entry.get("tap"))
+    desc = _catalog_description(name, kind, entry)
     stranded = scopes.stranded(entry)
     if as_json:
         print(json.dumps({"name": name, "kind": kind, "description": desc,
@@ -548,16 +548,15 @@ def cmd_info(argv):
     pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
     plock = (_for_tap(projectlock.get_skill(pbase, name), qualifier)
              if pbase is not None else None)
-    if lock:
+    if lock or plock:
         matches = catalog.find(args.name)
-        same_tap = [e for e in matches if e["tap"] == lock.get("tap")]
-        # Describe the copy that is installed: a tap can ship one name twice,
-        # and `same_tap[0]` showed the other copy's description beside this
-        # one's `source`.
-        if same_tap:
-            cat, _ = catalog.select_lock_source(same_tap, lock)
-        else:
-            cat = matches[0] if matches else None
+        # Describe the copy that is installed: a tap can ship one name twice
+        # -- two skill copies, or a skill and a workflow -- and the first
+        # same-tap row showed the other item's description beside this one's
+        # `source`. Only a skill row can describe an installed skill.
+        cat = (catalog.installed_row(matches, "skill", lock or plock or {})
+               or next((e for e in matches
+                        if (e.get("kind") or "skill") == "skill"), None))
     else:
         cat = catalog.resolve_one(args.name)   # raises if unknown anywhere
     # `lock`/`plock` only ever hold a *skill* lock entry (they read the
@@ -1012,7 +1011,7 @@ def cmd_explain(argv):
         # The lock has no description field of its own for a rule/workflow
         # (unlike a skill's SKILL.md frontmatter), and its materialized text
         # carries none either — the catalog is the only place left to ask.
-        desc = _catalog_description(_bare, _lock.get("tap"))
+        desc = _catalog_description(_bare, _kind, _lock)
     if desc:
         _print_wrapped(desc)
     headings = re.findall(r"^(#{1,6})\s+(.*)$", body, re.MULTILINE)
