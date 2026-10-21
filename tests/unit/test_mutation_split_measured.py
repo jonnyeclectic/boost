@@ -87,13 +87,38 @@ class TestTheAstBailIsStillTheDefault:
 class TestProofUnlocksIt:
     def test_a_complete_record_clears_the_class(self, tmp_path):
         path = make_tree(tmp_path, SOURCE, {"alpha": 10, "beta": 20})
-        assert ms.measured_partition(tmp_path, path) == ["alpha", "beta"]
+        assert ms.measured_partition(tmp_path, path) == \
+            ["alpha", "beta", ms.METHODS]
 
     def test_the_split_actually_happens_now(self, tmp_path):
         path = make_tree(tmp_path, SOURCE, {"alpha": 10, "beta": 20})
         units = ms.units_for(tmp_path, path, 1)
-        assert sorted(u.symbol for u in units) == ["alpha", "beta"], \
+        assert sorted(u.symbol for u in units) == \
+            sorted(["alpha", "beta", ms.METHODS]), \
             "a cleared module over the ceiling must split per function"
+
+    def test_the_methods_unit_addresses_methods_and_nothing_else(self, tmp_path):
+        """mutmut names a method's mutants `<module>.xǁ<Class>ǁ<m>__mutmut_<n>`.
+
+        The per-function units cannot match those, so without this unit a
+        cleared module's methods were never run (catalog.py, 6 mutants).
+        """
+        import fnmatch
+        path = make_tree(tmp_path, SOURCE, {"alpha": 10, "beta": 20})
+        pats = {u.symbol: ms.pattern_for(tmp_path, u)
+                for u in ms.units_for(tmp_path, path, 1)}
+        assert pats[ms.METHODS] == "boost_cli.core.sample.xǁ*"
+        method = "boost_cli.core.sample.xǁTapǁlabel__mutmut_1"
+        func = "boost_cli.core.sample.x_alpha__mutmut_1"
+        assert [s for s, p in pats.items() if fnmatch.fnmatchcase(method, p)] \
+            == [ms.METHODS]
+        assert [s for s, p in pats.items() if fnmatch.fnmatchcase(func, p)] \
+            == ["alpha"]
+
+    def test_a_module_without_methods_gets_no_methods_unit(self, tmp_path):
+        plain = SOURCE.split("\n\n\n", 1)[1]
+        path = make_tree(tmp_path, plain, {"alpha": 10, "beta": 20})
+        assert ms.measured_partition(tmp_path, path) == ["alpha", "beta"]
 
     def test_a_cleared_module_under_the_ceiling_still_stays_whole(self, tmp_path):
         """Clearing is not a reason to split; exceeding the ceiling is."""
@@ -146,7 +171,7 @@ class TestTheRecordIsProofNotThePartition:
         src = SOURCE + "\n\ndef gamma():\n    return 3\n"
         path = make_tree(tmp_path, src, {"alpha": 10, "beta": 20})
         assert ms.measured_partition(tmp_path, path) == [
-            "alpha", "beta", "gamma"]
+            "alpha", "beta", "gamma", ms.METHODS]
         units = ms.units_for(tmp_path, path, 1)
         assert "gamma" in {u.symbol for u in units}
 
@@ -155,8 +180,11 @@ class TestTheRecordIsProofNotThePartition:
         units = ms.units_for(tmp_path, path, 1)
         pats = [ms.pattern_for(tmp_path, u) for u in units]
         assert len(set(pats)) == len(pats), "two units share one pattern"
-        for p in pats:
-            assert p.endswith("__mutmut_*") and ".x_" in p
+        for u, p in zip(units, pats, strict=True):
+            if u.symbol == ms.METHODS:
+                assert p.endswith(".xǁ*")
+            else:
+                assert p.endswith("__mutmut_*") and ".x_" in p
 
 
 class TestTheInvariantHoldsOverTheRealTree:
