@@ -17,6 +17,7 @@ from datetime import datetime
 import pytest
 
 from boost_cli.core import agents, lockfile, paths, registry
+from boost_cli.core import logs as boost_logs
 
 
 def _copy_tap(src, dest):
@@ -156,6 +157,11 @@ class TestDoctor:
         from boost_cli.core import gitutil
         monkeypatch.setattr(gitutil, "has_git", lambda: False)
         logs = paths.boost_home() / "logs"
+        # Windows cannot delete the open boost.log, so detach it first; and
+        # keep the next run from recreating logs/, which is what the last
+        # assert reads as heal's repairs having run.
+        boost_logs.reset()
+        monkeypatch.setattr(boost_logs, "configure", lambda **_: None)
         shutil.rmtree(logs)
         r = boost("heal", *(["--dry-run"] if dry else []), expect=1)
         flat = " ".join(r.out.split())

@@ -16,6 +16,7 @@ workflow's skill copy that differs only by case, and two workflows that do.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import unicodedata
 from pathlib import Path
@@ -244,10 +245,13 @@ class TestCaseCollisionsInOneTap:
 
         assert [e["name"] for e in entries] == ["other"]
         err = " ".join(capsys.readouterr().err.split())
-        assert ("skipped 1 item in tap casetap whose paths differ only by "
-                "case, which this filesystem cannot hold apart: "
-                "skills/Lint/, skills/Lint/SKILL.md, skills/lint/, "
-                "skills/lint/SKILL.md") in err
+        # One item where the checkout already merged the twins (macOS),
+        # two where the filesystem holds both dirs (Linux).
+        assert re.search(
+            r"skipped [12] items? in tap casetap whose paths differ only by "
+            r"case, which this filesystem cannot hold apart: "
+            r"skills/Lint/, skills/Lint/SKILL\.md, skills/lint/, "
+            r"skills/lint/SKILL\.md", err)
         with pytest.raises(BoostError):
             catalog.resolve_one("lint")
 
