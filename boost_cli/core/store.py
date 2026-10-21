@@ -73,8 +73,8 @@ class InstallResult:
     # Kept out of `refused`: nothing refused, and a refusal is retried by the
     # next reinstall, where this link is meant to stay absent.
     covered: list[str] = field(default_factory=list)
-    # A workflow's target paths that already held a file boost did not write
-    # (no lock row records the path). Left alone, and recorded apart from the
+    # A workflow's or rules-dir rule's target paths that already held a file
+    # boost did not write (no lock row records the path). Left alone, and recorded apart from the
     # materializations, in the entry's ``foreign``: see :func:`foreign_rows`.
     foreign: list[str] = field(default_factory=list)
     score: int = 0
@@ -3161,6 +3161,63 @@ def narrow_materializing(targets: dict, only_agents, name: str, kind: str,
     return kept
 
 
+def _refuse_shared_rule_file(name: str, path: Path) -> None:
+    """Refuse a rules-dir file that is another installed rule's file.
+
+    Two names that differ only by case (``alpha``, ``ALPHA``) map to one file
+    on a case-insensitive filesystem, and a symlinked rules dir can alias two
+    paths the same way. The second install wrote over the first rule's file,
+    and uninstalling it deleted that file while the first rule's lock row
+    still named it. Checked before any agent is written, so the refusal
+    leaves every file and the lock as they were. Context-file rows are not
+    compared: every rule shares ``CLAUDE.md`` and owns only its block there.
+    """
+    from . import rules
+    if not os.path.lexists(path):
+        return
+    for other, entry in lockfile.installed_rules().items():
+        if other == name:
+            continue
+        for m in entry.get("materializations") or ():
+            if m.get("mode") == rules.MODE_CLAUDE or not m.get("path"):
+                continue
+            try:
+                same = os.path.samefile(path, m["path"])
+            except OSError:
+                continue
+            if same:
+                raise BoostError(
+                    "cannot install rule %s: %s is rule %s's file"
+                    % (name, paths.tilde(path), other),
+                    hint="the two names collide on this filesystem; "
+                    "uninstall %s first, or keep it and skip %s"
+                    % (other, name))
+
+
+def _context_file_created(name: str, path: Path, prior: dict) -> bool:
+    """Whether boost, not the user, made the context file at ``path``.
+
+    Recorded on the row so uninstall deletes a file that its strip leaves
+    empty only when boost created it; a file the user made, even an empty
+    one, stays. A re-install finds the file it created already there, so the
+    answer is carried from this rule's own row, and from any other rule's
+    row at the same path, whose block is what made the file exist.
+    """
+    from . import rules
+    if not os.path.lexists(path):
+        return True
+    if (prior.get(str(path)) or {}).get("created") is True:
+        return True
+    for other, entry in lockfile.installed_rules().items():
+        if other == name:
+            continue
+        for m in entry.get("materializations") or ():
+            if (m.get("mode") == rules.MODE_CLAUDE and m.get("created") is True
+                    and m.get("path") == str(path)):
+                return True
+    return False
+
+
 def _install_rule(entry: dict, force: bool = False,
                   only_agents: list[str] | None = None,
                   scope: str = "user", base=None,
@@ -3212,6 +3269,10 @@ def _install_rule(entry: dict, force: bool = False,
     blocked: list[tuple[str, str]] = []
     conflicts: list[str] = []
     refused: list[dict] = []
+    foreign: list[str] = []
+    foreign_record: list[dict] = []
+    prior = {m.get("path"): m for m in (existing or {}).get("materializations")
+             or () if isinstance(m, dict)}
     targets = narrow_materializing(agents.materializing_agents(resolved_base),
                                     only_agents, name, "rule",
                                     explicit=explicit_agents)
@@ -3226,12 +3287,14 @@ def _install_rule(entry: dict, force: bool = False,
         # a file outside the repo in the refusal and send the user to fix it.
         if resolved_base is not None:
             scopes.ensure_in_base(resolved_base, path)
-        if mode == rules.MODE_CLAUDE:
-            try:
-                text = util.read_user_text(path)
-            except OSError:
-                continue  # absent, or refused: the write loop handles both
-            rules.require_well_formed(text, name, path)
+        if mode != rules.MODE_CLAUDE:
+            _refuse_shared_rule_file(name, path)
+            continue
+        try:
+            text = util.read_user_text(path)
+        except OSError:
+            continue  # absent, or refused: the write loop handles both
+        rules.require_well_formed(text, name, path)
     for agent, skills_dir in targets.items():
         mode, path = rules.rule_target(
             agent, skills_dir, name, base=resolved_base,
@@ -3241,9 +3304,19 @@ def _install_rule(entry: dict, force: bool = False,
         # into the user's own ~/.claude, which they control — nothing to guard.
         if resolved_base is not None:
             scopes.ensure_in_base(resolved_base, path)
+        # A rules dir is the user's as much as boost's: a file there that no
+        # row of this rule records is theirs, as for a workflow's command.
+        # A context file is shared by design and takes a managed block.
+        if mode != rules.MODE_CLAUDE and _foreign_target(path, raw, set(prior)):
+            foreign.append(str(path))
+            foreign_record.append({"agent": agent, "mode": mode,
+                                   "path": str(path)})
+            continue
+        created = None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             if mode == rules.MODE_CLAUDE:
+                created = _context_file_created(name, path, prior)
                 current = util.read_user_text(path) if path.exists() else ""
                 # A context file is the user's: write through a symlink to
                 # it and keep its mode (see util.write_user_file).
@@ -3263,9 +3336,11 @@ def _install_rule(entry: dict, force: bool = False,
             refused.append({"agent": agent, "mode": mode, "path": str(path),
                             "unwritable": True})
             continue
-        materializations.append({
-            "agent": agent, "mode": mode, "path": str(path),
-            "sha256": hashlib.sha256(written.encode("utf-8")).hexdigest()})
+        row = {"agent": agent, "mode": mode, "path": str(path),
+               "sha256": hashlib.sha256(written.encode("utf-8")).hexdigest()}
+        if created is not None:
+            row["created"] = created
+        materializations.append(row)
         linked.append(agent)
 
     # Carry forward the agents this run did not touch — the same reason the
@@ -3279,6 +3354,11 @@ def _install_rule(entry: dict, force: bool = False,
         source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
         declared=declared_agent_scope(
             only_agents if explicit_agents else None, existing)))
+    # As for a workflow: an agent this run did not try keeps its foreign row.
+    tried = {*linked, *(r["agent"] for r in refused),
+             *(r["agent"] for r in foreign_record)}
+    foreign_record += [r for r in foreign_rows(existing)
+                       if r["agent"] not in tried]
 
     now = util.now_iso()
     lockfile.set_rule(name, {
@@ -3303,6 +3383,7 @@ def _install_rule(entry: dict, force: bool = False,
         # What the user asked for, beside what was written: the rows above
         # cannot say which, and :func:`preserved_agent_scope` replays this.
         **_declared_field(only_agents if explicit_agents else None, existing),
+        **({"foreign": foreign_record} if foreign_record else {}),
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
 
@@ -3310,6 +3391,7 @@ def _install_rule(entry: dict, force: bool = False,
         name=name,
         dest=Path(materializations[0]["path"]) if materializations else paths.store_dir(),
         kind="rule", scan_text=raw)
+    res.foreign = foreign
     res.linked = linked
     res.unwritable = unwritable
     res.blocked = blocked
@@ -3346,12 +3428,13 @@ def _refused_removal(name: str, path: Path):
         raise _removal_refused(name, path) from None
 
 
-def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]],
+def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str | None]],
                            base=None) -> int:
     """Apply an uninstall's removals, or none of them. Returns how many files.
 
-    ``plan`` holds ``(path, new_text)`` for each file to change: ``""`` to
-    delete it, other text to rewrite it. Every dir is checked before the
+    ``plan`` holds ``(path, new_text)`` for each file to change: ``None`` to
+    delete it, text to rewrite it -- ``""`` included, which empties a context
+    file the user made rather than deleting it. Every dir is checked before the
     first change, because a refusal part-way left some agents' files gone and
     the lock still naming them, so a `boost sync` in between wrote them back.
     The per-file guard stays, for what ``os.access`` cannot foresee.
@@ -3372,7 +3455,7 @@ def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]],
     from <repo>" off this, the way :func:`uninstall_project` reports it off
     paths that came off disk rather than off the agent list.
     """
-    once: dict[Path, tuple[Path, str]] = {}
+    once: dict[Path, tuple[Path, str | None]] = {}
     for path, text in plan:
         # The leaf resolves too: `GEMINI.md -> AGENTS.md` is one file.
         once.setdefault(Path(os.path.realpath(path.parent / path.name)),
@@ -3380,17 +3463,17 @@ def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]],
     for path, text in once.values():
         if not os.access(str(path.parent), os.W_OK):
             raise _removal_refused(name, path)
-        if text or path.is_symlink():
+        if text is not None or path.is_symlink():
             # A committed link re-pointed out of the repo is refused here,
             # before any file changes, not by the write part-way through.
             with _refused_removal(name, path):
                 util.user_file_target(path, base)
     for path, text in once.values():
         with _refused_removal(name, path):
-            if text or path.is_symlink():
+            if text is not None or path.is_symlink():
                 # Rewritten in place through any link, so the user's link
                 # survives uninstall; a linked file emptied stays, empty.
-                util.write_user_file(path, text, base=base)
+                util.write_user_file(path, text or "", base=base)
             else:
                 path.unlink(missing_ok=True)
     return len(once)
@@ -3418,7 +3501,8 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
     """Reverse every materialization recorded for an installed rule."""
     from . import rules
     removed: list[str] = []
-    plan: list[tuple[Path, str]] = []
+    plan: list[tuple[Path, str | None]] = []
+    kept: list[str] = []
     for m in rule.get("materializations", []):
         path = Path(m.get("path", ""))
         with _refused_removal(name, path):
@@ -3432,17 +3516,29 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
                     rules.require_well_formed(text, name, path)
                     stripped = rules.strip_block(text, name)
                     # No block of ours (a refused write): no rewrite. An
-                    # empty result held only our block: boost created it.
+                    # empty result is deleted only when the row says boost
+                    # created the file; one the user made, even empty, stays.
+                    # A row from before ``created`` was recorded keeps it.
                     if stripped != text:
-                        plan.append((path, stripped))
+                        plan.append((path, None if not stripped
+                                     and m.get("created") is True
+                                     else stripped))
             elif _present(path):
-                plan.append((path, ""))
+                # As for a workflow's file: one edited since boost wrote it
+                # is the user's now. A row with no sha is removed as before.
+                if m.get("sha256") and _file_sha(path) != m["sha256"]:
+                    kept.append(str(path))
+                    continue
+                plan.append((path, None))
         if m.get("agent"):
             removed.append(m["agent"])
     gone = _remove_all_or_nothing(name, plan, base=rule.get("base"))
     lockfile.remove_rule(name)
     journal.log("uninstall", name)
-    return _materialized_result(name, removed, rule, "rule", gone)
+    res = _materialized_result(name, removed, rule, "rule", gone)
+    if kept:
+        res["kept"] = kept
+    return res
 
 
 def quarantine_skill(name: str, entry: dict) -> tuple[list[str], dict[str, Path]]:
@@ -3713,7 +3809,7 @@ def foreign_rows(entry: dict | None) -> list[dict]:
             if isinstance(r, dict) and r.get("agent") and r.get("path")]
 
 
-def _freed_foreign(entry: dict) -> list[dict]:
+def _freed_foreign(entry: dict, kind: str = "workflow") -> list[dict]:
     """The ``foreign`` rows whose path no longer holds anything: free to write.
 
     ``lexists``, not ``isfile``: a dangling symlink of the user's is still
@@ -3723,7 +3819,7 @@ def _freed_foreign(entry: dict) -> list[dict]:
     """
     return [r for r in foreign_rows(entry)
             if not os.path.lexists(r["path"])
-            and materialization_is_written("workflow", entry, r)]
+            and materialization_is_written(kind, entry, r)]
 
 
 def _retire_moved(name: str, existing: dict | None, linked: list[str],
@@ -4466,7 +4562,7 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
     ``kept`` names any left in place.
     """
     removed: list[str] = []
-    plan: list[tuple[Path, str]] = []
+    plan: list[tuple[Path, str | None]] = []
     copies: list[dict] = []
     kept: list[str] = []
     for m in workflow.get("materializations", []):
@@ -4483,7 +4579,7 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
                 if m.get("sha256") and _file_sha(path) != m["sha256"]:
                     kept.append(str(path))
                     continue
-                plan.append((path, ""))
+                plan.append((path, None))
         if m.get("agent"):
             removed.append(m["agent"])
     for m in copies:
@@ -4491,7 +4587,7 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
         with _refused_removal(name, path):
             if _present(path):
                 if _file_sha(path) == m.get("sha256"):
-                    plan.append((path, ""))
+                    plan.append((path, None))
                 else:
                     kept.append(str(path))
     gone = _remove_all_or_nothing(name, plan)
@@ -5772,6 +5868,7 @@ def sync_plan() -> dict[str, list]:
                or not _rule_materialization_ok(name, m)
                for m in entry.get("materializations") or []
                if materialization_is_written("rule", entry, m)) \
+                or _freed_foreign(entry, "rule") \
                 or unmaterialized_agents("rule", entry):
             plan["missing_materializations"].append(("rule", name))
     for name, entry in lockfile.installed_workflows().items():

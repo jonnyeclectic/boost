@@ -5858,7 +5858,7 @@ class TestTwoAgentsOnOneDotdir:
         # The plan is made in one pass and applied in the next; a file gone
         # in between (another agent's row, another process) is the end state
         # the removal wanted, not an error.
-        store._remove_all_or_nothing("x", [(tmp_path / "gone.md", "")])
+        store._remove_all_or_nothing("x", [(tmp_path / "gone.md", None)])
         assert not (tmp_path / "gone.md").exists()
 
 
