@@ -857,7 +857,9 @@ def cmd_edit(argv):
     editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
     cmd = shlex.split(editor) or ["vi"]   # support EDITOR="code -w" etc.
     try:
-        rc = subprocess.call([*cmd, str(path)])
+        # Resolved, as for every other launch: `code` and most npm-installed
+        # editors are `.cmd` shims on Windows, which a bare name cannot launch.
+        rc = subprocess.call(util.resolve_exe([*cmd, str(path)]))
     except OSError as e:
         raise BoostError("cannot launch editor %r: %s" % (editor, e),
                         hint="set $VISUAL or $EDITOR to a valid command") from e
