@@ -5333,7 +5333,21 @@ def _check_links_removable(name: str, entry: dict) -> None:
             raise _removal_refused(name, link)
 
 
-def uninstall(name: str, *, project_fallback: bool = True) -> dict:
+def kinds_phrase(kinds: list[str]) -> str:
+    """``["skill", "rule"]`` -> "a skill and a rule"."""
+    each = ["a %s" % k for k in kinds]
+    return (" and ".join(each) if len(each) < 3
+            else "%s and %s" % (", ".join(each[:-1]), each[-1]))
+
+
+def installed_kinds(name: str) -> list[str]:
+    """The user-lock sections holding ``name``, skill first."""
+    return [k for k, section in lockfile.all_installed().items()
+            if name in section]
+
+
+def uninstall(name: str, *, project_fallback: bool = True,
+              kind: str | None = None) -> dict:
     """Uninstall ``name`` whatever its kind (skill, rule, workflow).
 
     Reverses everything the install wrote and drops the lock entry;
@@ -5348,12 +5362,29 @@ def uninstall(name: str, *, project_fallback: bool = True) -> dict:
     ``project_fallback=False`` (``uninstall --global``) nothing in a repo is
     removed: a skill only the current repo has, and a rule or workflow the
     user lock records at project scope, are refused rather than removed.
+
+    A name installed as more than one kind is refused unless ``kind`` says
+    which: resolving it skill-first removed the skill and left a same-named
+    rule and workflow live without a word, where `install` refuses the same
+    ambiguity and `pin` names it.
     """
     name = installed_name(name)
-    entry = lockfile.get_skill(name)
+    held = installed_kinds(name)
+    if kind is None and len(held) > 1:
+        raise BoostError(
+            "%s is installed as %s" % (name, kinds_phrase(held)),
+            hint="say which to remove: %s" % " or ".join(
+                "`boost uninstall %s --kind %s`" % (name, k) for k in held))
+    if kind is not None and held and kind not in held:
+        raise BoostError(
+            "no %s named %s is installed" % (kind, name),
+            hint="it is installed as %s — `boost uninstall %s --kind %s`"
+                 % (kinds_phrase(held), name, held[0]))
+    entry = lockfile.get_skill(name) if kind in (None, "skill") else None
     if not entry:
-        rule = lockfile.get_rule(name)
-        workflow = None if rule else lockfile.get_workflow(name)
+        rule = lockfile.get_rule(name) if kind in (None, "rule") else None
+        workflow = (None if rule or kind not in (None, "workflow")
+                    else lockfile.get_workflow(name))
         rec = rule or workflow
         if (rec and not project_fallback
                 and rec.get("scope") == scopes.SCOPE_PROJECT):
@@ -5376,7 +5407,8 @@ def uninstall(name: str, *, project_fallback: bool = True) -> dict:
         # former, so asking the latter here refused to remove what install had
         # just put in an unmarked directory.
         pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
-        in_repo = pbase is not None and bool(projectlock.get_skill(pbase, name))
+        in_repo = (kind in (None, "skill") and pbase is not None
+                   and bool(projectlock.get_skill(pbase, name)))
         if in_repo and project_fallback:
             return uninstall_project(name, base=pbase)
         raise BoostError("%s is not installed" % name,

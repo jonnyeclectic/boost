@@ -2074,6 +2074,49 @@ class TestShadowedNames:
         assert "pinned brainstorming" in r.out
         assert "a rule named brainstorming is also installed" in r.out
 
+    def test_uninstalling_a_shadowed_name_refuses_without_kind(
+            self, boost, installed):
+        # Skill-first resolution used to remove the skill, rc 0, and leave
+        # the rule and workflow of the same name live without a word.
+        from boost_cli.core import lockfile
+        self._seed_rule_named("brainstorming")
+        lockfile.set_workflow("brainstorming", {
+            "kind": "workflow", "version": "1.0.0", "tap": "some-tap",
+            "materializations": []})
+        r = boost("uninstall", "brainstorming", expect=1)
+        assert ("Error: brainstorming is installed as a skill, a rule and "
+                "a workflow") in r.err
+        assert ("say which to remove: `boost uninstall brainstorming --kind "
+                "skill` or `boost uninstall brainstorming --kind rule` or "
+                "`boost uninstall brainstorming --kind workflow`"
+                ) in " ".join(r.err.split())
+        assert lockfile.get_skill("brainstorming") is not None
+        assert lockfile.get_rule("brainstorming") is not None
+        assert lockfile.get_workflow("brainstorming") is not None
+
+    def test_uninstall_kind_removes_only_that_kind(self, boost, installed):
+        from boost_cli.core import lockfile
+        cm = self._seed_rule_named("brainstorming")
+        r = boost("uninstall", "brainstorming", "--kind", "rule")
+        assert "Uninstalled 1 rule" in r.out
+        assert lockfile.get_rule("brainstorming") is None
+        assert "Rule body." not in cm.read_text(encoding="utf-8")
+        assert lockfile.get_skill("brainstorming") is not None
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        # One kind left: no --kind needed any more.
+        r = boost("uninstall", "brainstorming")
+        assert "Uninstalled 1 skill" in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_uninstall_kind_that_is_not_installed_says_what_is(
+            self, boost, installed):
+        r = boost("uninstall", "brainstorming", "--kind", "workflow",
+                  expect=1)
+        assert "Error: no workflow named brainstorming is installed" in r.err
+        assert ("it is installed as a skill — `boost uninstall brainstorming "
+                "--kind skill`") in " ".join(r.err.split())
+        assert (paths.store_dir() / "brainstorming").is_dir()
+
 
 # ── decay ────────────────────────────────────────────────────────────────
 

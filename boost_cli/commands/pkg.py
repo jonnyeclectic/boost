@@ -830,10 +830,20 @@ def cmd_uninstall(argv: list[str]) -> int:
                        "user config, then this repo for a name only it has)",
         local_help="remove from this repo (= --scope project)",
         global_help="remove from your user config only (= --scope user)")
+    ap.add_argument("--kind", choices=("skill", "rule", "workflow"),
+                    default=None,
+                    help="which item to remove when a skill, rule or "
+                         "workflow share NAME")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     args = ap.parse_args(argv)
     args.names = [store.installed_name(n) for n in args.names]
+    if (args.kind not in (None, "skill")
+            and args.scope == scopes.SCOPE_PROJECT):
+        raise BoostError("--local removes project skills, not a %s"
+                         % args.kind,
+                         hint="drop --local: a %s installed into a repo is "
+                              "recorded in your user lock" % args.kind)
     # Ask only when someone is there to answer. out.confirm() returns its
     # `default` on a non-TTY, so gating on it unconditionally would turn every
     # scripted `boost uninstall x` — CI step, Makefile, Dockerfile — into a
@@ -842,6 +852,8 @@ def cmd_uninstall(argv: list[str]) -> int:
     if out.stdin_is_tty() and not args.yes:
         what = (args.names[0] if len(args.names) == 1 else
                 "%d skills: %s" % (len(args.names), ", ".join(args.names)))
+        if args.kind and len(args.names) == 1:
+            what = "%s %s" % (args.kind, what)
         if args.scope == scopes.SCOPE_PROJECT:
             from_repo, where = list(args.names), scopes.resolve_base(
                 scopes.SCOPE_PROJECT)
@@ -883,7 +895,8 @@ def cmd_uninstall(argv: list[str]) -> int:
                 # else: falling back to the repo would remove what the
                 # flag said to leave alone.
                 info = store.uninstall(
-                    name, project_fallback=args.scope != scopes.SCOPE_USER)
+                    name, project_fallback=args.scope != scopes.SCOPE_USER,
+                    kind=args.kind)
         except BoostError as err:
             if len(args.names) == 1:
                 raise

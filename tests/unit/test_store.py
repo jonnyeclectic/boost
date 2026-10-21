@@ -628,6 +628,58 @@ class TestHeldStoreCopy:
         assert "held_at" not in lockfile.get_skill("brainstorming")
 
 
+class TestUninstallKind:
+    """A name installed as several kinds is refused unless ``kind`` picks."""
+
+    def _rule(self):
+        lockfile.set_rule("brainstorming", {
+            "kind": "rule", "version": "1.0.0", "tap": "t",
+            "materializations": []})
+
+    def test_kinds_phrase(self):
+        assert store.kinds_phrase(["skill"]) == "a skill"
+        assert store.kinds_phrase(["skill", "rule"]) == "a skill and a rule"
+        assert store.kinds_phrase(["skill", "rule", "workflow"]) == (
+            "a skill, a rule and a workflow")
+
+    def test_installed_kinds(self, brainstorming):
+        assert store.installed_kinds("brainstorming") == ["skill"]
+        self._rule()
+        assert store.installed_kinds("brainstorming") == ["skill", "rule"]
+        assert store.installed_kinds("nope") == []
+
+    def test_ambiguous_name_is_refused(self, brainstorming):
+        self._rule()
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("brainstorming")
+        assert ei.value.message == (
+            "brainstorming is installed as a skill and a rule")
+        assert ei.value.hint == (
+            "say which to remove: `boost uninstall brainstorming --kind "
+            "skill` or `boost uninstall brainstorming --kind rule`")
+        assert store.installed_kinds("brainstorming") == ["skill", "rule"]
+
+    def test_kind_rule_leaves_the_skill(self, brainstorming):
+        self._rule()
+        info = store.uninstall("brainstorming", kind="rule")
+        assert info["kind"] == "rule"
+        assert store.installed_kinds("brainstorming") == ["skill"]
+        assert (paths.store_dir() / "brainstorming").is_dir()
+
+    def test_kind_skill_leaves_the_rule(self, brainstorming):
+        self._rule()
+        info = store.uninstall("brainstorming", kind="skill")
+        assert info["kind"] == "skill"
+        assert store.installed_kinds("brainstorming") == ["rule"]
+
+    def test_a_kind_not_installed_names_what_is(self, brainstorming):
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("brainstorming", kind="workflow")
+        assert ei.value.message == "no workflow named brainstorming is installed"
+        assert ei.value.hint == ("it is installed as a skill — `boost "
+                                 "uninstall brainstorming --kind skill`")
+
+
 class TestNativeStoreAgents:
     """A skill install must reach Gemini CLI without ever linking into it.
 

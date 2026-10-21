@@ -1213,10 +1213,19 @@ def resolve_one(name: str, path: str | None = None) -> dict:
             # reaching the catalog (see e.g. `_resolve_skill_md`,
             # `_resolve_skill`), so installing one clears the ambiguity for
             # every command that would otherwise hit it again.
-            kind = str(matches[0].get("kind") or "skill")
+            kinds = {str(e.get("kind") or "skill") for e in matches}
+            if len(kinds) == 1:
+                noun = "%ss" % kinds.pop()
+            else:
+                # A skill, a command and a rule are not "3 workflows": name
+                # each match's own kind.
+                noun = "items"
+                paths = ", ".join(sorted(
+                    "%s (%s)" % (e.get("rel_dir", "?"), e.get("kind") or "skill")
+                    for e in matches))
             raise SameTapAmbiguity(
-                "%r matches %d different %ss in %s: %s"
-                % (bare, len(matches), kind, taps[0], paths),
+                "%r matches %d different %s in %s: %s"
+                % (bare, len(matches), noun, taps[0], paths),
                 hint="that registry ships one name twice — install one with "
                      "`boost install %s --path <one of the above>`, then "
                      "retry; raise it with the tap" % bare,
