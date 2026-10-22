@@ -2206,3 +2206,72 @@ class TestPickerDrawingHelpers:
             "○ nothing in #testing kind:rule"
         assert browse.empty_lines("", "all", filters={})[0][1] == \
             "○ nothing here"
+
+
+class TestWideTextFitsThePane:
+    """The detail pane wrapped by codepoint count, so 30 full-width characters
+    were "30 wide", drew across 60 columns and ran over the list pane."""
+
+    CJK = "全角文字の説明文です。" * 6
+
+    def test_a_cjk_description_wraps_by_display_columns(self):
+        from boost_cli.core import output
+        lines = browse.detail_lines(_e("x", self.CJK), width=30, installed=False)
+        desc = [browse.line_text(ln) for ln in lines
+                if browse.line_role(ln) == "desc"]
+        assert desc[0] == "全角文字の説明文です。全角文字"
+        assert [output.visible_len(t) for t in desc] == [30, 30, 30, 30, 12]
+        assert "".join(desc) == self.CJK                 # nothing clipped away
+        assert max(output.visible_len(browse.line_text(ln))
+                   for ln in lines) <= 30
+
+    def test_a_cjk_frontmatter_value_stays_inside_the_pane(self):
+        from boost_cli.core import output
+        lines = browse.field_lines("note", self.CJK, 30)
+        assert [output.visible_len(browse.line_text(ln)) for ln in lines] == \
+            [29] * 6 + [21]                 # a wide char never straddles col 30
+        assert lines[1][1] == ("field", "。全角文字の説明文で")
+
+    def test_ascii_wraps_exactly_as_textwrap_did(self):
+        import textwrap
+
+        from boost_cli.core import output
+        text = "a well-behaved sentence, long enough to wrap at a hyphen-ated word"
+        assert output.wrap_columns(text, 12) == textwrap.wrap(text, width=12)
+
+    def test_mixed_text_breaks_at_spaces_before_characters(self):
+        from boost_cli.core import output
+        assert output.wrap_columns("ab 全角 cd", 7) == ["ab 全角", "cd"]
+        assert output.wrap_columns("ab 全角文字", 6) == ["ab", "全角文", "字"]
+        assert output.wrap_columns("é", 0) == ["é"]
+        assert output.wrap_columns("  ", 5) == []
+
+    def test_clip_spans_counts_columns(self):
+        line = [("a", "全角"), ("b", "文字")]
+        assert browse.clip_spans(line, 3) == [("a", "全")]
+        assert browse.clip_spans(line, 5) == [("a", "全角")]
+        assert browse.clip_spans(line, 6) == [("a", "全角"), ("b", "文")]
+        assert browse.clip_spans([("a", ""), ("b", "xy")], 5) == [
+            ("a", ""), ("b", "xy")]
+
+
+class TestInstallSession:
+    def test_an_empty_session_asked_for_nothing(self):
+        s = browse.InstallSession()
+        assert (s.requested(), s.exit_code(), s.landed()) == (False, 0, [])
+        assert s.interrupted is None
+
+    def test_landed_is_the_installed_entries_in_order(self):
+        a, b = _e("a"), _e("b")
+        s = browse.InstallSession(installed=[(a, "res-a"), (b, "res-b")])
+        assert s.landed() == [a, b]
+        assert (s.requested(), s.exit_code()) == (True, 0)
+
+    def test_a_failure_is_exit_1_and_a_cancel_is_still_a_request(self):
+        assert browse.InstallSession(
+            failed=[(_e("a"), "no", "")]).exit_code() == 1
+        cancelled = browse.InstallSession(cancelled=[_e("a")])
+        assert (cancelled.requested(), cancelled.exit_code()) == (True, 0)
+        # Sessions never share their lists.
+        assert browse.InstallSession().cancelled is not \
+            browse.InstallSession().cancelled

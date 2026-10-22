@@ -15,6 +15,7 @@ import contextlib
 import os
 import re
 import sys
+import textwrap
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -739,6 +740,45 @@ def wrap(text: str, width: int | None = None, indent: str = "") -> list[str]:
     lines.append(cur)
     return [lines[0]] + [indent + ln for ln in lines[1:]]
 
+
+
+def wrap_columns(text: str, width: int) -> list[str]:
+    """Wrap prose to ``width`` display columns, breaking inside a word when
+    one word is wider than the line.
+
+    The prose twin of :func:`wrap`. That one emits an over-wide token whole
+    because its long tokens are commands; this one is for text a pane must
+    hold, where nothing may run past the edge. ``textwrap.wrap`` counts
+    codepoints, so 30 full-width characters were "30 wide" and drew across 60
+    columns — over the frame and onto the pane beside it. And CJK prose has
+    no spaces to break at, so it is split between characters, by column.
+
+    ASCII text takes ``textwrap.wrap`` exactly: every ASCII character is one
+    column, so the codepoint count is the right one and the output is the
+    same lines as before, hyphen breaks included.
+    """
+    width = max(1, width)
+    if text.isascii():
+        return textwrap.wrap(text, width=width)
+    lines: list[str] = []
+    cur, cur_w = "", 0
+    for word in text.split():
+        word_w = visible_len(word)
+        if cur and cur_w + 1 + word_w <= width:
+            cur, cur_w = cur + " " + word, cur_w + 1 + word_w
+            continue
+        if cur:
+            lines.append(cur)
+            cur, cur_w = "", 0
+        for ch in word:
+            ch_w = _char_width(ch)
+            if cur and cur_w + ch_w > width:
+                lines.append(cur)
+                cur, cur_w = "", 0
+            cur, cur_w = cur + ch, cur_w + ch_w
+    if cur:
+        lines.append(cur)
+    return lines
 
 #: Alias for callers that take a ``wrap`` keyword argument of their own, which
 #: would otherwise shadow the function inside their own body.

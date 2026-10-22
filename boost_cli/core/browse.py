@@ -17,8 +17,7 @@ and every token must match somewhere in the scope. Tab took over selection.
 from __future__ import annotations
 
 import difflib
-import textwrap
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 #: Search scopes, in cycle order. `all` first because it is the useful default:
 #: one token can come from the name and another from the description.
@@ -1542,6 +1541,35 @@ def session_summary(status) -> tuple[str, str] | None:
     return None
 
 
+@dataclass
+class InstallSession:
+    """What the browser's in-place installs did, handed back when it exits.
+
+    The pane is the only report an in-place install gets while the browser is
+    open, and it is gone the moment the browser closes. So everything the
+    caller must say afterwards rides here: what landed (with its install
+    result, which carries the scan and MCP facts the exit report needs), what
+    was refused and why, what an interrupt cancelled, and the plan's notes.
+    """
+    installed: list = field(default_factory=list)   # [(entry, InstallResult)]
+    failed: list = field(default_factory=list)      # [(entry, message, hint)]
+    cancelled: list = field(default_factory=list)   # [entry]
+    notes: list = field(default_factory=list)       # [(role, text)]
+    interrupted: BaseException | None = None
+
+    def landed(self) -> list[dict]:
+        """The entries that installed, in install order."""
+        return [e for e, _res in self.installed]
+
+    def requested(self) -> bool:
+        """True once anything was asked for — a quit with no Enter is None."""
+        return bool(self.installed or self.failed or self.cancelled)
+
+    def exit_code(self) -> int:
+        """``boost install``'s answer: 1 when any requested install failed."""
+        return 1 if self.failed else 0
+
+
 def install_target(entry: dict, targets) -> str:
     """Destination text for the detail pane's ``installs`` line — what Enter
     will actually touch, stated before it is pressed.
@@ -1593,15 +1621,36 @@ def line_role(line: Line) -> str:
     return line[0][0] if line else "blank"
 
 
+def _wrap(text: str, width: int) -> list[str]:
+    """Prose wrapped to ``width`` display columns (:func:`output.wrap_columns`).
+
+    Not ``textwrap.wrap``: that counts codepoints, so a line of full-width CJK
+    came back twice as wide as the pane and curses drew it over the list."""
+    from . import output  # stdlib-only too; lazy to keep this module light
+    return output.wrap_columns(text, width)
+
+
 def clip_spans(line: Line, width: int) -> Line:
-    """``line`` cut to ``width`` columns, spans after the cut dropped."""
+    """``line`` cut to ``width`` columns, spans after the cut dropped.
+
+    Columns, not codepoints: a wide character costs two, so a chip row of CJK
+    text cut by ``len`` still ran past the pane."""
+    from . import output
     out: Line = []
     room = max(0, width)
     for role, text in line:
         if room <= 0:
             break
-        out.append((role, text[:room]))
-        room -= len(text[:room])
+        part, used = "", 0
+        for ch in text:
+            cw = output.visible_len(ch)
+            if used + cw > room:
+                break
+            part, used = part + ch, used + cw
+        if text and not part:
+            break                   # a wide character that no longer fits
+        out.append((role, part))
+        room -= used
     return out
 
 
@@ -1617,7 +1666,7 @@ def field_lines(label: str, value: str, width: int,
     """
     lw = max(label_w, len(label))
     vw = max(4, width - lw - 1)
-    chunks = textwrap.wrap(value, width=vw) or [""]
+    chunks = _wrap(value, vw) or [""]
     lines: list[Line] = [[("label", label.ljust(lw) + " "), ("field", chunks[0])]]
     lines.extend([("label", " " * (lw + 1)), ("field", c)] for c in chunks[1:])
     return lines
@@ -1666,7 +1715,7 @@ def detail_lines(entry: dict, width: int = 60,
 
     def add(role: str, text: str) -> None:
         lines.extend([(role, chunk)] for chunk in
-                     textwrap.wrap(text, width=width) or [""])
+                     _wrap(text, width) or [""])
 
     def blank() -> None:
         lines.append([("blank", "")])
@@ -1697,7 +1746,7 @@ def detail_lines(entry: dict, width: int = 60,
                 # Drop the comma, not the command.
                 bare = chunk.rstrip(",.;:")
                 parts = ([bare] if output.visible_len(bare) <= width
-                         else textwrap.wrap(chunk, width))
+                         else _wrap(chunk, width))
             lines.extend([(role, part)] for part in parts)
         blank()
 
