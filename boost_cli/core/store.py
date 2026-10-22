@@ -2974,8 +2974,9 @@ def refuse_copy_case_collision(name: str) -> None:
                 "%s at %s; on a case-insensitive filesystem they would share "
                 "one store dir" % (name, held, wname,
                                    paths.tilde(skill_store_dir(held))),
-                hint="`boost install %s --force --no-as-skill` takes the copy "
-                     "out of the store, then re-run this install" % wname,
+                hint="`%s --force --no-as-skill` takes the copy out of the "
+                     "store, then re-run this install" % _workflow_spelling(
+                         wname),
                 wrap=True)
 
 
@@ -3103,6 +3104,31 @@ def _require_writable(name: str) -> None:
                          hint="%s, then re-run" % paths.write_remedy(block))
 
 
+def install_spelling(tap: str | None, name: str,
+                     rel_dir: str | None = None) -> str:
+    """The `boost install` command that names exactly this one item.
+
+    Qualified with its tap and, when it has one, its directory — the spelling
+    a hint has to use, because a name that is a skill AND a workflow in one
+    tap, or ships twice, is ambiguous bare: `boost install ship --force`
+    answered "'ship' matches 2 different items", for the user who had just
+    typed the qualified form that works.
+    """
+    spelled = "boost install %s" % ("%s:%s" % (tap, name) if tap else name)
+    if rel_dir and rel_dir != ".":
+        spelled += " --path %s" % rel_dir
+    return spelled
+
+
+def _workflow_spelling(name: str) -> str:
+    """:func:`install_spelling` for the installed workflow ``name``."""
+    entry = lockfile.get_workflow(name) or {}
+    source = str(entry.get("source_file") or "")
+    tap = entry.get("tap")
+    return install_spelling(tap if isinstance(tap, str) else None, name,
+                            source.rpartition("/")[0] or None)
+
+
 def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
                        retry: str | None = None) -> str | None:
     """Refuse to copy over a store dir the lock file does not record.
@@ -3132,8 +3158,8 @@ def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
                              skill_store_dir(name)), owner),
                          hint=("%s replaces it; the workflow keeps its own "
                                "files" % retry if retry else
-                               "`boost install %s --force --no-as-skill` takes "
-                               "the copy out of the store" % owner),
+                               "`%s --force --no-as-skill` takes the copy out "
+                               "of the store" % _workflow_spelling(owner)),
                          wrap=True)
     if existing or force:
         return None
@@ -3427,7 +3453,9 @@ def install(entry: dict, force: bool = False,
                         hint="inspect with `boost policy list`")
 
     disowned = _refuse_unrecorded(name, existing, force,
-                                  retry="`boost install %s --force`" % name)
+                                  retry="`%s --force`" % install_spelling(
+                                      entry.get("tap"), name,
+                                      entry.get("rel_dir")))
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
     dest = skill_store_dir(name)

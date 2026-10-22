@@ -348,8 +348,10 @@ class TestSkillBesideAWorkflowCopy:
     MESSAGE = ("ship differs only by case from Ship, the skill copy of "
                "workflow Ship at %s; on a case-insensitive filesystem they "
                "would share one store dir")
-    HINT = ("`boost install Ship --force --no-as-skill` takes the copy out "
-            "of the store, then re-run this install")
+    # Qualified by tap and dir: bare `Ship` is ambiguous once a skill
+    # shares the name, so the hint has to be the spelling that resolves.
+    HINT = ("`boost install wftap:Ship --path commands --force --no-as-skill`"
+            " takes the copy out of the store, then re-run this install")
 
     @pytest.fixture()
     def taps(self, sandbox, tmp_path):
