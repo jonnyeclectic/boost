@@ -80,6 +80,7 @@ class TestDuplicatedBlock:
             {"path": "~/.claude/CLAUDE.md", "count": 2}]
 
         r = boost("heal", "--dry-run")
+        assert "re-materialize" not in r.out      # named once, as a dedupe
         assert ("would keep one of rule strict-types's 2 blocks in "
                 "~/.claude/CLAUDE.md") in r.out
         assert _claude_md().read_text(encoding="utf-8").count(
