@@ -730,8 +730,19 @@ def cmd_reindex(argv):
                  wrap=True)
     if args.dense:
         if dense_stats is None:
-            out.warn("dense index skipped — %s" % embed.fallback_note(),
-                     wrap=True)
+            from ..core import dense
+            st = dense.status()
+            # The extra is here and cannot load: "install the extra" would
+            # name the step this machine already took.
+            note = (dense.fix_hint(st["reason"], st)
+                    if st["reason"] == "no-extension-load"
+                    else embed.fallback_note())
+            out.warn("dense index skipped — %s" % note, wrap=True)
+        elif dense_stats.get("refused"):
+            from ..core import dense
+            msg, fix = dense.refusal_text(dense_stats)
+            out.warn(msg, wrap=True)
+            out.dim("hint: %s" % fix, wrap=True, indent=2)
         else:
             failed = dense_stats.get("failed") or []
             model_error = dense_stats.get("model_error")
@@ -865,6 +876,8 @@ def _reindex_dense(force, spinner=None):
     # embeds nothing and would otherwise never touch the model at all.
     embed.retry_local()
     stats = dense.build(force=force, on_progress=_embed_progress(spinner))
+    if isinstance(stats, dict) and stats.get("refused"):
+        return stats            # nothing was written; the caller words it
     if migrated and isinstance(stats, dict):
         stats = stats | {"quantized": migrated["chunks"]}
     if collapsed and isinstance(stats, dict) and collapsed["freed"]:
@@ -906,10 +919,12 @@ def cmd_index(argv):
             time.sleep(1)  # stay under the code-search rate limit
         try:
             proc = subprocess.run(
-                ["gh", "api", "-H", "Accept: application/vnd.github+json",
-                 "search/code?q=%s&per_page=100&page=%d"
-                 % (urllib.parse.quote(q, safe=":"), page)],
-                capture_output=True, text=True, timeout=120)
+                util.resolve_exe(
+                    ["gh", "api", "-H", "Accept: application/vnd.github+json",
+                     "search/code?q=%s&per_page=100&page=%d"
+                     % (urllib.parse.quote(q, safe=":"), page)]),
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=120)
         except (subprocess.TimeoutExpired, OSError) as e:
             spin.progress_clear()
             raise BoostError("gh api timed out on page %d" % page, hint=str(e)) from e
@@ -990,10 +1005,12 @@ def github_skill_search(query="", limit=20):
     per_page = max(1, min(int(limit), 100))
     try:
         proc = subprocess.run(
-            ["gh", "api", "-H", "Accept: application/vnd.github+json",
-             "search/code?q=%s&per_page=%d&page=1"
-             % (urllib.parse.quote(q, safe=":"), per_page)],
-            capture_output=True, text=True, timeout=120)
+            util.resolve_exe(
+                ["gh", "api", "-H", "Accept: application/vnd.github+json",
+                 "search/code?q=%s&per_page=%d&page=1"
+                 % (urllib.parse.quote(q, safe=":"), per_page)]),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=120)
     except (subprocess.TimeoutExpired, OSError):
         return None
     if proc.returncode != 0:
@@ -1349,7 +1366,9 @@ def cmd_recommend(argv):
 
 
 def _browse_plain(entries, why: str):
-    out.warn(why + " — showing the full catalog")
+    # stderr: piping is the only scripted use of browse, so stdout's first
+    # line must be the table header, not this notice.
+    out.warn(why + " — showing the full catalog", stream=sys.stderr)
     # Same collapse the TUI does: a registry renders one skill into
     # .claude/, .cursor/, .gemini/ and a plugin root, and this fallback used
     # to list every copy with nothing to tell them apart.
@@ -2373,6 +2392,8 @@ def cmd_browse(argv):
     p.add_argument("--by-count", action="store_true",
                    help="with --categories: largest first instead of A–Z")
     args = p.parse_args(argv)
+    if args.by_count and not args.categories:
+        p.error("--by-count only applies with --categories")
     entries = sorted(catalog.all_entries(), key=operator.itemgetter("name"))
     if not entries:
         raise BoostError("no skills available to browse",
@@ -2569,7 +2590,15 @@ def cmd_stats(argv):
             kind, lock = "skill", prow.entry
     kind = kind or "skill"
     qualifier, _bare = catalog.split_name(args.name)
-    cat = catalog.for_lock(catalog.find(args.name), lock)
+    matches = catalog.find(args.name)
+    cat: dict | None
+    if lock is None and matches:
+        # Nothing installed to narrow by, so the row is picked the way `info`
+        # picks it: `matches[0]` described whichever tap sorted first — and
+        # suggested an install that then refused the same name as ambiguous.
+        cat = catalog.resolve_one(args.name)
+    else:
+        cat = catalog.for_lock(matches, lock)
     if not lock and not cat:
         raise BoostError("no skill named %r installed or in any tap" % args.name,
                         hint=catalog.join_hints(catalog.search_hint(name),
@@ -2641,7 +2670,10 @@ def cmd_stats(argv):
         out.kv("version", cat["version"])
         out.kv("tap", cat["tap"])
         out.kv("description", cat["description"], wrap=True)
-        out.info(out.role("not installed — `boost install %s`" % name, "muted"))
+        # As typed: a bare name can resolve to another tap's copy, or not at
+        # all, where the qualified spelling just resolved to this one.
+        out.info(out.role("not installed — `boost install %s`"
+                          % out.plain(args.name), "muted"))
     out.kv("activity", "%d installs · %d updates · %d uninstalls"
            % (acts["install"], acts["update"], acts["uninstall"]))
     if lock and latest:

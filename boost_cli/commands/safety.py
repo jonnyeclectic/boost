@@ -23,6 +23,8 @@ from ..core import (
     catalog,
     frontmatter,
     gitutil,
+    injectscan,
+    installscan,
     integrity,
     journal,
     lockfile,
@@ -50,9 +52,24 @@ from ._common import (
 
 # --- audit: dangerous-content patterns ------------------------------------
 
+# The prompt-injection / remote-exec / exfiltration signals come from
+# core.injectscan, the same rule set install warns with, so the two commands
+# cannot give different verdicts on the same bytes (`_audit_text`). Its rule
+# ids keep the labels audit has always printed where one existed.
+_INJECT_LABEL = {
+    "curl-pipe-shell": "remote-exec",
+    "base64-pipe-shell": "obfuscated-exec",
+    "ignore-previous": "prompt-injection",
+    "exfiltrate-secret": "exfiltration",
+}
+_INJECT_SEV = {"high": "HIGH", "medium": "MED", "low": "LOW"}
+# Audit keeps its own, narrower `destructive` check below: injectscan's
+# rm-rf-root also matches an ordinary cleanup of a real absolute path, which
+# audit deliberately does not fail on.
+_INJECT_SKIP = frozenset({"rm-rf-root"})
+
+# What audit checks beyond injectscan.
 _AUDIT_PATTERNS = [
-    (re.compile(r"(?:curl|wget)[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b"),
-     "HIGH", "remote-exec"),
     # A trailing `/` (`rm -rf ~/`) or glob (`rm -rf /*`) is still "delete
     # everything" and must not slip past the boundary check the way a real
     # path (`rm -rf /home/user`) should. The optional `(?:/\*?|\*)?` group
@@ -61,11 +78,6 @@ _AUDIT_PATTERNS = [
     (re.compile(r"rm\s+-(?:rf|fr)\s+(?:/|~)(?:/\*?|\*)?(?=[\s'\";`)]|$)",
                re.MULTILINE),
      "HIGH", "destructive"),
-    (re.compile(r"base64\s+(?:-d|-D|--decode)\b[^\n]*\|\s*(?:ba|z)?sh\b"),
-     "HIGH", "obfuscated-exec"),
-    (re.compile(r"(?i)ignore\s+(?:all\s+|any\s+)?(?:previous|prior)\s+instructions"),
-     "HIGH", "prompt-injection"),
-    (re.compile(r"(?i)exfiltrat"), "MED", "exfiltration"),
     (re.compile(r"\bsudo\s"), "LOW", "privilege-escalation"),
 ]
 _CRED_POST = re.compile(r"(?i)(?:curl\b[^\n]*\s(?:-d|--data)\b|POST\s+[^\n]*https?://)")
@@ -73,12 +85,36 @@ _CRED_HINT = re.compile(r"(?i)secret|token|api[-_]?key|password|credential")
 _SEV_ROLE = {"HIGH": "danger", "MED": "warn", "LOW": "muted"}
 _SEV_RANK = {"HIGH": 0, "MED": 1, "LOW": 2}
 
-# Content scan file scope. SKILL.md is always included (added separately,
-# below); this is everything else worth reading for a shell-out, a fetched
-# script, or a prompt-injection string. Not "every UTF-8 file" — a vendored
-# data file or lockfile would just be noise — but wide enough that a NOTES.md
-# or a hidden .js helper is no longer invisible to the scan.
-_SCAN_SUFFIXES = frozenset({".sh", ".py", ".md", ".js", ".ts", ".rb", ".ps1"})
+
+def _audit_text(text: str) -> list[tuple[str, str, int, str]]:
+    """``(severity, label, line, snippet)`` for every audit finding in text.
+
+    One finding per (line, label): where audit's own pattern and an
+    injectscan rule name the same thing on the same line, the worse severity
+    is kept. Ordered by line, then label.
+    """
+    hits: dict[tuple[int, str], tuple[str, str]] = {}
+
+    def keep(severity, label, line_no, snippet):
+        prev = hits.get((line_no, label))
+        if prev is None or _SEV_RANK[severity] < _SEV_RANK[prev[0]]:
+            hits[(line_no, label)] = (severity, snippet[:90])
+
+    for pat, severity, label in _AUDIT_PATTERNS:
+        for m in pat.finditer(text):
+            start = text.rfind("\n", 0, m.start()) + 1
+            stop = text.find("\n", m.start())
+            keep(severity, label, text.count("\n", 0, m.start()) + 1,
+                 text[start:stop if stop != -1 else len(text)].strip())
+    for i, line in enumerate(text.splitlines(), 1):
+        if _CRED_POST.search(line) and _CRED_HINT.search(line):
+            keep("MED", "credential-exfil", i, line.strip())
+    for f in injectscan.scan_text(text):
+        if f.rule_id not in _INJECT_SKIP:
+            keep(_INJECT_SEV[f.severity],
+                 _INJECT_LABEL.get(f.rule_id, f.rule_id), f.line, f.snippet)
+    return [(sev, label, line_no, snip)
+            for (line_no, label), (sev, snip) in sorted(hits.items())]
 
 
 def cmd_audit(argv):
@@ -87,7 +123,7 @@ def cmd_audit(argv):
         description="Check installed skills against a safety blocklist "
                      "(scans SKILL.md plus %s files under each skill; "
                      "materialized rules/workflows are scanned whole)"
-                     % "/".join(sorted(_SCAN_SUFFIXES)))
+                     % "/".join(sorted(installscan.SCAN_SUFFIXES)))
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--skills", action="store_true",
                     help="trust/staleness report for installed skills instead "
@@ -132,25 +168,13 @@ def cmd_audit(argv):
             if score < min_score:
                 add(name, "MED", "quality-below-policy", "SKILL.md",
                     "score %d < policy minimum %d" % (score, min_score))
-        files = [sdir / "SKILL.md"] if (sdir / "SKILL.md").exists() else []
-        files += [p for p in sorted(sdir.rglob("*"))
-                  if p.is_file() and p.suffix in _SCAN_SUFFIXES
-                  and p.name != "SKILL.md"]
-        for f in files:
+        for rel, f in installscan.skill_files(sdir):
             try:
                 text = f.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            rel = f.relative_to(sdir).as_posix()
-            for pat, severity, label in _AUDIT_PATTERNS:
-                for m in pat.finditer(text):
-                    line_no = text.count("\n", 0, m.start()) + 1
-                    line = text.splitlines()[line_no - 1].strip()
-                    add(name, severity, label, "%s:%d" % (rel, line_no), line[:90])
-            for i, line in enumerate(text.splitlines(), 1):
-                if _CRED_POST.search(line) and _CRED_HINT.search(line):
-                    add(name, "MED", "credential-exfil",
-                        "%s:%d" % (rel, i), line.strip()[:90])
+            for severity, label, line_no, snippet in _audit_text(text):
+                add(name, severity, label, "%s:%d" % (rel, line_no), snippet)
 
     # Rules and workflows get the same content scan, over what is actually
     # materialized — the CLAUDE.md block or rendered command file is the text
@@ -176,16 +200,9 @@ def cmd_audit(argv):
                 if m.get("mode") == rules_mod.MODE_CLAUDE:
                     text = rules_mod.read_block(text, name) or ""
                 where = "%s %s" % (kind, path.name)
-                for pat, severity, label in _AUDIT_PATTERNS:
-                    for hit in pat.finditer(text):
-                        line_no = text.count("\n", 0, hit.start()) + 1
-                        line = text.splitlines()[line_no - 1].strip()
-                        add(name, severity, label,
-                            "%s:%d" % (where, line_no), line[:90])
-                for i, line in enumerate(text.splitlines(), 1):
-                    if _CRED_POST.search(line) and _CRED_HINT.search(line):
-                        add(name, "MED", "credential-exfil",
-                            "%s:%d" % (where, i), line.strip()[:90])
+                for severity, label, line_no, snippet in _audit_text(text):
+                    add(name, severity, label, "%s:%d" % (where, line_no),
+                        snippet)
                 break  # identical content per agent — one scan is the signal
 
     # Deterministic, worst-first order: the scan above appends findings in
@@ -292,7 +309,10 @@ def _upstream_reason(name, lk, tap_name, head):
     Same signal-gathering order as ``cmd_outdated`` so the two commands can
     never disagree about whether a skill is behind its tap.
     """
-    matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
+    # Skills only, as in cmd_outdated: a same-named workflow is not this
+    # skill's upstream.
+    matches = [e for e in catalog.find(name) if e["tap"] == tap_name
+               and e.get("kind", "skill") == "skill"]
     if not matches:
         return None
     entry, _warning = catalog.select_lock_source(matches, lk)
@@ -577,8 +597,8 @@ def cmd_quarantine(argv):
 
     modes = sum(1 for m in (args.name, args.release, args.list_mode) if m)
     if modes != 1:
-        raise BoostError("specify a skill to quarantine, --release NAME, or --list",
-                        hint="e.g. `boost quarantine cowboy-coding`")
+        ap.error("specify a skill to quarantine, --release NAME, or --list",
+                 hint="e.g. `boost quarantine cowboy-coding`")
     if args.as_json and not args.list_mode:
         # Accepting it and printing prose would hand `| jq` a parse error.
         ap.error("--json is only supported with --list")

@@ -9,6 +9,7 @@ so the command modules count toward coverage.
 from __future__ import annotations
 
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +29,9 @@ _START_DIR = Path.cwd()
 # `scopes.project_root` does, and by the time the guard first runs the `sandbox`
 # fixture has already pointed `$HOME` at a tempdir.
 _REAL_HOME = Path(os.environ.get("HOME") or Path.home())
+
+# Whether this Python's sqlite3 can load extensions at all; see `sandbox`.
+SQLITE_LOADS_EXTENSIONS = hasattr(sqlite3.Connection, "enable_load_extension")
 
 # A name joined into probe paths that are never read, only stat-ed. It has to
 # satisfy `util.is_safe_component` and the skill-name rule, so it cannot be a
@@ -739,6 +743,14 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(policy, "_WARNED_CORRUPT", False)
     monkeypatch.setattr(projectlock, "_WARNED_CORRUPT", set())
     monkeypatch.setattr(catalog, "_UNSAVED", set())
+    # The suite describes a machine whose sqlite3 can load extensions. A
+    # runner's Python that cannot (the macOS one) would otherwise answer
+    # every dense status with `no-extension-load` and every hint after it
+    # with that rung's, so tests that fake a backend would be judging the
+    # runner rather than the code. The probe's own tests restore it.
+    if not SQLITE_LOADS_EXTENSIONS:
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "extension_error", lambda: None)
     return home
 
 

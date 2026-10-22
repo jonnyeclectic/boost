@@ -1055,12 +1055,11 @@ class TestOneRefusedEntryDoesNotSilenceTheRestOfThePreview:
         # The entry that survives the narrowing is still planned — the plan
         # line itself, not just the name, which a warning would also carry.
         assert "would install brainstorming" in dry.out
-        # …the one that does not is a warning, not an abort. `out.warn`
-        # writes to stdout, which is also where the live run's
-        # per-entry warning lands, so the two are compared there.
+        # …the one that does not is a warning, not an abort. It is the reason
+        # for rc 1, so both modes put it on stderr, and compare it there.
         msg = "no agent left to install workflow ship-it into"
-        assert msg in dry.out
-        assert msg in live.out
+        assert msg in dry.err and msg not in dry.out
+        assert msg in live.err and msg not in live.out
         # …and the marker that makes the exit code readable is still printed.
         assert "dry run — nothing was changed" in dry.out
         assert lockfile.get_workflow("ship-it") is None
@@ -1171,7 +1170,8 @@ class TestAnInstalledItemIsRefusedInBothModes:
         dry, live = self._both(boost, "install", "brainstorming", *names)
         assert live.rc == 1 and dry.rc == 1
         warn = "brainstorming: brainstorming is already installed (v1.4.0)"
-        assert warn in live.out and warn in dry.out
+        assert warn in live.err and warn in dry.err
+        assert warn not in live.out and warn not in dry.out
         assert "would install %s" % names[0] in dry.out
         assert lockfile.get_skill(names[0]) is not None
 

@@ -766,6 +766,22 @@ def cmd_doctor(argv):
                             ", ".join(p.name for p in leftovers),
                             "it" if len(leftovers) == 1 else "them"),
             wrap=True)
+    # What a boost killed mid-write or mid-install left: a temp copy of the
+    # lock file, or a staging dir, in the dir agents read skills from.
+    temps = store.stale_temps()
+    for pth, kind in temps:
+        if kind == store.PARKED_STORE:
+            bad("store", "%s holds the %s — compare it with %s, move back "
+                "what is missing, then delete it" % (_tilde(pth), kind,
+                                                    _tilde(store_dir)),
+                wrap=True)
+    temps = [t for t in temps if t[1] != store.PARKED_STORE]
+    if temps:
+        bad("store", "%d stale temp file%s or staging dir%s a killed boost "
+            "left in %s (%s) — `boost clean` removes %s"
+            % (len(temps), _s(len(temps)), _s(len(temps)), _tilde(store_dir),
+               ", ".join(p.name for p, _kind in temps),
+               "it" if len(temps) == 1 else "them"), wrap=True)
     if configured and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
                                               "" if cache_block
@@ -822,12 +838,18 @@ def cmd_doctor(argv):
             rep.note("lockfile", "no lock file yet — nothing installed")
             lock_ok = True
     elif integ.problem == "corrupt":
-        bad("lockfile", "lock file is corrupt — restore with `boost replay`")
+        bad("lockfile", "lock file is corrupt — %s" % lockfile.remedy(integ),
+            wrap=True)
+        lock_ok = False
+    elif lockfile.newer(integ):
+        bad("lockfile", "lock file %s — %s"
+            % (lockfile.fault(integ), lockfile.remedy(integ)), wrap=True)
         lock_ok = False
     else:  # "schema"
-        bad("lockfile", "lock file schema is %s, expected v%d"
+        bad("lockfile", "lock file schema is %s, expected v%d — %s"
             % ("unreadable" if integ.version is None
-               else "v%s" % integ.version, lockfile.SCHEMA_VERSION))
+               else "v%s" % integ.version, lockfile.SCHEMA_VERSION,
+               lockfile.remedy(integ)), wrap=True)
         lock_ok = False
 
     # linking_agents, not enabled_agents, for the same reason `sync_plan` uses
@@ -1453,6 +1475,13 @@ def cmd_doctor(argv):
             bad("log", "diagnostic log %s is not writable — every invocation is "
                 "failing to record; fix its permissions (chmod u+w)"
                 % _tilde(lp))
+    if not logs.dir_writable():
+        # The append-open above passes in a read-only directory, but rotation
+        # (a rename) and crash reports (a new file) both need to create
+        # entries there — rotation failing is what silently froze the log.
+        bad("logs", "logs directory %s is not writable — crash reports and "
+            "log rotation cannot be written; fix its permissions (chmod u+w)"
+            % _tilde(paths.logs_dir()))
     crashes = sorted(paths.logs_dir().glob("crash-*.log")) \
         if paths.logs_dir().is_dir() else []
     if crashes:
@@ -1570,6 +1599,14 @@ def _report_search_engine(rep) -> None:
         return
 
     fix = dense.fix_hint(st["reason"], st)
+    if st["reason"] == "corrupt":
+        # Its own line: there is no chunk count or build to describe, and
+        # "not configured" — what this used to say — named the wrong fault.
+        rep.issue("search-engine",
+                  "semantic search silently off — %s is not a readable "
+                  "SQLite database; searches are using BM25 — %s"
+                  % (dense.db_path().as_posix(), fix), hint=fix, wrap=True)
+        return
     if st["degraded"]:
         # The store was built and is now dead weight: say what it holds, what
         # changed, and that search has silently been on BM25 the whole time.
@@ -2290,7 +2327,7 @@ def cmd_heal(argv):
     if not integ.ok and integ.problem != "missing":
         stuck.append(paths.lockfile_path())
         out.warn("the lock file %s, so heal cannot tell which store dirs are "
-                 "boost's — restore it with `boost replay`" % lockfile.fault(integ),
+                 "boost's — %s" % (lockfile.fault(integ), lockfile.remedy(integ)),
                  wrap=True)
     for d, block in blocked.items():
         stuck.append(d)
@@ -2671,8 +2708,8 @@ def cmd_trust(argv) -> int:
 
     if args.action == "add":
         if not args.name or not args.key:
-            raise BoostError("trust add requires NAME and KEY",
-                             hint="`boost trust add acme ./acme.pub`")
+            p.error("trust add requires NAME and KEY",
+                    hint="`boost trust add acme ./acme.pub`")
         key_path = paths.expand(args.key)
         if key_path.is_file():
             key_text = key_path.read_text(encoding="utf-8")
@@ -2705,7 +2742,8 @@ def cmd_trust(argv) -> int:
 
     if args.action == "remove":
         if not args.name:
-            raise BoostError("trust remove requires a NAME")
+            p.error("trust remove requires a NAME",
+                    hint="see the names with `boost trust list`")
         if not provenance.remove_trusted_key(args.name):
             raise BoostError("no trusted key named %r" % args.name)
         journal.log("trust", args.name, op="remove-key")

@@ -178,6 +178,69 @@ class TestTilde:
     def test_accepts_path_object(self, sandbox):
         assert paths.tilde(sandbox / "cache") == "~/cache"
 
+    @pytest.mark.parametrize("var", ["BOOST_HOME", "BOOST_AGENTS_STORE"])
+    def test_override_expands_tilde_and_env(self, sandbox, monkeypatch, var):
+        # A quoted '~/x' reaches boost unexpanded; it must still mean $HOME/x.
+        monkeypatch.setenv(var, "~/x")
+        assert paths.env_dir(var) == sandbox / "x"
+        monkeypatch.setenv("BOOST_TEST_ROOT", str(sandbox / "r"))
+        monkeypatch.setenv(var, "${BOOST_TEST_ROOT}/x")
+        assert paths.env_dir(var) == sandbox / "r" / "x"
+        monkeypatch.setenv(var, "~")
+        assert paths.env_dir(var) == sandbox
+
+    @pytest.mark.parametrize("var", ["BOOST_HOME", "BOOST_AGENTS_STORE"])
+    def test_empty_override_is_unset(self, sandbox, monkeypatch, var):
+        monkeypatch.setenv(var, "")
+        assert paths.env_dir(var) is None
+        monkeypatch.delenv(var)
+        assert paths.env_dir(var) is None
+
+    @pytest.mark.parametrize("var", ["BOOST_HOME", "BOOST_AGENTS_STORE"])
+    @pytest.mark.parametrize("raw", ["rel", "./rel", "rel/~/x"])
+    def test_relative_override_refused(self, sandbox, monkeypatch, var, raw):
+        monkeypatch.setenv(var, raw)
+        with pytest.raises(BoostError) as ei:
+            paths.env_dir(var)
+        assert ei.value.message == (
+            "%s=%r is a relative path, so it would resolve against the "
+            "working directory" % (var, raw))
+        assert ei.value.hint == (
+            "export %s=/an/absolute/path (or ~/path)" % var)
+        with pytest.raises(BoostError):
+            paths.check_env()
+        # nothing was created under the working directory
+        assert list(Path.cwd().iterdir()) == []
+
+    def test_relative_override_refused_by_both_resolvers(self, sandbox,
+                                                         monkeypatch):
+        monkeypatch.setenv("BOOST_HOME", "rel")
+        with pytest.raises(BoostError, match="BOOST_HOME="):
+            paths.boost_home()
+        assert paths.store_dir() == sandbox / ".agents" / "skills"
+        monkeypatch.delenv("BOOST_HOME")
+        monkeypatch.setenv("BOOST_AGENTS_STORE", "rel")
+        with pytest.raises(BoostError, match="BOOST_AGENTS_STORE="):
+            paths.store_dir()
+        assert paths.boost_home() == sandbox / ".boost"
+
+    def test_check_env_passes_on_absolute(self, sandbox, monkeypatch):
+        monkeypatch.setenv("BOOST_HOME", str(sandbox / "b"))
+        monkeypatch.setenv("BOOST_AGENTS_STORE", str(sandbox / "s"))
+        assert paths.check_env() is None
+
+    def test_cli_refuses_relative_boost_home_before_logging(
+            self, sandbox, monkeypatch, capsys):
+        from boost_cli import cli
+        monkeypatch.setenv("BOOST_HOME", "~rel")
+        assert cli.main(["config", "list"]) == 1
+        err = capsys.readouterr().err
+        assert "BOOST_HOME='~rel' is a relative path" in err
+        assert "Traceback" not in err
+        # no log dir, crash report or config under cwd or the sandbox HOME
+        assert list(Path.cwd().iterdir()) == []
+        assert not (sandbox / ".boost").exists()
+
     def test_resolved_home_contracts_through_symlink(self, tmp_path, monkeypatch):
         # HOME is a symlink; a path expressed against the *resolved* home must
         # still contract (the helper tries both raw and resolved home).

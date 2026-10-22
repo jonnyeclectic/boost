@@ -28,7 +28,7 @@ import re
 import sys
 import threading
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from ..errors import BoostError
@@ -63,7 +63,10 @@ from . import (
 #        `escapes`), so a cache that indexed one must be rescanned to drop it
 #   6 -- an item whose files collide by case with another path in the tap
 #        is dropped on a case-insensitive clone (see `drop_case_collisions`)
-CACHE_FORMAT = 6
+#   7 -- `frontmatter` folds an indented continuation carrying ": " into
+#        the plain scalar above it instead of dropping it and every line
+#        after, so a truncated description is restored on rescan
+CACHE_FORMAT = 7
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -125,6 +128,17 @@ def _description(meta: dict, body: str) -> str:
         if line and not line.startswith("#"):
             return line[:160]
     return ""
+
+
+def describe(meta: dict, body: str) -> str:
+    """The description the scanner indexes for an item with this frontmatter.
+
+    Public so a reader of an installed copy (``installedview``) derives the
+    same text a scan does: a SKILL.md with no ``description:`` is described by
+    its first prose line, and reading only the frontmatter there reported an
+    unchanged install as having no description and an "upstream" one.
+    """
+    return _description(meta, body)
 
 
 def _content_digest(name: str, description: str, body: str) -> str:
@@ -916,15 +930,30 @@ def split_name(name: str) -> tuple[str | None, str]:
     return None, name
 
 
+def _tap_tiers(qualifier: str) -> list[Callable[[str], bool]]:
+    """The tests a ``tap:`` qualifier is matched by, best first.
+
+    The same four tiers as :func:`registry.get`: exact ``owner/repo``, the
+    filesystem ``safe_name``, the bare repo tail, then case-folded. Before the
+    last tier, `boost update Beta` acted on tap ``beta`` while `boost install
+    Beta:x` answered "no tap named 'Beta'", so one spelling worked for every
+    tap command and failed for every item command.
+    """
+    folded = registry.name_key(qualifier)
+    return [lambda t: t == qualifier,
+            lambda t: t.replace("/", "__") == qualifier,
+            lambda t: t.split("/")[-1] == qualifier,
+            lambda t: registry.name_key(t) == folded]
+
+
 def tap_matches(tap_name: str, qualifier: str) -> bool:
     """True when ``qualifier`` selects the single tap ``tap_name``.
 
-    The one-candidate form of :func:`find`'s tap filter — an exact
-    ``owner/repo`` or the bare repo tail. Not a substitute for find's tiering,
-    which picks the *best* tap among several; here there is only one to accept
-    or reject, so the two tiers collapse into one test.
+    The one-candidate form of :func:`find`'s tap filter. Not a substitute for
+    find's tiering, which picks the *best* tap among several; here there is
+    only one to accept or reject, so any tier accepts it.
     """
-    return bool(tap_name) and qualifier in (tap_name, tap_name.split("/")[-1])
+    return bool(tap_name) and any(t(tap_name) for t in _tap_tiers(qualifier))
 
 
 def for_tap(entry: dict | None, qualifier: str | None) -> dict | None:
@@ -1040,9 +1069,11 @@ def find(name: str, tap: str | None = None,
         # errored on the ambiguity while `boost bundle apply` with
         # `skills:brainstorming` silently took matches[0] from whichever tap
         # sorted first.
-        exact = [e for e in matches if e["tap"] == tap]
-        matches = exact or [e for e in matches
-                            if e["tap"].split("/")[-1] == tap]
+        for tier in _tap_tiers(tap):
+            hits = [e for e in matches if tier(e["tap"])]
+            if hits:
+                return hits
+        return []
     return matches
 
 
@@ -1079,6 +1110,20 @@ def select_lock_source(matches: list[dict], lk: dict) -> tuple[dict | None, str 
     fallback = matches[0]
     return fallback, ("%s no longer at its installed source (%s) — using %s"
                       % (fallback.get("name", "?"), wanted, fallback.get(field, "?")))
+
+
+def installed_row(matches: list[dict], kind: str, lk: dict) -> dict | None:
+    """The catalog row an installed item came from, or None.
+
+    Same tap, same kind, then the recorded source (:func:`select_lock_source`).
+    One tap can ship one name as a skill *and* a workflow, and a row picked
+    by tap alone described whichever of the two sorted first, so `boost info`
+    on an installed workflow printed its skill namesake's description.
+    """
+    same = [e for e in matches
+            if e.get("tap") == lk.get("tap")
+            and (e.get("kind") or "skill") == kind]
+    return select_lock_source(same, lk)[0]
 
 
 def upstream_path(entry: dict) -> str:
@@ -1235,9 +1280,12 @@ class SameTapAmbiguity(BoostError):
     """
 
     def __init__(self, message: str, hint: str, *, bare: str,
-                 paths: list[str]):
+                 paths: list[str], qualified: str | None = None):
         super().__init__(message, hint=hint)
         self.bare = bare
+        #: ``tap:bare`` — the name a retry must pass, since the bare name can
+        #: resolve to (or collide with) another tap's copy.
+        self.qualified = qualified or bare
         self.paths = paths
 
 
@@ -1362,10 +1410,15 @@ def resolve_one(name: str, path: str | None = None) -> dict:
             raise SameTapAmbiguity(
                 "%r matches %d different %s in %s: %s"
                 % (bare, len(matches), noun, taps[0], paths),
+                # Qualified, always: the bare name with `--path` resolves
+                # across every tap, so when another registry ships it too the
+                # suggested command failed with the cross-tap error — naming
+                # the wrong tap — or, for identical copies, quietly installed
+                # the other registry's.
                 hint="that registry ships one name twice — install one with "
-                     "`boost install %s --path <one of the above>`, then "
-                     "retry; raise it with the tap" % bare,
-                bare=bare,
+                     "`boost install %s:%s --path <one of the above>`, then "
+                     "retry; raise it with the tap" % (taps[0], bare),
+                bare=bare, qualified="%s:%s" % (taps[0], bare),
                 paths=sorted(str(e.get("rel_dir", "?")) for e in matches))
         # Several taps, one thing. Registries mirror each other constantly, so
         # the common cross-tap collision is N byte-identical copies of one
@@ -1382,6 +1435,72 @@ def resolve_one(name: str, path: str | None = None) -> dict:
             "%r exists in multiple taps: %s" % (name, ", ".join(taps)),
             hint="qualify it, e.g. `%s:%s`" % (taps[0], bare))
     return matches[0]
+
+
+def _resolve_kind(name: str, kind: str | None) -> dict:
+    """:func:`resolve_one`, narrowed to ``kind`` when one copy of it remains.
+
+    A record that carries one kind only (a profile or snapshot keeps skills)
+    is not ambiguous because the tap also ships a workflow of that name — and
+    without the narrowing a ``find()[0]`` restore brought back the workflow.
+    """
+    if kind is not None:
+        found = find(name)
+        same = [e for e in found if (e.get("kind") or KIND_SKILL) == kind]
+        if len(same) == 1:
+            return same[0]
+        if found and not same:
+            # Only another kind answers to the name: restoring it would put a
+            # workflow where the record kept a skill.
+            raise BoostError(
+                "%s is no longer shipped as a %s"
+                % (split_name(name)[1], kind),
+                hint="what answers to it now: %s" % ", ".join(sorted(
+                    "%s (%s)" % (e.get("tap"), e.get("kind") or KIND_SKILL)
+                    for e in found)))
+    return resolve_one(name)
+
+
+def resolve_recorded(name: str, tap: str | None = None,
+                     kind: str | None = None) -> dict | None:
+    """The entry to reinstall for a name some record kept, or None if absent.
+
+    For ``cohort apply``, ``profile use`` and ``snapshot rollback``. None
+    only when no tap ships the name at all; every other way to fail raises
+    :class:`BoostError` naming why, so the caller can skip the item and say
+    so. Both refusals replace a ``find()[0]`` that installed whichever tap
+    sorted first:
+
+    * without ``tap``, the name resolves like ``install`` resolves it
+      (:func:`resolve_one`), so an ambiguous name is refused, not guessed;
+    * with ``tap`` — the tap the record says it came from — only that tap's
+      copy is the answer. A recorded tap that is gone used to bring back
+      another tap's item and blame "its tap has moved".
+
+    ``kind`` is the one kind the record carries, when it carries one: a
+    single copy of that kind is the answer even beside a namesake of another.
+    """
+    bare = split_name(name)[1]
+    shipped = find(bare)
+    if not shipped:
+        return None
+    if not tap:
+        return _resolve_kind(name, kind)
+    others = ", ".join(sorted({str(e.get("tap") or "") for e in shipped}))
+    if not any(tap_matches(t.name, tap) for t in registry.list_taps()):
+        if tap == "local":
+            raise BoostError(
+                "%s was installed from a local path, not a tap" % bare,
+                hint="it is shipped by: %s — install one by name to switch"
+                     % others)
+        raise BoostError(
+            "%s was recorded from tap %s, which is no longer tapped"
+            % (bare, tap),
+            hint="`boost tap` it again, or install it from: %s" % others)
+    if not find("%s:%s" % (tap, bare)):
+        raise BoostError("%s is no longer in tap %s" % (bare, tap),
+                         hint="it is shipped by: %s" % others)
+    return _resolve_kind("%s:%s" % (tap, bare), kind)
 
 
 def _same_thing(matches: list[dict]) -> dict | None:

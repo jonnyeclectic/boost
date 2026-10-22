@@ -1128,13 +1128,13 @@ def test_info_project_skill_shows_its_identity_rows(boost, tapped, repo):
 def test_info_project_skill_omits_the_user_only_rows(boost, tapped, repo):
     """Omit rather than blank: a project entry has no such keys.
 
-    Printing `pinned no` would assert a field `store._install_project_skill`
-    never writes, and there is no canonical store in a repo to point `store`
-    at.
+    There is no canonical store in a repo to point `store` at, and nothing
+    quarantines a project row. `pinned` is the exception: `boost pin` writes
+    it into the project lock, so the card says it either way.
     """
     boost("install", "brainstorming", "--local")
     res = boost("info", "brainstorming")
-    assert "pinned" not in res.out
+    assert "pinned no" in " ".join(res.out.split())
     assert "quarantined" not in res.out
     assert "store" not in res.out
 

@@ -67,7 +67,17 @@ def skill_relations(name: str, key: str) -> list[str]:
     matches = catalog.find(name)
     if not matches:
         return []
-    meta = matches[0].get("meta") or {}
+    return entry_relations(matches[0], key)
+
+
+def entry_relations(entry: dict, key: str) -> list[str]:
+    """`requires:`/`conflicts:` read off one catalog entry's own frontmatter.
+
+    Keyed by entry rather than by name because a name is not an item: with
+    `jira-integration` in two taps, ``install beta:jira-integration`` planned
+    alpha's `requires:` (the first ``find`` row) and skipped beta's.
+    """
+    meta = entry.get("meta") or {}
     if key == "requires":
         return deps.requirement_names(meta)
     return rel_list(meta, key)
@@ -90,26 +100,40 @@ def expand_dependencies(entries: list[dict], pbase=None
     # All three lock sections, not just skills: a rule or workflow already
     # installed under a required name must not be re-added to the plan.
     installed = prereq.installed_names(pbase)
+    # One entry per name in the plan — the roots as the caller chose them, a
+    # dependency as `resolve_one` picks it — and every relation is read off
+    # that entry, so the item whose `requires:` was walked is the item that
+    # gets installed.
+    picked: dict[str, dict | None] = {e["name"]: e for e in entries}
+
+    def entry_for(name: str) -> dict | None:
+        if name not in picked:
+            try:
+                picked[name] = catalog.resolve_one(name)
+            except BoostError:
+                picked[name] = None
+        return picked[name]
+
+    def relations(name: str, key: str) -> list[str]:
+        entry = entry_for(name)
+        return entry_relations(entry, key) if entry is not None else []
+
     res = resolve.resolve(
         [e["name"] for e in entries],
-        lambda n: skill_relations(n, "requires"),
-        lambda n: skill_relations(n, "conflicts"),
+        lambda n: relations(n, "requires"),
+        lambda n: relations(n, "conflicts"),
         installed=installed,
         known=lambda n: bool(catalog.find(n)),
     )
-    by_name = {e["name"]: e for e in entries}
     ordered: list[dict] = []
     for name in res.order:
-        if name in by_name:
-            ordered.append(by_name[name])
-            continue
-        try:
-            ordered.append(catalog.resolve_one(name))
-        except BoostError:
+        entry = entry_for(name)
+        if entry is not None:
+            ordered.append(entry)
+        elif name not in res.unresolved:
             # A dep that resolves nowhere unambiguously is reported via
             # res.unresolved; skip it here rather than abort the whole install.
-            if name not in res.unresolved:
-                res.unresolved.append(name)
+            res.unresolved.append(name)
     return ordered, res
 
 

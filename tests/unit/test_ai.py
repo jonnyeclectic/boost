@@ -52,7 +52,7 @@ def ai_on(sandbox, monkeypatch):
 def _with_cli(monkeypatch, rc=0, stdout="", stderr=""):
     calls = []
 
-    def fake_run(cmd, input=None, capture_output=None, text=None, timeout=None):
+    def fake_run(cmd, input=None, timeout=None, **_kw):
         calls.append({"cmd": cmd, "input": input, "timeout": timeout})
         return FakeProc(rc, stdout, stderr)
 
@@ -183,7 +183,7 @@ class TestAskCli:
         monkeypatch.setattr("boost_cli.core.nethttp.urlopen", _boom)
         assert ai.ask("hi", system="sys prompt") == "answer"
         assert calls == [{
-            "cmd": ["claude", "-p", "--model", DEFAULT_MODEL,
+            "cmd": ["/fake/bin/claude", "-p", "--model", DEFAULT_MODEL,
                     "--output-format", "text",
                     "--no-session-persistence",
                     "--append-system-prompt", "sys prompt"],

@@ -807,7 +807,7 @@ class TestBodyReadFailures:
             shards.fetch_manifest("https://example.test/m.json")
         assert err.value.message == (
             "cannot read https://example.test/m.json: %s" % said)
-        assert err.value.hint == shards.LOCAL_EMBED_HINT
+        assert err.value.hint == shards.transport_hint()
         assert err.value.__cause__ is exc
 
     @pytest.mark.parametrize(("exc", "said"), _BODY_FAILURES[:2])

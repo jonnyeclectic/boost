@@ -36,16 +36,20 @@ from .pkg import _report_result, _warn_unwritable
 _tilde = paths.tilde
 
 
-def _resolve_entry(name: str, prefer_tap: str | None = None):
-    """Find a catalog entry by name, preferring a specific tap. None if absent."""
-    matches = catalog.find(name)
-    if not matches:
-        return None
-    if prefer_tap:
-        tapped = [e for e in matches if e["tap"] == prefer_tap]
-        if tapped:
-            return tapped[0]
-    return matches[0]
+def _resolve_entry(name: str, prefer_tap: str | None = None,
+                   kind: str | None = None
+                   ) -> tuple[dict | None, str | None]:
+    """``(entry, why_not)`` for a recorded name (:func:`catalog.resolve_recorded`).
+
+    ``(None, None)`` when no tap ships it; ``(None, reason)`` when one does
+    but it cannot be the answer — ambiguous, or its recorded tap is gone —
+    with the reason as one printable line.
+    """
+    try:
+        return catalog.resolve_recorded(name, prefer_tap, kind), None
+    except BoostError as e:
+        return None, ("%s (%s)" % (e.message, e.hint) if e.hint
+                      else e.message)
 
 
 # ---------------------------------------------------------------- cohort
@@ -72,7 +76,7 @@ def _is_member(user: str, cohort_name: str, percent: int) -> bool:
 
 
 def cmd_cohort(argv) -> int:
-    """boost cohort [list|create NAME --skills a,b --percent N|delete NAME|status|apply [NAME]]"""
+    """boost cohort [list [NAME]|create NAME --skills a,b --percent N|delete NAME|status [NAME]|apply [NAME]]"""
     p = cliparse.parser(
         prog="boost cohort",
         description="Controlled skill rollouts & team A/B testing",
@@ -82,15 +86,25 @@ def cmd_cohort(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=["list", "create", "delete", "status", "apply"],
                    help="what to do (default: list; status is the same as list)")
-    p.add_argument("name", nargs="?", help="cohort name")
+    p.add_argument("name", nargs="?",
+                   help="cohort name (list/status: show only that cohort)")
     p.add_argument("--skills", action="append", default=[],
-                   help="comma-separated skill names (repeatable)")
-    p.add_argument("--percent", type=int, default=100,
-                   help="rollout percentage (default 100)")
+                   help="with `create`: comma-separated skill names "
+                        "(repeatable)")
+    p.add_argument("--percent", type=int, default=None,
+                   help="with `create`: rollout percentage (default 100)")
     p.add_argument("-y", "--yes", action="store_true",
                    help="`delete` without the confirmation prompt")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
+    if args.action != "create":
+        stray = [f for f, v in (("--skills", args.skills),
+                                ("--percent", args.percent is not None)) if v]
+        if stray:
+            p.error("%s only appl%s to `cohort create`"
+                    % ("/".join(stray), "y" if len(stray) > 1 else "ies"))
+    if args.percent is None:
+        args.percent = 100
 
     cohorts, bad = cohort.load(_cohorts_path())
     # `create` replaces the file, so a corrupt one is quarantined by the
@@ -112,7 +126,9 @@ def cmd_cohort(argv) -> int:
             p.error("create needs --skills a,b,...")
         for s in skills:
             if not catalog.find(s):
-                out.warn("skill %r not found in any tap (kept anyway)" % s)
+                # stderr: under --json, stdout holds the JSON object alone.
+                out.warn("skill %r not found in any tap (kept anyway)" % s,
+                         stream=sys.stderr)
         existing = cohorts.get(args.name)
         cohorts[args.name] = {
             "skills": skills, "percent": args.percent,
@@ -213,10 +229,12 @@ def cmd_cohort(argv) -> int:
                     present_here.append(skill)
                     skipped += 1
                     continue
-                entry = _resolve_entry(skill)
+                entry, why = _resolve_entry(skill)
                 if entry is None:
                     if not args.json:
-                        out.warn("%s not found in any tap — skipped" % skill)
+                        out.warn("%s — skipped" % why if why else
+                                 "%s not found in any tap — skipped" % skill,
+                                 wrap=True)
                     missing_here.append(skill)
                     continue
                 res = store.install(entry)
@@ -249,10 +267,14 @@ def cmd_cohort(argv) -> int:
         return cohort.apply_exit_code(total_installed, total_present,
                                       total_missing)
 
-    # list / status
+    # list / status — a NAME narrows to that cohort, and one that does not
+    # exist is an error rather than every other cohort's data under rc 0.
+    if args.name and args.name not in cohorts:
+        raise BoostError("no cohort named %s" % args.name,
+                        hint="list cohorts with `boost cohort list`")
     rows = []
     data = []
-    for cname in sorted(cohorts):
+    for cname in [args.name] if args.name else sorted(cohorts):
         spec = cohorts[cname]
         member = _is_member(user, cname, spec["percent"])
         data.append({"name": cname, "skills": spec["skills"],
@@ -398,6 +420,10 @@ def cmd_profile(argv) -> int:
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
+    if args.prune and args.action != "use":
+        # Accepted and ignored, `profile save --prune` reported success and
+        # left the user believing a prune had happened.
+        p.error("--prune only applies to `profile use`")
     if args.action != "list" and not args.name:
         p.error("%s needs a profile NAME" % args.action)
 
@@ -555,10 +581,13 @@ def cmd_profile(argv) -> int:
                      "leaving it as-is" % (n, kind))
     installed_now, not_found = [], []
     for n in missing:
-        entry = _resolve_entry(n, prefer_tap=want[n].get("tap"))
+        entry, why = _resolve_entry(n, prefer_tap=want[n].get("tap"),
+                                   kind=catalog.KIND_SKILL)
         if entry is None:
             if not args.json:
-                out.warn("%s is in the profile but not in any tap — skipped" % n)
+                out.warn("%s — skipped" % why if why else
+                         "%s is in the profile but not in any tap — skipped"
+                         % n, wrap=True)
             not_found.append(n)
             continue
         saved = want[n]
@@ -732,6 +761,11 @@ def cmd_protocol(argv) -> int:
                       help="`open` asks in a desktop dialog instead of the "
                            "terminal (what the registered handler passes)")
     args = p.parse_args(argv)
+    if args.action != "open":
+        if args.gui:
+            p.error("%s only applies to `protocol open`" % _GUI_FLAG)
+        if args.url:
+            p.error("a URL only applies to `protocol open`")
     system = platform.system()
 
     if args.action == "open":
@@ -992,15 +1026,27 @@ def cmd_replay(argv) -> int:
     if not args.id:
         p.error("%s needs a history ID" % args.action)
     snapshot = lockfile.history_read(args.id)
-    if args.action == "rollback" and lockfile.check().problem == "corrupt":
+    integ = lockfile.check()
+    # Any lock boost cannot use but a newer boost's (whose last change a
+    # rollback would discard): through the diff below, write() refuses it,
+    # and its hint named this very command.
+    if (args.action == "rollback" and not integ.ok
+            and integ.problem != "missing" and not lockfile.newer(integ)):
         # Every other write refuses a corrupt lock, and the diff below would
         # read it as empty and reinstall each skill over it. Restoring is the
         # snapshot itself becoming the lock; the corrupt bytes stay aside.
-        backup = paths.tilde(lockfile.corrupt_backup())
+        # Kept now, so the name below is the backup that holds these bytes
+        # (a backup from an earlier corruption may hold another state).
+        try:
+            held = lockfile.keep_copy()
+        except OSError:
+            held = lockfile.corrupt_backup()
+        backup = paths.tilde(held)
         if not (args.yes or out.confirm(
-                "the lock file is corrupt — make snapshot %s the lock file? "
+                "the lock file %s — make snapshot %s the lock file? "
                 "It is the lock as it was before the change after it; the "
-                "newest record stays only in %s" % (args.id, backup),
+                "newest record stays only in %s"
+                % (lockfile.fault(integ), args.id, backup),
                 quiet=args.json)):
             if args.json:
                 print(json.dumps({"id": args.id, "cancelled": True}, indent=2))
@@ -1083,10 +1129,18 @@ def cmd_replay(argv) -> int:
         for n in only:
             out.info("kept %s: the store holds its only copy — `boost "
                      "uninstall %s` deletes it" % (n, n))
-    resolved = {n: _resolve_entry(n, prefer_tap=snap_skills[n].get("tap"))
+    lookups = {n: _resolve_entry(n, prefer_tap=snap_skills[n].get("tap"),
+                                  kind=catalog.KIND_SKILL)
                for n in removed}
-    restorable = [n for n in removed if resolved[n] is not None]
-    gone = [n for n in removed if resolved[n] is None]
+    resolved = {n: entry for n, (entry, _why) in lookups.items()
+                if entry is not None}
+    restorable = [n for n in removed if n in resolved]
+    gone = [n for n in removed if n not in resolved]
+
+    def _gone_line(n: str) -> str:
+        why = lookups[n][1]
+        return ("%s — cannot restore" % why if why
+                else "%s is gone from every tap — cannot restore" % n)
 
     if not (added or restorable or changed):
         if args.json:
@@ -1099,7 +1153,7 @@ def cmd_replay(argv) -> int:
                              indent=2))
             return 0
         for n in gone:
-            out.warn("%s is gone from every tap — cannot restore" % n)
+            out.warn(_gone_line(n), wrap=True)
         out.ok("nothing else to roll back" if only else
                "skills already match this snapshot — nothing to do"
                if mat_diff else "already at this snapshot — nothing to do")
@@ -1121,7 +1175,7 @@ def cmd_replay(argv) -> int:
         uninstalled.append(n)
     for n in gone:
         if not args.json:
-            out.warn("%s is gone from every tap — cannot restore" % n)
+            out.warn(_gone_line(n), wrap=True)
     for n in restorable:  # in snapshot, missing now, resolvable
         want = snap_skills[n]
         entry = resolved[n]

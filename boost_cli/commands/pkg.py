@@ -242,7 +242,9 @@ def _register_mcp_server(name: str, spec: dict, host: str = "claude",
         out.info("  run it yourself: " + mcphost.shell_line(argv))
         return
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(util.resolve_exe(argv), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         out.warn("could not register %s: %s" % (name, e))
         out.info("  run it yourself: " + mcphost.shell_line(argv))
@@ -568,7 +570,7 @@ def cmd_install(argv: list[str]) -> int:
         except BoostError as err:
             if not multi:
                 raise
-            out.warn("%s: %s" % (n, err.message))
+            out.warn("%s: %s" % (n, err.message), stream=sys.stderr)
             failed += 1
 
     _warn_confusions(entries)
@@ -729,7 +731,7 @@ def cmd_install(argv: list[str]) -> int:
             except BoostError as err:
                 if not multi:
                     raise
-                out.warn("%s: %s" % (e["name"], err.message))
+                out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
                 failed += 1
                 continue
         _report_prerequisites(entries, pbase=pbase, would=True)
@@ -750,7 +752,7 @@ def cmd_install(argv: list[str]) -> int:
         except BoostError as err:
             if not multi:
                 raise
-            out.warn("%s: %s" % (e["name"], err.message))
+            out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
             failed += 1
             continue
         _report_result(res, no_mcp=args.no_mcp)
@@ -900,7 +902,7 @@ def cmd_uninstall(argv: list[str]) -> int:
         except BoostError as err:
             if len(args.names) == 1:
                 raise
-            out.warn("%s: %s" % (name, err.message))
+            out.warn("%s: %s" % (name, err.message), stream=sys.stderr)
             failed += 1
             continue
         kind = info.get("kind", "skill")
@@ -1057,7 +1059,19 @@ def cmd_sync(argv: list[str]) -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the --prune confirmation prompts")
+    ap.add_argument("--rebuild-lock", action="store_true",
+                    help="set an unreadable lock file aside (its bytes are "
+                         "kept) and re-record the store into a new one")
     args = ap.parse_args(argv)
+    if args.rebuild_lock:
+        if args.diff:
+            ap.error("--rebuild-lock replaces the lock file; drop --diff")
+        # The way back from a corrupt lock with no history to roll back to:
+        # a missing lock over a populated store is what sync re-records.
+        backup = lockfile.set_aside()
+        out.info("set the unreadable lock file aside — its bytes are in %s; "
+                 "re-recording the store" % _tilde(backup),
+                 stream=sys.stderr if args.json else None, wrap=True)
     plan = store.sync_plan()
     # A checkout can be missing skills its project lock records — that is the
     # normal state right after `git clone` — so sync repairs the repo too.
@@ -1079,8 +1093,9 @@ def cmd_sync(argv: list[str]) -> int:
                              indent=2))
             return 0
         if lock_bad:
-            out.warn("the lock file %s, so sync will record nothing — restore "
-                     "it with `boost replay`" % lockfile.fault(integ), wrap=True)
+            out.warn("the lock file %s, so sync will record nothing — %s"
+                     % (lockfile.fault(integ), lockfile.remedy(integ)),
+                     wrap=True)
         # What a run writes into the lock with no plan bucket of its own: an
         # older lock's schema stamp and the hashes rows were installed
         # without. Missing here, `--diff` said "everything in sync" over the
@@ -1255,13 +1270,13 @@ def cmd_sync(argv: list[str]) -> int:
     for line in kept:
         out.warn(line, wrap=True)
     if lock_bad:
-        out.warn("the lock file %s, so sync records nothing%s — restore it "
-                 "with `boost replay`"
+        out.warn("the lock file %s, so sync records nothing%s — %s"
                  % (lockfile.fault(integ),
                     " and leaves %s as %s: %s"
                     % (_plural(len(unrecorded), "store dir"),
                        "it is" if len(unrecorded) == 1 else "they are",
-                       ", ".join(unrecorded)) if unrecorded else ""), wrap=True)
+                       ", ".join(unrecorded)) if unrecorded else "",
+                    lockfile.remedy(integ)), wrap=True)
     for name in pruned:
         out.ok("pruned %s" % _tilde(store.skill_store_dir(name)))
     for line in store.older_copy_lines(plan["older_copies"]):
@@ -1403,13 +1418,14 @@ def _confirm_risky_update(name: str, entry: dict, base=None,
     return _show_and_confirm(name, diff, name)
 
 
-def _materialized_sides(kind: str, name: str, lk: dict, new_raw: str):
-    """``(installed_text, incoming_text)`` for a rule/workflow, same shape both.
+def _materialized_sides(kind: str, name: str, lk: dict,
+                        new_raw: str) -> list[tuple[str, str, str]]:
+    """``(label, installed_text, incoming_text)`` per materialization.
 
     Rules and workflows keep no copy of the source they were installed from —
-    only the artifact they were materialized into. That artifact is the honest
-    left-hand side anyway: it is the text the agent is loading *right now*, and
-    a diff against it is the diff the user actually cares about.
+    only the artifacts they were materialized into. Those are the honest
+    left-hand side anyway: they are the text the agents are loading *right
+    now*, and a diff against them is the diff the user actually cares about.
 
     Each recorded materialization says how it was written, so the incoming half
     is reconstructed the same way: a verbatim rule drop compares raw to raw, a
@@ -1417,27 +1433,44 @@ def _materialized_sides(kind: str, name: str, lk: dict, new_raw: str):
     workflow compares the rendered file to the same render of the new source —
     which keeps Gemini's TOML comparable with Gemini's TOML.
 
-    Falls back to ``("", new_raw)`` when nothing can be read back, so an
-    unreadable artifact scans the whole incoming file rather than nothing.
+    *Every* readable one, not the first. Stopping at the first returned the
+    CLAUDE.md block, which carries no frontmatter — so a change to the
+    frontmatter alone (an injected ``description``, ``alwaysApply: true``)
+    was never diffed, and was then copied verbatim into Cursor's and
+    Windsurf's rules. Copies with the same before and after (two verbatim
+    drops) are listed once, under the first path.
+
+    A materialization that cannot be read back (deleted, unreadable, its
+    CLAUDE.md block gone) is diffed from empty, so whatever the update writes
+    there is scanned whole; with none recorded at all it falls back to
+    ``[(name, "", new_raw)]``.
     """
     from ..core import rules, workflows
+    sides: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
     for m in lk.get("materializations") or []:
+        path = m.get("path", "")
         try:
-            current = Path(m.get("path", "")).read_text(encoding="utf-8")
+            current = Path(path).read_text(encoding="utf-8",
+                                           errors="replace")
         except OSError:
-            continue
-        if kind == "rule":
-            if m.get("mode") != rules.MODE_CLAUDE:
-                return current, new_raw
-            old = rules.read_block(current, name)
-            if old is None:
-                continue
+            # Gone or unreadable, it is still rewritten by the update: scan
+            # what is about to land there against nothing, never skip it.
+            current = ""
+        if kind == "rule" and m.get("mode") == rules.MODE_CLAUDE:
+            old = rules.read_block(current, name) or ""
             meta, body = frontmatter.parse(new_raw)
-            return old, rules.render_claude_body(
-                str(meta.get("name") or name), body)
-        return current, workflows.render(
-            m.get("agent"), m.get("slot", ""), name, new_raw)
-    return "", new_raw
+            pair = (old, rules.render_claude_body(
+                str(meta.get("name") or name), body))
+        elif kind == "rule":
+            pair = (current, new_raw)
+        else:
+            pair = (current, workflows.render(
+                m.get("agent"), m.get("slot", ""), name, new_raw))
+        if pair not in seen:
+            seen.add(pair)
+            sides.append((_tilde(path), *pair))
+    return sides or [(name, "", new_raw)]
 
 
 def _confirm_risky_materialized(kind: str, name: str, lk: dict,
@@ -1448,10 +1481,12 @@ def _confirm_risky_materialized(kind: str, name: str, lk: dict,
     grew a shell command was gated, while a rule — which is merged into the
     standing instructions the agent reads every session, and which this repo's
     own notes call "more invasive than a skill, not less" — was refreshed in
-    place with one line of output and no diff.
+    place with one line of output and no diff. Every materialization is
+    diffed, so the reasons cover whatever reaches any agent.
     """
-    old, new = _materialized_sides(kind, name, lk, new_raw)
-    diff = updatediff.diff_tree({name: old}, {name: new})
+    sides = _materialized_sides(kind, name, lk, new_raw)
+    diff = updatediff.diff_tree({label: old for label, old, _ in sides},
+                                {label: new for label, _, new in sides})
     if not diff.risky:
         return True
     return _show_and_confirm("%s %s" % (kind, name), diff, name)
@@ -1630,7 +1665,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                 scope=lk.get("scope", "user"), base=lk.get("base"),
                 via="update"))
         except BoostError as err:
-            out.warn("%s: %s" % (name, err.message))
+            out.warn("%s: %s" % (name, err.message), stream=sys.stderr)
             held += 1
             continue
         out.ok(_refresh_line("%s %s" % (kind, name), old_v,
@@ -1814,8 +1849,16 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     if _source_changed_hold(label, name, lk, tapname):
         return 0, 1, 0, 0
     pool = index.get(catalog.split_name(name)[1], [])
-    matches = [e for e in catalog.find(name, entries=pool)
-               if e["tap"] == tapname]
+    in_tap = [e for e in catalog.find(name, entries=pool)
+              if e["tap"] == tapname]
+    # A skill row refreshes only from a skill: the name alone also matched a
+    # same-named workflow, which was installed beside the untouched skill.
+    matches = [e for e in in_tap if e.get("kind", "skill") == "skill"]
+    if in_tap and not matches:
+        out.warn(staleness.kind_changed_message(
+            label, name, tapname, (e.get("kind", "skill") for e in in_tap)),
+            wrap=True)
+        return 0, 0, 0, 0
     if not matches:
         out.warn("%s is no longer in tap %s — leaving as-is" % (label, tapname))
         return 0, 0, 0, 0
@@ -2057,7 +2100,7 @@ def _reinstall_held(kind: str, name: str, lk: dict, **source) -> bool:
         return False
     label = name if kind == "skill" else "%s %s" % (kind, name)
     out.warn("%s: not reinstalled — %s; `boost unpin %s` first to take the "
-             "new content" % (label, why, name), wrap=True)
+             "new content" % (label, why, name), wrap=True, stream=sys.stderr)
     return True
 
 
@@ -2066,7 +2109,7 @@ def _reinstall_project_skill(name: str, lk: dict, pbase: Path) -> bool:
     matches = [e for e in catalog.find(name)
                if e["tap"] == lk.get("tap") and e.get("kind", "skill") == "skill"]
     if not matches:
-        out.warn(store.source_missing_message(name, name, lk), wrap=True)
+        out.warn(store.source_missing_message(name, name, lk), wrap=True, stream=sys.stderr)
         return False
     entry, warning = catalog.select_lock_source(matches, lk)
     entry = cast(dict, entry)                 # matches is non-empty above
@@ -2080,7 +2123,7 @@ def _reinstall_project_skill(name: str, lk: dict, pbase: Path) -> bool:
     except BoostError as err:
         out.warn("%s: %s%s" % (name, err.message,
                                " — %s" % err.hint if err.hint else ""),
-                 wrap=True)
+                 wrap=True, stream=sys.stderr)
         return False
     out.ok("reinstalled %s v%s (this repo)"
            % (name, out.plain(entry.get("version", "0.0.0"))))
@@ -2145,7 +2188,7 @@ def cmd_reinstall(argv: list[str]) -> int:
                 if len(args.names) == 1:
                     raise BoostError("%s is not installed%s" % (name, where),
                                     hint="see what is with `boost list`")
-                out.warn("%s is not installed%s — skipped" % (name, where))
+                out.warn("%s is not installed%s — skipped" % (name, where), stream=sys.stderr)
                 failed += 1
                 continue
             items.append((found[0], name, found[1]))
@@ -2162,7 +2205,7 @@ def cmd_reinstall(argv: list[str]) -> int:
                        and e.get("kind", "skill") == kind]
             if not matches:
                 out.warn(store.source_missing_message(
-                    "%s %s" % (kind, name), name, lk), wrap=True)
+                    "%s %s" % (kind, name), name, lk), wrap=True, stream=sys.stderr)
                 failed += 1
                 continue
             entry, warning = catalog.select_lock_source(matches, lk)
@@ -2181,7 +2224,7 @@ def cmd_reinstall(argv: list[str]) -> int:
                 # useful with the `boost uninstall` that clears it.
                 out.warn("%s: %s%s" % (name, err.message,
                                        " — %s" % err.hint if err.hint else ""),
-                         wrap=True)
+                         wrap=True, stream=sys.stderr)
                 failed += 1
                 continue
             # Success first, then what it skipped: the same order as every
@@ -2213,7 +2256,7 @@ def cmd_reinstall(argv: list[str]) -> int:
             url = str(lk.get("source_url") or "")
             if src is None and not url:
                 out.warn("%s: local source %s is gone — skipped"
-                         % (name, _tilde(str(lk.get("source_dir") or ""))))
+                         % (name, _tilde(str(lk.get("source_dir") or ""))), stream=sys.stderr)
                 failed += 1
                 continue
             if src is not None and _reinstall_held("skill", name, lk, src=src):
@@ -2236,17 +2279,25 @@ def cmd_reinstall(argv: list[str]) -> int:
                     how = ("from %s at %s" % (url, commit[:7]) if commit
                            else "from %s" % url)
             except BoostError as err:
-                out.warn("%s: %s" % (name, err.message))
+                out.warn("%s: %s" % (name, err.message), stream=sys.stderr)
                 failed += 1
                 continue
+            store.keep_sideline(name, lk, res)
             out.ok("reinstalled %s (%s)" % (name, how))
             _warn_unwritable(res)
             done += 1
             done_kinds.add("skill")
             continue
-        matches = [e for e in catalog.find(name) if e["tap"] == lk.get("tap")]
+        in_tap = [e for e in catalog.find(name) if e["tap"] == lk.get("tap")]
+        matches = [e for e in in_tap if e.get("kind", "skill") == "skill"]
+        if in_tap and not matches:
+            out.warn(staleness.kind_changed_message(
+                name, name, str(lk.get("tap")),
+                (e.get("kind", "skill") for e in in_tap)), wrap=True)
+            failed += 1
+            continue
         if not matches:
-            out.warn(store.source_missing_message(name, name, lk), wrap=True)
+            out.warn(store.source_missing_message(name, name, lk), wrap=True, stream=sys.stderr)
             failed += 1
             continue
         entry, warning = catalog.select_lock_source(matches, lk)
@@ -2261,7 +2312,7 @@ def cmd_reinstall(argv: list[str]) -> int:
         except BoostError as err:
             out.warn("%s: %s%s" % (name, err.message,
                                    " — %s" % err.hint if err.hint else ""),
-                     wrap=True)
+                     wrap=True, stream=sys.stderr)
             failed += 1
             continue
         out.ok("reinstalled %s v%s"
@@ -2299,14 +2350,15 @@ def cmd_bundle(argv: list[str]) -> int:
                     help="Boostfile (dump: default stdout; "
                          "install: default ./Boostfile, '-' = stdin)")
     ap.add_argument("--dry-run", action="store_true",
-                    help="show what install would do, touching nothing")
+                    help="show what install would do, or print what dump "
+                         "would write, touching nothing")
     args = ap.parse_args(argv)
     if args.action == "dump":
-        return _bundle_dump(args.file)
+        return _bundle_dump(args.file, dry_run=args.dry_run)
     return _bundle_install(args.file, args.dry_run)
 
 
-def _bundle_dump(file: str | None) -> int:
+def _bundle_dump(file: str | None, dry_run: bool = False) -> int:
     _pbase, project = store.project_skills()
     text = _boostfile_text(lockfile.installed(), project=project)
     lines = text.splitlines()
@@ -2320,12 +2372,17 @@ def _bundle_dump(file: str | None) -> int:
     others = _others_installed()
     if others:
         notices.append("%s not captured — Boostfiles carry skills only" % others)
-    if not file or file == "-":
+    if not file or file == "-" or dry_run:
         print(text, end="")
         # stdout IS the Boostfile here; the notices go to stderr so
         # `boost bundle dump > Boostfile` stays a parseable artifact.
         for msg in notices:
             out.warn(msg, stream=sys.stderr)
+        if dry_run and file and file != "-":
+            # --dry-run promises to touch nothing: the FILE a user names may
+            # be a hand-written Boostfile, and overwriting it was the bug.
+            out.info("dry run — %s not written" % _tilde(paths.expand(file)),
+                     stream=sys.stderr)
         return 0
     dest = paths.expand(file)
     try:
@@ -2894,15 +2951,21 @@ def cmd_pin(argv: list[str]) -> int:
                     help="installed skill, rule or workflow")
     ap.add_argument("--commit", action="store_true",
                     help="also freeze the exact source commit (integrity pin)")
+    _add_pin_scope(ap, "pin")
     args = ap.parse_args(argv)
-    args.name = store.installed_name(args.name)
-    if (args.commit and lockfile.find_any(args.name) is None
-            and _project_row(args.name) is not None):
+    args.name = store.installed_name(args.name, args.scope)
+    row = _pin_target(args.name, args.scope, "pin")
+    if args.commit and row is not None:
         # `verify` never grades a project row's commit pin, so writing one
         # would promise a check that does not exist.
         raise BoostError("%s is installed at project scope — --commit applies "
                          "to user-scope installs" % args.name,
-                         hint="`boost pin %s` holds it at its version" % args.name)
+                         # --local: unscoped is refused when a user copy
+                         # shares the name, so the bare form could not run.
+                         hint="`boost pin %s --local` holds it at its version"
+                              % args.name)
+    if row is not None:
+        return _set_project_pin(row, True)
     rc = _set_pin(args.name, True)
     # Read after the pin: `set_commit_pin` takes the commit from this row.
     found = lockfile.find_any(args.name)
@@ -2920,6 +2983,7 @@ def cmd_unpin(argv: list[str]) -> int:
                                  description="Allow a pinned skill, rule or workflow to update again")
     ap.add_argument("name", metavar="NAME",
                     help="pinned skill, rule or workflow")
+    _add_pin_scope(ap, "unpin")
     args = ap.parse_args(argv)
     # Releasing the version pin releases the commit pin with it — a commit pin
     # only makes sense while the skill is otherwise frozen. The commit pin is
@@ -2927,7 +2991,10 @@ def cmd_unpin(argv: list[str]) -> int:
     # trailer prints after — it qualifies `_set_pin`'s own "unpinned" line, so
     # printing it first would leave the trailer describing a line that has
     # not appeared yet (mirrors `cmd_pin`'s ok-line-then-trailer order).
-    args.name = store.installed_name(args.name)
+    args.name = store.installed_name(args.name, args.scope)
+    row = _pin_target(args.name, args.scope, "unpin")
+    if row is not None:
+        return _set_project_pin(row, False)
     found = lockfile.find_any(args.name)
     cleared_commit_pin = bool(
         found and integrity.clear_commit_pin(args.name, found[1], kind=found[0]))
@@ -2935,6 +3002,50 @@ def cmd_unpin(argv: list[str]) -> int:
     if cleared_commit_pin:
         out.dim("  released the commit pin too", wrap=True)
     return rc
+
+
+def _add_pin_scope(ap, verb: str) -> None:
+    """``pin``/``unpin``'s ``--scope``/``--local``/``--global``, as install's."""
+    cliparse.add_scope_flags(
+        ap, scope_help="%s the copy in your user config or in this repo "
+                       "(needed when both hold the name)" % verb,
+        local_help="the copy installed in this repo (= --scope project)",
+        global_help="the copy in your user config (= --scope user)")
+
+
+def _pin_target(name: str, scope: str | None,
+                verb: str) -> integrity.InstalledSkill | None:
+    """The project row ``pin``/``unpin`` acts on, or None for the user lock.
+
+    Unscoped, a name only this repo holds is the project row, as before. A
+    name both scopes hold is refused: acting on the user row alone pinned it
+    while `boost update` moved the repo's copy, with nothing said about it.
+    """
+    base, project = integrity.project_skills()
+    prow = project.get(name)
+    if scope == scopes.SCOPE_PROJECT:
+        if base is None:
+            raise BoostError("not in a project — --local %ss what this repo "
+                             "has installed" % verb,
+                             hint="cd into the repo, or drop --local")
+        if prow is None:
+            raise BoostError("%s is not installed in this repo" % name,
+                             hint="see what is with `boost list`")
+        return integrity.InstalledSkill(
+            name, prow, scopes.SCOPE_PROJECT, base, None)
+    if scope == scopes.SCOPE_USER:
+        if lockfile.find_any(name) is None:
+            raise BoostError("%s is not installed in your user config" % name,
+                             hint="see what is with `boost list`")
+        return None
+    if prow is None:
+        return None
+    if lockfile.find_any(name) is not None:
+        raise BoostError("%s is installed in your user config and in this "
+                         "repo — say which to %s" % (name, verb),
+                         hint="`boost %s %s --global` or `boost %s %s --local`"
+                              % (verb, name, verb, name))
+    return integrity.InstalledSkill(name, prow, scopes.SCOPE_PROJECT, base, None)
 
 
 def _project_row(name: str) -> integrity.InstalledSkill | None:
@@ -2970,11 +3081,9 @@ def _set_pin(name: str, pinned: bool) -> int:
     # update loops (skills at cmd_update, rules/workflows at
     # _update_materialized) each honour it. A skill installed `--local` lives
     # in the project lock instead, which the same update loop also reads.
+    # A project row never reaches here: `_pin_target` routes it first.
     found = lockfile.find_any(name)
     if not found:
-        row = _project_row(name)
-        if row is not None:
-            return _set_project_pin(row, pinned)
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     kind, entry = found
@@ -3027,8 +3136,8 @@ def cmd_snapshot(argv: list[str]) -> int:
     if args.action == "list":
         return _snapshot_list(args.json)
     if not args.arg:
-        raise BoostError("restore needs a snapshot id",
-                        hint="see `boost snapshot list`")
+        ap.error("restore needs a snapshot id",
+                 hint="see `boost snapshot list`")
     return _snapshot_restore(args.arg, args.yes)
 
 
@@ -3040,10 +3149,13 @@ def _snapshot_save(label: str | None) -> int:
         serial += 1
         snap_id = "%s-%d" % (base, serial)
     tar_path = paths.snapshots_dir() / (snap_id + ".tar.gz")
-    arch = snapshot.archive(paths.store_dir(), tar_path)
+    # With the held copies: their lock rows are in the store, they are not.
+    arch = snapshot.archive(paths.store_dir(), tar_path, store.held_copies())
     skill_count = len(lockfile.installed())
+    # The home the lock's rule/workflow paths are under, so a restore on
+    # another machine can move them onto its own (lockfile.rehome).
     manifest = {"id": snap_id, "label": label or "", "created": util.now_iso(),
-                "skills": skill_count}
+                "skills": skill_count, "home": str(paths.home())}
     (paths.snapshots_dir() / (snap_id + ".json")).write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     journal.log("snapshot", snap_id, label=label)
@@ -3138,8 +3250,17 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
     pre_skills = set(lockfile.installed())
     # Extracted into a staging dir and swapped in only once that succeeded,
     # so a corrupt or refused snapshot can never leave an emptied store.
-    snapshot.restore(tar_path, root, snap_id)
+    snapshot.restore(tar_path, root, snap_id, paths.held_skills_dir(),
+                     rehome=store.snapshot_rehomer(snap_id, tar_path))
     kept = store.restore_preserve_newer_lock_sections(pre_rules, pre_workflows)
+    # A snapshot saved before held copies were archived: no copy to hold, so
+    # the restore's sync below reinstalls them instead.
+    lost = store.unhold_lost_copies()
+    if lost:
+        out.warn("this snapshot has no copy of sidelined %s — reinstalling "
+                 "from %s tap" % (", ".join(lost),
+                                  "its" if len(lost) == 1 else "their"),
+                 wrap=True)
     # Before anything links: a skill blocklisted since the snapshot was saved
     # is declined here, as `replay rollback` and `install` decline it.
     declined = store.decline_restored_by_policy(pre_skills)

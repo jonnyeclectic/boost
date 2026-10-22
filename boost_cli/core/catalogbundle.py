@@ -171,7 +171,7 @@ def read_manifest(src: Path) -> dict:
             handle = tar.extractfile(member)
             if handle is None:
                 raise BoostError("bundle manifest is unreadable: %s" % src)
-            return json.loads(handle.read().decode("utf-8"))
+            manifest = json.loads(handle.read().decode("utf-8"))
     except KeyError as exc:
         raise BoostError(
             "%s is not a boost catalogue bundle (no %s)" % (src, MANIFEST_NAME),
@@ -180,6 +180,45 @@ def read_manifest(src: Path) -> dict:
         raise BoostError("cannot read bundle %s: %s" % (src, exc)) from exc
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise BoostError("bundle manifest is malformed: %s" % exc) from exc
+    return _validate_manifest(manifest)
+
+
+def _malformed(why: str) -> BoostError:
+    return BoostError("bundle manifest is malformed: %s" % why,
+                      hint="re-export it with `boost catalog --export <file>`")
+
+
+def _validate_manifest(manifest: object) -> dict:
+    """``manifest`` if its shape is one import and --show can trust, or raise.
+
+    The manifest is as untrusted as the archive. Checked once, before anything
+    is written: a ``taps`` row that was a string used to crash the config
+    merge at rc 70 *after* its catalogue file had landed in the cache, leaving
+    a file no tap owned.
+    """
+    if not isinstance(manifest, dict):
+        raise _malformed("expected an object, got %s" % type(manifest).__name__)
+    taps = manifest.get("taps")
+    if taps is not None and not isinstance(taps, list):
+        raise _malformed("`taps` must be a list, got %s" % type(taps).__name__)
+    for i, row in enumerate(taps or []):
+        if not isinstance(row, dict):
+            raise _malformed("taps[%d] must be an object, got %s"
+                             % (i, type(row).__name__))
+        name = row.get("name")
+        if not isinstance(name, str) or not name:
+            raise _malformed("taps[%d] needs a non-empty string `name`" % i)
+        if not isinstance(row.get("url", ""), str):
+            raise _malformed("taps[%d].url must be a string" % i)
+        if not isinstance(row.get("commit") or "", str):
+            raise _malformed("taps[%d].commit must be a string" % i)
+    entries = manifest.get("entries")
+    if entries is not None and (not isinstance(entries, int)
+                                or isinstance(entries, bool)):
+        raise _malformed("`entries` must be an integer")
+    if not isinstance(manifest.get("generated", ""), str):
+        raise _malformed("`generated` must be a string")
+    return manifest
 
 
 def manifest_files(manifest: dict) -> set[str]:

@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import sys
 from contextlib import suppress
 from pathlib import Path
 from typing import cast
@@ -16,6 +16,7 @@ from ..core import (
     complete,
     config,
     gitutil,
+    installedview,
     integrity,
     journal,
     lockfile,
@@ -120,14 +121,16 @@ def _tap_all(urls: list[str], jobs: int | None,
             out.info(out.role("%s already tapped" % name, "muted"))
             continue
         if not res.get("ok"):
-            out.warn("could not tap %s: %s" % (name, res.get("error", "")))
+            out.warn("could not tap %s: %s" % (name, res.get("error", "")),
+                     stream=sys.stderr)
             rc = 1
             continue
         tap = res["tap"]
         try:
             entries = catalog.rebuild_tap(tap)
         except BoostError as err:
-            out.warn("could not index %s: %s" % (name, err.message))
+            out.warn("could not index %s: %s" % (name, err.message),
+                     stream=sys.stderr)
             rc = 1
             continue
         journal.log("tap", tap.name)
@@ -186,6 +189,18 @@ def cmd_tap(argv) -> int:
                         "%d)" % (registry.DEFAULT_TAP_JOBS,
                                  registry.MAX_TAP_JOBS))
     args = p.parse_args(argv)
+    if not args.catalog:
+        # Each of these only narrows --catalog. Ignoring them elsewhere let
+        # `tap --limit 2 --defaults` clone every default registry.
+        stray = [flag for flag, val in (("--type", args.type),
+                                        ("--category", args.category),
+                                        ("--limit", args.limit),
+                                        ("--include-lists", args.include_lists))
+                 if val]
+        if stray:
+            p.error("%s only filter%s --catalog; pass --catalog or drop %s"
+                    % ("/".join(stray), "" if len(stray) > 1 else "s",
+                       "them" if len(stray) > 1 else "it"))
     if args.at and len(args.spec) != 1:
         p.error("--at pins one registry, so it needs exactly one SPEC")
     if not args.spec and not args.defaults and not args.catalog:
@@ -282,7 +297,8 @@ def _untap_one(name: str, force: bool) -> int:
     try:
         tap = registry.get(name)
     except BoostError as exc:
-        out.warn("could not untap %s: %s" % (name, exc.message))
+        out.warn("could not untap %s: %s" % (name, exc.message),
+                 stream=sys.stderr)
         return 1
     labels = [n if kind == "skill" else "%s (%s)" % (n, kind)
               for kind, n in registry.dependents(tap.name)]
@@ -526,7 +542,10 @@ def cmd_outdated(argv) -> int:
                             "tap": tap_name, "pinned": bool(lk.get("pinned")),
                             "scope": scope})
             continue
-        matches = [e for e in catalog.find(name, entries=entries) if e["tap"] == tap_name]
+        # Skills only: a same-named workflow upstream is not this skill's
+        # update, and listing it as one sent `boost update` to "upgrade" it.
+        matches = [e for e in catalog.find(name, entries=entries)
+                   if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
         if not matches:
             # The tap is untapped, or dropped this entry entirely — same
             # condition the rule/workflow loop below reports honestly, so a
@@ -601,27 +620,17 @@ def cmd_outdated(argv) -> int:
                                        "latest_commit": None})
                 continue
             tap = tap_memo[tap_name]
-            try:
-                if tap is None:
-                    raise OSError("tap %s is not configured" % tap_name)
-                raw = (tap.path / lk.get("source_file", "")
-                       ).read_text(encoding="utf-8", errors="replace")
-            except OSError:
+            if tap is None:
                 results.append(base | {"latest": None,
                                        "reason": staleness.SOURCE_MISSING,
                                        "latest_commit": None})
                 continue
-            if hashlib.sha256(raw.encode("utf-8")).hexdigest() == lk.get("sha256"):
+            # The one comparison `boost info` makes too, so the two cannot
+            # disagree about whether a rule or workflow has an update.
+            reason, r_latest = installedview.update_of(
+                kind, lk, tap, catalog.find(name, entries=entries))
+            if reason is None:
                 continue
-            matches = [e for e in catalog.find(name, entries=entries)
-                       if e["tap"] == tap_name
-                       and e.get("kind", "skill") == kind]
-            entry, _warning = catalog.select_lock_source(matches, lk)
-            r_latest: str | None = (str(entry.get("version"))
-                                    if entry and entry.get("version") else None)
-            reason = (staleness.VERSION
-                      if r_latest and util.semver_gt(r_latest, installed_v)
-                      else staleness.CONTENT)
             # Rules/workflows carry no tap-HEAD commit here (only a source-file
             # sha comparison), so `latest_commit` stays unset — `_outdated_display`
             # falls back to the same "(content changed)" wording skills used to

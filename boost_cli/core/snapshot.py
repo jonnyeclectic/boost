@@ -15,23 +15,52 @@ that keep a snapshot honest:
   archive is extracted into a staging directory next to the store first; only
   when that has fully succeeded are the store's children swapped out, and a
   failure part-way through the swap puts the old children back.
+* **A held copy rides along.** A quarantined or sidelined skill's copy sits
+  outside the store (``paths.held_skills_dir``), while its lock row — which
+  says ``held_at`` — is inside it. Archiving the store alone restored rows
+  pointing at copies that existed nowhere, so a save during `boost focus`
+  lost every sidelined skill's content. Held copies are archived under
+  :data:`HELD_ARC` and restored to the held dir, never into the store.
+* **An interrupt is a failure like any other.** The swap rolls back on any
+  exception, Ctrl-C included, and the dir the old children are parked in is
+  only deleted once the swap has succeeded or they are all back: a parked
+  store left by a kill is reported by `boost doctor`, never removed unasked.
+* **The archived lock is checked before it replaces the live one.** A lock
+  that does not parse, or is another schema, emptied every install; one
+  written under another ``$HOME`` is rehomed (:func:`lockfile.rehome`).
 """
 from __future__ import annotations
 
 import contextlib
 import json
 import os
+import shutil
 import tarfile
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..errors import BoostError
-from . import util
+from . import lockfile, util
 
 UNTOUCHED_HINT = ("the store was left untouched — "
                   "see `boost snapshot list` for other snapshots")
 
+
+#: The archive directory held copies go under: a dot name nothing boost
+#: writes into the store uses, and restore takes it out of the staging dir
+#: before anything is swapped into the store. A store child of this name is
+#: refused at save, so it can never be mistaken for the held copies.
+HELD_ARC = ".boost-held"
+
+#: The ``mkdtemp`` prefixes :func:`restore` makes beside the store, longest
+#: first: staging (the archive), the parked previous children, the held
+#: copies. A kill leaves them; ``store.stale_temps`` names them.
+PARKED_PREFIX = ".boost-restore-old-"
+HELD_PREFIX = ".boost-restore-held-"
+STAGING_PREFIX = ".boost-restore-"
+RESTORE_PREFIXES = (PARKED_PREFIX, HELD_PREFIX, STAGING_PREFIX)
 
 TAR_SUFFIX = ".tar.gz"
 META_SUFFIX = ".json"
@@ -105,14 +134,19 @@ class ArchiveResult:
 
     dereferenced: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    #: Held copies archived beside the store, by skill name.
+    held: list[str] = field(default_factory=list)
 
 
-def archive(root: Path, tar_path: Path) -> ArchiveResult:
+def archive(root: Path, tar_path: Path,
+            held: dict[str, Path] | None = None) -> ArchiveResult:
     """Write every child of ``root`` into a gzip tarball at ``tar_path``.
 
     A symlinked child is archived as its target's content (a restore brings it
-    back as a real copy); a dangling one is skipped. Raises BoostError, and
-    leaves no archive behind, when a member would be refused on restore.
+    back as a real copy); a dangling one is skipped. ``held`` maps a skill name
+    to its held copy, archived under :data:`HELD_ARC`; one not on disk is
+    skipped. Raises BoostError, and leaves no archive behind, when a member
+    would be refused on restore.
     """
     res = ArchiveResult()
     # Checked against an empty directory — what restore extracts into — not
@@ -134,6 +168,11 @@ def archive(root: Path, tar_path: Path) -> ArchiveResult:
     try:
         with tarfile.open(str(tar_path), "w:gz") as tf:
             for child in sorted(root.iterdir()):
+                if child.name == HELD_ARC:
+                    raise BoostError(
+                        "cannot snapshot %s: the name is reserved for held "
+                        "copies" % child.name,
+                        hint="move it out of the store, then save again")
                 src = child
                 if child.is_symlink():
                     if not child.exists():
@@ -142,6 +181,11 @@ def archive(root: Path, tar_path: Path) -> ArchiveResult:
                     src = child.resolve()
                     res.dereferenced.append(child.name)
                 tf.add(str(src), arcname=child.name, filter=_check)
+            for name, hdir in sorted((held or {}).items()):
+                if hdir.is_dir() and not hdir.is_symlink():
+                    tf.add(str(hdir), arcname="%s/%s" % (HELD_ARC, name),
+                           filter=_check)
+                    res.held.append(name)
     except BaseException:
         with contextlib.suppress(OSError):
             tar_path.unlink()
@@ -156,38 +200,118 @@ def _swap_in(staging: Path, root: Path, scratch: Path) -> None:
 
     ``root`` itself is kept (agents' symlinks path into it, and it may be a
     symlink); its old children are parked in ``scratch`` until every new one
-    is in place, and moved back if any move fails.
+    is in place, and moved back if anything — a failed move, or Ctrl-C —
+    stops the swap first. Only an OSError becomes a BoostError; anything
+    else is re-raised once the old children are back.
     """
     old = sorted(root.iterdir())
-    moved_out: list[Path] = []
-    moved_in: list[Path] = []
+    new = sorted(c.name for c in staging.iterdir())
     try:
         for child in old:
             os.replace(child, scratch / child.name)
-            moved_out.append(child)
-        for child in sorted(staging.iterdir()):
-            target = root / child.name
-            os.replace(child, target)
-            moved_in.append(target)
-    except OSError as e:
-        for p in moved_in:
-            with contextlib.suppress(OSError):
-                if p.is_dir() and not p.is_symlink():
-                    util.rmtree(p)
-                else:
-                    p.unlink()
-        for child in moved_out:
-            with contextlib.suppress(OSError):
-                os.replace(scratch / child.name, child)
-        raise BoostError("restore failed while swapping the store: %s" % e,
-                         hint="the previous store contents were put back") from e
+        for name in new:
+            os.replace(staging / name, root / name)
+    except BaseException as e:
+        _roll_back(root, staging, scratch, {c.name for c in old}, new)
+        if isinstance(e, OSError):
+            raise BoostError("restore failed while swapping the store: %s" % e,
+                             hint="the previous store contents were put back") from e
+        raise
 
 
-def restore(tar_path: Path, root: Path, snap_id: str) -> None:
+def _roll_back(root: Path, staging: Path, scratch: Path, old: set[str],
+               new: list[str]) -> None:
+    """Undo a part-done :func:`_swap_in`, reading what moved off the disk.
+
+    Every old child moves out before any new one moves in, so a new name in
+    ``root`` whose old namesake is parked — or that ``root`` never had — came
+    from the archive and goes back to ``staging``; then whatever is parked
+    returns. Read from the disk, not a list of finished moves: an interrupt
+    between a rename and its bookkeeping would leave a child no list names.
+    """
+    parked = {c.name for c in scratch.iterdir()}
+    for name in new:
+        target = root / name
+        if (name in parked or name not in old) and os.path.lexists(target):
+            with contextlib.suppress(OSError):
+                os.replace(target, staging / name)
+    for name in sorted(parked):
+        with contextlib.suppress(OSError):
+            os.replace(scratch / name, root / name)
+
+
+def _put_held(src: Path, held_root: Path | None) -> list[str]:
+    """Move each held copy under ``src`` into ``held_root``, replacing any
+    copy already there; the names moved. Without ``held_root``, none."""
+    if held_root is None or not src.is_dir():
+        return []
+    moved = []
+    held_root.mkdir(parents=True, exist_ok=True)
+    for child in sorted(src.iterdir()):
+        target = held_root / child.name
+        if os.path.lexists(target):
+            util.remove_path(target)
+        shutil.move(str(child), str(target))
+        moved.append(child.name)
+    return moved
+
+
+#: The lock file's name inside the store (``paths.lockfile_path``).
+LOCK_NAME = ".skill-lock.json"
+
+
+def check_lock(staging: Path, snap_id: str) -> None:
+    """Refuse an extracted archive whose lock file would empty the store.
+
+    A lock that does not parse, has sections that are not maps, or is a
+    schema this boost does not read replaced a good lock, and every install
+    vanished from it: links swept, the restore reported success. So did an
+    archive holding store dirs and no lock at all. An archive with nothing
+    but held copies, or nothing, is a snapshot of an empty store.
+    """
+    lock = staging / LOCK_NAME
+    integ = lockfile.check(lock)
+    if integ.ok:
+        return
+    if integ.problem == "missing":
+        if not any(c.name != HELD_ARC for c in staging.iterdir()):
+            return
+        why = "holds skills but no lock file to say which are installed"
+    elif integ.problem == "schema":
+        why = "has a lock file in schema %r, which this boost does not read" % (
+            integ.version,)
+    else:
+        why = "has a corrupt lock file"
+    raise BoostError("snapshot %s cannot be restored: it %s" % (snap_id, why),
+                     hint=UNTOUCHED_HINT)
+
+
+def _vet_lock(staging: Path, snap_id: str,
+              rehome: Callable[[dict], bool] | None) -> None:
+    """:func:`check_lock`, then ``rehome`` over the staged lock; rewritten in
+    staging when ``rehome`` says it changed something."""
+    check_lock(staging, snap_id)
+    lock = staging / LOCK_NAME
+    if rehome is None or not lock.exists():
+        return
+    data = json.loads(lock.read_text(encoding="utf-8-sig"))
+    if rehome(data):
+        util.atomic_write_text(lock, json.dumps(data, indent=2) + "\n")
+
+
+def restore(tar_path: Path, root: Path, snap_id: str,
+            held_root: Path | None = None,
+            rehome: Callable[[dict], bool] | None = None) -> list[str]:
     """Replace the contents of ``root`` with the archive at ``tar_path``.
 
-    Raises BoostError — with ``root`` exactly as it was — when the archive
-    cannot be opened, is corrupt, or holds an entry the ``data`` filter refuses.
+    Held copies in the archive go to ``held_root`` once the store swap has
+    succeeded, never into ``root``; returns their names. ``rehome`` is given
+    the archived lock, parsed, before the swap: it may rewrite it in place
+    (returning True to have it saved) or raise BoostError to refuse.
+
+    Raises — with ``root`` exactly as it was — when the archive cannot be
+    opened, is corrupt, holds an entry the ``data`` filter refuses or a lock
+    :func:`check_lock` refuses, or the swap is interrupted.
     """
     try:
         tf = tarfile.open(str(tar_path), "r:gz")  # noqa: SIM115  (opened in a try to translate the error; used via `with tf:` below)
@@ -196,8 +320,10 @@ def restore(tar_path: Path, root: Path, snap_id: str) -> None:
                          hint=UNTOUCHED_HINT) from e
     # Next to the real store, so the swap is a rename on one filesystem.
     parent = root.resolve().parent
-    staging = Path(tempfile.mkdtemp(dir=str(parent), prefix=".boost-restore-"))
-    scratch = Path(tempfile.mkdtemp(dir=str(parent), prefix=".boost-restore-old-"))
+    staging = Path(tempfile.mkdtemp(dir=str(parent), prefix=STAGING_PREFIX))
+    scratch = Path(tempfile.mkdtemp(dir=str(parent), prefix=PARKED_PREFIX))
+    parked = Path(tempfile.mkdtemp(dir=str(parent), prefix=HELD_PREFIX))
+    swapped = False
     try:
         with tf:
             try:
@@ -210,8 +336,22 @@ def restore(tar_path: Path, root: Path, snap_id: str) -> None:
             except (tarfile.TarError, OSError, EOFError) as e:
                 raise BoostError("snapshot %s cannot be restored: %s"
                                  % (snap_id, e), hint=UNTOUCHED_HINT) from e
+        _vet_lock(staging, snap_id, rehome)
+        # Out of staging first: everything left there is swapped into the store.
+        if os.path.lexists(staging / HELD_ARC):
+            os.replace(staging / HELD_ARC, parked / HELD_ARC)
         _swap_in(staging, root, scratch)
+        swapped = True
+        return _put_held(parked / HELD_ARC, held_root)
     finally:
-        for d in (staging, scratch):
+        for d in (staging, parked):
             with contextlib.suppress(OSError):
                 util.rmtree(d)
+        # The previous store, until the swap is done: removed whole only
+        # then, and otherwise only when empty — a rollback that was itself
+        # cut short leaves the user's skills here, not in a deleted dir.
+        with contextlib.suppress(OSError):
+            if swapped:
+                util.rmtree(scratch)
+            else:
+                scratch.rmdir()

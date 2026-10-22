@@ -100,9 +100,46 @@ class TestCohort:
     def test_create_full_rollout_warns_on_unknown_skill(self, boost, tapped):
         r = boost("cohort", "create", "pilot",
                  "--skills", "brainstorming,ghost-skill", "--percent", "100")
-        assert "skill 'ghost-skill' not found in any tap (kept anyway)" in r.out
+        assert r.err == ("  ! skill 'ghost-skill' not found in any tap "
+                         "(kept anyway)\n")
+        assert "not found" not in r.out
         assert ("created cohort pilot (100% rollout, 2 skills) — "
                 "you are IN") in r.out
+
+    def test_create_json_with_unknown_skill_keeps_stdout_parseable(
+            self, boost, tapped):
+        # The warning used to land on stdout ahead of the object, so
+        # `json.load` failed on line 1 of a successful create.
+        r = boost("cohort", "create", "beta", "--skills", "nosuch-skill",
+                 "--json")
+        assert json.loads(r.out) == {"name": "beta", "percent": 100,
+                                     "skills": ["nosuch-skill"],
+                                     "updated": False,
+                                     "member": _member("beta", 100)}
+        assert "skill 'nosuch-skill' not found in any tap" in r.err
+
+    @pytest.mark.parametrize("action", ["list", "status"])
+    def test_name_narrows_list_and_status(self, boost, tapped, action):
+        boost("cohort", "create", "pilot", "--skills", "brainstorming")
+        boost("cohort", "create", "zero", "--skills", "commit-messages",
+             "--percent", "0")
+        data = json.loads(boost("cohort", action, "zero", "--json").out)
+        assert data == [{"name": "zero", "skills": ["commit-messages"],
+                         "percent": 0, "member": False,
+                         "created": data[0]["created"]}]
+        r = boost("cohort", action, "zero")
+        assert [l.split()[0] for l in r.out.splitlines()
+                if l.startswith(("pilot", "zero"))] == ["zero"]
+
+    @pytest.mark.parametrize("extra", [[], ["--json"]])
+    @pytest.mark.parametrize("action", ["list", "status"])
+    def test_missing_name_is_rc1_not_every_cohort(self, boost, tapped,
+                                                   action, extra):
+        boost("cohort", "create", "pilot", "--skills", "brainstorming")
+        r = boost("cohort", action, "nosuch", *extra, expect=1)
+        assert r.out == ""
+        assert "Error: no cohort named nosuch" in r.err
+        assert "list cohorts with `boost cohort list`" in r.err
 
     def test_create_singular_skill_agrees(self, boost, tapped):
         r = boost("cohort", "create", "solo",
@@ -195,7 +232,9 @@ class TestCohort:
         boost("cohort", "create", "pilot", "--percent", "100",
              "--skills", "othertap:brainstorming,tdd-workflow")
         r = boost("cohort", "apply")
-        assert "othertap:brainstorming not found in any tap" in r.out
+        # The tap is what is missing, not the skill — fixture-tap ships it.
+        assert ("! no tap named 'othertap' ('brainstorming' is shipped by: "
+                "fixture-tap) —") in r.out
         assert "installed tdd-workflow" in r.out
         assert "applied: 1 installed, 0 already present, 1 not found" in r.out
 
@@ -264,12 +303,29 @@ class TestCohort:
         assert "deleted cohort pilot" in r.out
         assert "no cohorts defined" in boost("cohort", "list").out
 
+    @pytest.mark.parametrize("argv, msg", [
+        (("list", "--percent", "5"), "--percent only applies to `cohort create`"),
+        (("status", "--percent", "100"),
+         "--percent only applies to `cohort create`"),
+        (("apply", "--skills", "a"), "--skills only applies to `cohort create`"),
+        (("delete", "x", "--skills", "a", "--percent", "5"),
+         "--skills/--percent only apply to `cohort create`"),
+    ])
+    def test_create_only_flags_on_another_action_rc2(self, boost, sandbox,
+                                                      argv, msg):
+        r = boost("cohort", *argv, expect=2)
+        assert msg in r.err
+        assert not paths.state_dir().joinpath("cohorts.json").exists()
+
     def test_errors_and_edge_cases(self, boost, tapped):
         r = boost("cohort", "create", "bad", "--skills", "x",
                  "--percent", "101", expect=2)
         assert "--percent must be 0-100" in r.err
         r = boost("cohort", "create", "bad", expect=2)
         assert "create needs --skills" in r.err
+        r = boost("cohort", "create", "full", "--skills", "x")
+        assert "(100% rollout, 1 skill)" in r.out
+        boost("cohort", "delete", "full", "-y")
         r = boost("cohort", "delete", "ghost", expect=1)
         assert "no cohort named ghost" in r.err
         r = boost("cohort", "apply", "ghost", expect=1)
@@ -364,6 +420,82 @@ class TestCohort:
 
 
 # ---------------------------------------------------------------- profile
+
+class TestRecordedNamesAcrossTaps:
+    """`cohort apply` and `profile use` installed `find()[0]` — the first
+    tap's copy — for a name two taps ship, or whose recorded tap was gone."""
+
+    def test_cohort_apply_skips_an_ambiguous_member(self, boost, rival_tap,
+                                                    monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        boost("cohort", "create", "pilot", "--percent", "100",
+              "--skills", "brainstorming")
+        r = boost("cohort", "apply", expect=1)
+        assert ("! 'brainstorming' exists in multiple taps: fixture-tap, "
+                "rival-tap (qualify it, e.g. `fixture-tap:brainstorming`) — "
+                "skipped") in r.out
+        assert "applied: 0 installed, 0 already present, 1 not found" in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_profile_use_never_swaps_in_another_tap(self, boost, rival_tap,
+                                                    monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        boost("install", "rival-tap:brainstorming")
+        boost("profile", "save", "p1")
+        boost("uninstall", "brainstorming")
+        boost("untap", "rival-tap")
+        r = boost("profile", "use", "p1")
+        assert ("! brainstorming was recorded from tap rival-tap, which is no "
+                "longer tapped (`boost tap` it again, or install it from: "
+                "fixture-tap) — skipped") in r.out
+        assert "tap has moved" not in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_rollback_never_restores_another_tap_s_copy(
+            self, boost, rival_tap, tick_clock, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        boost("install", "rival-tap:brainstorming")
+        boost("install", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]   # holds brainstorming
+        assert "brainstorming" in lockfile.history_read(snap_id)["skills"]
+        boost("uninstall", "brainstorming")
+        boost("untap", "rival-tap")
+        r = boost("replay", "rollback", snap_id, expect=1)
+        assert ("! brainstorming was recorded from tap rival-tap, which is no "
+                "longer tapped (`boost tap` it again, or install it from: "
+                "fixture-tap) — cannot restore") in r.out
+        assert "finished with 1 skill not restored: brainstorming" in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_profile_use_restores_the_skill_beside_a_namesake_workflow(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        """A profile keeps skills only, yet `find()[0]` brought back the
+        tap's same-named workflow — and resolve_one alone refuses the pair."""
+        monkeypatch.setenv("COLUMNS", "200")
+        root = tmp_path / "pair-tap"
+        (root / "skills" / "tdd").mkdir(parents=True)
+        (root / "skills" / "tdd" / "SKILL.md").write_text(
+            "---\nname: tdd\ndescription: The tdd skill\nversion: 1.0.0\n"
+            "---\n\n# TDD\n\nRed, green, refactor.\n", encoding="utf-8")
+        (root / "commands").mkdir()
+        (root / "commands" / "tdd.md").write_text(
+            "---\ndescription: A slash command running tdd\n---\n\nRun tdd.\n",
+            encoding="utf-8")
+        for argv in (("init", "-q"), ("config", "user.email", "p@boost.test"),
+                     ("config", "user.name", "Pair"), ("add", "-A"),
+                     ("commit", "-qm", "pair")):
+            subprocess.run(("git", *argv), cwd=root, check=True,
+                           capture_output=True)
+        boost("tap", root)
+        boost("install", "pair-tap:tdd", "--path", "skills/tdd")
+        boost("profile", "save", "p1")
+        boost("uninstall", "tdd")
+        r = boost("profile", "use", "p1")
+        assert "installed tdd" in r.out
+        assert "skipped" not in r.out
+        assert lockfile.get_skill("tdd")["version"] == "1.0.0"
+        assert lockfile.find_any("tdd")[0] == "skill"
+
 
 class TestProfile:
     def test_save_show_diff_use_lifecycle(self, boost, tapped):
@@ -590,6 +722,15 @@ class TestProfile:
         assert "no profiles saved" in r.out
         r = boost("profile", "show", expect=2)
         assert "show needs a profile NAME" in r.err
+
+    @pytest.mark.parametrize("action", ["save", "list", "show", "diff",
+                                        "delete"])
+    def test_prune_outside_use_rc2(self, boost, installed, action):
+        # `profile save p3 --prune -y` reported "saved" and pruned nothing.
+        r = boost("profile", action, "p3", "--prune", "-y", expect=2)
+        assert "--prune only applies to `profile use`" in r.err
+        assert r.out == ""
+        assert not list(paths.profiles_dir().glob("*.json"))
 
     def test_list_and_show_json(self, boost, installed):
         boost("profile", "save", "daily")
@@ -876,6 +1017,17 @@ class TestProtocol:
         assert "cannot parse boost://install/" in r.err
         r = boost("protocol", "open", expect=2)
         assert "open needs a boost:// URL" in r.err
+
+    @pytest.mark.parametrize("argv, msg", [
+        (("status", "--gui"), "--gui only applies to `protocol open`"),
+        (("register", "--gui"), "--gui only applies to `protocol open`"),
+        (("status", "boost://install/x"),
+         "a URL only applies to `protocol open`"),
+    ])
+    def test_open_only_arguments_elsewhere_rc2(self, boost, sandbox, argv, msg):
+        r = boost("protocol", *argv, expect=2)
+        assert msg in r.err
+        assert r.out == ""
 
     def test_declined_install_and_tap(self, boost, tapped, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")

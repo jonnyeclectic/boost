@@ -24,6 +24,7 @@ import sys
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
+from pathlib import Path
 from typing import NamedTuple
 
 from ..errors import BoostError
@@ -42,6 +43,14 @@ _WARNED_CORRUPT = False
 #: each write, so the newest snapshot predates the last change.
 ROLLBACK_HINT = ("`boost replay rollback <id>` restores the lock as it was "
                  "before its last change; the newest record is only in %s")
+#: The same, when there is no history to roll back to — which is always the
+#: case after the first install, since a snapshot is only taken *before* a
+#: write. `boost sync --rebuild-lock` (:func:`set_aside`) is what works then.
+REBUILD_HINT = ("`boost sync --rebuild-lock` sets it aside and re-records the "
+                "store; the newest record is only in %s")
+#: A lock a newer boost wrote is that boost's to read: rolling it back would
+#: discard that boost's last change, and writing over it its whole schema.
+UPGRADE = "upgrade boost with `boost self-update`"
 
 # One section per installable kind, in lookup-precedence order. `find_any`
 # resolves a bare name through these left to right, so a skill shadows a rule
@@ -129,6 +138,14 @@ def read() -> dict:
         return _skeleton()
     if lock is None:
         return _skeleton()          # empty: never installed anything yet
+    if shape_error(lock) is not None:
+        # `{"rules": []}` or a row that is a string parses, and every reader
+        # that walks it then died on `.items()`/`.get` — doctor included. A
+        # schema boost knows, so it is corrupt; one it does not know is a
+        # newer boost's, kept as it is (:func:`refuse_corrupt` guards it).
+        if _known(lock.get("version")):
+            _preserve_corrupt(p)
+        return _skeleton()
     lock.setdefault("version", SCHEMA_VERSION)
     lock.setdefault("skills", {})
     lock.setdefault("rules", {})       # rules install alongside skills (v3+)
@@ -136,10 +153,96 @@ def read() -> dict:
     return lock
 
 
-def corrupt_backup(p=None):
-    """Where :func:`read` keeps the bytes of a lock it could not parse."""
+def shape_error(raw: dict) -> str | None:
+    """Why a parsed lock's sections are not maps of records, or None."""
+    for _kind, section in SECTIONS:
+        bad = jsonstate.object_map_error(raw, section)
+        if bad is not None:
+            return bad
+    return None
+
+
+def _known(version: object) -> bool:
+    """Whether ``version`` is a schema this boost reads: current or older."""
+    return version == SCHEMA_VERSION or migratable(version)
+
+
+def corrupt_backups(p=None) -> list:
+    """Every backup of an unreadable lock, oldest first.
+
+    ``<lock>.corrupt``, then ``<lock>.corrupt.2``, ``.3``, … — the names
+    :func:`jsonstate.quarantine` uses. One fixed name was overwritten by the
+    next corrupt read, so a hand fix that broke the file again destroyed the
+    only copy of the newest record while the warning still pointed at it.
+    """
     p = p or paths.lockfile_path()
-    return p.with_name(p.name + ".corrupt")
+    base = p.name + ".corrupt"
+    found = []
+    with suppress(OSError):
+        for f in p.parent.iterdir():
+            rest = f.name[len(base):] if f.name.startswith(base) else None
+            if rest == "":
+                found.append((1, f))
+            # isascii too: "²".isdigit() is True and int("²") raises, so one
+            # stray name would crash every reader of a corrupt lock.
+            elif (rest and rest[0] == "." and rest[1:].isascii()
+                  and rest[1:].isdigit()):
+                found.append((int(rest[1:]), f))
+    return [f for _n, f in sorted(found)]
+
+
+def _holding(p, backups: list):
+    """The backup in ``backups`` byte-identical to ``p``, or None."""
+    try:
+        data = p.read_bytes()
+    except OSError:
+        return None
+    for b in backups:
+        with suppress(OSError):
+            if b.read_bytes() == data:
+                return b
+    return None
+
+
+def corrupt_backup(p=None):
+    """The backup of an unreadable lock to name to the user.
+
+    The one holding the lock's current bytes, when there is one; else the
+    newest; else ``<lock>.corrupt``, where :func:`keep_copy` puts the first.
+    """
+    p = p or paths.lockfile_path()
+    backups = corrupt_backups(p)
+    held = _holding(p, backups)
+    if held is not None:
+        return held
+    return backups[-1] if backups else p.with_name(p.name + ".corrupt")
+
+
+def keep_copy(p=None):
+    """Copy the lock's bytes to a backup unless one already holds them.
+
+    A distinct state goes to the next free name (``.corrupt``, then
+    ``.corrupt.N`` one past the highest), so no backup is ever overwritten.
+    Returns the backup that holds them. Raises OSError when it cannot copy.
+    """
+    p = p or paths.lockfile_path()
+    backups = corrupt_backups(p)
+    held = _holding(p, backups)
+    if held is not None:
+        return held
+    if not backups:
+        dest = p.with_name(p.name + ".corrupt")
+    else:
+        last = backups[-1].name.rsplit(".", 1)[-1]
+        n = int(last) + 1 if last.isdigit() else 2
+        dest = p.with_name("%s.corrupt.%d" % (p.name, n))
+    shutil.copy(p, dest)
+    return dest
+
+
+def has_history() -> bool:
+    """Whether `boost replay` has a snapshot it can roll back to."""
+    return bool(history_list())
 
 
 def _preserve_corrupt(p) -> None:
@@ -152,9 +255,8 @@ def _preserve_corrupt(p) -> None:
     terminal to say the record had broken rather than emptied.
     """
     global _WARNED_CORRUPT
-    backup = corrupt_backup(p)
     try:
-        shutil.copy(p, backup)
+        backup = keep_copy(p)
     except OSError:
         backup = None
     with suppress(Exception):
@@ -164,29 +266,94 @@ def _preserve_corrupt(p) -> None:
             "empty lock", p, backup or "(backup failed)")
     if not _WARNED_CORRUPT:
         _WARNED_CORRUPT = True
+        how = ("`boost replay rollback <id>` restores it as it was before "
+               "its last change" if has_history()
+               else "`boost sync --rebuild-lock` sets it aside and re-records "
+                    "the store")
         output.warn("the lock file %s is corrupt, so boost sees nothing "
-                    "installed — `boost replay rollback <id>` restores it as "
-                    "it was before its last change%s"
-                    % (paths.tilde(p), "; the newest record is only in %s"
+                    "installed — %s%s"
+                    % (paths.tilde(p), how, "; the newest record is only in %s"
                        % paths.tilde(backup) if backup else ""),
                     stream=sys.stderr, wrap=True)
 
 
 def refuse_corrupt() -> None:
-    """Raise while the lock on disk is corrupt, so nothing writes over it.
+    """Raise while the lock on disk is one boost must not write over.
 
     :func:`read` hands a corrupt lock's callers an empty skeleton, so the next
     write would replace every record with whatever one change added to it — a
     fresh `boost install` did exactly that and reported "lock updated". A
-    missing lock is a fresh install and passes; so does one in another schema,
-    which still parses (an older one is migrated by being rewritten).
+    missing lock is a fresh install and passes; so does an older schema, which
+    is migrated by being rewritten. A newer schema is refused: `pin`, `tag`
+    and `install` each stamped a v4 lock as v3 with a green tick, while
+    `verify`, `sync` and `heal` declined to touch it.
     """
-    p = paths.lockfile_path()
-    if jsonstate.read_object(p)[1] is None:
+    integ = check()
+    if integ.ok or integ.problem == "missing":
         return
-    raise BoostError("lock file is corrupt — boost will not write over it",
-                     hint=ROLLBACK_HINT % paths.tilde(corrupt_backup(p)),
+    p = paths.lockfile_path()
+    if newer(integ):
+        raise BoostError(
+            "lock file is schema v%s, newer than this boost's v%d — boost will "
+            "not write over it" % (integ.version, SCHEMA_VERSION),
+            hint="%s; this boost would drop what v%s records"
+                 % (UPGRADE, integ.version), wrap=True)
+    # Kept now, not only by a read(): install refuses before reading, and the
+    # newest backup may hold an earlier corruption rather than these bytes.
+    try:
+        held = keep_copy(p)
+    except OSError:
+        held = corrupt_backup(p)
+    raise BoostError("lock file %s — boost will not write over it" % fault(integ),
+                     hint=(ROLLBACK_HINT if has_history() else REBUILD_HINT)
+                     % paths.tilde(held),
                      wrap=True)
+
+
+def newer(integ: Integrity) -> bool:
+    """Whether :func:`check` found a lock a newer boost wrote."""
+    v = integ.version
+    return (integ.problem == "schema" and isinstance(v, int)
+            and not isinstance(v, bool) and v > SCHEMA_VERSION)
+
+
+def remedy(integ: Integrity) -> str:
+    """What fixes a lock :func:`check` found unreadable, worded to follow
+    "— ": ``restore it with `boost replay``` only while there is history to
+    restore, ``rebuild it …`` when there is none, and an upgrade for a lock a
+    newer boost wrote, whose rollback would discard that boost's last change.
+    """
+    if newer(integ):
+        return UPGRADE
+    if has_history():
+        return "restore it with `boost replay`"
+    return "rebuild it from the store with `boost sync --rebuild-lock`"
+
+
+def set_aside():
+    """Move an unreadable lock out of the way so `boost sync` re-records it.
+
+    The no-history way back (:data:`REBUILD_HINT`): its bytes are kept in a
+    backup (:func:`keep_copy`) first, and a missing lock over a populated
+    store is what `boost sync` already knows how to re-record. Refuses a lock
+    boost can read, and one a newer boost wrote. Returns the backup.
+    """
+    with exclusive():
+        integ = check()
+        if integ.ok or integ.problem == "missing":
+            raise BoostError("the lock file is readable — there is nothing "
+                             "to rebuild", hint="run `boost sync`")
+        if newer(integ):
+            raise BoostError("the lock file %s — boost will not set it aside"
+                             % fault(integ), hint=UPGRADE, wrap=True)
+        p = paths.lockfile_path()
+        try:
+            backup = keep_copy(p)
+            p.unlink()
+        except OSError as e:
+            raise BoostError("could not set %s aside (%s)"
+                             % (paths.tilde(p), e.strerror or e)) from e
+        return backup
 
 
 def restore(hist_id: str) -> dict:
@@ -200,9 +367,10 @@ def restore(hist_id: str) -> dict:
     snapshot = history_read(hist_id)
     p = paths.lockfile_path()
     with exclusive():
-        if p.exists() and jsonstate.read_object(p)[1] is not None:
+        integ = check()
+        if not integ.ok and integ.problem != "missing":
             with suppress(OSError):
-                shutil.copy(p, corrupt_backup(p))
+                keep_copy(p)
         src = paths.lock_history_dir() / ("lock-%s.json" % hist_id)
         util.atomic_write_text(p, src.read_text(encoding="utf-8"))
     return snapshot
@@ -221,7 +389,10 @@ def unrestored_corrupt():
     An equal mtime counts as newer: a coarse clock must not hide the backup.
     Returns ``None`` when there is no backup or a later write superseded it.
     """
-    backup = corrupt_backup()
+    backups = corrupt_backups()
+    if not backups:
+        return None
+    backup = backups[-1]
     try:
         mtime = backup.stat().st_mtime_ns
     except OSError:
@@ -263,27 +434,31 @@ class Integrity(NamedTuple):
     version: object = None  # the schema version found, for "schema"/"older"
 
 
-def check() -> Integrity:
+def check(p=None) -> Integrity:
     """Report whether the lock file itself parses as the current schema.
 
     Does not touch the store — a missing lock file with an empty store is a
     fresh install, not a fault; callers that care about that distinction
-    combine this with a store-content check of their own.
+    combine this with a store-content check of their own. ``p`` checks a lock
+    file somewhere else instead: `snapshot restore` asks it of the archived
+    one before that replaces the live store.
     """
-    raw, err = jsonstate.read_object(paths.lockfile_path())
+    raw, err = jsonstate.read_object(p or paths.lockfile_path())
     if err is not None:
         return Integrity(False, "corrupt")
     if raw is None:
         return Integrity(False, "missing")
     version = raw.get("version")
+    if not _known(version):
+        return Integrity(False, "schema", version)
+    # The sections must be maps of records, as :func:`read` hands them on, or
+    # every reader that walks one trips over what it holds. In a schema boost
+    # knows, anything else is damage, not a format: corrupt, like bad JSON.
+    if shape_error(raw) is not None:
+        return Integrity(False, "corrupt", version)
     if version == SCHEMA_VERSION:
         return Integrity(True, None, version)
-    # The sections an older lock holds must be the ones :func:`read` hands
-    # on, or every reader that walks one would trip over what it holds.
-    if migratable(version) and all(isinstance(raw.get(section, {}), dict)
-                                   for _kind, section in SECTIONS):
-        return Integrity(True, "older", version)
-    return Integrity(False, "schema", version)
+    return Integrity(True, "older", version)
 
 
 def migratable(version: object) -> bool:
@@ -334,9 +509,13 @@ def fault(integ: Integrity) -> str:
     """
     if integ.problem == "corrupt":
         return "is corrupt"
+    if newer(integ):
+        return "is schema v%s, newer than this boost's v%d" % (
+            integ.version, SCHEMA_VERSION)
     if integ.version is None:
-        # "older" with no version; "schema" with none is a section that is
-        # not a mapping, which no schema boost wrote holds.
+        # "older" with no version; :func:`check` never says "schema" with
+        # none (a versionless lock is the oldest format), but an Integrity
+        # built by hand may, and "v None" names nothing.
         return ("has no schema version" if integ.problem == "older"
                 else "is in no schema boost knows")
     return "is schema v%s, not v%d" % (integ.version, SCHEMA_VERSION)
@@ -377,6 +556,7 @@ def write(lock: dict) -> None:
 
     A corrupt lock is the exception: it raises (:func:`refuse_corrupt`)
     rather than being replaced by a lock built on :func:`read`'s skeleton.
+    So does one in a schema boost does not know, a newer one included.
     """
     with exclusive():
         refuse_corrupt()
@@ -635,6 +815,137 @@ def portable(lock: dict, base=None) -> dict:
                 if isinstance(m, dict) and "path" in m:
                     m["path"] = _portable_path(m["path"], want if local else None)
     return projected
+
+
+def _root_of(p: str, root) -> str | None:
+    """The spelling of ``root`` — as given, or resolved (a symlinked or
+    /private home) — that the absolute path ``p`` is or sits beneath."""
+    for r in (str(root), os.path.realpath(root)):
+        stem = r.rstrip(os.sep)
+        if p == stem or p.startswith(stem + os.sep):
+            # ``/`` strips to "", which relpath would read as the cwd.
+            return stem or os.sep
+    return None
+
+
+def _under(p: str, root) -> bool:
+    """Whether the absolute path ``p`` is ``root`` or sits beneath it."""
+    return _root_of(p, root) is not None
+
+
+def _dot_home(p: str, agent, home, dirs: dict) -> str | None:
+    """The home ``p`` was written under, read off where its agent's dotdir
+    (``.claude`` for ``~/.claude/skills``) appears in it, nearest the file."""
+    adir = dirs.get(agent)
+    dot = adir.parent if adir is not None else None
+    if dot is None or not _under(str(dot), home):
+        return None
+    rel = Path(os.path.relpath(dot, home)).parts
+    parts = Path(p).parts
+    for i in range(len(parts) - len(rel), 0, -1):
+        if parts[i:i + len(rel)] == rel:
+            return str(Path(*parts[:i]))
+    return None
+
+
+def _rehome(p: str, agent, old_home: str | None, home,
+            dirs: dict) -> str | None:
+    """``p`` placed under ``home``; ``p`` itself when it already belongs on
+    this machine; None when nothing says where it would go.
+
+    It belongs when it is relative, under ``home``, or under its agent's own
+    dotdir (an agent dir configured outside ``$HOME``). Otherwise it moves
+    from ``old_home`` when it sits under that, or — for a snapshot that never
+    recorded its home — from wherever its agent's dotdir appears in it, since
+    ``/old/home/.claude/CLAUDE.md`` is ``.claude/CLAUDE.md`` under any home.
+    """
+    adir = dirs.get(agent)
+    dot = adir.parent if adir is not None else None
+    if (not Path(p).is_absolute() or _under(p, home)
+            or (dot is not None and _under(p, dot))):
+        return p
+    base = _root_of(p, old_home) if old_home else None
+    if base is None:
+        base = _dot_home(p, agent, home, dirs)
+    if base is None:
+        return None
+    return os.path.join(str(home), os.path.relpath(p, base))
+
+
+def _infer_home(lock: dict, home, dirs: dict) -> str | None:
+    """The one home a snapshot with no recorded home was saved under, read
+    off the rows whose agent dotdir places them; None unless they agree.
+
+    Without it a row no dotdir names — Gemini's ``~/.gemini/GEMINI.md``,
+    whose skills dir is the canonical store, or a row with no agent — was
+    unplaceable, and every such snapshot was refused on another machine.
+    """
+    seen = set()
+    for _kind, entry in _user_rows(lock):
+        for m in _row_paths(entry):
+            p = m["path"]
+            if Path(p).is_absolute() and not _under(p, home):
+                guess = _dot_home(p, m.get("agent"), home, dirs)
+                if guess is not None:
+                    seen.add(guess)
+    return seen.pop() if len(seen) == 1 else None
+
+
+def _user_rows(lock: dict):
+    """``(label, entry)`` for each user-scope rule/workflow row of ``lock``."""
+    from . import scopes
+    for kind, section in SECTIONS:
+        if kind == "skill":
+            continue
+        for name, entry in sorted((lock.get(section) or {}).items()):
+            if isinstance(entry, dict) and entry.get("scope") != scopes.SCOPE_PROJECT:
+                yield "%s %s" % (kind, name), entry
+
+
+def _row_paths(entry: dict):
+    """The materialization/foreign records of ``entry`` that carry a path."""
+    for m in (*(entry.get("materializations") or ()),
+              *(entry.get("foreign") or ())):
+        if isinstance(m, dict) and isinstance(m.get("path"), str):
+            yield m
+
+
+def rehome(lock: dict, home, old_home: str | None = None,
+           dirs: dict | None = None) -> tuple[list[str], list[str]]:
+    """Move a user-scope rule/workflow row's absolute paths onto ``home``.
+
+    A snapshot carries the lock of the machine that saved it, whose
+    ``materializations[].path`` and ``foreign[].path`` are absolute under
+    *that* ``$HOME``. Restored as they were, every row pointed at the first
+    home: doctor read the other home's files as this one's and called them
+    fully materialized, and `boost uninstall` deleted them. Rehomed, the row
+    names the file this machine's agent reads, and `boost sync` writes it
+    when it is missing. ``old_home`` is the home the snapshot was saved
+    under, when its sidecar says; ``dirs`` maps an agent to its skills dir
+    here (:func:`agents.known_agents`). A project-scope row is the repo's
+    and is left alone.
+
+    Mutates ``lock``; returns ``(moved, unplaced)`` as ``kind name`` labels
+    — a row with a path neither ``old_home`` nor its agent's dotdir places
+    is unplaced, and keeps the path it had. With no ``old_home`` it is
+    inferred from the rows a dotdir places, when they agree on one.
+    """
+    dirs = dirs or {}
+    if not old_home:
+        old_home = _infer_home(lock, home, dirs)
+    moved: list[str] = []
+    unplaced: list[str] = []
+    for label, entry in _user_rows(lock):
+        for m in _row_paths(entry):
+            new = _rehome(m["path"], m.get("agent"), old_home, home, dirs)
+            if new is None:
+                if label not in unplaced:
+                    unplaced.append(label)
+            elif new != m["path"]:
+                m["path"] = new
+                if label not in moved:
+                    moved.append(label)
+    return moved, unplaced
 
 
 def _portable_path(p, want: str | None) -> str:

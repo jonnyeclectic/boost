@@ -30,6 +30,7 @@ from ..core import (
     config,
     frontmatter,
     gitutil,
+    installedview,
     installplan,
     installscan,
     integrity,
@@ -47,6 +48,7 @@ from ..core import (
     selfupdate,
     serve,
     snapshot,
+    staleness,
     store,
     typedvalue,
     util,
@@ -90,11 +92,11 @@ def cmd_config(argv) -> int:
     if args.action == "list" and (args.key or args.value is not None):
         p.error("config list takes no KEY/VALUE")
     if args.action in ("get", "set", "unset") and not args.key:
-        raise BoostError("config %s requires a KEY" % args.action,
-                        hint="e.g. `boost config %s ai.enabled`" % args.action)
+        p.error("config %s requires a KEY" % args.action,
+                hint="e.g. `boost config %s ai.enabled`" % args.action)
     if args.action == "set" and args.value is None:
-        raise BoostError("config set requires a VALUE",
-                        hint="e.g. `boost config set ai.enabled false`")
+        p.error("config set requires a VALUE",
+                hint="e.g. `boost config set ai.enabled false`")
     if args.action in ("get", "unset") and args.value is not None:
         p.error("config %s takes no VALUE" % args.action)
 
@@ -127,8 +129,9 @@ def cmd_config(argv) -> int:
         try:
             config.set_value(args.key, args.value)
         except typedvalue.ValueTypeError as e:
+            # e.key is the leaf when a JSON object held the bad value.
             raise _bad_value(e, "boost config set %s <%s>"
-                             % (args.key, config.placeholder(args.key))) from e
+                             % (e.key, config.placeholder(e.key))) from e
         except TypeError as e:
             raise BoostError(str(e),
                             hint="the parent key holds a plain value — "
@@ -216,6 +219,19 @@ def cmd_clean(argv) -> int:
     leftovers = store.leftover_copies()
     items.extend((pth, "leftover skill copy", util.dir_size(pth))
                  for pth in leftovers)
+    temps = store.stale_temps()
+    # The only copy of the previous store, once a kill cut a restore short:
+    # named, never removed — `boost doctor` says what to do with it.
+    for pth, kind in temps:
+        if kind == store.PARKED_STORE:
+            out.warn("left %s alone: it holds the %s — move back what %s is "
+                     "missing, then delete it" % (_tilde(pth), kind,
+                                                 _tilde(paths.store_dir())),
+                     stream=sys.stderr, wrap=True)
+    temps = [t for t in temps if t[1] != store.PARKED_STORE]
+    items.extend((pth, kind, util.dir_size(pth) if pth.is_dir()
+                  else pth.stat().st_size) for pth, kind in temps)
+    leftovers += [pth for pth, _kind in temps if pth.is_dir()]
     if paths.store_dir().is_dir():
         for pth in sorted(paths.store_dir().rglob("*")):
             if any(pth.is_relative_to(d) for d in leftovers):
@@ -667,8 +683,8 @@ def cmd_policy(argv) -> int:
 
     if args.action in ("set", "unset"):
         if not args.key:
-            raise BoostError("policy %s requires a KEY" % args.action,
-                            hint="keys: " + ", ".join(sorted(policy.DEFAULTS)))
+            p.error("policy %s requires a KEY" % args.action,
+                    hint="keys: " + ", ".join(sorted(policy.DEFAULTS)))
         if args.key not in policy.DEFAULTS:
             raise BoostError("unknown policy key %r" % args.key,
                             hint="keys: " + ", ".join(sorted(policy.DEFAULTS)))
@@ -691,8 +707,8 @@ def cmd_policy(argv) -> int:
 
     if args.action == "set":
         if args.value is None:
-            raise BoostError("policy set requires a VALUE",
-                            hint="e.g. `boost policy set min_quality_score 60`")
+            p.error("policy set requires a VALUE",
+                    hint="e.g. `boost policy set min_quality_score 60`")
         value = _parse_policy_value(args.key, args.value)
         policy.set_key(args.key, value)
         journal.log("policy", args.key, op="set")
@@ -1066,9 +1082,11 @@ def cmd_onboard(argv) -> int:
         gitutil.run(["-C", str(repo), "commit", "-m",
                      "chore: add boost skill tracking (boost onboard)"])
         try:
-            proc = subprocess.run(["gh", "pr", "create", "--fill"],
+            proc = subprocess.run(util.resolve_exe(["gh", "pr", "create",
+                                                    "--fill"]),
                                   cwd=str(repo), capture_output=True,
-                                  text=True, timeout=120)
+                                  text=True, encoding="utf-8",
+                                  errors="replace", timeout=120)
         except (subprocess.TimeoutExpired, OSError) as e:
             raise BoostError("gh pr create failed: %s" % e,
                             hint="branch %s is committed — push it and open the PR manually" % branch) from e
@@ -1257,7 +1275,7 @@ def _crontab_lines():
     """Current crontab lines, [] when empty, None when crontab is unusable."""
     try:
         proc = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
-                              timeout=30)
+                              encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
@@ -1409,9 +1427,11 @@ def cmd_schedule(argv) -> int:
             out.ok("wrote %s" % _tilde(plist))
             try:
                 subprocess.run(["launchctl", "unload", str(plist)],
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=30)
                 proc = subprocess.run(["launchctl", "load", "-w", str(plist)],
-                                      capture_output=True, text=True, timeout=30)
+                                      capture_output=True, text=True,
+                                      encoding="utf-8", errors="replace", timeout=30)
                 if proc.returncode != 0:
                     tail = (proc.stderr or "").strip().splitlines()
                     out.warn("launchctl load failed: %s"
@@ -1432,7 +1452,8 @@ def cmd_schedule(argv) -> int:
                 try:
                     proc = subprocess.run(["crontab", "-"],
                                           input="\n".join([*kept, entry]) + "\n",
-                                          capture_output=True, text=True, timeout=30)
+                                          capture_output=True, text=True,
+                                          encoding="utf-8", errors="replace", timeout=30)
                 except (OSError, subprocess.TimeoutExpired):
                     proc = None
                 if proc is None or proc.returncode != 0:
@@ -1450,7 +1471,8 @@ def cmd_schedule(argv) -> int:
         if plist.exists():
             try:
                 subprocess.run(["launchctl", "unload", "-w", str(plist)],
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=30)
             except (OSError, subprocess.TimeoutExpired):
                 out.warn("launchctl unavailable — removed the plist only")
             plist.unlink()
@@ -1463,7 +1485,8 @@ def cmd_schedule(argv) -> int:
                 try:
                     proc = subprocess.run(["crontab", "-"],
                                           input="\n".join(kept) + ("\n" if kept else ""),
-                                          capture_output=True, text=True, timeout=30)
+                                          capture_output=True, text=True,
+                                          encoding="utf-8", errors="replace", timeout=30)
                     removed = proc.returncode == 0
                 except (OSError, subprocess.TimeoutExpired):
                     pass
@@ -1576,7 +1599,7 @@ def _path_hint(fn: Callable[[dict], tuple[str, bool]]
             raise BoostError(
                 e.message,
                 hint='call again with "path" set to one of the above, e.g. '
-                     '{"name": "%s", "path": "%s"}' % (e.bare, e.paths[0])
+                     '{"name": "%s", "path": "%s"}' % (e.qualified, e.paths[0])
             ) from e
     wrapped.__doc__ = fn.__doc__
     return wrapped
@@ -1696,9 +1719,11 @@ def _tool_list(args: dict):
     lines = []
     for kind, section in everything.items():
         for n, e in sorted(section.items()):
-            lines.append("%s v%s (%s)%s%s"
+            where = scopes.project_label(e) if kind != "skill" else None
+            lines.append("%s v%s (%s)%s%s%s"
                          % (n, e.get("version", "?"), e.get("tap", "?"),
                             "" if kind == "skill" else " [%s]" % kind,
+                            " [project %s]" % where if where else "",
                             " [pinned]" if e.get("pinned") else ""))
     if project:
         lines.append("project skills (%s):" % _tilde(pbase))
@@ -1708,6 +1733,41 @@ def _tool_list(args: dict):
                      for n, e in sorted(project.items()))
     lines.append(footer)
     return "\n".join(lines), False
+
+
+def _installed_facts(name: str, kind: str, entry: dict, pbase, src: dict,
+                     matches: list[dict]) -> list[str]:
+    """``description``/``latest`` lines for an installed item, as `info` gives.
+
+    The description is the installed copy's; the catalog row is the tap's
+    HEAD, so its text is labelled upstream when it differs, and its version
+    is ``latest`` with the same update verdict `boost info` and `boost
+    outdated` reach.
+    """
+    if kind == "skill":
+        bare = catalog.split_name(name)[1]
+        sdir = (integrity.project_skill_dir(entry, pbase) if pbase is not None
+                else store.skill_store_dir(bare))
+        desc, upstream = installedview.skill_description(sdir, src)
+        note = {staleness.BEHIND: " (update available)",
+                staleness.AHEAD: " (older than installed)"}.get(
+            staleness.catalog_relation(str(entry.get("version") or ""),
+                                       str(src.get("version") or "")) or "",
+            "")
+    else:
+        reason, _ = installedview.installed_update(kind, entry, matches)
+        desc, upstream = installedview.materialized_description(
+            entry, src, reason)
+        note = {staleness.VERSION: " (update available)",
+                staleness.CONTENT: " (content changed)"}.get(reason or "", "")
+    lines = []
+    if desc:
+        lines.append("description: %s" % desc)
+    if upstream:
+        lines.append("upstream description: %s" % upstream)
+    if src.get("version"):
+        lines.append("latest: %s%s" % (src["version"], note))
+    return lines
 
 
 @_path_hint
@@ -1726,8 +1786,10 @@ def _tool_info(args: dict):
         # The installed copy's own catalog row, never another tap's: version
         # and tap came from the lock while the description came from
         # whichever tap sorted first, one reply describing two items.
-        src = next((e for e in catalog.find(name)
-                    if e["tap"] == entry.get("tap")), {})
+        # Its kind and recorded source too: one tap can ship a name as a
+        # skill and as a workflow, and the first row by tap was either.
+        matches = catalog.find(name)
+        src = catalog.installed_row(matches, kind, entry) or {}
     elif not catalog.find(name):
         return "no skill named %r (installed or in any tap)" % name, True
     else:
@@ -1740,7 +1802,9 @@ def _tool_info(args: dict):
         lines.append("kind: %s" % kind_label)
     lines.extend(("version: %s" % (entry or src).get("version", "?"),
                   "tap: %s" % (entry or src).get("tap", "?")))
-    if src.get("description"):
+    if entry:
+        lines.extend(_installed_facts(name, kind, entry, pbase, src, matches))
+    elif src.get("description"):
         lines.append("description: %s" % src["description"])
     if entry:
         # Only the agents boost still writes for: a recorded row whose agent
@@ -1749,8 +1813,10 @@ def _tool_info(args: dict):
             integrity.written_agent_names(kind, entry)) or "none"
         lines.extend(("installed: yes (%s)" % entry.get("installed_at", "?"),
                       "agents: %s" % agents_s))
-        if pbase is not None:
-            lines.append("scope: project (%s)" % _tilde(pbase))
+        where = (_tilde(pbase) if pbase is not None
+                 else scopes.project_label(entry))
+        if where:
+            lines.append("scope: project (%s)" % where)
         if entry.get("pinned"):
             lines.append("pinned: yes")
         if entry.get("quarantined"):
@@ -1815,9 +1881,11 @@ def _tool_read(args: dict):
                 and rec.get("source_dir", cat.get("rel_dir"))
                 == cat.get("rel_dir"))
         return mcp.read_reply(name, text, kind=cat.get("kind") or "skill",
-                              installed=here), False
+                              installed=here,
+                              where=scopes.project_label(rec or {})), False
     text, kind, lock, _cat = info._resolve_text(name)
-    return mcp.read_reply(name, text, kind=kind, installed=lock is not None), False
+    return mcp.read_reply(name, text, kind=kind, installed=lock is not None,
+                          where=scopes.project_label(lock or {})), False
 
 
 @_path_hint
@@ -1963,8 +2031,8 @@ def _tool_doctor(args: dict):
     # answered "healthy" while CLI `doctor` and `heal` exited 1.
     lock_bad = not integ.ok and not lost
     if lock_bad:
-        lines.append("the lock file %s — ask the user to restore it with "
-                     "`boost replay`" % lockfile.fault(integ))
+        lines.append("the lock file %s — ask the user to %s"
+                     % (lockfile.fault(integ), lockfile.remedy(integ)))
 
     def unrecorded(names: list[str]) -> list[str]:
         n = len(names)
@@ -1973,8 +2041,9 @@ def _tool_doctor(args: dict):
                     "re-records %s" % (n, "" if n == 1 else "s", ", ".join(names),
                                        "it" if n == 1 else "them")]
         return ["%d store dir%s the lock file cannot be read about (%s) — "
-                "`boost replay` restores the lock that knows whose they are"
-                % (n, "" if n == 1 else "s", ", ".join(names))]
+                "%s, and it will know whose they are"
+                % (n, "" if n == 1 else "s", ", ".join(names),
+                   lockfile.remedy(integ))]
 
     # Right after `boost replay rollback` over a corrupt lock, an unrecorded
     # store dir may be what the lock's last change installed, so `boost sync`
@@ -2446,7 +2515,9 @@ def _run_mcp_host(host: str, action: str, cmd, *,
     if cfg:
         return "refused", cfg
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(util.resolve_exe(cmd), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return "failed", str(e)
     for ln in (proc.stdout or "").strip().splitlines():

@@ -54,7 +54,7 @@ holds, and the gap is not small:
     sickn33/antigravity-awesome-skills           6,634     2,117    68.1%
     NeoLabHQ/context-engineering-kit               268        90    66.4%
     affaan-m/ECC                                 1,621     1,588     2.0%
-    the whole corpus                            10,731     5,938    44.7%
+    the whole corpus                            10,731     5,937    44.7%
 
 `MAX_ROW_SHARE` is the only shipped guard against the gate's corpus becoming
 one publisher's house style, and it ratcheted on the first column alone. That

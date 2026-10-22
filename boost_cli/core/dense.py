@@ -20,6 +20,7 @@ import json
 import os
 import sqlite3
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 from ..errors import BoostError
@@ -72,15 +73,102 @@ def _connect() -> sqlite3.Connection | None:
     if mod is None:
         return None
     paths.ensure_dirs()
-    con = sqlite3.connect(str(db_path()))
+    p = db_path()
+    # Sized before the connect, because `sqlite3.connect` creates the file. A
+    # Python whose sqlite3 cannot load extensions used to leave a 0-byte store
+    # behind on every `reindex --dense`, which doctor then read as a broken
+    # build. Only an empty file is removed: it holds nothing to lose.
+    try:
+        size = p.stat().st_size
+    except OSError:
+        size = 0
+    con = sqlite3.connect(str(p))
     try:
         con.enable_load_extension(True)
         mod.load(con)
         con.enable_load_extension(False)
     except (AttributeError, sqlite3.OperationalError):
+        # Closed before the unlink: Windows refuses to delete an open file.
         con.close()
+        if size == 0:
+            with suppress(OSError):
+                p.unlink()
         return None
     return con
+
+
+def extension_error() -> str | None:
+    """Why this Python's sqlite3 cannot load sqlite-vec, or None.
+
+    The ``[rag]`` extra can be fully installed and still unusable: a Python
+    built without loadable SQLite extensions (some pyenv and system builds)
+    imports ``sqlite_vec`` fine and then cannot load it. Every remedy that says
+    "install the extra" is a no-op for that user, so this is its own rung.
+
+    Probed on an in-memory database, never the store, so it writes nothing.
+    None when there is no backend to probe — that is the ``no-backend`` rung.
+    """
+    mod = _load()
+    if mod is None:
+        return None
+    load = getattr(mod, "load", None)
+    if not callable(load):
+        return None
+    con = sqlite3.connect(":memory:")
+    try:
+        try:
+            enable = con.enable_load_extension
+        except AttributeError:
+            return "this Python's sqlite3 was built without extension loading"
+        try:
+            enable(True)
+            load(con)
+        except sqlite3.OperationalError as exc:
+            return str(exc) or type(exc).__name__
+        return None
+    finally:
+        con.close()
+
+
+def unreadable() -> bool:
+    """True when a store file exists, is non-empty, and SQLite rejects it.
+
+    A truncated download, a disk error or a stray file at this path reads as
+    "file is not a database" on the first query. That used to escape as exit
+    70 from `boost search` and from the `reindex --dense --force` meant to
+    repair it, while doctor called the store "not configured".
+    """
+    p = db_path()
+    try:
+        if p.stat().st_size == 0:
+            return False
+    except OSError:
+        return False
+    try:
+        con = sqlite3.connect(str(p))
+    except sqlite3.Error:
+        return True
+    try:
+        con.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+    except sqlite3.OperationalError:
+        # "database is locked" is an OperationalError too: a store another
+        # boost is writing (a long VACUUM holds the lock for minutes) is busy,
+        # not corrupt, and calling it corrupt would send the user to the
+        # `--force` that deletes it.
+        return False
+    except sqlite3.DatabaseError:
+        return True                 # "file is not a database", "malformed"
+    finally:
+        con.close()
+    return False
+
+
+def _remove_store() -> None:
+    """Delete the store file and any journal SQLite left beside it."""
+    p = db_path()
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        with suppress(FileNotFoundError):
+            Path(str(p) + suffix).unlink()
 
 
 # How many binary candidates the exact rescore re-ranks. `vec0` has no ANN
@@ -374,7 +462,9 @@ def _gc_orphan_vectors(con: sqlite3.Connection) -> int:
 def _read_meta(con: sqlite3.Connection) -> dict[str, object]:
     try:
         rows = con.execute("SELECT k, v FROM meta").fetchall()
-    except sqlite3.OperationalError:
+    except sqlite3.DatabaseError:
+        # OperationalError is "no meta table"; its parent is also "file is
+        # not a database", which a caller must survive the same way.
         return {}
     out: dict[str, object] = {}
     for k, v in rows:
@@ -461,23 +551,35 @@ def _recorded_meta(*, count: bool = False) -> dict:
     store was built with voyage-3") would then vanish in exactly the case that
     needs it — a user who dropped the ``[rag]`` extra and wants to know why
     dense went quiet. ``meta`` is a plain table, so plain sqlite3 can read it.
+
+    The private keys say what is on disk: ``_store`` is a store anything
+    built (a ``meta`` row or a chunk), so an empty file — what a failed
+    extension load used to leave — is no store rather than "an older build";
+    ``_corrupt`` is a file SQLite rejects, which is a store and a broken one.
     """
     p = db_path()
     if not p.exists():
         return {}
+    if unreadable():
+        # Never raise into a health check whose whole job is to survive a
+        # broken install — but never call it "no store" either: that sent
+        # doctor to "not configured" and the build that then crashed on it.
+        return {"_corrupt": True, "_store": True}
     try:
         con = sqlite3.connect(str(p))
     except sqlite3.Error:
-        return {}
+        return {"_corrupt": True, "_store": True}
     try:
         meta = _read_meta(con)
+        built = bool(meta)
         meta["_chunks"], meta["_nonempty"] = _chunk_total(con, meta, exact=count)
         meta["_quantized"] = quantized(con)
+        meta["_store"] = built or bool(meta["_nonempty"])
         return meta
+    except sqlite3.OperationalError:
+        return {}                   # busy (locked), not broken: see unreadable()
     except sqlite3.DatabaseError:
-        # A truncated or non-sqlite file: report "no store", never raise into
-        # a health check whose whole job is to survive a broken install.
-        return {}
+        return {"_corrupt": True, "_store": True}
     finally:
         con.close()
 
@@ -588,6 +690,16 @@ _FIX = {
     # failure mode this whole table exists to prevent.
     "disabled": "unset the kill switch: `unset BOOST_NO_EMBED`",
     "no-backend": "install the extra: `%s`" % _INSTALL,
+    # The extra is installed and cannot run: reinstalling it changes nothing,
+    # which is what this machine used to be told.
+    "no-extension-load": ("this Python's sqlite3 cannot load extensions, "
+                          "which sqlite-vec needs — reinstall boost under a "
+                          "Python built with loadable SQLite extensions, "
+                          "then `boost reindex --dense`"),
+    # SQLite rejects the file outright. Only `--force` may replace it: the
+    # plain build refuses, so a store is never deleted without being asked.
+    "corrupt": ("rebuild it: `boost reindex --dense --force` replaces the "
+                "unreadable store and re-embeds every entry"),
     # Names the keyless remedy first: since the [rag] extra carries a local
     # embedding model, an API key is the quality ceiling, not the entry fee.
     # This reason means "no key AND no local backend", which in practice is a
@@ -910,7 +1022,10 @@ def status(*, count: bool = False) -> dict:
     # Emptiness is answered by the probe, never by the count — that is what
     # lets the count stay unknown without any reason becoming a guess.
     nonempty = bool(meta.get("_nonempty"))
-    store_exists = bool(meta)
+    corrupt = bool(meta.get("_corrupt"))
+    store_exists = bool(meta.get("_store"))
+    # Probed only once a backend imports: without one there is nothing to load.
+    ext_err = extension_error() if have_be else None
     # Only the local provider records one: an API key's failures are not
     # tracked, and a record left by the local model says nothing about Voyage.
     failure = embed.local_failure() if prov == "local" else None
@@ -923,8 +1038,15 @@ def status(*, count: bool = False) -> dict:
         # a key both leave this status byte-identical, so naming any other link
         # would send the user to a remedy that provably cannot work.
         reason: str | None = "disabled"
+    elif corrupt:
+        # Above the backend: the file is unreadable whatever else is missing,
+        # and every rung below it would describe a store that is not there.
+        reason = "corrupt"
     elif not have_be:
         reason = "no-backend"
+    elif ext_err is not None:
+        # Above the key: no provider can help a store that cannot be opened.
+        reason = "no-extension-load"
     elif prov is None:
         reason = "no-key"
     elif not store_exists:
@@ -965,6 +1087,8 @@ def status(*, count: bool = False) -> dict:
         "backend": have_be,
         "provider": prov, "model": mdl, "dim": dim,
         "store_exists": store_exists,
+        "corrupt": corrupt,
+        "extension_error": ext_err,
         "built_provider": b_prov, "built_model": b_mdl,
         "built_dim": b_dim, "built_version": b_ver,
         "chunks": chunks,
@@ -1003,26 +1127,60 @@ def ready() -> bool:
     if con is None:
         return False
     try:
-        meta = _read_meta(con)
-        if meta.get("version") != INDEX_VERSION:
-            return False
-        if meta.get("provider") != embed.provider():
-            return False
-        # Model, not just provider+dim: two models from one provider can share
-        # a dimension and still be different embedding spaces (voyage-3 and
-        # voyage-4 are both 1024-d), so serving stale vectors would silently
-        # mix spaces rather than fail loudly.
-        if meta.get("model") != embed.model():
-            return False
-        if meta.get("dim") != embed.dimension():
-            return False
-        # Existence, not a total: this runs on every search that has a store to
-        # consult, and counting `chunks` walks its whole covering index — 34.5
-        # MB on a real 445-tap store — to answer a yes/no question. `LIMIT 1`
-        # stops at the first row. See `_chunk_total` for the measurements.
-        return _chunk_total(con, meta, exact=False)[1]
+        return _ready_on(con)
+    except sqlite3.DatabaseError:
+        # An unreadable store is not ready; `boost search` falls back to BM25
+        # and `status()` names it, rather than this escaping as exit 70.
+        return False
     finally:
         con.close()
+
+
+def _ready_on(con: sqlite3.Connection) -> bool:
+    """Whether the store open on `con` matches the live embedding space."""
+    meta = _read_meta(con)
+    if meta.get("version") != INDEX_VERSION:
+        return False
+    if meta.get("provider") != embed.provider():
+        return False
+    # Model, not just provider+dim: two models from one provider can share
+    # a dimension and still be different embedding spaces (voyage-3 and
+    # voyage-4 are both 1024-d), so serving stale vectors would silently
+    # mix spaces rather than fail loudly.
+    if meta.get("model") != embed.model():
+        return False
+    if meta.get("dim") != embed.dimension():
+        return False
+    # Existence, not a total: this runs on every search that has a store to
+    # consult, and counting `chunks` walks its whole covering index — 34.5
+    # MB on a real 445-tap store — to answer a yes/no question. `LIMIT 1`
+    # stops at the first row. See `_chunk_total` for the measurements.
+    return _chunk_total(con, meta, exact=False)[1]
+
+
+def refusal_text(refused: dict, st: dict | None = None) -> tuple[str, str]:
+    """``(message, hint)`` for a :func:`build` refusal.
+
+    The hint is :func:`fix_hint`'s, so `reindex` names the remedy doctor and
+    search name; the message says what was kept and what replacing it costs.
+    """
+    reason = str(refused.get("refused") or "")
+    hint = fix_hint(reason, status() if st is None else st)
+    if reason == "corrupt":
+        return ("dense index not rebuilt — %s is not a readable SQLite "
+                "database, and only `--force` replaces it"
+                % db_path().as_posix(), hint)
+    n = refused.get("chunks")
+    held = (f"{n:,} vector{'' if n == 1 else 's'}"
+            if isinstance(n, int) and not isinstance(n, bool) else "vectors")
+    live = refused.get("provider")
+    how = ("through %s's paid API" % live) if live in embed.KEY_ENV else "locally"
+    return ("dense index not rebuilt — the store holds %s built with %s %s "
+            "(%s-d) and this machine embeds with %s %s (%s-d); only `--force` "
+            "replaces them, re-embedding every entry %s"
+            % (held, refused.get("built_provider"), refused.get("built_model"),
+               refused.get("built_dim"), live, refused.get("model"),
+               refused.get("dim"), how), hint)
 
 
 def build(entries: list[dict] | None = None, force: bool = False,
@@ -1030,7 +1188,11 @@ def build(entries: list[dict] | None = None, force: bool = False,
     """(Re)embed and store chunk vectors, reusing unchanged taps.
 
     Returns stats, or ``None`` if the backend or an embeddings provider is
-    unavailable (nothing is written in that case).
+    unavailable (nothing is written in that case). Without ``force`` it also
+    writes nothing and returns ``{"refused": <status reason>, ...}`` for a
+    store it would have to destroy: one SQLite cannot read (``corrupt``), or
+    one holding vectors in another embedding space (``provider-changed``,
+    ``model-changed``, ``dim-changed``). :func:`refusal_text` words it.
 
     ``on_progress(done, total)`` is called before the first batch and after
     each one. It exists because this is the longest-running thing boost does —
@@ -1043,6 +1205,12 @@ def build(entries: list[dict] | None = None, force: bool = False,
     from .rag import _tap_commits, _tap_paths
     if not have_backend() or not embed.available():
         return None
+    if unreadable():
+        # Without --force, say so and leave the file: it is the user's to
+        # inspect, and a plain reindex must never delete what it cannot read.
+        if not force:
+            return {"refused": "corrupt"}
+        _remove_store()
     entries = catalog.all_entries() if entries is None else entries
     tap_paths = _tap_paths()
     commits = _tap_commits()
@@ -1064,6 +1232,25 @@ def build(entries: list[dict] | None = None, force: bool = False,
                         and meta.get("provider") == prov
                         and meta.get("model") == mdl
                         and meta.get("dim") == dim)
+        if not force and same_version and not same_backend:
+            # A store in another embedding space. Wiping it is the re-embed
+            # `fix_hint` reserves for `--force` — and for a paid space, a bill
+            # restoring the key would have avoided. Refuse while it holds
+            # vectors; an empty one has nothing to lose. A version change
+            # still rebuilds: those vectors cannot be served by any space.
+            held, nonempty = _chunk_total(con, meta, exact=False)
+            if nonempty:
+                if meta.get("provider") != prov:
+                    why = "provider-changed"
+                elif meta.get("model") != mdl:
+                    why = "model-changed"
+                else:
+                    why = "dim-changed"
+                return {"refused": why, "chunks": held,
+                        "built_provider": meta.get("provider"),
+                        "built_model": meta.get("model"),
+                        "built_dim": meta.get("dim"),
+                        "provider": prov, "model": mdl, "dim": dim}
         if force or not same_backend:
             _wipe(con)
         _ensure_schema(con, dim)
@@ -1361,7 +1548,7 @@ def _indexed_taps(con: sqlite3.Connection) -> set:
     """Every tap name the vector index currently holds chunks for."""
     try:
         return {r[0] for r in con.execute("SELECT DISTINCT tap FROM chunks")}
-    except sqlite3.OperationalError:
+    except sqlite3.DatabaseError:
         return set()          # no chunks table yet — nothing indexed, nothing stale
 
 

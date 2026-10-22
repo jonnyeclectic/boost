@@ -530,20 +530,28 @@ class TestBuildWithoutExtension:
         assert dense._indexed_taps(con) == set()
         con.close()
 
-    def test_provider_switch_wipes_and_rebuilds(self, store):
+    def test_provider_switch_refuses_without_force(self, store):
+        # A plain build must not throw away vectors from another space: that
+        # re-embed is what `fix_hint` reserves for `--force`.
         dense.build(entries=_ENTRIES, force=True)
         store.setattr(embed, "provider", lambda: "voyage")
-        stats = dense.build(entries=_ENTRIES)              # no force needed
+        stats = dense.build(entries=_ENTRIES)
+        assert stats == {"refused": "provider-changed", "chunks": 2,
+                         "built_provider": "openai", "built_model": "toy-8",
+                         "built_dim": 8, "provider": "voyage",
+                         "model": "toy-8", "dim": 8}
+        stats = dense.build(entries=_ENTRIES, force=True)
         assert stats["reused"] == []
         assert stats["provider"] == "voyage"
 
-    def test_model_switch_wipes_and_rebuilds(self, store):
+    def test_model_switch_refuses_then_force_rebuilds(self, store):
         # provider and dim unchanged, only the model moved — the voyage-3 ->
         # voyage-4 case. Without the model term in `same_backend` the unchanged
         # tap commit would reuse vectors from the old embedding space.
         dense.build(entries=_ENTRIES, force=True)
         store.setattr(embed, "model", lambda: "toy-4")
-        stats = dense.build(entries=_ENTRIES)              # no force needed
+        assert dense.build(entries=_ENTRIES)["refused"] == "model-changed"
+        stats = dense.build(entries=_ENTRIES, force=True)
         assert stats["reused"] == []
         assert stats["model"] == "toy-4"
         assert stats["added"] == 2

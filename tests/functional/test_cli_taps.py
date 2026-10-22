@@ -127,6 +127,27 @@ class TestTap:
         r = boost("tap", expect=2)
         assert "provide a SPEC, --defaults, or --catalog" in r.err
 
+    @pytest.mark.parametrize("extra, named", [
+        (("--limit", "2"), "--limit only filters --catalog; pass --catalog "
+                           "or drop it"),
+        (("--include-lists",), "--include-lists only filters --catalog; "
+                               "pass --catalog or drop it"),
+        (("--type", "rule", "--category", "ui"),
+         "--type/--category only filter --catalog; pass --catalog or drop "
+         "them"),
+    ])
+    @pytest.mark.parametrize("target", [("--defaults",), ("someone/repo",)])
+    def test_catalog_filters_without_catalog_rc2(self, boost, sandbox, extra,
+                                                 named, target):
+        # They used to be ignored: `tap --limit 2 --defaults` cloned all seven.
+        r = boost("tap", "--dry-run", *extra, *target, expect=2)
+        assert named in r.err
+        assert r.out == ""
+
+    def test_catalog_filters_with_catalog_are_accepted(self, boost, sandbox):
+        r = boost("tap", "--catalog", "--dry-run", "--limit", "1")
+        assert "dry run" in r.out
+
     def test_missing_local_path_names_the_directory_not_github(
             self, boost, sandbox, tmp_path):
         # A path-shaped SPEC that doesn't exist used to fall through to the
@@ -157,8 +178,9 @@ class TestTap:
 
         monkeypatch.setattr("boost_cli.core.gitutil.clone_shallow", boom)
         r = boost("tap", "--defaults", expect=1)
-        assert "could not tap anthropics/skills: network down" in r.out
-        assert "could not tap obra/superpowers: network down" in r.out
+        assert "  ! could not tap anthropics/skills: network down\n" in r.err
+        assert "  ! could not tap obra/superpowers: network down\n" in r.err
+        assert "could not tap" not in r.out
         assert registry.list_taps() == []   # nothing half-added
 
     def test_defaults_success_then_already_tapped(self, boost, sandbox,
@@ -300,7 +322,9 @@ class TestTapCatalog:
 class TestUntap:
     def test_unknown_rc1(self, boost, sandbox):
         r = boost("untap", "nope", expect=1)
-        assert "could not untap nope: no such tap: nope" in r.out
+        # The reason for rc 1 is on stderr, where a script looks for it.
+        assert r.err == "  ! could not untap nope: no such tap: nope\n"
+        assert "could not untap" not in r.out
 
     def test_dependents_declined_keeps_tap(self, boost, installed, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")

@@ -115,7 +115,7 @@ def ask(prompt: str, ok_label: str, system: str,
     run = subprocess.run if run is None else run
     try:
         proc = run(argv, capture_output=True, text=True,
-                   timeout=TIMEOUT + 30)
+                   encoding="utf-8", errors="replace", timeout=TIMEOUT + 30)
     except (OSError, subprocess.SubprocessError):
         return False
     return answered_yes(argv, ok_label, proc.returncode, proc.stdout or "")

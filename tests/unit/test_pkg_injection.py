@@ -36,7 +36,7 @@ def test_lists_up_to_three_findings(monkeypatch, tmp_path):
     warnings = _capture(monkeypatch)
     pkg._warn_injection(_result(tmp_path, body))
     # 1 summary line + at most 3 detail lines
-    detail = [w for w in warnings if w.lstrip().startswith("L")]
+    detail = [w for w in warnings if w.lstrip().startswith("SKILL.md:L")]
     assert len(detail) == 3
 
 

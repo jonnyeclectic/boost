@@ -104,13 +104,13 @@
       <div class="group-h">Install &amp; lifecycle</div>
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp --as-skill --no-as-skill name">install</a>
       <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --scope {user,project} --local --global --kind {skill,rule,workflow} -y, --yes name">uninstall</a>
-      <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes">sync</a>
+      <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes --rebuild-lock">sync</a>
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --discard-edits --allow-downgrade --shards --json tap">update</a>
       <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all --scope {user,project} --local --global name">reinstall</a>
       <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  --dry-run {dump,install} file">bundle</a>
       <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a -y, --yes url_or_path">import</a>
-      <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit name">pin</a>
-      <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  name">unpin</a>
+      <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit --scope {user,project} --local --global name">pin</a>
+      <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  --scope {user,project} --local --global name">unpin</a>
       <a class="cmd-link" href="#cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json -y, --yes {save,list,restore} label|id">snapshot</a>
       <a class="cmd-link" href="#cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --output, --out out --zip --force name">export</a>
       <a class="cmd-link" href="#cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk, langgraph) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --output, --out file name">adapt</a>
@@ -252,16 +252,17 @@
           <div class="arg"><code>-y, --yes</code><span>skip the confirmation prompt</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes">
+      <section class="cmd" id="cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes --rebuild-lock">
         <h3><span class="cname">sync</span><span class="gtag">pkg</span></h3>
         <p class="summary">Reconcile installed skills &amp; symlinks against the lock file</p>
-        <pre class="syn">boost sync [--diff] [--prune] [--json] [-y]</pre>
+        <pre class="syn">boost sync [--diff] [--prune] [--json] [-y] [--rebuild-lock]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--diff</code><span>show the plan without applying it</span></div>
           <div class="arg"><code>--prune</code><span>also delete store dirs that copy another tool&#x27;s skills, drop boost&#x27;s Claude Code link to a skill an enabled plugin ships identically, and remove links outside a declared --agent scope</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
           <div class="arg"><code>-y, --yes</code><span>skip the --prune confirmation prompts</span></div>
+          <div class="arg"><code>--rebuild-lock</code><span>set an unreadable lock file aside (its bytes are kept) and re-record the store into a new one</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --discard-edits --allow-downgrade --shards --json tap">
@@ -311,7 +312,7 @@
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--dry-run</code><span>show what install would do, touching nothing</span></div>
+          <div class="arg"><code>--dry-run</code><span>show what install would do, or print what dump would write, touching nothing</span></div>
         </div>
         <p class="epilog">Boostfile lines: `tap NAME [URL] [--at SHA]` and `skill [TAP:]NAME[@VERSION] [--local] [--agent A]... [--pin] [--commit-pin SHA] [--tag T]...`; `#` starts a comment. `--at` holds the tap at a commit, as `boost tap --at` does; the skill options replay `boost install --local/--agent`, `boost pin [--commit]` and `boost tag +T`. Every option is optional, so older Boostfiles still install.</p>
       </section>
@@ -331,10 +332,10 @@
           <div class="arg"><code>-y, --yes</code><span>skip the replace-the-only-copy confirmation prompt</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit name">
+      <section class="cmd" id="cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit --scope {user,project} --local --global name">
         <h3><span class="cname">pin</span><span class="gtag">pkg</span></h3>
         <p class="summary">Pin a skill, rule or workflow to its current version</p>
-        <pre class="syn">boost pin [--commit] NAME</pre>
+        <pre class="syn">boost pin [--commit] [--scope {user,project} | --local | --global] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>installed skill, rule or workflow</span></div>
@@ -342,15 +343,24 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--commit</code><span>also freeze the exact source commit (integrity pin)</span></div>
+          <div class="arg"><code>--scope {user,project}</code><span>pin the copy in your user config or in this repo (needed when both hold the name)</span></div>
+          <div class="arg"><code>--local</code><span>the copy installed in this repo (= --scope project)</span></div>
+          <div class="arg"><code>--global</code><span>the copy in your user config (= --scope user)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  name">
+      <section class="cmd" id="cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  --scope {user,project} --local --global name">
         <h3><span class="cname">unpin</span><span class="gtag">pkg</span></h3>
         <p class="summary">Allow a pinned skill, rule or workflow to update again</p>
-        <pre class="syn">boost unpin NAME</pre>
+        <pre class="syn">boost unpin [--scope {user,project} | --local | --global] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>pinned skill, rule or workflow</span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--scope {user,project}</code><span>unpin the copy in your user config or in this repo (needed when both hold the name)</span></div>
+          <div class="arg"><code>--local</code><span>the copy installed in this repo (= --scope project)</span></div>
+          <div class="arg"><code>--global</code><span>the copy in your user config (= --scope user)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json -y, --yes {save,list,restore} label|id">
@@ -1250,12 +1260,12 @@
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{list,create,delete,status,apply}</code><span>what to do (default: list; status is the same as list)</span></div>
-          <div class="arg"><code>name</code><span>cohort name</span></div>
+          <div class="arg"><code>name</code><span>cohort name (list/status: show only that cohort)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--skills SKILLS</code><span>comma-separated skill names (repeatable)</span></div>
-          <div class="arg"><code>--percent PERCENT</code><span>rollout percentage (default 100)</span></div>
+          <div class="arg"><code>--skills SKILLS</code><span>with `create`: comma-separated skill names (repeatable)</span></div>
+          <div class="arg"><code>--percent PERCENT</code><span>with `create`: rollout percentage (default 100)</span></div>
           <div class="arg"><code>-y, --yes</code><span>`delete` without the confirmation prompt</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>

@@ -14,6 +14,8 @@ commands gather the raw signals (``head_commit``, ``source_dir_for``,
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from . import util
 
 # ── upstream_reason: why a tap's copy is newer than the installed one ──────
@@ -174,6 +176,22 @@ def removed_upstream_remedy(name: str = "", quote: bool = False) -> str:
     """
     cmd = "boost uninstall %s" % name if name else "boost uninstall"
     return "%s, or keep as-is" % ("`%s`" % cmd if quote else cmd)
+
+
+def kind_changed_message(label: str, name: str, tap: str,
+                         kinds: Iterable[str]) -> str:
+    """Why an installed skill is left alone: its tap now ships ``name`` only
+    as another kind (``kinds``, e.g. a workflow).
+
+    The skill paths used to match the name across every kind, so a skill that
+    became a same-named workflow upstream had the *workflow* installed beside
+    it and "upgraded" reported for a skill nobody touched — on every run. The
+    switch is the user's to make, so this names it rather than doing it.
+    """
+    now = " or ".join(sorted(set(kinds)))
+    return ("%s is no longer shipped as a skill by tap %s (it is now a %s) — "
+            "leaving as-is; `boost uninstall %s --kind skill`, then `boost "
+            "install %s:%s`, switches to it" % (label, tap, now, name, tap, name))
 
 
 def outdated_footer(total: int, source_missing: int, removed: int = 0,
