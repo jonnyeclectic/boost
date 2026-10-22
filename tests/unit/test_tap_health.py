@@ -286,3 +286,78 @@ class TestUnfinishedClones:
         (repos / "o__half" / ".git").mkdir(parents=True)
         monkeypatch.setattr(gitutil, "has_git", lambda: False)
         assert registry.unfinished_clones() == []
+
+
+def _drop_from_config(name):
+    from boost_cli.core import config
+    config.mutate(lambda cfg: cfg.__setitem__(
+        "taps", [t for t in cfg["taps"] if t["name"] != name]))
+
+
+class TestUnlistedClones:
+    """A complete clone no tap row lists: named, with the command that re-adds it."""
+
+    def test_only_complete_unlisted_clones_with_their_origin(
+            self, boost, fixture_tap_src, tmp_path):
+        assert registry.unlisted_clones() == []          # no repos/ at all
+        keep = _copy_tap(fixture_tap_src, tmp_path, "ul-keep")
+        lost = _copy_tap(fixture_tap_src, tmp_path, "ul-lost")
+        boost("tap", keep)
+        boost("tap", lost)
+        (paths.repos_dir() / "o__half" / ".git").mkdir(parents=True)
+        (paths.repos_dir() / "stray.txt").write_text("x", encoding="utf-8")
+        assert registry.unlisted_clones() == []
+        _drop_from_config("ul-lost")
+        clone = paths.repos_dir() / "ul-lost"
+        assert registry.unlisted_clones() == [(clone, str(lost))]
+        assert registry.readd_hint(clone, str(lost)) == (
+            "`boost tap %s`" % util.shell_arg(str(lost)))
+        assert registry.unlisted_clone_line(clone, str(lost)) == (
+            "%s is a tap clone no configured tap lists, so boost reads "
+            "nothing from it — re-add it with `boost tap %s`, or delete the "
+            "directory" % (paths.tilde(clone), util.shell_arg(str(lost))))
+
+    def test_a_clone_without_an_origin_gets_words_not_a_command(self, sandbox):
+        clone = paths.repos_dir() / "nourl"
+        assert registry.readd_hint(clone, "") == (
+            "re-tap nourl from its original source (its URL was not recorded)")
+        assert registry.readd_hint(paths.repos_dir() / "o__r", "") == (
+            "`boost tap o/r`")
+
+    def test_without_git_none_are_reported(self, boost, fixture_tap_src,
+                                           tmp_path, monkeypatch):
+        boost("tap", _copy_tap(fixture_tap_src, tmp_path, "ul-nogit"))
+        _drop_from_config("ul-nogit")
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+        assert registry.unlisted_clones() == []
+
+    def test_corrupt_config_names_each_clone_and_doctor_stays_red_until_all(
+            self, boost, fixture_tap_src, tmp_path):
+        one = _copy_tap(fixture_tap_src, tmp_path, "ul-one")
+        two = _copy_tap(fixture_tap_src, tmp_path, "ul-two")
+        boost("tap", one)
+        boost("tap", two)
+        paths.config_path().write_text('{"taps": [', encoding="utf-8")
+        flat = " ".join(boost("doctor", expect=1).out.split())
+        assert ("the 2 tap clones on disk are not listed. Repair the file, "
+                "or re-add them with `boost tap %s`, `boost tap %s`; the next "
+                "write" % (util.shell_arg(str(one)), util.shell_arg(str(two)))
+                in flat)
+        # Following the advice for one tap is not the whole remedy.
+        boost("tap", one)
+        r = boost("doctor", "--json", expect=1)
+        import json
+        rows = [c for c in json.loads(r.out)["checks"]
+                if c["status"] == "issue"]
+        assert [(c["name"], c["message"]) for c in rows] == [
+            ("tap", registry.unlisted_clone_line(
+                paths.repos_dir() / "ul-two", str(two)))]
+        for dry in ([], ["--dry-run"]):
+            r = boost("heal", *dry, expect=1)
+            text = " ".join(r.out.split())
+            assert "re-add it with `boost tap %s`" % util.shell_arg(
+                str(two)) in text
+            assert "nothing to heal" not in text
+        boost("tap", two)
+        r = boost("doctor")
+        assert "2 taps cloned" in r.out

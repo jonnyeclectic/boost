@@ -496,6 +496,41 @@ def unfinished_clones() -> list[Path]:
                   and not gitutil.head_commit(d))
 
 
+def unlisted_clones() -> list[tuple[Path, str]]:
+    """Real clones under `repos/` that no configured tap lists, with origin URL.
+
+    The complement of :func:`unfinished_clones`: a dir whose HEAD resolves is
+    someone's clone, left serving nothing once config.json lost its row. With
+    the file corrupt every clone is one, and doctor counted them without
+    naming any; after the user re-added the one they remembered, it called
+    the machine healthy over the rest. Empty without git.
+    """
+    root = paths.repos_dir()
+    if not root.is_dir() or not gitutil.has_git():
+        return []
+    listed = {t.path for t in list_taps()}
+    return [(d, gitutil.remote_url(d)) for d in sorted(root.iterdir())
+            if d.is_dir() and d not in listed and gitutil.head_commit(d)]
+
+
+def readd_hint(clone: Path, url: str) -> str:
+    """The quoted command that re-adds the unlisted ``clone``, or words for one.
+
+    :func:`retap_hint` with the clone's dir name mapped back to a tap name, so
+    a clone with no origin still gets an honest sentence rather than a
+    command that fails.
+    """
+    hint = retap_hint(clone.name.replace("__", "/"), url)
+    return "`%s`" % hint if hint.startswith("boost tap ") else hint
+
+
+def unlisted_clone_line(clone: Path, url: str) -> str:
+    """The one line doctor and heal print for a :func:`unlisted_clones` row."""
+    return ("%s is a tap clone no configured tap lists, so boost reads "
+            "nothing from it — re-add it with %s, or delete the directory"
+            % (paths.tilde(clone), readd_hint(clone, url)))
+
+
 def broken_clone_line(name: str) -> str:
     """The one line doctor and heal print for a `Tap.is_broken_clone` tap.
 

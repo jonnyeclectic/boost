@@ -10,6 +10,7 @@ quarantine) live in commands/safety.py; shared helpers in commands/_common.py.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -677,14 +678,22 @@ def cmd_doctor(argv):
     # machine whose clones were all still on disk. Say what was lost instead.
     cfg_err = config.check()
     if cfg_err:
-        clones = config.unlisted_clones()
+        # Each clone named with the command that re-adds it: "re-add your
+        # taps" named none, though every clone's origin says where it came
+        # from.
+        clones = registry.unlisted_clones()
+        if clones:
+            unread = "the %d tap clone%s on disk %s not listed" % (
+                len(clones), _s(len(clones)),
+                "is" if len(clones) == 1 else "are")
+            readd = "re-add %s with %s" % (
+                "it" if len(clones) == 1 else "them",
+                ", ".join(itertools.starmap(registry.readd_hint, clones)))
+        else:
+            unread, readd = "no taps or settings are read", "re-add your taps"
         bad("config", "%s — boost is running on defaults, so %s. Repair the "
-            "file, or re-add your taps; the next write moves the bad file "
-            "to config.json.corrupt" % (cfg_err, (
-                "the %d tap clone%s on disk %s not listed" % (
-                    len(clones), _s(len(clones)),
-                    "is" if len(clones) == 1 else "are"))
-                if clones else "no taps or settings are read"), wrap=True)
+            "file, or %s; the next write moves the bad file to "
+            "config.json.corrupt" % (cfg_err, unread, readd), wrap=True)
 
     # Same for policy.json: unreadable, it reads as defaults, and the
     # verdict was "healthy" while every rule in it went unenforced.
@@ -802,6 +811,10 @@ def cmd_doctor(argv):
     for half in [] if cfg_err else registry.unfinished_clones():
         bad("tap", "%s is a clone that never finished (no tap lists it and it "
             "has no commit checked out) — delete it" % _tilde(half), wrap=True)
+    # A complete clone no tap lists: re-adding one tap after a corrupt config
+    # turned doctor green over every clone still unlisted.
+    for clone, url in [] if cfg_err else registry.unlisted_clones():
+        bad("tap", registry.unlisted_clone_line(clone, url), wrap=True)
     if taps and cache_block:
         bad("cache", "%s — every command rescans its taps and cannot keep the "
             "result; %s"
@@ -2484,6 +2497,11 @@ def cmd_heal(argv):
                  wrap=True)
     stuck.extend(broken_taps)
     stuck.extend(not_collapsed)
+    # Re-adding a tap is the user's call (it is a clone, and a source), so
+    # heal names the one doctor flags rather than answer "nothing to heal".
+    for clone, url in [] if cfg_err else registry.unlisted_clones():
+        stuck.append(clone)
+        out.warn(registry.unlisted_clone_line(clone, url), wrap=True)
     # The same rule for the cache dir doctor flags, and for any directory a
     # refused mkdir left missing: heal cannot make the parent writable, so it
     # must not answer "nothing to heal" beneath the problem. The preview and
