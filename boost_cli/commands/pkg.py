@@ -3094,8 +3094,8 @@ def cmd_snapshot(argv: list[str]) -> int:
     if args.action == "list":
         return _snapshot_list(args.json)
     if not args.arg:
-        raise BoostError("restore needs a snapshot id",
-                        hint="see `boost snapshot list`")
+        ap.error("restore needs a snapshot id",
+                 hint="see `boost snapshot list`")
     return _snapshot_restore(args.arg, args.yes)
 
 

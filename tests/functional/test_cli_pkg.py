@@ -3835,8 +3835,8 @@ class TestErrorFollowsItsTable:
 
 
 class TestSnapshotEdges:
-    def test_restore_without_id_rc1(self, boost, sandbox):
-        r = boost("snapshot", "restore", expect=1)
+    def test_restore_without_id_is_a_usage_error(self, boost, sandbox):
+        r = boost("snapshot", "restore", expect=2)
         assert "restore needs a snapshot id" in r.err
         assert "boost snapshot list" in r.err
 

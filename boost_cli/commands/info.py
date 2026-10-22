@@ -1525,8 +1525,8 @@ def cmd_tag(argv):
         return 0
 
     if not args.name:
-        raise BoostError("skill name required",
-                        hint="`boost tag NAME +tag -tag`, or `boost tag --list`")
+        ap.error("skill name required",
+                 hint="`boost tag NAME +tag -tag`, or `boost tag --list`")
     # `args.name` may be tap-qualified (`owner/repo:skill`); resolve to the
     # bare name the lock keys on, honoring the qualifier against the
     # installed tap rather than rejecting the string as an invalid skill name.

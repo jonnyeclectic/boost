@@ -114,17 +114,17 @@ class TestHooksAdd:
 class TestHooksErrors:
     def test_add_missing_command(self, boost, sandbox):
         r = boost("hooks", "add", "SessionStart", "-n", "x",
-                  "-s", "global", expect=1)
+                  "-s", "global", expect=2)
         assert "needs --command" in r.err
 
     def test_add_missing_event(self, boost, sandbox):
         r = boost("hooks", "add", "-c", "x", "-n", "y",
-                  "-s", "global", expect=1)
+                  "-s", "global", expect=2)
         assert "needs an EVENT" in r.err
 
     def test_add_missing_name(self, boost, sandbox):
         r = boost("hooks", "add", "SessionStart", "-c", "x",
-                  "-s", "global", expect=1)
+                  "-s", "global", expect=2)
         assert "needs --name" in r.err
 
     def test_list_fits_the_pane_with_a_long_name_and_command(
