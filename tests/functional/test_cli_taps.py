@@ -127,6 +127,27 @@ class TestTap:
         r = boost("tap", expect=2)
         assert "provide a SPEC, --defaults, or --catalog" in r.err
 
+    @pytest.mark.parametrize("extra, named", [
+        (("--limit", "2"), "--limit only filters --catalog; pass --catalog "
+                           "or drop it"),
+        (("--include-lists",), "--include-lists only filters --catalog; "
+                               "pass --catalog or drop it"),
+        (("--type", "rule", "--category", "ui"),
+         "--type/--category only filter --catalog; pass --catalog or drop "
+         "them"),
+    ])
+    @pytest.mark.parametrize("target", [("--defaults",), ("someone/repo",)])
+    def test_catalog_filters_without_catalog_rc2(self, boost, sandbox, extra,
+                                                 named, target):
+        # They used to be ignored: `tap --limit 2 --defaults` cloned all seven.
+        r = boost("tap", "--dry-run", *extra, *target, expect=2)
+        assert named in r.err
+        assert r.out == ""
+
+    def test_catalog_filters_with_catalog_are_accepted(self, boost, sandbox):
+        r = boost("tap", "--catalog", "--dry-run", "--limit", "1")
+        assert "dry run" in r.out
+
     def test_missing_local_path_names_the_directory_not_github(
             self, boost, sandbox, tmp_path):
         # A path-shaped SPEC that doesn't exist used to fall through to the

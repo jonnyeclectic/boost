@@ -189,6 +189,18 @@ def cmd_tap(argv) -> int:
                         "%d)" % (registry.DEFAULT_TAP_JOBS,
                                  registry.MAX_TAP_JOBS))
     args = p.parse_args(argv)
+    if not args.catalog:
+        # Each of these only narrows --catalog. Ignoring them elsewhere let
+        # `tap --limit 2 --defaults` clone every default registry.
+        stray = [flag for flag, val in (("--type", args.type),
+                                        ("--category", args.category),
+                                        ("--limit", args.limit),
+                                        ("--include-lists", args.include_lists))
+                 if val]
+        if stray:
+            p.error("%s only filter%s --catalog; pass --catalog or drop %s"
+                    % ("/".join(stray), "" if len(stray) > 1 else "s",
+                       "them" if len(stray) > 1 else "it"))
     if args.at and len(args.spec) != 1:
         p.error("--at pins one registry, so it needs exactly one SPEC")
     if not args.spec and not args.defaults and not args.catalog:
