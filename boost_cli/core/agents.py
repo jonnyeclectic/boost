@@ -508,6 +508,12 @@ def relocated_to(kind: str, name: str, entry: dict, m: dict) -> Path | None:
     have = os.path.normcase(os.path.normpath(str(m["path"])))
     if have == os.path.normcase(os.path.normpath(str(want))):
         return None
+    # The same file by another spelling is not a move: a $HOME of /tmp/x
+    # at install and /private/tmp/x now (macOS) named every row moved, and
+    # sync then rewrote them all on every run.
+    if (os.path.normcase(os.path.realpath(have))
+            == os.path.normcase(os.path.realpath(str(want)))):
+        return None
     return want
 
 

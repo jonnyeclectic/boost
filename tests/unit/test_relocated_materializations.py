@@ -176,6 +176,21 @@ class TestRelocatedTo:
                                    _cursor_row("rule", "tidy-imports")) \
             == _home(*NEW_RULE)
 
+    @pytest.mark.skipif(os.name == "nt", reason="symlinks need privilege")
+    def test_the_same_file_by_another_spelling_is_not_moved(self, boost,
+                                                            mixed, tmp_path):
+        # $HOME was /tmp/x at install and is /private/tmp/x now (macOS).
+        alias = tmp_path / "home-alias"
+        alias.symlink_to(paths.home(), target_is_directory=True)
+        entry = lockfile.get_rule("tidy-imports")
+        m = {**_cursor_row("rule", "tidy-imports"),
+             "path": str(alias.joinpath(*OLD_RULE))}
+        assert agents.relocated_to("rule", "tidy-imports", entry, m) is None
+        # ...while a moved dir under the alias still reads as moved.
+        _repoint(boost)
+        assert agents.relocated_to("rule", "tidy-imports", entry, m) \
+            == _home(*NEW_RULE)
+
     def test_rows_with_nothing_to_compare(self, boost, mixed):
         _repoint(boost)
         entry = lockfile.get_workflow("review-pr")
