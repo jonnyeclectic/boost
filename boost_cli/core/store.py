@@ -85,6 +85,9 @@ class InstallResult:
     # render_problem`) — a Gemini subagent the sanitizer could not repair.
     # No row is recorded: there is no file, and nothing for sync to retry.
     declined: list[tuple[str, str]] = field(default_factory=list)
+    # What a written workflow file could not carry over for one agent
+    # (:func:`workflows.render_notes`), worded by core, printed by the command.
+    render_notes: list[str] = field(default_factory=list)
     score: int = 0
     upgraded: bool = False
     kind: str = "skill"
@@ -5508,6 +5511,7 @@ def _install_workflow(entry: dict, force: bool = False,
     foreign: list[str] = []
     foreign_record: list[dict] = []
     declined: list[tuple[str, str]] = []
+    render_notes: list[str] = []
     # From ``materializations`` only: a ``foreign`` row names the user's file.
     owned = {m.get("path") for m in (existing or {}).get("materializations")
              or () if not lockfile.is_skill_copy(m)}
@@ -5567,6 +5571,8 @@ def _install_workflow(entry: dict, force: bool = False,
                 "agent": agent, "slot": slot, "path": str(path),
                 "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest()})
             linked.append(agent)
+            render_notes += ["%s: %s" % (agent, note) for note in
+                             workflows.render_notes(agent, slot, raw)]
 
         # A path this run no longer writes for an agent it did write (the source
         # moved from commands/ to agents/): the old file is a live slash command
@@ -5661,6 +5667,7 @@ def _install_workflow(entry: dict, force: bool = False,
     res.conflicts = conflicts
     res.foreign = foreign
     res.declined = declined
+    res.render_notes = render_notes
     res.upgraded = existing is not None
     res.scope = scope
     res.skill_copy = Path(copy_row["path"]).parent if copy_row else None

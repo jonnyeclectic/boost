@@ -140,6 +140,56 @@ def _toml_str(s: str) -> str:
 # it, and not the indexed ``$ARGUMENTS[0]`` form, which has no Gemini twin.
 _ARGUMENTS = re.compile(r"\$ARGUMENTS(?![\w\[])")
 
+# Claude's dynamic content, and Gemini's spelling of the same two things.
+# Source: Gemini CLI's bundled FileCommandLoader (chunk-55E6VPR2.js,
+# `SHELL_INJECTION_TRIGGER = "!{"`, `AT_FILE_INJECTION_TRIGGER = "@{"`), whose
+# extractor closes an injection on the brace that balances its opener and has
+# no escape. Claude Code documents !`cmd` as "runs before the prompt" and
+# @path as "includes the file".
+#
+# A command holding a brace is left alone: inside !{...} it would close the
+# injection early or leave it unclosed, and Gemini refuses the whole command
+# with "Unclosed injection".
+_BANG_CMD = re.compile(r"(?<!`)!`([^`\n{}]+)`(?!`)")
+_BANG_CMD_BRACED = re.compile(r"(?<!`)!`([^`\n]*[{}][^`\n]*)`(?!`)")
+# Conservative on purpose: a missing path is an error line in Gemini where it
+# was plain text in Claude, so only a token that names a FILE is converted —
+# one ending in an extension (`@src/main.py`, `@package.json`). An npm scope
+# (`@angular/core`), a mention (`@alice`), an email (`a@b.com`, the `@` is
+# not at a word start) and git's `stash@{0}` are all left as written.
+_AT_FILE = re.compile(
+    r"(?<![^\s(\[])@((?:\.{0,2}/|~/)?[\w./-]*\.[A-Za-z]\w*)(?![\w/-])")
+
+
+def _gemini_prompt(body: str) -> str:
+    """``body`` with Claude's placeholders in Gemini's spelling."""
+    # Commands first: `{{args}}` is legal inside !{...} (Gemini shell-escapes
+    # it there), but its braces would stop _BANG_CMD matching the command.
+    out = _BANG_CMD.sub(lambda m: "!{%s}" % m.group(1), body)
+    out = _ARGUMENTS.sub("{{args}}", out)
+    return _AT_FILE.sub(lambda m: "@{%s}" % m.group(1), out)
+
+
+def gemini_command_notes(raw: str) -> list[str]:
+    """What a Gemini rendering of command ``raw`` could not carry over.
+
+    Gemini's loader has no escape for its two triggers, so text a tap meant
+    literally — git's ``stash@{0}`` or ``@{u}``, a shell ``!{`` — is read as
+    a file or shell injection: an error line at each run, or the whole command
+    refused when the braces do not balance. :func:`render_gemini_command`
+    cannot fix that without changing the prompt, so it is said instead.
+    """
+    _meta, body = frontmatter.parse(raw)
+    notes = ["Gemini reads the `%s` in its prompt as %s; the text is written "
+             "as the tap has it" % (trigger, what)
+             for trigger, what in (("@{", "a file to inject"),
+                                   ("!{", "a shell command to run"))
+             if trigger in body]
+    notes += ["Gemini cannot run `!`%s`` before the prompt (a brace would end "
+              "its `!{...}` early); left as text" % m.group(1)
+              for m in _BANG_CMD_BRACED.finditer(body)]
+    return notes
+
 
 def render_gemini_command(name: str, raw: str) -> str:
     """A Markdown workflow rendered as a Gemini CLI ``.toml`` slash command.
@@ -160,7 +210,10 @@ def render_gemini_command(name: str, raw: str) -> str:
     with what the user typed, and a prompt without one gets the input
     appended after two newlines, so a literal ``$ARGUMENTS`` left the model
     reading a placeholder where the input belonged. Claude's positional
-    ``$1``/``$2`` have no Gemini counterpart and are left as written. A
+    ``$1``/``$2`` have no Gemini counterpart and are left as written.
+    Claude's !`cmd` and @path become Gemini's !{cmd} and @{path} (see
+    :data:`_BANG_CMD` and :data:`_AT_FILE` for what is left alone, and
+    :func:`gemini_command_notes` for what is said about it). A
     ``description`` that is not a string (a YAML list) is dropped rather than
     emitted as its Python repr.
     """
@@ -170,7 +223,7 @@ def render_gemini_command(name: str, raw: str) -> str:
     description = d.strip() if isinstance(d, str) else ""
     if description:
         lines.append("description = %s" % _toml_str(description))
-    prompt = _ARGUMENTS.sub("{{args}}", body.strip("\n"))
+    prompt = _gemini_prompt(body.strip("\n"))
     lines.append("prompt = %s" % _toml_str(prompt))
     return "\n".join(lines) + "\n"
 
@@ -1089,6 +1142,17 @@ def render_skill(name: str, description: str, raw: str) -> str:
     """
     head = frontmatter.dump({"name": name, "description": description})
     return "%s\n\n%s" % (head, _skill_body(raw))
+
+
+def render_notes(agent: str | None, slot: str, raw: str) -> list[str]:
+    """What :func:`render` could not carry over for ``agent`` in ``slot``.
+
+    The file is still written; these are said beside it. Only Gemini's TOML
+    commands have any (:func:`gemini_command_notes`).
+    """
+    if target_ext(agent, slot) == TOML_EXT:
+        return gemini_command_notes(raw)
+    return []
 
 
 def render_problem(agent: str | None, slot: str, text: str) -> str | None:

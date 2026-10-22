@@ -353,6 +353,9 @@ def _warn_unwritable(res, stream=None) -> None:
     note = getattr(res, "skill_note", None)
     if note:
         out.info(note, stream=stream, wrap=True)
+    # Written, but not everything in the source survived the conversion.
+    for line in getattr(res, "render_notes", None) or ():
+        out.warn("%s: %s" % (res.name, line), stream=stream, wrap=True)
     # A link in the skill the copy left out: the rest installed, and this
     # names the file the skill may still expect.
     for line in getattr(res, "skipped_links", None) or ():

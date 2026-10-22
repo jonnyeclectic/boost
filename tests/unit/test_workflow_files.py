@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import json
 import shutil
 from pathlib import Path
 
@@ -238,6 +239,93 @@ class TestGeminiArgs:
             pytest.skip("gemini is not an enabled workflow agent here")
         assert toml[0].read_text(encoding="utf-8") \
             == 'prompt = "Run with {{args}} here."\n'
+
+
+class TestGeminiDynamicContent:
+    """Claude's !`cmd` and @path in Gemini's spelling, !{cmd} and @{path}.
+
+    Gemini CLI's bundled FileCommandLoader (chunk-55E6VPR2.js) defines
+    ``SHELL_INJECTION_TRIGGER = "!{"`` and ``AT_FILE_INJECTION_TRIGGER =
+    "@{"`` and has no escape for either: a literal one in a prompt is read as
+    an injection, so it is converted where Claude meant one and named where
+    it did not."""
+
+    def test_the_findings_commit_command(self):
+        raw = ("---\ndescription: c\n---\n## Context\n- Status: !`git status`\n"
+               "- File: @src/main.py\nCommit with message $ARGUMENTS\n")
+        assert workflows.render_gemini_command("commit", raw) == (
+            'description = "c"\nprompt = "## Context\\n- Status: '
+            '!{git status}\\n- File: @{src/main.py}\\nCommit with message '
+            '{{args}}"\n')
+        assert workflows.gemini_command_notes(raw) == []
+
+    @pytest.mark.parametrize("body, want", [
+        ("see @package.json.", "see @{package.json}."),
+        ("(@./docs/a.md)", "(@{./docs/a.md})"),
+        ("@~/notes.txt", "@{~/notes.txt}"),
+        ("@../up/x.py,", "@{../up/x.py},"),
+        ("[@/etc/hosts.conf]", "[@{/etc/hosts.conf}]"),
+        ("!`ls -la` and !`git diff HEAD`", "!{ls -la} and !{git diff HEAD}"),
+        ("!`git log $ARGUMENTS`", "!{git log {{args}}}"),
+    ])
+    def test_converted(self, body, want):
+        assert workflows.render_gemini_command("x", body) == (
+            "prompt = %s\n" % json.dumps(want))
+
+    @pytest.mark.parametrize("body", [
+        "import @angular/core",          # npm scope: no file extension
+        "ask @alice",                    # a mention
+        "mail a@b.com",                  # not at a word start
+        "`@src/main.py` in code",        # inside an inline code span
+        "stash@{0} and @{u}",            # git reflog syntax
+        "@v1.2",                         # a version, not an extension
+        "run `!`x``",                    # backtick-wrapped, not Claude's form
+        "!`echo ${HOME}`",               # a brace would end !{...} early
+        "a!b `c`",
+    ])
+    def test_left_as_written(self, body):
+        assert workflows.render_gemini_command("x", body) == (
+            "prompt = %s\n" % json.dumps(body))
+
+    def test_literal_triggers_are_named(self):
+        raw = "Run git stash apply stash@{0} then git log @{u}..HEAD\n"
+        assert workflows.gemini_command_notes(raw) == [
+            "Gemini reads the `@{` in its prompt as a file to inject; the "
+            "text is written as the tap has it"]
+        assert workflows.gemini_command_notes("echo !{x}\n") == [
+            "Gemini reads the `!{` in its prompt as a shell command to run; "
+            "the text is written as the tap has it"]
+
+    def test_a_braced_command_is_named(self):
+        assert workflows.gemini_command_notes("!`echo ${HOME}`\n") == [
+            "Gemini cannot run `!`echo ${HOME}`` before the prompt (a brace "
+            "would end its `!{...}` early); left as text"]
+
+    def test_frontmatter_is_not_scanned(self):
+        assert workflows.gemini_command_notes(
+            "---\ndescription: uses @{x}\n---\nplain\n") == []
+
+    def test_notes_are_for_gemini_commands_only(self):
+        raw = "stash@{0}\n"
+        assert workflows.render_notes("gemini", workflows.SLOT_COMMANDS, raw)
+        assert workflows.render_notes("gemini", workflows.SLOT_AGENTS, raw) == []
+        assert workflows.render_notes("claude-code", workflows.SLOT_COMMANDS,
+                                      raw) == []
+        # Claude keeps the tap's bytes.
+        assert workflows.render("claude-code", workflows.SLOT_COMMANDS, "x",
+                                "!`ls`\n") == "!`ls`\n"
+
+    def test_install_carries_the_note_and_the_report_prints_it(self, tap, capsys):
+        res = store.install(_wf(tap, "stashy", "commands/stashy.md",
+                                body="git stash apply stash@{0}\n"),
+                            as_skill=False)
+        assert res.render_notes == [
+            "gemini: Gemini reads the `@{` in its prompt as a file to inject; "
+            "the text is written as the tap has it"]
+        pkg._warn_unwritable(res)
+        out = " ".join(capsys.readouterr().out.split())
+        assert ("stashy: gemini: Gemini reads the `@{` in its prompt as a file "
+                "to inject; the text is written as the tap has it") in out
 
 
 def _foreign_install(tap, name):
