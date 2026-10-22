@@ -2350,14 +2350,15 @@ def cmd_bundle(argv: list[str]) -> int:
                     help="Boostfile (dump: default stdout; "
                          "install: default ./Boostfile, '-' = stdin)")
     ap.add_argument("--dry-run", action="store_true",
-                    help="show what install would do, touching nothing")
+                    help="show what install would do, or print what dump "
+                         "would write, touching nothing")
     args = ap.parse_args(argv)
     if args.action == "dump":
-        return _bundle_dump(args.file)
+        return _bundle_dump(args.file, dry_run=args.dry_run)
     return _bundle_install(args.file, args.dry_run)
 
 
-def _bundle_dump(file: str | None) -> int:
+def _bundle_dump(file: str | None, dry_run: bool = False) -> int:
     _pbase, project = store.project_skills()
     text = _boostfile_text(lockfile.installed(), project=project)
     lines = text.splitlines()
@@ -2371,12 +2372,17 @@ def _bundle_dump(file: str | None) -> int:
     others = _others_installed()
     if others:
         notices.append("%s not captured — Boostfiles carry skills only" % others)
-    if not file or file == "-":
+    if not file or file == "-" or dry_run:
         print(text, end="")
         # stdout IS the Boostfile here; the notices go to stderr so
         # `boost bundle dump > Boostfile` stays a parseable artifact.
         for msg in notices:
             out.warn(msg, stream=sys.stderr)
+        if dry_run and file and file != "-":
+            # --dry-run promises to touch nothing: the FILE a user names may
+            # be a hand-written Boostfile, and overwriting it was the bug.
+            out.info("dry run — %s not written" % _tilde(paths.expand(file)),
+                     stream=sys.stderr)
         return 0
     dest = paths.expand(file)
     try:
