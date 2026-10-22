@@ -14,6 +14,14 @@ from boost_cli.core import dense, embed
 
 _GARBAGE = bytes(range(256)) * 12
 
+#: The real probe, taken before the sandbox stubs it out on a Python whose
+#: sqlite3 cannot load extensions at all (the macOS runners).
+_extension_error = dense.extension_error
+
+_loads = pytest.mark.skipif(
+    not hasattr(sqlite3.Connection, "enable_load_extension"),
+    reason="this Python's sqlite3 cannot load extensions")
+
 
 def _flat(text: str) -> str:
     return " ".join(text.split())
@@ -82,6 +90,7 @@ class TestCorruptStore:
 
 
 class TestOtherSpaceStore:
+    @_loads
     def test_plain_reindex_keeps_paid_vectors(self, keyed, monkeypatch):
         p = dense.db_path()
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -113,6 +122,7 @@ class TestExtensionCannotLoad:
     def test_reindex_names_the_real_cause_and_leaves_no_file(
             self, keyed, monkeypatch):
         monkeypatch.setattr(dense, "_load", lambda: _DeniedVec)
+        monkeypatch.setattr(dense, "extension_error", _extension_error)
         r = keyed("reindex", "--dense")
         out = _flat(r.out)
         assert ("dense index skipped — this Python's sqlite3 cannot load "

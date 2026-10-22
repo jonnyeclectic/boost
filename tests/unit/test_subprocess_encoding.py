@@ -16,6 +16,7 @@ import ast
 import json
 import locale
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -29,12 +30,21 @@ PKG = Path(__file__).resolve().parents[2] / "boost_cli"
 
 #: Names a subprocess launch is called through (``dialog`` injects ``run``).
 _LAUNCHERS = {"run", "Popen", "check_output", "check_call", "call"}
+_MUTANT = re.compile(r"__mutmut_\d+$")
 
 
 def _text_calls_without_encoding(source: str) -> list[int]:
     """Line numbers of launches in ``source`` that decode text with no encoding."""
+    tree = ast.parse(source)
+    # mutmut keeps each mutant as its own ``x_f__mutmut_N`` copy of a
+    # function, and a mutant that deletes ``encoding=`` is the point of it.
+    for parent in ast.walk(tree):
+        if hasattr(parent, "body") and isinstance(parent.body, list):
+            parent.body = [n for n in parent.body if not (
+                isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and _MUTANT.search(n.name))]
     bad = []
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
@@ -68,6 +78,13 @@ class TestNoLocaleDecoding:
                "subprocess.run(['git'], text=True)\n"
                "run(['x'],\n    capture_output=True, universal_newlines=1)\n")
         assert _text_calls_without_encoding(src) == [2, 3]
+
+    def test_scanner_skips_mutmut_copies_only(self):
+        src = ("def x_f__mutmut_1():\n"
+               "    run(['git'], text=True)\n"
+               "def x_f__mutmut_orig():\n"
+               "    run(['git'], text=True)\n")
+        assert _text_calls_without_encoding(src) == [4]
 
     def test_scanner_passes_encoded_bytes_and_unrelated_calls(self):
         src = ("import subprocess\n"
@@ -120,6 +137,9 @@ def _echo_script(tmp_path: Path, tail: bytes = b"") -> Path:
     return script
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason=(
+    "Windows feeds stdin from a thread, so the encode error kills the writer "
+    "and the child waits for EOF until the timeout"))
 def test_cp1252_fixture_reproduces_the_windows_failure(cp1252, tmp_path):
     """Negative control: without an encoding the patched default bites."""
     script = _echo_script(tmp_path)

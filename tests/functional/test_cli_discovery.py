@@ -1808,7 +1808,8 @@ class TestBrowse:
         from boost_cli.commands import discovery
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",
-                            types.SimpleNamespace(stdin=tty, stdout=tty))
+                            types.SimpleNamespace(stdin=tty, stdout=tty,
+                                                  stderr=sys.stderr))
         monkeypatch.setattr(discovery, "_browse_tui",
                             lambda curses, entries, **_kw: None)
         r = boost("browse")
