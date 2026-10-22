@@ -392,10 +392,12 @@ def _redact(name: str, value: str) -> str:
 #: for ``://`` — ``boost search <200,000 x's>`` spent minutes here, twice per
 #: command, before the search itself had run. A scheme now starts only where
 #: the previous character could not have continued one, so each character is
-#: scanned by one start. Every real URL still matches: what precedes it is
-#: whitespace, ``=`` or the start of the token.
-_URL_USERINFO = re.compile(r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*://)[^/\s]+@",
-                           re.IGNORECASE)
+#: scanned by one start. A run may open with digits or ``+.-``, which cannot
+#: start a scheme but did not stop one starting at the next letter: the
+#: leading ``[0-9+.-]*`` keeps that match (``1https://u:p@h`` leaked its
+#: password through a bare lookbehind) and is carried through verbatim.
+_URL_USERINFO = re.compile(
+    r"(?<![a-z0-9+.-])([0-9+.-]*[a-z][a-z0-9+.-]*://)[^/\s]+@", re.IGNORECASE)
 #: A query parameter's ``?name=`` / ``&name=``. The name may not contain the
 #: next ``?`` or ``&``, so every start scans only to the next delimiter — the
 #: old single pattern let one name run across every ``?`` and backtracked
