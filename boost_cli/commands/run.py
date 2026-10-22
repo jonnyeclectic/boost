@@ -38,15 +38,15 @@ def cmd_run(argv: list[str]) -> int:
                     "(`pip install \"openai-agents[litellm]\"`) and the model "
                     "provider's API key (ANTHROPIC_API_KEY for a bare model "
                     "id); --print needs neither.")
-    ap.add_argument("name", help="skill to run")
-    ap.add_argument("target", nargs="?",
+    ap.add_argument("name", type=util.nonempty_str, help="skill to run")
+    ap.add_argument("target", type=util.nonempty_str, nargs="?",
                     help="file or directory for the agent to work on (default: .)")
-    ap.add_argument("--model", metavar="M", default=None,
+    ap.add_argument("--model", type=util.nonempty_str, metavar="M", default=None,
                     help="LLM to run on (default: boost's ai.model; "
                          "'none' for the SDK's own default)")
     ap.add_argument("--print", dest="print_only", action="store_true",
                     help="print the generated runner script instead of executing it")
-    ap.add_argument("-o", "--output", "--out", dest="out", metavar="FILE",
+    ap.add_argument("-o", "--output", "--out", type=util.nonempty_str, dest="out", metavar="FILE",
                     help="with --print: write the runner to FILE")
     args = ap.parse_args(argv)
 

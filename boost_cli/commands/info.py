@@ -360,7 +360,7 @@ def cmd_list(argv):
                                  description="List installed skills, rules and workflows")
     ap.add_argument("--kind", choices=("skill", "rule", "workflow"), default=None,
                     help="only show installed items of this kind")
-    ap.add_argument("--tag", help="only show skills carrying this tag")
+    ap.add_argument("--tag", type=util.nonempty_str, help="only show skills carrying this tag")
     ap.add_argument("--local", action="store_true",
                     help="only what is installed into this repo")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
@@ -600,7 +600,7 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
 def cmd_info(argv):
     ap = cliparse.parser(prog="boost info",
                                  description="Show detailed info about a skill")
-    ap.add_argument("name", help="skill, rule or workflow, installed or in a "
+    ap.add_argument("name", type=util.nonempty_str, help="skill, rule or workflow, installed or in a "
                                  "tap (owner/repo:name picks the tap)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
@@ -878,7 +878,7 @@ def cmd_info(argv):
 def cmd_cat(argv):
     ap = cliparse.parser(prog="boost cat",
                                  description="Print a skill or rule's contents")
-    ap.add_argument("name", help="skill, rule or workflow: the installed copy, "
+    ap.add_argument("name", type=util.nonempty_str, help="skill, rule or workflow: the installed copy, "
                                  "else the tap's (owner/repo:name picks the tap)")
     ap.add_argument("--raw", action="store_true", help="no styling even on a TTY")
     args = ap.parse_args(argv)
@@ -901,7 +901,7 @@ def cmd_cat(argv):
 def cmd_edit(argv):
     ap = cliparse.parser(prog="boost edit",
                                  description="Open a skill's SKILL.md in your editor")
-    ap.add_argument("name", help="installed skill to open in $VISUAL or "
+    ap.add_argument("name", type=util.nonempty_str, help="installed skill to open in $VISUAL or "
                                  "$EDITOR")
     args = ap.parse_args(argv)
     # `args.name` may be tap-qualified (`owner/repo:skill`); resolve to the
@@ -1032,7 +1032,7 @@ def _render_markdown(body: str) -> None:
 def cmd_preview(argv):
     ap = cliparse.parser(prog="boost preview",
                                  description="Render a SKILL.md with rich formatting")
-    ap.add_argument("name", help="skill, rule or workflow: the installed copy, "
+    ap.add_argument("name", type=util.nonempty_str, help="skill, rule or workflow: the installed copy, "
                                  "else the tap's (raw text when piped)")
     args = ap.parse_args(argv)
     text, _kind, lock, cat = _resolve_text(args.name)
@@ -1088,7 +1088,7 @@ def _explanation_is_faithful(reply: str, source: str) -> bool:
 def cmd_explain(argv):
     ap = cliparse.parser(prog="boost explain",
                                  description="Explain what a skill does in plain English")
-    ap.add_argument("name", help="skill, rule or workflow, installed or in a tap")
+    ap.add_argument("name", type=util.nonempty_str, help="skill, rule or workflow, installed or in a tap")
     args = ap.parse_args(argv)
     _qualifier, _bare = catalog.split_name(args.name)
     text, _kind, _lock, _cat = _resolve_text(args.name)
@@ -1266,7 +1266,7 @@ def _show_crashes(limit, as_json=False):
 def cmd_log(argv):
     ap = cliparse.parser(prog="boost log",
                                  description="Git log for a skill, or boost's activity log")
-    ap.add_argument("name", nargs="?", help="skill to show upstream history for")
+    ap.add_argument("name", type=util.nonempty_str, nargs="?", help="skill to show upstream history for")
     ap.add_argument("-n", "--limit", type=util.positive_int, default=20, metavar="N",
                     help="max entries (default 20)")
     ap.add_argument("--diagnostics", action="store_true",
@@ -1358,7 +1358,7 @@ def cmd_log(argv):
 def cmd_home(argv):
     ap = cliparse.parser(prog="boost home",
                                  description="Open an item's GitHub page in the browser")
-    ap.add_argument("name", help="skill, rule or workflow, installed or in a "
+    ap.add_argument("name", type=util.nonempty_str, help="skill, rule or workflow, installed or in a "
                                  "tap")
     ap.add_argument("--print", dest="print_only", action="store_true",
                     help="print the URL without opening a browser")
@@ -1435,7 +1435,7 @@ def _mcp_requirement_rows(skill_dir) -> list[dict]:
 def cmd_deps(argv):
     ap = cliparse.parser(prog="boost deps",
                                  description="Show dependency & conflict relationships")
-    ap.add_argument("name", nargs="?", help="skill to inspect (default: check all installed)")
+    ap.add_argument("name", type=util.nonempty_str, nargs="?", help="skill to inspect (default: check all installed)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
     # `requires:`/`conflicts:` name an installed item, not a kind — a
@@ -1557,33 +1557,54 @@ def cmd_deps(argv):
     return 1
 
 
+def _split_at_double_dash(argv: list[str]) -> tuple[list[str], list[str]]:
+    """``(before, after)`` around the first ``--`` in ``argv``.
+
+    ``after`` holds every token past the separator verbatim, ``--x`` included;
+    the separator itself is in neither half.
+    """
+    if "--" not in argv:
+        return argv.copy(), []
+    i = argv.index("--")
+    return argv[:i], argv[i + 1:]
+
+
 def cmd_tag(argv):
     ap = cliparse.parser(prog="boost tag",
                                  description="Custom labels for organizing skills")
     ap.add_argument("--list", dest="list_all", action="store_true",
                     help="show every tag and the skills carrying it")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
-    ap.add_argument("name", nargs="?", help="installed skill")
-    ap.add_argument("mods", nargs="*", help="+tag to add, -tag to remove")
+    ap.add_argument("name", type=util.nonempty_str, nargs="?", help="installed skill")
+    ap.add_argument("mods", type=util.nonempty_str, nargs="*", help="+tag to add, -tag to remove")
     # A `-tag` removal looks like an option to argparse, which forced the old
     # parse_known_args + argv re-walk. Instead split the literal option strings
     # from operands ourselves: the skill name and its +tag/-tag operands keep
     # their exact argv order with no re-walk, so `-x +x` still nets differently
     # from `+x -x`.
     flag_strings = {"--list", "--json", "-h", "--help"}
-    flags = [t for t in argv if t in flag_strings]
+    # Everything after the first `--` is an operand, the POSIX convention
+    # argparse itself follows: `tag NAME -- --zz` used to drop `--zz` (and
+    # the `--`) as if neither were there and exit 0 having done nothing.
+    head, tail = _split_at_double_dash(argv)
+    flags = [t for t in head if t in flag_strings]
     # A long option this command does not know must not silently fall through
     # as an operand: `tag brainstorming --verbose` used to read as removing
     # the tag `-verbose`, and `tag --verbose` as `--verbose is not installed`
     # — every sibling command instead rejects an unrecognized `--flag` with
     # exit 2. Handing the untouched argv to argparse here raises that same
     # "unrecognized arguments" error rather than the misleading ones above.
-    unknown_long = [t for t in argv if t.startswith("--") and t not in flag_strings]
+    unknown_long = [t for t in head if t.startswith("--") and t not in flag_strings]
     if unknown_long:
-        ap.parse_args(argv)
-    operands = [t for t in argv if t not in flag_strings and not t.startswith("--")]
+        ap.parse_args(head)
+    operands = [t for t in head if t not in flag_strings and not t.startswith("--")]
+    operands += tail
     args = ap.parse_args(flags)
     args.name = operands[0] if operands else None
+    if args.name is not None and not args.name.strip():
+        # The operands bypass argparse, so `type=util.nonempty_str` on `name`
+        # never runs; this is the same refusal, worded the same way.
+        ap.error("argument name: must not be empty")
     mods = operands[1:]
 
     if args.list_all:

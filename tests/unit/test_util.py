@@ -952,6 +952,21 @@ class TestPositiveInt:
         assert str(exc.value) == "invalid int value: 'abc'"
 
 
+class TestNonemptyStr:
+    """`util.nonempty_str` — the argparse type behind every NAME/path flag."""
+
+    def test_a_real_value_round_trips_unchanged(self):
+        assert util.nonempty_str("brainstorming") == "brainstorming"
+        # Inner and edge whitespace is the caller's business, not stripped.
+        assert util.nonempty_str(" a b ") == " a b "
+
+    @pytest.mark.parametrize("value", ["", " ", "\t\n"])
+    def test_empty_or_blank_rejected_with_exact_message(self, value):
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            util.nonempty_str(value)
+        assert str(exc.value) == "must not be empty"
+
+
 class TestScoreInt:
     """`util.score_int` — the argparse type behind `lint --min` (0-100)."""
 

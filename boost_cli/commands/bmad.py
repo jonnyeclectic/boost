@@ -105,7 +105,7 @@ def cmd_bmad(argv) -> int:
     p.add_argument("-s", "--scope", choices=("project", "global"), default=None,
                    help="target scope (on/off default: global; personas and "
                         "status: both; others: project)")
-    p.add_argument("--modules", default=DEFAULT_MODULES,
+    p.add_argument("--modules", type=util.nonempty_str, default=DEFAULT_MODULES,
                    help="BMAD modules to install (default: %s)" % DEFAULT_MODULES)
     p.add_argument("-y", "--yes", action="store_true",
                    help="skip confirmation prompts")

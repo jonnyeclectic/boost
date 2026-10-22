@@ -1300,6 +1300,31 @@ class TestTag:
         assert "whitespace" in r.err
         assert _lock()["brainstorming"].get("tags", []) == []
 
+    def test_every_token_after_double_dash_is_an_operand(self, boost, installed):
+        # `--zz` after `--` used to be dropped (with the `--`), rc 0 and no
+        # change. Now it is the mod it spells: remove the tag `-zz`.
+        r = boost("tag", "brainstorming", "--", "+-zz", "+a")
+        assert _lock()["brainstorming"]["tags"] == ["-zz", "a"]
+        r = boost("tag", "brainstorming", "--", "--zz")
+        assert _lock()["brainstorming"]["tags"] == ["a"]
+        assert r.out == "  ✓ brainstorming  #a\n"
+
+    def test_the_name_may_follow_double_dash(self, boost, installed):
+        boost("tag", "--", "brainstorming", "+b")
+        assert _lock()["brainstorming"]["tags"] == ["b"]
+
+    def test_bad_operand_after_double_dash_is_still_rejected(self, boost,
+                                                             installed):
+        r = boost("tag", "brainstorming", "--", "oops", expect=1)
+        assert "cannot parse 'oops'" in r.err
+        assert _lock()["brainstorming"].get("tags", []) == []
+
+    def test_unknown_long_flag_before_double_dash_still_exits_2(self, boost,
+                                                               installed):
+        r = boost("tag", "brainstorming", "--verbose", "--", "+a", expect=2)
+        assert "unrecognized arguments: --verbose" in r.err
+        assert _lock()["brainstorming"].get("tags", []) == []
+
 
 # ── installed rules & workflows ──────────────────────────────────────────
 

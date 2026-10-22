@@ -87,9 +87,9 @@ def cmd_cohort(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=["list", "create", "delete", "status", "apply"],
                    help="what to do (default: list; status is the same as list)")
-    p.add_argument("name", nargs="?",
+    p.add_argument("name", type=util.nonempty_str, nargs="?",
                    help="cohort name (list/status: show only that cohort)")
-    p.add_argument("--skills", action="append", default=[],
+    p.add_argument("--skills", type=util.nonempty_str, action="append", default=[],
                    help="with `create`: comma-separated skill names "
                         "(repeatable)")
     p.add_argument("--percent", type=int, default=None,
@@ -412,7 +412,7 @@ def cmd_profile(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=["list", "save", "use", "show", "diff", "delete"],
                    help="what to do (default: list)")
-    p.add_argument("name", nargs="?", help="profile name")
+    p.add_argument("name", type=util.nonempty_str, nargs="?", help="profile name")
     p.add_argument("--prune", action="store_true",
                    help="with `use`: fully uninstall skills not in the profile")
     p.add_argument("-y", "--yes", action="store_true",
@@ -754,7 +754,7 @@ def cmd_protocol(argv) -> int:
     p.add_argument("action", nargs="?", default="status",
                    choices=["status", "register", "unregister", "open"],
                    help="what to do (default: status)")
-    p.add_argument("url", nargs="?", help="a boost:// URL (for `open`)")
+    p.add_argument("url", type=util.nonempty_str, nargs="?", help="a boost:// URL (for `open`)")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("-y", "--yes", action="store_true",
                       help="`open` without the confirmation prompt")
@@ -923,7 +923,7 @@ def cmd_pulse(argv) -> int:
     p.add_argument("-n", type=util.positive_int, default=20,
                    help="events to show (default 20)")
     p.add_argument("--all", action="store_true", help="show the whole journal")
-    p.add_argument("--action", help="filter by action (install, tap, ...)")
+    p.add_argument("--action", type=util.nonempty_str, help="filter by action (install, tap, ...)")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
@@ -971,7 +971,7 @@ def cmd_replay(argv) -> int:
                    choices=["list", "show", "rollback"],
                    help="what to do (default: list; rollback restores skills "
                         "only)")
-    p.add_argument("id", nargs="?", help="history entry id (from `boost replay list`)")
+    p.add_argument("id", type=util.nonempty_str, nargs="?", help="history entry id (from `boost replay list`)")
     p.add_argument("-y", "--yes", action="store_true",
                    help="`rollback` without the confirmation prompt")
     p.add_argument("--discard-edits", action="store_true",
@@ -1314,7 +1314,7 @@ def cmd_who(argv) -> int:
     p = cliparse.parser(
         prog="boost who",
         description="Discover who on the team has skill expertise")
-    p.add_argument("skill", nargs="?", help="focus on one skill")
+    p.add_argument("skill", type=util.nonempty_str, nargs="?", help="focus on one skill")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 

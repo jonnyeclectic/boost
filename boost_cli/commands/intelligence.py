@@ -214,16 +214,16 @@ def cmd_distill(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost distill",
         description="Merge multiple skills into one deduplicated skill")
-    ap.add_argument("names", nargs="+", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="+", metavar="NAME",
                     help="two or more skills to merge")
     name_g = ap.add_mutually_exclusive_group()
-    name_g.add_argument("--name", metavar="NEWNAME",
+    name_g.add_argument("--name", type=util.nonempty_str, metavar="NEWNAME",
                         help="name for the merged skill (default: "
                              "<first>-distilled)")
     # Every sibling's -o/--output is a FILE; distill's has always been the
     # skill NAME. Kept, so existing scripts run, but a path is refused rather
     # than slugified into a directory in the cwd nobody asked for.
-    name_g.add_argument("-o", "--output", dest="name", metavar="NEWNAME",
+    name_g.add_argument("-o", "--output", type=util.nonempty_str, dest="name", metavar="NEWNAME",
                         help="older spelling of --name (a name, not a path)")
     ap.add_argument("--install", action="store_true",
                     help="install the merged skill instead of writing a file")
@@ -353,9 +353,9 @@ def cmd_simulate(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost simulate",
         description="Preview how a skill would change Claude's behavior")
-    ap.add_argument("name", metavar="NAME",
+    ap.add_argument("name", type=util.nonempty_str, metavar="NAME",
                     help="skill, installed or in a tap")
-    ap.add_argument("--task", metavar="TEXT",
+    ap.add_argument("--task", type=util.nonempty_str, metavar="TEXT",
                     help="task to simulate (default: a typical coding task)")
     args = ap.parse_args(argv)
 
@@ -417,11 +417,11 @@ def cmd_infer(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost infer",
         description="Generate a SKILL.md from your codebase patterns")
-    ap.add_argument("--path", default=".", metavar="DIR",
+    ap.add_argument("--path", type=util.nonempty_str, default=".", metavar="DIR",
                     help="codebase to analyze (default: current directory)")
-    ap.add_argument("--name", default="project-conventions", metavar="N",
+    ap.add_argument("--name", type=util.nonempty_str, default="project-conventions", metavar="N",
                     help="skill name (default: project-conventions)")
-    ap.add_argument("-o", "--output", "--out", dest="output", metavar="FILE",
+    ap.add_argument("-o", "--output", "--out", type=util.nonempty_str, dest="output", metavar="FILE",
                     help="write to a file")
     ap.add_argument("--install", action="store_true",
                     help="install the generated skill")
@@ -648,7 +648,7 @@ def cmd_absorb(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost absorb",
         description="Turn recurring chat-history patterns into a skill")
-    ap.add_argument("--history", metavar="PATH",
+    ap.add_argument("--history", type=util.nonempty_str, metavar="PATH",
                     help="history .jsonl file or directory of them")
     ap.add_argument("--limit", type=util.positive_int, default=5, metavar="N",
                     help="max patterns to absorb (default: 5)")
@@ -834,7 +834,7 @@ def cmd_evolve(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost evolve",
         description="Iteratively improve a skill from feedback")
-    ap.add_argument("name", metavar="NAME", help="installed skill to revise")
+    ap.add_argument("name", type=util.nonempty_str, metavar="NAME", help="installed skill to revise")
     ap.add_argument("--feedback", required=True, metavar="TEXT",
                     help="what should change, in plain English; `-` reads "
                          "it from stdin, `@FILE` from a file")
@@ -1002,10 +1002,10 @@ def cmd_context(argv: list[str]) -> int:
     sub.add_parser("enable", help="turn on branch-aware activation (runs apply)")
     sub.add_parser("disable", help="turn it off and relink all mapped skills")
     sp = sub.add_parser("map", help="map a branch pattern to skills")
-    sp.add_argument("pattern", help="fnmatch branch pattern, e.g. 'feature/*'")
-    sp.add_argument("skills", help="comma-separated skill names")
+    sp.add_argument("pattern", type=util.nonempty_str, help="fnmatch branch pattern, e.g. 'feature/*'")
+    sp.add_argument("skills", type=util.nonempty_str, help="comma-separated skill names")
     sp = sub.add_parser("unmap", help="remove a branch pattern rule")
-    sp.add_argument("pattern", help="the pattern exactly as it was mapped")
+    sp.add_argument("pattern", type=util.nonempty_str, help="the pattern exactly as it was mapped")
     sub.add_parser("apply", help="link/unlink mapped skills for this branch")
     args = ap.parse_args(argv)
 
@@ -1207,7 +1207,7 @@ def cmd_focus(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost focus",
         description="Temporarily prioritize skills for a work session")
-    ap.add_argument("skills", nargs="*", metavar="SKILL",
+    ap.add_argument("skills", type=util.nonempty_str, nargs="*", metavar="SKILL",
                     help="skills to focus on")
     ap.add_argument("--clear", action="store_true",
                     help="end the session and relink everything")
@@ -1359,7 +1359,7 @@ def cmd_impact(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost impact",
         description="Correlate a skill's install date with repo activity")
-    ap.add_argument("name", nargs="?", metavar="NAME",
+    ap.add_argument("name", type=util.nonempty_str, nargs="?", metavar="NAME",
                     help="one skill (default: all installed)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)

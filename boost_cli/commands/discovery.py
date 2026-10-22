@@ -119,7 +119,7 @@ def cmd_search(argv):
     p.add_argument("query", nargs="+", help="search terms")
     p.add_argument("--smart", action="store_true",
                    help="rerank the top hits with Claude")
-    p.add_argument("--category", default="",
+    p.add_argument("--category", type=util.nonempty_str,
                    help="only show entries whose category matches (case-insensitive)")
     p.add_argument("-k", "--limit", type=util.positive_int, default=15,
                    help="max results (default 15)")
@@ -652,10 +652,10 @@ def cmd_reindex(argv):
     p.add_argument("--dense", action="store_true",
                    help="also embed chunks into the opt-in dense vector store "
                         "(needs the `rag` extra; no API key required)")
-    p.add_argument("--export-shard", metavar="TAP",
+    p.add_argument("--export-shard", type=util.nonempty_str, metavar="TAP",
                    help="write TAP's prebuilt vectors to stdout as JSON, for "
                         "publishing so others need not re-embed them")
-    p.add_argument("--import-shard", metavar="FILE",
+    p.add_argument("--import-shard", type=util.nonempty_str, metavar="FILE",
                    help="merge a prebuilt vector shard, skipping the embed "
                         "cost; refused unless it matches this store's backend "
                         "and the tap's current commit")
@@ -1263,8 +1263,8 @@ def cmd_recommend(argv):
     p = cliparse.parser(
         prog="boost recommend",
         description="Suggest skills based on your project's tech stack")
-    p.add_argument("--path", default=".", help="project directory (default: cwd)")
-    p.add_argument("--category", default="",
+    p.add_argument("--path", type=util.nonempty_str, default=".", help="project directory (default: cwd)")
+    p.add_argument("--category", type=util.nonempty_str,
                    help="only recommend entries whose category matches (case-insensitive)")
     p.add_argument("--limit", type=util.positive_int, default=8,
                    help="max suggestions (default 8)")
@@ -2531,7 +2531,7 @@ def cmd_browse(argv):
     p = cliparse.parser(
         prog="boost browse",
         description="Interactive full-screen TUI with fuzzy search")
-    p.add_argument("--category", default="",
+    p.add_argument("--category", type=util.nonempty_str,
                    help="open on one category (case-insensitive); ^G switches")
     p.add_argument("--categories", action="store_true",
                    help="list the categories and how many items each holds, A–Z")
@@ -2566,7 +2566,7 @@ def cmd_browse(argv):
     try:
         # The whole catalogue, not `narrowed`: the category is a filter the
         # browser can lift, so it needs the rows outside it too.
-        session = _browse_tui(curses, entries, category=args.category)
+        session = _browse_tui(curses, entries, category=args.category or "")
     except curses.error as e:
         # An fd that claims isatty() but isn't a real pty (IDE run consoles,
         # `script`, TERM=dumb) can fail deep inside curses.wrapper's own
@@ -2679,7 +2679,7 @@ def cmd_stats(argv):
     p = cliparse.parser(
         prog="boost stats",
         description="Install statistics & trend for a single skill")
-    p.add_argument("name", help="skill name")
+    p.add_argument("name", type=util.nonempty_str, help="skill name")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
