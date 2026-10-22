@@ -227,15 +227,57 @@ class TestMaterialize:
         assert argv[-3:] == ["ls-files", "-t", "-z"], (
             "the widened dir must be checked before anything copies it")
 
-    def test_materializing_the_repo_root_is_a_noop(self, monkeypatch, tmp_path):
-        """rel_dir "." means the whole repo is the skill; nothing to narrow."""
+    @pytest.mark.parametrize("rel", [".", "", "/"])
+    def test_materializing_the_repo_root_widens_to_everything(
+            self, monkeypatch, tmp_path, rel):
+        """rel_dir "." means the whole repo is the skill, so the whole repo is
+        checked out. This was a no-op, and a sparse clone's root holds only
+        Markdown: the skill's scripts/ installed as nothing."""
         seen = _clone_argv(monkeypatch)
         monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
-        (tmp_path / "repo" / ".git").mkdir(parents=True)
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+
+        gitutil.materialize(repo, rel)
+
+        assert seen["calls"] == [
+            ["git", "-c", "core.precomposeunicode=false", "-C", str(repo),
+             "sparse-checkout", "add", "/*"],
+            ["git", "-c", "core.precomposeunicode=false", "-C", str(repo),
+             "ls-files", "-t", "-z"]]
+
+    def test_a_root_already_widened_costs_no_subprocess(self, monkeypatch,
+                                                        tmp_path):
+        seen = _clone_argv(monkeypatch)
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        info = tmp_path / "repo" / ".git" / "info"
+        info.mkdir(parents=True)
+        (info / "sparse-checkout").write_text("*.md\n/*\n", encoding="utf-8")
 
         gitutil.materialize(tmp_path / "repo", ".")
 
-        assert not [c for c in seen.get("calls", []) if "sparse-checkout" in c]
+        assert "calls" not in seen
+
+    def test_a_root_left_partly_skip_worktree_is_refused(self, monkeypatch,
+                                                         tmp_path):
+        """Every path belongs to the root, so any one left out fails it."""
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        monkeypatch.setattr(gitutil, "has_git", lambda: True)
+        repo = tmp_path / "tap"
+        (repo / ".git").mkdir(parents=True)
+
+        def fake(argv, **_k):
+            out = "H SKILL.md\0S scripts/run.sh\0S z/deep.py\0" \
+                if "ls-files" in argv else ""
+            return subprocess.CompletedProcess(argv, 0, out, "")
+        monkeypatch.setattr(gitutil, "_exec", fake)
+
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize(repo, ".")
+        assert err.value.message == (
+            "could not check out 2 files of the repo root from the tap tap "
+            "(scripts/run.sh, z/deep.py), so installing it would copy a "
+            "partial skill")
 
     def test_materialize_is_a_noop_on_a_non_sparse_clone(self, monkeypatch, tmp_path):
         """Clones made before this change have every file already."""
@@ -374,9 +416,35 @@ class TestMaterializePaths:
         monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
         repo = self._repo(tmp_path)
         gitutil.materialize_paths(repo, ["/shared/helper.py", "lib", ".", ""])
+        ls = ["git", "-c", "core.precomposeunicode=false", "-C", str(repo),
+              "ls-files", "-t", "-z"]
         assert seen["calls"] == [[
             "git", "-c", "core.precomposeunicode=false", "-C", str(repo),
-            "sparse-checkout", "add", "/shared/helper.py", "/shared/helper.py/*", "/lib", "/lib/*"]]
+            "sparse-checkout", "add", "/shared/helper.py", "/shared/helper.py/*", "/lib", "/lib/*"],
+            ls, ls]
+
+    def test_a_target_left_skip_worktree_is_refused(self, monkeypatch,
+                                                    tmp_path):
+        """A file target matches by its own path, a dir by its prefix; a
+        sibling that only shares the prefix's spelling is not it."""
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        monkeypatch.setattr(gitutil, "has_git", lambda: True)
+
+        def fake(argv, **_k):
+            out = ("S shared/helper.py\0S lib/x.sh\0S library/y.sh\0"
+                   if "ls-files" in argv else "")
+            return subprocess.CompletedProcess(argv, 0, out, "")
+        monkeypatch.setattr(gitutil, "_exec", fake)
+        repo = self._repo(tmp_path)
+
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize_paths(repo, ["shared/helper.py"])
+        assert err.value.message.startswith(
+            "could not check out 1 file of shared/helper.py from the repo tap "
+            "(shared/helper.py)")
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize_paths(repo, ["lib"])
+        assert "1 file of lib from the repo tap (lib/x.sh)" in err.value.message
 
     def test_patterns_already_present_are_not_added_again(self, monkeypatch,
                                                           tmp_path):
@@ -396,7 +464,7 @@ class TestMaterializePaths:
         gitutil.materialize_paths(repo, ["x[1]"])
         assert "calls" not in seen, "an escaped pattern must count as present"
         gitutil.materialize_paths(repo, ["s/h?.py"])
-        assert seen["calls"] == [[
+        assert seen["calls"][:1] == [[
             "git", "-c", "core.precomposeunicode=false", "-C", str(repo),
             "sparse-checkout", "add", "/s/h\\?.py", "/s/h\\?.py/*"]]
 

@@ -650,9 +650,17 @@ def cmd_info(argv):
         size = sum(f.stat().st_size for f in copied)
         files = len(copied)
 
+    # A submodule installs as an empty dir: what the install recorded, or,
+    # before one, what the tap's index holds.
+    submodules = [str(p) for p in ((lock or plock or {}).get("submodules")
+                                   or [])]
+    if not (lock or plock) and cat and kind == "skill":
+        submodules = store.unfetched_submodules(cat)
+
     if args.json:
         print(json.dumps({
             "name": name, "kind": kind, "description": desc,
+            "submodules": submodules,
             "upstream_description": upstream or None,
             "installed": lock, "project": plock,
             "capabilities": declared_caps, "detected_capabilities": detected_extra,
@@ -781,6 +789,8 @@ def cmd_info(argv):
                + ("" if src in (None, "", ".") else " (%s)" % src))
     elif src:
         out.kv("source", _tilde(src))
+    for sub in submodules:
+        out.kv("submodule", out.plain(store.submodule_note(sub)), wrap=True)
     if entry:
         if entry.get("commit"):
             out.kv("commit", str(entry["commit"])[:9])

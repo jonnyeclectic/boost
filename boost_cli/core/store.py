@@ -17,7 +17,7 @@ import tempfile
 import time
 from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from ..errors import BoostError
 from . import (
@@ -118,6 +118,10 @@ class InstallResult:
     # one leading to nothing, or out of the tap. Core words each; the command
     # prints them.
     skipped_links: list[str] = field(default_factory=list)
+    # Paths in the skill, relative to it, that are git submodules
+    # (:func:`unfetched_submodules`): boost never fetches one, so each landed
+    # as an empty directory. The command warns; the lock row records them.
+    submodules: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -568,10 +572,65 @@ def source_dir_for(entry: dict) -> Path:
         raise BoostError("source for %s vanished from tap %s" % (entry["name"], tap.name),
                         hint="run `boost update %s`" % tap.name)
     refuse_escape(tap, src / "SKILL.md", entry["name"])
-    missing = link_targets_to_fetch(tap.path, src)
-    if missing:
-        gitutil.materialize_paths(tap.path, missing)
+    _materialize_link_targets(tap.path, src)
     return src
+
+
+def unfetched_submodules(entry: dict) -> list[str]:
+    """Skill-relative paths of ``entry``'s tap source that are submodules.
+
+    A tap is one shallow clone and boost never runs ``submodule update``, so
+    each one checks out, and installs, as an empty directory: a skill whose
+    ``scripts/`` is a submodule reported "Installed" and verify called it
+    ``ok``. Fetching another repository on a skill's say-so is not something
+    an install should do quietly, so boost names them instead (the install
+    warns, the lock row records them, `verify` and `info` say so). Empty for
+    a rule or workflow, or an entry whose tap is not cloned.
+    """
+    if (entry.get("kind") or catalog.KIND_SKILL) != catalog.KIND_SKILL:
+        return []
+    try:
+        tap = registry.get(entry["tap"])
+    except BoostError:
+        return []
+    if not tap.is_cloned:
+        return []
+    rel = str(entry.get("rel_dir") or ".").strip("/")
+    found = gitutil.gitlinks(tap.path, rel)
+    if rel in ("", "."):
+        return found
+    return [PurePosixPath(p).relative_to(rel).as_posix() for p in found
+            if PurePosixPath(p).is_relative_to(rel)]
+
+
+def submodule_note(path: str) -> str:
+    """How every command words one of :func:`unfetched_submodules`."""
+    return ("%s is a git submodule, which boost does not fetch, so it is "
+            "empty" % path)
+
+
+def _materialize_link_targets(repo: Path, src: Path) -> None:
+    """Widen ``repo``'s cone to what ``src``'s links lead to, transitively.
+
+    A directory a link leads to is walked in turn once it is on disk, since
+    :func:`_copy_tree` copies it as its target and its own links obey the
+    same rule. Each path is fetched once, so a cycle of links ends.
+
+    Only a directory that resolves inside ``repo`` is walked: ``os.walk``
+    follows its top, so a tap path that is itself a link to ``/`` (lexically
+    in the tap, so named above) walked the whole filesystem on install.
+    """
+    seen: set[str] = set()
+    todo = [src]
+    while todo:
+        new = [t for t in link_targets_to_fetch(repo, todo.pop(), src)
+               if t not in seen]
+        if not new:
+            continue
+        seen.update(new)
+        gitutil.materialize_paths(repo, new)
+        todo += [repo / t for t in new if (repo / t).is_dir()
+                 and not catalog.escapes(repo, repo / t)]
 
 
 def copy_view_sha(src: Path, within: Path | None) -> str:
@@ -650,16 +709,28 @@ def _inside(path: str, root: str) -> bool:
         return False
 
 
-def link_targets_to_fetch(repo: Path, src: Path) -> list[str]:
-    """Repo-relative paths ``src``'s symlinks lead to that are not on disk.
+def link_targets_to_fetch(repo: Path, src: Path,
+                          skill: Path | None = None) -> list[str]:
+    """Repo-relative paths ``src``'s symlinks lead to that the copy needs
+    fetched: a target not on disk, or any directory.
 
     A tap checks out Markdown and each installed skill's own dir, so a link
     from the skill to a file elsewhere in the tap (``../../shared/helper.py``)
     dangles in the clone though the file exists upstream; copying it then
-    fails. Only targets inside ``repo`` are named — a link out of the tap is
-    never followed, so there is nothing to fetch for it.
+    fails. A directory is named even when it exists, because existing says
+    nothing about being whole: a link to another skill's dir found its
+    ``SKILL.md`` (Markdown is always in the cone) and copied that alone,
+    unless that skill had been installed first and so widened it. The copy
+    then depended on install order.
+
+    Only targets inside ``repo`` are named — a link out of the tap is never
+    followed, so there is nothing to fetch for it. Nor is one inside
+    ``skill`` (default ``src``), which is checked out already and copied as
+    the link it is, or a directory holding it, which the copy refuses as a
+    loop rather than widen the cone over it.
     """
     root = os.path.abspath(repo)
+    own = os.path.abspath(skill if skill is not None else src)
     found: list[str] = []
     for here, dirs, names in os.walk(src):
         dirs[:] = [d for d in dirs if d not in util.IGNORED]
@@ -668,7 +739,10 @@ def link_targets_to_fetch(repo: Path, src: Path) -> list[str]:
             if not p.is_symlink():
                 continue
             target = os.path.normpath(os.path.join(here, os.readlink(p)))
-            if _inside(target, root) and not Path(target).exists():
+            if (not _inside(target, root) or _inside(target, own)
+                    or _inside(own, target)):
+                continue
+            if Path(target).is_dir() or not Path(target).exists():
                 found.append(Path(os.path.relpath(target, root)).as_posix())
     return found
 
@@ -3353,6 +3427,7 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
     res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
                       updated_at=dated)
     res.skipped_links = skipped
+    res.submodules = unfetched_submodules(entry)
     res.upgraded = existing is not None
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
@@ -3391,6 +3466,7 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
         **({"refused_agents": refused} if (refused := unrecorded_agents(name, res))
            else {}),
         **({"source_updated_at": dated} if dated else {}),
+        **({"submodules": res.submodules} if res.submodules else {}),
     })
     return res
 
@@ -3504,6 +3580,7 @@ def _install_project_skill(entry: dict, force: bool = False,
 
     now = util.now_iso()
     tap = registry.get(entry["tap"])
+    submodules = unfetched_submodules(entry)
     projectlock.set_skill(resolved_base, name, {
         "kind": "skill",
         "version": entry.get("version", "0.0.0"),
@@ -3518,6 +3595,7 @@ def _install_project_skill(entry: dict, force: bool = False,
         "updated_at": now,
         "agents": all_agents,
         "materializations": materializations,
+        **({"submodules": submodules} if submodules else {}),
     # What the user ASKED for, beside what was written: without it an agent
     # enabled afterwards (here or on a teammate's machine) could not be told
     # from one narrowed away, so sync never copied into it.
@@ -3531,6 +3609,7 @@ def _install_project_skill(entry: dict, force: bool = False,
 
     res = InstallResult(name=name, dest=first, kind="skill")
     res.skipped_links = skipped
+    res.submodules = submodules
     res.linked = linked
     res.upgraded = existing is not None
     res.scope = scopes.SCOPE_PROJECT

@@ -280,6 +280,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
                % (projectlock.LOCK_DIRNAME, projectlock.LOCK_FILENAME))
         out.dim("  commit %s/ to share these with the team"
                 % projectlock.LOCK_DIRNAME, wrap=True)
+        _warn_submodules(res)
         _warn_injection(res)
         _warn_secrets(res)
         _offer_mcp(res, no_mcp=no_mcp)
@@ -311,6 +312,14 @@ def _report_skill_copy(res) -> None:
         out.ok("as a skill → %s" % _tilde(copy))
 
 
+def _warn_submodules(res, stream=None) -> None:
+    """A submodule installs as an empty dir: said by name, so the success
+    line is not read as a complete skill."""
+    for sub in getattr(res, "submodules", None) or ():
+        out.warn("%s: %s" % (res.name, store.submodule_note(sub)),
+                 stream=stream, wrap=True)
+
+
 def _warn_unwritable(res, stream=None) -> None:
     """Name what an install skipped, and the remedy — every path that
     installs, reinstall and update included, so none reports success over an
@@ -333,6 +342,7 @@ def _warn_unwritable(res, stream=None) -> None:
     for line in getattr(res, "skipped_links", None) or ():
         out.warn("%s: not copied — the link %s" % (res.name, out.plain(line)),
                  stream=stream, wrap=True)
+    _warn_submodules(res, stream=stream)
     conflicts, refused = _skipped_agent_lines(res)
     for line in conflicts:
         out.warn(line, stream=stream)
