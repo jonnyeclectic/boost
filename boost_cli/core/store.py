@@ -19,7 +19,7 @@ from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from ..errors import BoostError
+from ..errors import BoostError, NotUTF8Error
 from . import (
     agents,
     catalog,
@@ -4723,7 +4723,7 @@ def _note_prior(undo: list[tuple[Path, str | None, bool]], path: Path,
     """
     try:
         prior = util.read_user_text(path) if os.path.lexists(path) else None
-    except (OSError, UnicodeDecodeError):
+    except (OSError, NotUTF8Error):
         return
     undo.append((path, prior, user_file))
 
@@ -4737,7 +4737,7 @@ def _undo_writes(undo: list[tuple[Path, str | None, bool]]) -> None:
     which a cleanup failure must not replace.
     """
     for path, prior, user_file in reversed(undo):
-        with contextlib.suppress(OSError, UnicodeDecodeError):
+        with contextlib.suppress(OSError, NotUTF8Error):
             if prior is None:
                 path.unlink(missing_ok=True)
             elif util.read_user_text(path) != prior:
@@ -5172,7 +5172,7 @@ def stale_quarantine_artifacts(name: str, entry: dict) -> bool:
                 if p.exists() and rules.read_block(
                         p.read_text(encoding="utf-8"), name) is not None:
                     return True
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
         elif p.is_file():
             return True
@@ -5778,7 +5778,7 @@ def duplicate_rule_blocks() -> list[tuple[str, str, int]]:
             seen.add(key)
             try:
                 text = util.read_user_text(Path(p))
-            except (OSError, UnicodeDecodeError):
+            except (OSError, NotUTF8Error):
                 continue
             n = len(rules.block_spans(text, name))
             if n > 1:

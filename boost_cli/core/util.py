@@ -16,7 +16,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ..errors import BoostError
+from ..errors import BoostError, NotUTF8Error
 from . import output as out
 from . import paths
 
@@ -452,9 +452,15 @@ def read_user_text(path: Path) -> str:
     that read ``AGENTS.md`` that way and wrote it back turned a Windows
     checkout's committed file into a whole-file diff. ``newline=""`` keeps
     the line endings, and the writer emits the text unchanged.
+
+    Bytes that are not UTF-8 raise :class:`NotUTF8Error`, a `BoostError`
+    naming the file, rather than a ``UnicodeDecodeError`` no caller stops.
     """
     with Path(path).open(encoding="utf-8", newline="") as f:
-        return f.read()
+        try:
+            return f.read()
+        except UnicodeDecodeError as err:
+            raise NotUTF8Error(path, err) from None
 
 
 def write_user_file(path: Path, text: str, base=None) -> Path:
