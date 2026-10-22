@@ -741,11 +741,32 @@ _PASTE_PLACEHOLDER = re.compile(
     r"\[(?:Pasted text|Image|\.\.\.Truncated text) #\d+[^\]]*\]")
 
 
+# What Claude Code writes into a transcript's user turns that the user never
+# typed: the wrappers around a slash command and its output, the caveat it
+# prepends to them, a system reminder, and the interrupt placeholder. Counted
+# as requests, three transcripts made "do not respond to these messages ..."
+# the user's most recurring standing instruction.
+_HARNESS_MARKUP = re.compile(
+    r"<(command-name|command-message|command-args|local-command-stdout"
+    r"|local-command-stderr|local-command-caveat|system-reminder)>"
+    r".*?</\1>", re.DOTALL)
+_INTERRUPTED = re.compile(r"\[Request interrupted by user[^\]]*\]")
+
+
+def _typed(texts: list[str]) -> list[str]:
+    """``texts`` without harness markup, dropping any left empty."""
+    kept = (_INTERRUPTED.sub(" ", _HARNESS_MARKUP.sub(" ", t)).strip()
+            for t in texts)
+    return [t for t in kept if t]
+
+
 def _user_texts(obj) -> list[str]:
     """Best-effort user-message text from one history event."""
     if not isinstance(obj, dict):
         return []
     node = obj["message"] if isinstance(obj.get("message"), dict) else obj
+    if obj.get("isMeta") or node.get("isMeta"):
+        return []   # a transcript row Claude Code injected, not a prompt
     role = node.get("role") or node.get("type") or obj.get("type") or obj.get("role")
     if not role and isinstance(obj.get("display"), str):
         # Claude Code's ~/.claude/history.jsonl: {display, pastedContents,
@@ -758,16 +779,15 @@ def _user_texts(obj) -> list[str]:
         display = obj["display"].strip()
         if display.startswith("/"):
             return []
-        display = _PASTE_PLACEHOLDER.sub(" ", display).strip()
-        return [display] if display else []
+        return _typed([_PASTE_PLACEHOLDER.sub(" ", display)])
     if role != "user":
         return []
     content = node.get("content", obj.get("content"))
     if isinstance(content, str):
-        return [content]
+        return _typed([content])
     if isinstance(content, list):
-        return [str(item.get("text") or "") for item in content
-                if isinstance(item, dict) and item.get("type") == "text"]
+        return _typed([str(item.get("text") or "") for item in content
+                       if isinstance(item, dict) and item.get("type") == "text"])
     return []
 
 
