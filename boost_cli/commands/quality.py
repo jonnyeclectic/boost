@@ -899,6 +899,15 @@ def cmd_doctor(argv):
                    name, _tilde(paths.store_dir())), wrap=True)
             skill_issues += 1
         sdir = store.copy_dir(name, entry)
+        if not sdir.is_dir() and store.is_held(entry):
+            # Held aside on purpose, and the held copy is gone too. `heal`
+            # leaves a held row alone and a release has nothing to put back,
+            # so naming either was a loop.
+            bad("skill", "skill %s is %s, but its held copy is gone — %s"
+                % (name, store.held_reason(name, entry)[0],
+                   store.lost_held_copy_hint(name)), wrap=True)
+            skill_issues += 1
+            continue
         if not sdir.is_dir():
             # A pin over a moved source is a repair heal declines, so naming
             # heal sent the user round doctor -> heal -> doctor. Whether the

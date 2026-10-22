@@ -5209,7 +5209,8 @@ class TestMaterializedGovernance:
 
     A rule materializes into the standing instructions the agent reads every
     session, so these tests hold the two flags to the same contract skills
-    already have: a pin survives a forced reinstall, quarantine does not, and
+    already have: a pin survives a forced reinstall, a quarantine refuses one
+    (only a release lifts it), and
     quarantine physically removes the artifact while a release restores the
     exact bytes it removed — never whatever the tap has moved to since.
     """
@@ -5225,18 +5226,24 @@ class TestMaterializedGovernance:
         assert rule["pinned"] is False and rule["quarantined"] is False
         assert wf["pinned"] is False and wf["quarantined"] is False
 
-    def test_pin_survives_forced_reinstall_quarantine_does_not(self, tap):
+    def test_pin_survives_forced_reinstall_quarantine_refuses_it(self, tap):
         entry = _rule_entry(tap)
         store.install(entry)
         lk = lockfile.get_rule("team-conventions")
         lk["pinned"] = True
-        lk["quarantined"] = True
         lockfile.set_rule("team-conventions", lk)
         store.install(entry, force=True)
         lk = lockfile.get_rule("team-conventions")
         assert lk["pinned"] is True, "a forced reinstall must not drop a pin"
-        assert lk["quarantined"] is False, \
-            "reinstall re-materialized the content; a surviving flag would lie"
+        # A forced reinstall used to clear the flag and re-materialize what
+        # quarantine removed, without a release ever being journalled.
+        lk["quarantined"] = True
+        lockfile.set_rule("team-conventions", lk)
+        with pytest.raises(BoostError) as exc:
+            store.install(entry, force=True)
+        assert exc.value.message == ("rule team-conventions is quarantined "
+                                     "— not reinstalled")
+        assert lockfile.get_rule("team-conventions")["quarantined"] is True
 
     def test_quarantine_strips_the_claude_block_and_stashes_it(self, tap):
         store.install(_rule_entry(tap))

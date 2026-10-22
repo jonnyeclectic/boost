@@ -1407,6 +1407,37 @@ def held_refusal(name: str, entry: dict | None) -> BoostError | None:
                       hint="%s first" % back)
 
 
+def quarantine_refusal(name: str, entry: dict | None,
+                       kind: str = "skill") -> BoostError | None:
+    """The error for an install over quarantined ``name``, or None.
+
+    ``install --force`` and ``reinstall`` used to lift a quarantine without a
+    word: the held copy, edits and all, was thrown away, the item jumped to
+    the tap's HEAD and was linked into every agent, and no ``release`` was
+    journalled — while ``update`` holds the same item back on purpose. Lifting
+    a quarantine is its own decision, so the one command that makes it is
+    named, ``force`` or not.
+    """
+    if not (entry or {}).get("quarantined"):
+        return None
+    label = name if kind == "skill" else "%s %s" % (kind, name)
+    return BoostError("%s is quarantined — not reinstalled" % label,
+                      hint="`boost quarantine --release %s` first" % name)
+
+
+def lost_held_copy_hint(name: str) -> str:
+    """The way back for a held skill whose held copy is gone.
+
+    Not ``boost heal`` (it leaves a held row alone by design), not ``boost
+    reinstall`` (it refuses a quarantined row, :func:`quarantine_refusal`)
+    and not a release (there is nothing to put back): the record goes, and a
+    fresh install fetches the tap's copy. Release and doctor both word it
+    with this, so they cannot send the user round each other.
+    """
+    return ("`boost uninstall %s` drops the record, then `boost install %s` "
+            "fetches it again" % (name, name))
+
+
 def held_reason(name: str, entry: dict) -> tuple[str, str]:
     """``(why, back)`` for a held skill: why it is away, what returns it.
 
@@ -2968,6 +2999,9 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
             shares="one file per agent")
         existing = (lockfile.get_rule if kind == "rule"
                     else lockfile.get_workflow)(name)
+        refusal = quarantine_refusal(name, existing, kind)
+        if refusal is not None:
+            raise refusal
         _check_scope_conflict(name, existing, scope, resolved_base, force)
         return existing
     if scope == scopes.SCOPE_PROJECT:
@@ -2997,6 +3031,9 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
     refuse_case_collision(name, lockfile.installed())
     refuse_copy_case_collision(name)
     existing = lockfile.get_skill(name)
+    refusal = quarantine_refusal(name, existing)
+    if refusal is not None:
+        raise refusal
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
     if existing and not force:
@@ -5029,6 +5066,13 @@ def release_skill(name: str, entry: dict) -> InstallResult:
     ``entry`` with the links measured and the hold cleared.
     """
     restore_store_copy(name)
+    if not skill_store_dir(name).is_dir():
+        # Neither the held copy nor a store copy: linking now would point
+        # every agent at a directory that does not exist and report it as
+        # released. The row stays quarantined, so nothing changed.
+        raise BoostError("%s has no held copy to release (%s is gone)"
+                         % (name, paths.tilde(held_copy_dir(name))),
+                         hint=lost_held_copy_hint(name), wrap=True)
     res = link_agents(name, only=entry.get("only_agents"))
     entry["quarantined"] = False
     entry.pop(HELD_KEY, None)
@@ -6462,6 +6506,9 @@ def install_from_path(src_dir: Path, name: str | None = None,
             hint=("it is installed already, and edits there are live"
                   if existing else
                   "`boost sync` records a skill put in the store by hand"))
+    refusal = quarantine_refusal(name, existing)
+    if refusal is not None:
+        raise refusal
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
     disowned = _refuse_unrecorded(name, existing, force)
