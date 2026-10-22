@@ -2392,6 +2392,8 @@ def cmd_browse(argv):
     p.add_argument("--by-count", action="store_true",
                    help="with --categories: largest first instead of A–Z")
     args = p.parse_args(argv)
+    if args.by_count and not args.categories:
+        p.error("--by-count only applies with --categories")
     entries = sorted(catalog.all_entries(), key=operator.itemgetter("name"))
     if not entries:
         raise BoostError("no skills available to browse",

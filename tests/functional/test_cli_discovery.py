@@ -3351,6 +3351,13 @@ class TestBrowseCategories:
         assert names(boost("browse", "--categories", "--by-count").out) == [
             "zeta", "alpha", "beta", "uncategorized"]
 
+    def test_by_count_without_categories_rc2(self, boost, sandbox):
+        # Checked before the catalog is read: an empty sandbox is rc 2, not
+        # "no skills available" rc 1.
+        r = boost("browse", "--by-count", expect=2)
+        assert "--by-count only applies with --categories" in r.err
+        assert r.out == ""
+
     def test_an_unknown_category_points_at_the_list(self, boost, tapped):
         r = boost("browse", "--category", "nope", expect=1)
         assert "no entries in category 'nope'" in r.err
