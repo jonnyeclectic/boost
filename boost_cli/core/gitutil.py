@@ -973,6 +973,19 @@ def _is_sha(value: str) -> bool:
     return len(value) == 40 and all(c in "0123456789abcdef" for c in value.lower())
 
 
+def tracks(repo: Path, rel: str) -> bool:
+    """Whether git at ``repo`` tracks ``rel``, so `git checkout -- rel` restores it.
+
+    False without git or outside a work tree, never raising: it decides which
+    remedy a message offers, and a checkout git cannot do is no remedy.
+    """
+    if not has_git():
+        return False
+    proc = run(["-C", str(repo), "ls-files", "--error-unmatch", "--", rel],
+               check=False)
+    return proc.returncode == 0
+
+
 def remote_url(repo: Path) -> str:
     """Return the URL of `repo`'s `origin` remote, or "" if it has none."""
     proc = run(["-C", str(repo), "remote", "get-url", "origin"], check=False)

@@ -6,7 +6,6 @@ from __future__ import annotations
 import difflib
 import os
 import re
-import shlex
 import sys
 import time
 import urllib.parse
@@ -508,15 +507,6 @@ def broken_clone_line(name: str) -> str:
             "`boost update %s` to re-clone it" % (name, name))
 
 
-def _shell_arg(arg: str) -> str:
-    """`arg` as one argument a user can paste into their shell."""
-    if sys.platform == "win32":
-        # cmd.exe and PowerShell both take double quotes; neither takes the
-        # single quotes `shlex.quote` emits.
-        return '"%s"' % arg if any(c.isspace() for c in arg) else arg
-    return shlex.quote(arg)
-
-
 def retap_hint(name: str, url: str = "") -> str:
     """What to run to re-tap `name` once it is no longer configured.
 
@@ -529,7 +519,7 @@ def retap_hint(name: str, url: str = "") -> str:
     command, and anything else gets words rather than a command that fails.
     """
     if url and not url.startswith(WHEEL_SCHEME):
-        return "boost tap %s" % _shell_arg(url)
+        return "boost tap %s" % util.shell_arg(url)
     if url.startswith(WHEEL_SCHEME) or "/" not in name or " " in name:
         return "re-tap %s from its original source (its URL was not recorded)" % name
     return "boost tap %s" % name

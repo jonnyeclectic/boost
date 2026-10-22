@@ -1129,7 +1129,7 @@ def cmd_doctor(argv):
         # wrong with copies nothing records any more.
         bad("project-lock", "%s — boost sees no project skills here and "
             "refuses to install or uninstall any until it is repaired; %s"
-            % (plock_err, projectlock.RECOVER_HINT % projectlock.LOCK_REL),
+            % (plock_err, projectlock.recover_hint(pbase)),
             wrap=True)
         proj_issues += 1
     for name, entry in sorted(pskills.items()):

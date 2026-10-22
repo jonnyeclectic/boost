@@ -27,7 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..errors import BoostError
-from . import jsonstate, output, util
+from . import gitutil, jsonstate, output, util
 
 SCHEMA_VERSION = 1
 LOCK_DIRNAME = ".boost"
@@ -37,9 +37,23 @@ LOCK_REL = LOCK_DIRNAME + "/" + LOCK_FILENAME
 # Lock paths already warned about, so one command that reads a corrupt lock
 # several times says so once — per repo, since one process can visit several.
 _WARNED_CORRUPT: set[str] = set()
-#: How a corrupt project lock is recovered: it is committed, so git has it.
-RECOVER_HINT = ("it is tracked by the repo, so `git checkout -- %s` restores "
-                "the committed copy; or repair the JSON by hand")
+
+
+def recover_hint(base) -> str:
+    """How the corrupt project lock of the repo at ``base`` is recovered.
+
+    A checkout is offered only when git tracks the file, and is run with
+    ``-C <base>``: a relative ``git checkout -- .boost/skill-lock.json``
+    failed from any subdirectory of the repo (doctor and install resolve the
+    root from there), and in a repo that never committed the file it failed
+    everywhere, under a hint saying the repo tracked it.
+    """
+    if gitutil.tracks(Path(base), LOCK_REL):
+        return ("it is tracked by the repo, so `git -C %s checkout -- %s` "
+                "restores the committed copy; or repair the JSON by hand"
+                % (util.shell_arg(str(base)), LOCK_REL))
+    return ("git does not track it, so there is no committed copy to restore "
+            "— repair the JSON by hand")
 
 
 def lock_path(base) -> Path:
@@ -135,7 +149,7 @@ def _warn_corrupt(p: Path, err: str) -> None:
         return
     _WARNED_CORRUPT.add(str(p))
     output.warn("%s — boost sees no project skills here and will not write "
-                "over it; %s" % (err, RECOVER_HINT % LOCK_REL),
+                "over it; %s" % (err, recover_hint(p.parent.parent)),
                 stream=sys.stderr, wrap=True)
 
 
@@ -159,7 +173,7 @@ def refuse_corrupt(base) -> None:
         return
     raise BoostError("project lock is corrupt — boost will not write over it "
                      "(%s)" % err,
-                     hint=RECOVER_HINT % LOCK_REL, wrap=True)
+                     hint=recover_hint(base), wrap=True)
 
 
 def write(base, lock: dict) -> None:

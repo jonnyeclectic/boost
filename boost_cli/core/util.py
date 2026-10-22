@@ -8,6 +8,7 @@ import getpass
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import stat
 import sys
@@ -1257,3 +1258,12 @@ def lint_failed(skill_dir: Path, score: int, min_score: int = 40) -> bool:
     unclosed frontmatter fence, no SKILL.md) from passing on score alone.
     """
     return score < min_score or bool(lint_errors(skill_dir))
+
+
+def shell_arg(arg: str) -> str:
+    """`arg` as one argument a user can paste into their shell."""
+    if sys.platform == "win32":
+        # cmd.exe and PowerShell both take double quotes; neither takes the
+        # single quotes `shlex.quote` emits.
+        return '"%s"' % arg if any(c.isspace() for c in arg) else arg
+    return shlex.quote(arg)
