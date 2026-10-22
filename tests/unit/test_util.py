@@ -231,6 +231,20 @@ class TestSlugify:
     def test_digits_and_dashes_kept(self):
         assert util.slugify("tdd-workflow-3") == "tdd-workflow-3"
 
+    def test_nfc_and_nfd_spellings_give_one_slug(self):
+        # Precomposed é (NFC) was dropped -> `caf`, while e + U+0301 (NFD,
+        # what a macOS paste often produces) kept its e -> `cafe`: one typed
+        # name saved a profile under one file and looked it up under another.
+        nfc, nfd = "caf\u00e9", "cafe\u0301"
+        assert util.slugify(nfc) == util.slugify(nfd) == "cafe"
+        assert util.slugify("Cr\u00e8me Br\u00fbl\u00e9e") == "creme-brulee"
+
+    def test_compatibility_forms_fold_to_ascii(self):
+        assert util.slugify("\ufb01le \u2460") == "file-1"
+
+    def test_letters_with_no_ascii_fold_still_fall_back(self):
+        assert util.slugify("\u540d\u524d") == "skill"
+
 
 class TestResolveSlug:
     """The shared helper for a user-typed name: slugify, refuse when there is
@@ -272,7 +286,21 @@ class TestResolveSlug:
     def test_empty_raises_instead_of_falling_back_to_skill(self):
         with pytest.raises(BoostError) as exc:
             util.resolve_slug("")
-        assert "no letters or digits" in exc.value.message
+        assert exc.value.message == "name has no letters or digits: ''"
+
+    def test_nfd_input_is_noted_with_the_folded_slug(self, capsys):
+        assert util.resolve_slug("cafe\u0301", what="profile name") == "cafe"
+        assert util.resolve_slug("caf\u00e9", what="profile name") == "cafe"
+        assert capsys.readouterr().err.count("using profile name 'cafe'") == 2
+
+    def test_non_ascii_letters_are_not_called_no_letters(self):
+        # `名前` is all letters; "has no letters or digits" told the user
+        # their input was empty.
+        with pytest.raises(BoostError) as exc:
+            util.resolve_slug("\u540d\u524d", what="skill name")
+        assert exc.value.message == "skill name needs ASCII letters or digits: " \
+            "'\u540d\u524d'"
+        assert exc.value.hint == "a name becomes a file name made of a-z, 0-9 and '-'"
 
     def test_punctuation_only_raises_instead_of_falling_back_to_skill(self):
         # Unlike slugify("!!!") == "skill", a user-typed name with nothing to
