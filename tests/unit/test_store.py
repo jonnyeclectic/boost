@@ -2727,13 +2727,13 @@ class TestRestorePreserveNewerLockSections:
         pre_rules = {"newer-rule": {"tap": tap.name, "version": "1.0.0"}}
         assert lockfile.installed_rules() == {}   # nothing on disk yet
         kept = store.restore_preserve_newer_lock_sections(pre_rules, {})
-        assert kept == {"rules": ["newer-rule"], "workflows": []}
+        assert kept == {"rules": ["newer-rule"], "workflows": [], "live": []}
         assert lockfile.installed_rules() == pre_rules
 
     def test_fills_in_a_workflow_missing_from_the_restored_lock(self, tap):
         pre_workflows = {"newer-flow": {"tap": tap.name, "version": "1.0.0"}}
         kept = store.restore_preserve_newer_lock_sections({}, pre_workflows)
-        assert kept == {"rules": [], "workflows": ["newer-flow"]}
+        assert kept == {"rules": [], "workflows": ["newer-flow"], "live": []}
         assert lockfile.installed_workflows() == pre_workflows
 
     def test_does_not_touch_an_entry_the_restored_lock_already_has(self, tap):
@@ -2743,15 +2743,27 @@ class TestRestorePreserveNewerLockSections:
         kept = store.restore_preserve_newer_lock_sections(pre_rules, {})
         # already present after "restore" (nothing was wiped in this test) ->
         # nothing to fill in, and no spurious write.
-        assert kept == {"rules": [], "workflows": []}
+        assert kept == {"rules": [], "workflows": [], "live": []}
 
     def test_no_write_when_nothing_needs_keeping(self, tap):
         # No install has happened in this test, so the lock file was never
         # created -- a spurious write would bring one into existence.
         assert not paths.lockfile_path().exists()
         kept = store.restore_preserve_newer_lock_sections({}, {})
-        assert kept == {"rules": [], "workflows": []}
+        assert kept == {"rules": [], "workflows": [], "live": []}
         assert not paths.lockfile_path().exists()
+
+    def test_the_live_row_replaces_a_differing_restored_one(self, tap):
+        # The snapshot's older row over the newer block still on disk:
+        # verify called boost's own content the user's local edits.
+        self._install_rule(tap)
+        restored = dict(lockfile.installed_rules()["team-conventions"])
+        live = {**restored, "version": "2.0.0"}
+        kept = store.restore_preserve_newer_lock_sections(
+            {"team-conventions": live}, {})
+        assert kept == {"rules": [], "workflows": [],
+                        "live": ["team-conventions"]}
+        assert lockfile.installed_rules() == {"team-conventions": live}
 
     def _install_rule(self, tap, name="team-conventions"):
         entry = _rule_entry(tap, name=name)
@@ -7224,3 +7236,34 @@ class TestHeldRefusal:
         assert err is not None
         assert err.message == "x is sidelined — its store copy is held aside"
         assert err.hint == "relinking it puts it back first"
+
+
+class TestRestoreCarryNames:
+    """store.restore_carry_names: what a snapshot restore must not drop."""
+
+    def _store(self):
+        root = paths.store_dir()
+        for name in ("alpha", "mine"):
+            (root / name).mkdir(parents=True)
+            (root / name / "SKILL.md").write_text("# %s\n" % name,
+                                                  encoding="utf-8")
+        for name in (".skill-lock.json.lock", ".skill-lock.json.corrupt"):
+            (root / name).write_text("x", encoding="utf-8")
+        return root
+
+    def test_everything_but_the_lock_and_recorded_skills_is_carried(
+            self, sandbox):
+        root = self._store()
+        (root / ".skill-lock.json").write_text(
+            '{"version": 3, "skills": {"alpha": {}}}', encoding="utf-8")
+        assert store.restore_carry_names({"alpha"}) == (
+            [".skill-lock.json.corrupt", "mine"], [])
+
+    def test_an_unreadable_lock_sets_every_dir_aside(self, sandbox):
+        root = self._store()
+        (root / ".skill-lock.json").write_text("{", encoding="utf-8")
+        assert store.restore_carry_names(set()) == (
+            [".skill-lock.json.corrupt"], ["alpha", "mine"])
+
+    def test_no_store_carries_nothing(self, sandbox):
+        assert store.restore_carry_names(set()) == ([], [])

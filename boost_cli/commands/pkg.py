@@ -52,6 +52,8 @@ _tilde = paths.tilde
 
 
 def _plural(n: int, word: str) -> str:
+    if n != 1 and word.endswith("y") and word[-2:-1] not in "aeiou":
+        return "%d %sies" % (n, word[:-1])     # entry -> entries
     return "%d %s%s" % (n, word, "" if n == 1 else "s")
 
 
@@ -3345,7 +3347,7 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
         raise BoostError("no snapshot %s" % snap_id,
                         hint="see `boost snapshot list`")
     root = paths.store_dir()
-    if not (yes or out.confirm("Restore %s? This replaces everything in %s"
+    if not (yes or out.confirm("Restore %s? This replaces the skills in %s"
                                % (snap_id, _tilde(root)))):
         out.info("cancelled")
         return 1
@@ -3359,14 +3361,34 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
     pre_rules = lockfile.installed_rules().copy()
     pre_workflows = lockfile.installed_workflows().copy()
     pre_skills = set(lockfile.installed())
+    # Whatever in the store is not a recorded skill — the lock's .corrupt
+    # backups, a hand-made dir, a workflow's copy — is carried across the
+    # swap; one the archive also holds goes to a named backup, not the bin.
+    # A live workflow's copy stays live, as its lock row does.
+    carry, set_aside = store.restore_carry_names(pre_skills)
+    keep_live = store.workflow_owned_store_names()
+    backup_dir = (paths.state_dir() / "restore-kept"
+                  / ("%s-%s" % (snap_id,
+                                datetime.now(UTC).strftime("%Y%m%d-%H%M%S"))))
     # Extracted into a staging dir and swapped in only once that succeeded,
     # so a corrupt or refused snapshot can never leave an emptied store.
     # The live lock goes into lock history first, as every other lock
     # change's does, so `boost replay rollback` can undo the restore.
-    snapshot.restore(tar_path, root, snap_id, paths.held_skills_dir(),
-                     rehome=store.snapshot_rehomer(snap_id, tar_path),
-                     before_swap=lockfile.record_history)
+    res = snapshot.restore(tar_path, root, snap_id, paths.held_skills_dir(),
+                           rehome=store.snapshot_rehomer(snap_id, tar_path),
+                           before_swap=lockfile.record_history,
+                           carry=carry, keep_live=keep_live,
+                           set_aside=set_aside, backup_dir=backup_dir)
     kept = store.restore_preserve_newer_lock_sections(pre_rules, pre_workflows)
+    if res.carried:
+        out.info("kept %s the snapshot does not cover: %s"
+                 % (_plural(len(res.carried), "store item"),
+                    ", ".join(res.carried)), wrap=True)
+    if res.backed_up:
+        out.warn("moved %s the live lock did not record as installed to %s: %s"
+                 % (_plural(len(res.backed_up), "store item"),
+                    _tilde(backup_dir),
+                    ", ".join(p.name for p in res.backed_up)), wrap=True)
     # A snapshot saved before held copies were archived: no copy to hold, so
     # the restore's sync below reinstalls them instead.
     lost = store.unhold_lost_copies()
@@ -3395,6 +3417,9 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
         if kept_n:
             extra.append("%s installed after this snapshot kept as-is"
                          % _plural(kept_n, "entry"))
+        if kept["live"]:
+            extra.append("%s kept at the installed version, not the "
+                         "snapshot's" % _plural(len(kept["live"]), "entry"))
         if rematerialized:
             extra.append("%s re-materialized from its tap"
                          % _plural(rematerialized, "entry"))
