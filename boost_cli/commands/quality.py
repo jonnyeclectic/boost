@@ -701,14 +701,14 @@ def cmd_doctor(argv):
             unread = "the %d tap clone%s on disk %s not listed" % (
                 len(clones), _s(len(clones)),
                 "is" if len(clones) == 1 else "are")
-            readd = "re-add %s with %s" % (
+            re_add = "re-add %s with %s" % (
                 "it" if len(clones) == 1 else "them",
                 ", ".join(itertools.starmap(registry.readd_hint, clones)))
         else:
-            unread, readd = "no taps or settings are read", "re-add your taps"
+            unread, re_add = "no taps or settings are read", "re-add your taps"
         bad("config", "%s — boost is running on defaults, so %s. Repair the "
             "file, or %s; the next write moves the bad file to "
-            "config.json.corrupt" % (cfg_err, unread, readd), wrap=True)
+            "config.json.corrupt" % (cfg_err, unread, re_add), wrap=True)
 
     # Same for policy.json: unreadable, it reads as defaults, and the
     # verdict was "healthy" while every rule in it went unenforced.
