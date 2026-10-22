@@ -130,6 +130,28 @@ class TestALinkToAnotherSkillIsOrderIndependent:
         boost("install", "a")
         assert _files(paths.store_dir() / "a") == list(self.WANT)
 
+    def test_an_already_widened_target_costs_no_git_call(self, boost,
+                                                         link_tap,
+                                                         monkeypatch):
+        """`drift`, `outdated` and `doctor` resolve every installed skill's
+        source: once the cone holds a target, that must be a file read."""
+        from boost_cli.core import catalog
+        boost("tap", link_tap)
+        boost("install", "a")
+        entry = next(e for e in catalog.all_entries() if e["name"] == "a")
+        calls: list = []
+        real = gitutil.run
+
+        def spy(argv, **kw):
+            calls.append(argv)
+            return real(argv, **kw)
+        monkeypatch.setattr(gitutil, "run", spy)
+
+        store.source_dir_for(entry)
+
+        assert [c for c in calls
+                if "sparse-checkout" in c or "ls-files" in c] == []
+
     def test_existing_dirs_are_named_and_files_only_when_missing(
             self, tmp_path):
         repo = tmp_path / "repo"
