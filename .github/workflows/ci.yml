@@ -488,7 +488,7 @@ jobs:
   #   mutation-scope   can the score have changed at all? (for 38% of this
   #                    repo's merged PRs — docs, roadmap cards, other workflows
   #                    — provably not)
-  #   mutation-shard   twelve parallel slices of the mutant set. A file heavier
+  #   mutation-shard   twenty-four parallel slices of the mutant set. A file heavier
   #                    than an even share is split per top-level function
   #                    (mutant names are addressable that way), so store.py —
   #                    18% of all mutants — is no longer a floor of its own.
@@ -557,8 +557,8 @@ jobs:
     # because its figures are a snapshot of the pack and the weights as they
     # stood then. The retraction at the end of this block is NOT part of that
     # snapshot and is dated separately. For what the cap is worth against the
-    # pack committed today, run `scripts/mutation_shards.py plan --shards 16
-    # --explain --timeout-minutes 120` rather than trust a number restated here.
+    # pack committed today, run `scripts/mutation_shards.py plan --shards 24
+    # --explain --timeout-minutes 160` rather than trust a number restated here.
     #
     # The split was never the problem — the runners were. The committed pack
     # balances to within a hundredth of a percent (`--explain` prints each
@@ -687,8 +687,8 @@ jobs:
     # where that purchase is worth making.
     #
     # Figures re-derived 2026-10-05 against the pack committed that day, and
-    # they go stale on the next weights refresh: run `plan --shards 16
-    # --explain --timeout-minutes 120` for the live ones rather than trusting
+    # they go stale on the next weights refresh: run `plan --shards 24
+    # --explain --timeout-minutes 160` for the live ones rather than trusting
     # these, and read them next to the observed 34.6 / 55.8 rather than alone.
     #
     # THE FIXED COST WAS MEASURED, AND MOST OF IT WAS A TEST (2026-10-09).
@@ -737,12 +737,76 @@ jobs:
     # 69%, the same kind of margin the eval floors keep. A ceiling costs
     # nothing on a shard that finishes early.
     #
+    # 16 -> 24 SHARDS AND 120 -> 160 (2026-10-22). Main run 39729763526
+    # (head c45107e8) took three attempts and never finished shard 7:
+    # 104.0 min (runner lost), then cancelled at 120.7 and 125.0. PR #1225's
+    # run 39750022044 (head 553b69ae) lost shards 7, 8, 10, 14 and 15 to the
+    # cap. The other shards took 27.1 to 115.7 min, on a pack `plan` called
+    # flat at 43.9. The weights had gone stale again, but the model held.
+    # Over the 25 successful jobs of both runs, each job's own mutant time / 4
+    # matched its `Running mutation testing` phase at a median 0.973
+    # (0.922-0.990). Scored on the pack it actually ran, every PR shard that
+    # finished was predicted to within 5 min (26 / 27.1, 71 / 71.0,
+    # 94 / 96.2). The preamble came back at a median 9.98 min (6.6-15.6), so
+    # FIXED_MINUTES is now 10.0.
+    #
+    # The weights were rebuilt from the 26 `mutation-shard-*` artifacts of
+    # the two runs, PR first and main filling the gaps: 46,088 mutants, up
+    # from 36,182, and 278.0M ms against 136.4M: 1.27x the mutants, 1.60x
+    # the time per mutant (3.77 -> 6.03 s). Main's
+    # shard 7 was the only set neither run timed. That is 1,536 mutants:
+    # all of config.py, interrupt.py, store._copy_skill and store.link_agents,
+    # with parts of store.py, catalog.py and logs.py. They are IMPUTED, and
+    # they are the one guessed block in the file. Each mutant starts from its
+    # own function's measured mean, else that function's rate in the
+    # committed weights, else its file's mean, else the 2.6 s repo mean. Then
+    # the whole set is scaled by 2.92x, until it reaches the work that
+    # shard's 120.7-minute cancellation proves it holds:
+    # (120.7 - 9.98) x 4 x 0.973 = 431 work-minutes. That is a lower bound.
+    # The real time may be higher, so the next refresh at this width
+    # supersedes it.
+    #
+    # The floor is that guess. store._copy_skill is 140 mutants, all of them
+    # in shard 7, and they impute at 88 s each, 12,330,979 ms. Its tail alone
+    # is (10.0 + 52.4) x 1.91 = 119.2 min, 99% of 120. That is the "single
+    # unit past the cap" case from the paragraph above, so no width fits 120.
+    # Every width from 24 to 40 hits the same floor. Spread additively
+    # instead of in proportion, the shortfall would put _copy_skill near
+    # 6.9M, and the floor would be store.install, measured at 9.3M (79% of
+    # 120). Proportional was chosen because store.py's measured functions
+    # grew 1.7-2.4x per mutant (install 1.71x, check_existing 1.72x,
+    # _install_rule 1.98x, _install_workflow 2.43x). The first run at this width decides between the
+    # two. (store._copy_tree, the floor in the paragraph above, now measures
+    # 1,934,906 ms over 121 mutants, down from 7,563,495, because most of its
+    # survivors are now killed.)
+    #
+    # At 160, `plan --explain` gives 75% at twenty-four shards (median
+    # 62.4 min on the floor shard, 59.3 ideal) and 82% at twenty (fails).
+    # Twenty-eight is still 75%, on the same floor: it splits util.py and
+    # buys only runner minutes. 150 would leave 79.5%, the 0.8-minute
+    # margin this block refuses above. 160 also lets a median runner finish
+    # _copy_skill even if the guess is 1.5x low, and that breaks the loop
+    # shard 7 is in: always cancelled, so never measured. Queueing is
+    # already real at sixteen. In main's first attempt nine shards started
+    # within 3.2 min of the run and the last one 33.4 min after it. The PR
+    # run's shards started 58.8-132.3 min in, behind main's run. Queue time
+    # does not count against `timeout-minutes`, so going wider costs
+    # wall-clock time, not cancellations.
+    #
+    # Separately, three of main's shards died with "The hosted runner lost
+    # communication with the server" at 104-114 min: shard 0 (later 67.4),
+    # shard 7, and shard 8 twice (later 52.0). Shard 8's units, among them
+    # registry._checked at 130-144 s per mutant, also sat in PR shard 8,
+    # which `plan` scores at 58 min and which was cancelled at 125. Identical
+    # work running 2-2.4x slower is the runner, not the weights, and
+    # TAIL_MULTIPLIER is not re-fitted on it, per its own note.
+    #
     # tests/unit/test_mutation_shard_count.py pins all of it: that this number
     # and the matrix below and every `--shards` in this repo agree, and that
     # the committed pack passes `plan --timeout-minutes` against this cap with
     # 20% headroom. So the next pack that would be cancelled fails a unit test
     # instead, which is the point.
-    timeout-minutes: 120
+    timeout-minutes: 160
     permissions:
       contents: read
     strategy:
@@ -751,7 +815,7 @@ jobs:
       # rerun of the whole matrix to learn anything.
       fail-fast: false
       matrix:
-        index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
@@ -812,11 +876,11 @@ jobs:
           .venv/bin/pip -q install -r requirements/mutation-tools.txt
           # sqlite-vec so dense.py's mutants are covered by the dense tests
           .venv/bin/pip -q install sqlite-vec || true
-      - name: mutate shard ${{ matrix.index }} of 16
+      - name: mutate shard ${{ matrix.index }} of 24
         env:
           SHARD: ${{ matrix.index }}
         run: |
-          PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 16 --index "$SHARD")"
+          PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 24 --index "$SHARD")"
           echo "shard $SHARD patterns: $PATTERNS"
           # `mutmut run` with no arguments runs EVERY mutant. An empty plan must
           # therefore run nothing at all, not silently become a full 26-minute
@@ -917,7 +981,7 @@ jobs:
         # partial result: mutmut counts an unrun mutant as "not checked" and the
         # gate divides by total, so silently accepting one would quietly lower
         # the score instead of failing.
-        run: python3 scripts/mutation_shards.py merge --shards 16 --into mutants --source shard-results
+        run: python3 scripts/mutation_shards.py merge --shards 24 --into mutants --source shard-results
       - name: mutation strength gate (>=80% killed)
         if: needs.mutation-scope.outputs.relevant == 'true'
         run: .venv/bin/python scripts/mutation_gate.py --min 80
