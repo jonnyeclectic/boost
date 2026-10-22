@@ -28,7 +28,7 @@ import re
 import sys
 import threading
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from ..errors import BoostError
@@ -930,15 +930,30 @@ def split_name(name: str) -> tuple[str | None, str]:
     return None, name
 
 
+def _tap_tiers(qualifier: str) -> list[Callable[[str], bool]]:
+    """The tests a ``tap:`` qualifier is matched by, best first.
+
+    The same four tiers as :func:`registry.get`: exact ``owner/repo``, the
+    filesystem ``safe_name``, the bare repo tail, then case-folded. Before the
+    last tier, `boost update Beta` acted on tap ``beta`` while `boost install
+    Beta:x` answered "no tap named 'Beta'", so one spelling worked for every
+    tap command and failed for every item command.
+    """
+    folded = registry.name_key(qualifier)
+    return [lambda t: t == qualifier,
+            lambda t: t.replace("/", "__") == qualifier,
+            lambda t: t.split("/")[-1] == qualifier,
+            lambda t: registry.name_key(t) == folded]
+
+
 def tap_matches(tap_name: str, qualifier: str) -> bool:
     """True when ``qualifier`` selects the single tap ``tap_name``.
 
-    The one-candidate form of :func:`find`'s tap filter — an exact
-    ``owner/repo`` or the bare repo tail. Not a substitute for find's tiering,
-    which picks the *best* tap among several; here there is only one to accept
-    or reject, so the two tiers collapse into one test.
+    The one-candidate form of :func:`find`'s tap filter. Not a substitute for
+    find's tiering, which picks the *best* tap among several; here there is
+    only one to accept or reject, so any tier accepts it.
     """
-    return bool(tap_name) and qualifier in (tap_name, tap_name.split("/")[-1])
+    return bool(tap_name) and any(t(tap_name) for t in _tap_tiers(qualifier))
 
 
 def for_tap(entry: dict | None, qualifier: str | None) -> dict | None:
@@ -1054,9 +1069,11 @@ def find(name: str, tap: str | None = None,
         # errored on the ambiguity while `boost bundle apply` with
         # `skills:brainstorming` silently took matches[0] from whichever tap
         # sorted first.
-        exact = [e for e in matches if e["tap"] == tap]
-        matches = exact or [e for e in matches
-                            if e["tap"].split("/")[-1] == tap]
+        for tier in _tap_tiers(tap):
+            hits = [e for e in matches if tier(e["tap"])]
+            if hits:
+                return hits
+        return []
     return matches
 
 
@@ -1263,9 +1280,12 @@ class SameTapAmbiguity(BoostError):
     """
 
     def __init__(self, message: str, hint: str, *, bare: str,
-                 paths: list[str]):
+                 paths: list[str], qualified: str | None = None):
         super().__init__(message, hint=hint)
         self.bare = bare
+        #: ``tap:bare`` — the name a retry must pass, since the bare name can
+        #: resolve to (or collide with) another tap's copy.
+        self.qualified = qualified or bare
         self.paths = paths
 
 
@@ -1390,10 +1410,15 @@ def resolve_one(name: str, path: str | None = None) -> dict:
             raise SameTapAmbiguity(
                 "%r matches %d different %s in %s: %s"
                 % (bare, len(matches), noun, taps[0], paths),
+                # Qualified, always: the bare name with `--path` resolves
+                # across every tap, so when another registry ships it too the
+                # suggested command failed with the cross-tap error — naming
+                # the wrong tap — or, for identical copies, quietly installed
+                # the other registry's.
                 hint="that registry ships one name twice — install one with "
-                     "`boost install %s --path <one of the above>`, then "
-                     "retry; raise it with the tap" % bare,
-                bare=bare,
+                     "`boost install %s:%s --path <one of the above>`, then "
+                     "retry; raise it with the tap" % (taps[0], bare),
+                bare=bare, qualified="%s:%s" % (taps[0], bare),
                 paths=sorted(str(e.get("rel_dir", "?")) for e in matches))
         # Several taps, one thing. Registries mirror each other constantly, so
         # the common cross-tap collision is N byte-identical copies of one

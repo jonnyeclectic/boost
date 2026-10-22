@@ -247,10 +247,12 @@ class TestSameTapAmbiguity:
         with pytest.raises(catalog.SameTapAmbiguity) as e:
             catalog.resolve_one("dup:twin")
         assert e.value.bare == "twin"
+        assert e.value.qualified == "dup:twin"
         assert e.value.paths == ["a/twin", "b/twin"]
         assert e.value.message == ("'twin' matches 2 different skills in "
                                    "dup: a/twin, b/twin")
         assert e.value.hint == (
             "that registry ships one name twice — install one with `boost "
-            "install twin --path <one of the above>`, then retry; raise it "
+            "install dup:twin --path <one of the above>`, then retry; raise "
+            "it "
             "with the tap")

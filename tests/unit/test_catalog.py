@@ -670,6 +670,54 @@ class TestTapMatches:
         # ("" tap) would satisfy an empty qualifier by string equality.
         assert catalog.tap_matches("", "") is False
 
+    def test_case_folded_spelling_selects_the_tap(self):
+        # `boost update Beta` acts on tap `beta` (registry.get's last tier),
+        # so `Beta:x` must select it too.
+        assert catalog.tap_matches("beta", "Beta") is True
+        assert catalog.tap_matches("Obra/Superpowers", "obra/superpowers") \
+            is True
+
+    def test_safe_name_selects_the_tap(self):
+        assert catalog.tap_matches("acme/fix", "acme__fix") is True
+
+    def test_case_fold_does_not_widen_the_tail(self):
+        # registry.get folds the full name only; `Skills` is not a tail tier.
+        assert catalog.tap_matches("trailofbits/skills", "Skills") is False
+
+
+class TestFindTapTiers:
+    def test_case_variant_qualifier_finds_the_tap(self, sandbox):
+        _fake_taps(("beta", [_entry("x", "beta", desc="b")]))
+        assert [e["tap"] for e in catalog.find("Beta:x")] == ["beta"]
+        assert catalog.resolve_one("Beta:x")["tap"] == "beta"
+
+    # A corpus passed in directly: two taps that differ only by case or by
+    # `/` vs `__` share one cache file on disk, so they cannot both be faked.
+    def test_exact_spelling_beats_a_case_variant(self):
+        pool = [_entry("x", "beta", desc="lower"),
+                _entry("x", "Beta", desc="upper")]
+        assert [e["description"] for e in catalog.find("Beta:x", entries=pool)] \
+            == ["upper"]
+        assert [e["description"] for e in catalog.find("beta:x", entries=pool)] \
+            == ["lower"]
+
+    def test_safe_name_beats_a_tail_and_a_fold(self):
+        pool = [_entry("x", "other/acme__fix", desc="tail"),
+                _entry("x", "acme/fix", desc="safe"),
+                _entry("x", "ACME__FIX", desc="fold")]
+        assert [e["description"]
+                for e in catalog.find("acme__fix:x", entries=pool)] == ["safe"]
+
+    def test_tail_beats_a_fold(self):
+        pool = [_entry("x", "Fix", desc="fold"),
+                _entry("x", "acme/fix", desc="tail")]
+        assert [e["description"] for e in catalog.find("fix:x", entries=pool)] \
+            == ["tail"]
+
+    def test_unmatched_qualifier_finds_nothing(self, sandbox):
+        _fake_taps(("beta", [_entry("x", "beta", desc="b")]))
+        assert catalog.find("gamma:x") == []
+
 
 _A = {"name": "x", "tap": "acme/fix", "version": "1.0.2"}
 _B = {"name": "x", "tap": "other", "version": "9.0.0"}
@@ -1197,7 +1245,25 @@ class TestResolveOneVendoredCopies:
         with pytest.raises(BoostError) as excinfo:
             catalog.resolve_one("dbg")
         hint = excinfo.value.hint or ""
-        assert "boost install dbg --path" in hint
+        assert "boost install t:dbg --path" in hint
+
+    def test_the_hinted_command_resolves_when_another_tap_ships_it(self, sandbox):
+        """The hint dropped the qualifier, so with the name in a second tap
+        the suggested `install dbg --path a/dbg` failed with the cross-tap
+        error and pointed at the wrong tap. Following it now resolves."""
+        _fake_taps(("alpha", [_entry("dbg", "alpha", desc="alpha's",
+                                     rel_dir="a/dbg")]),
+                   ("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(catalog.SameTapAmbiguity) as excinfo:
+            catalog.resolve_one("t:dbg")
+        assert excinfo.value.hint == (
+            "that registry ships one name twice — install one with `boost "
+            "install t:dbg --path <one of the above>`, then retry; raise it "
+            "with the tap")
+        assert excinfo.value.qualified == "t:dbg"
+        got = catalog.resolve_one(excinfo.value.qualified, path="a/dbg")
+        assert (got["tap"], got["description"]) == ("t", "python")
 
     def test_the_ambiguity_message_names_the_entry_s_own_kind(self, sandbox):
         """A workflow sharing a name inside one tap was still reported as

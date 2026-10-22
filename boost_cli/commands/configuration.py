@@ -1590,7 +1590,7 @@ def _path_hint(fn: Callable[[dict], tuple[str, bool]]
             raise BoostError(
                 e.message,
                 hint='call again with "path" set to one of the above, e.g. '
-                     '{"name": "%s", "path": "%s"}' % (e.bare, e.paths[0])
+                     '{"name": "%s", "path": "%s"}' % (e.qualified, e.paths[0])
             ) from e
     wrapped.__doc__ = fn.__doc__
     return wrapped
