@@ -2356,7 +2356,7 @@ class TestRuleInstall:
         assert lockfile.get_rule("team-conventions") is not None
 
 
-def _workflow_entry(tap, name="ship-it", rel="commands/ship.md",
+def _workflow_entry(tap, name="ship-it", rel="commands/ship-it.md",
                     body="---\nname: ship-it\ndescription: release helper\n"
                          "allowed-tools: Bash\n---\n\nRun the release.\n"):
     """Write a workflow file into the tap clone and return its catalog entry."""
@@ -2554,7 +2554,8 @@ class TestWorkflowInstall:
 
     def test_uninstall_removes_a_gemini_subagent_markdown_file(self, tap):
         entry = _workflow_entry(tap, name="reviewer", rel="agents/reviewer.md",
-                                body="---\nname: reviewer\n---\n\nReview it.\n")
+                                body="---\nname: reviewer\ndescription: d\n---\n\n"
+                                     "Review it.\n")
         store.install(entry)
         gem = paths.home() / ".gemini" / "agents" / "reviewer.md"
         assert gem.is_file()

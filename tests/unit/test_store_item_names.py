@@ -119,7 +119,7 @@ class TestLongNames:
     def test_246_character_skill_and_workflow_install(self, sandbox, tmp_path):
         skill, wf = "s" + "b" * 245, "w" + "b" * 245
         make_tap(tmp_path / "long", skills={"long": skill},
-                 commands={"lw": wf})
+                 commands={wf: wf})
         store.install(catalog.resolve_one(skill))
         store.install(catalog.resolve_one(wf))
         assert (store.skill_store_dir(skill) / "SKILL.md").is_file()
@@ -129,7 +129,7 @@ class TestLongNames:
     def test_a_name_that_cannot_fit_is_refused_before_any_write(
             self, sandbox, tmp_path, boost):
         wf = "w" * 251
-        make_tap(tmp_path / "long", commands={"lw": wf})
+        make_tap(tmp_path / "long", commands={wf: wf})
         res = boost("install", wf, expect=1)
         assert "workflow name is too long (256 bytes, limit 255)" in res.err
         assert "unexpected error" not in res.err
