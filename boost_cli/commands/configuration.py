@@ -1736,12 +1736,12 @@ def _tool_list(args: dict):
                          % (n, e.get("version", "?"), e.get("tap", "?"),
                             "" if kind == "skill" else " [%s]" % kind,
                             " [project %s]" % where if where else "",
-                            " [pinned]" if e.get("pinned") else ""))
+                            mcp.state_marks(e)))
     if project:
         lines.append("project skills (%s):" % _tilde(pbase))
         lines.extend("%s v%s (%s) [project]%s"
                      % (n, e.get("version", "?"), e.get("tap", "?"),
-                        " [pinned]" if e.get("pinned") else "")
+                        mcp.state_marks(e))
                      for n, e in sorted(project.items()))
     lines.append(footer)
     return "\n".join(lines), False
@@ -1894,10 +1894,12 @@ def _tool_read(args: dict):
                 == cat.get("rel_dir"))
         return mcp.read_reply(name, text, kind=cat.get("kind") or "skill",
                               installed=here,
-                              where=scopes.project_label(rec or {})), False
+                              where=scopes.project_label(rec or {}),
+                              held=mcp.held_line(name, rec)), False
     text, kind, lock, _cat = info._resolve_text(name)
     return mcp.read_reply(name, text, kind=kind, installed=lock is not None,
-                          where=scopes.project_label(lock or {})), False
+                          where=scopes.project_label(lock or {}),
+                          held=mcp.held_line(name, lock)), False
 
 
 @_path_hint
@@ -2343,7 +2345,8 @@ REGISTRY.register(
     "The skills, rules and workflows already installed on this machine and "
     "usable this second — capability you own and may not know you own. "
     "Returns one line each: name, version, tap, a [rule] or [workflow] marker "
-    "where it is not a skill, and [pinned] where the version is held, then a "
+    "where it is not a skill, [pinned] where the version is held, and "
+    "[quarantined] or [sidelined] where no agent loads it, then a "
     "closing count per kind. That count is the other half of the answer: it is "
     "what this machine holds, not what exists, and a kind sitting at zero is a "
     "kind nothing here could have loaded. boost_search is what reads the "

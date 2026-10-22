@@ -128,3 +128,24 @@ class TestProjectScopeIsInstalled:
         listed, _ = _tool("boost_list")
         assert "[project]" not in listed
         assert "project skills" not in listed
+
+
+class TestQuarantineIsVisible:
+    def test_list_and_read_mark_a_quarantined_skill(self, boost, tapped):
+        boost("install", "commit-messages", "brainstorming")
+        boost("quarantine", "brainstorming")
+        text, is_err = _tool("boost_list")
+        assert is_err is False
+        lines = text.splitlines()
+        held = next(line for line in lines if line.startswith("brainstorming "))
+        assert held.endswith(" [quarantined]")
+        live = next(line for line in lines
+                    if line.startswith("commit-messages "))
+        assert "[quarantined]" not in live
+        text, is_err = _tool("boost_read", name="brainstorming")
+        assert is_err is False
+        assert ("installed: yes\nquarantined: yes — no agent loads it; "
+                "`boost quarantine --release brainstorming` puts it back"
+                ) in text
+        text, _ = _tool("boost_read", name="commit-messages")
+        assert "quarantined" not in text.split("\n\n")[0]
