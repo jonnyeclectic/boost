@@ -1829,8 +1829,16 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     if _source_changed_hold(label, name, lk, tapname):
         return 0, 1, 0, 0
     pool = index.get(catalog.split_name(name)[1], [])
-    matches = [e for e in catalog.find(name, entries=pool)
-               if e["tap"] == tapname]
+    in_tap = [e for e in catalog.find(name, entries=pool)
+              if e["tap"] == tapname]
+    # A skill row refreshes only from a skill: the name alone also matched a
+    # same-named workflow, which was installed beside the untouched skill.
+    matches = [e for e in in_tap if e.get("kind", "skill") == "skill"]
+    if in_tap and not matches:
+        out.warn(staleness.kind_changed_message(
+            label, name, tapname, (e.get("kind", "skill") for e in in_tap)),
+            wrap=True)
+        return 0, 0, 0, 0
     if not matches:
         out.warn("%s is no longer in tap %s — leaving as-is" % (label, tapname))
         return 0, 0, 0, 0
@@ -2259,7 +2267,14 @@ def cmd_reinstall(argv: list[str]) -> int:
             done += 1
             done_kinds.add("skill")
             continue
-        matches = [e for e in catalog.find(name) if e["tap"] == lk.get("tap")]
+        in_tap = [e for e in catalog.find(name) if e["tap"] == lk.get("tap")]
+        matches = [e for e in in_tap if e.get("kind", "skill") == "skill"]
+        if in_tap and not matches:
+            out.warn(staleness.kind_changed_message(
+                name, name, str(lk.get("tap")),
+                (e.get("kind", "skill") for e in in_tap)), wrap=True)
+            failed += 1
+            continue
         if not matches:
             out.warn(store.source_missing_message(name, name, lk), wrap=True)
             failed += 1

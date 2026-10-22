@@ -203,6 +203,22 @@ class TestRemovedUpstreamRemedy:
                 == "`boost uninstall x`, or keep as-is")
 
 
+class TestKindChangedMessage:
+    """A skill its tap now ships only as another kind is named, not swapped."""
+
+    def test_names_the_new_kind_and_both_steps(self):
+        assert (staleness.kind_changed_message(
+            "cm (project)", "cm", "t", ["workflow", "workflow"])
+            == "cm (project) is no longer shipped as a skill by tap t (it is "
+               "now a workflow) — leaving as-is; `boost uninstall cm --kind "
+               "skill`, then `boost install t:cm`, switches to it")
+
+    def test_several_kinds_are_sorted_and_joined(self):
+        msg = staleness.kind_changed_message("cm", "cm", "t",
+                                             iter(["workflow", "rule"]))
+        assert "(it is now a rule or workflow)" in msg
+
+
 class TestCatalogRelation:
     """`boost info`'s installed-vs-catalog decision, compared as versions."""
 

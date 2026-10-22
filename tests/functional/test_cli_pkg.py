@@ -1457,6 +1457,69 @@ class TestUpdateDiffGate:
         assert "upgraded brainstorming v1.4.0 → v1.5.0" in r.out
 
 
+class TestSkillBecameWorkflow:
+    """Upstream turns a skill into a same-named workflow.
+
+    The skill paths matched the name across every kind, so `boost update`
+    installed the workflow beside the untouched skill and printed "upgraded"
+    for it — on every run, since `outdated` kept listing the skill as behind.
+    """
+
+    def _converted(self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "kind-tap")
+        boost("tap", tap_dir)
+        boost("install", "commit-messages")
+        subprocess.run(["git", "-C", str(tap_dir), "rm", "-rq",
+                        "skills/commit-messages"],
+                       check=True, capture_output=True)
+        _add_and_commit(tap_dir, "commands/commit-messages.md",
+                        "---\nname: commit-messages\nversion: 2.0.0\n"
+                        "description: Write commit messages\n---\n\nDo it.\n",
+                        "skill becomes a workflow")
+        return _lock()["commit-messages"]["tap"]
+
+    def test_update_names_the_switch_and_installs_nothing(
+            self, boost, fixture_tap_src, tmp_path):
+        tap = self._converted(boost, fixture_tap_src, tmp_path)
+        store_md = paths.home() / ".agents" / "skills" / "commit-messages" / "SKILL.md"
+        before = store_md.read_bytes()
+        for _ in range(2):
+            r = boost("update")
+            assert r.rc == 0
+            assert ("commit-messages is no longer shipped as a skill by tap "
+                    "%s (it is now a workflow) — leaving as-is; `boost "
+                    "uninstall commit-messages --kind skill`, then `boost "
+                    "install %s:commit-messages`, switches to it"
+                    % (tap, tap)) in " ".join(r.out.split())
+            assert "upgraded" not in r.out
+        assert _lock()["commit-messages"]["version"] == "1.0.2"
+        assert store_md.read_bytes() == before
+        assert not (paths.home() / ".claude" / "commands"
+                    / "commit-messages.md").exists()
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        assert "commit-messages" not in (lock.get("workflows") or {})
+
+    def test_outdated_does_not_offer_the_workflow_as_an_upgrade(
+            self, boost, fixture_tap_src, tmp_path):
+        self._converted(boost, fixture_tap_src, tmp_path)
+        boost("update")                       # rescans the tap
+        r = boost("outdated", "--json")
+        rows = [x for x in json.loads(r.out) if x["name"] == "commit-messages"]
+        assert [(x["kind"], x["latest"], x["reason"]) for x in rows] == [
+            ("skill", None, "source-missing")]
+
+    def test_reinstall_does_not_install_the_workflow(
+            self, boost, fixture_tap_src, tmp_path):
+        tap = self._converted(boost, fixture_tap_src, tmp_path)
+        boost("update")                       # rescans the tap
+        r = boost("reinstall", "commit-messages", expect=1)
+        assert ("no longer shipped as a skill by tap %s" % tap
+                in " ".join(r.out.split()))
+        assert "reinstalled" not in r.out
+        assert not (paths.home() / ".claude" / "commands"
+                    / "commit-messages.md").exists()
+
+
 class TestRuleUpdateGate:
     """A rule refresh rewrites CLAUDE.md. It now has to be seen first.
 

@@ -526,7 +526,10 @@ def cmd_outdated(argv) -> int:
                             "tap": tap_name, "pinned": bool(lk.get("pinned")),
                             "scope": scope})
             continue
-        matches = [e for e in catalog.find(name, entries=entries) if e["tap"] == tap_name]
+        # Skills only: a same-named workflow upstream is not this skill's
+        # update, and listing it as one sent `boost update` to "upgrade" it.
+        matches = [e for e in catalog.find(name, entries=entries)
+                   if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
         if not matches:
             # The tap is untapped, or dropped this entry entirely — same
             # condition the rule/workflow loop below reports honestly, so a
