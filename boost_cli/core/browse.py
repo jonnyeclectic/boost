@@ -17,7 +17,6 @@ and every token must match somewhere in the scope. Tab took over selection.
 from __future__ import annotations
 
 import difflib
-import textwrap
 from dataclasses import dataclass, replace
 
 #: Search scopes, in cycle order. `all` first because it is the useful default:
@@ -1593,15 +1592,36 @@ def line_role(line: Line) -> str:
     return line[0][0] if line else "blank"
 
 
+def _wrap(text: str, width: int) -> list[str]:
+    """Prose wrapped to ``width`` display columns (:func:`output.wrap_columns`).
+
+    Not ``textwrap.wrap``: that counts codepoints, so a line of full-width CJK
+    came back twice as wide as the pane and curses drew it over the list."""
+    from . import output  # stdlib-only too; lazy to keep this module light
+    return output.wrap_columns(text, width)
+
+
 def clip_spans(line: Line, width: int) -> Line:
-    """``line`` cut to ``width`` columns, spans after the cut dropped."""
+    """``line`` cut to ``width`` columns, spans after the cut dropped.
+
+    Columns, not codepoints: a wide character costs two, so a chip row of CJK
+    text cut by ``len`` still ran past the pane."""
+    from . import output
     out: Line = []
     room = max(0, width)
     for role, text in line:
         if room <= 0:
             break
-        out.append((role, text[:room]))
-        room -= len(text[:room])
+        part, used = "", 0
+        for ch in text:
+            cw = output.visible_len(ch)
+            if used + cw > room:
+                break
+            part, used = part + ch, used + cw
+        if text and not part:
+            break                   # a wide character that no longer fits
+        out.append((role, part))
+        room -= used
     return out
 
 
@@ -1617,7 +1637,7 @@ def field_lines(label: str, value: str, width: int,
     """
     lw = max(label_w, len(label))
     vw = max(4, width - lw - 1)
-    chunks = textwrap.wrap(value, width=vw) or [""]
+    chunks = _wrap(value, vw) or [""]
     lines: list[Line] = [[("label", label.ljust(lw) + " "), ("field", chunks[0])]]
     lines.extend([("label", " " * (lw + 1)), ("field", c)] for c in chunks[1:])
     return lines
@@ -1666,7 +1686,7 @@ def detail_lines(entry: dict, width: int = 60,
 
     def add(role: str, text: str) -> None:
         lines.extend([(role, chunk)] for chunk in
-                     textwrap.wrap(text, width=width) or [""])
+                     _wrap(text, width) or [""])
 
     def blank() -> None:
         lines.append([("blank", "")])
@@ -1697,7 +1717,7 @@ def detail_lines(entry: dict, width: int = 60,
                 # Drop the comma, not the command.
                 bare = chunk.rstrip(",.;:")
                 parts = ([bare] if output.visible_len(bare) <= width
-                         else textwrap.wrap(chunk, width))
+                         else _wrap(chunk, width))
             lines.extend([(role, part)] for part in parts)
         blank()
 

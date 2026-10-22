@@ -2347,7 +2347,9 @@ def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names,
         for role, text in line:
             key = _DETAIL_ROLE_KEYS.get(role, role)
             put(y, x, text, th[key] if key in th else th["field"])
-            x += len(text)
+            # Columns, not codepoints: after a CJK label span the next span
+            # started inside it, half a line to the left of where it drew.
+            x += out.visible_len(text)
     if len(lines) > visible and visible > 0:
         bar = _scrollbar(len(lines), visible, dscroll)
         if bar:
