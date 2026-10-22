@@ -6,11 +6,15 @@ None of them carries a project marker, so the unmarked fallback claimed them:
 from an installed skill's store dir it wrote agent dirs into the skill (and
 ``verify`` then called it modified), from a tap clone it planted copies the
 next rescan indexed as that tap's items, and in a bare repo it wrote files no
-commit can carry.
+commit can carry. From an agent's user config root (``~/.gemini``,
+``~/.codex``) it wrote that agent's *global* context file — GEMINI.md and
+AGENTS.md are the same name at both scopes — and recorded it as project scope.
 """
 from __future__ import annotations
 
-from boost_cli.core import paths
+import pytest
+
+from boost_cli.core import lockfile, paths
 
 _DIRS = (".boost", ".claude", ".cursor", ".gemini", ".windsurf", ".codex")
 
@@ -64,3 +68,24 @@ def test_an_ordinary_checkout_still_installs(boost, tapped, monkeypatch):
     monkeypatch.chdir(proj)
     boost("install", "brainstorming", "--local")
     assert (proj / ".claude" / "skills" / "brainstorming" / "SKILL.md").is_file()
+
+
+@pytest.mark.parametrize("dotdir,context", [(".gemini", "GEMINI.md"),
+                                            (".codex", "AGENTS.md")])
+@pytest.mark.parametrize("marked", [False, True])
+def test_refused_in_an_agent_user_config_root(boost, tapped, monkeypatch,
+                                              dotdir, context, marked):
+    d = paths.home() / dotdir
+    d.mkdir()
+    if marked:   # a dotfiles repo: the VCS walk resolves here too
+        (d / ".git").mkdir()
+    before = sorted(p.name for p in d.iterdir())
+    monkeypatch.chdir(d)
+    r = boost("install", "brainstorming", "--local", expect=1)
+    assert ("cannot install --local here: ~/%s is inside an agent's user "
+            "config directory (~/%s)" % (dotdir, dotdir)) in r.err
+    assert "starts a new one here" not in r.out + r.err
+    assert sorted(p.name for p in d.iterdir()) == before
+    assert not (d / context).exists()
+    assert not (d / ".boost").exists()
+    assert not any(lockfile.all_installed().values())
