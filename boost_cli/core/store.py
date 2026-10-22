@@ -2116,6 +2116,10 @@ def stale_temps(now: float | None = None) -> list[tuple[Path, str]]:
     names (:func:`leftover_copies` has the ``.old``/``.new`` ones) and only
     older than :data:`STALE_TEMP_AGE`, since a younger one may be a write or
     install in progress. A symlink is never one.
+
+    Beyond the store, the same ``.tmp`` files in every other dir boost writes
+    atomically into (:func:`atomic_write_dirs`): beside ``config.json``, the
+    tap caches, and each rule's or workflow's file in an agent's dotdir.
     """
     root = paths.store_dir()
     now = time.time() if now is None else now
@@ -2123,7 +2127,7 @@ def stale_temps(now: float | None = None) -> list[tuple[Path, str]]:
     try:
         entries = list(root.iterdir())
     except OSError:
-        return []
+        entries = []    # no store: the other dirs below may still hold one
     for p in entries:
         try:
             st = p.lstat()
@@ -2132,11 +2136,75 @@ def stale_temps(now: float | None = None) -> list[tuple[Path, str]]:
         if now - st.st_mtime <= STALE_TEMP_AGE:
             continue
         if stat.S_ISREG(st.st_mode) and _temp_token(p.name, ".tmp"):
-            found.append((p, "stale temp file"))
+            found.append((p, STALE_TEMP_FILE))
         elif stat.S_ISDIR(st.st_mode) and _temp_token(p.name, ""):
             found.append((p, "stale staging dir"))
     found += _stale_restore_dirs(root, now)
+    found += _stale_write_temps(now)
     return sorted(found)
+
+
+#: :func:`stale_temps`' kind for an ``atomic_write_text`` temp file.
+STALE_TEMP_FILE = "stale temp file"
+
+
+def atomic_write_dirs() -> list[Path]:
+    """The dirs besides the store that boost writes files into atomically.
+
+    ``util._replace_atomically`` makes its ``.boost-XXXXXXXX.tmp`` beside the
+    target, so a kill leaves one next to ``config.json``, a tap cache, or a
+    user's ``CLAUDE.md`` — and a scan of the store alone said "healthy" over
+    a 0600 copy of that ``CLAUDE.md``. boost's own dirs, then the dir of
+    every rule or workflow file the lock records (project-scope rows too:
+    the temp sits in the repo just the same), nominal and resolved, since
+    ``write_user_file`` writes through a symlink and makes its temp beside
+    the real file. Each once, in order, the store left out.
+    """
+    store = paths.store_dir()
+    dirs = [d for d in paths.boost_dirs() if d != store]
+    lock = lockfile.read()
+    for _kind, section in lockfile.SECTIONS[1:]:
+        for entry in (lock.get(section) or {}).values():
+            if not isinstance(entry, dict):
+                continue
+            for m in lockfile._row_paths(entry):
+                p = Path(m["path"])
+                dirs.append(p.parent)
+                dirs.append(Path(os.path.realpath(p)).parent)
+    def key_of(d: Path) -> str:
+        return os.path.normcase(os.path.realpath(d))
+    seen: set[str] = {key_of(store)}
+    out_: list[Path] = []
+    for d in dirs:
+        key = key_of(d)
+        if key not in seen:
+            seen.add(key)
+            out_.append(d)
+    return out_
+
+
+def _stale_write_temps(now: float) -> list[tuple[Path, str]]:
+    """The aged ``.boost-XXXXXXXX.tmp`` files in :func:`atomic_write_dirs`.
+
+    Files only: a ``.boost-XXXXXXXX`` dir is a staging dir, and only the
+    store holds those. Never one path twice when two dirs are one on disk.
+    """
+    found: dict[str, Path] = {}
+    for d in atomic_write_dirs():
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            continue
+        for p in entries:
+            if not _temp_token(p.name, ".tmp"):
+                continue
+            try:
+                st = p.lstat()
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode) and now - st.st_mtime > STALE_TEMP_AGE:
+                found.setdefault(os.path.realpath(p), p)
+    return [(p, STALE_TEMP_FILE) for p in found.values()]
 
 
 #: :func:`stale_temps`' kind for a ``snapshot restore``'s parked previous

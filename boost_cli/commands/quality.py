@@ -776,12 +776,23 @@ def cmd_doctor(argv):
                                                     _tilde(store_dir)),
                 wrap=True)
     temps = [t for t in temps if t[1] != store.PARKED_STORE]
-    if temps:
-        bad("store", "%d stale temp file%s or staging dir%s a killed boost "
-            "left in %s (%s) — `boost clean` removes %s"
-            % (len(temps), _s(len(temps)), _s(len(temps)), _tilde(store_dir),
-               ", ".join(p.name for p, _kind in temps),
-               "it" if len(temps) == 1 else "them"), wrap=True)
+    # One line per dir: the store's (its staging dirs and the restore dirs
+    # beside it included), then each other dir a write left a temp file in —
+    # beside config.json, a tap cache, or the user's CLAUDE.md.
+    by_dir: dict[Path, list[Path]] = {}
+    for pth, kind in temps:
+        where = (pth.parent if kind == store.STALE_TEMP_FILE
+                 and pth.parent != store_dir else store_dir)
+        by_dir.setdefault(where, []).append(pth)
+    for where in sorted(by_dir, key=lambda d: d != store_dir):
+        found = by_dir[where]
+        n = len(found)
+        what = ("stale temp file%s or staging dir%s" % (_s(n), _s(n))
+                if where == store_dir else "stale temp file%s" % _s(n))
+        bad("store", "%d %s a killed boost left in %s (%s) — `boost clean` "
+            "removes %s" % (n, what, _tilde(where),
+                            ", ".join(p.name for p in found),
+                            "it" if n == 1 else "them"), wrap=True)
     if configured and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
                                               "" if cache_block
@@ -2345,12 +2356,23 @@ def cmd_heal(argv):
                  "`boost sync --prune`"
                  % (len(oos), _s(len(oos)),
                     ", ".join("%s → %s" % (n, a) for n, a in oos)), wrap=True)
+    # What a killed boost left beside a file it was writing. Removing it is
+    # `boost clean`'s job (it already decides what is safe to delete there),
+    # so heal names it rather than answer "nothing to heal" over it.
+    temps = [pth for pth, kind in store.stale_temps()
+             if kind != store.PARKED_STORE]
+    if temps:
+        out.warn("%d stale temp file%s or staging dir%s a killed boost left "
+                 "(%s) — `boost clean` removes %s"
+                 % (len(temps), _s(len(temps)), _s(len(temps)),
+                    ", ".join(_tilde(p) for p in temps),
+                    "it" if len(temps) == 1 else "them"), wrap=True)
     if not actions and not stuck and not cfg_err and not no_git:
         # A duplicate this run declined to prune is something `heal` saw, can
         # fix, and deliberately left. A bare "nothing to heal" printed under
         # the line offering the flag contradicts it.
         out.ok("nothing to heal automatically"
-               if declined_duplicates or declined_copies or oos
+               if declined_duplicates or declined_copies or oos or temps
                else "nothing to heal")
     if actions and not dry:
         journal.log("heal", "%d actions" % len(actions))
