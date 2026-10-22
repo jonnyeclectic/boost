@@ -20,7 +20,7 @@
 #          divider -- a historical baseline, not a subset that scores
 # largest: sickn33/antigravity-awesome-skills, 6,634 entries (61.8%)
 # next:    affaan-m/ECC, 1,621 entries (15.1%)
-# content: 5,938 distinct items; sickn33/antigravity-awesome-skills holds 35.7%
+# content: 5,937 distinct items; sickn33/antigravity-awesome-skills holds 35.7%
 #          of them, and the rows overstate the corpus 1.81x
 # scores:  tests/eval/baseline.json, re-baselined with every move
 # --- end corpus size ---
