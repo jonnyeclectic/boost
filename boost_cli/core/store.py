@@ -1233,6 +1233,40 @@ def missing_from_store(name: str, entry: dict | None) -> bool:
     return not is_held(entry) and not skill_store_dir(name).is_dir()
 
 
+def held_copies() -> dict[str, Path]:
+    """Each recorded skill's held copy, by name: what a snapshot archives
+    beside the store, since the lock rows saying ``held_at`` are inside it."""
+    return {name: held_copy_dir(name)
+            for name, entry in lockfile.installed().items()
+            if is_held(entry) and util.is_safe_component(name)}
+
+
+def unhold_lost_copies() -> list[str]:
+    """Clear the sideline of each sidelined row whose held copy is gone.
+
+    A snapshot saved before held copies were archived restores rows that say
+    ``held_at`` with no copy anywhere: `focus --clear` "restored" them into
+    dangling links and `heal` skipped them as held. Un-held, they read as
+    missing from the store, which the restore's own sync reinstalls. A
+    quarantined row is left alone — bringing its content back is
+    `quarantine --release`'s call. Returns the names cleared.
+    """
+    lost = sorted(name for name, entry in lockfile.installed().items()
+                  if is_held(entry) and not entry.get("quarantined")
+                  and util.is_safe_component(name)
+                  and not os.path.lexists(held_copy_dir(name)))
+
+    def unhold(lock: dict) -> None:
+        for name in lost:
+            entry = lock["skills"].get(name)
+            if entry is not None:
+                entry.pop(HELD_KEY, None)
+                entry.pop("sidelined_by", None)
+    if lost:
+        lockfile.mutate(unhold)
+    return lost
+
+
 def drop_held_copy(name: str) -> None:
     """Remove a held copy no lock row will restore; a leftover is harmless."""
     with contextlib.suppress(OSError):
@@ -1319,6 +1353,40 @@ def unsideline(name: str) -> InstallResult:
         entry.pop(HELD_KEY, None)
     lockfile.update_skill(name, relinked)
     return res
+
+
+def sideline_priors(installed: dict, names: list[str],
+                    carried: dict | None = None) -> dict[str, str]:
+    """The mechanism other than focus that had set each of ``names`` aside.
+
+    ``boost focus X`` relinks X whatever sidelined it, so a skill ``context``
+    had set aside came back linked at ``focus --clear`` against the branch
+    rule. Recorded here so the clear can put that sideline back. ``carried``
+    is the running session's own record: a re-focus keeps it, since a skill
+    it relinked is a focus sideline now and its first flag is the true one.
+    """
+    prior = {str(k): str(v) for k, v in (carried or {}).items() if v}
+    for name in names:
+        by = (installed.get(name) or {}).get("sidelined_by")
+        if by and by != "focus":
+            prior[name] = str(by)
+    return prior
+
+
+def focus_displaced(active: list[str], installed: dict) -> list[tuple[str, str]]:
+    """``(name, why)`` for each focused skill that is no longer linked.
+
+    `profile use` and `quarantine` can set a focused skill aside mid-session,
+    and `focus --status` went on naming it the active focus.
+    """
+    displaced = []
+    for name in active:
+        entry = installed.get(name)
+        if entry is None:
+            displaced.append((name, "not installed"))
+        elif entry.get("quarantined") or entry.get("sidelined_by"):
+            displaced.append((name, held_reason(name, entry)[0]))
+    return displaced
 
 
 def linked_agents(name: str) -> list[str]:
@@ -2742,7 +2810,9 @@ def carried_user_state(existing: dict | None) -> dict:
       ``source_updated_at``, ``materializations``, a workflow's ``foreign``.
     * **reset on purpose** — ``quarantined`` (the content was just put back)
       and ``sidelined_by`` (the install relinks, and ``agents`` is measured
-      from disk, so keeping the flag would describe links that exist).
+      from disk, so keeping the flag would describe links that exist). An
+      ``update`` or ``reinstall`` then puts a sidelined skill back aside
+      (:func:`keep_sideline`), so the flag it ends with is measured too.
     """
     pin = (existing or {}).get("commit_pin")
     return {"commit_pin": pin} if pin else {}
@@ -2930,8 +3000,34 @@ def install(entry: dict, force: bool = False,
         for b in old:
             if os.path.lexists(b):
                 _remove_backup(b)
+    if via in REFRESH_VIAS:
+        keep_sideline(name, existing, res)
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
     return res
+
+
+#: The ``via`` of an install that refreshes content rather than asks for the
+#: skill back: ``update`` and ``reinstall`` keep a sidelined skill sidelined.
+REFRESH_VIAS = frozenset({"update", "reinstall"})
+
+
+def keep_sideline(name: str, existing: dict | None, res: InstallResult) -> bool:
+    """Set ``name`` aside again after a refresh, if ``existing`` had been.
+
+    The install relinks and resets ``sidelined_by`` (:func:`carried_user_state`),
+    which is right for a ``boost install`` but not for ``update`` or
+    ``reinstall`` during a focus or context session: those relinked the skill
+    the session had set aside, dropped the flag, and ``focus --clear`` then
+    counted one restore fewer. The new copy is held aside like the old one, so
+    the refresh lands and the sideline stands. Returns whether it re-sidelined.
+    """
+    by = str((existing or {}).get("sidelined_by") or "")
+    if not by or (existing or {}).get("quarantined"):
+        return False
+    sideline(name, by)
+    # The links this install reported were just taken away again.
+    res.linked = []
+    return True
 
 
 def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,

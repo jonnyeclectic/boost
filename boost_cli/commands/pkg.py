@@ -2282,6 +2282,7 @@ def cmd_reinstall(argv: list[str]) -> int:
                 out.warn("%s: %s" % (name, err.message), stream=sys.stderr)
                 failed += 1
                 continue
+            store.keep_sideline(name, lk, res)
             out.ok("reinstalled %s (%s)" % (name, how))
             _warn_unwritable(res)
             done += 1
@@ -3142,7 +3143,8 @@ def _snapshot_save(label: str | None) -> int:
         serial += 1
         snap_id = "%s-%d" % (base, serial)
     tar_path = paths.snapshots_dir() / (snap_id + ".tar.gz")
-    arch = snapshot.archive(paths.store_dir(), tar_path)
+    # With the held copies: their lock rows are in the store, they are not.
+    arch = snapshot.archive(paths.store_dir(), tar_path, store.held_copies())
     skill_count = len(lockfile.installed())
     manifest = {"id": snap_id, "label": label or "", "created": util.now_iso(),
                 "skills": skill_count}
@@ -3240,8 +3242,16 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
     pre_skills = set(lockfile.installed())
     # Extracted into a staging dir and swapped in only once that succeeded,
     # so a corrupt or refused snapshot can never leave an emptied store.
-    snapshot.restore(tar_path, root, snap_id)
+    snapshot.restore(tar_path, root, snap_id, paths.held_skills_dir())
     kept = store.restore_preserve_newer_lock_sections(pre_rules, pre_workflows)
+    # A snapshot saved before held copies were archived: no copy to hold, so
+    # the restore's sync below reinstalls them instead.
+    lost = store.unhold_lost_copies()
+    if lost:
+        out.warn("this snapshot has no copy of sidelined %s — reinstalling "
+                 "from %s tap" % (", ".join(lost),
+                                  "its" if len(lost) == 1 else "their"),
+                 wrap=True)
     # Before anything links: a skill blocklisted since the snapshot was saved
     # is declined here, as `replay rollback` and `install` decline it.
     declined = store.decline_restored_by_policy(pre_skills)

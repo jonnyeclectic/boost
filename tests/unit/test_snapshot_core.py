@@ -10,7 +10,7 @@ import tarfile
 
 import pytest
 
-from boost_cli.core import lockfile, projectlock, snapshot, store
+from boost_cli.core import lockfile, projectlock, snapshot, store, util
 from boost_cli.errors import BoostError
 
 
@@ -38,6 +38,67 @@ def test_archive_then_restore_round_trips(tmp_path):
     assert (root / "alpha" / "SKILL.md").read_text(encoding="utf-8") == "# alpha\n"
     assert [p.name for p in root.parent.iterdir()
             if p.name.startswith(".boost-restore")] == []
+
+
+def _held(tmp_path, name, body):
+    d = tmp_path / "snapcore-held" / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(body, encoding="utf-8")
+    return d
+
+
+def test_held_copies_round_trip_beside_the_store(tmp_path):
+    root = _store(tmp_path)
+    held_root = tmp_path / "snapcore-held"
+    beta = _held(tmp_path, "beta", "# beta\n")
+    tar = tmp_path / "snapcore-held.tar.gz"
+    res = snapshot.archive(root, tar, {"beta": beta,
+                                       "gone": held_root / "gone"})
+    assert res.held == ["beta"]
+    with tarfile.open(str(tar)) as tf:
+        assert snapshot.HELD_ARC + "/beta/SKILL.md" in tf.getnames()
+    # Lost since the save, and a different copy now held under that name.
+    util.rmtree(beta)
+    _held(tmp_path, "beta", "newer\n")
+    assert snapshot.restore(tar, root, "snap-held", held_root) == ["beta"]
+    assert _tree(root) == [".skill-lock.json", "alpha", "alpha/SKILL.md"]
+    assert (held_root / "beta" / "SKILL.md").read_text(
+        encoding="utf-8") == "# beta\n"
+    assert [p.name for p in root.parent.iterdir()
+            if p.name.startswith(".boost-restore")] == []
+
+
+def test_held_copies_never_land_in_the_store(tmp_path):
+    root = _store(tmp_path)
+    tar = tmp_path / "snapcore-held2.tar.gz"
+    snapshot.archive(root, tar, {"beta": _held(tmp_path, "beta", "b\n")})
+    # No held root to put them in: dropped, still not in the store.
+    assert snapshot.restore(tar, root, "snap-held2") == []
+    assert snapshot.HELD_ARC not in os.listdir(root)
+    assert snapshot.archive(root, tmp_path / "snapcore-none.tar.gz").held == []
+    assert snapshot.restore(tmp_path / "snapcore-none.tar.gz", root, "s",
+                            tmp_path / "snapcore-held") == []
+
+
+def test_a_store_child_named_like_the_held_dir_is_refused(tmp_path):
+    root = _store(tmp_path)
+    (root / snapshot.HELD_ARC).mkdir()
+    tar = tmp_path / "snapcore-reserved.tar.gz"
+    with pytest.raises(BoostError) as ei:
+        snapshot.archive(root, tar)
+    assert ei.value.message == ("cannot snapshot .boost-held: the name is "
+                                "reserved for held copies")
+    assert not tar.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_symlinked_held_copy_is_not_archived(tmp_path):
+    root = _store(tmp_path)
+    real = _held(tmp_path, "beta", "b\n")
+    link = tmp_path / "snapcore-heldlink"
+    link.symlink_to(real)
+    tar = tmp_path / "snapcore-heldlink.tar.gz"
+    assert snapshot.archive(root, tar, {"beta": link}).held == []
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")

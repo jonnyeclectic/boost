@@ -4906,3 +4906,112 @@ class TestBundleLineDiagnostics:
         assert "bf:1: nope not found in tap fixture-tap — skipped" in flat
         assert ("bf:2: brainstorming is ambiguous — in fixture-tap, rival-tap; "
                 "qualify it as owner/repo:brainstorming") in flat
+
+
+class TestRefreshDuringFocus:
+    """`update` and `reinstall` of a skill focus set aside keep it aside."""
+
+    def test_update_keeps_a_focus_sideline(self, boost, fixture_tap_src,
+                                           tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "fu-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming", "commit-messages")
+        boost("focus", "brainstorming")
+        _bump(tap_dir, "commit-messages", "1.0.2", "1.0.3")
+        r = boost("update")
+        assert "upgraded commit-messages v1.0.2 → v1.0.3" in r.out
+        lk = _lock()["commit-messages"]
+        assert lk["version"] == "1.0.3"
+        assert lk["sidelined_by"] == "focus"
+        assert lk["agents"] == []
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "commit-messages")
+        assert not os.path.lexists(paths.store_dir() / "commit-messages")
+        held = paths.held_skills_dir() / "commit-messages" / "SKILL.md"
+        assert "version: 1.0.3" in held.read_text(encoding="utf-8")
+        boost("verify", "commit-messages")
+        r = boost("focus", "--clear")
+        assert "focus cleared — 1 skill(s) restored" in r.out
+        assert (paths.home() / ".claude" / "skills" / "commit-messages"
+                ).is_symlink()
+
+    def test_an_edited_held_copy_names_a_remedy_that_works(self, boost,
+                                                           tapped):
+        boost("install", "brainstorming", "commit-messages")
+        boost("focus", "brainstorming")
+        held = paths.held_skills_dir() / "commit-messages" / "SKILL.md"
+        held.write_text(held.read_text(encoding="utf-8") + "evil\n",
+                        encoding="utf-8")
+        r = boost("verify", "commit-messages", expect=1)
+        assert "boost reinstall commit-messages" in r.out + r.err
+        assert "boost heal" not in r.out + r.err
+        r = boost("reinstall", "commit-messages")
+        assert "reinstalled commit-messages" in r.out
+        assert "evil" not in held.read_text(encoding="utf-8")
+        boost("verify", "commit-messages")
+        lk = _lock()["commit-messages"]
+        assert lk["sidelined_by"] == "focus"
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "commit-messages")
+
+
+class TestSnapshotDuringFocus:
+    """A snapshot taken while skills are held aside brings their copies back."""
+
+    def test_round_trip_keeps_every_recorded_copy(self, boost, tapped):
+        from boost_cli.core import store
+
+        boost("install", "brainstorming", "commit-messages", "tdd-workflow")
+        boost("focus", "brainstorming")
+        held = paths.held_skills_dir() / "tdd-workflow" / "SKILL.md"
+        held.write_text(held.read_text(encoding="utf-8") + "local note\n",
+                        encoding="utf-8")
+        r = boost("snapshot", "save")
+        snap_id = re.search(r"saved (snap-[\w-]+)", r.out).group(1)
+        boost("focus", "--clear")
+        r = boost("snapshot", "restore", snap_id, "-y")
+        assert "restored %s (3 skills)" % snap_id in r.out
+        assert "no copy of sidelined" not in r.out + r.err
+        lock = _lock()
+        for name, row in lock.items():
+            assert store.copy_dir(name, row).is_dir(), name
+        assert lock["tdd-workflow"]["sidelined_by"] == "focus"
+        assert "local note" in held.read_text(encoding="utf-8")
+        assert snapshot_arc() not in os.listdir(paths.store_dir())
+        r = boost("focus", "--clear")
+        assert "2 skill(s) restored" in r.out
+        for name in ("commit-messages", "tdd-workflow"):
+            link = paths.home() / ".claude" / "skills" / name
+            assert link.is_symlink() and link.exists()
+
+    def test_a_snapshot_without_held_copies_reinstalls_them(self, boost,
+                                                           tapped):
+        boost("install", "brainstorming", "commit-messages")
+        boost("focus", "brainstorming")
+        r = boost("snapshot", "save")
+        snap_id = re.search(r"saved (snap-[\w-]+)", r.out).group(1)
+        # What a pre-fix save wrote: the store, and no held copy.
+        tar_path = paths.snapshots_dir() / (snap_id + ".tar.gz")
+        with tarfile.open(str(tar_path)) as tf:
+            keep = [(m, tf.extractfile(m).read() if m.isfile() else None)
+                    for m in tf.getmembers()
+                    if not m.name.startswith(snapshot_arc())]
+        with tarfile.open(str(tar_path), "w:gz") as tf:
+            for m, data in keep:
+                tf.addfile(m, io.BytesIO(data) if data is not None else None)
+        boost("focus", "--clear")
+        held_dir = paths.held_skills_dir() / "commit-messages"
+        assert not held_dir.exists()
+        r = boost("snapshot", "restore", snap_id, "-y")
+        assert ("this snapshot has no copy of sidelined commit-messages — "
+                "reinstalling from its tap") in " ".join((r.out + r.err).split())
+        row = _lock()["commit-messages"]
+        assert "sidelined_by" not in row and "held_at" not in row
+        assert (paths.store_dir() / "commit-messages" / "SKILL.md").is_file()
+        link = paths.home() / ".claude" / "skills" / "commit-messages"
+        assert link.is_symlink() and link.exists()
+
+
+def snapshot_arc():
+    from boost_cli.core import snapshot
+    return snapshot.HELD_ARC
