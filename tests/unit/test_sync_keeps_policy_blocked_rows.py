@@ -207,3 +207,31 @@ class TestHealExitsOverAKeptRow:
         assert "brainstorming not restored: policy blocks" in said
         assert "source gone" not in said
         assert lockfile.get_skill("brainstorming") is not None
+
+
+class TestSyncExitsOverAKeptRow:
+    """`sync` printed the same decline under a "!" as heal, and exited 0."""
+
+    def test_run_warns_and_exits_1(self, boost, missing):
+        policy.save({"blocked_skills": ["brainstorming"]})
+        r = boost("sync", expect=1)
+        assert BLOCKED in " ".join((r.out + r.err).split())
+        assert lockfile.get_skill("brainstorming") is not None
+
+    def test_json_names_the_unrepaired_line_and_exits_1(self, boost, missing):
+        import json
+        policy.save({"blocked_skills": ["brainstorming"]})
+        r = boost("sync", "--json", expect=1)
+        data = json.loads(r.out)
+        assert data["unrepaired"] == [BLOCKED]
+        assert BLOCKED in data["actions"]
+
+    def test_a_restore_it_makes_exits_0(self, boost, missing):
+        r = boost("sync", "--json", expect=0)
+        assert json_unrepaired(r.out) == []
+        assert (paths.store_dir() / "brainstorming").is_dir()
+
+
+def json_unrepaired(text: str) -> list:
+    import json
+    return json.loads(text)["unrepaired"]
