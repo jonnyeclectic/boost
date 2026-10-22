@@ -2412,6 +2412,9 @@ def cmd_heal(argv):
                  wrap=True)
     for tap in registry.list_taps():
         if not tap.is_cloned:
+            # Left as a broken clone is: re-cloning is `update`'s (network),
+            # and doctor counts it, so heal must not exit 0 under this line.
+            broken_taps.append(tap.path)
             out.warn("tap %s not cloned — skipped (run `boost update`)" % tap.name)
             continue
         if tap.is_broken_clone:

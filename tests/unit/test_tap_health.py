@@ -206,6 +206,23 @@ class TestDoctorAndHealSeeIt:
         assert "nothing to heal" not in res.out + res.err
 
 
+    @pytest.mark.parametrize("dry", [False, True])
+    def test_heal_fails_over_a_tap_that_is_not_cloned(
+            self, boost, fixture_tap_src, tmp_path, dry):
+        # Doctor counts an uncloned tap as an issue; heal warned about it and
+        # then printed "nothing to heal" and exited 0 beneath the warning.
+        boost("tap", _copy_tap(fixture_tap_src, tmp_path, "health-uncl"))
+        tap = registry.get("health-uncl")
+        util.rmtree(tap.path)
+        res = boost("heal", *(["--dry-run"] if dry else []), expect=None)
+        text = res.out + res.err
+        assert res.rc == 1
+        assert ("tap health-uncl not cloned — skipped (run `boost update`)"
+                in text)
+        assert "nothing to heal" not in text
+        assert not tap.path.exists()
+
+
 def _rule_workflow_tap(fixture_tap_src, tmp_path, name):
     src = _copy_tap(fixture_tap_src, tmp_path, name)
     (src / "rules").mkdir()
