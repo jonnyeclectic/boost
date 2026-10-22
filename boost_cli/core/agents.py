@@ -467,29 +467,28 @@ def materialization_target(kind: str, name: str, entry: dict,
     A row records the path it was written to, and the agent's dir can move
     after that (``agents.cursor.dir``). None for a row of an agent boost no
     longer writes (:func:`materialization_is_written` names those), a
-    workflow's store copy, a workflow row with no ``slot``, and a name the
-    target functions refuse.
+    project-scope row, a workflow's store copy, a workflow row with no
+    ``slot``, and a name the target functions refuse.
     """
     from . import rules, workflows
     agent = m.get("agent")
-    if not agent or m.get("slot") == workflows.SLOT_SKILL:
+    # User scope only. A project row's place is the repo's own layout,
+    # committed with it; repointing a dir under $HOME is no reason for sync
+    # to rewrite files in someone's repo.
+    if (not agent or entry.get("base") is not None
+            or m.get("slot") == workflows.SLOT_SKILL):
         return None
-    base = entry.get("base")
-    writes = (workflow_agents(base) if kind == "workflow"
-              else materializing_agents(base))
+    writes = workflow_agents() if kind == "workflow" else materializing_agents()
     skills_dir = writes.get(agent)
     if skills_dir is None:
         return None
-    dotdir = project_dotdir(agent, skills_dir)
     try:
         if kind == "workflow":
             if not m.get("slot"):
                 return None
             return workflows.workflow_target(skills_dir, m["slot"], name,
-                                             base=base, agent=agent,
-                                             dotdir=dotdir)
-        return rules.rule_target(agent, skills_dir, name, base=base,
-                                 dotdir=dotdir)[1]
+                                             agent=agent)
+        return rules.rule_target(agent, skills_dir, name)[1]
     except BoostError:
         return None
 

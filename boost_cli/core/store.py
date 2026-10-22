@@ -5235,7 +5235,10 @@ def _retire_block(name: str, path: Path, m: dict, base) -> bool:
     left, as :func:`_uninstall_rule` does.
     """
     from . import rules
-    text = util.read_user_text(path)
+    try:
+        text = util.read_user_text(path)
+    except FileNotFoundError:
+        return True  # a dangling link: no block of ours to strip
     try:
         rules.require_well_formed(text, name, path)
     except BoostError:

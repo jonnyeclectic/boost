@@ -280,3 +280,100 @@ def test_links_to_store_dir_reads_the_raw_target(sandbox):
     assert store.links_to_store_dir(rel, "x")
     assert not store.links_to_store_dir(rel, "y")
     assert not store.links_to_store_dir(adir, "x")  # not a link
+
+
+def test_a_project_row_is_never_relocated(boost, mixed):
+    """A repo's committed layout does not move with a dir under $HOME."""
+    _repoint(boost)
+    entry = dict(lockfile.get_rule("tidy-imports"),
+                 base=str(paths.home() / "repo"))
+    m = _cursor_row("rule", "tidy-imports")
+    assert agents.materialization_target("rule", "tidy-imports", entry,
+                                         m) is None
+    assert agents.relocated_to("rule", "tidy-imports", entry, m) is None
+
+
+def test_a_store_alias_is_not_a_remembered_native_dir(boost, mixed):
+    adir = _home(".windsurf", "skills")
+    for link in adir.iterdir():
+        os.unlink(link)
+    adir.rmdir()
+    os.symlink(paths.store_dir(), adir)
+    boost("config", "set", "agents.windsurf.links_skills", "false")
+    assert all(a != "windsurf" for a, _d in agents.remembered_native_dirs())
+
+
+class TestRetireMoved:
+    """`store._retire_moved` on the rows a re-install moved off."""
+
+    @staticmethod
+    def _block_row(path, sha=None, created=None):
+        row = {"agent": "claude-code", "mode": "claude", "path": str(path)}
+        if sha:
+            row["sha256"] = sha
+        if created is not None:
+            row["created"] = created
+        return row
+
+    def _existing(self, *rows):
+        return {"materializations": list(rows)}
+
+    def test_a_damaged_old_block_keeps_its_row_and_text(self, sandbox):
+        old = paths.home() / "old" / "CLAUDE.md"
+        old.parent.mkdir()
+        text = "mine\n<!-- boost:rule:r start -->\nno end marker\n"
+        old.write_text(text, encoding="utf-8")
+        row = self._block_row(old)
+        assert store._retire_moved("r", self._existing(row), ["claude-code"],
+                                   []) == [row]
+        assert old.read_text(encoding="utf-8") == text
+
+    def test_an_old_file_with_no_block_drops_the_row(self, sandbox):
+        old = paths.home() / "old" / "CLAUDE.md"
+        old.parent.mkdir()
+        old.write_text("mine\n", encoding="utf-8")
+        assert store._retire_moved(
+            "r", self._existing(self._block_row(old)), ["claude-code"],
+            []) == []
+        assert old.read_text(encoding="utf-8") == "mine\n"
+
+    def test_an_edited_block_keeps_its_row(self, sandbox):
+        from boost_cli.core import rules
+        old = paths.home() / "old" / "CLAUDE.md"
+        old.parent.mkdir()
+        text = rules.merge_block("", "r", "edited body")
+        old.write_text(text, encoding="utf-8")
+        row = self._block_row(old, sha="0" * 64, created=True)
+        assert store._retire_moved("r", self._existing(row), ["claude-code"],
+                                   []) == [row]
+        assert old.read_text(encoding="utf-8") == text
+
+    def test_a_dangling_old_context_file_is_nothing_to_strip(self, sandbox):
+        old = paths.home() / "CLAUDE.md"
+        os.symlink(paths.home() / "nowhere.md", old)
+        assert store._retire_moved(
+            "r", self._existing(self._block_row(old)), ["claude-code"],
+            []) == []
+        assert os.path.islink(old)
+
+    def test_an_old_path_that_is_a_new_one_by_another_name_stays(self,
+                                                                 sandbox):
+        real = paths.home() / "real"
+        real.mkdir()
+        f = real / "r.mdc"
+        f.write_text("body", encoding="utf-8")
+        alias = paths.home() / "alias"
+        os.symlink(real, alias)
+        row = {"agent": "cursor", "mode": "file", "path": str(alias / "r.mdc")}
+        new = [{"agent": "windsurf", "path": str(f)}]
+        assert store._retire_moved("r", self._existing(row), ["cursor"],
+                                   new) == []
+        assert f.read_text(encoding="utf-8") == "body"
+
+    def test_an_untouched_agent_keeps_its_file(self, sandbox):
+        f = paths.home() / "r.mdc"
+        f.write_text("body", encoding="utf-8")
+        row = {"agent": "cursor", "mode": "file", "path": str(f)}
+        assert store._retire_moved("r", self._existing(row), ["windsurf"],
+                                   []) == []
+        assert f.is_file()
