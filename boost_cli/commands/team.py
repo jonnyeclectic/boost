@@ -30,6 +30,7 @@ from ..core import (
     util,
 )
 from ..core import output as out
+from ..core import profiles as profile_rules
 from ..errors import BoostError
 from ._common import _s
 from .pkg import _report_result, _warn_unwritable
@@ -193,14 +194,14 @@ def cmd_cohort(argv) -> int:
             print(out.empty_state("no cohorts defined"))
             return 0
         applied = skipped = 0
-        total_installed = total_present = total_missing = 0
+        total_installed = total_present = total_missing = total_failed = 0
         per_cohort = []
         for cname in targets:
             spec = cohorts[cname]
             if not _is_member(user, cname, spec["percent"]):
                 per_cohort.append({"cohort": cname, "member": False,
                                    "installed": [], "already_present": [],
-                                   "not_found": []})
+                                   "not_found": [], "failed": []})
                 if not args.json:
                     out.info(out.role("%s: not in the %d%% rollout — skipping"
                                    % (cname, spec["percent"]), "muted"))
@@ -208,6 +209,7 @@ def cmd_cohort(argv) -> int:
             if not args.json:
                 out.heading("cohort %s" % cname)
             installed_here, present_here, missing_here = [], [], []
+            failed_here: list[str] = []
             for skill in spec["skills"]:
                 # find_any, not installed(): a cohort item installed as a rule
                 # or workflow would otherwise be re-installed on every apply.
@@ -238,7 +240,18 @@ def cmd_cohort(argv) -> int:
                                  wrap=True)
                     missing_here.append(skill)
                     continue
-                res = store.install(entry)
+                try:
+                    res = store.install(entry)
+                except BoostError as err:
+                    # One refused member (a policy block, an unwritable
+                    # store) used to abort the whole apply: earlier members
+                    # stayed installed, later members and cohorts were never
+                    # tried, and no summary, JSON or journal entry said so.
+                    # Counted and carried on past, as `bundle install` does.
+                    if not args.json:
+                        out.warn("%s: %s" % (skill, err.message), wrap=True)
+                    failed_here.append(skill)
+                    continue
                 if not args.json:
                     out.ok("installed %s → %s" % (skill, " · ".join(res.linked)))
                     _warn_unwritable(res)
@@ -247,26 +260,30 @@ def cmd_cohort(argv) -> int:
             per_cohort.append({"cohort": cname, "member": True,
                                "installed": installed_here,
                                "already_present": present_here,
-                               "not_found": missing_here})
+                               "not_found": missing_here,
+                               "failed": failed_here})
             journal.log("cohort", cname, op="apply",
                         installed=len(installed_here),
                         present=len(present_here),
-                        missing=len(missing_here))
+                        missing=len(missing_here),
+                        failed=len(failed_here))
             total_installed += len(installed_here)
             total_present += len(present_here)
             total_missing += len(missing_here)
+            total_failed += len(failed_here)
         # #767's exit code is the substance of that PR — a cohort member no tap
         # can resolve must not read as success — so it applies under --json too:
         # an exit code that depended on the output format would undo it.
         if args.json:
             print(json.dumps({"cohorts": per_cohort, "installed": applied,
-                              "already_present": skipped}, indent=2))
+                              "already_present": skipped,
+                              "failed": total_failed}, indent=2))
             return cohort.apply_exit_code(total_installed, total_present,
-                                          total_missing)
+                                          total_missing, total_failed)
         out.info(cohort.apply_summary(total_installed, total_present,
-                                      total_missing))
+                                      total_missing, total_failed))
         return cohort.apply_exit_code(total_installed, total_present,
-                                      total_missing)
+                                      total_missing, total_failed)
 
     # list / status — a NAME narrows to that cohort, and one that does not
     # exist is an error rather than every other cohort's data under rc 0.
@@ -386,8 +403,14 @@ def _profile_diff(profile: dict):
     ``other_kind`` maps a profile name to the kind it is installed as when
     that kind is not "skill" — reporting those as missing would tell the user
     to install something `boost list` already shows.
+
+    ``extras`` are *active* skills only. `profile save` leaves sidelined
+    skills out (``split_sidelined``) and `profile use` sidelines extras, so
+    counting a sidelined one as an extra made `diff` report a mismatch right
+    after either — and made every repeat `use` sideline it again.
     """
     current = lockfile.installed()
+    active, _ = lockfile.split_sidelined(current)
     want = profile.get("skills", {})
     missing, other_kind = [], {}
     for n in sorted(want):
@@ -398,7 +421,7 @@ def _profile_diff(profile: dict):
             other_kind[n] = found[0]
         else:
             missing.append(n)
-    extras = sorted(n for n in current if n not in want)
+    extras = sorted(n for n in active if n not in want)
     changed = sorted(n for n in want
                      if n in current and _row_differs(want[n], current[n]))
     return missing, extras, changed, other_kind
@@ -580,7 +603,9 @@ def cmd_profile(argv) -> int:
         if not args.json:
             out.info("%s is installed as a %s — profiles carry skills only, "
                      "leaving it as-is" % (n, kind))
-    installed_now, not_found = [], []
+    installed_now: list[str] = []
+    not_found: list[str] = []
+    failed: list[str] = []
     for n in missing:
         entry, why = _resolve_entry(n, prefer_tap=want[n].get("tap"),
                                    kind=catalog.KIND_SKILL)
@@ -595,7 +620,17 @@ def cmd_profile(argv) -> int:
         # Into the agents the profile recorded: a skill saved linked for one
         # agent came back linked for every agent, so the switch rewrote the
         # scope it was meant to restore.
-        res = store.install(entry, only_agents=saved.get("only_agents") or None)
+        try:
+            res = store.install(entry,
+                                only_agents=saved.get("only_agents") or None)
+        except BoostError as err:
+            # A refused member (policy, an unwritable store) used to abort the
+            # switch halfway: later members untried, extras still linked, no
+            # JSON. Counted and carried past, as `bundle install` does.
+            if not args.json:
+                out.warn("%s: %s" % (n, err.message), wrap=True)
+            failed.append(n)
+            continue
         if saved.get("pinned"):
             lockfile.update_skill(n, lambda row: row.update(pinned=True))
         if not args.json:
@@ -634,13 +669,30 @@ def cmd_profile(argv) -> int:
     sidelined: list[str] = []
     kept_extras = False
     only: list[str] = []
-    if extras:
+    # --prune removes every skill the profile does not name, sidelined ones
+    # included — a skill an earlier `use` set aside is still installed. The
+    # sideline step takes only the active extras: re-sidelining one already
+    # set aside reported a change on every repeat of the same switch.
+    prunable = (sorted(n for n in lockfile.installed() if n not in want)
+                if args.prune else extras)
+    resolved = sum(1 for n in want if lockfile.find_any(n) is not None)
+    left_linked: list[str] = []
+    if not profile_rules.sideline_allowed(resolved, len(not_found), len(failed)):
+        # Nothing the profile names could be installed, so the switch would
+        # trade the user's whole setup for nothing.
+        left_linked, prunable = extras, []
+        if extras and not args.json:
+            out.warn("nothing in profile %s could be installed — left %d "
+                     "skill%s linked: %s"
+                     % (args.name, len(extras), _s(len(extras)),
+                        ", ".join(extras)), wrap=True)
+    if prunable:
         # A skill `boost sync` recorded where it found it has no copy outside
         # the store, so --prune would delete it for good as a side effect of
         # switching profiles. It is set aside like any extra instead.
-        only = [n for n in extras
+        only = [n for n in prunable
                 if args.prune and store.only_copy(n, lockfile.get_skill(n) or {})]
-        doomed = [n for n in extras if n not in only]
+        doomed = [n for n in prunable if n not in only]
         # A declined --prune confirm used to leave extras fully installed
         # and linked, then still print the unconditional "switched" below —
         # a checkmark for a state the machine was not in. Falling through to
@@ -668,7 +720,7 @@ def cmd_profile(argv) -> int:
             for n in only:
                 out.info("kept %s: the store holds its only copy — "
                          "`boost uninstall %s` deletes it" % (n, n))
-        sidelined = only if pruned else extras
+        sidelined = [n for n in (only if pruned else prunable) if n in extras]
         for n in sidelined:
             store.sideline(n, "profile")
         if sidelined and not args.json:
@@ -677,21 +729,23 @@ def cmd_profile(argv) -> int:
     journal.log("profile", args.name, op="use")
     if args.json:
         print(json.dumps({"name": args.name, "installed": installed_now,
-                          "not_found": not_found, "uninstalled": uninstalled,
+                          "not_found": not_found, "failed": failed,
+                          "uninstalled": uninstalled,
                           "sidelined": sidelined, "kept_extras": kept_extras,
                           "other_kind": other_kind, "differs": sorted(changed),
-                          **({"only_copies": only} if only else {})}, indent=2))
-        return 0
-    if changed:
-        # "switched" is a claim that this machine now is the profile; with a
-        # skill at another version or commit it is not, so it is not made.
-        out.warn("applied profile %s, but %d skill%s differ%s from it — "
-                 "compare with `boost profile diff %s`"
-                 % (args.name, len(changed), _s(len(changed)),
-                    "s" if len(changed) == 1 else "", args.name), wrap=True)
-        return 0
-    out.ok("switched to profile %s" % args.name)
-    return 0
+                          **({"only_copies": only} if only else {}),
+                          **({"left_linked": left_linked} if left_linked
+                             else {})}, indent=2))
+        return profile_rules.use_exit_code(len(not_found), len(failed))
+    # "switched" is a claim that this machine now is the profile; with a
+    # member missing, refused, or at another version or commit it is not.
+    summary = profile_rules.use_summary(args.name, len(not_found), len(failed),
+                                   len(changed))
+    if summary:
+        out.warn(summary, wrap=True)
+    else:
+        out.ok("switched to profile %s" % args.name)
+    return profile_rules.use_exit_code(len(not_found), len(failed))
 
 
 # ---------------------------------------------------------------- protocol

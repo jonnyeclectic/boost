@@ -272,6 +272,36 @@ class TestCohort:
         assert not [e for e in journal.events(action="cohort", subject="zero")
                    if e.get("op") == "apply"]
 
+    def test_apply_survives_a_policy_refused_member(self, boost, tapped):
+        # One refused member used to abort the whole apply: c2 never ran,
+        # nothing was printed to stdout and nothing was journaled.
+        boost("policy", "set", "blocked_skills", "cowboy-coding")
+        boost("cohort", "create", "c1", "--skills",
+             "jira-integration,cowboy-coding", "--percent", "100")
+        boost("cohort", "create", "c2", "--skills", "commit-messages",
+             "--percent", "100")
+        r = json.loads(boost("cohort", "apply", "--json", expect=1).out)
+        by_name = {c["cohort"]: c for c in r["cohorts"]}
+        assert by_name["c1"]["installed"] == ["jira-integration"]
+        assert by_name["c1"]["failed"] == ["cowboy-coding"]
+        assert by_name["c2"]["installed"] == ["commit-messages"]
+        assert by_name["c2"]["failed"] == []
+        assert (r["installed"], r["failed"]) == (2, 1)
+        event = [e for e in journal.events(action="cohort", subject="c1")
+                 if e.get("op") == "apply"]
+        assert event[0]["failed"] == 1
+        assert event[0]["installed"] == 1
+
+    def test_apply_text_counts_the_refused_member(self, boost, tapped):
+        boost("policy", "set", "blocked_skills", "cowboy-coding")
+        boost("cohort", "create", "c1", "--skills",
+             "jira-integration,cowboy-coding", "--percent", "100")
+        r = boost("cohort", "apply", expect=1)
+        flat = " ".join(r.out.split())
+        assert ("cowboy-coding: policy blocks installing cowboy-coding: skill "
+                "'cowboy-coding' is on the blocklist") in flat
+        assert "applied: 1 installed, 0 already present, 1 failed" in flat
+
     def test_apply_skills_flag_can_be_repeated(self, boost, tapped):
         # --skills a --skills b used to replace rather than append, so only
         # the last occurrence's skills survived.
@@ -389,10 +419,11 @@ class TestCohort:
         assert by_name["pilot"] == {
             "cohort": "pilot", "member": True,
             "installed": ["brainstorming"], "already_present": [],
-            "not_found": ["ghost-skill"]}
+            "not_found": ["ghost-skill"], "failed": []}
         assert by_name["closed"] == {
             "cohort": "closed", "member": False, "installed": [],
-            "already_present": [], "not_found": []}
+            "already_present": [], "not_found": [], "failed": []}
+        assert first["failed"] == 0
 
         second = json.loads(boost("cohort", "apply", "pilot", "--json").out)
         assert second["cohorts"][0]["already_present"] == ["brainstorming"]
@@ -444,10 +475,14 @@ class TestRecordedNamesAcrossTaps:
         boost("profile", "save", "p1")
         boost("uninstall", "brainstorming")
         boost("untap", "rival-tap")
-        r = boost("profile", "use", "p1")
+        # A skipped member means this is not the profile: no "switched", rc 1.
+        r = boost("profile", "use", "p1", expect=1)
         assert ("! brainstorming was recorded from tap rival-tap, which is no "
                 "longer tapped (`boost tap` it again, or install it from: "
                 "fixture-tap) — skipped") in r.out
+        assert ("applied profile p1, but 1 skill not found — compare with "
+                "`boost profile diff p1`") in r.out
+        assert "switched to profile" not in r.out
         assert "tap has moved" not in r.out
         assert lockfile.get_skill("brainstorming") is None
 
@@ -776,6 +811,7 @@ class TestProfile:
         boost("install", "cowboy-coding")
         r = json.loads(boost("profile", "use", "solo", "--json").out)
         assert r == {"name": "solo", "installed": [], "not_found": [],
+                     "failed": [],
                      "uninstalled": [], "sidelined": ["cowboy-coding"],
                      "kept_extras": False, "other_kind": {}, "differs": []}
 
@@ -806,14 +842,18 @@ class TestProfile:
         assert "uninstalled cowboy-coding" in flat
         assert ("kept pr-me: the store holds its only copy — `boost uninstall "
                 "pr-me` deletes it") in flat
-        assert ("sidelined 1 skill not in the profile (unlinked, still "
-                "installed): pr-me") in flat
+        # The declined run above already set it aside, so this one does not
+        # report sidelining it again.
+        assert "sidelined" not in flat
+        assert lockfile.get_skill("pr-me")["sidelined_by"] == "profile"
         # Its only copy is held aside, not deleted.
         assert not os.path.lexists(mine)
         assert (paths.held_skills_dir() / "pr-me" / "SKILL.md").is_file()
         assert not os.path.lexists(paths.home() / ".claude" / "skills" / "pr-me")
+        # Already set aside by the run above, so a repeat sidelines nothing
+        # new — it still names the only copy it keeps.
         r = json.loads(boost("profile", "use", "solo", "--prune", "--json").out)
-        assert (r["uninstalled"], r["sidelined"]) == ([], ["pr-me"])
+        assert (r["uninstalled"], r["sidelined"]) == ([], [])
         assert r["only_copies"] == ["pr-me"] and r["kept_extras"] is False
 
     def test_use_json_declines_prune(self, boost, tapped, monkeypatch):
@@ -884,6 +924,143 @@ class TestProfile:
         r = boost("profile", "delete", "broken")
         assert "deleted profile broken" in r.out
         assert not p.exists()
+
+
+def _ghost_profile(name, skills):
+    """A profile file naming ``skills``, written by hand like a teammate's,
+    at the version the fixture tap ships (``1.0.0`` for a name it lacks)."""
+    from boost_cli.core import catalog
+
+    def version(n):
+        found = catalog.find(n)
+        return str(found[0]["version"]) if found else "1.0.0"
+
+    path = paths.profiles_dir() / ("%s.json" % name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "name": name, "saved": "2026-10-01T00:00:00Z", "user": "x",
+        "skills": {n: {"tap": "fixture-tap", "version": version(n)}
+                   for n in skills}}), encoding="utf-8")
+
+
+class TestProfileUseSkippedMembers:
+    """A switch that skipped members is not a switch: no checkmark, rc 1."""
+
+    def test_nothing_resolvable_keeps_the_setup_linked(self, boost, tapped):
+        boost("install", "brainstorming", "tdd-workflow")
+        before = sorted(lockfile.installed())
+        _ghost_profile("onlyghost", ["ghost-skill"])
+        r = json.loads(boost("profile", "use", "onlyghost", "--json",
+                             expect=1).out)
+        assert r["not_found"] == ["ghost-skill"]
+        assert r["failed"] == []
+        assert r["sidelined"] == []
+        assert r["left_linked"] == before
+        assert not [n for n, e in lockfile.installed().items()
+                    if e.get("sidelined_by")]
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").exists()
+
+        r = boost("profile", "use", "onlyghost", expect=1)
+        flat = " ".join(r.out.split())
+        assert ("nothing in profile onlyghost could be installed — left %d "
+                "skills linked: %s" % (len(before), ", ".join(before))) in flat
+        assert ("applied profile onlyghost, but 1 skill not found — compare "
+                "with `boost profile diff onlyghost`") in flat
+        assert "switched to profile" not in flat
+        assert "sidelined" not in flat
+
+    def test_an_empty_profile_still_switches(self, boost, tapped):
+        boost("install", "brainstorming")
+        _ghost_profile("empty", [])
+        r = json.loads(boost("profile", "use", "empty", "--json").out)
+        assert r["sidelined"] == ["brainstorming"]
+        assert "left_linked" not in r
+
+    def test_mixed_profile_warns_instead_of_switching(self, boost, tapped):
+        boost("install", "brainstorming")
+        boost("profile", "save", "p1")
+        path = paths.profiles_dir() / "p1.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["skills"]["ghost-skill"] = {"tap": "fixture-tap",
+                                         "version": "1.0.0"}
+        path.write_text(json.dumps(data), encoding="utf-8")
+        boost("install", "cowboy-coding")
+        r = boost("profile", "use", "p1", expect=1)
+        flat = " ".join(r.out.split())
+        assert "ghost-skill is in the profile but not in any tap — skipped" in flat
+        assert ("applied profile p1, but 1 skill not found — compare with "
+                "`boost profile diff p1`") in flat
+        assert "switched to profile" not in flat
+        # Something the profile names did resolve, so the extra is set aside.
+        assert lockfile.get_skill("cowboy-coding")["sidelined_by"] == "profile"
+
+    def test_a_refused_member_does_not_abort_the_switch(self, boost, tapped):
+        # cowboy-coding sorts between the other two, so the member after the
+        # refusal is the one the old abort never reached.
+        _ghost_profile("pb", ["brainstorming", "cowboy-coding",
+                              "tdd-workflow"])
+        boost("install", "jira-integration")   # pulls in commit-messages
+        boost("policy", "set", "blocked_skills", "cowboy-coding")
+        r = json.loads(boost("profile", "use", "pb", "--json", expect=1).out)
+        assert r["installed"] == ["brainstorming", "tdd-workflow"]
+        assert r["failed"] == ["cowboy-coding"]
+        assert r["not_found"] == []
+        assert r["differs"] == []
+        assert r["sidelined"] == ["commit-messages", "jira-integration"]
+        assert lockfile.get_skill("cowboy-coding") is None
+        assert [e for e in journal.events(action="profile", subject="pb")
+                if e.get("op") == "use"]
+
+    def test_a_refused_member_is_named_in_text(self, boost, tapped):
+        _ghost_profile("pb", ["brainstorming", "cowboy-coding"])
+        boost("policy", "set", "blocked_skills", "cowboy-coding")
+        r = boost("profile", "use", "pb", expect=1)
+        flat = " ".join(r.out.split())
+        assert ("cowboy-coding: policy blocks installing cowboy-coding: skill "
+                "'cowboy-coding' is on the blocklist") in flat
+        assert ("applied profile pb, but 1 skill failed to install — compare "
+                "with `boost profile diff pb`") in flat
+        assert "switched to profile" not in flat
+        assert lockfile.get_skill("brainstorming") is not None
+
+
+class TestProfileDiffIgnoresSidelined:
+    """`save` leaves sidelined skills out, so `diff` must not count them."""
+
+    def test_save_diff_use_use_is_idempotent(self, boost, tapped):
+        boost("install", "brainstorming", "tdd-workflow")
+        boost("profile", "save", "p1")
+        boost("install", "jira-integration")   # pulls in commit-messages
+        r = boost("profile", "use", "p1")
+        assert ("sidelined 2 skills not in the profile (unlinked, still "
+                "installed): commit-messages, jira-integration") in r.out
+        assert json.loads(boost("profile", "diff", "p1", "--json").out) == {
+            "missing": [], "extras": [], "changed": [], "other_kind": {}}
+
+        boost("profile", "save", "p2")
+        assert json.loads(boost("profile", "diff", "p2", "--json").out) == {
+            "missing": [], "extras": [], "changed": [], "other_kind": {}}
+        r = boost("profile", "diff", "p2")
+        assert "current setup matches profile p2" in r.out
+        for _ in range(2):
+            r = boost("profile", "use", "p2")
+            assert "sidelined" not in r.out
+            assert "switched to profile p2" in r.out
+            js = json.loads(boost("profile", "use", "p2", "--json").out)
+            assert js["sidelined"] == []
+        assert lockfile.get_skill("jira-integration")["sidelined_by"] == "profile"
+
+    def test_prune_still_removes_an_already_sidelined_extra(self, boost,
+                                                            tapped):
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("install", "cowboy-coding")
+        boost("profile", "use", "solo")
+        r = json.loads(boost("profile", "use", "solo", "--prune", "-y",
+                             "--json").out)
+        assert r["uninstalled"] == ["cowboy-coding"]
+        assert r["sidelined"] == []
+        assert lockfile.get_skill("cowboy-coding") is None
 
 
 # ---------------------------------------------------------------- protocol
