@@ -132,13 +132,27 @@ def skill_modified(name: str, entry: dict | None) -> bool:
     The one test both doctors ask, so the CLI and the MCP surface cannot
     disagree about it again: ``boost_doctor`` once checked rules and
     workflows only, and called a hand-edited skill "healthy" while ``boost
-    doctor`` flagged it on the same machine. A quarantined skill is not
-    asked — quarantine is its own report — and :func:`status` already keeps
-    a self-sourced skill, a missing store dir and an unlocked row out.
+    doctor`` flagged it on the same machine. A quarantined skill is asked
+    too, of its held copy (:func:`copy_dir`): `boost verify` failed an edited
+    one while doctor called the machine healthy. :func:`status` already
+    keeps a self-sourced skill, a missing copy and an unlocked row out.
     """
-    if not entry or entry.get("quarantined"):
+    if not entry:
         return False
     return status(name, entry) == STATUS_MODIFIED
+
+
+def held_status(name: str, entry: dict | None) -> str:
+    """:func:`status`, with an intact quarantined skill reading
+    ``STATUS_QUARANTINED`` — the word a quarantined rule or workflow already
+    gets (:func:`materialized_status`), so `verify` labels all three kinds
+    alike. Anything wrong with the held copy keeps its failing status: the
+    quarantine does not launder an edit into a pass.
+    """
+    st = status(name, entry)
+    if (entry or {}).get("quarantined") and st == STATUS_OK:
+        return STATUS_QUARANTINED
+    return st
 
 
 def modified_remedy(name: str, kind: str = "skill",

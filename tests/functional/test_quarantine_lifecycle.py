@@ -184,3 +184,57 @@ class TestReleaseKeepsAFileTheUserWrote:
         entry = lockfile.get_workflow(WORKFLOW)
         assert str(cmd) in [m["path"] for m in entry["materializations"]]
         assert not store.foreign_rows(entry)
+
+
+class TestOneQuarantineLabelForEveryKind:
+    def test_verify_and_drift_label_skill_and_rule_alike(self, boost, rwtap):
+        import json
+        boost("install", "brainstorming", RULE)
+        boost("quarantine", "brainstorming")
+        boost("quarantine", RULE)
+        r = boost("verify")
+        rows = {line.split()[0]: line.split()[1] for line in r.out.splitlines()
+                if line.startswith("  ") and line.split()[0] != "✓"}
+        assert rows == {"brainstorming": "quarantined", RULE: "quarantined"}
+        rows = json.loads(boost("verify", "--json").out)["skills"]
+        skill = next(x for x in rows if x["name"] == "brainstorming")
+        assert skill["status"] == "quarantined"
+        assert skill["quarantined"] is True and skill["passed"] is True
+        drift = json.loads(boost("drift", "--json").out)["skills"]
+        assert {d["name"]: d["status"] for d in drift} == {
+            "brainstorming": "quarantined", RULE: "quarantined"}
+        assert next(d for d in drift if d["name"] == "brainstorming")[
+            "hint"] == ("boost quarantine --release brainstorming to restore")
+
+    def test_an_edited_held_copy_fails_verify_drift_and_doctor(self, boost,
+                                                               rwtap):
+        import json
+        boost("install", "brainstorming")
+        boost("quarantine", "brainstorming")
+        md = store.held_copy_dir("brainstorming") / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8") + "edit\n",
+                      encoding="utf-8")
+        r = boost("verify", "brainstorming", expect=1)
+        line = next(x for x in r.out.splitlines() if "brainstorming" in x)
+        assert line.split()[1] == "modified"
+        assert "quarantined" in line
+        assert "`boost quarantine --list` to review it" in line
+        drift = json.loads(boost("drift", "--json").out)["skills"]
+        assert drift[0]["status"] == "local-edits"
+        r = boost("doctor", expect=None)
+        assert r.rc != 0
+        assert ("quarantined skill brainstorming modified since install (its "
+                "held copy) — run `boost quarantine --list` to review it"
+                ) in _flat(r.out + r.err)
+        assert "healthy" not in r.out.splitlines()[-1]
+
+    def test_a_lost_held_copy_drifts_to_the_way_back(self, boost, rwtap):
+        import json
+        boost("install", "brainstorming")
+        boost("quarantine", "brainstorming")
+        util.rmtree(store.held_copy_dir("brainstorming"))
+        drift = json.loads(boost("drift", "--json").out)["skills"]
+        assert drift[0]["status"] == "store-missing"
+        assert drift[0]["hint"] == (
+            "boost uninstall brainstorming drops the record, then boost "
+            "install brainstorming fetches it again")

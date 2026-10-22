@@ -260,6 +260,14 @@ def _drift_status(name: str, entry: dict) -> str:
     """'in-sync' | 'local-edits' | 'upstream-moved' | 'source-missing'
     | 'source-changed'
     | 'store-missing' | 'n/a' (local imports with no tap source)."""
+    if entry.get("quarantined"):
+        # The word a quarantined rule or workflow gets, so the board labels
+        # all three kinds alike; the held copy is still checked, and an edit
+        # to it or its loss outranks the label.
+        st = integrity.status(name, entry)
+        return {integrity.STATUS_MISSING: staleness.STORE_MISSING,
+                integrity.STATUS_MODIFIED: staleness.LOCAL_EDITS}.get(
+                    st, "quarantined")
     sdir = store.copy_dir(name, entry)
     if sdir.is_dir() and integrity.self_sourced(name, entry):
         # Kept in the store itself: an edit there is the skill, not drift.
@@ -941,6 +949,14 @@ def cmd_doctor(argv):
                 bad("skill-quarantine", "quarantined skill %s may still be "
                     "linked for %s — run `boost quarantine %s` again"
                     % (name, ", ".join(still), name))
+                skill_issues += 1
+            # Its held copy is checked as `boost verify` checks it: an edit
+            # there failed verify while this called the machine healthy.
+            if integrity.skill_modified(name, entry):
+                cmd, why = integrity.modified_remedy(name, entry=entry)
+                bad("skill", "quarantined skill %s modified since install "
+                    "(its held copy) — run `%s` %s" % (name, cmd, why),
+                    wrap=True)
                 skill_issues += 1
             continue
         # tamper detection: the lock file records a sha256 at install time, but
@@ -1908,6 +1924,11 @@ def cmd_drift(argv):
         # reinstall) is the repair for — the split doctor and verify name.
         hint = (" ".join(integrity.modified_remedy(name))
                 if kind == "skill" and status == "local-edits"
+                # A held copy that is gone: heal skips a held row, so the
+                # store-missing hint looped (`store.lost_held_copy_hint`).
+                else store.lost_held_copy_hint(name).replace("`", "")
+                if (kind == "skill" and status == staleness.STORE_MISSING
+                    and store.is_held(entry))
                 else _drift_hint(name, status, entry.get("tap", ""),
                                  str(entry.get("tap_url") or "")))
         rows.append({"name": name, "kind": kind, "scope": scope,

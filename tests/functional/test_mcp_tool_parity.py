@@ -38,15 +38,20 @@ class TestDoctorSeesSkillDrift:
         cli = boost("doctor", expect=None)
         assert "skill commit-messages modified since install" in cli.out
 
-    def test_a_quarantined_skill_is_not_reported_as_drift(self, boost, tapped):
-        from boost_cli.core import lockfile
+    def test_an_edited_quarantined_copy_is_drift_too(self, boost, tapped):
+        # It was skipped, so this reply and CLI doctor said healthy while
+        # `boost verify` failed the same copy.
+        from boost_cli.core import store
         boost("install", "commit-messages")
-        md = paths.store_dir() / "commit-messages" / "SKILL.md"
-        md.write_text("edited", encoding="utf-8")
-        entry = lockfile.get_skill("commit-messages")
-        lockfile.set_skill("commit-messages", {**entry, "quarantined": True})
+        boost("quarantine", "commit-messages")
         text, _ = _tool("boost_doctor")
         assert "skill commit-messages: modified" not in text
+        md = store.held_copy_dir("commit-messages") / "SKILL.md"
+        md.write_text("edited", encoding="utf-8")
+        text, is_err = _tool("boost_doctor")
+        assert ("skill commit-messages: modified since install (run `boost "
+                "quarantine --list` to review it") in text
+        assert is_err is True
 
 
 class TestInfoResolvesTheQualifiedName:

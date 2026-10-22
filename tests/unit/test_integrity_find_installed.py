@@ -89,11 +89,18 @@ class TestSkillModified:
         (paths.store_dir() / "s1" / "SKILL.md").write_text("x", encoding="utf-8")
         assert integrity.skill_modified("s1", entry) is True
 
-    def test_quarantined_unlocked_and_missing_are_not_drift(self, sandbox):
+    def test_unlocked_and_missing_are_not_drift(self, sandbox):
         entry = _skill("s1")
         (paths.store_dir() / "s1" / "SKILL.md").write_text("x", encoding="utf-8")
-        assert integrity.skill_modified("s1", {**entry, "quarantined": True}) is False
         assert integrity.skill_modified("s1", {**entry, "sha256": ""}) is False
         assert integrity.skill_modified("gone", entry) is False
         assert integrity.skill_modified("s1", None) is False
         assert integrity.skill_modified("s1", {}) is False
+
+    def test_a_quarantined_copy_is_asked_too(self, sandbox):
+        # Doctor called the machine healthy over an edited quarantined copy
+        # that `boost verify` failed.
+        entry = {**_skill("s1"), "quarantined": True}
+        assert integrity.skill_modified("s1", entry) is False
+        (paths.store_dir() / "s1" / "SKILL.md").write_text("x", encoding="utf-8")
+        assert integrity.skill_modified("s1", entry) is True
