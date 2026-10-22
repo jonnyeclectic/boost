@@ -464,6 +464,8 @@ def _outdated_display(r: dict, configured: frozenset[str] = frozenset()) -> str:
     if r["reason"] == staleness.NOT_CLONED:
         return staleness.OUTDATED_NOT_CLONED
     latest = r["latest"] or "?"
+    if r["reason"] == staleness.DOWNGRADE:
+        return "%s (older than installed)" % latest
     if r["reason"] == staleness.CONTENT:
         return ("%s (%s)" % (latest, r["latest_commit"])
                 if r["latest_commit"] else "%s (content changed)" % latest)
@@ -589,16 +591,16 @@ def cmd_outdated(argv) -> int:
                                    "reason": staleness.SOURCE_MISSING,
                                    "latest_commit": None})
         else:
-            reason = staleness.upstream_reason(
+            reason = staleness.rewound(staleness.upstream_reason(
                 installed_v, latest, lk.get("commit", ""), head,
-                lk.get("sha256", ""), src_sha, exec_changed)
+                lk.get("sha256", ""), src_sha, exec_changed),
+                installed_v, latest, pinned=bool(lk.get("pinned")))
             if reason == staleness.VERSION:
                 results.append(base | {"latest": latest,
                                        "reason": staleness.VERSION,
                                        "latest_commit": None})
-            elif reason == staleness.CONTENT:
-                results.append(base | {"latest": latest,
-                                       "reason": staleness.CONTENT,
+            elif reason in (staleness.CONTENT, staleness.DOWNGRADE):
+                results.append(base | {"latest": latest, "reason": reason,
                                        "latest_commit": head[:7]})
 
     # Rules/workflows have no store dir — their staleness signal is the lock's
@@ -631,6 +633,8 @@ def cmd_outdated(argv) -> int:
                 kind, lk, tap, catalog.find(name, entries=entries))
             if reason is None:
                 continue
+            reason = staleness.rewound(reason, installed_v, r_latest,
+                                       pinned=bool(lk.get("pinned")))
             # Rules/workflows carry no tap-HEAD commit here (only a source-file
             # sha comparison), so `latest_commit` stays unset — `_outdated_display`
             # falls back to the same "(content changed)" wording skills used to
@@ -662,7 +666,8 @@ def cmd_outdated(argv) -> int:
     out.dim(staleness.outdated_footer(
         len(results), len(missing), removed,
         source_changed=reasons.count(staleness.SOURCE_CHANGED),
-        not_cloned=reasons.count(staleness.NOT_CLONED)))
+        not_cloned=reasons.count(staleness.NOT_CLONED),
+        downgrade=reasons.count(staleness.DOWNGRADE)))
     return 0
 
 
