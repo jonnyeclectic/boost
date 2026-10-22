@@ -434,6 +434,22 @@ class TestRecordedNamesAcrossTaps:
         assert "tap has moved" not in r.out
         assert lockfile.get_skill("brainstorming") is None
 
+    def test_rollback_never_restores_another_tap_s_copy(
+            self, boost, rival_tap, tick_clock, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        boost("install", "rival-tap:brainstorming")
+        boost("install", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]   # holds brainstorming
+        assert "brainstorming" in lockfile.history_read(snap_id)["skills"]
+        boost("uninstall", "brainstorming")
+        boost("untap", "rival-tap")
+        r = boost("replay", "rollback", snap_id, expect=1)
+        assert ("! brainstorming was recorded from tap rival-tap, which is no "
+                "longer tapped (`boost tap` it again, or install it from: "
+                "fixture-tap) — cannot restore") in r.out
+        assert "finished with 1 skill not restored: brainstorming" in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
 
 class TestProfile:
     def test_save_show_diff_use_lifecycle(self, boost, tapped):
