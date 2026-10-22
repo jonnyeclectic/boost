@@ -5123,6 +5123,11 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
                 # needs it to restore the block at its original position
                 # rather than re-appending at end-of-file.
                 full_text = util.read_user_text(path)
+                # A damaged block reads as no block, so the removal below
+                # skipped it and quarantine reported the rule withheld with
+                # its text still live. Refused here, before the stash is
+                # persisted, as uninstall refuses it.
+                rules.require_well_formed(full_text, name, path)
                 content = rules.read_block(full_text, name)
                 if content is not None:
                     # A file the removal will rewrite is checked against the

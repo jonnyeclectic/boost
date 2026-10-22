@@ -323,3 +323,14 @@ class TestOrphanEnd:
                 "%s has an end marker with no start marker above it"
                 % paths.tilde(md)) in out
         assert lockfile.get_rule("oh") is not None
+
+    def test_quarantine_refuses_rather_than_claim_it_withheld(self, tap):
+        md, damaged = self._installed_then_unstarted(tap, "oq")
+        entry = lockfile.get_rule("oq")
+        with pytest.raises(BoostError) as ei:
+            store.quarantine_materialized("rule", "oq", entry)
+        assert "has an end marker with no start marker" in ei.value.message
+        assert md.read_text(encoding="utf-8") == damaged
+        row = lockfile.get_rule("oq")
+        assert not row.get("quarantined")
+        assert "quarantine_stash" not in row
