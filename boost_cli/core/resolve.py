@@ -22,7 +22,7 @@ plain graph work.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence, Set
 from dataclasses import dataclass, field
 
 __all__ = ["Resolution", "resolve"]
@@ -67,7 +67,7 @@ def resolve(
     requires_of: Callable[[str], Sequence[str]],
     conflicts_of: Callable[[str], Sequence[str]] | None = None,
     *,
-    installed: frozenset[str] = frozenset(),
+    installed: Set[str] = frozenset(),
     known: Callable[[str], bool] | None = None,
 ) -> Resolution:
     """Resolve ``roots`` plus their ``requires:`` closure into an install plan.
@@ -76,7 +76,9 @@ def resolve(
     need them. The traversal is cycle-safe (a skill on the current DFS stack is
     not re-entered) and each skill is visited once. A dependency that is already
     ``installed`` is not re-added; a *requested* root is always kept so an
-    explicit reinstall/upgrade still happens. Unknown dependencies (per
+    explicit reinstall/upgrade still happens. ``installed`` is only ever
+    asked ``dep in installed`` and iterated, so a caller can pass a set whose
+    membership understands ``tap:name`` (:class:`prereq.InstalledSet`). Unknown dependencies (per
     ``known``) are recorded in ``unresolved`` and not traversed further.
     """
     conflicts_of = conflicts_of or (lambda _n: [])

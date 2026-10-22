@@ -135,3 +135,15 @@ class TestUnmetNames:
         # A conflict row (no "requires" key at all) must not raise if it
         # were ever passed here by mistake — best-effort, not schema-strict.
         assert deps.unmet_names([{"name": "a", "installed": False}]) == ["a"]
+
+
+class TestRequirementRowAsksTheContainer:
+    def test_a_tap_aware_container_judges_a_qualified_token(self):
+        from boost_cli.core import prereq
+        have = prereq.InstalledSet({"base": {"alpha"}})
+        assert deps.requirement_row("alpha:base", have, ["beta:base"]) == {
+            "name": "alpha:base", "installed": True,
+            "requires": [{"name": "beta:base", "installed": False,
+                          "requires": []}]}
+        assert deps.conflict_row("alpha:base", have) == {
+            "name": "alpha:base", "installed": True}
