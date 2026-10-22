@@ -1053,7 +1053,10 @@ jobs:
     # service. PR-only: there's nothing to diff a push to main against.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The same suite as the Linux `tests` cells, under coverage, so the same
+    # cap: at 15 the 2026-10-22 train was killed three attempts running at
+    # 93% of a suite that was still progressing, not wedged.
+    timeout-minutes: 30
     permissions:
       contents: read
     # JOB-level, not step-level: a secret cannot be referenced directly in an
