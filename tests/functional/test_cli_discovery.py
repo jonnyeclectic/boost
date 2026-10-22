@@ -3612,3 +3612,22 @@ class TestBrowseInstallsLikeInstall:
         r = boost("browse", expect=130)
         assert ("interrupted — not installed: commit-messages, tdd-workflow"
                 in r.err)
+
+    def test_a_crash_in_the_plan_fails_the_pick_and_keeps_the_worker(
+            self, boost, tapped, monkeypatch):
+        from boost_cli.core import installplan
+        real = installplan.plan
+
+        def plan(roots, **kw):
+            if roots[0]["name"] == "brainstorming":
+                raise RuntimeError("boom")
+            return real(roots, **kw)
+
+        monkeypatch.setattr(installplan, "plan", plan)
+        poll = type("P", (_Polls,), {"until": "installed ~/.agents/skills/commit"})
+        # Enter on brainstorming, Down, Enter on commit-messages.
+        _real_tui(monkeypatch, [10, _FakeCurses.KEY_DOWN, 10], fake=poll)
+        r = boost("browse", expect=1)
+        assert "brainstorming: boom" in r.err
+        assert "installed commit-messages v1.0.2 (fixture-tap)" in r.out
+        assert set(lockfile.installed()) == {"commit-messages"}

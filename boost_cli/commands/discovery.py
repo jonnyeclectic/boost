@@ -1877,7 +1877,15 @@ def _browse_tui(curses, entries, install=None, category=""):
                         draining[0] = False
                         return
                     req = queue.pop(0)
-                run_request(req)
+                try:
+                    run_request(req)
+                except Exception as e:          # the plan, not an install
+                    # A dead worker would leave every later Enter ignored and
+                    # these rows spinning, reported nowhere.
+                    for root in req:
+                        if status.get(_desc_key(root), ("", ""))[0] == \
+                                browse.BUSY:
+                            fail(root, e)
 
         t = threading.Thread(target=worker, daemon=False)
         workers.append(t)

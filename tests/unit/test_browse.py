@@ -2251,6 +2251,8 @@ class TestWideTextFitsThePane:
         assert browse.clip_spans(line, 3) == [("a", "全")]
         assert browse.clip_spans(line, 5) == [("a", "全角")]
         assert browse.clip_spans(line, 6) == [("a", "全角"), ("b", "文")]
+        assert browse.clip_spans([("a", ""), ("b", "xy")], 5) == [
+            ("a", ""), ("b", "xy")]
 
 
 class TestInstallSession:
