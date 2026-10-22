@@ -925,6 +925,26 @@ class TestExplain:
         assert "Key rules:" not in r.out
 
 
+class TestExplainSkipsFencedCode:
+    def test_shell_comments_and_heredoc_lines_are_not_outline_or_rules(
+            self, boost, sandbox, monkeypatch):
+        text = ("---\nname: deploy-helper\ndescription: Deploys.\n---\n\n"
+                "# Deploy\n\n```bash\n# Install dependencies first\n"
+                "# Never commit secrets -- this is just a shell comment\n"
+                "1. not a step, a heredoc line\n```\n\n## After\n\n"
+                "- Always run the smoke test after deploy.\n")
+        monkeypatch.setattr(info, "_resolve_text",
+                            lambda name: (text, "skill", None, None))
+        r = boost("explain", "deploy-helper")
+        lines = [ln.strip() for ln in r.out.split("\n")]
+        start = lines.index("Outline:") + 1
+        assert lines[start:lines.index("", start)] == ["Deploy", "After"]
+        start = lines.index("Key rules:") + 1
+        assert lines[start:] in (
+            ["• Always run the smoke test after deploy."],
+            ["• Always run the smoke test after deploy.", ""])
+
+
 # The outline used to print every heading in the file: 521 lines for one
 # catalog entry, while the "Key rules:" list beside it stopped at 12. The cap
 # is spelled out here rather than read from `info`, so the boundary is a

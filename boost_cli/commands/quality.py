@@ -2585,7 +2585,7 @@ def cmd_conflict(argv):
             for other in (conflicts if isinstance(conflicts, list) else [conflicts])
             if str(other) in installed_names and str(other) != name
         )
-        for raw in body.splitlines():
+        for raw in imperative.prose_lines(body):
             m = imperative.RULE_RE.match(raw)
             if not m:
                 continue

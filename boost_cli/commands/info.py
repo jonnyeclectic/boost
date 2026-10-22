@@ -1151,7 +1151,11 @@ def cmd_explain(argv):
     elif upstream:
         _print_wrapped("Upstream description (the tap's current version, "
                        "not the installed one): " + upstream)
-    headings = re.findall(r"^(#{1,6})\s+(.*)$", body, re.MULTILINE)
+    # Fenced code is skipped: a shell `# comment` is not a heading, and a
+    # heredoc's `1. ...` line is not a rule.
+    prose = imperative.prose_lines(body)
+    headings = [m.groups() for line in prose
+                if (m := re.match(r"(#{1,6})\s+(.*)$", line))]
     if headings:
         print()
         out.info(out.c("Outline:", out.BOLD))
@@ -1162,7 +1166,7 @@ def cmd_explain(argv):
             out.info(out.role("  … and %d more heading%s"
                               % (more, "" if more == 1 else "s"), "muted"))
     rules, seen = [], set()
-    for line in body.splitlines():
+    for line in prose:
         stripped = re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", line).strip()
         if not stripped or stripped in seen:
             continue

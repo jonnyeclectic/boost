@@ -2532,6 +2532,19 @@ class TestConflict:
         r = boost("conflict")
         assert "no contradictory rules across 1 skill" in r.out
 
+    def test_a_fenced_line_is_not_a_rule(self, boost, sandbox, tmp_path):
+        _import_skill(boost, tmp_path, "pushes",
+                      "- Always force push to main.\n")
+        _import_skill(boost, tmp_path, "shell-notes",
+                      "```bash\n# never force push to main\n"
+                      "never force push to main\n```\n")
+        r = boost("conflict")
+        assert "no contradictory rules across 2 skills" in r.out
+        _import_skill(boost, tmp_path / "b", "guard",
+                      "- Never force push to main.\n")
+        r = boost("conflict", expect=1)
+        assert "pushes ↔ guard" in r.out or "guard ↔ pushes" in r.out
+
     def test_quarantine_clears_a_declared_conflict(self, boost, tapped):
         # Quarantine removes a skill's active links/materialization on purpose
         # (see quality.py's doctor/drift comments) — a MED conflict finding

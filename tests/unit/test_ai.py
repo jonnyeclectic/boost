@@ -414,6 +414,51 @@ class TestExtractMarkdown:
         assert ai.extract_markdown("") == ""
         assert ai.extract_markdown(None) == ""
 
+    def test_chatter_after_the_closing_fence_is_dropped(self):
+        reply = ("```markdown\n---\nname: merged\ndescription: Merged rules\n"
+                 "---\n\n# Merged\n\n- Do X.\n```\n\n"
+                 "Let me know if you want any changes!\n")
+        assert ai.extract_markdown(reply) == (
+            "---\nname: merged\ndescription: Merged rules\n---\n\n"
+            "# Merged\n\n- Do X.")
+
+    def test_chatter_and_a_second_fenced_block_are_dropped(self):
+        reply = ("```markdown\n# Skill\n```\n\nFor example:\n"
+                 "```bash\nboost lint\n```\n")
+        assert ai.extract_markdown(reply) == "# Skill"
+
+    def test_an_inner_language_block_survives(self):
+        reply = ("```markdown\n# Skill\n\n```bash\nmake test\n```\n\n"
+                 "- Run it.\n```\nThanks!")
+        assert ai.extract_markdown(reply) == (
+            "# Skill\n\n```bash\nmake test\n```\n\n- Run it.")
+
+    def test_an_inner_language_line_inside_a_block_stays_inner(self):
+        reply = "```markdown\nA\n```sh\n```py\n```\nB\n```\nchat"
+        assert ai.extract_markdown(reply) == "A\n```sh\n```py\n```\nB"
+
+    def test_an_inner_bare_block_survives(self):
+        reply = "```markdown\nA\n```\nout\n```\nB\n```\nchat"
+        assert ai.extract_markdown(reply) == "A\n```\nout\n```\nB"
+
+    def test_a_longer_outer_fence_closes_only_on_its_own_width(self):
+        reply = "````markdown\nA\n```\nx\n```\n~~~~\n````\nchat"
+        assert ai.extract_markdown(reply) == "A\n```\nx\n```\n~~~~"
+
+    def test_a_tilde_outer_fence(self):
+        assert ai.extract_markdown("~~~\nA\n```\n~~~\nchat") == "A\n```"
+
+    def test_a_fence_with_an_info_string_does_not_close_a_tilde_outer(self):
+        # `~~~python` opens an inner block; only a bare `~~~` closes.
+        assert ai.extract_markdown(
+            "~~~markdown\nA\n~~~~python\nx\n~~~\nchat") == "A\n~~~~python\nx"
+
+    def test_a_short_fence_does_not_close_a_long_one(self):
+        assert ai.extract_markdown("````\nA\n```\nB") == "A\n```\nB"
+
+    def test_an_inline_backtick_opener_is_not_a_fence(self):
+        assert ai.extract_markdown("``x``\nB") == "``x``\nB"
+
 
 class _Recorder(logging.Handler):
     def __init__(self):
@@ -706,3 +751,16 @@ class TestAuthoredSkill:
         assert ai.unavailable_reason() == (
             "reply was not usable (empty after removing the code fence) — "
             "see ~/.boost/logs/boost.log")
+
+    @pytest.mark.parametrize("reply, why", [
+        ("---\nname: x\n---\n", "no description in the frontmatter"),
+        ("---\nname: x\ndescription: \"  \"\n---\n\nbody\n",
+         "no description in the frontmatter"),
+        ("---\nname: x\ndescription: d\n---\n\n  \n", "an empty SKILL.md body"),
+    ])
+    def test_frontmatter_without_a_skill_is_unusable(self, ai_on, monkeypatch,
+                                                     reply, why):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
+        assert ai.authored_skill(reply, "x") is None
+        assert ai.unavailable_reason() == (
+            "reply was not usable (%s) — see ~/.boost/logs/boost.log" % why)

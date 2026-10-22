@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import urllib.error
@@ -190,9 +191,9 @@ def authored_skill(reply: str | None, name: str) -> str | None:
     something-else, and `boost evolve --apply` renamed the installed skill out
     from under its own directory. The caller already validated ``name``, so a
     missing or different one is overwritten in place (only that line of the
-    frontmatter changes). A reply with no frontmatter at all is unusable — it
-    is recorded via :func:`note_bad_reply` and None tells the caller to
-    degrade to its heuristic.
+    frontmatter changes). A reply with no frontmatter, no ``description`` or
+    an empty body is unusable — it is recorded via :func:`note_bad_reply`
+    and None tells the caller to degrade to its heuristic.
     """
     if not reply:
         return None
@@ -203,7 +204,16 @@ def authored_skill(reply: str | None, name: str) -> str | None:
     if not frontmatter.split(text)[0]:
         note_bad_reply("no SKILL.md frontmatter", reply)
         return None
-    meta, _ = frontmatter.parse(text)
+    meta, body = frontmatter.parse(text)
+    # Frontmatter alone is not a skill: `---\nname: x\n---` passed, and
+    # `evolve --apply` wrote it over the installed copy (description, tags
+    # and declared conflicts gone) while distill/infer --install installed it.
+    if not str(meta.get("description") or "").strip():
+        note_bad_reply("no description in the frontmatter", reply)
+        return None
+    if not body.strip():
+        note_bad_reply("an empty SKILL.md body", reply)
+        return None
     if meta.get("name") != name:
         logs.get_logger().debug("ai: reply named the skill %r; using %r",
                                 meta.get("name"), name)
@@ -308,16 +318,69 @@ def _ask_api(prompt: str, system: str | None, model: str,
     return text
 
 
+_FENCE_LINE_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+
+
+def _fence(line: str) -> tuple[str, str] | None:
+    """``(marker, info)`` for a code-fence line, or None."""
+    m = _FENCE_LINE_RE.match(line.strip())
+    return (m.group(1), m.group(2).strip()) if m else None
+
+
+def _outer_close(lines: list[str], marker: str) -> int | None:
+    """Index of the line that closes a reply's outer ``marker`` fence.
+
+    A wrapped SKILL.md carries its own code blocks, so the first bare fence
+    is not necessarily the outer one: a ```` ```bash ```` block closes with a
+    bare ```` ``` ```` too. A fence longer than three, or of tildes, closes
+    only on a run of the same character at least as long. A three-backtick
+    outer is read by nesting: a fence with an info string opens an inner
+    block that the next bare fence closes; a bare fence outside one closes
+    the outer -- unless the next fence after it is bare as well, which is
+    the shape of an inner block opened without a language.
+    """
+    char, width = marker[0], len(marker)
+    inner = False
+    for i, raw in enumerate(lines):
+        f = _fence(raw)
+        if f is None:
+            continue
+        mark, info = f
+        closes = not info and mark[0] == char and len(mark) >= width
+        if marker != "```":
+            if closes:
+                return i
+            continue
+        if inner:
+            inner = bool(info)
+            continue
+        if info:
+            inner = True
+            continue
+        nxt = next((g for g in map(_fence, lines[i + 1:]) if g), None)
+        if nxt is not None and not nxt[1]:
+            inner = True
+            continue
+        return i
+    return None
+
+
 def extract_markdown(text: str) -> str:
-    """Strip a ```markdown fence if the model wrapped its answer in one."""
+    """Strip a ```markdown fence if the model wrapped its answer in one.
+
+    Everything after the closing fence is dropped: a model that signs off
+    with "Let me know if you want any changes!" after the fence put that
+    line, and the stray fence above it, into the SKILL.md it wrote.
+    """
     # `or ""`: callers hand this a model reply, which is None when the call
     # failed — tolerating None here is tested behavior, not dead defense.
     t = (text or "").strip()  # noqa: FURB143
-    if t.startswith("```"):
-        lines = t.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        return "\n".join(lines).strip()
-    return t
+    lines = t.splitlines()
+    opener = _fence(lines[0]) if lines else None
+    if opener is None:
+        return t
+    lines = lines[1:]
+    end = _outer_close(lines, opener[0])
+    if end is not None:
+        lines = lines[:end]
+    return "\n".join(lines).strip()
