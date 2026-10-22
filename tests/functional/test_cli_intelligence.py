@@ -1195,17 +1195,89 @@ class TestFocus:
         assert not (skills / "tdd-workflow").exists()
         assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
 
+    def test_focusing_a_context_sidelined_skill_puts_it_back_at_clear(
+            self, boost, tapped, tmp_path, monkeypatch):
+        from boost_cli.core import lockfile
+
+        for n in ("brainstorming", "commit-messages", "tdd-workflow"):
+            boost("install", n, "--no-deps")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        boost("context", "map", "feature/*", "tdd-workflow")
+        boost("context", "enable")
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
+        boost("focus", "tdd-workflow")
+        state = json.loads((paths.state_dir() / "focus.json").read_text(
+            encoding="utf-8"))
+        assert state["prior"] == {"tdd-workflow": "context"}
+        skills = paths.home() / ".claude" / "skills"
+        assert (skills / "tdd-workflow").is_symlink()
+        # A re-focus keeps the record: tdd-workflow is a focus sideline now.
+        boost("focus", "brainstorming")
+        assert json.loads((paths.state_dir() / "focus.json").read_text(
+            encoding="utf-8"))["prior"] == {"tdd-workflow": "context"}
+        r = boost("focus", "--clear")
+        assert "focus cleared — 2 skill(s) restored" in r.out
+        assert ("sidelined again, as before the focus: tdd-workflow"
+                in flat(r.out))
+        assert not os.path.lexists(skills / "tdd-workflow")
+        assert (skills / "commit-messages").is_symlink()
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
+
+    def test_a_disabled_context_is_not_put_back(
+            self, boost, tapped, tmp_path, monkeypatch):
+        from boost_cli.core import lockfile
+
+        for n in ("brainstorming", "tdd-workflow"):
+            boost("install", n, "--no-deps")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        boost("context", "map", "feature/*", "tdd-workflow")
+        boost("context", "enable")
+        boost("focus", "tdd-workflow")
+        boost("context", "disable")
+        r = json.loads(boost("focus", "--clear", "--json").out)
+        assert r == {"active": [], "restored": 1, "residelined": [],
+                     "had_session": True}
+        assert "sidelined_by" not in lockfile.get_skill("tdd-workflow")
+        assert (paths.home() / ".claude" / "skills" / "tdd-workflow"
+                ).is_symlink()
+
+    def test_status_names_a_focused_skill_a_profile_set_aside(
+            self, boost, tapped):
+        boost("install", "tdd-workflow", "--no-deps")
+        boost("profile", "save", "onlytdd")
+        boost("install", "brainstorming", "--no-deps")
+        boost("focus", "brainstorming")
+        boost("profile", "use", "onlytdd")
+        r = boost("focus", "--status")
+        assert "focus: brainstorming" in r.out
+        assert ("brainstorming is not linked — sidelined by `boost profile` "
+                "since the focus began") in flat(r.out)
+        data = json.loads(boost("focus", "--json").out)
+        assert data["displaced"] == {
+            "brainstorming": "sidelined by `boost profile`"}
+
+    def test_an_intact_focus_has_nothing_displaced(self, boost, tapped):
+        boost("install", "brainstorming")
+        boost("focus", "brainstorming")
+        r = boost("focus", "--status")
+        assert "not linked" not in r.out + r.err
+        assert json.loads(boost("focus", "--json").out)["displaced"] == {}
+
     def test_focus_set_and_clear_json(self, boost, tapped):
         boost("install", "brainstorming")
         boost("install", "jira-integration", "--no-deps")
         r = json.loads(boost("focus", "brainstorming", "--json").out)
         assert r == {"active": ["brainstorming"], "sidelined": 1}
         r = json.loads(boost("focus", "--clear", "--json").out)
-        assert r == {"active": [], "restored": 1, "had_session": True}
+        assert r == {"active": [], "restored": 1, "residelined": [],
+                     "had_session": True}
 
     def test_clear_with_no_session_json(self, boost, installed):
         r = json.loads(boost("focus", "--clear", "--json").out)
-        assert r == {"active": [], "restored": 0, "had_session": False}
+        assert r == {"active": [], "restored": 0, "residelined": [],
+                     "had_session": False}
 
     def test_unknown_skill(self, boost, installed):
         r = boost("focus", "nope", expect=1)

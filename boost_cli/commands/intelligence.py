@@ -1202,6 +1202,8 @@ def cmd_focus(argv: list[str]) -> int:
         # still reported "N skill(s) restored". `sidelined_by == "focus"` is
         # only true of skills THIS session actually unlinked.
         had_session = state_path.exists()
+        prior = (_load_state(_FOCUS_STATE, {}).get("prior") or {}
+                 if had_session else {})
         restored = 0
         for name, entry in sorted(lockfile.installed().items()):
             if entry.get("sidelined_by") != "focus" or entry.get("quarantined"):
@@ -1209,29 +1211,41 @@ def cmd_focus(argv: list[str]) -> int:
             _warn_unwritable(store.unsideline(name),
                              stream=sys.stderr if args.json else None)
             restored += 1
+        residelined = _focus_put_back(prior)
         if had_session:
             state_path.unlink()
-        journal.log("focus", "clear", restored=restored)
+        journal.log("focus", "clear", restored=restored,
+                    residelined=residelined or None)
         if args.json:
             print(json.dumps({"active": [], "restored": restored,
+                              "residelined": residelined,
                               "had_session": had_session}))
             return 0
         if not had_session and not restored:
             out.info("no focus session")
             return 0
         out.ok("focus cleared — %d skill(s) restored" % restored)
+        if residelined:
+            out.info("sidelined again, as before the focus: %s"
+                     % ", ".join(residelined), wrap=True)
         return 0
 
     if args.status or not args.skills:
         state = _load_state(_FOCUS_STATE, {})
+        displaced = store.focus_displaced(list(state.get("active", [])),
+                                          lockfile.installed())
         if args.json:
             print(json.dumps({"active": state.get("active", []),
-                              "since": state.get("since")}))
+                              "since": state.get("since"),
+                              "displaced": dict(displaced)}))
             return 0
         if state.get("active"):
             out.info("⌁ focus: %s  %s"
                      % (", ".join(state["active"]),
                         out.role("(since %s)" % util.rel_time(state.get("since", "")), "muted")))
+            for name, why in displaced:
+                out.warn("%s is not linked — %s since the focus began"
+                         % (name, why), wrap=True)
             out.info(out.role("end it with `boost focus --clear`", "muted"))
         else:
             print(out.empty_state("no focus session",
@@ -1263,7 +1277,13 @@ def cmd_focus(argv: list[str]) -> int:
     # Recorded before anything is sidelined: a state dir that refuses the
     # write used to crash *after* every other skill had lost its links, and
     # with no session on file `boost focus` then said there was none.
-    _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso()})
+    # And the sideline each focused skill had before (context, profile), so
+    # `--clear` can put it back rather than leave it linked.
+    carried = (_load_state(_FOCUS_STATE, {}).get("prior")
+               if state_path.exists() else None)
+    prior = store.sideline_priors(inst, names, carried)
+    _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso(),
+                               **({"prior": prior} if prior else {})})
     sidelined = 0
     for name, entry in sorted(inst.items()):
         if name in names or entry.get("quarantined"):
@@ -1286,6 +1306,28 @@ def cmd_focus(argv: list[str]) -> int:
              % (", ".join(names),
                 out.role("(other %d skill%s sidelined)" % (sidelined, _s(sidelined)), "muted")))
     return 0
+
+
+def _focus_put_back(prior: dict) -> list[str]:
+    """Re-apply the sidelines focus had lifted off its own skills.
+
+    Only onto a skill still installed, unquarantined and linked: one another
+    command set aside since is that command's now. A ``context`` sideline
+    needs context still enabled — `context disable` mid-session ended it.
+    """
+    if not isinstance(prior, dict):
+        return []
+    context_on = bool(_load_state(_CONTEXT_STATE, _CONTEXT_DEFAULT).get("enabled"))
+    inst = lockfile.installed()
+    put_back = []
+    for name, by in sorted(prior.items()):
+        entry = inst.get(name)
+        if (entry is None or entry.get("quarantined") or entry.get("sidelined_by")
+                or (by == "context" and not context_on)):
+            continue
+        store.sideline(name, str(by))
+        put_back.append(name)
+    return put_back
 
 
 # ---------------------------------------------------------------- impact

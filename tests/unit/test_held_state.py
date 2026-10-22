@@ -166,3 +166,30 @@ class TestRefreshKeepsTheSideline:
     def test_refresh_vias(self):
         assert frozenset({"update", "reinstall"}) == store.REFRESH_VIAS
 
+
+class TestFocusBookkeeping:
+    def test_sideline_priors_records_only_other_mechanisms(self):
+        inst = {"a": {"sidelined_by": "context"}, "b": {"sidelined_by": "focus"},
+                "c": {}, "d": {"sidelined_by": "profile"}}
+        assert store.sideline_priors(inst, ["a", "b", "c", "x"]) == {
+            "a": "context"}
+        assert store.sideline_priors(inst, ["d"], None) == {"d": "profile"}
+        assert store.sideline_priors({}, []) == {}
+
+    def test_sideline_priors_carries_the_session_record(self):
+        inst = {"a": {"sidelined_by": "focus"}, "b": {"sidelined_by": "profile"}}
+        assert store.sideline_priors(
+            inst, ["b"], {"a": "context", "z": ""}) == {
+            "a": "context", "b": "profile"}
+        # A fresh flag outranks a carried one for the same name.
+        assert store.sideline_priors(inst, ["b"], {"b": "context"}) == {
+            "b": "profile"}
+
+    def test_focus_displaced(self):
+        inst = {"a": {}, "b": {"sidelined_by": "profile"},
+                "c": {"quarantined": True}, "d": {"sidelined_by": ""}}
+        assert store.focus_displaced(["a", "b", "c", "d", "gone"], inst) == [
+            ("b", "sidelined by `boost profile`"),
+            ("c", "quarantined"),
+            ("gone", "not installed")]
+        assert store.focus_displaced([], inst) == []

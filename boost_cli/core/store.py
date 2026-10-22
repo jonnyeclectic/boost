@@ -1321,6 +1321,40 @@ def unsideline(name: str) -> InstallResult:
     return res
 
 
+def sideline_priors(installed: dict, names: list[str],
+                    carried: dict | None = None) -> dict[str, str]:
+    """The mechanism other than focus that had set each of ``names`` aside.
+
+    ``boost focus X`` relinks X whatever sidelined it, so a skill ``context``
+    had set aside came back linked at ``focus --clear`` against the branch
+    rule. Recorded here so the clear can put that sideline back. ``carried``
+    is the running session's own record: a re-focus keeps it, since a skill
+    it relinked is a focus sideline now and its first flag is the true one.
+    """
+    prior = {str(k): str(v) for k, v in (carried or {}).items() if v}
+    for name in names:
+        by = (installed.get(name) or {}).get("sidelined_by")
+        if by and by != "focus":
+            prior[name] = str(by)
+    return prior
+
+
+def focus_displaced(active: list[str], installed: dict) -> list[tuple[str, str]]:
+    """``(name, why)`` for each focused skill that is no longer linked.
+
+    `profile use` and `quarantine` can set a focused skill aside mid-session,
+    and `focus --status` went on naming it the active focus.
+    """
+    displaced = []
+    for name in active:
+        entry = installed.get(name)
+        if entry is None:
+            displaced.append((name, "not installed"))
+        elif entry.get("quarantined") or entry.get("sidelined_by"):
+            displaced.append((name, held_reason(name, entry)[0]))
+    return displaced
+
+
 def linked_agents(name: str) -> list[str]:
     """The linking agents that currently hold a symlink for ``name``.
 
