@@ -746,3 +746,16 @@ class TestAuthoredSkill:
         assert ai.unavailable_reason() == (
             "reply was not usable (empty after removing the code fence) — "
             "see ~/.boost/logs/boost.log")
+
+    @pytest.mark.parametrize("reply, why", [
+        ("---\nname: x\n---\n", "no description in the frontmatter"),
+        ("---\nname: x\ndescription: \"  \"\n---\n\nbody\n",
+         "no description in the frontmatter"),
+        ("---\nname: x\ndescription: d\n---\n\n  \n", "an empty SKILL.md body"),
+    ])
+    def test_frontmatter_without_a_skill_is_unusable(self, ai_on, monkeypatch,
+                                                     reply, why):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
+        assert ai.authored_skill(reply, "x") is None
+        assert ai.unavailable_reason() == (
+            "reply was not usable (%s) — see ~/.boost/logs/boost.log" % why)

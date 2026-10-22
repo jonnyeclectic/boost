@@ -191,9 +191,9 @@ def authored_skill(reply: str | None, name: str) -> str | None:
     something-else, and `boost evolve --apply` renamed the installed skill out
     from under its own directory. The caller already validated ``name``, so a
     missing or different one is overwritten in place (only that line of the
-    frontmatter changes). A reply with no frontmatter at all is unusable — it
-    is recorded via :func:`note_bad_reply` and None tells the caller to
-    degrade to its heuristic.
+    frontmatter changes). A reply with no frontmatter, no ``description`` or
+    an empty body is unusable — it is recorded via :func:`note_bad_reply`
+    and None tells the caller to degrade to its heuristic.
     """
     if not reply:
         return None
@@ -204,7 +204,16 @@ def authored_skill(reply: str | None, name: str) -> str | None:
     if not frontmatter.split(text)[0]:
         note_bad_reply("no SKILL.md frontmatter", reply)
         return None
-    meta, _ = frontmatter.parse(text)
+    meta, body = frontmatter.parse(text)
+    # Frontmatter alone is not a skill: `---\nname: x\n---` passed, and
+    # `evolve --apply` wrote it over the installed copy (description, tags
+    # and declared conflicts gone) while distill/infer --install installed it.
+    if not str(meta.get("description") or "").strip():
+        note_bad_reply("no description in the frontmatter", reply)
+        return None
+    if not body.strip():
+        note_bad_reply("an empty SKILL.md body", reply)
+        return None
     if meta.get("name") != name:
         logs.get_logger().debug("ai: reply named the skill %r; using %r",
                                 meta.get("name"), name)

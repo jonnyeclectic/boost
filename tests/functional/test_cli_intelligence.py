@@ -1527,3 +1527,52 @@ class TestAuthoredName:
         r = boost("evolve", "brainstorming", "--feedback", "be terser")
         assert JUNK_NOTE in flat(r.err)
         assert "+- be terser." in r.out
+
+
+# ------------------------------- AI replies that are frontmatter and no skill
+
+HOLLOW = "---\nname: brainstorming\n---\n"
+HOLLOW_NOTE = ("AI reply was not usable (no description in the frontmatter) — "
+               "see ~/.boost/logs/boost.log — using the heuristic fallback")
+
+
+class TestHollowReply:
+    """A reply of frontmatter alone used to be written as the skill: evolve
+    --apply wiped the installed copy and distill --install installed an
+    empty one. It must degrade to the heuristic like any unusable reply."""
+
+    def test_evolve_apply_writes_the_heuristic_revision(self, boost, installed,
+                                                        ai_on):
+        from boost_cli.commands import intelligence
+        skill_md = paths.store_dir() / "brainstorming" / "SKILL.md"
+        before = skill_md.read_text(encoding="utf-8")
+        ai_on(ask_author=HOLLOW)
+        r = boost("evolve", "brainstorming", "--apply", "--feedback", "be terser")
+        assert HOLLOW_NOTE in flat(r.err)
+        assert "evolved brainstorming → v1.4.1" in r.out
+        text = skill_md.read_text(encoding="utf-8")
+        expected = intelligence._evolve_append(before, "1.4.0", "be terser")
+        assert text == expected
+
+    def test_distill_install_installs_the_heuristic_merge(
+            self, boost, tapped, ai_on):
+        ai_on(ask_author=HOLLOW.replace("brainstorming", "m4"))
+        r = boost("distill", "brainstorming", "tdd-workflow", "--name", "m4",
+                  "--install")
+        assert HOLLOW_NOTE in flat(r.err)
+        meta, body = frontmatter.parse(
+            (paths.store_dir() / "m4" / "SKILL.md").read_text(encoding="utf-8"))
+        assert meta["description"].endswith(" (distilled)")
+        assert body.startswith("# m4\n\nDistilled from: brainstorming, "
+                               "tdd-workflow.")
+
+    def test_infer_with_an_empty_body_prints_the_heuristic(
+            self, boost, sandbox, py_project, ai_on):
+        ai_on(ask_author="---\nname: project-conventions\ndescription: d\n---\n")
+        r = boost("infer", "--path", py_project)
+        assert ("AI reply was not usable (an empty SKILL.md body) — see "
+                "~/.boost/logs/boost.log — using the heuristic fallback"
+                in flat(r.err))
+        meta, body = frontmatter.parse(r.out)
+        assert meta["name"] == "project-conventions"
+        assert body.strip()
