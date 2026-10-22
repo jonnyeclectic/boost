@@ -262,6 +262,40 @@ def test_an_interrupted_swap_leaves_the_store_byte_identical(
     assert _restore_dirs(root) == []
 
 
+@pytest.mark.parametrize("nth", [6, 7])
+def test_a_skill_dir_already_moved_in_goes_back_out(tmp_path, monkeypatch, nth):
+    # Skills are dirs, and os.replace will not overwrite a non-empty one: an
+    # archive copy left in root would keep the parked original out of it.
+    root, tar = _edited_store(tmp_path)
+    (root / "zeta").mkdir()
+    (root / "zeta" / "SKILL.md").write_text("# zeta live\n", encoding="utf-8")
+    zeta_src = tmp_path / "snapcore-zeta"
+    (zeta_src / "zeta").mkdir(parents=True)
+    (zeta_src / "zeta" / "SKILL.md").write_text("# zeta archived\n",
+                                                encoding="utf-8")
+    with tarfile.open(str(tar), "r:gz") as tf:
+        tf.extractall(str(zeta_src), filter="data")
+    with tarfile.open(str(tar), "w:gz") as tf:
+        for child in sorted(zeta_src.iterdir()):
+            tf.add(str(child), arcname=child.name)
+    before = _bytes(root)
+    real = os.replace
+    calls = {"n": 0}
+
+    def interrupted(src, dst):
+        # Four move out (1-4); lock, alpha, zeta move in (5-7).
+        calls["n"] += 1
+        if calls["n"] == nth:
+            raise KeyboardInterrupt
+        return real(src, dst)
+
+    monkeypatch.setattr(snapshot.os, "replace", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        snapshot.restore(tar, root, "snap-zeta")
+    assert _bytes(root) == before
+    assert _restore_dirs(root) == []
+
+
 def test_a_rollback_cut_short_keeps_the_parked_store(tmp_path, monkeypatch):
     # A second interrupt inside the rollback: the originals not yet moved
     # back stay parked — found by `boost doctor` — never deleted.
