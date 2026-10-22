@@ -974,6 +974,26 @@ def test_modified_remedy_for_an_edited_held_copy_is_a_reinstall(installed):
         "boost reinstall other", "to discard local edits")
 
 
+def test_modified_remedy_for_a_quarantined_copy_never_names_reinstall(installed):
+    # A reinstall clears `quarantined` and relinks: as the fix for an edited
+    # quarantined copy it would walk the user out of the quarantine.
+    from boost_cli.core import lockfile
+
+    def quarantine(entry: dict) -> None:
+        entry["quarantined"] = True
+    lockfile.update_skill(installed, quarantine)
+    cmd, why = integrity.modified_remedy(installed)
+    assert cmd == "boost quarantine --list"
+    assert "quarantined" in why
+    assert "reinstall" not in cmd and cmd != "boost heal"
+    # Quarantine outranks held_at and a missing store SKILL.md alike.
+    held = {"quarantined": True, "held_at": "/h/x"}
+    assert integrity.modified_remedy("x", entry=held)[0] == (
+        "boost quarantine --list")
+    assert integrity.modified_remedy("x", entry={"quarantined": True})[0] == (
+        "boost quarantine --list")
+
+
 def test_modified_remedy_for_a_project_skill_carries_local(sandbox):
     # No user store copy to probe: even a name with no store SKILL.md is
     # a reinstall, and one that reads this repo's lock.

@@ -165,12 +165,20 @@ def modified_remedy(name: str, kind: str = "skill",
     `heal` leaves a held row alone by design, so naming it answered an edited
     sidelined skill with "nothing to heal". ``boost reinstall`` refreshes the
     held copy and keeps it aside. ``entry`` defaults to the lock row.
+
+    Except a quarantined one: a reinstall clears ``quarantined`` and relinks
+    the skill, so naming it as the fix for an edited quarantined copy would
+    walk the user out of the quarantine. Its remedy is to review it there.
     """
     if scope == scopes.SCOPE_PROJECT:
         return "boost reinstall %s --local" % name, "to discard local edits"
     if kind == "skill":
         if entry is None:
             entry = lockfile.get_skill(name)
+        if (entry or {}).get("quarantined"):
+            return ("boost quarantine --list",
+                    "to review it — it is quarantined, and a reinstall "
+                    "would release it")
         if (not (entry or {}).get("held_at")
                 and not (_store_dir(name) / "SKILL.md").is_file()):
             return "boost heal", "to restore its missing SKILL.md"
