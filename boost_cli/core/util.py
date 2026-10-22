@@ -683,9 +683,9 @@ def _slug_or_none(name: str) -> str | None:
 
     Folded under NFKD before the character class applies, so one typed name is
     one slug however its bytes arrived: a precomposed ``é`` (NFC) used to be
-    dropped (``café`` -> ``caf``) while ``e`` + U+0301 (NFD, what a macOS paste
-    often produces) kept its ``e`` — ``profile save café`` wrote ``caf.json``
-    and ``profile show café`` looked for ``cafe.json``. The same fold the
+    dropped outright while ``e`` + U+0301 (NFD, what a macOS paste often
+    produces) kept its ``e`` — ``profile save café`` wrote a file one letter
+    short of the ``cafe.json`` that ``profile show café`` looked for. The same fold the
     catalog applies to a frontmatter name (``catalog._entry_slug``).
     """
     folded = "".join(c for c in unicodedata.normalize("NFKD", name)
