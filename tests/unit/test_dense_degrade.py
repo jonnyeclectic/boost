@@ -401,6 +401,7 @@ class TestTransportHint:
 
     def test_extension_cannot_load(self, keyed, monkeypatch):
         monkeypatch.setattr(dense, "_load", lambda: _DeniedVec)
+        monkeypatch.setattr(dense, "extension_error", _extension_error)
         assert shards.transport_hint().startswith(
             "shards are optional — to embed on this machine instead, "
             "this Python's sqlite3 cannot load extensions")
