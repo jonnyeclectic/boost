@@ -396,26 +396,51 @@ def test_an_older_schema_lock_restores(tmp_path):
     assert _tree(root) == [".skill-lock.json", "foo", "foo/SKILL.md"]
 
 
-def test_rehome_rewrites_the_staged_lock_only_when_it_says_so(tmp_path):
+def test_rehome_rewrites_the_staged_lock_and_restamps_it(tmp_path,
+                                                       monkeypatch):
+    # The restored lock is stamped `updated` now, whatever `rehome` says: the
+    # archive's own stamp put the restored state into lock history under an
+    # id that collided with, and sorted above, entries written after it.
+    monkeypatch.setattr(util, "now_iso", lambda: "2026-10-22T05:00:00Z")
     root = _store(tmp_path)
-    tar = _tar_with(tmp_path, "snapcore-rh", '{"version": 3, "rules": {}}')
+    tar = _tar_with(tmp_path, "snapcore-rh",
+                    '{"version": 3, "rules": {}, '
+                    '"updated": "2026-01-01T00:00:00Z"}')
     seen = []
 
     def unchanged(lock):
-        seen.append(lock)
+        seen.append(dict(lock))
         return False
     snapshot.restore(tar, root, "snap-rh", rehome=unchanged)
-    assert seen == [{"version": 3, "rules": {}}]
-    assert (root / ".skill-lock.json").read_text(
-        encoding="utf-8") == '{"version": 3, "rules": {}}'
+    assert seen == [{"version": 3, "rules": {},
+                     "updated": "2026-01-01T00:00:00Z"}]
+    assert (root / ".skill-lock.json").read_text(encoding="utf-8") == (
+        '{\n  "version": 3,\n  "rules": {},\n'
+        '  "updated": "2026-10-22T05:00:00Z"\n}\n')
 
     def changed(lock):
         lock["rules"]["r"] = {"x": 1}
         return True
     snapshot.restore(tar, root, "snap-rh", rehome=changed)
-    assert (root / ".skill-lock.json").read_text(encoding="utf-8") == (
-        '{\n  "version": 3,\n  "rules": {\n    "r": {\n      "x": 1\n'
-        '    }\n  }\n}\n')
+    assert json.loads((root / ".skill-lock.json").read_text(
+        encoding="utf-8")) == {"version": 3, "rules": {"r": {"x": 1}},
+                               "updated": "2026-10-22T05:00:00Z"}
+
+
+def test_before_swap_runs_once_the_archive_is_vetted(tmp_path):
+    # It is where `snapshot restore` keeps the live lock in history: run
+    # while the store still holds it, and never for an archive refused.
+    root = _store(tmp_path)
+    tar = _tar_with(tmp_path, "snapcore-bs", '{"version": 3}')
+    seen = []
+    snapshot.restore(tar, root, "snap-bs", before_swap=lambda: seen.append(
+        (root / ".skill-lock.json").read_text(encoding="utf-8")))
+    assert seen == ["{}\n"]
+    bad = _tar_with(tmp_path, "snapcore-bsx", "not json")
+    with pytest.raises(BoostError):
+        snapshot.restore(bad, root, "snap-bsx",
+                         before_swap=lambda: seen.append("ran"))
+    assert seen == ["{}\n"]
 
 
 def test_a_rehome_refusal_leaves_the_store_untouched(tmp_path):
@@ -498,3 +523,4 @@ def test_project_skills(sandbox, tmp_path, monkeypatch):
     assert skills["snapcore-p"]["version"] == "2.0.0"
     monkeypatch.chdir(sandbox)
     assert store.project_skills() == (None, {})
+

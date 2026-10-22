@@ -1523,6 +1523,35 @@ class TestReplay:
                       if l.startswith(history[1]["id"]))
         assert "+1" in newest                 # the rule the old delta missed
 
+    def test_snapshot_restore_can_itself_be_rolled_back(self, boost, tapped,
+                                                        tick_clock):
+        # Regression: the restore swapped the lock in with no history entry
+        # for the state it replaced, and stamped with the archive's old
+        # `updated` — so replay could not undo it, and ids collided.
+        import re
+        boost("install", "brainstorming")
+        boost("install", "commit-messages")
+        r = boost("snapshot", "save", "before-x")
+        snap = re.search(r"saved (snap-[\w-]+)", r.out).group(1)
+        boost("uninstall", "commit-messages")
+        boost("install", "cowboy-coding")
+        before = {h["id"] for h in lockfile.history_list()}
+        boost("snapshot", "restore", snap, "-y")
+        assert sorted(lockfile.installed()) == ["brainstorming",
+                                                 "commit-messages"]
+        history = lockfile.history_list()
+        kept = [h for h in history if h["id"] not in before
+                and "cowboy-coding" in lockfile.history_read(h["id"])["skills"]]
+        assert len(kept) == 1
+        # Chronological: nothing written before the restore sorts after it.
+        assert [h["updated"] for h in history] == sorted(
+            h["updated"] for h in history)
+        assert lockfile.read()["updated"] > kept[0]["updated"]
+        r = boost("replay", "rollback", kept[0]["id"])
+        assert "rollback to %s complete" % kept[0]["id"] in r.out
+        assert sorted(lockfile.installed()) == ["brainstorming",
+                                                 "cowboy-coding"]
+
 
 # ---------------------------------------------------------------- who
 

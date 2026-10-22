@@ -3250,8 +3250,11 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
     pre_skills = set(lockfile.installed())
     # Extracted into a staging dir and swapped in only once that succeeded,
     # so a corrupt or refused snapshot can never leave an emptied store.
+    # The live lock goes into lock history first, as every other lock
+    # change's does, so `boost replay rollback` can undo the restore.
     snapshot.restore(tar_path, root, snap_id, paths.held_skills_dir(),
-                     rehome=store.snapshot_rehomer(snap_id, tar_path))
+                     rehome=store.snapshot_rehomer(snap_id, tar_path),
+                     before_swap=lockfile.record_history)
     kept = store.restore_preserve_newer_lock_sections(pre_rules, pre_workflows)
     # A snapshot saved before held copies were archived: no copy to hold, so
     # the restore's sync below reinstalls them instead.

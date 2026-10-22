@@ -810,3 +810,31 @@ class TestHistoryIsARecordNotTheWork:
         # still lands in the store.
         lockfile.set_skill("a", {"version": "1"})
         assert paths.lockfile_path().is_file()
+
+
+class TestRecordHistory:
+    def test_keeps_the_live_lock_under_its_own_updated(self, sandbox):
+        lockfile.set_skill("rh-a", {"version": "1.0.0"})
+        stamp = lockfile.read()["updated"]
+        assert lockfile.history_list() == []
+        assert lockfile.record_history() is True
+        [h] = lockfile.history_list()
+        assert h["updated"] == stamp and h["count"] == 1
+        assert list(lockfile.history_read(h["id"])["skills"]) == ["rh-a"]
+
+    def test_an_explicit_path(self, sandbox, tmp_path):
+        p = tmp_path / "rh-lock.json"
+        p.write_text('{"version": 3, "skills": {"rh-b": {}}, '
+                     '"updated": "2026-01-02T03:04:05Z"}', encoding="utf-8")
+        assert lockfile.record_history(p) is True
+        assert [h["id"] for h in lockfile.history_list()] == [
+            "20260102T030405Z"]
+
+    def test_a_missing_or_corrupt_lock_is_not_recorded(self, sandbox,
+                                                       tmp_path):
+        assert lockfile.record_history() is False
+        p = tmp_path / "rh-bad.json"
+        p.write_text("not json", encoding="utf-8")
+        assert lockfile.record_history(p) is False
+        assert not list(paths.lock_history_dir().glob("lock-*.json"))
+

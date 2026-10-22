@@ -609,6 +609,24 @@ def _snapshot(p) -> None:
                         stream=sys.stderr, wrap=True)
 
 
+def record_history(p=None) -> bool:
+    """Keep the live lock (or ``p``) in history before something replaces it.
+
+    :func:`write` does this for every change it makes; a wholesale
+    replacement that does not go through it (`snapshot restore` swaps in an
+    archived store, lock and all) calls this first, so `boost replay` can
+    still get back to the state it replaced. A lock that is missing or does
+    not parse is not recorded: a history entry nothing can read is no way
+    back. Returns whether one was kept.
+    """
+    p = paths.lockfile_path() if p is None else Path(p)
+    with exclusive():
+        if not check(p).ok:
+            return False
+        _snapshot(p)
+    return True
+
+
 def _history_files() -> list:
     """History snapshots oldest→newest (mtime, then name — '-2' suffixed
     same-second snapshots would sort before their base name otherwise)."""

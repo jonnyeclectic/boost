@@ -288,26 +288,44 @@ def check_lock(staging: Path, snap_id: str) -> None:
 
 def _vet_lock(staging: Path, snap_id: str,
               rehome: Callable[[dict], bool] | None) -> None:
-    """:func:`check_lock`, then ``rehome`` over the staged lock; rewritten in
-    staging when ``rehome`` says it changed something."""
+    """:func:`check_lock`, then ``rehome`` over the staged lock, which is
+    restamped ``updated`` now and rewritten in staging.
+
+    The restamp is what keeps lock history chronological: the next write
+    archives this lock under its ``updated`` (``lockfile._archive_stamp``),
+    and the archive's own, older stamp put the restored state in history
+    beside the state it was saved from, under a colliding id, sorted above
+    entries written after it.
+    """
     check_lock(staging, snap_id)
     lock = staging / LOCK_NAME
-    if rehome is None or not lock.exists():
+    if not lock.exists():
         return
     data = json.loads(lock.read_text(encoding="utf-8-sig"))
-    if rehome(data):
-        util.atomic_write_text(lock, json.dumps(data, indent=2) + "\n")
+    if rehome is not None:
+        rehome(data)
+    data["updated"] = util.now_iso()
+    # Staging is boost's own scratch dir, swapped in whole or not at all, so
+    # a plain write is as safe here as an atomic one.
+    lock.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def restore(tar_path: Path, root: Path, snap_id: str,
             held_root: Path | None = None,
-            rehome: Callable[[dict], bool] | None = None) -> list[str]:
+            rehome: Callable[[dict], bool] | None = None,
+            before_swap: Callable[[], object] | None = None) -> list[str]:
     """Replace the contents of ``root`` with the archive at ``tar_path``.
 
     Held copies in the archive go to ``held_root`` once the store swap has
     succeeded, never into ``root``; returns their names. ``rehome`` is given
     the archived lock, parsed, before the swap: it may rewrite it in place
-    (returning True to have it saved) or raise BoostError to refuse.
+    or raise BoostError to refuse. The staged lock is stamped ``updated``
+    now. ``before_swap`` runs once the archive has been vetted, just before
+    ``root`` changes: `snapshot restore` passes
+    :func:`lockfile.record_history`, so the lock it replaces stays in lock
+    history like every other lock change's. It is a parameter, not a call
+    made here, because lock history is the real store's and ``root`` need
+    not be.
 
     Raises — with ``root`` exactly as it was — when the archive cannot be
     opened, is corrupt, holds an entry the ``data`` filter refuses or a lock
@@ -340,6 +358,10 @@ def restore(tar_path: Path, root: Path, snap_id: str,
         # Out of staging first: everything left there is swapped into the store.
         if os.path.lexists(staging / HELD_ARC):
             os.replace(staging / HELD_ARC, parked / HELD_ARC)
+        # Last thing before the swap, once the archive is known good: the
+        # caller keeps the lock about to be replaced in history here.
+        if before_swap is not None:
+            before_swap()
         _swap_in(staging, root, scratch)
         swapped = True
         return _put_held(parked / HELD_ARC, held_root)
