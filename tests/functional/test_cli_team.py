@@ -1523,6 +1523,150 @@ class TestReplay:
                       if l.startswith(history[1]["id"]))
         assert "+1" in newest                 # the rule the old delta missed
 
+    def test_rollback_brings_a_quarantined_skill_back_quarantined(
+            self, boost, tapped, tick_clock):
+        # Regression: the reinstall reset the flag, so a skill the snapshot
+        # recorded quarantined came back linked into every agent, "complete".
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        boost("quarantine", "tdd-workflow")
+        boost("uninstall", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]
+        assert lockfile.history_read(snap_id)["skills"]["tdd-workflow"][
+            "quarantined"] is True
+        r = boost("replay", "rollback", snap_id)
+        assert ("restored tdd-workflow (quarantined, as the snapshot "
+                "recorded)") in r.out
+        assert "rollback to %s complete" % snap_id in r.out
+        row = lockfile.get_skill("tdd-workflow")
+        assert row["quarantined"] is True and row["agents"] == []
+        assert (paths.held_skills_dir() / "tdd-workflow" / "SKILL.md").is_file()
+        assert not (paths.store_dir() / "tdd-workflow").exists()
+        for agent in (".claude", ".cursor", ".windsurf"):
+            assert not os.path.lexists(
+                paths.home() / agent / "skills" / "tdd-workflow")
+
+    def test_rollback_restores_a_sideline(self, boost, tapped, tick_clock):
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        from boost_cli.core import store
+        store.sideline("tdd-workflow", "profile")
+        boost("uninstall", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]
+        r = boost("replay", "rollback", snap_id)
+        assert ("restored tdd-workflow (sidelined by `boost profile`, as the "
+                "snapshot recorded)") in r.out
+        row = lockfile.get_skill("tdd-workflow")
+        assert row["sidelined_by"] == "profile" and row["agents"] == []
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "tdd-workflow")
+
+    def test_a_pin_flip_is_a_difference_and_rollback_undoes_it(
+            self, boost, tapped, tick_clock):
+        # Regression: compared by version alone, `show` said "matches" and
+        # rollback "nothing to do" while the pin the snapshot lacked stayed.
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        boost("pin", "brainstorming")
+        snap_id = lockfile.history_list()[-1]["id"]   # before the pin
+        r = boost("replay", "show", snap_id)
+        assert "~ brainstorming  pinned no → yes" in r.out
+        assert "matches" not in r.out
+        data = json.loads(boost("replay", "show", snap_id, "--json").out)
+        assert data["since_snapshot"]["changed"] == ["brainstorming"]
+        assert data["since_snapshot"]["differences"] == {
+            "brainstorming": {"pinned": [False, True]}}
+        r = boost("replay", "rollback", snap_id)
+        assert "revisit 1 changed skill(s)" in r.out
+        assert ("restored brainstorming's pinned as the snapshot recorded"
+                in r.out)
+        assert "rollback to %s complete" % snap_id in r.out
+        assert "pinned" not in lockfile.get_skill("brainstorming")
+        assert "current state matches this snapshot" in boost(
+            "replay", "show", snap_id).out
+        assert "already at this snapshot — nothing to do" in boost(
+            "replay", "rollback", snap_id).out
+
+    def test_rollback_reapplies_a_released_pin_json(self, boost, tapped,
+                                                    tick_clock):
+        boost("install", "brainstorming")
+        boost("pin", "brainstorming")
+        boost("install", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]   # pinned, no tdd
+        boost("unpin", "brainstorming")
+        r = json.loads(boost("replay", "rollback", snap_id, "--json").out)
+        assert r == {"id": snap_id, "uninstalled": ["tdd-workflow"],
+                     "restored": [], "unrestorable": [], "version_diffs": [],
+                     "not_rolled_back": [],
+                     "holds_restored": ["brainstorming"]}
+        assert lockfile.get_skill("brainstorming")["pinned"] is True
+
+    def test_a_same_version_content_change_is_not_reported_as_matching(
+            self, boost, fixture_tap_src, tmp_path, tick_clock):
+        src = tmp_path / "rp-content"
+        shutil.copytree(fixture_tap_src, src)
+        boost("tap", src)
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        md = src / "skills" / "tdd-workflow" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8")
+                      + "\n- Run the whole suite twice.\n", encoding="utf-8")
+        subprocess.run(["git", "-c", "user.email=t@t.test", "-c",
+                        "user.name=t", "commit", "-qam", "body"],
+                       cwd=str(src), check=True, capture_output=True)
+        before = lockfile.get_skill("tdd-workflow")
+        boost("update")
+        after = lockfile.get_skill("tdd-workflow")
+        assert after["version"] == before["version"]
+        assert after["commit"] != before["commit"]
+        snap_id = lockfile.history_list()[-1]["id"]   # before the update
+        line = ("~ tdd-workflow  commit %s → %s · sha256 %s → %s"
+                % (before["commit"][:12], after["commit"][:12],
+                   before["sha256"][:12], after["sha256"][:12]))
+        r = boost("replay", "show", snap_id)
+        assert line in r.out and "matches" not in r.out
+        for _ in range(2):   # nothing a rerun does can change it
+            r = boost("replay", "rollback", snap_id, expect=1)
+            flat = " ".join(r.out.split()) + " " + " ".join(r.err.split())
+            assert "tdd-workflow differs from the snapshot: commit" in flat
+            assert ("finished with 1 skill still differing from the "
+                    "snapshot: tdd-workflow") in flat
+            assert "complete" not in flat and "nothing to do" not in flat
+        r = json.loads(boost("replay", "rollback", snap_id, "--json",
+                             expect=1).out)
+        assert r["version_diffs"] == [{
+            "skill": "tdd-workflow", "snapshot": before["version"],
+            "current": after["version"], "fields": ["commit", "sha256"]}]
+        assert r["restored"] == [] and r["uninstalled"] == []
+
+    def test_rollback_refuses_to_delete_local_edits(self, boost, tapped,
+                                                    tick_clock):
+        # Regression: an edited skill installed since the snapshot was
+        # uninstalled for good, and rolling forward brought the tap's copy.
+        boost("install", "brainstorming")
+        boost("install", "commit-messages")
+        snap_id = lockfile.history_list()[-1]["id"]   # {brainstorming}
+        md = paths.store_dir() / "commit-messages" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8") + "MY LOCAL EDIT\n",
+                      encoding="utf-8")
+        r = boost("replay", "rollback", snap_id, expect=1)
+        flat = " ".join((r.out + r.err).split())
+        assert ("not rolled back: it would uninstall commit-messages, which "
+                "has local edits nothing else holds — copy it aside, or "
+                "`boost replay rollback %s --discard-edits` deletes them"
+                % snap_id) in flat
+        assert "MY LOCAL EDIT" in md.read_text(encoding="utf-8")
+        assert "commit-messages" in lockfile.installed()
+        assert json.loads(boost("replay", "rollback", snap_id, "--json",
+                                expect=1).out) == {
+            "id": snap_id, "refused": "local-edits",
+            "edited": ["commit-messages"]}
+        assert "MY LOCAL EDIT" in md.read_text(encoding="utf-8")
+        r = boost("replay", "rollback", snap_id, "--discard-edits")
+        assert "uninstalled commit-messages" in r.out
+        assert "rollback to %s complete" % snap_id in r.out
+        assert not md.exists()
+
     def test_snapshot_restore_can_itself_be_rolled_back(self, boost, tapped,
                                                         tick_clock):
         # Regression: the restore swapped the lock in with no history entry

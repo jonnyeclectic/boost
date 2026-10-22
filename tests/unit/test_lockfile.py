@@ -838,3 +838,38 @@ class TestRecordHistory:
         assert lockfile.record_history(p) is False
         assert not list(paths.lock_history_dir().glob("lock-*.json"))
 
+
+_ROW = {"version": "1.0.0", "commit": "c1", "sha256": "s1"}
+
+
+class TestRowDifferences:
+    BASE = _ROW
+
+    def test_identical_rows_and_absent_flags_match(self):
+        assert lockfile.row_differences(self.BASE, dict(self.BASE)) == {}
+        assert lockfile.row_differences(
+            {**self.BASE, "pinned": False, "only_agents": [],
+             "commit_pin": None}, self.BASE) == {}
+        assert lockfile.row_differences(
+            {**self.BASE, "only_agents": ["b", "a"]},
+            {**self.BASE, "only_agents": ["a", "b"]}) == {}
+
+    def test_every_field_is_compared(self):
+        cur = {"version": "2.0.0", "commit": "c2", "sha256": "s2",
+               "pinned": True, "commit_pin": "c2",
+               "only_agents": ["cursor"]}
+        assert lockfile.row_differences(self.BASE, cur) == {
+            "version": ("1.0.0", "2.0.0"), "commit": ("c1", "c2"),
+            "sha256": ("s1", "s2"), "pinned": (False, True),
+            "commit_pin": (None, "c2"), "only_agents": (None, ["cursor"])}
+
+    def test_a_digest_one_side_lacks_is_no_evidence(self):
+        assert lockfile.row_differences(
+            {"version": "1.0.0"}, self.BASE) == {}
+        assert lockfile.row_differences(
+            self.BASE, {"version": "1.0.0", "commit": "c1"}) == {}
+
+    def test_version_compares_as_text(self):
+        assert lockfile.row_differences({"version": 1}, {"version": "1"}) == {}
+        assert lockfile.row_differences({}, {"version": "1"}) == {
+            "version": ("None", "1")}
