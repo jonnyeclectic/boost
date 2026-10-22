@@ -484,6 +484,8 @@ def cmd_verify(argv):
             "commit_pin": commit_pin,
             "passed": integrity.verification_passed(
                 status, missing_fields, commit_pin) and not wrong}
+        if kind == "skill" and entry.get("submodules"):
+            row["submodules"] = list(entry["submodules"])
         if wrong:
             row["misdirected_links"] = [
                 {"agent": a, "target": paths.tilde(t)} for a, t in wrong]
@@ -517,7 +519,9 @@ def cmd_verify(argv):
                         "scope": "project", "missing_fields": missing_fields,
                         "commit_pin": None,
                         "passed": integrity.verification_passed(
-                            status, missing_fields, None)})
+                            status, missing_fields, None),
+                        **({"submodules": list(entry["submodules"])}
+                           if entry.get("submodules") else {})})
 
     bad = [r for r in results if not r["passed"]]
     if args.json:
@@ -549,6 +553,9 @@ def cmd_verify(argv):
         if "materialization sha256" in r["missing_fields"]:
             bits.append("`boost sync` records it, or `boost reinstall %s` "
                         "if a file was edited" % r["name"])
+        # The copy matches its hash, but the hash is of an empty dir: an
+        # unqualified "ok" read as a complete skill.
+        bits.extend(store.submodule_note(sub) for sub in r.get("submodules", []))
         bits.extend("linked for %s to %s — `boost heal` relinks it"
                     % (m["agent"], m["target"])
                     for m in r.get("misdirected_links", []))
