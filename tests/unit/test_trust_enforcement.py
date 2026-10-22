@@ -272,3 +272,81 @@ class TestDeclineRestored:
         assert sorted(lockfile.installed()) == ["brainstorming",
                                                 "tdd-workflow"]
         assert held.is_dir()
+
+
+# ── require_signed_taps reaches installs from a tap added before it ─────
+
+
+def _unsigned_line(tap: str) -> str:
+    return ("tap %r is unsigned (no .boost/tap.manifest.minisig), and policy "
+            "requires a trusted signature" % tap)
+
+
+class TestInstalledTapSigning:
+    def test_unsigned_tap_tapped_before_the_policy_refuses_install(self, two):
+        entry = catalog.find("jira-integration")[0]
+        _require_signed()
+        with pytest.raises(BoostError) as exc:
+            store.install(entry)
+        assert exc.value.message == (
+            "policy blocks installing jira-integration: "
+            + _unsigned_line(entry["tap"]))
+        assert exc.value.hint == "inspect with `boost policy list`"
+        assert lockfile.get_skill("jira-integration") is None
+        assert not (paths.store_dir() / "jira-integration").exists()
+
+    def test_off_by_default(self, two):
+        assert policy.installed_tap_signing(
+            lockfile.get_skill("brainstorming")["tap"]) == []
+        entry = catalog.find("jira-integration")[0]
+        assert policy.check_install(entry, 0) == []
+
+    def test_a_signed_trusted_tap_still_installs(self, signed):
+        _src, tap, _head = signed
+        entry = catalog.find("jira-integration")[0]
+        assert entry["tap"] == tap.name
+        assert policy.installed_tap_signing(tap.name) == []
+        store.install(entry)
+        assert lockfile.get_skill("jira-integration") is not None
+
+    def test_local_and_empty_are_not_taps(self, sandbox):
+        _require_signed()
+        assert policy.installed_tap_signing("local") == []
+        assert policy.installed_tap_signing("") == []
+
+    def test_an_unknown_tap_fails_closed(self, sandbox):
+        _require_signed()
+        assert policy.installed_tap_signing("nope") == [
+            "tap 'nope' is not tapped, so its signature cannot be verified, "
+            "and policy requires a trusted signature"]
+        assert policy.check_install(
+            {"name": "x", "tap": "nope", "version": "1.0.0"}, 0) == [
+            "tap 'nope' is not tapped, so its signature cannot be verified, "
+            "and policy requires a trusted signature"]
+
+    def test_master_switch_bypasses(self, two):
+        from boost_cli.core import config
+        _require_signed()
+        cfg = config.load()
+        cfg["policy_enforce"] = False
+        config.save(cfg)
+        assert policy.installed_tap_signing(
+            lockfile.get_skill("brainstorming")["tap"]) == []
+
+    def test_cli_install_and_policy_check_fail(self, boost, two):
+        tap = lockfile.get_skill("brainstorming")["tap"]
+        _require_signed()
+        r = boost("install", "jira-integration", expect=1)
+        assert ("policy blocks installing jira-integration: "
+                + _unsigned_line(tap)) in " ".join(r.err.split())
+        r = boost("policy", "check", "--json", expect=1)
+        import json
+        rows = [(v["name"], v["violation"])
+                for v in json.loads(r.out)["violations"]]
+        assert rows == [("brainstorming", _unsigned_line(tap)),
+                        ("tdd-workflow", _unsigned_line(tap))]
+
+    def test_policy_check_passes_a_signed_tap(self, boost, signed):
+        store.install(catalog.find("jira-integration")[0])
+        boost("policy", "check", expect=0)
+
