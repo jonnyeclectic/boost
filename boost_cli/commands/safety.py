@@ -737,24 +737,44 @@ def cmd_attest(argv):
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
-    targets = _iter_installed_all([store.installed_name(args.name)]
-                                  if args.name else None)
+    # NAME may be installed at user OR project scope, as for `boost verify`:
+    # a skill installed `--local` lives in the repo's own lock, which the
+    # user-lock iterator never reads, so attest called it "not installed"
+    # and `--verify` passed over a tampered repo copy that `verify` fails.
+    name = store.installed_name(args.name) if args.name else None
+    pbase, pskills = integrity.project_skills()
+    in_user = name is not None and lockfile.find_any(name) is not None
+    if name is not None and not in_user and name not in pskills:
+        candidates = list(chain.from_iterable(
+            lockfile.all_installed().values())) + list(pskills)
+        raise BoostError("not installed: %s" % name,
+                         hint=_not_installed_hint([name], candidates))
+    user_filter = None if name is None else [name] if in_user else []
+    targets = [(kind, n, e, scopes.SCOPE_USER)
+               for kind, n, e in _iter_installed_all(user_filter)]
+    targets += [("skill", n, e, scopes.SCOPE_PROJECT)
+                for n, e in sorted(pskills.items())
+                if name is None or n == name]
     first_install: dict = {}
     for e in journal.events():  # most-recent-first; oldest wins by overwrite
         if e.get("action") in ("install", "import") and e.get("subject"):
             first_install[e["subject"]] = e
 
     records, failures = [], 0
-    for kind, name, entry in targets:
+    for kind, name, entry, scope in targets:
         ev = first_install.get(name)
-        rec = {"name": name, "kind": kind,
+        rec = {"name": name, "kind": kind, "scope": scope,
                "who": (ev or {}).get("user", "?"),
                "when": entry.get("installed_at", "?"),
                "tap": entry.get("tap", "?"),
                "commit": (entry.get("commit") or "")[:9],
                "sha256": (entry.get("sha256") or "")[:12]}
         if args.verify:
-            if kind == "skill":
+            if scope == scopes.SCOPE_PROJECT:
+                # Every copy in the repo against the project lock's digest —
+                # the check `boost verify` grades project rows with.
+                st = integrity.project_status(entry, pbase)
+            elif kind == "skill":
                 st = integrity.status(name, entry)
             else:
                 # The artifact the agent loads, against the hash recorded when
@@ -793,7 +813,12 @@ def cmd_attest(argv):
         return 0
     # Kind folds into the name cell only when it is not a skill, so the
     # everyday all-skills table keeps its width and nothing truncates.
-    out.table([(r["name"] if r["kind"] == "skill"
+    # A project row is labelled so a same-named user skill stays a separate
+    # line rather than one OK standing for both copies.
+    for r in records:
+        r["label"] = ("%s (project)" % r["name"]
+                      if r["scope"] == scopes.SCOPE_PROJECT else r["name"])
+    out.table([(r["label"] if r["kind"] == "skill"
                 else "%s (%s)" % (r["name"], r["kind"]),
                 r["who"], util.rel_time(r["when"]),
                 r["tap"], r["commit"] or "-", r["sha256"]) for r in records],
@@ -812,6 +837,11 @@ def cmd_attest(argv):
                     # Not `boost heal`: it would recreate the deleted repo.
                     msg = ("installed --local into a directory that no "
                            "longer exists (boost uninstall %s)" % r["name"])
+                elif r["scope"] == scopes.SCOPE_PROJECT:
+                    msg = ("project copy missing (boost sync)"
+                           if r["reason"] == "missing"
+                           else "project copy no longer matches the "
+                                "project lock sha")
                 elif r["reason"] == "missing":
                     msg = ("store directory missing (boost heal)"
                            if r["kind"] == "skill"
@@ -820,10 +850,10 @@ def cmd_attest(argv):
                     msg = ("%s content no longer matches the lock sha"
                            % ("store" if r["kind"] == "skill"
                               else "materialized"))
-                out.warn("%s: %s" % (r["name"], msg))
+                out.warn("%s: %s" % (r["label"], msg))
             elif not r["journal"]:
-                out.warn("%s: no journal record (installed before journaling?)" % r["name"])
+                out.warn("%s: no journal record (installed before journaling?)" % r["label"])
             else:
-                out.ok("%s attestation OK" % r["name"])
+                out.ok("%s attestation OK" % r["label"])
         return 1 if failures else 0
     return 0
