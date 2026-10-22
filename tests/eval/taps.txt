@@ -136,7 +136,7 @@ aliarghyani/vue-cursor-rules            92609798e192312ce16edb78aa5424a8caaa415b
 affaan-m/ECC                            ca185ef5f7667078a1e70a763bd3a9c71c48acf0  1621  1588
 BagelHole/DevOps-Security-Agent-Skills  0365f57a079b1332f95cf26e31dd2d5332a8399f   163   163
 composio-community/awesome-codex-skills 0930e1373789d2eda449039f7ac154b33031de89   880   880
-first-fluke/oh-my-agent                 75b3fbce93258f37843d6db8a7e32ab52a6d9aa3   205   140
+first-fluke/oh-my-agent                 75b3fbce93258f37843d6db8a7e32ab52a6d9aa3   205   139
 iktakahiro/python-fastapi-ddd-skill     aa498d4c81acae475e05528520009c275cbe554f     6     6
 langchain-ai/skills-benchmarks          9195f8c296f7076152cf5c698d6abd4f84853eb9    21    21
 minio/skills                            22961d30013f4aadc863c41d14b28e58cb64c063     4     4
