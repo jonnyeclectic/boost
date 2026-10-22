@@ -15,7 +15,7 @@ import shutil
 import stat
 import tempfile
 import time
-from collections.abc import Collection, Iterator
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -7160,16 +7160,20 @@ def restore_preserve_newer_lock_sections(
     return kept
 
 
-def restore_carry_names(recorded: Collection[str]
+def restore_carry_names(recorded: Mapping[str, dict]
                         ) -> tuple[list[str], list[str]]:
     """The store children a snapshot restore keeps: ``(carry, set_aside)``.
 
     Everything but the lock file, its ``.lock`` sibling and the skill dirs
-    ``recorded`` (the live lock's skills section) — those are what a snapshot
-    replaces. The rest is boost's or the user's, never a snapshot's to drop:
-    the lock's ``.corrupt`` backups `boost list` points the user at, a dir
-    added by hand or by another tool, a workflow's skill copy, an edited copy
-    `boost uninstall` kept. They are carried across the swap.
+    ``recorded`` (the live lock's skills section, name -> row) — those are
+    what a snapshot replaces. The rest is boost's or the user's, never a
+    snapshot's to drop: the lock's ``.corrupt`` backups `boost list` points
+    the user at, a dir added by hand or by another tool, a workflow's skill
+    copy, an edited copy `boost uninstall` kept. They are carried across the
+    swap. So is a recorded skill that is its own only copy
+    (:func:`only_copy`): a hand-made dir `boost sync` adopted is still the
+    user's, and a restore — whose own sync adopts any carried dir — made the
+    first restore record it and the second delete it.
 
     While the lock cannot vouch for the store (:func:`lock_vouches`),
     ``recorded`` is empty and any dir may be one boost installed: carried
@@ -7183,7 +7187,8 @@ def restore_carry_names(recorded: Collection[str]
         names = sorted(os.listdir(paths.store_dir()))
     except OSError:
         return [], []
-    keep = [n for n in names if n not in own and n not in recorded]
+    replaced = {n for n, e in recorded.items() if not only_copy(n, e)}
+    keep = [n for n in names if n not in own and n not in replaced]
     if lock_vouches():
         return keep, []
     return ([n for n in keep if n.startswith(".")],

@@ -3360,12 +3360,13 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
     # store.restore_preserve_newer_lock_sections.
     pre_rules = lockfile.installed_rules().copy()
     pre_workflows = lockfile.installed_workflows().copy()
-    pre_skills = set(lockfile.installed())
+    pre_rows = lockfile.installed().copy()
+    pre_skills = set(pre_rows)
     # Whatever in the store is not a recorded skill — the lock's .corrupt
     # backups, a hand-made dir, a workflow's copy — is carried across the
     # swap; one the archive also holds goes to a named backup, not the bin.
     # A live workflow's copy stays live, as its lock row does.
-    carry, set_aside = store.restore_carry_names(pre_skills)
+    carry, set_aside = store.restore_carry_names(pre_rows)
     keep_live = store.workflow_owned_store_names()
     backup_dir = (paths.state_dir() / "restore-kept"
                   / ("%s-%s" % (snap_id,

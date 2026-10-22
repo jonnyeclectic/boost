@@ -7256,14 +7256,36 @@ class TestRestoreCarryNames:
         root = self._store()
         (root / ".skill-lock.json").write_text(
             '{"version": 3, "skills": {"alpha": {}}}', encoding="utf-8")
-        assert store.restore_carry_names({"alpha"}) == (
+        assert store.restore_carry_names({"alpha": {}}) == (
             [".skill-lock.json.corrupt", "mine"], [])
+
+    def test_a_recorded_skill_that_is_its_own_only_copy_is_carried(
+            self, sandbox, tmp_path):
+        root = self._store()
+        (root / ".skill-lock.json").write_text(
+            '{"version": 3, "skills": {"alpha": {}, "mine": {}}}',
+            encoding="utf-8")
+        own = {"tap": "local", "source_dir": str(root / "mine")}
+        ext = tmp_path / "elsewhere"
+        ext.mkdir()
+        (ext / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        # Adopted by sync: the store dir is the only copy, so it is kept.
+        assert store.restore_carry_names({"alpha": {}, "mine": own}) == (
+            [".skill-lock.json.corrupt", "mine"], [])
+        # A local skill with its source elsewhere can be put back from there.
+        assert store.restore_carry_names(
+            {"alpha": {}, "mine": {"tap": "local", "source_dir": str(ext)}}
+        ) == ([".skill-lock.json.corrupt"], [])
+        # One fetched from a URL is not its only copy either.
+        assert store.restore_carry_names(
+            {"alpha": {}, "mine": {**own, "source_url": "https://x/y"}}
+        ) == ([".skill-lock.json.corrupt"], [])
 
     def test_an_unreadable_lock_sets_every_dir_aside(self, sandbox):
         root = self._store()
         (root / ".skill-lock.json").write_text("{", encoding="utf-8")
-        assert store.restore_carry_names(set()) == (
+        assert store.restore_carry_names({}) == (
             [".skill-lock.json.corrupt"], ["alpha", "mine"])
 
     def test_no_store_carries_nothing(self, sandbox):
-        assert store.restore_carry_names(set()) == ([], [])
+        assert store.restore_carry_names({}) == ([], [])

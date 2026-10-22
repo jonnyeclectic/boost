@@ -2507,6 +2507,25 @@ class TestSnapshot:
         assert "local edits" not in r.out
         assert "failed verification" not in r.out
 
+    def test_a_second_restore_keeps_a_hand_made_dir_the_first_adopted(
+            self, boost, installed):
+        # The first restore's sync records a carried hand-made dir as a local
+        # skill; the second then treated it as one the snapshot replaces and
+        # deleted the only copy.
+        snap_id = re.search(r"saved (snap-[\w-]+)",
+                            boost("snapshot", "save").out).group(1)
+        mine = paths.store_dir() / "my-own"
+        mine.mkdir()
+        (mine / "SKILL.md").write_text("---\nname: my-own\n---\n# mine\n",
+                                       encoding="utf-8")
+        boost("snapshot", "restore", snap_id, "-y")
+        assert "my-own" in lockfile.installed()
+        r = boost("snapshot", "restore", snap_id, "-y")
+        assert "kept 1 store item the snapshot does not cover: my-own" in r.out
+        assert (mine / "SKILL.md").read_text(encoding="utf-8").endswith(
+            "# mine\n")
+        assert "my-own" in lockfile.installed()
+
     def test_restore_keeps_the_corrupt_lock_backup_and_a_hand_made_dir(
             self, boost, installed):
         # Restore swapped the whole store and deleted what the archive did not
