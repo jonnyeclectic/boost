@@ -72,7 +72,7 @@ def _is_member(user: str, cohort_name: str, percent: int) -> bool:
 
 
 def cmd_cohort(argv) -> int:
-    """boost cohort [list|create NAME --skills a,b --percent N|delete NAME|status|apply [NAME]]"""
+    """boost cohort [list [NAME]|create NAME --skills a,b --percent N|delete NAME|status [NAME]|apply [NAME]]"""
     p = cliparse.parser(
         prog="boost cohort",
         description="Controlled skill rollouts & team A/B testing",
@@ -82,7 +82,8 @@ def cmd_cohort(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=["list", "create", "delete", "status", "apply"],
                    help="what to do (default: list; status is the same as list)")
-    p.add_argument("name", nargs="?", help="cohort name")
+    p.add_argument("name", nargs="?",
+                   help="cohort name (list/status: show only that cohort)")
     p.add_argument("--skills", action="append", default=[],
                    help="comma-separated skill names (repeatable)")
     p.add_argument("--percent", type=int, default=100,
@@ -112,7 +113,9 @@ def cmd_cohort(argv) -> int:
             p.error("create needs --skills a,b,...")
         for s in skills:
             if not catalog.find(s):
-                out.warn("skill %r not found in any tap (kept anyway)" % s)
+                # stderr: under --json, stdout holds the JSON object alone.
+                out.warn("skill %r not found in any tap (kept anyway)" % s,
+                         stream=sys.stderr)
         existing = cohorts.get(args.name)
         cohorts[args.name] = {
             "skills": skills, "percent": args.percent,
@@ -249,10 +252,14 @@ def cmd_cohort(argv) -> int:
         return cohort.apply_exit_code(total_installed, total_present,
                                       total_missing)
 
-    # list / status
+    # list / status — a NAME narrows to that cohort, and one that does not
+    # exist is an error rather than every other cohort's data under rc 0.
+    if args.name and args.name not in cohorts:
+        raise BoostError("no cohort named %s" % args.name,
+                        hint="list cohorts with `boost cohort list`")
     rows = []
     data = []
-    for cname in sorted(cohorts):
+    for cname in [args.name] if args.name else sorted(cohorts):
         spec = cohorts[cname]
         member = _is_member(user, cname, spec["percent"])
         data.append({"name": cname, "skills": spec["skills"],

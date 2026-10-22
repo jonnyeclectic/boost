@@ -100,9 +100,46 @@ class TestCohort:
     def test_create_full_rollout_warns_on_unknown_skill(self, boost, tapped):
         r = boost("cohort", "create", "pilot",
                  "--skills", "brainstorming,ghost-skill", "--percent", "100")
-        assert "skill 'ghost-skill' not found in any tap (kept anyway)" in r.out
+        assert r.err == ("  ! skill 'ghost-skill' not found in any tap "
+                         "(kept anyway)\n")
+        assert "not found" not in r.out
         assert ("created cohort pilot (100% rollout, 2 skills) — "
                 "you are IN") in r.out
+
+    def test_create_json_with_unknown_skill_keeps_stdout_parseable(
+            self, boost, tapped):
+        # The warning used to land on stdout ahead of the object, so
+        # `json.load` failed on line 1 of a successful create.
+        r = boost("cohort", "create", "beta", "--skills", "nosuch-skill",
+                 "--json")
+        assert json.loads(r.out) == {"name": "beta", "percent": 100,
+                                     "skills": ["nosuch-skill"],
+                                     "updated": False,
+                                     "member": _member("beta", 100)}
+        assert "skill 'nosuch-skill' not found in any tap" in r.err
+
+    @pytest.mark.parametrize("action", ["list", "status"])
+    def test_name_narrows_list_and_status(self, boost, tapped, action):
+        boost("cohort", "create", "pilot", "--skills", "brainstorming")
+        boost("cohort", "create", "zero", "--skills", "commit-messages",
+             "--percent", "0")
+        data = json.loads(boost("cohort", action, "zero", "--json").out)
+        assert data == [{"name": "zero", "skills": ["commit-messages"],
+                         "percent": 0, "member": False,
+                         "created": data[0]["created"]}]
+        r = boost("cohort", action, "zero")
+        assert [l.split()[0] for l in r.out.splitlines()
+                if l.startswith(("pilot", "zero"))] == ["zero"]
+
+    @pytest.mark.parametrize("extra", [[], ["--json"]])
+    @pytest.mark.parametrize("action", ["list", "status"])
+    def test_missing_name_is_rc1_not_every_cohort(self, boost, tapped,
+                                                   action, extra):
+        boost("cohort", "create", "pilot", "--skills", "brainstorming")
+        r = boost("cohort", action, "nosuch", *extra, expect=1)
+        assert r.out == ""
+        assert "Error: no cohort named nosuch" in r.err
+        assert "list cohorts with `boost cohort list`" in r.err
 
     def test_create_singular_skill_agrees(self, boost, tapped):
         r = boost("cohort", "create", "solo",
