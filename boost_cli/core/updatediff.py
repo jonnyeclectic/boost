@@ -91,11 +91,15 @@ class TreeFile(NamedTuple):
     so one stray Latin-1 byte cannot hide the ``curl … | sh`` beside it.
     ``binary`` marks a file that really is not text (it holds a NUL byte, the
     rule git uses), whose ``text`` is a digest so two versions still compare.
+    ``scan`` is a binary's bytes decoded with NULs dropped: one NUL byte is
+    all it takes to make a file "binary", so without it a NUL appended to a
+    SKILL.md or a script would take every line above it out of the scan.
     """
 
     text: str
     binary: bool = False
     executable: bool = False
+    scan: str = ""
 
 
 #: How many leading bytes decide whether a file is binary — git's window.
@@ -107,6 +111,23 @@ def _as_file(value: str | TreeFile | None) -> TreeFile | None:
     if value is None or isinstance(value, TreeFile):
         return value
     return TreeFile(value)
+
+
+def _scan_side(f: TreeFile | None) -> str:
+    """The text the risk scan reads for one side of a change."""
+    if f is None:
+        return ""
+    return f.scan if f.binary else f.text
+
+
+def _binary_added_lines(before: TreeFile | None, after: TreeFile) -> list[str]:
+    """Lines of ``after`` that ``before`` lacks, for a binary on either side.
+
+    A set difference, not ``ndiff``: a binary can be large and has no line
+    order worth aligning, and the scan only needs what is new.
+    """
+    had = set(_scan_side(before).splitlines())
+    return [ln for ln in _scan_side(after).splitlines() if ln not in had]
 
 
 def _binary_chunk(rel: str, before: TreeFile | None,
@@ -130,12 +151,13 @@ def diff_tree(old: Mapping[str, str | TreeFile],
     Only the ``+`` side is scanned. *Removing* a poisoned line must not be the
     thing that stops to ask. A binary file has no lines to scan; it is listed
     as ``Binary file <rel> added|changed|removed``, and one that arrives
-    executable — new, or newly made so — is a reason of its own, since it is
-    a program the update puts on the machine with nothing to read.
+    executable — new, newly made so, or with its bytes swapped — is a reason
+    of its own, since it is a program the update puts on the machine with
+    nothing to read. A binary's text (``TreeFile.scan``) is still scanned.
     """
     chunks: list[str] = []
     added_all: list[str] = []
-    exec_binaries: list[str] = []
+    exec_binaries: list[str] = []      # "adds|changes executable binary <rel>"
     changed = False
     for rel in sorted(set(old) | set(new)):
         before = _as_file(old.get(rel))
@@ -146,9 +168,12 @@ def diff_tree(old: Mapping[str, str | TreeFile],
         if (before is not None and before.binary) or (
                 after is not None and after.binary):
             chunks.append(_binary_chunk(rel, before, after))
-            if (after is not None and after.binary and after.executable
-                    and (before is None or not before.executable)):
-                exec_binaries.append(rel)
+            if after is not None:
+                added_all.extend(_binary_added_lines(before, after))
+                if after.binary and after.executable:
+                    exec_binaries.append("%s executable binary %s" % (
+                        "changes" if before is not None and before.executable
+                        else "adds", rel))
             continue
         old_text = before.text if before is not None else ""
         new_text = after.text if after is not None else ""
@@ -164,7 +189,9 @@ def diff_tree(old: Mapping[str, str | TreeFile],
     reasons: list[str] = []
     if touches_executable(added_all):
         reasons.append("changes executable-looking instructions")
-    reasons.extend("adds executable binary %s" % rel for rel in exec_binaries)
+    # Added, newly +x, or its bytes swapped: each puts a program on the
+    # machine that nobody can read in the diff.
+    reasons.extend(exec_binaries)
     # `injectscan` orders worst-first and may report the same rule on several
     # lines; the prompt wants each distinct reason once.
     for f in injectscan.scan_text("\n".join(added_all)):
@@ -182,7 +209,9 @@ def read_file(p: Path) -> TreeFile:
     executable = bool(p.stat().st_mode & 0o111)
     if b"\0" in data[:_SNIFF]:
         return TreeFile(hashlib.sha256(data).hexdigest(), binary=True,
-                        executable=executable)
+                        executable=executable,
+                        scan=data.replace(b"\0", b"").decode(
+                            "utf-8", errors="replace"))
     return TreeFile(data.decode("utf-8", errors="replace"),
                     executable=executable)
 
