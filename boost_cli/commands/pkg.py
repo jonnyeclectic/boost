@@ -2268,14 +2268,26 @@ def cmd_reinstall(argv: list[str]) -> int:
                 failed += 1
                 continue
             items.append((found[0], name, found[1]))
+    quarantined_held = 0
     for kind, name, lk in items:
+        refusal = store.quarantine_refusal(name, lk, kind)
+        if refusal is not None:
+            # Lifting a quarantine is `quarantine --release`'s decision, not
+            # a side effect of a reinstall: it threw the held copy away and
+            # took the tap's HEAD. `--all` holds it back as `update` does; a
+            # named one is refused and named.
+            if args.all:
+                quarantined_held += 1
+            else:
+                out.warn("%s — %s" % (refusal.message, refusal.hint),
+                         wrap=True, stream=sys.stderr)
+                failed += 1
+            continue
         if kind != "skill":
             # Rules/workflows always come from a tap (`boost import` is
             # skill-only), so resolve the catalog entry the way
             # _update_materialized does and re-materialize where it was
-            # installed (user config vs a specific repo). store.install with
-            # force also clears a quarantine flag — the reinstall puts the
-            # content back, so the lock must say so.
+            # installed (user config vs a specific repo).
             matches = [e for e in catalog.find(name)
                        if e["tap"] == lk.get("tap")
                        and e.get("kind", "skill") == kind]
@@ -2403,6 +2415,12 @@ def cmd_reinstall(argv: list[str]) -> int:
     noun = next(iter(tried)) if len(tried) == 1 else (
         "item" if tried else "skill")
     out.info("Reinstalled %s" % _plural(done, noun))
+    if quarantined_held:
+        out.info(out.role(
+            "%d quarantined item%s held back — `boost quarantine --release "
+            "<name>` lets one be reinstalled"
+            % (quarantined_held, "s" if quarantined_held != 1 else ""),
+            "muted"))
     return 1 if failed else 0
 
 

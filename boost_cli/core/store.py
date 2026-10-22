@@ -1407,6 +1407,37 @@ def held_refusal(name: str, entry: dict | None) -> BoostError | None:
                       hint="%s first" % back)
 
 
+def quarantine_refusal(name: str, entry: dict | None,
+                       kind: str = "skill") -> BoostError | None:
+    """The error for an install over quarantined ``name``, or None.
+
+    ``install --force`` and ``reinstall`` used to lift a quarantine without a
+    word: the held copy, edits and all, was thrown away, the item jumped to
+    the tap's HEAD and was linked into every agent, and no ``release`` was
+    journalled — while ``update`` holds the same item back on purpose. Lifting
+    a quarantine is its own decision, so the one command that makes it is
+    named, ``force`` or not.
+    """
+    if not (entry or {}).get("quarantined"):
+        return None
+    label = name if kind == "skill" else "%s %s" % (kind, name)
+    return BoostError("%s is quarantined — not reinstalled" % label,
+                      hint="`boost quarantine --release %s` first" % name)
+
+
+def lost_held_copy_hint(name: str) -> str:
+    """The way back for a held skill whose held copy is gone.
+
+    Not ``boost heal`` (it leaves a held row alone by design), not ``boost
+    reinstall`` (it refuses a quarantined row, :func:`quarantine_refusal`)
+    and not a release (there is nothing to put back): the record goes, and a
+    fresh install fetches the tap's copy. Release and doctor both word it
+    with this, so they cannot send the user round each other.
+    """
+    return ("`boost uninstall %s` drops the record, then `boost install %s` "
+            "fetches it again" % (name, name))
+
+
 def held_reason(name: str, entry: dict) -> tuple[str, str]:
     """``(why, back)`` for a held skill: why it is away, what returns it.
 
@@ -2968,6 +2999,9 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
             shares="one file per agent")
         existing = (lockfile.get_rule if kind == "rule"
                     else lockfile.get_workflow)(name)
+        refusal = quarantine_refusal(name, existing, kind)
+        if refusal is not None:
+            raise refusal
         _check_scope_conflict(name, existing, scope, resolved_base, force)
         return existing
     if scope == scopes.SCOPE_PROJECT:
@@ -2997,6 +3031,9 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
     refuse_case_collision(name, lockfile.installed())
     refuse_copy_case_collision(name)
     existing = lockfile.get_skill(name)
+    refusal = quarantine_refusal(name, existing)
+    if refusal is not None:
+        raise refusal
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
     if existing and not force:
@@ -5029,6 +5066,13 @@ def release_skill(name: str, entry: dict) -> InstallResult:
     ``entry`` with the links measured and the hold cleared.
     """
     restore_store_copy(name)
+    if not skill_store_dir(name).is_dir():
+        # Neither the held copy nor a store copy: linking now would point
+        # every agent at a directory that does not exist and report it as
+        # released. The row stays quarantined, so nothing changed.
+        raise BoostError("%s has no held copy to release (%s is gone)"
+                         % (name, paths.tilde(held_copy_dir(name))),
+                         hint=lost_held_copy_hint(name), wrap=True)
     res = link_agents(name, only=entry.get("only_agents"))
     entry["quarantined"] = False
     entry.pop(HELD_KEY, None)
@@ -5135,8 +5179,24 @@ def stale_quarantine_artifacts(name: str, entry: dict) -> bool:
     return False
 
 
+def _taken_while_held(path: Path, content: str) -> bool:
+    """Whether ``path`` now holds a file of the user's that a release of
+    ``content`` must not replace.
+
+    :func:`_foreign_target`'s test without its ``owned`` set: at release the
+    stash rows *are* the recorded paths, so every one would read as boost's.
+    Quarantine removed the file, so anything there now was put there since —
+    except the very text stashed, which an interrupted quarantine leaves and
+    rewriting changes nothing. A directory is the write's own refusal.
+    """
+    if not os.path.lexists(path) or occupied(path):
+        return False
+    return path.is_symlink() or _file_sha(path) != _text_sha(content)
+
+
 def release_materialized(kind: str, name: str, entry: dict,
-                         skipped: list[str] | None = None) -> list[str]:
+                         skipped: list[str] | None = None,
+                         foreign: list[str] | None = None) -> list[str]:
     """Restore what :func:`quarantine_materialized` removed, byte-for-byte.
 
     A stash record whose ``content`` is None (the artifact was already gone at
@@ -5144,6 +5204,12 @@ def release_materialized(kind: str, name: str, entry: dict,
     Persists the entry and returns the agents restored. A skill copy whose
     store dir something else took meanwhile is not restored, and its path is
     appended to ``skipped`` for the caller to name.
+
+    A rule or command file the user wrote at the path while it was held is
+    theirs (:func:`_taken_while_held`): left alone and moved from
+    ``materializations`` to the entry's ``foreign`` record, exactly as an
+    install records it, so uninstall never deletes it and `boost sync` writes
+    the item once the path is free. Its path is appended to ``foreign``.
     """
     from . import rules
     # The stash names absolute paths under the row's base, so releasing a
@@ -5183,6 +5249,18 @@ def release_materialized(kind: str, name: str, entry: dict,
                 if not lockfile.is_skill_copy(r)]
             if skipped is not None:
                 skipped.append(str(path.parent))
+            continue
+        if (m.get("mode") != rules.MODE_CLAUDE and not lockfile.is_skill_copy(m)
+                and _taken_while_held(path, content)):
+            entry["materializations"] = [
+                r for r in entry.get("materializations") or ()
+                if r.get("path") != m.get("path")]
+            row = {k: m[k] for k in ("agent", "slot", "mode", "path")
+                   if m.get(k) is not None}
+            entry["foreign"] = [*(r for r in foreign_rows(entry)
+                                  if r["path"] != row["path"]), row]
+            if foreign is not None:
+                foreign.append(str(path))
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         if m.get("mode") == rules.MODE_CLAUDE:
@@ -6462,6 +6540,9 @@ def install_from_path(src_dir: Path, name: str | None = None,
             hint=("it is installed already, and edits there are live"
                   if existing else
                   "`boost sync` records a skill put in the store by hand"))
+    refusal = quarantine_refusal(name, existing)
+    if refusal is not None:
+        raise refusal
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
     disowned = _refuse_unrecorded(name, existing, force)

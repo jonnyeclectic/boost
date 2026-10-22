@@ -22,6 +22,7 @@ from boost_cli.core import (
     registry,
     scopes,
     store,
+    util,
 )
 from boost_cli.errors import BoostError
 
@@ -980,16 +981,17 @@ def test_modified_remedy_for_an_edited_held_copy_is_a_reinstall(installed):
 
 
 def test_modified_remedy_for_a_quarantined_copy_never_names_reinstall(installed):
-    # A reinstall clears `quarantined` and relinks: as the fix for an edited
-    # quarantined copy it would walk the user out of the quarantine.
+    # A reinstall refuses a quarantined row, and lifting the quarantine is
+    # not the fix for an edited held copy.
     from boost_cli.core import lockfile
 
     def quarantine(entry: dict) -> None:
         entry["quarantined"] = True
     lockfile.update_skill(installed, quarantine)
     cmd, why = integrity.modified_remedy(installed)
-    assert cmd == "boost quarantine --list"
-    assert "quarantined" in why
+    assert (cmd, why) == ("boost quarantine --list",
+                          "to review it — it is quarantined, so a reinstall "
+                          "waits for `boost quarantine --release`")
     assert "reinstall" not in cmd and cmd != "boost heal"
     # Quarantine outranks held_at and a missing store SKILL.md alike.
     held = {"quarantined": True, "held_at": "/h/x"}
@@ -1014,3 +1016,19 @@ def test_modified_remedy_for_a_rule_or_workflow_is_a_reinstall(sandbox):
     for kind in ("rule", "workflow"):
         assert integrity.modified_remedy("r", kind) == (
             "boost reinstall r", "to discard local edits")
+
+
+def test_held_status_labels_an_intact_quarantined_copy(installed):
+    assert integrity.held_status(installed, lockfile.get_skill(installed)) \
+        == integrity.STATUS_OK
+    store.quarantine_skill(installed, lockfile.get_skill(installed))
+    entry = lockfile.get_skill(installed)
+    assert integrity.held_status(installed, entry) == \
+        integrity.STATUS_QUARANTINED
+    # An edit to the held copy is not laundered by the label.
+    md = store.held_copy_dir(installed) / "SKILL.md"
+    md.write_text("edit\n", encoding="utf-8")
+    assert integrity.held_status(installed, entry) == integrity.STATUS_MODIFIED
+    assert integrity.skill_modified(installed, entry) is True
+    util.rmtree(store.held_copy_dir(installed))
+    assert integrity.held_status(installed, entry) == integrity.STATUS_MISSING

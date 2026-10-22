@@ -394,9 +394,36 @@ def str_arg(args: Mapping, key: str) -> str | None:
 READ_LIMIT = 12000
 
 
+def state_marks(entry: dict | None) -> str:
+    """``boost_list``'s trailing markers for one lock row.
+
+    ``[pinned]`` holds the version; ``[quarantined]`` and ``[sidelined]``
+    mean no agent loads the item at all. Without the last two a quarantined
+    item read as installed and "usable this second" under a description that
+    promises exactly that, while CLI `boost list` flagged it.
+    """
+    e = entry or {}
+    return "".join((" [pinned]" if e.get("pinned") else "",
+                    " [quarantined]" if e.get("quarantined")
+                    else " [sidelined]" if e.get("sidelined_by") else ""))
+
+
+def held_line(name: str, entry: dict | None) -> str | None:
+    """``boost_read``'s header line for an installed item no agent loads, or
+    None. The content follows either way; this says it is not in effect."""
+    e = entry or {}
+    if e.get("quarantined"):
+        return ("quarantined: yes — no agent loads it; `boost quarantine "
+                "--release %s` puts it back" % name)
+    if e.get("sidelined_by"):
+        return ("sidelined: yes (by `boost %s`) — no agent loads it"
+                % e["sidelined_by"])
+    return None
+
+
 def read_reply(name: str, text: str, *, kind: str = "skill",
                installed: bool = False, limit: int = READ_LIMIT,
-               where: str | None = None) -> str:
+               where: str | None = None, held: str | None = None) -> str:
     """`boost_read`'s reply: a header, then the item's own content.
 
     The header exists because the body alone does not say what the agent is
@@ -425,6 +452,9 @@ def read_reply(name: str, text: str, *, kind: str = "skill",
     # alone told an agent in another repo that the item was active there.
     head.append("installed: %s" % (("yes (project %s)" % where if where
                                      else "yes") if installed else "no"))
+    # ``held`` (:func:`held_line`): installed, and still not in effect.
+    if held and installed:
+        head.append(held)
     body = text.strip("\n")
     if len(body) > limit:
         cut = body[:limit].rpartition("\n")[0] or body[:limit]

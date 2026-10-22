@@ -467,7 +467,7 @@ def cmd_verify(argv):
         # acts on. An UNLOCKED entry has no digest to compare — surface it as a
         # missing field rather than a false "ok".
         if kind == "skill":
-            status = integrity.status(name, entry)
+            status = integrity.held_status(name, entry)
             if status == integrity.STATUS_UNLOCKED and "sha256" not in missing_fields:
                 missing_fields.append("sha256")
         else:
@@ -486,6 +486,8 @@ def cmd_verify(argv):
                 status, missing_fields, commit_pin) and not wrong}
         if kind == "skill" and entry.get("submodules"):
             row["submodules"] = list(entry["submodules"])
+        if kind == "skill" and entry.get("quarantined"):
+            row["quarantined"] = True
         if wrong:
             row["misdirected_links"] = [
                 {"agent": a, "target": paths.tilde(t)} for a, t in wrong]
@@ -544,6 +546,10 @@ def cmd_verify(argv):
         if r["status"] == integrity.STATUS_STRANDED:
             bits.append("that directory is gone — `boost uninstall %s` drops "
                         "the record" % r["name"])
+        # A quarantined skill failing its check still says it is held, as
+        # its passing row does in the status column.
+        if r.get("quarantined") and r["status"] != integrity.STATUS_QUARANTINED:
+            bits.append("quarantined")
         if r["missing_fields"]:
             bits.append("missing lock fields: " + ", ".join(r["missing_fields"]))
         # Installed before rows carried a hash: `boost sync` records it for a
@@ -680,13 +686,21 @@ def cmd_quarantine(argv):
                    % (name, ", ".join(res.linked) or "none"))
         else:
             skipped: list[str] = []
+            theirs: list[str] = []
             restored = store.release_materialized(kind, name, entry,
-                                                  skipped=skipped)
+                                                  skipped=skipped,
+                                                  foreign=theirs)
             out.ok("released %s %s (restored: %s)"
                    % (kind, name, ", ".join(restored) or "none"))
             for d in skipped:
                 out.info("not restored as a skill: %s now holds something "
                          "else — left alone" % paths.tilde(d), wrap=True)
+            # Install's words for the same file: the user's own, never
+            # replaced, and `boost sync` writes the item once it is moved.
+            for f in theirs:
+                out.warn("not written: %s exists and is not managed by boost "
+                         "— left alone; move it aside, then `boost sync` "
+                         "writes it" % paths.tilde(f), wrap=True)
         return 0
 
     name = store.installed_name(args.name)
