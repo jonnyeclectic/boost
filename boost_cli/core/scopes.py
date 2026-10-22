@@ -215,7 +215,8 @@ def managed_by_boost(base) -> str | None:
     ``boost verify`` then reports it tampered); into a tap clone under
     ``~/.boost/repos`` it plants copies the next rescan indexes as that tap's
     own catalogue items; into a bare git repo it writes files no commit can
-    carry. Each is a directory with no project marker, so the unmarked
+    carry; into an agent's user config root (``~/.gemini``, ``~/.codex``) it
+    writes that agent's *global* context file. Each is a directory with no project marker, so the unmarked
     fallback in :func:`project_base` would happily claim it.
     """
     from . import agents
@@ -225,9 +226,30 @@ def managed_by_boost(base) -> str | None:
         return None
     managed = [(paths.store_dir(), "boost's skill store"),
                (paths.boost_home(), "boost's own state directory")]
+    try:
+        home = Path(paths.home()).resolve()
+    except OSError:
+        home = None
     with suppress(BoostError):
-        managed += [(Path(d), "an agent's user skills directory")
-                    for d in agents.enabled_agents().values()]
+        dirs = [Path(d) for d in agents.enabled_agents().values()]
+        managed += [(d, "an agent's user skills directory") for d in dirs]
+        # The skills dir's parent is the agent's user config root, and it is
+        # where user scope writes that agent's context file. Gemini and Codex
+        # name the project file the same as the user one (`rules.CONTEXT_FILES`
+        # — GEMINI.md, AGENTS.md), so a "project" at ~/.gemini puts its rule
+        # block into the global file every session loads, recorded as project
+        # scope. Every configured agent, not just the enabled ones: turning an
+        # agent off does not make its config dir a project. Never $HOME or
+        # above it — an agent whose skills sit directly in ~ would otherwise
+        # refuse every project on the machine.
+        roots = [Path(s["dir"]).parent
+                 for s in agents.known_agents().values()]
+        for root in roots:
+            with suppress(OSError):
+                r = root.resolve()
+                if home is not None and (r == home or r in home.parents):
+                    continue
+                managed.append((root, "an agent's user config directory"))
     for root, what in managed:
         try:
             root_r = root.resolve()
@@ -236,10 +258,6 @@ def managed_by_boost(base) -> str | None:
         if here == root_r or root_r in here.parents:
             return "%s is inside %s (%s)" % (paths.tilde(here), what,
                                             paths.tilde(root_r))
-    try:
-        home = Path(paths.home()).resolve()
-    except OSError:
-        home = None
     for d in (here, *here.parents):
         if d == home:
             break
