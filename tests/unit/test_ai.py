@@ -448,6 +448,11 @@ class TestExtractMarkdown:
     def test_a_tilde_outer_fence(self):
         assert ai.extract_markdown("~~~\nA\n```\n~~~\nchat") == "A\n```"
 
+    def test_a_fence_with_an_info_string_does_not_close_a_tilde_outer(self):
+        # `~~~python` opens an inner block; only a bare `~~~` closes.
+        assert ai.extract_markdown(
+            "~~~markdown\nA\n~~~~python\nx\n~~~\nchat") == "A\n~~~~python\nx"
+
     def test_a_short_fence_does_not_close_a_long_one(self):
         assert ai.extract_markdown("````\nA\n```\nB") == "A\n```\nB"
 
