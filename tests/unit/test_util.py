@@ -93,6 +93,16 @@ class TestRelTime:
     def test_30_seconds(self):
         assert util.rel_time(iso_ago(30)) == "30s ago"
 
+    def test_a_stamp_seconds_ahead_is_just_now(self):
+        # Clock skew between machines sharing the feed: floored, a negative
+        # age read "1s ago" however far ahead the stamp was.
+        assert util.rel_time(iso_ago(-1)) == "just now"
+        assert util.rel_time(iso_ago(-59)) == "just now"
+
+    def test_a_stamp_a_minute_or_more_ahead_is_in_the_future(self):
+        assert util.rel_time(iso_ago(-60)) == "in the future"
+        assert util.rel_time(iso_ago(-2 * 86400)) == "in the future"
+
     def test_59_seconds_still_seconds_bucket(self):
         assert util.rel_time(iso_ago(59)) == "59s ago"
 
