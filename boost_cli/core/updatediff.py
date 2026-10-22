@@ -27,8 +27,9 @@ only filesystem touch and is a thin adapter.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
@@ -83,8 +84,76 @@ def _added_lines(old: str, new: str) -> list[str]:
     return added
 
 
-def diff_tree(old: dict[str, str], new: dict[str, str]) -> TreeDiff:
-    """Diff two ``{relpath: text}`` maps.
+class TreeFile(NamedTuple):
+    """One file of a tree as the gate sees it.
+
+    ``text`` is the content decoded as UTF-8 with undecodable bytes replaced,
+    so one stray Latin-1 byte cannot hide the ``curl … | sh`` beside it.
+    ``binary`` marks a file that really is not text (it holds a NUL byte, the
+    rule git uses, and is not text with a NUL smuggled in — see
+    :func:`read_file`), whose ``text`` is a digest so two versions still
+    compare.
+    """
+
+    text: str
+    binary: bool = False
+    executable: bool = False
+
+
+#: How many leading bytes decide whether a file is binary — git's window.
+_SNIFF = 8000
+
+
+def _as_file(value: str | TreeFile | None) -> TreeFile | None:
+    """A bare string is a text file: the shape every caller used to pass."""
+    if value is None or isinstance(value, TreeFile):
+        return value
+    return TreeFile(value)
+
+
+#: Suffixes an agent or a shell reads as text, whatever bytes they hold.
+_TEXT_SUFFIXES = frozenset((
+    ".md", ".mdc", ".markdown", ".txt", ".rst", ".cursorrules",
+    ".windsurfrules", ".clinerules", ".sh", ".bash", ".zsh", ".fish", ".ps1",
+    ".bat", ".cmd", ".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl",
+    ".json", ".yaml", ".yml", ".toml"))
+
+#: Share of a NUL-stripped sniff window that may be garbage (U+FFFD or a
+#: non-printing character) for it still to read as text. Measured: text
+#: with a NUL in it is ~0; Mach-O, .so and PNG files sit at 0.33-0.69.
+_GARBAGE_MAX = 0.1
+
+
+def _smuggled_text(p: Path, data: bytes) -> str | None:
+    """``data`` decoded, if it is text with NULs in it rather than a binary.
+
+    One NUL is all git's rule needs, so without this a NUL appended to a
+    SKILL.md or a script took every line above it out of the diff and the
+    scan. A real binary is left alone: its string tables are full of words
+    like ``exec`` and ``/bin/sh``, and gating on those would ask about every
+    PDF and ``.so`` with a reason nobody could inspect.
+    """
+    text = data.replace(b"\0", b"").decode("utf-8", errors="replace")
+    if (p.suffix.lower() in _TEXT_SUFFIXES or p.name.lower() in _TEXT_SUFFIXES
+            or data.startswith(b"#!")):
+        return text
+    window = text[:_SNIFF]
+    garbage = sum(1 for c in window if c == "\ufffd"
+                  or (not c.isprintable() and c not in "\t\n\r"))
+    return text if garbage <= _GARBAGE_MAX * len(window) else None
+
+
+def _binary_chunk(rel: str, before: TreeFile | None,
+                  after: TreeFile | None) -> str:
+    """The diff line for a change on either side of which is binary."""
+    how = ("added" if before is None else "removed" if after is None
+           else "changed")
+    return "Binary file %s %s" % (rel, how)
+
+
+def diff_tree(old: Mapping[str, str | TreeFile],
+              new: Mapping[str, str | TreeFile]) -> TreeDiff:
+    """Diff two ``{relpath: text | TreeFile}`` maps.
 
     Returns the unified-diff text over every changed file, whether anything
     changed at all, whether any *added* line is worth a human look (the
@@ -93,24 +162,47 @@ def diff_tree(old: dict[str, str], new: dict[str, str]) -> TreeDiff:
     objected to is a prompt people learn to accept without reading.
 
     Only the ``+`` side is scanned. *Removing* a poisoned line must not be the
-    thing that stops to ask.
+    thing that stops to ask. A binary file has no lines to scan; it is listed
+    as ``Binary file <rel> added|changed|removed``, and one that arrives
+    executable — new, newly made so, or with its bytes swapped — is a reason
+    of its own, since it is a program the update puts on the machine with
+    nothing to read.
     """
     chunks: list[str] = []
     added_all: list[str] = []
+    exec_binaries: list[str] = []      # "adds|changes executable binary <rel>"
     changed = False
     for rel in sorted(set(old) | set(new)):
-        before = old.get(rel, "")
-        after = new.get(rel, "")
+        before = _as_file(old.get(rel))
+        after = _as_file(new.get(rel))
         if before == after:
             continue
         changed = True
-        added_all.extend(_added_lines(before, after))
+        if (before is not None and before.binary) or (
+                after is not None and after.binary):
+            chunks.append(_binary_chunk(rel, before, after))
+            if after is not None and after.binary and after.executable:
+                exec_binaries.append("%s executable binary %s" % (
+                    "changes" if before is not None and before.executable
+                    else "adds", rel))
+            continue
+        old_text = before.text if before is not None else ""
+        new_text = after.text if after is not None else ""
+        if before is not None and after is not None and old_text == new_text:
+            # Same bytes, other mode: say so rather than print an empty diff.
+            chunks.append("Mode of %s changed: %s executable"
+                          % (rel, "now" if after.executable else "no longer"))
+            continue
+        added_all.extend(_added_lines(old_text, new_text))
         chunks.append("\n".join(difflib.unified_diff(
-            before.splitlines(), after.splitlines(),
+            old_text.splitlines(), new_text.splitlines(),
             fromfile="a/" + rel, tofile="b/" + rel, lineterm="")))
     reasons: list[str] = []
     if touches_executable(added_all):
         reasons.append("changes executable-looking instructions")
+    # Added, newly +x, or its bytes swapped: each puts a program on the
+    # machine that nobody can read in the diff.
+    reasons.extend(exec_binaries)
     # `injectscan` orders worst-first and may report the same rule on several
     # lines; the prompt wants each distinct reason once.
     for f in injectscan.scan_text("\n".join(added_all)):
@@ -122,22 +214,40 @@ def diff_tree(old: dict[str, str], new: dict[str, str]) -> TreeDiff:
                     reasons=tuple(reasons))
 
 
-def read_tree(path: Path) -> dict[str, str]:
-    """Map every readable text file under ``path`` to its content.
+def read_file(p: Path) -> TreeFile:
+    """Read one file for the gate; raises ``OSError`` if it cannot be read."""
+    data = p.read_bytes()
+    executable = bool(p.stat().st_mode & 0o111)
+    if b"\0" in data[:_SNIFF]:
+        text = _smuggled_text(p, data)
+        if text is not None:
+            return TreeFile(text, executable=executable)
+        return TreeFile(hashlib.sha256(data).hexdigest(), binary=True,
+                        executable=executable)
+    return TreeFile(data.decode("utf-8", errors="replace"),
+                    executable=executable)
 
-    Binary files (and anything under an ignored dir) are skipped — the gate is
-    about human-readable instructions, and a binary can't be a shell command.
-    A missing directory yields an empty map, so a first install diffs cleanly.
+
+def read_tree(path: Path) -> dict[str, TreeFile]:
+    """Map every readable file under ``path`` to its :class:`TreeFile`.
+
+    Nothing readable is skipped any more. This used to drop every file that
+    was not valid UTF-8, so one stray byte took a ``curl … | sh`` or an
+    injection sentence out of the diff and the scan, and a new executable
+    binary landed unlisted. Text is decoded with replacement; a binary is kept
+    as a digest so it can be listed and judged. Only an unreadable file or an
+    ignored dir is left out. A missing directory yields an empty map, so a
+    first install diffs cleanly.
     """
     root = Path(path)
-    tree: dict[str, str] = {}
+    tree: dict[str, TreeFile] = {}
     if not root.is_dir():
         return tree
     for p in root.rglob("*"):
         if not p.is_file() or any(part in IGNORED for part in p.parts):
             continue
         try:
-            tree[p.relative_to(root).as_posix()] = p.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue  # binary or unreadable — not an instruction surface
+            tree[p.relative_to(root).as_posix()] = read_file(p)
+        except OSError:
+            continue  # unreadable — store.install reports the real error
     return tree
