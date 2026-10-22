@@ -89,13 +89,22 @@ def cmd_cohort(argv) -> int:
     p.add_argument("name", nargs="?",
                    help="cohort name (list/status: show only that cohort)")
     p.add_argument("--skills", action="append", default=[],
-                   help="comma-separated skill names (repeatable)")
-    p.add_argument("--percent", type=int, default=100,
-                   help="rollout percentage (default 100)")
+                   help="with `create`: comma-separated skill names "
+                        "(repeatable)")
+    p.add_argument("--percent", type=int, default=None,
+                   help="with `create`: rollout percentage (default 100)")
     p.add_argument("-y", "--yes", action="store_true",
                    help="`delete` without the confirmation prompt")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
+    if args.action != "create":
+        stray = [f for f, v in (("--skills", args.skills),
+                                ("--percent", args.percent is not None)) if v]
+        if stray:
+            p.error("%s only appl%s to `cohort create`"
+                    % ("/".join(stray), "y" if len(stray) > 1 else "ies"))
+    if args.percent is None:
+        args.percent = 100
 
     cohorts, bad = cohort.load(_cohorts_path())
     # `create` replaces the file, so a corrupt one is quarantined by the
@@ -411,6 +420,10 @@ def cmd_profile(argv) -> int:
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
+    if args.prune and args.action != "use":
+        # Accepted and ignored, `profile save --prune` reported success and
+        # left the user believing a prune had happened.
+        p.error("--prune only applies to `profile use`")
     if args.action != "list" and not args.name:
         p.error("%s needs a profile NAME" % args.action)
 
@@ -748,6 +761,11 @@ def cmd_protocol(argv) -> int:
                       help="`open` asks in a desktop dialog instead of the "
                            "terminal (what the registered handler passes)")
     args = p.parse_args(argv)
+    if args.action != "open":
+        if args.gui:
+            p.error("%s only applies to `protocol open`" % _GUI_FLAG)
+        if args.url:
+            p.error("a URL only applies to `protocol open`")
     system = platform.system()
 
     if args.action == "open":

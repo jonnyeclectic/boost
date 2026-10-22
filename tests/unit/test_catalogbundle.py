@@ -586,3 +586,84 @@ class TestTheErrorPathsAreReachable:
 
         assert stats["added"] == 1
         assert [t.name for t in registry.list_taps()] == ["acme/skills"]
+
+
+_OK_ROW = {"name": "fixture", "url": "https://github.com/a/fixture"}
+_FMT = catalogbundle.BUNDLE_FORMAT
+
+
+class TestMalformedManifest:
+    """A manifest of the wrong *shape* is refused before anything is written.
+
+    Each of these crashed `catalog --import` at rc 70 — a string row died in
+    the config merge after ``catalog/fixture.json`` had already landed in the
+    cache, owned by no tap.
+    """
+
+    @staticmethod
+    def _bundle(path, manifest) -> None:
+        raw = json.dumps(manifest).encode("utf-8")
+        with tarfile.open(path, "w:gz") as tar:
+            info = tarfile.TarInfo(catalogbundle.MANIFEST_NAME)
+            info.size = len(raw)
+            tar.addfile(info, io.BytesIO(raw))
+            info = tarfile.TarInfo("catalog/fixture.json")
+            info.size = 2
+            tar.addfile(info, io.BytesIO(b"{}"))
+
+    @pytest.mark.parametrize("manifest, why", [
+        ([1, 2], "expected an object, got list"),
+        ({"format": _FMT, "taps": {"name": "fixture"}},
+         "`taps` must be a list, got dict"),
+        ({"format": _FMT, "taps": [_OK_ROW, "oops"]},
+         "taps[1] must be an object, got str"),
+        ({"format": _FMT, "taps": [{"name": ["x"]}]},
+         "taps[0] needs a non-empty string `name`"),
+        ({"format": _FMT, "taps": [{"name": ""}]},
+         "taps[0] needs a non-empty string `name`"),
+        ({"format": _FMT, "taps": [{"url": "u"}]},
+         "taps[0] needs a non-empty string `name`"),
+        ({"format": _FMT, "taps": [{"name": "fixture", "url": 7}]},
+         "taps[0].url must be a string"),
+        ({"format": _FMT, "taps": [{"name": "fixture", "commit": 7}]},
+         "taps[0].commit must be a string"),
+        ({"format": _FMT, "taps": [_OK_ROW], "entries": "9"},
+         "`entries` must be an integer"),
+        ({"format": _FMT, "taps": [_OK_ROW], "entries": True},
+         "`entries` must be an integer"),
+        ({"format": _FMT, "taps": [_OK_ROW], "generated": 5},
+         "`generated` must be a string"),
+    ])
+    def test_is_refused_with_nothing_written(self, sandbox, tmp_path,
+                                             manifest, why):
+        bundle = tmp_path / "bad.tgz"
+        self._bundle(bundle, manifest)
+        with pytest.raises(BoostError) as ei:
+            catalogbundle.import_bundle(bundle)
+        assert ei.value.message == "bundle manifest is malformed: " + why
+        assert ei.value.hint == ("re-export it with "
+                                 "`boost catalog --export <file>`")
+        assert not (paths.cache_dir() / "fixture.json").exists()
+        assert not paths.config_path().exists()
+        # --show reads the same manifest and must refuse it the same way.
+        with pytest.raises(BoostError) as ei:
+            catalogbundle.read_manifest(bundle)
+        assert ei.value.message == "bundle manifest is malformed: " + why
+
+    def test_optional_fields_may_be_absent_or_null(self, sandbox, tmp_path):
+        bundle = tmp_path / "ok.tgz"
+        self._bundle(bundle, {"format": _FMT, "entries": None,
+                              "taps": [{"name": "fixture", "commit": None}]})
+        stats = catalogbundle.import_bundle(bundle)
+        assert stats["files"] == 1 and stats["added"] == 1
+        assert stats["entries"] == 0 and stats["generated"] == ""
+        assert [t.name for t in registry.list_taps()] == ["fixture"]
+
+    def test_taps_may_be_absent(self, sandbox, tmp_path):
+        raw = json.dumps({"format": _FMT}).encode("utf-8")
+        bundle = tmp_path / "empty.tgz"
+        with tarfile.open(bundle, "w:gz") as tar:
+            info = tarfile.TarInfo(catalogbundle.MANIFEST_NAME)
+            info.size = len(raw)
+            tar.addfile(info, io.BytesIO(raw))
+        assert catalogbundle.import_bundle(bundle)["taps"] == 0

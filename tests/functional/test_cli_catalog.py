@@ -14,10 +14,12 @@ neither is exercised by a test of the core module.
 """
 from __future__ import annotations
 
+import io
 import json
 import shutil
+import tarfile
 
-from boost_cli.core import config, paths, registry
+from boost_cli.core import catalogbundle, config, paths, registry
 
 
 def _cache(name: str, entries: int = 2) -> None:
@@ -155,6 +157,26 @@ class TestImport:
 
         assert "1 new tap" in r.out
         assert (paths.cache_dir() / "acme__skills.json").exists()
+
+    def test_a_malformed_manifest_is_rc1_and_writes_nothing(
+            self, boost, sandbox, tmp_path):
+        # Used to crash at rc 70 after writing catalog/fixture.json.
+        raw = json.dumps({"format": catalogbundle.BUNDLE_FORMAT,
+                          "taps": [{"name": "fixture", "url": ""}, "oops"]}
+                         ).encode("utf-8")
+        bundle = tmp_path / "bad1.tgz"
+        with tarfile.open(bundle, "w:gz") as tar:
+            for name, data in ((catalogbundle.MANIFEST_NAME, raw),
+                               ("catalog/fixture.json", b"{}")):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+        r = boost("catalog", "--import", str(bundle), expect=1)
+        assert ("bundle manifest is malformed: taps[1] must be an object, "
+                "got str") in r.err
+        assert "unexpected error" not in r.err
+        assert not (paths.cache_dir() / "fixture.json").exists()
+        assert not paths.config_path().exists()
 
     def test_it_says_what_still_needs_a_clone(self, boost, sandbox, tmp_path):
         # The one thing a bundle does NOT give you. Leaving it unsaid invites

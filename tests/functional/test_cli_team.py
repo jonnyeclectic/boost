@@ -303,12 +303,29 @@ class TestCohort:
         assert "deleted cohort pilot" in r.out
         assert "no cohorts defined" in boost("cohort", "list").out
 
+    @pytest.mark.parametrize("argv, msg", [
+        (("list", "--percent", "5"), "--percent only applies to `cohort create`"),
+        (("status", "--percent", "100"),
+         "--percent only applies to `cohort create`"),
+        (("apply", "--skills", "a"), "--skills only applies to `cohort create`"),
+        (("delete", "x", "--skills", "a", "--percent", "5"),
+         "--skills/--percent only apply to `cohort create`"),
+    ])
+    def test_create_only_flags_on_another_action_rc2(self, boost, sandbox,
+                                                      argv, msg):
+        r = boost("cohort", *argv, expect=2)
+        assert msg in r.err
+        assert not paths.state_dir().joinpath("cohorts.json").exists()
+
     def test_errors_and_edge_cases(self, boost, tapped):
         r = boost("cohort", "create", "bad", "--skills", "x",
                  "--percent", "101", expect=2)
         assert "--percent must be 0-100" in r.err
         r = boost("cohort", "create", "bad", expect=2)
         assert "create needs --skills" in r.err
+        r = boost("cohort", "create", "full", "--skills", "x")
+        assert "(100% rollout, 1 skill)" in r.out
+        boost("cohort", "delete", "full", "-y")
         r = boost("cohort", "delete", "ghost", expect=1)
         assert "no cohort named ghost" in r.err
         r = boost("cohort", "apply", "ghost", expect=1)
@@ -706,6 +723,15 @@ class TestProfile:
         r = boost("profile", "show", expect=2)
         assert "show needs a profile NAME" in r.err
 
+    @pytest.mark.parametrize("action", ["save", "list", "show", "diff",
+                                        "delete"])
+    def test_prune_outside_use_rc2(self, boost, installed, action):
+        # `profile save p3 --prune -y` reported "saved" and pruned nothing.
+        r = boost("profile", action, "p3", "--prune", "-y", expect=2)
+        assert "--prune only applies to `profile use`" in r.err
+        assert r.out == ""
+        assert not list(paths.profiles_dir().glob("*.json"))
+
     def test_list_and_show_json(self, boost, installed):
         boost("profile", "save", "daily")
         r = boost("profile", "list", "--json")
@@ -991,6 +1017,17 @@ class TestProtocol:
         assert "cannot parse boost://install/" in r.err
         r = boost("protocol", "open", expect=2)
         assert "open needs a boost:// URL" in r.err
+
+    @pytest.mark.parametrize("argv, msg", [
+        (("status", "--gui"), "--gui only applies to `protocol open`"),
+        (("register", "--gui"), "--gui only applies to `protocol open`"),
+        (("status", "boost://install/x"),
+         "a URL only applies to `protocol open`"),
+    ])
+    def test_open_only_arguments_elsewhere_rc2(self, boost, sandbox, argv, msg):
+        r = boost("protocol", *argv, expect=2)
+        assert msg in r.err
+        assert r.out == ""
 
     def test_declined_install_and_tap(self, boost, tapped, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")
