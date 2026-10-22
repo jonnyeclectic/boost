@@ -90,16 +90,14 @@ class TreeFile(NamedTuple):
     ``text`` is the content decoded as UTF-8 with undecodable bytes replaced,
     so one stray Latin-1 byte cannot hide the ``curl … | sh`` beside it.
     ``binary`` marks a file that really is not text (it holds a NUL byte, the
-    rule git uses), whose ``text`` is a digest so two versions still compare.
-    ``scan`` is a binary's bytes decoded with NULs dropped: one NUL byte is
-    all it takes to make a file "binary", so without it a NUL appended to a
-    SKILL.md or a script would take every line above it out of the scan.
+    rule git uses, and is not text with a NUL smuggled in — see
+    :func:`read_file`), whose ``text`` is a digest so two versions still
+    compare.
     """
 
     text: str
     binary: bool = False
     executable: bool = False
-    scan: str = ""
 
 
 #: How many leading bytes decide whether a file is binary — git's window.
@@ -113,21 +111,36 @@ def _as_file(value: str | TreeFile | None) -> TreeFile | None:
     return TreeFile(value)
 
 
-def _scan_side(f: TreeFile | None) -> str:
-    """The text the risk scan reads for one side of a change."""
-    if f is None:
-        return ""
-    return f.scan if f.binary else f.text
+#: Suffixes an agent or a shell reads as text, whatever bytes they hold.
+_TEXT_SUFFIXES = frozenset((
+    ".md", ".mdc", ".markdown", ".txt", ".rst", ".cursorrules",
+    ".windsurfrules", ".clinerules", ".sh", ".bash", ".zsh", ".fish", ".ps1",
+    ".bat", ".cmd", ".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl",
+    ".json", ".yaml", ".yml", ".toml"))
+
+#: Share of a NUL-stripped sniff window that may be garbage (U+FFFD or a
+#: non-printing character) for it still to read as text. Measured: text
+#: with a NUL in it is ~0; Mach-O, .so and PNG files sit at 0.33-0.69.
+_GARBAGE_MAX = 0.1
 
 
-def _binary_added_lines(before: TreeFile | None, after: TreeFile) -> list[str]:
-    """Lines of ``after`` that ``before`` lacks, for a binary on either side.
+def _smuggled_text(p: Path, data: bytes) -> str | None:
+    """``data`` decoded, if it is text with NULs in it rather than a binary.
 
-    A set difference, not ``ndiff``: a binary can be large and has no line
-    order worth aligning, and the scan only needs what is new.
+    One NUL is all git's rule needs, so without this a NUL appended to a
+    SKILL.md or a script took every line above it out of the diff and the
+    scan. A real binary is left alone: its string tables are full of words
+    like ``exec`` and ``/bin/sh``, and gating on those would ask about every
+    PDF and ``.so`` with a reason nobody could inspect.
     """
-    had = set(_scan_side(before).splitlines())
-    return [ln for ln in _scan_side(after).splitlines() if ln not in had]
+    text = data.replace(b"\0", b"").decode("utf-8", errors="replace")
+    if (p.suffix.lower() in _TEXT_SUFFIXES or p.name.lower() in _TEXT_SUFFIXES
+            or data.startswith(b"#!")):
+        return text
+    window = text[:_SNIFF]
+    garbage = sum(1 for c in window if c == "\ufffd"
+                  or (not c.isprintable() and c not in "\t\n\r"))
+    return text if garbage <= _GARBAGE_MAX * len(window) else None
 
 
 def _binary_chunk(rel: str, before: TreeFile | None,
@@ -153,7 +166,7 @@ def diff_tree(old: Mapping[str, str | TreeFile],
     as ``Binary file <rel> added|changed|removed``, and one that arrives
     executable — new, newly made so, or with its bytes swapped — is a reason
     of its own, since it is a program the update puts on the machine with
-    nothing to read. A binary's text (``TreeFile.scan``) is still scanned.
+    nothing to read.
     """
     chunks: list[str] = []
     added_all: list[str] = []
@@ -168,12 +181,10 @@ def diff_tree(old: Mapping[str, str | TreeFile],
         if (before is not None and before.binary) or (
                 after is not None and after.binary):
             chunks.append(_binary_chunk(rel, before, after))
-            if after is not None:
-                added_all.extend(_binary_added_lines(before, after))
-                if after.binary and after.executable:
-                    exec_binaries.append("%s executable binary %s" % (
-                        "changes" if before is not None and before.executable
-                        else "adds", rel))
+            if after is not None and after.binary and after.executable:
+                exec_binaries.append("%s executable binary %s" % (
+                    "changes" if before is not None and before.executable
+                    else "adds", rel))
             continue
         old_text = before.text if before is not None else ""
         new_text = after.text if after is not None else ""
@@ -208,10 +219,11 @@ def read_file(p: Path) -> TreeFile:
     data = p.read_bytes()
     executable = bool(p.stat().st_mode & 0o111)
     if b"\0" in data[:_SNIFF]:
+        text = _smuggled_text(p, data)
+        if text is not None:
+            return TreeFile(text, executable=executable)
         return TreeFile(hashlib.sha256(data).hexdigest(), binary=True,
-                        executable=executable,
-                        scan=data.replace(b"\0", b"").decode(
-                            "utf-8", errors="replace"))
+                        executable=executable)
     return TreeFile(data.decode("utf-8", errors="replace"),
                     executable=executable)
 
