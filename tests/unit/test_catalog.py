@@ -2244,3 +2244,39 @@ class TestResolveRecorded:
             catalog.resolve_recorded("solo", "alpha")
         assert e.value.message == "solo is no longer in tap alpha"
         assert e.value.hint == "it is shipped by: beta"
+
+    @staticmethod
+    def _skill_and_workflow():
+        wf = dict(_entry("tdd", "beta", desc="cmd", rel_dir="commands"),
+                  kind="workflow")
+        _fake_taps(("beta", [_entry("tdd", "beta", desc="skill",
+                                    rel_dir="skills/tdd"), wf]))
+
+    def test_a_skill_record_takes_the_skill_beside_a_workflow(self, sandbox):
+        # A profile/snapshot keeps skills only; `find()[0]` restored the
+        # tap's same-named workflow, and resolve_one alone refuses the pair.
+        self._skill_and_workflow()
+        for tap in ("beta", None):
+            got = catalog.resolve_recorded("tdd", tap, kind="skill")
+            assert (got["description"], got["rel_dir"]) == ("skill",
+                                                            "skills/tdd")
+            with pytest.raises(catalog.SameTapAmbiguity):
+                catalog.resolve_recorded("tdd", tap)
+
+    def test_a_skill_record_never_takes_another_kind(self, sandbox):
+        wf = dict(_entry("tdd", "beta", desc="cmd", rel_dir="commands"),
+                  kind="workflow")
+        _fake_taps(("beta", [wf]))
+        for tap in ("beta", None):
+            with pytest.raises(BoostError) as e:
+                catalog.resolve_recorded("tdd", tap, kind="skill")
+            assert e.value.message == "tdd is no longer shipped as a skill"
+            assert e.value.hint == "what answers to it now: beta (workflow)"
+        assert catalog.resolve_recorded("tdd", "beta")["kind"] == "workflow"
+
+    def test_two_skills_of_the_kind_still_go_through_resolve_one(self, sandbox):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]),
+                   ("beta", [_entry("cm", "beta", desc="b")]))
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm", kind="skill")
+        assert e.value.message == "'cm' exists in multiple taps: alpha, beta"

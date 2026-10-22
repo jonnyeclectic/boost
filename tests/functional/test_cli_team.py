@@ -450,6 +450,35 @@ class TestRecordedNamesAcrossTaps:
         assert "finished with 1 skill not restored: brainstorming" in r.out
         assert lockfile.get_skill("brainstorming") is None
 
+    def test_profile_use_restores_the_skill_beside_a_namesake_workflow(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        """A profile keeps skills only, yet `find()[0]` brought back the
+        tap's same-named workflow — and resolve_one alone refuses the pair."""
+        monkeypatch.setenv("COLUMNS", "200")
+        root = tmp_path / "pair-tap"
+        (root / "skills" / "tdd").mkdir(parents=True)
+        (root / "skills" / "tdd" / "SKILL.md").write_text(
+            "---\nname: tdd\ndescription: The tdd skill\nversion: 1.0.0\n"
+            "---\n\n# TDD\n\nRed, green, refactor.\n", encoding="utf-8")
+        (root / "commands").mkdir()
+        (root / "commands" / "tdd.md").write_text(
+            "---\ndescription: A slash command running tdd\n---\n\nRun tdd.\n",
+            encoding="utf-8")
+        for argv in (("init", "-q"), ("config", "user.email", "p@boost.test"),
+                     ("config", "user.name", "Pair"), ("add", "-A"),
+                     ("commit", "-qm", "pair")):
+            subprocess.run(("git", *argv), cwd=root, check=True,
+                           capture_output=True)
+        boost("tap", root)
+        boost("install", "pair-tap:tdd", "--path", "skills/tdd")
+        boost("profile", "save", "p1")
+        boost("uninstall", "tdd")
+        r = boost("profile", "use", "p1")
+        assert "installed tdd" in r.out
+        assert "skipped" not in r.out
+        assert lockfile.get_skill("tdd")["version"] == "1.0.0"
+        assert lockfile.find_any("tdd")[0] == "skill"
+
 
 class TestProfile:
     def test_save_show_diff_use_lifecycle(self, boost, tapped):

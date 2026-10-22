@@ -1437,7 +1437,32 @@ def resolve_one(name: str, path: str | None = None) -> dict:
     return matches[0]
 
 
-def resolve_recorded(name: str, tap: str | None = None) -> dict | None:
+def _resolve_kind(name: str, kind: str | None) -> dict:
+    """:func:`resolve_one`, narrowed to ``kind`` when one copy of it remains.
+
+    A record that carries one kind only (a profile or snapshot keeps skills)
+    is not ambiguous because the tap also ships a workflow of that name — and
+    without the narrowing a ``find()[0]`` restore brought back the workflow.
+    """
+    if kind is not None:
+        found = find(name)
+        same = [e for e in found if (e.get("kind") or KIND_SKILL) == kind]
+        if len(same) == 1:
+            return same[0]
+        if found and not same:
+            # Only another kind answers to the name: restoring it would put a
+            # workflow where the record kept a skill.
+            raise BoostError(
+                "%s is no longer shipped as a %s"
+                % (split_name(name)[1], kind),
+                hint="what answers to it now: %s" % ", ".join(sorted(
+                    "%s (%s)" % (e.get("tap"), e.get("kind") or KIND_SKILL)
+                    for e in found)))
+    return resolve_one(name)
+
+
+def resolve_recorded(name: str, tap: str | None = None,
+                     kind: str | None = None) -> dict | None:
     """The entry to reinstall for a name some record kept, or None if absent.
 
     For ``cohort apply``, ``profile use`` and ``snapshot rollback``. None
@@ -1451,13 +1476,16 @@ def resolve_recorded(name: str, tap: str | None = None) -> dict | None:
     * with ``tap`` — the tap the record says it came from — only that tap's
       copy is the answer. A recorded tap that is gone used to bring back
       another tap's item and blame "its tap has moved".
+
+    ``kind`` is the one kind the record carries, when it carries one: a
+    single copy of that kind is the answer even beside a namesake of another.
     """
     bare = split_name(name)[1]
     shipped = find(bare)
     if not shipped:
         return None
     if not tap:
-        return resolve_one(name)
+        return _resolve_kind(name, kind)
     others = ", ".join(sorted({str(e.get("tap") or "") for e in shipped}))
     if not any(tap_matches(t.name, tap) for t in registry.list_taps()):
         if tap == "local":
@@ -1472,7 +1500,7 @@ def resolve_recorded(name: str, tap: str | None = None) -> dict | None:
     if not find("%s:%s" % (tap, bare)):
         raise BoostError("%s is no longer in tap %s" % (bare, tap),
                          hint="it is shipped by: %s" % others)
-    return resolve_one("%s:%s" % (tap, bare))
+    return _resolve_kind("%s:%s" % (tap, bare), kind)
 
 
 def _same_thing(matches: list[dict]) -> dict | None:

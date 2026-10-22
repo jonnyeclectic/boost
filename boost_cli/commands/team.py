@@ -36,7 +36,8 @@ from .pkg import _report_result, _warn_unwritable
 _tilde = paths.tilde
 
 
-def _resolve_entry(name: str, prefer_tap: str | None = None
+def _resolve_entry(name: str, prefer_tap: str | None = None,
+                   kind: str | None = None
                    ) -> tuple[dict | None, str | None]:
     """``(entry, why_not)`` for a recorded name (:func:`catalog.resolve_recorded`).
 
@@ -45,7 +46,7 @@ def _resolve_entry(name: str, prefer_tap: str | None = None
     with the reason as one printable line.
     """
     try:
-        return catalog.resolve_recorded(name, prefer_tap), None
+        return catalog.resolve_recorded(name, prefer_tap, kind), None
     except BoostError as e:
         return None, ("%s (%s)" % (e.message, e.hint) if e.hint
                       else e.message)
@@ -567,7 +568,8 @@ def cmd_profile(argv) -> int:
                      "leaving it as-is" % (n, kind))
     installed_now, not_found = [], []
     for n in missing:
-        entry, why = _resolve_entry(n, prefer_tap=want[n].get("tap"))
+        entry, why = _resolve_entry(n, prefer_tap=want[n].get("tap"),
+                                   kind=catalog.KIND_SKILL)
         if entry is None:
             if not args.json:
                 out.warn("%s — skipped" % why if why else
@@ -1109,7 +1111,8 @@ def cmd_replay(argv) -> int:
         for n in only:
             out.info("kept %s: the store holds its only copy — `boost "
                      "uninstall %s` deletes it" % (n, n))
-    lookups = {n: _resolve_entry(n, prefer_tap=snap_skills[n].get("tap"))
+    lookups = {n: _resolve_entry(n, prefer_tap=snap_skills[n].get("tap"),
+                                  kind=catalog.KIND_SKILL)
                for n in removed}
     resolved = {n: entry for n, (entry, _why) in lookups.items()
                 if entry is not None}
