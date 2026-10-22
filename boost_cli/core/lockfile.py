@@ -821,9 +821,10 @@ def _root_of(p: str, root) -> str | None:
     """The spelling of ``root`` — as given, or resolved (a symlinked or
     /private home) — that the absolute path ``p`` is or sits beneath."""
     for r in (str(root), os.path.realpath(root)):
-        r = r.rstrip(os.sep)
-        if p == r or p.startswith(r + os.sep):
-            return r
+        stem = r.rstrip(os.sep)
+        if p == stem or p.startswith(stem + os.sep):
+            # ``/`` strips to "", which relpath would read as the cwd.
+            return stem or os.sep
     return None
 
 

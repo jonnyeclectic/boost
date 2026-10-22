@@ -156,10 +156,14 @@ def test_homes_that_disagree_infer_nothing(homes, tmp_path):
     old, new, dirs = homes
     lock = _rule(_m("claude-code", old / ".claude" / "CLAUDE.md"),
                  _m("cursor", tmp_path / "h3" / ".cursor" / "r.mdc"))
+    # One dotdir-less row under each home: whichever guess won, one of
+    # them would be placed.
     lock["workflows"]["w"] = {"materializations": [
         _m("gemini", old / ".gemini" / "GEMINI.md")]}
-    assert lockfile.rehome(lock, new, None, dirs) == (["rule r"],
-                                                      ["workflow w"])
+    lock["workflows"]["x"] = {"materializations": [
+        _m("gemini", tmp_path / "h3" / ".gemini" / "GEMINI.md")]}
+    assert lockfile.rehome(lock, new, None, dirs) == (
+        ["rule r"], ["workflow w", "workflow x"])
     assert lock["rules"]["r"]["materializations"][1]["path"] == str(
         new / ".cursor" / "r.mdc")
 
@@ -176,3 +180,17 @@ def test_a_path_under_the_resolved_old_home_lands_inside_this_one(
     assert lockfile.rehome(lock, new, str(old), dirs) == (["rule r"], [])
     assert lock["rules"]["r"]["materializations"][0]["path"] == os.path.join(
         str(new), "notes", "CLAUDE.md")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX root")
+@pytest.mark.parametrize("recorded", [True, False])
+def test_a_home_of_root_lands_inside_this_one(homes, recorded):
+    # HOME=/ in a container: "/" stripped to "", which relpath read as cwd.
+    _old, new, dirs = homes
+    lock = _rule(_m("claude-code", "/.claude/CLAUDE.md"),
+                 _m("gemini", "/.gemini/GEMINI.md"))
+    assert lockfile.rehome(lock, new, "/" if recorded else None,
+                           {**dirs, "gemini": new / ".agents" / "skills"}
+                           ) == (["rule r"], [])
+    assert [m["path"] for m in lock["rules"]["r"]["materializations"]] == [
+        str(new / ".claude" / "CLAUDE.md"), str(new / ".gemini" / "GEMINI.md")]
