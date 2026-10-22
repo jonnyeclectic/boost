@@ -4,6 +4,10 @@
 broken links: the dirs the lock claims, the dirs heal sweeps, nothing else."""
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from boost_cli.core import lockfile, paths, store
 
 
@@ -51,3 +55,15 @@ class TestHygieneCandidates:
         assert store.hygiene_candidates() == sorted([
             root / ".DS_Store", root / "brainstorming" / "sub",
             root / "brainstorming" / "sub" / ".DS_Store"])
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privilege")
+    def test_a_recorded_name_that_is_a_link_is_not_walked(self, sandbox):
+        # A store entry that is a symlink leads out of the store: what sits
+        # under its target is not boost's to delete.
+        outside = paths.home() / "elsewhere" / "__pycache__"
+        outside.mkdir(parents=True)
+        (outside / "x.pyc").write_bytes(b"x")
+        paths.store_dir().mkdir(parents=True, exist_ok=True)
+        (paths.store_dir() / "linked").symlink_to(outside.parent)
+        lockfile.set_skill("linked", {"version": "1"})
+        assert store.hygiene_candidates() == []
