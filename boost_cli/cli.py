@@ -16,7 +16,7 @@ import sys
 import time
 
 from . import PRODUCT, TAGLINE, __version__
-from .core import logs, nethttp, paths
+from .core import interrupt, logs, nethttp, paths
 from .core import output as out
 from .errors import BoostError
 
@@ -402,10 +402,15 @@ def _route(argv: list[str]) -> int:
             rc = 1
             out.err(e.message, hint=e.hint, wrap=getattr(e, "wrap", False))
             return rc
-        except KeyboardInterrupt:
-            logs.get_logger().debug("interrupted by user")
-            rc = 130
-            print()
+        except KeyboardInterrupt as e:
+            # A SIGTERM/SIGHUP arrives as interrupt.Terminated, a subclass,
+            # so it reaches here having run the same rollbacks as Ctrl-C.
+            rc = interrupt.exit_code(e)
+            if isinstance(e, interrupt.Terminated):
+                logs.get_logger().debug("terminated by signal %d", e.signum)
+            else:
+                logs.get_logger().debug("interrupted by user")
+                print()
             return rc
         except BrokenPipeError:
             # Reclassify before `except Exception` below can mistake a
@@ -467,7 +472,11 @@ def main(argv: list[str] | None = None) -> int:
         logs.configure(verbose=opts["verbose"], debug=opts["debug"],
                        quiet=opts["quiet"])
     try:
-        return _route(argv)
+        # SIGTERM/SIGHUP raise like Ctrl-C for the whole run, so `timeout`, a
+        # cancelled CI job or a closed terminal rolls a half-done install back
+        # instead of killing it mid-write (core.interrupt).
+        with interrupt.raising_on_termination():
+            return _route(argv)
     except BrokenPipeError:
         # Covers the early-return paths above (`--help`, `--version`,
         # `help`, `__complete`) that have no try/except of their own, plus
@@ -475,3 +484,7 @@ def main(argv: list[str] | None = None) -> int:
         # the dispatch path's flush-free writes didn't.
         _seal_broken_stdout()
         return 0
+    except interrupt.Terminated as e:
+        # One that landed outside the dispatch handler (`--help`, plumbing):
+        # nothing is mid-write there, so only the exit status is owed.
+        return e.exit_code
