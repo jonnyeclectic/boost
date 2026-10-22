@@ -28,7 +28,7 @@ import re
 import sqlite3
 import tempfile
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import cast
@@ -2030,6 +2030,38 @@ def retrieve_any(query: str, k: int = 60, kind: str | None = None,
         if vectors:
             hits = collapse_near_duplicate_hits(hits, vectors, k)
     return hits, engine
+
+
+#: How far :func:`retrieve_filtered` widens the pool before giving up: a
+#: filter matching nothing in the first 16k hits is answered as capped rather
+#: than ranking the whole catalogue (70k+ entries on a real machine).
+FILTER_POOL_CEILING = 16384
+
+
+def retrieve_filtered(query: str, k: int, want: int,
+                      keep: Callable[[dict], bool], kind: str | None = None,
+                      collapse_near_duplicates: bool = False,
+                      ceiling: int = FILTER_POOL_CEILING,
+                      ) -> tuple[list[Hit] | None, str, int]:
+    """:func:`retrieve_any`, widened until ``want`` hits pass ``keep``.
+
+    Returns ``(hits, engine, k)`` — every hit of the last round, *unfiltered*,
+    and the ``k`` that round used, so the caller still knows whether the
+    final pool hit its cap. ``boost search --category`` filtered one page of
+    ``max(60, limit * 4)`` and returned whatever of it passed: 10 of a
+    category's 20 matches against a ``--limit`` of 15, with nothing saying
+    the rest sat past the cut. The pool grows fourfold until enough pass, the
+    engine runs out (fewer than ``k`` came back), or ``ceiling`` is reached.
+    """
+    while True:
+        hits, engine = retrieve_any(query, k=k, kind=kind,
+                                    collapse_near_duplicates=collapse_near_duplicates)
+        if hits is None:
+            return None, engine, k
+        if (sum(1 for h in hits if keep(h["entry"])) >= want
+                or len(hits) < k or k >= ceiling):
+            return hits, engine, k
+        k = min(k * 4, ceiling)
 
 
 HEURISTIC_ENGINE = "heuristic relevance"

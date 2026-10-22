@@ -732,10 +732,39 @@ class TestSearchCategoryFilter:
             return hits, "BM25 full-content"
         monkeypatch.setattr(rag, "retrieve_any", fake_retrieve_any)
         r = boost("search", "anything", "--category", "no-such-category")
-        assert ("○ none of the top 60 matches for 'anything' are in "
-                "category 'no-such-category'") in r.out
+        # The pool widened to its ceiling looking for the category first.
+        assert ("○ none of the top %d matches for 'anything' are in "
+                "category 'no-such-category'" % rag.FILTER_POOL_CEILING) in r.out
         assert "it matches outside that category" not in r.out
         assert "boost discover" not in r.out
+
+    def test_the_filter_sees_past_the_first_retrieval_page(
+            self, boost, tmp_path):
+        # 70 gadgets, 20 in `ui`, every one of which ranks below the 50
+        # others: the first page of max(60, limit * 4) held 10 of them, and
+        # the default --limit of 15 printed those 10 while `browse --category
+        # ui` listed all 20.
+        files = {}
+        for i in range(1, 71):
+            ui = i > 50
+            files["skills/gadget-%d/SKILL.md" % i] = (
+                "---\nname: gadget-%d\ndescription: Gadget helper number %d.\n"
+                "%s---\n\n%s\n" % (i, i, "category: ui\n" if ui else "",
+                                     "Helper text about widgets. " * 20 if ui
+                                     else "Gadget gadget helper."))
+        boost("tap", _git_tap(tmp_path / "gadgets", files))
+        ranked = [e["name"] for e in json.loads(
+            boost("search", "gadget", "--json", "-k", "100").out)]
+        assert max(ranked.index("gadget-%d" % n) for n in range(1, 51)) \
+            < min(ranked.index("gadget-%d" % n) for n in range(51, 71))
+        data = json.loads(boost("search", "gadget", "--category", "ui",
+                                "--json").out)
+        assert len(data) == 15
+        assert {e["category"] for e in data} == {"ui"}
+        r = boost("search", "gadget", "--category", "ui", "-k", "50")
+        assert sorted(re.findall(r"gadget-\d+", r.out)) == \
+            sorted("gadget-%d" % n for n in range(51, 71))
+        assert "20 matches · ranked by" in r.out
 
     def test_an_unsaturated_filter_miss_still_says_it_matches_elsewhere(
             self, boost, tapped):
