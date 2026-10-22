@@ -309,7 +309,10 @@ def _upstream_reason(name, lk, tap_name, head):
     Same signal-gathering order as ``cmd_outdated`` so the two commands can
     never disagree about whether a skill is behind its tap.
     """
-    matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
+    # Skills only, as in cmd_outdated: a same-named workflow is not this
+    # skill's upstream.
+    matches = [e for e in catalog.find(name) if e["tap"] == tap_name
+               and e.get("kind", "skill") == "skill"]
     if not matches:
         return None
     entry, _warning = catalog.select_lock_source(matches, lk)

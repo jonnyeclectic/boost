@@ -1440,8 +1440,10 @@ def _materialized_sides(kind: str, name: str, lk: dict,
     Windsurf's rules. Copies with the same before and after (two verbatim
     drops) are listed once, under the first path.
 
-    Falls back to ``[(name, "", new_raw)]`` when nothing can be read back, so
-    an unreadable artifact scans the whole incoming file rather than nothing.
+    A materialization that cannot be read back (deleted, unreadable, its
+    CLAUDE.md block gone) is diffed from empty, so whatever the update writes
+    there is scanned whole; with none recorded at all it falls back to
+    ``[(name, "", new_raw)]``.
     """
     from ..core import rules, workflows
     sides: list[tuple[str, str, str]] = []
@@ -1449,13 +1451,14 @@ def _materialized_sides(kind: str, name: str, lk: dict,
     for m in lk.get("materializations") or []:
         path = m.get("path", "")
         try:
-            current = Path(path).read_text(encoding="utf-8")
+            current = Path(path).read_text(encoding="utf-8",
+                                           errors="replace")
         except OSError:
-            continue
+            # Gone or unreadable, it is still rewritten by the update: scan
+            # what is about to land there against nothing, never skip it.
+            current = ""
         if kind == "rule" and m.get("mode") == rules.MODE_CLAUDE:
-            old = rules.read_block(current, name)
-            if old is None:
-                continue
+            old = rules.read_block(current, name) or ""
             meta, body = frontmatter.parse(new_raw)
             pair = (old, rules.render_claude_body(
                 str(meta.get("name") or name), body))
