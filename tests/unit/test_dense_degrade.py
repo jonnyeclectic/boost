@@ -84,6 +84,25 @@ class TestCorruptStore:
         _built_store(version=dense.INDEX_VERSION)
         assert dense.unreadable() is False
 
+    def test_a_locked_store_is_busy_not_corrupt(self, sandbox, monkeypatch):
+        # Another boost mid-VACUUM holds an exclusive lock for minutes. That
+        # raises "database is locked" — an OperationalError, which is also a
+        # DatabaseError — and reading it as corrupt would point the user at
+        # the `--force` that deletes a healthy store.
+        p = _built_store(version=dense.INDEX_VERSION)
+        real = sqlite3.connect
+        holder = real(str(p), isolation_level=None)
+        try:
+            holder.execute("BEGIN EXCLUSIVE")
+            monkeypatch.setattr(sqlite3, "connect",
+                                lambda db, *a, **k: real(db, timeout=0))
+            assert dense.unreadable() is False
+            assert dense._recorded_meta().get("_corrupt") is None
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+        assert p.exists()
+
     def test_status_names_it_and_it_is_a_fault(self, keyed):
         _corrupt_store()
         st = dense.status(count=True)

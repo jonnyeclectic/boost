@@ -150,8 +150,14 @@ def unreadable() -> bool:
         return True
     try:
         con.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+    except sqlite3.OperationalError:
+        # "database is locked" is an OperationalError too: a store another
+        # boost is writing (a long VACUUM holds the lock for minutes) is busy,
+        # not corrupt, and calling it corrupt would send the user to the
+        # `--force` that deletes it.
+        return False
     except sqlite3.DatabaseError:
-        return True
+        return True                 # "file is not a database", "malformed"
     finally:
         con.close()
     return False
@@ -570,6 +576,8 @@ def _recorded_meta(*, count: bool = False) -> dict:
         meta["_quantized"] = quantized(con)
         meta["_store"] = built or bool(meta["_nonempty"])
         return meta
+    except sqlite3.OperationalError:
+        return {}                   # busy (locked), not broken: see unreadable()
     except sqlite3.DatabaseError:
         return {"_corrupt": True, "_store": True}
     finally:
