@@ -1223,7 +1223,32 @@ def unlink_agents(name: str, into: list[str] | None = None) -> list[str]:
             link.unlink()
             if agent not in removed:
                 removed.append(agent)
+    # And a dir boost linked into before that agent's ``links_skills`` went
+    # false. Other tools link into the store from there too, so only the
+    # link to this skill's own store dir goes, live or dangling.
+    for agent, adir in agents.remembered_native_dirs():
+        link = adir / name
+        if is_boost_link(link) and links_to_store_dir(link, name):
+            link.unlink()
+            if agent not in removed:
+                removed.append(agent)
     return removed
+
+
+def links_to_store_dir(link: Path, name: str) -> bool:
+    """Whether symlink ``link``'s own target is skill ``name``'s store dir.
+
+    The raw ``readlink()``, as :func:`points_into_store` reads it, so a link
+    that dangles since its store dir went still answers.
+    """
+    try:
+        target = link.readlink()
+    except OSError:
+        return False
+    if not target.is_absolute():
+        target = link.parent / target
+    return (normalize_link_target(target)
+            == normalize_link_target(skill_store_dir(name)))
 
 
 #: Lock field naming where a withheld skill's store copy is held aside.
@@ -4496,6 +4521,12 @@ def _install_rule(entry: dict, force: bool = False,
             materializations.append(row)
             linked.append(agent)
 
+        # A row this run moved off (the agent's dir was repointed): its old
+        # file, or its block in the old context file, is boost's to remove
+        # now, or nothing would ever record it again.
+        materializations.extend(_retire_moved(name, existing, linked,
+                                              materializations,
+                                              base=resolved_base))
         # Carry forward the agents this run did not touch — the same reason the
         # project-scope skill path does it, but the stakes are higher here. A
         # rule's materialization is a managed block inside a file the user reads
@@ -5157,7 +5188,7 @@ def _freed_foreign(entry: dict, kind: str = "workflow") -> list[dict]:
 
 
 def _retire_moved(name: str, existing: dict | None, linked: list[str],
-                  materializations: list[dict]) -> list[dict]:
+                  materializations: list[dict], base=None) -> list[dict]:
     """Remove the files a re-install stopped writing; the rows to keep.
 
     For an agent this run wrote to, an old row at a path the new run did not
@@ -5168,21 +5199,58 @@ def _retire_moved(name: str, existing: dict | None, linked: list[str],
     did *not* write keeps its rows through :func:`_untouched_materializations`,
     so its old command survives a refused new write.
     """
+    from . import rules
     new_paths = {m["path"] for m in materializations}
+    # Resolved too: two agents' dirs can lead to one file, and the old row of
+    # one is then the new row of the other.
+    new_real = {os.path.realpath(p) for p in new_paths}
     kept: list[dict] = []
     for m in (existing or {}).get("materializations") or ():
         if (lockfile.is_skill_copy(m) or m.get("agent") not in linked
-                or m.get("path") in new_paths):
+                or m.get("path") in new_paths
+                or os.path.realpath(m.get("path", "")) in new_real):
             continue
         path = Path(m.get("path", ""))
         with _refused_removal(name, path):
             if not _present(path):
+                continue
+            if m.get("mode") == rules.MODE_CLAUDE:
+                # A context file is the user's: only boost's block comes out.
+                if not _retire_block(name, path, m, base):
+                    kept.append(m)
                 continue
             if m.get("sha256") and _file_sha(path) != m["sha256"]:
                 kept.append(m)
                 continue
             path.unlink()
     return kept
+
+
+def _retire_block(name: str, path: Path, m: dict, base) -> bool:
+    """Strip rule ``name``'s block from the context file a moved row names.
+
+    False -- keep the row -- when the block was edited since boost wrote it,
+    or is damaged and :func:`rules.strip_block` would have to guess. The file
+    is deleted only when the row says boost created it and nothing else is
+    left, as :func:`_uninstall_rule` does.
+    """
+    from . import rules
+    text = util.read_user_text(path)
+    try:
+        rules.require_well_formed(text, name, path)
+    except BoostError:
+        return False
+    body = rules.read_block(text, name)
+    if body is None:
+        return True  # nothing of ours there
+    if m.get("sha256") and _text_sha(body) != m["sha256"]:
+        return False
+    stripped = rules.strip_block(text, name)
+    if not stripped and m.get("created") is True:
+        path.unlink()
+    else:
+        util.write_user_file(path, stripped, base=base)
+    return True
 
 
 def _install_workflow(entry: dict, force: bool = False,
@@ -5289,7 +5357,8 @@ def _install_workflow(entry: dict, force: bool = False,
         # moved from commands/ to agents/): the old file is a live slash command
         # that no row would claim once the list is rebuilt.
         materializations.extend(_retire_moved(name, existing, linked,
-                                              materializations))
+                                              materializations,
+                                              base=resolved_base))
         # As for rules: an unrecorded materialization is a live slash command that
         # `_uninstall_workflow` — driven by this list — can never remove.
         materializations.extend(_refused_materializations(
@@ -7559,6 +7628,14 @@ def stale_links(lock: dict, vouches: bool) -> list[str]:
     # reports those entries and removes nothing. Disabled agents are swept
     # too (`unlinking_agents`): boost linked there while they were enabled.
     # Former dirs too: an agent whose dir was repointed left its old links.
+    # A native-store dir boost once linked into gives up its dangling links
+    # into the store only: a live one there is duplicate discovery's to
+    # report, whoever made it (`agents.remembered_native_dirs`).
+    for _agent, adir in agents.remembered_native_dirs():
+        if os.path.isdir(adir):  # noqa: FURB146
+            found.extend(str(link) for link in adir.iterdir()
+                         if link.is_symlink() and points_into_store(link)
+                         and _dangles(link))
     for adir in agents.sweep_dirs():
         if not os.path.isdir(adir):  # noqa: FURB146
             continue
@@ -7596,6 +7673,7 @@ def _plan_materializations(plan: dict[str, list]) -> dict[str, list]:
             continue
         if any(m.get("unwritable") or m.get("stale")
                or not _rule_materialization_ok(name, m)
+               or agents.relocated_to("rule", name, entry, m) is not None
                for m in entry.get("materializations") or []
                if materialization_is_written("rule", entry, m)) \
                 or _freed_foreign(entry, "rule") \
@@ -7606,6 +7684,7 @@ def _plan_materializations(plan: dict[str, list]) -> dict[str, list]:
             continue
         if any(m.get("unwritable") or m.get("stale")
                or not os.path.isfile(m.get("path", ""))
+               or agents.relocated_to("workflow", name, entry, m) is not None
                for m in entry.get("materializations") or []
                if materialization_is_written("workflow", entry, m)) \
                 or _freed_foreign(entry) \

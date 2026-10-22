@@ -538,8 +538,13 @@ class TestAnItemMaterializedNowhere:
         config.save(cfg)
 
     def _written_row(self, tmp_path, body="hello\n"):
-        """A row for an agent boost still writes, present and correctly hashed."""
-        f = tmp_path / "written.md"
+        """A row for an agent boost still writes, present and correctly hashed.
+
+        At rule ``x``'s own Cursor target: a row anywhere else is one whose
+        agent dir moved since, which reads as missing (`agents.relocated_to`).
+        """
+        f = paths.home() / ".cursor" / "rules" / "x.mdc"
+        f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(body, encoding="utf-8")
         return self._row("cursor", f,
                          hashlib.sha256(body.encode("utf-8")).hexdigest())
@@ -614,7 +619,7 @@ class TestAnItemMaterializedNowhere:
         earlier draft of this docstring claimed the move "dies here" and it
         does not. The position is argued in the source comment instead."""
         row = self._written_row(tmp_path)
-        (tmp_path / "written.md").unlink()
+        Path(row["path"]).unlink()
         e = {"kind": "rule", "materializations": [self._skipped_row(), row]}
         assert integrity.materialized_status("x", e, "rule") == \
             integrity.STATUS_MISSING
