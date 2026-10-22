@@ -582,6 +582,71 @@ class TestPull:
         assert gitutil.head_commit(clone) == first
 
 
+class TestCheckoutCommitMissingUpstream:
+    SHA = "2b227a0d595e333e5d8e5a3ba71a3ea1fa16bd5a"
+
+    def _fake(self, monkeypatch, stderr):
+        calls = []
+
+        def rec(args, **kw):
+            calls.append(args)
+            if "cat-file" in args:
+                return FakeProc(rc=1)
+            if "fetch" in args:
+                assert kw.get("check") is False
+                return FakeProc(rc=128, stderr=stderr)
+            if "get-url" in args:
+                return FakeProc(rc=0, stdout="https://github.com/o/r\n")
+            return FakeProc(rc=0)
+        monkeypatch.setattr("boost_cli.core.gitutil.run", rec)
+        return calls
+
+    @pytest.mark.parametrize("stderr", [
+        "fatal: git upload-pack: not our ref %s\n" % SHA,
+        "error: Server does not allow request for unadvertised object %s\n"
+        % SHA,
+        "fatal: Couldn't find remote ref %s\n" % SHA,
+    ])
+    def test_a_commit_the_remote_lacks_is_named(self, tmp_path, monkeypatch,
+                                                stderr):
+        calls = self._fake(monkeypatch, stderr)
+        with pytest.raises(gitutil.CommitNotUpstream) as ei:
+            gitutil.checkout_commit(tmp_path, self.SHA)
+        assert ei.value.message == ("commit 2b227a0 is not on "
+                                    "https://github.com/o/r (history "
+                                    "rewritten upstream?)")
+        assert ei.value.hint == ("pin a commit that exists there, or tap "
+                                 "without `--at` to follow its default branch")
+        assert (ei.value.sha, ei.value.url) == (self.SHA,
+                                                "https://github.com/o/r")
+        assert not any("checkout" in c for c in calls)
+
+    def test_any_other_fetch_failure_keeps_gits_words(self, tmp_path,
+                                                      monkeypatch):
+        self._fake(monkeypatch, "fatal: unable to access 'x': timeout\n")
+        with pytest.raises(BoostError) as ei:
+            gitutil.checkout_commit(tmp_path, self.SHA)
+        assert not isinstance(ei.value, gitutil.CommitNotUpstream)
+        assert ei.value.message == ("git fetch failed: fatal: unable to "
+                                    "access 'x': timeout")
+
+    def test_a_real_gcd_commit_is_reported_missing(self, tmp_path):
+        origin = _make_repo(tmp_path / "origin")
+        first = gitutil.head_commit(origin)
+        (origin / "b.md").write_text("two\n", encoding="utf-8")
+        _git("add", "-A", cwd=origin)
+        _git("commit", "-qm", "add b", cwd=origin)
+        gone = gitutil.head_commit(origin)
+        _git("reset", "-q", "--hard", first, cwd=origin)
+        _git("reflog", "expire", "--expire=now", "--all", cwd=origin)
+        _git("gc", "-q", "--prune=now", cwd=origin)
+        fresh = tmp_path / "fresh"
+        gitutil.clone_shallow(str(origin), fresh)
+        with pytest.raises(gitutil.CommitNotUpstream) as ei:
+            gitutil.checkout_commit(fresh, gone)
+        assert ei.value.sha == gone
+
+
 class TestReadBlob:
     def test_returns_exact_bytes_at_a_commit(self, tmp_path):
         repo = _make_repo(tmp_path / "repo")

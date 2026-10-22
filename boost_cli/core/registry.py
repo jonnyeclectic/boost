@@ -660,6 +660,34 @@ def _append_rows(cfg: dict, rows: list[dict]) -> bool:
     return added
 
 
+#: In every message :func:`pin_missing` builds, so `cmd_update` can tell a tap
+#: whose pin is gone upstream from a dead tap in a sweep's failures -- the
+#: same substring contract as :data:`POLICY_REFUSAL`. `boost untap` is the
+#: wrong advice for it: the repository is alive, only the commit is gone.
+PIN_MISSING = "which is no longer on"
+
+
+def pin_missing_remedy(name: str) -> str:
+    """The two ways out of a pin whose commit upstream no longer has."""
+    return ("`boost update --force %s` re-clones its default branch and drops "
+            "the pin, or re-tap it with `--at <sha>` to pin a commit that "
+            "exists there" % name)
+
+
+def pin_missing(tap: Tap, pin: str, url: str = "") -> BoostError:
+    """The error for a tap pinned at a commit its remote no longer serves.
+
+    git says "not our ref <sha>", and the sweep then advised `boost untap`
+    -- discarding a live tap -- while `boost doctor` sent the user back to
+    the `boost update` that had just failed. `--force`, which works, was
+    never named.
+    """
+    return BoostError(
+        "tap %s is pinned at %s, %s %s (history rewritten upstream?)"
+        % (tap.name, pin[:7], PIN_MISSING, url or tap.url),
+        hint=pin_missing_remedy(tap.name), wrap=True)
+
+
 def _already_configured(name: str, spec: str, at: str | None) -> BoostError:
     """The error for re-tapping a configured tap, with a hint that works.
 
@@ -812,7 +840,10 @@ def _reclone(tap: Tap, pin: str | None) -> None:
     try:
         gitutil.clone_shallow(tap.url, staging)
         if pin:
-            gitutil.checkout_commit(staging, pin)
+            try:
+                gitutil.checkout_commit(staging, pin)
+            except gitutil.CommitNotUpstream as err:
+                raise pin_missing(tap, pin, err.url) from err
         # Checked on the staging tree, before it replaces anything: a
         # re-clone is a fresh download, so it gets the same provenance gate
         # `boost tap` applies — or a tap whose clone went missing would come
@@ -1342,8 +1373,11 @@ def update(name: str | None = None,
             # move, so the caller rescans the catalog and resyncs vectors.
             head = off_pin(tap)
             if head:
-                gitutil.checkout_commit(tap.path, tap.pin,
-                                        verify=_signing_guard(tap))
+                try:
+                    gitutil.checkout_commit(tap.path, tap.pin,
+                                            verify=_signing_guard(tap))
+                except gitutil.CommitNotUpstream as err:
+                    raise pin_missing(tap, tap.pin, err.url) from err
                 return ("%s → %s (back on its pin)"
                         % (head[:7], tap.pin[:7]), False)
             return "pinned at %s (skipped)" % tap.pin[:7], False

@@ -742,7 +742,15 @@ def cmd_doctor(argv):
     configured = builtin.configured_tap_count()
     tap_ok = 0
     for tap in taps:
-        if not tap.is_cloned:
+        if not tap.is_cloned and tap.pin:
+            # Doctor reads no network, so it cannot know the pin is gone
+            # upstream -- but `boost update` alone failed forever when it
+            # was, and this line used to send the user straight back to it.
+            bad("tap", "tap %s not cloned — run `boost update %s` to clone it "
+                "at its pin %s; if that commit is gone upstream, %s"
+                % (tap.name, tap.name, tap.pin[:7],
+                   registry.pin_missing_remedy(tap.name)), wrap=True)
+        elif not tap.is_cloned:
             bad("tap", "tap %s not cloned — run `boost update`" % tap.name)
         elif tap.is_broken_clone:
             bad("tap", registry.broken_clone_line(tap.name), wrap=True)

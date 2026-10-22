@@ -899,6 +899,31 @@ def head_commit(repo: Path) -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
+#: git's words, lowercased, for a fetch by SHA of a commit the remote does not
+#: serve: `upload-pack` over file/ssh ("not our ref"), the smart-HTTP protocol
+#: ("unadvertised object") and a protocol-v2 server ("couldn't find remote
+#: ref"). After a force-push and gc upstream, a pinned commit is simply gone.
+_MISSING_COMMIT = ("not our ref", "unadvertised object",
+                   "couldn't find remote ref")
+
+
+class CommitNotUpstream(BoostError):
+    """A commit asked for by SHA is not on the remote any more (or never was).
+
+    Its own type so a caller that knows *why* it wanted the commit -- a tap's
+    pin -- can say so and name the remedy that works, rather than relaying
+    git's "fatal: git upload-pack: not our ref <sha>".
+    """
+
+    def __init__(self, sha: str, url: str):
+        self.sha, self.url = sha, url
+        super().__init__(
+            "commit %s is not on %s (history rewritten upstream?)"
+            % (sha[:7], url),
+            hint="pin a commit that exists there, or tap without `--at` to "
+                 "follow its default branch", wrap=True)
+
+
 def checkout_commit(repo: Path, sha: str,
                     verify: Callable[[str], None] | None = None) -> None:
     """Detach `repo` at `sha`, fetching that commit first if it is absent.
@@ -920,8 +945,13 @@ def checkout_commit(repo: Path, sha: str,
     have = run(["-C", str(repo), "cat-file", "-e", sha + "^{commit}"],
                check=False)
     if have.returncode != 0:
-        run(["-C", str(repo), "fetch", "--quiet", *_depth(repo),
-             "--filter=blob:none", "origin", sha])
+        fetched = run(["-C", str(repo), "fetch", "--quiet", *_depth(repo),
+                       "--filter=blob:none", "origin", sha], check=False)
+        if fetched.returncode != 0:
+            text = fetched.stderr or fetched.stdout or ""
+            if any(m in text.lower() for m in _MISSING_COMMIT):
+                raise CommitNotUpstream(sha, remote_url(repo) or "its remote")
+            raise BoostError("git fetch failed: %s" % _git_error(text))
     if verify is not None:
         # As in `pull`: the commit is checked while the tree is still on the
         # old one, so a refusal moves nothing.
