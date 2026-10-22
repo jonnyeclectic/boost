@@ -169,8 +169,19 @@ def cmd_search(argv):
         # built and floors to BM25 otherwise, so the CLI and the MCP server
         # answer from the same engine instead of the CLI being BM25-only.
         k = max(60, args.limit * 4)
-        hits, engine = rag.retrieve_any(
-            query, k=k, collapse_near_duplicates=args.collapse_dupes)
+        if args.category:
+            # Widen until --limit rows survive the filter: filtering one
+            # page of `k` returned 10 of a category's 20 matches against a
+            # --limit of 15, the rest sitting past the cut unmentioned.
+            categories = _tap_categories()
+            hits, engine, k = rag.retrieve_filtered(
+                query, k=k, want=args.limit,
+                keep=lambda e: catalog.matches_category(e, args.category,
+                                                        categories),
+                collapse_near_duplicates=args.collapse_dupes)
+        else:
+            hits, engine = rag.retrieve_any(
+                query, k=k, collapse_near_duplicates=args.collapse_dupes)
         hits = hits or []
         # Retrieval never returns more than `k` — hitting that cap means
         # there may be more matches beyond it, not that there are exactly

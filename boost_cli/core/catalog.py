@@ -1077,6 +1077,43 @@ def find(name: str, tap: str | None = None,
     return matches
 
 
+def addressable_name(name: str) -> str:
+    """The catalog name a typed *bare* ``name`` is known by everywhere.
+
+    A frontmatter name that is not a safe path component is slugged at scan
+    time (``c++-helper`` -> ``c--helper``, see :func:`_entry_slug`), and
+    :func:`find` keeps the original as an alias so ``boost install
+    c++-helper`` finds it. The lock, the store and every installed-item
+    command are keyed by the slug, so ``info``/``uninstall c++-helper``
+    answered "invalid skill name" and "not installed" about the item that
+    had just been installed under that very spelling. This is the one rule
+    every command applies to what was typed: an alias that names one slug
+    becomes that slug, with a note on stderr so the swap is never silent.
+
+    Only the catalog alias is followed — never a fresh slug of the input,
+    which would turn ``uninstall c+helper`` into a removal of an unrelated
+    ``c-helper``. A safe name costs no catalog read, and a miss or an alias
+    naming several slugs comes back unchanged for the caller's own error.
+    """
+    if util.is_safe_component(name):
+        return name
+    slugs = {e["name"] for e in find(name)}
+    if len(slugs) != 1:
+        return name
+    slug = slugs.pop()
+    note_catalogued_as(slug, name)
+    return slug
+
+
+def note_catalogued_as(slug: str, typed: str) -> None:
+    """Say on stderr that ``typed`` is known as ``slug``, when they differ.
+
+    stderr because every caller may be speaking ``--json`` on stdout; the
+    same wording as :func:`util.resolve_slug`'s note."""
+    if slug != typed:
+        output.info("using name %r (from %r)" % (slug, typed), stream=sys.stderr)
+
+
 def select_lock_source(matches: list[dict], lk: dict) -> tuple[dict | None, str | None]:
     """Pick the catalog entry a lock's recorded source refers to.
 

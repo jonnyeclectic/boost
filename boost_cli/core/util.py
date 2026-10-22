@@ -13,6 +13,7 @@ import stat
 import sys
 import tempfile
 import time
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -709,7 +710,18 @@ def head_lines(text: str, cap: int) -> tuple[list[str], int]:
 
 
 def _slug_or_none(name: str) -> str | None:
-    return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or None
+    """``name`` as ``[a-z0-9-]``, accents folded to their base letter, or None.
+
+    Folded under NFKD before the character class applies, so one typed name is
+    one slug however its bytes arrived: a precomposed ``é`` (NFC) used to be
+    dropped (``café`` -> ``caf``) while ``e`` + U+0301 (NFD, what a macOS paste
+    often produces) kept its ``e`` — ``profile save café`` wrote ``caf.json``
+    and ``profile show café`` looked for ``cafe.json``. The same fold the
+    catalog applies to a frontmatter name (``catalog._entry_slug``).
+    """
+    folded = "".join(c for c in unicodedata.normalize("NFKD", name)
+                     if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9-]+", "-", folded.strip().lower()).strip("-") or None
 
 
 def slugify(name: str) -> str:
@@ -899,6 +911,12 @@ def resolve_slug(raw: str, *, what: str = "name") -> str:
     """
     slug = _slug_or_none(raw)
     if slug is None:
+        # `名前` has letters — just none a slug can hold, and saying it had
+        # none told the user their input was empty.
+        if any(c.isalnum() for c in raw):
+            raise BoostError("%s needs ASCII letters or digits: %r" % (what, raw),
+                             hint="a name becomes a file name made of a-z, "
+                                  "0-9 and '-'")
         raise BoostError("%s has no letters or digits: %r" % (what, raw))
     _check_component(slug, what)
     if slug != raw:

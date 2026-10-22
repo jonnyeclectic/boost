@@ -611,6 +611,8 @@ def cmd_info(argv):
     # rejects the qualified string, since `owner/repo:skill` is not a safe path
     # component). Everything below this line works from the bare name.
     qualifier, name = catalog.split_name(args.name)
+    # A tap's `c++-helper` is catalogued, locked and stored as `c--helper`.
+    name = catalog.addressable_name(name)
     lock = _for_tap(lockfile.get_skill(name), qualifier)
     if lock is None:
         # An installed rule/workflow is installed — `boost list` shows it, so

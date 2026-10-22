@@ -641,7 +641,14 @@ def cmd_install(argv: list[str]) -> int:
     entries, failed = [], 0
     for n in args.names:
         try:
-            entries.append(catalog.resolve_one(n, path=args.path))
+            entry = catalog.resolve_one(n, path=args.path)
+            # The slug every other command will know it by, said out loud:
+            # `install c++-helper` copied to `c--helper` without a word. Only
+            # a catalog alias is renamed, and only an unsafe name has one.
+            bare = catalog.split_name(n)[1]
+            if not util.is_safe_component(bare):
+                catalog.note_catalogued_as(entry["name"], bare)
+            entries.append(entry)
         except BoostError as err:
             if not multi:
                 raise
