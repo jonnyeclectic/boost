@@ -2144,6 +2144,43 @@ def stale_temps(now: float | None = None) -> list[tuple[Path, str]]:
     return sorted(found)
 
 
+def recorded_store_dirs() -> list[Path]:
+    """The store dirs the lock claims: each skill's, and each workflow's
+    skill copy. Sorted, once each, only names a store dir could have."""
+    lock = lockfile.read()
+    store = paths.store_dir()
+    found = {store / n for n in (lock.get("skills") or {})
+             if util.is_safe_component(n)}
+    for entry in (lock.get("workflows") or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        for m in entry.get("materializations") or ():
+            if (isinstance(m, dict) and lockfile.is_skill_copy(m)
+                    and isinstance(m.get("path"), str)):
+                d = Path(m["path"]).parent
+                if d.parent == store:
+                    found.add(d)
+    return sorted(found)
+
+
+def hygiene_candidates() -> list[Path]:
+    """What `boost clean` may sweep for ``__pycache__``/``.DS_Store``.
+
+    The store's own top level, then everything under a dir the lock records
+    (:func:`recorded_store_dirs`), sorted. Not the rest of the store: a dir
+    there that no lock row claims is one `boost sync` and `boost heal` name
+    and leave alone as not boost's, and clean used to reach inside it.
+    """
+    store = paths.store_dir()
+    if not os.path.isdir(store):  # noqa: FURB146
+        return []
+    found = [p for p in store.iterdir() if p.name in (".DS_Store", "__pycache__")]
+    for d in recorded_store_dirs():
+        if os.path.isdir(d) and not os.path.islink(d):  # noqa: FURB146
+            found.extend(d.rglob("*"))
+    return sorted(found)
+
+
 #: :func:`stale_temps`' kind for an ``atomic_write_text`` temp file.
 STALE_TEMP_FILE = "stale temp file"
 
