@@ -243,14 +243,41 @@ def require_well_formed(text: str, name: str,
             damaged = True
             break
         pos = j + len(end)
+    where = " in %s" % path if path is not None else ""
     if damaged:
-        where = " in %s" % path if path is not None else ""
         raise BoostError(
             "rule %s's managed block%s has no matching end marker, so boost "
             "cannot tell where its text stops and yours begins" % (name, where),
             hint="restore `%s` after the rule's text (or delete `%s`), then "
                  "run the command again" % (end, start),
             wrap=True)
+    if orphan_end(text, name):
+        raise BoostError(
+            "rule %s's managed block%s has an end marker with no start marker "
+            "above it, so boost cannot tell where its text begins and yours "
+            "ends" % (name, where),
+            hint="restore `%s` above the rule's text (or delete the rule's "
+                 "text and `%s`), then run the command again" % (start, end),
+            wrap=True)
+
+
+def orphan_end(text: str, name: str) -> bool:
+    """True when an end marker for ``name`` in ``text`` has no start marker
+    between it and the end marker before it — its start was deleted.
+
+    The mirror of :func:`unclosed_block`, and as invisible to `read_block`:
+    with no start there is no block, so doctor called the rule missing, heal
+    appended a whole second block under the remnant, and uninstall reported
+    success with the old rule text still in the file. A body cannot forge an
+    end marker (`neutralize_markers`), so one outside a block is damage.
+    """
+    start, end = markers(name)
+    pos = 0
+    while (at := text.find(end, pos)) != -1:
+        if text.find(start, pos, at) == -1:
+            return True
+        pos = at + len(end)
+    return False
 
 
 def line_ending(text: str) -> str:

@@ -1292,6 +1292,18 @@ def cmd_doctor(argv):
                         wrap=True)
                     mat_issues += 1
                     continue
+                # The mirror: the start marker deleted, the end left. It read
+                # as missing, and the reinstall that remedy named appended a
+                # second block under the remnant (`rules.orphan_end`).
+                if rule_blocks.orphan_end(text, name):
+                    bad("rule", "rule %s's block in %s has an end marker and "
+                        "no start marker — restore its `%s` line above the "
+                        "rule's text, or delete that text and the end marker, "
+                        "then run `boost reinstall %s`"
+                        % (name, _tilde(p), rule_blocks.markers(name)[0], name),
+                        wrap=True)
+                    mat_issues += 1
+                    continue
                 # Two clean copies: the agent reads both, and a refresh that
                 # rewrote one of them left stale instructions live under an
                 # all-clear. `boost heal` keeps the first.

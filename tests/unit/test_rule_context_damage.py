@@ -219,3 +219,82 @@ class TestNotUTF8:
         assert p.read_bytes() == LATIN1
 
 
+class TestOrphanEnd:
+    START, END = rules.markers("r")
+    CLEAN = START + "\nB\n" + END + "\n"
+    ORPHAN = "Mine\n\n# r\n\nold text\n" + END + "\n"
+
+    def test_an_end_with_no_start_is_orphaned(self):
+        assert rules.orphan_end(self.ORPHAN, "r")
+
+    def test_an_orphan_end_before_a_clean_block(self):
+        assert rules.orphan_end(self.ORPHAN + self.CLEAN, "r")
+
+    def test_an_orphan_end_after_a_clean_block(self):
+        assert rules.orphan_end(self.CLEAN + "old\n" + self.END + "\n", "r")
+
+    @pytest.mark.parametrize("text", [
+        "notes\n", CLEAN, CLEAN + CLEAN, CLEAN + "x\n" + CLEAN,
+        START + "\nA\n" + START + "\nB\n" + END,   # a doubled start, not this
+        CLEAN + "<!-- boost:rule:other end -->\n",
+    ])
+    def test_clean_and_other_shapes_are_not(self, text):
+        assert not rules.orphan_end(text, "r")
+
+    def test_require_well_formed_refuses_it_naming_the_file(self):
+        with pytest.raises(BoostError) as ei:
+            rules.require_well_formed(self.ORPHAN, "r", Path("/x/CLAUDE.md"))
+        assert ei.value.message == (
+            "rule r's managed block in %s has an end marker with no start "
+            "marker above it, so boost cannot tell where its text begins and "
+            "yours ends" % Path("/x/CLAUDE.md"))
+        assert ei.value.hint == (
+            "restore `<!-- boost:rule:r start -->` above the rule's text (or "
+            "delete the rule's text and `<!-- boost:rule:r end -->`), then "
+            "run the command again")
+        assert ei.value.wrap is True
+
+    def test_merge_refuses_rather_than_append_a_second_copy(self):
+        with pytest.raises(BoostError):
+            rules.merge_block(self.ORPHAN, "r", "NEWER")
+
+    def test_a_damaged_start_keeps_its_own_message(self):
+        with pytest.raises(BoostError) as ei:
+            rules.require_well_formed(self.END + "\n" + self.START + "\nx\n",
+                                      "r")
+        assert "has no matching end marker" in ei.value.message
+
+    def _installed_then_unstarted(self, tap, name):
+        md = _claude_md()
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text("Mine\n", encoding="utf-8")
+        store.install(_rule(tap, name))
+        start, _end = rules.markers(name)
+        damaged = md.read_text(encoding="utf-8").replace(start + "\n", "")
+        md.write_text(damaged, encoding="utf-8")
+        return md, damaged
+
+    def test_uninstall_refuses_and_keeps_the_row(self, tap):
+        md, damaged = self._installed_then_unstarted(tap, "oe")
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("oe")
+        assert "has an end marker with no start marker" in ei.value.message
+        assert md.read_text(encoding="utf-8") == damaged
+        assert lockfile.get_rule("oe") is not None
+
+    def test_doctor_names_it_instead_of_missing(self, tap, capsys):
+        md, _ = self._installed_then_unstarted(tap, "od")
+        capsys.readouterr()
+        assert quality.cmd_doctor([]) == 1
+        out = _flat(capsys.readouterr())
+        assert ("rule od's block in %s has an end marker and no start marker "
+                "— restore its `<!-- boost:rule:od start -->` line above the "
+                "rule's text, or delete that text and the end marker, then "
+                "run `boost reinstall od`" % paths.tilde(md)) in out
+        assert "rule od missing its claude-code materialization" not in out
+
+    def test_heal_does_not_append_a_second_copy(self, tap, capsys):
+        md, damaged = self._installed_then_unstarted(tap, "oh")
+        quality.cmd_heal([])
+        assert md.read_text(encoding="utf-8") == damaged
+        assert "re-materialized rule oh" not in _flat(capsys.readouterr())
