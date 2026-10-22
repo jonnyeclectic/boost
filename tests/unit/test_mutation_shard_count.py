@@ -337,7 +337,20 @@ class TestPlanCliContract:
 #: 0.970 (0.939-0.989), against the 0.98 committed. So RUNNER_EFFICIENCY
 #: stands and only this anchor moves. TAIL_MULTIPLIER is not re-fitted:
 #: that run's 21.8-73.4 spread was the missing store.py weight, not runners.
-FITTED_TOTAL_MS = 136_439_539
+#:
+#: **Re-anchored 2026-10-22 from 136,439,539 to 278,027,516.** This is drift,
+#: and most of it is cost per mutant: 36,182 -> 46,088 mutants (1.27x) and
+#: 3.77 -> 6.03 s each (1.60x). It was rebuilt from the 26 shard artifacts of
+#: main run 39729763526 and PR #1225's run 39750022044. Main's shard 7 never
+#: finished, so its 1,536 mutants are imputed up to the lower bound its
+#: 120.7-minute cancellation sets (ci.yml's block above `timeout-minutes`
+#: gives the method). Re-fitted from the job API as this test prescribes:
+#: over those runs' 25 successful jobs, mutant time / 4 matches the
+#: `Running mutation testing` phase at a median 0.973 (0.922-0.990), and on
+#: the pack the PR actually ran, every shard that finished was predicted to
+#: within 5 min. RUNNER_EFFICIENCY stands. TAIL_MULTIPLIER is not re-fitted:
+#: the outliers in those runs were lost runners, not the model.
+FITTED_TOTAL_MS = 278_027_516
 
 #: What the *planner* totals over the same committed file, which is larger, and
 #: the two are not interchangeable. `load_durations` sums the 63 files with a
@@ -403,7 +416,13 @@ TWELVE_SHARDS = 12
 #: run is the first sixteen-wide observation; its p50 and worst job are
 #: recorded in the PR body rather than frozen here, since no second run at
 #: this width exists yet to say whether it reproduces.
-SHARDS_OBSERVED = 16
+#:
+#: Raised to twenty-four on 2026-10-22 on the same terms. Sixteen has now
+#: run at scale: over main run 39729763526 and PR #1225's run 39750022044,
+#: 25 jobs succeeded at 27.1-115.7 min, and eight were cancelled or lost
+#: their runner, all on weights `plan` had put at a flat 43.9. The first
+#: twenty-four-wide observation is the CI run of the PR that widens it.
+SHARDS_OBSERVED = 24
 
 #: The eight-shard p50 the fit was re-checked against, named so the two
 #: widths can be compared in one assertion instead of one of them being a
@@ -469,8 +488,14 @@ PREAMBLE_WITHOUT_PLANNER_TESTS_MIN = 5.49
 #: on a cold cache after the planner tests left the baseline: CI run
 #: 39357937728, head 525611de, 2026-10-20. Median of its fifteen successful
 #: shards' job start to `Running mutation testing`; range 4.36-8.65.
-#: Frozen. `ms.FIXED_MINUTES` is this.
+#: Frozen. `ms.FIXED_MINUTES` was this until the re-measure below.
 SIXTEEN_SHARD_COLD_FIXED_MIN = 7.09
+
+#: The next re-measure, from the 25 successful jobs of main run 39729763526
+#: (head c45107e8) and PR #1225's run 39750022044 (head 553b69ae),
+#: 2026-10-22, sixteen shards, cold. Median job start to `Running mutation
+#: testing`; range 6.60-15.57. Frozen. `ms.FIXED_MINUTES` is this, rounded.
+SIXTEEN_SHARD_TRAIN_FIXED_MIN = 9.98
 
 #: Mutation-phase minutes per weight-minute, each job graded on its own
 #: run's measured durations (the `mutation-weights` artifact) summed over the
@@ -554,8 +579,14 @@ class TestConversion:
         # last preamble measured without them -- and below what twelve paid
         # with them, which is what this change removes.
         # Since 2026-10-20 it is the cold-cache re-measure, which came back
-        # above the 5.49 it was predicted from, so it was raised.
-        assert abs(ms.FIXED_MINUTES - SIXTEEN_SHARD_COLD_FIXED_MIN) < 0.1
+        # above the 5.49 it was predicted from, so it was raised. On
+        # 2026-10-22 it came back at 9.98 and was raised again. That leaves
+        # it 0.02 under what eight paid WITH the planner tests, so the last
+        # assertion now holds with no margin. It is kept as the tripwire: a
+        # preamble past eight's means a cost has come back that a test
+        # skip took out once already.
+        assert abs(ms.FIXED_MINUTES - SIXTEEN_SHARD_TRAIN_FIXED_MIN) < 0.1
+        assert SIXTEEN_SHARD_COLD_FIXED_MIN < ms.FIXED_MINUTES
         assert PREAMBLE_WITHOUT_PLANNER_TESTS_MIN < ms.FIXED_MINUTES
         assert ms.FIXED_MINUTES < EIGHT_SHARD_FIXED_MIN < TWELVE_SHARD_FIXED_MIN
 

@@ -83,12 +83,13 @@ jobs:
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     # Nothing here embeds, runs tests, or clones a corpus — it downloads 16 KB,
-    # bin-packs the 66 mutatable files of boost_cli/core into 223 units
-    # (catalog.py, registry.py and store.py are each split per top-level
-    # function at this width; `__init__.py` is excluded, which is the 67th)
-    # twice, and opens a PR. The unit count moves with `--shards` and with the
-    # weights — it was 156 when one file split and 183 at eight shards — so it
-    # is here to size the job, not as a figure to rely on.
+    # bin-packs the 74 mutatable files of boost_cli/core into 530 units
+    # (catalog.py, gitutil.py, registry.py and store.py are each split per
+    # top-level function at twenty-four shards; `__init__.py` is excluded,
+    # which is the 75th) twice, and opens a PR. The unit count moves with
+    # `--shards` and with the weights — it was 156 when one file split, 183 at
+    # eight shards and 223 at sixteen — so it is here to size the job, not as a
+    # figure to rely on.
     timeout-minutes: 15
     permissions:
       contents: write            # push the branch carrying the refreshed hints
@@ -149,7 +150,7 @@ jobs:
         run: |
           python3 scripts/mutation_shards.py drift \
             --candidate candidate/mutation_weights.json \
-            --shards 16 \
+            --shards 24 \
             --summary-md "$RUNNER_TEMP/drift.md" \
             --github-output "$GITHUB_OUTPUT"
           # `|| true` even though `cmd_drift` now writes --summary-md on
@@ -180,8 +181,9 @@ jobs:
             echo "The hints are an **optimisation, never a correctness input**:"
             echo "a stale file costs shard balance and can no more change the"
             echo "mutation score than a missing one can. What it does change is"
-            echo "headroom — the slowest shard carries \`timeout-minutes: 75\`,"
-            echo "and #1000 lost a required check to a shard that ran 75.6."
+            echo "headroom — the slowest shard carries \`timeout-minutes: 160\`,"
+            echo "and #1000 lost a required check to a shard that ran 75.6"
+            echo "under the 75 it carried then."
             echo
             echo "**This PR arrives with no check runs** unless \`BOT_PR_TOKEN\`"
             echo "exists: a \`GITHUB_TOKEN\` push never triggers workflows, so"

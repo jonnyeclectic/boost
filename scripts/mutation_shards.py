@@ -138,7 +138,7 @@ WEIGHTS = Path("scripts/mutation_weights.json")
 #: spelled in two workflows, pinned against them by
 #: ``tests/unit/test_mutation_shard_count.py`` — ``timeout-minutes`` cannot be
 #: read through ``${{ }}``, so the agreement is asserted rather than derived.
-SHARDS = 16
+SHARDS = 24
 
 #: ``mutmut``'s worker count on the runner. It defaults to ``os.cpu_count()``
 #: and ``setup.cfg`` sets no ``max_children``, so on ``ubuntu-latest`` — 4 vCPU
@@ -220,7 +220,18 @@ RUNNER_EFFICIENCY = 0.98
 #: the paragraph above asks. The same run confirms the divided term: each
 #: shard's own summed mutmut durations / 4 match its mutation phase at a
 #: median 0.970 of the four workers (0.939-0.989), against the 0.98 committed.
-FIXED_MINUTES = 7.1
+#:
+#: **Re-measured again, 2026-10-22: 10.0.** The 25 successful shard jobs of
+#: main run 39729763526 (head ``c45107e8``) and PR #1225's run 39750022044
+#: (head ``553b69ae``), both sixteen shards and cold, logged the preamble at a
+#: median **9.98 min**, range 6.60-15.57, so it is raised again. The divided
+#: term held once more: mutant time / 4 against the mutation phase, median
+#: 0.973 (0.922-0.990). Most of the preamble is mutmut's ``Running stats``
+#: pass, a median 6.2 min in those logs. The rest is generation, about 2.1,
+#: and the clean and forced-fail runs, about 1.7. Why stats grew back toward
+#: the 6.9 it reached with the planner tests in it has not been measured. The
+#: ci.yml block above ``timeout-minutes`` has the rest of that re-pack.
+FIXED_MINUTES = 10.0
 
 #: How much worse the *worst* run of a shard is than that shard's median.
 #:
