@@ -10,6 +10,7 @@ uninstall` deleted them there.
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 
@@ -134,3 +135,44 @@ def test_project_rows_and_skills_are_not_touched(homes):
 def test_a_lock_without_sections_has_nothing(homes):
     _old, new, _dirs = homes
     assert lockfile.rehome({}, new) == ([], [])
+
+
+def test_an_unrecorded_home_is_inferred_for_rows_no_dotdir_names(homes):
+    # Measured on a five-agent install: Gemini's skills dir is the canonical
+    # store, so its ~/.gemini rows (and a row with no agent) were unplaceable
+    # and every snapshot saved before `home` was recorded was refused.
+    old, new, dirs = homes
+    dirs = {**dirs, "gemini": new / ".agents" / "skills"}
+    lock = _rule(_m("claude-code", old / ".claude" / "CLAUDE.md"),
+                 _m("gemini", old / ".gemini" / "GEMINI.md"),
+                 {"path": str(old / "x" / "w.md")})
+    assert lockfile.rehome(lock, new, None, dirs) == (["rule r"], [])
+    assert [m["path"] for m in lock["rules"]["r"]["materializations"]] == [
+        str(new / ".claude" / "CLAUDE.md"), str(new / ".gemini" / "GEMINI.md"),
+        str(new / "x" / "w.md")]
+
+
+def test_homes_that_disagree_infer_nothing(homes, tmp_path):
+    old, new, dirs = homes
+    lock = _rule(_m("claude-code", old / ".claude" / "CLAUDE.md"),
+                 _m("cursor", tmp_path / "h3" / ".cursor" / "r.mdc"))
+    lock["workflows"]["w"] = {"materializations": [
+        _m("gemini", old / ".gemini" / "GEMINI.md")]}
+    assert lockfile.rehome(lock, new, None, dirs) == (["rule r"],
+                                                      ["workflow w"])
+    assert lock["rules"]["r"]["materializations"][1]["path"] == str(
+        new / ".cursor" / "r.mdc")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privilege")
+def test_a_path_under_the_resolved_old_home_lands_inside_this_one(
+        homes, tmp_path):
+    old, new, dirs = homes
+    real = tmp_path / "real"
+    (real / ".claude").mkdir(parents=True)
+    old.symlink_to(real)
+    lock = _rule(_m("claude-code",
+                    os.path.join(os.path.realpath(old), "notes", "CLAUDE.md")))
+    assert lockfile.rehome(lock, new, str(old), dirs) == (["rule r"], [])
+    assert lock["rules"]["r"]["materializations"][0]["path"] == os.path.join(
+        str(new), "notes", "CLAUDE.md")

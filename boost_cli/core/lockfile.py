@@ -817,14 +817,34 @@ def portable(lock: dict, base=None) -> dict:
     return projected
 
 
-def _under(p: str, root) -> bool:
-    """Whether the absolute path ``p`` is ``root`` or sits beneath it, taking
-    ``root`` both as given and resolved (a symlinked or /private home)."""
-    for r in {str(root), os.path.realpath(root)}:
+def _root_of(p: str, root) -> str | None:
+    """The spelling of ``root`` — as given, or resolved (a symlinked or
+    /private home) — that the absolute path ``p`` is or sits beneath."""
+    for r in (str(root), os.path.realpath(root)):
         r = r.rstrip(os.sep)
         if p == r or p.startswith(r + os.sep):
-            return True
-    return False
+            return r
+    return None
+
+
+def _under(p: str, root) -> bool:
+    """Whether the absolute path ``p`` is ``root`` or sits beneath it."""
+    return _root_of(p, root) is not None
+
+
+def _dot_home(p: str, agent, home, dirs: dict) -> str | None:
+    """The home ``p`` was written under, read off where its agent's dotdir
+    (``.claude`` for ``~/.claude/skills``) appears in it, nearest the file."""
+    adir = dirs.get(agent)
+    dot = adir.parent if adir is not None else None
+    if dot is None or not _under(str(dot), home):
+        return None
+    rel = Path(os.path.relpath(dot, home)).parts
+    parts = Path(p).parts
+    for i in range(len(parts) - len(rel), 0, -1):
+        if parts[i:i + len(rel)] == rel:
+            return str(Path(*parts[:i]))
+    return None
 
 
 def _rehome(p: str, agent, old_home: str | None, home,
@@ -843,16 +863,50 @@ def _rehome(p: str, agent, old_home: str | None, home,
     if (not Path(p).is_absolute() or _under(p, home)
             or (dot is not None and _under(p, dot))):
         return p
-    if old_home and _under(p, old_home):
-        return os.path.join(str(home), os.path.relpath(p, old_home))
-    if dot is None or not _under(str(dot), home):
+    base = _root_of(p, old_home) if old_home else None
+    if base is None:
+        base = _dot_home(p, agent, home, dirs)
+    if base is None:
         return None
-    rel = Path(os.path.relpath(dot, home)).parts
-    parts = Path(p).parts
-    for i in range(len(parts) - len(rel), 0, -1):
-        if parts[i:i + len(rel)] == rel:
-            return str(dot.joinpath(*parts[i + len(rel):]))
-    return None
+    return os.path.join(str(home), os.path.relpath(p, base))
+
+
+def _infer_home(lock: dict, home, dirs: dict) -> str | None:
+    """The one home a snapshot with no recorded home was saved under, read
+    off the rows whose agent dotdir places them; None unless they agree.
+
+    Without it a row no dotdir names — Gemini's ``~/.gemini/GEMINI.md``,
+    whose skills dir is the canonical store, or a row with no agent — was
+    unplaceable, and every such snapshot was refused on another machine.
+    """
+    seen = set()
+    for _kind, entry in _user_rows(lock):
+        for m in _row_paths(entry):
+            p = m["path"]
+            if Path(p).is_absolute() and not _under(p, home):
+                guess = _dot_home(p, m.get("agent"), home, dirs)
+                if guess is not None:
+                    seen.add(guess)
+    return seen.pop() if len(seen) == 1 else None
+
+
+def _user_rows(lock: dict):
+    """``(label, entry)`` for each user-scope rule/workflow row of ``lock``."""
+    from . import scopes
+    for kind, section in SECTIONS:
+        if kind == "skill":
+            continue
+        for name, entry in sorted((lock.get(section) or {}).items()):
+            if isinstance(entry, dict) and entry.get("scope") != scopes.SCOPE_PROJECT:
+                yield "%s %s" % (kind, name), entry
+
+
+def _row_paths(entry: dict):
+    """The materialization/foreign records of ``entry`` that carry a path."""
+    for m in (*(entry.get("materializations") or ()),
+              *(entry.get("foreign") or ())):
+        if isinstance(m, dict) and isinstance(m.get("path"), str):
+            yield m
 
 
 def rehome(lock: dict, home, old_home: str | None = None,
@@ -872,31 +926,24 @@ def rehome(lock: dict, home, old_home: str | None = None,
 
     Mutates ``lock``; returns ``(moved, unplaced)`` as ``kind name`` labels
     — a row with a path neither ``old_home`` nor its agent's dotdir places
-    is unplaced, and keeps the path it had.
+    is unplaced, and keeps the path it had. With no ``old_home`` it is
+    inferred from the rows a dotdir places, when they agree on one.
     """
-    from . import scopes
+    dirs = dirs or {}
+    if not old_home:
+        old_home = _infer_home(lock, home, dirs)
     moved: list[str] = []
     unplaced: list[str] = []
-    for kind, section in SECTIONS:
-        if kind == "skill":
-            continue
-        for name, entry in sorted((lock.get(section) or {}).items()):
-            if not isinstance(entry, dict) or entry.get("scope") == scopes.SCOPE_PROJECT:
-                continue
-            label = "%s %s" % (kind, name)
-            for m in (*(entry.get("materializations") or ()),
-                      *(entry.get("foreign") or ())):
-                if not (isinstance(m, dict) and isinstance(m.get("path"), str)):
-                    continue
-                new = _rehome(m["path"], m.get("agent"), old_home, home,
-                              dirs or {})
-                if new is None:
-                    if label not in unplaced:
-                        unplaced.append(label)
-                elif new != m["path"]:
-                    m["path"] = new
-                    if label not in moved:
-                        moved.append(label)
+    for label, entry in _user_rows(lock):
+        for m in _row_paths(entry):
+            new = _rehome(m["path"], m.get("agent"), old_home, home, dirs)
+            if new is None:
+                if label not in unplaced:
+                    unplaced.append(label)
+            elif new != m["path"]:
+                m["path"] = new
+                if label not in moved:
+                    moved.append(label)
     return moved, unplaced
 
 
