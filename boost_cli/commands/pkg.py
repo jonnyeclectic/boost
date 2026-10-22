@@ -511,6 +511,14 @@ def _install_closure(entries: list[dict], *, scope: str = scopes.SCOPE_USER,
         label = "%s v%s (%s)%s" % (dep["name"], out.plain(dep.get("version")),
                                    dep["tap"], where)
         if dry_run:
+            # The run's policy gate, asked here too: a preview that promised
+            # a dependency the run then refuses exited 0 where the run fails.
+            why = store.install_policy_refusal(dep, scope=scope, base=pbase)
+            if why:
+                out.warn("required skill %s would not be installed: %s"
+                         % (dep["name"], why), wrap=True)
+                failed += 1
+                continue
             out.info("would install %s" % label)
             done.append(dep)
             continue
@@ -555,6 +563,15 @@ def _preview_skill_copy(e: dict, seen: dict | None, as_skill: bool | None,
         out.info("  %s" % blocker, wrap=True)
         return
     out.info("  as a skill → %s" % _tilde(store.skill_store_dir(e["name"])))
+
+
+def _refuse_preview_by_policy(e: dict, scope: str, pbase, seen) -> None:
+    """Raise the policy refusal the run would, so a dry run does not promise
+    an install the run then refuses."""
+    why = store.install_policy_refusal(e, scope=scope, base=pbase,
+                                       existing=seen)
+    if why:
+        raise BoostError(why, hint="inspect with `boost policy list`")
 
 
 def cmd_install(argv: list[str]) -> int:
@@ -712,6 +729,7 @@ def cmd_install(argv: list[str]) -> int:
                     # must not promise a reinstall the run declines.
                     seen = store.check_existing(e, force=args.force,
                                                 scope=args.scope)
+                    _refuse_preview_by_policy(e, args.scope, pbase, seen)
                     # agents_for_scope(pbase), not enabled_agents(): project scope
                     # copies into each agent's *repo-local* dotdir, which excludes
                     # Antigravity CLI (its layout is two levels under ~/.gemini and
@@ -747,6 +765,7 @@ def cmd_install(argv: list[str]) -> int:
                     # that is seen here is one --force replaces: a reinstall.
                     seen = store.check_existing(e, force=args.force,
                                                 scope=args.scope)
+                    _refuse_preview_by_policy(e, args.scope, pbase, seen)
                     verb = "reinstall" if seen else "install"
                     where = "into this repo" if args.scope == "project" else "user config"
                     # The real run's two steps, in its order: replay the lock's
@@ -774,6 +793,7 @@ def cmd_install(argv: list[str]) -> int:
                                             scope=args.scope)
                 # The run's refusal, ahead of the header, as the branches above.
                 store.refuse_unreachable_skill(only, e["name"])
+                _refuse_preview_by_policy(e, args.scope, pbase, seen)
                 verb = "reinstall" if seen else "install"
                 # The lock's recorded scope, replayed exactly as `store.install`
                 # replays it before calling `link_agents` — the same two steps
@@ -2824,6 +2844,16 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 installed_kinds.add(dep_kind)
                 installed_n += 1
             if dry_run:
+                # The run's policy gate: a blocklisted line was previewed as
+                # "would install" with rc 0, and the run then refused it.
+                # Warned in the run's own words, and counted as it counts it.
+                why = store.install_policy_refusal(
+                    entry, scope=scopes.SCOPE_PROJECT if local
+                    else scopes.SCOPE_USER, base=pbase)
+                if why:
+                    out.warn("%s: %s: %s" % (where, sname, why))
+                    failed += 1
+                    continue
                 out.info("would install %s v%s (%s)%s%s"
                          % (sname, out.plain(entry.get("version")),
                             entry["tap"],

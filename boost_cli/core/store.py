@@ -2901,6 +2901,47 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
         hint="uninstall it there first — a different scope cannot force-overwrite it")
 
 
+def policy_refusal(entry: dict, installed: dict, *,
+                   replaces: bool | None = None) -> str | None:
+    """Why the install policy refuses ``entry``, or ``None`` if it allows it.
+
+    ``installed`` is the skill map ``max_skills`` is weighed against and
+    ``replaces`` is :func:`_count_others`'s. The one wording every install
+    path raises — and that a dry run reports, so a preview cannot promise an
+    install the run then refuses.
+    """
+    violations = policy.check_install(
+        entry, _count_others(installed, entry["name"], replaces=replaces))
+    if not violations:
+        return None
+    return "policy blocks installing %s: %s" % (entry["name"],
+                                                "; ".join(violations))
+
+
+def refuse_by_policy(entry: dict, installed: dict, *,
+                     replaces: bool | None = None) -> None:
+    """Raise :func:`policy_refusal`'s reason, if there is one."""
+    why = policy_refusal(entry, installed, replaces=replaces)
+    if why:
+        raise BoostError(why, hint="inspect with `boost policy list`")
+
+
+def install_policy_refusal(entry: dict, *, scope: str = scopes.SCOPE_USER,
+                           base=None, existing=None) -> str | None:
+    """:func:`policy_refusal` against the lock :func:`install` would weigh.
+
+    For a preview: a project-scope skill counts the project lock, every other
+    install the user lock — and a rule or workflow replaces an item only when
+    ``existing`` (``check_existing``'s answer) records one, as the run says.
+    """
+    if entry.get("kind", "skill") != "skill":
+        return policy_refusal(entry, lockfile.installed(),
+                              replaces=existing is not None)
+    if scope == scopes.SCOPE_PROJECT:
+        return policy_refusal(entry, projectlock.installed(base))
+    return policy_refusal(entry, lockfile.installed())
+
+
 def _count_others(installed: dict, name: str, *,
                   replaces: bool | None = None) -> int:
     """How many skills ``installed`` holds besides ``name``: the count an
@@ -3412,11 +3453,7 @@ def install(entry: dict, force: bool = False,
 
     # An upgrade or reinstall replaces a skill already counted, so it adds
     # none: at exactly max_skills, `boost update` declined every upgrade.
-    violations = policy.check_install(
-        entry, _count_others(lockfile.installed(), name))
-    if violations:
-        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
-                        hint="inspect with `boost policy list`")
+    refuse_by_policy(entry, lockfile.installed())
 
     disowned = _refuse_unrecorded(name, existing, force,
                                   retry="`boost install %s --force`" % name)
@@ -3570,11 +3607,7 @@ def _install_project_skill(entry: dict, force: bool = False,
     existing = check_existing(entry, force=force, scope=scopes.SCOPE_PROJECT,
                               base=resolved_base, kind="skill")
 
-    violations = policy.check_install(
-        entry, _count_others(projectlock.installed(resolved_base), name))
-    if violations:
-        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
-                        hint="inspect with `boost policy list`")
+    refuse_by_policy(entry, projectlock.installed(resolved_base))
 
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
@@ -4537,11 +4570,8 @@ def _install_rule(entry: dict, force: bool = False,
     explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 
-    violations = policy.check_install(entry, _count_others(
-        lockfile.installed(), name, replaces=existing is not None))
-    if violations:
-        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
-                        hint="inspect with `boost policy list`")
+    refuse_by_policy(entry, lockfile.installed(),
+                     replaces=existing is not None)
 
     tap = registry.get(entry["tap"])
     src = tap.path / entry.get("skill_md", "")
@@ -5459,11 +5489,8 @@ def _install_workflow(entry: dict, force: bool = False,
     explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 
-    violations = policy.check_install(entry, _count_others(
-        lockfile.installed(), name, replaces=existing is not None))
-    if violations:
-        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
-                        hint="inspect with `boost policy list`")
+    refuse_by_policy(entry, lockfile.installed(),
+                     replaces=existing is not None)
 
     tap = registry.get(entry["tap"])
     source_rel = entry.get("skill_md", "")
