@@ -455,6 +455,55 @@ def _report_prerequisites(entries: list[dict], *, pbase=None,
         out.info(hint, wrap=True)
 
 
+def _install_closure(entries: list[dict], *, scope: str = scopes.SCOPE_USER,
+                     pbase=None, only_agents: list[str] | None = None,
+                     via: str | None = None, also_installed=(),
+                     dry_run: bool = False) -> tuple[list[dict], int]:
+    """Install the ``requires:`` closure of ``entries`` the caller installs
+    itself: ``(dependency entries installed or previewed, failures)``.
+
+    ``boost install`` plans the closure up front; ``boost update`` and
+    ``boost bundle install`` install their own items and used to stop there,
+    so an upgrade that added a ``requires:`` — or a Boostfile line naming a
+    skill with one — left the skill without what it needs, silently. The
+    lines are install's own (``installplan.added_line`` /
+    ``dependency_warnings``), so the three commands describe a closure in the
+    same words.
+    """
+    pulled, res = installplan.missing_dependencies(
+        entries, pbase if scope == scopes.SCOPE_PROJECT else None,
+        also_installed=also_installed)
+    added = installplan.added_line(res)
+    if added:
+        out.info(added)
+    for line in installplan.dependency_warnings(res):
+        out.warn(line, wrap=True)
+    where = " at project scope" if scope == scopes.SCOPE_PROJECT else ""
+    done: list[dict] = []
+    failed = 0
+    for dep in pulled:
+        label = "%s v%s (%s)%s" % (dep["name"], out.plain(dep.get("version")),
+                                   dep["tap"], where)
+        if dry_run:
+            out.info("would install %s" % label)
+            done.append(dep)
+            continue
+        try:
+            res_i = store.install(dep, only_agents=only_agents, scope=scope,
+                                  base=pbase, via=via)
+        except BoostError as err:
+            out.warn("required skill %s was not installed: %s"
+                     % (dep["name"], err.message), wrap=True)
+            failed += 1
+            continue
+        out.ok("installed %s" % label)
+        _warn_unwritable(res_i)
+        _warn_injection(res_i)
+        _warn_secrets(res_i)
+        done.append(dep)
+    return done, failed
+
+
 # ── install ──────────────────────────────────────────────────────────────
 
 def _preview_skill_copy(e: dict, seen: dict | None, as_skill: bool | None,
@@ -1919,6 +1968,9 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
         return 0, 1, 0, 0
     out.ok(_refresh_line(label, old_v, str(entry.get("version") or ""),
                          edited, reason == staleness.VERSION))
+    # A new version can declare a new `requires:`; install it as `boost
+    # install` would have, in the scope the upgraded skill lives in.
+    _install_closure([entry], scope=scope, pbase=pbase, via="update")
     return 1, 0, 0, 0
 
 
@@ -2703,6 +2755,23 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                             "would install" if dry_run else "installing"))
                 drifted += 1
             entry_kind = entry.get("kind", "skill")
+            # The line's `requires:` closure first, as `boost install` plans
+            # it: the line used to install the skill alone. Items an earlier
+            # line installed (or, in a dry run, would have) count as present.
+            pulled, dep_failed = _install_closure(
+                [entry], scope=scopes.SCOPE_PROJECT if local
+                else scopes.SCOPE_USER, pbase=pbase,
+                only_agents=only_agents,
+                also_installed=list(here) if dry_run else (),
+                dry_run=dry_run)
+            failed += dep_failed
+            for dep in pulled:
+                dep_kind = dep.get("kind", "skill")
+                if dry_run and dep_kind == "rule":
+                    would_rules.append(dep["name"])
+                here[dep["name"]] = (dep_kind, dep)
+                installed_kinds.add(dep_kind)
+                installed_n += 1
             if dry_run:
                 out.info("would install %s v%s (%s)%s%s"
                          % (sname, out.plain(entry.get("version")),
