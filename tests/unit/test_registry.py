@@ -145,6 +145,15 @@ class TestParseSpec:
         assert "git init" in ei.value.hint
         assert "boost import %s" % d in ei.value.hint
 
+    def test_bare_repo_dir_is_a_tap_named_without_its_suffix(self, tmp_path):
+        """`git clone --bare` has no `.git` entry, and was refused as "not a
+        git repository" with a `git init` hint that cannot work on it."""
+        work = _make_repo(tmp_path / "work")
+        bare = tmp_path / "fx.git"
+        _git("clone", "-q", "--bare", str(work), str(bare), cwd=tmp_path)
+        assert registry.parse_spec(str(bare)) == ("fx", str(bare.resolve()))
+        assert registry.parse_spec(bare.as_uri()) == ("fx", str(bare.resolve()))
+
 
 class TestParseSpecs:
     """`tap --dry-run` previews via this — must stay a pure read, no clone."""
@@ -308,6 +317,17 @@ class TestListAndGet:
 
 
 class TestAddRemove:
+    def test_add_bare_local_repo_clones_its_items(self, sandbox, tmp_path,
+                                                  fixture_tap_src):
+        bare = tmp_path / "remotes" / "fx.git"
+        _git("clone", "-q", "--bare", str(fixture_tap_src), str(bare),
+             cwd=tmp_path)
+        tap = registry.add(str(bare))
+        assert tap.name == "fx"
+        assert tap.url == str(bare.resolve())
+        assert (tap.path / "skills" / "brainstorming" / "SKILL.md").is_file()
+        assert [r["name"] for r in config.get("taps")] == ["fx"]
+
     def test_add_local_repo_clones_and_persists(self, sandbox, fixture_tap_src):
         tap = registry.add(str(fixture_tap_src))
         assert tap.name == "fixture-tap"

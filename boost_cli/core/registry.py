@@ -173,7 +173,7 @@ def parse_spec(spec: str):
     if local is not None and _looks_like_a_directory(local):
         p = local
     if _looks_like_a_directory(p):
-        if not gitutil.is_repo(p):
+        if not gitutil.is_repo_root(p):
             # The dir exists, so git's own "repository '...' does not exist"
             # (which is what `clone_shallow` would raise next) is a false
             # statement about the very thing this branch just confirmed.
@@ -185,7 +185,12 @@ def parse_spec(spec: str):
         # in a Boostfile line, so `boost tap "my tap"` named it `my tap` and
         # `bundle dump` wrote a `tap my tap …` line that its own `bundle
         # install` read as a tap called `my`.
-        return _checked(_WHITESPACE.sub("-", p.resolve().name),
+        # A bare repo's directory conventionally ends in `.git`, which the
+        # URL branch below already drops from a name — `fx.git` and
+        # `file://…/fx.git` and `https://…/fx.git` are all tap `fx`.
+        dirname = p.resolve().name
+        return _checked(_WHITESPACE.sub("-", dirname.removesuffix(".git")
+                                        or dirname),
                         str(p.resolve()), spec)
     # A spec shaped like a path (starts with ./, ../, ~, or a root separator,
     # or is absolute) that is not an actual directory must not fall through to

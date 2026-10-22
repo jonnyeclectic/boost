@@ -1092,3 +1092,27 @@ def log_entries(repo: Path, rel_path: str = ".", n: int = 20) -> list[dict]:
 def is_repo(path: Path) -> bool:
     """Return True when `path` contains a `.git` entry."""
     return (Path(path) / ".git").exists()
+
+
+def is_repo_root(path: Path) -> bool:
+    """True when `path` is itself a git repository, bare or with a worktree.
+
+    :func:`is_repo` asks for a ``.git`` entry, which every bare repository
+    (``git clone --bare``, the usual shape of a local or self-hosted remote)
+    lacks — so `boost tap <dir>.git` called a valid repo "not a git
+    repository" and suggested `git init` on it. ``rev-parse --git-dir`` alone
+    over-accepts: run from a subdirectory of a repo it answers with the
+    parent's git dir, and that subdirectory is not something git can clone.
+    So the git dir must be ``path`` itself (bare) or ``path/.git``. Both sides
+    are resolved: on macOS a ``/var/folders`` path resolves to ``/private/var``.
+    """
+    p = Path(path)
+    if (p / ".git").exists():
+        return True
+    proc = run(["-C", str(p), "rev-parse", "--absolute-git-dir"], check=False)
+    if proc.returncode != 0:
+        return False
+    try:
+        return Path(proc.stdout.strip()).resolve() == p.resolve()
+    except OSError:
+        return False

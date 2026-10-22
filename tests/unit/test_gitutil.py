@@ -316,6 +316,27 @@ class TestCloneAndInspect:
     def test_is_repo_false_on_plain_dir(self, tmp_path):
         assert gitutil.is_repo(tmp_path) is False
 
+    def test_is_repo_root_accepts_a_worktree_and_a_bare_repo(self, tmp_path):
+        work = _make_repo(tmp_path / "work")
+        bare = tmp_path / "remote.git"
+        _git("clone", "-q", "--bare", str(work), str(bare), cwd=tmp_path)
+        assert gitutil.is_repo(bare) is False      # no `.git` entry
+        assert gitutil.is_repo_root(work) is True
+        assert gitutil.is_repo_root(bare) is True
+
+    def test_is_repo_root_refuses_a_repo_subdir_and_a_plain_dir(self, tmp_path):
+        """rev-parse answers for a subdirectory with its parent's git dir;
+        neither that subdirectory nor a bare repo's `objects/` is a repo."""
+        work = _make_repo(tmp_path / "work")
+        (work / "sub").mkdir()
+        bare = tmp_path / "remote.git"
+        _git("clone", "-q", "--bare", str(work), str(bare), cwd=tmp_path)
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        assert gitutil.is_repo_root(work / "sub") is False
+        assert gitutil.is_repo_root(bare / "objects") is False
+        assert gitutil.is_repo_root(plain) is False
+
     def test_head_commit_empty_on_non_repo(self, tmp_path):
         assert gitutil.head_commit(tmp_path) == ""
 
