@@ -830,6 +830,16 @@ class TestRecordHistory:
         assert [h["id"] for h in lockfile.history_list()] == [
             "20260102T030405Z"]
 
+    def test_an_older_schema_lock_is_recorded(self, sandbox, tmp_path):
+        # The lock a restore replaces may predate schema v3; it is still a
+        # state `replay` can read, so it is kept.
+        p = tmp_path / "rh-v2.json"
+        p.write_text('{"version": 2, "skills": {"rh-c": {}}, '
+                     '"updated": "2026-01-02T03:04:06Z"}', encoding="utf-8")
+        assert lockfile.record_history(p) is True
+        assert [h["id"] for h in lockfile.history_list()] == [
+            "20260102T030406Z"]
+
     def test_a_missing_or_corrupt_lock_is_not_recorded(self, sandbox,
                                                        tmp_path):
         assert lockfile.record_history() is False
@@ -873,3 +883,7 @@ class TestRowDifferences:
         assert lockfile.row_differences({"version": 1}, {"version": "1"}) == {}
         assert lockfile.row_differences({}, {"version": "1"}) == {
             "version": ("None", "1")}
+
+    def test_an_empty_commit_pin_is_no_pin(self):
+        assert lockfile.row_differences(
+            {**_ROW, "commit_pin": ""}, _ROW) == {}

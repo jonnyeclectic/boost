@@ -2986,8 +2986,9 @@ def restore_recorded_holds(name: str, want: dict) -> list[str]:
         return []
     scope = list(want.get("only_agents") or []) or None
     res = None
-    if ("only_agents" in changed and not is_held(row)
-            and not row.get("quarantined") and not row.get("sidelined_by")):
+    # A held copy is only ever a withheld one, so the two flags are the test.
+    if ("only_agents" in changed and not row.get("quarantined")
+            and not row.get("sidelined_by")):
         unlink_agents(name)
         res = link_agents(name, scope)
 
@@ -2995,7 +2996,7 @@ def restore_recorded_holds(name: str, want: dict) -> list[str]:
         for f in ("pinned", "commit_pin"):
             if f in changed:
                 if want.get(f):
-                    entry[f] = True if f == "pinned" else want[f]
+                    entry[f] = want[f]
                 else:
                     entry.pop(f, None)
         if "only_agents" in changed:

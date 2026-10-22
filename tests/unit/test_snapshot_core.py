@@ -599,3 +599,13 @@ def test_reapply_recorded_aside(sandbox):
     row = lockfile.get_skill("snapcore-r")
     assert row["quarantined"] is True and "sidelined_by" not in row
     assert store.is_held(row)
+
+
+def test_restore_recorded_holds_only_records_a_sidelined_skill_s_scope(sandbox):
+    _linked_skill("snapcore-f")
+    store.sideline("snapcore-f", "focus")
+    assert store.restore_recorded_holds(
+        "snapcore-f", {"only_agents": ["cursor"]}) == ["only_agents"]
+    row = lockfile.get_skill("snapcore-f")
+    assert row["only_agents"] == ["cursor"] and row["agents"] == []
+    assert store.linked_agents("snapcore-f") == []
