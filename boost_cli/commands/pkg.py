@@ -1418,13 +1418,14 @@ def _confirm_risky_update(name: str, entry: dict, base=None,
     return _show_and_confirm(name, diff, name)
 
 
-def _materialized_sides(kind: str, name: str, lk: dict, new_raw: str):
-    """``(installed_text, incoming_text)`` for a rule/workflow, same shape both.
+def _materialized_sides(kind: str, name: str, lk: dict,
+                        new_raw: str) -> list[tuple[str, str, str]]:
+    """``(label, installed_text, incoming_text)`` per materialization.
 
     Rules and workflows keep no copy of the source they were installed from —
-    only the artifact they were materialized into. That artifact is the honest
-    left-hand side anyway: it is the text the agent is loading *right now*, and
-    a diff against it is the diff the user actually cares about.
+    only the artifacts they were materialized into. Those are the honest
+    left-hand side anyway: they are the text the agents are loading *right
+    now*, and a diff against them is the diff the user actually cares about.
 
     Each recorded materialization says how it was written, so the incoming half
     is reconstructed the same way: a verbatim rule drop compares raw to raw, a
@@ -1432,27 +1433,41 @@ def _materialized_sides(kind: str, name: str, lk: dict, new_raw: str):
     workflow compares the rendered file to the same render of the new source —
     which keeps Gemini's TOML comparable with Gemini's TOML.
 
-    Falls back to ``("", new_raw)`` when nothing can be read back, so an
-    unreadable artifact scans the whole incoming file rather than nothing.
+    *Every* readable one, not the first. Stopping at the first returned the
+    CLAUDE.md block, which carries no frontmatter — so a change to the
+    frontmatter alone (an injected ``description``, ``alwaysApply: true``)
+    was never diffed, and was then copied verbatim into Cursor's and
+    Windsurf's rules. Copies with the same before and after (two verbatim
+    drops) are listed once, under the first path.
+
+    Falls back to ``[(name, "", new_raw)]`` when nothing can be read back, so
+    an unreadable artifact scans the whole incoming file rather than nothing.
     """
     from ..core import rules, workflows
+    sides: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
     for m in lk.get("materializations") or []:
+        path = m.get("path", "")
         try:
-            current = Path(m.get("path", "")).read_text(encoding="utf-8")
+            current = Path(path).read_text(encoding="utf-8")
         except OSError:
             continue
-        if kind == "rule":
-            if m.get("mode") != rules.MODE_CLAUDE:
-                return current, new_raw
+        if kind == "rule" and m.get("mode") == rules.MODE_CLAUDE:
             old = rules.read_block(current, name)
             if old is None:
                 continue
             meta, body = frontmatter.parse(new_raw)
-            return old, rules.render_claude_body(
-                str(meta.get("name") or name), body)
-        return current, workflows.render(
-            m.get("agent"), m.get("slot", ""), name, new_raw)
-    return "", new_raw
+            pair = (old, rules.render_claude_body(
+                str(meta.get("name") or name), body))
+        elif kind == "rule":
+            pair = (current, new_raw)
+        else:
+            pair = (current, workflows.render(
+                m.get("agent"), m.get("slot", ""), name, new_raw))
+        if pair not in seen:
+            seen.add(pair)
+            sides.append((_tilde(path), *pair))
+    return sides or [(name, "", new_raw)]
 
 
 def _confirm_risky_materialized(kind: str, name: str, lk: dict,
@@ -1463,10 +1478,12 @@ def _confirm_risky_materialized(kind: str, name: str, lk: dict,
     grew a shell command was gated, while a rule — which is merged into the
     standing instructions the agent reads every session, and which this repo's
     own notes call "more invasive than a skill, not less" — was refreshed in
-    place with one line of output and no diff.
+    place with one line of output and no diff. Every materialization is
+    diffed, so the reasons cover whatever reaches any agent.
     """
-    old, new = _materialized_sides(kind, name, lk, new_raw)
-    diff = updatediff.diff_tree({name: old}, {name: new})
+    sides = _materialized_sides(kind, name, lk, new_raw)
+    diff = updatediff.diff_tree({label: old for label, old, _ in sides},
+                                {label: new for label, _, new in sides})
     if not diff.risky:
         return True
     return _show_and_confirm("%s %s" % (kind, name), diff, name)
