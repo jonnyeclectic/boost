@@ -1529,6 +1529,12 @@ class TestSkillBecameWorkflow:
                     / "commit-messages.md").exists()
         lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert "commit-messages" not in (lock.get("workflows") or {})
+        # The two steps the warning names do switch it over.
+        boost("uninstall", "commit-messages", "--kind", "skill", "--yes")
+        boost("install", "%s:commit-messages" % tap)
+        assert "commit-messages" not in _lock()
+        assert (paths.home() / ".claude" / "commands"
+                / "commit-messages.md").is_file()
 
     def test_outdated_does_not_offer_the_workflow_as_an_upgrade(
             self, boost, fixture_tap_src, tmp_path):
