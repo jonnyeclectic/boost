@@ -133,3 +133,54 @@ class TestReleaseWithALostHeldCopy:
         boost("install", "brainstorming")
         assert (paths.home() / ".claude" / "skills" / "brainstorming"
                 / "SKILL.md").is_file()
+
+
+class TestReleaseKeepsAFileTheUserWrote:
+    @pytest.mark.parametrize(("name", "rel"), [
+        (WORKFLOW, (".claude", "commands", "%s.md" % WORKFLOW)),
+        (RULE, (".cursor", "rules", "%s.mdc" % RULE)),
+    ])
+    def test_release_leaves_it_and_records_it_foreign(self, boost, rwtap,
+                                                       name, rel):
+        boost("install", name)
+        boost("quarantine", name)
+        mine = paths.home().joinpath(*rel)
+        assert not mine.exists()
+        mine.parent.mkdir(parents=True, exist_ok=True)
+        mine.write_text("MY OWN file - do not lose\n", encoding="utf-8")
+        r = boost("quarantine", "--release", name)
+        kind = "workflow" if name == WORKFLOW else "rule"
+        agent = "claude-code" if name == WORKFLOW else "cursor"
+        assert ("not written: %s exists and is not managed by boost — left "
+                "alone; move it aside, then `boost sync` writes it"
+                % paths.tilde(mine)) in _flat(r.out + r.err)
+        released = next(line for line in r.out.splitlines()
+                        if "released %s %s" % (kind, name) in line)
+        assert agent not in released
+        assert mine.read_text(encoding="utf-8") == "MY OWN file - do not lose\n"
+        entry = lockfile.find_any(name)[1]
+        assert entry["quarantined"] is False
+        assert str(mine) not in [m["path"] for m in entry["materializations"]]
+        assert [f["path"] for f in store.foreign_rows(entry)] == [str(mine)]
+        assert store.foreign_rows(entry)[0]["agent"] == agent
+        # Other agents were restored.
+        assert entry["materializations"]
+        for m in entry["materializations"]:
+            if not lockfile.is_skill_copy(m) and m.get("mode") != "claude":
+                assert os.path.isfile(m["path"])
+        # Uninstall never takes the user's file with it.
+        boost("uninstall", name)
+        assert mine.read_text(encoding="utf-8") == "MY OWN file - do not lose\n"
+
+    def test_the_stashed_text_itself_is_restored_over(self, boost, rwtap):
+        boost("install", WORKFLOW)
+        cmd = paths.home() / ".claude" / "commands" / ("%s.md" % WORKFLOW)
+        before = cmd.read_text(encoding="utf-8")
+        boost("quarantine", WORKFLOW)
+        # An interrupted quarantine leaves exactly the stashed text behind.
+        cmd.write_text(before, encoding="utf-8")
+        r = boost("quarantine", "--release", WORKFLOW)
+        assert "not written" not in r.out + r.err
+        entry = lockfile.get_workflow(WORKFLOW)
+        assert str(cmd) in [m["path"] for m in entry["materializations"]]
+        assert not store.foreign_rows(entry)

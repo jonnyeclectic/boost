@@ -680,13 +680,21 @@ def cmd_quarantine(argv):
                    % (name, ", ".join(res.linked) or "none"))
         else:
             skipped: list[str] = []
+            theirs: list[str] = []
             restored = store.release_materialized(kind, name, entry,
-                                                  skipped=skipped)
+                                                  skipped=skipped,
+                                                  foreign=theirs)
             out.ok("released %s %s (restored: %s)"
                    % (kind, name, ", ".join(restored) or "none"))
             for d in skipped:
                 out.info("not restored as a skill: %s now holds something "
                          "else — left alone" % paths.tilde(d), wrap=True)
+            # Install's words for the same file: the user's own, never
+            # replaced, and `boost sync` writes the item once it is moved.
+            for f in theirs:
+                out.warn("not written: %s exists and is not managed by boost "
+                         "— left alone; move it aside, then `boost sync` "
+                         "writes it" % paths.tilde(f), wrap=True)
         return 0
 
     name = store.installed_name(args.name)

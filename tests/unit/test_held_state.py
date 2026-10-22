@@ -305,3 +305,58 @@ class TestReleaseWithALostHeldCopy:
         entry = lockfile.get_skill(installed)
         assert entry["quarantined"] is False
         assert not store.is_held(entry)
+
+
+class TestReleaseLeavesAUserFileAlone:
+    def test_taken_while_held(self, sandbox, tmp_path):
+        p = tmp_path / "x.md"
+        assert store._taken_while_held(p, "boost") is False      # absent
+        p.write_text("boost", encoding="utf-8")
+        assert store._taken_while_held(p, "boost") is False      # same text
+        p.write_text("mine", encoding="utf-8")
+        assert store._taken_while_held(p, "boost") is True
+        p.unlink()
+        p.mkdir()
+        assert store._taken_while_held(p, "boost") is False      # a dir
+        p.rmdir()
+        if os.name != "nt":
+            target = tmp_path / "t.md"
+            target.write_text("boost", encoding="utf-8")
+            p.symlink_to(target)
+            assert store._taken_while_held(p, "boost") is True   # a link
+
+    def test_release_records_it_foreign_and_restores_the_rest(self, sandbox):
+        home = paths.home()
+        mine = home / ".claude" / "commands" / "w.md"
+        free = home / ".cursor" / "commands" / "w.md"
+        mine.parent.mkdir(parents=True)
+        mine.write_text("mine\n", encoding="utf-8")
+        rows = [{"agent": "claude-code", "slot": "commands",
+                 "path": str(mine), "sha256": "a"},
+                {"agent": "cursor", "slot": "commands",
+                 "path": str(free), "sha256": "b"}]
+        entry = {"kind": "workflow", "name": "w", "version": "1.0.0",
+                 "quarantined": True, "materializations": rows,
+                 "quarantine_stash": [{**r, "content": "boost\n",
+                                       "full_text": None} for r in rows]}
+        lockfile.set_workflow("w", entry)
+        theirs: list[str] = []
+        restored = store.release_materialized("workflow", "w", entry,
+                                              foreign=theirs)
+        assert restored == ["cursor"]
+        assert theirs == [str(mine)]
+        assert mine.read_text(encoding="utf-8") == "mine\n"
+        assert free.read_text(encoding="utf-8") == "boost\n"
+        saved = lockfile.get_workflow("w")
+        assert saved["quarantined"] is False
+        assert "quarantine_stash" not in saved
+        assert [m["path"] for m in saved["materializations"]] == [str(free)]
+        assert saved["foreign"] == [{"agent": "claude-code",
+                                     "slot": "commands", "path": str(mine)}]
+        # Released twice over a kept foreign row: never duplicated.
+        saved["quarantined"] = True
+        saved["quarantine_stash"] = [{**rows[0], "content": "boost\n"}]
+        saved["materializations"] = [rows[0]]
+        store.release_materialized("workflow", "w", saved)
+        assert lockfile.get_workflow("w")["foreign"] == [
+            {"agent": "claude-code", "slot": "commands", "path": str(mine)}]

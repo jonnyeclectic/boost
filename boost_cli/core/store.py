@@ -5179,8 +5179,24 @@ def stale_quarantine_artifacts(name: str, entry: dict) -> bool:
     return False
 
 
+def _taken_while_held(path: Path, content: str) -> bool:
+    """Whether ``path`` now holds a file of the user's that a release of
+    ``content`` must not replace.
+
+    :func:`_foreign_target`'s test without its ``owned`` set: at release the
+    stash rows *are* the recorded paths, so every one would read as boost's.
+    Quarantine removed the file, so anything there now was put there since —
+    except the very text stashed, which an interrupted quarantine leaves and
+    rewriting changes nothing. A directory is the write's own refusal.
+    """
+    if not os.path.lexists(path) or occupied(path):
+        return False
+    return path.is_symlink() or _file_sha(path) != _text_sha(content)
+
+
 def release_materialized(kind: str, name: str, entry: dict,
-                         skipped: list[str] | None = None) -> list[str]:
+                         skipped: list[str] | None = None,
+                         foreign: list[str] | None = None) -> list[str]:
     """Restore what :func:`quarantine_materialized` removed, byte-for-byte.
 
     A stash record whose ``content`` is None (the artifact was already gone at
@@ -5188,6 +5204,12 @@ def release_materialized(kind: str, name: str, entry: dict,
     Persists the entry and returns the agents restored. A skill copy whose
     store dir something else took meanwhile is not restored, and its path is
     appended to ``skipped`` for the caller to name.
+
+    A rule or command file the user wrote at the path while it was held is
+    theirs (:func:`_taken_while_held`): left alone and moved from
+    ``materializations`` to the entry's ``foreign`` record, exactly as an
+    install records it, so uninstall never deletes it and `boost sync` writes
+    the item once the path is free. Its path is appended to ``foreign``.
     """
     from . import rules
     # The stash names absolute paths under the row's base, so releasing a
@@ -5227,6 +5249,18 @@ def release_materialized(kind: str, name: str, entry: dict,
                 if not lockfile.is_skill_copy(r)]
             if skipped is not None:
                 skipped.append(str(path.parent))
+            continue
+        if (m.get("mode") != rules.MODE_CLAUDE and not lockfile.is_skill_copy(m)
+                and _taken_while_held(path, content)):
+            entry["materializations"] = [
+                r for r in entry.get("materializations") or ()
+                if r.get("path") != m.get("path")]
+            row = {k: m[k] for k in ("agent", "slot", "mode", "path")
+                   if m.get(k) is not None}
+            entry["foreign"] = [*(r for r in foreign_rows(entry)
+                                  if r["path"] != row["path"]), row]
+            if foreign is not None:
+                foreign.append(str(path))
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         if m.get("mode") == rules.MODE_CLAUDE:
