@@ -496,6 +496,11 @@ def unfinished_clones() -> list[Path]:
                   and not gitutil.head_commit(d))
 
 
+#: The staging dir a re-clone fills beside the tap (see `_reclone`). Not a
+#: tap of its own, so a killed run's leftover is never offered `boost tap`.
+RECLONE_SUFFIX = ".boost-reclone"
+
+
 def unlisted_clones() -> list[tuple[Path, str]]:
     """Real clones under `repos/` that no configured tap lists, with origin URL.
 
@@ -510,7 +515,8 @@ def unlisted_clones() -> list[tuple[Path, str]]:
         return []
     listed = {t.path for t in list_taps()}
     return [(d, gitutil.remote_url(d)) for d in sorted(root.iterdir())
-            if d.is_dir() and d not in listed and gitutil.head_commit(d)]
+            if d.is_dir() and d not in listed
+            and not d.name.endswith(RECLONE_SUFFIX) and gitutil.head_commit(d)]
 
 
 def readd_hint(clone: Path, url: str) -> str:
@@ -869,7 +875,7 @@ def _reclone(tap: Tap, pin: str | None) -> None:
     cannot be checked out still never lands as a tree on HEAD with a stale pin
     beside it: the staging copy is discarded with it.)
     """
-    staging = tap.path.with_name(tap.path.name + ".boost-reclone")
+    staging = tap.path.with_name(tap.path.name + RECLONE_SUFFIX)
     _clear_path(staging)
     try:
         gitutil.clone_shallow(tap.url, staging)

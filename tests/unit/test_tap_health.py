@@ -306,6 +306,11 @@ class TestUnlistedClones:
         boost("tap", lost)
         (paths.repos_dir() / "o__half" / ".git").mkdir(parents=True)
         (paths.repos_dir() / "stray.txt").write_text("x", encoding="utf-8")
+        # A killed re-clone's staging copy is a full clone, and not a tap.
+        subprocess.run(["git", "clone", "-q", str(keep),
+                        str(paths.repos_dir() / ("ul-keep"
+                                                 + registry.RECLONE_SUFFIX))],
+                       check=True, capture_output=True)
         assert registry.unlisted_clones() == []
         _drop_from_config("ul-lost")
         clone = paths.repos_dir() / "ul-lost"
