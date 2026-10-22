@@ -2589,6 +2589,7 @@ def cmd_stats(argv):
     kind = kind or "skill"
     qualifier, _bare = catalog.split_name(args.name)
     matches = catalog.find(args.name)
+    cat: dict | None
     if lock is None and matches:
         # Nothing installed to narrow by, so the row is picked the way `info`
         # picks it: `matches[0]` described whichever tap sorted first — and
