@@ -2742,7 +2742,9 @@ def carried_user_state(existing: dict | None) -> dict:
       ``source_updated_at``, ``materializations``, a workflow's ``foreign``.
     * **reset on purpose** — ``quarantined`` (the content was just put back)
       and ``sidelined_by`` (the install relinks, and ``agents`` is measured
-      from disk, so keeping the flag would describe links that exist).
+      from disk, so keeping the flag would describe links that exist). An
+      ``update`` or ``reinstall`` then puts a sidelined skill back aside
+      (:func:`keep_sideline`), so the flag it ends with is measured too.
     """
     pin = (existing or {}).get("commit_pin")
     return {"commit_pin": pin} if pin else {}
@@ -2930,8 +2932,34 @@ def install(entry: dict, force: bool = False,
         for b in old:
             if os.path.lexists(b):
                 _remove_backup(b)
+    if via in REFRESH_VIAS:
+        keep_sideline(name, existing, res)
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
     return res
+
+
+#: The ``via`` of an install that refreshes content rather than asks for the
+#: skill back: ``update`` and ``reinstall`` keep a sidelined skill sidelined.
+REFRESH_VIAS = frozenset({"update", "reinstall"})
+
+
+def keep_sideline(name: str, existing: dict | None, res: InstallResult) -> bool:
+    """Set ``name`` aside again after a refresh, if ``existing`` had been.
+
+    The install relinks and resets ``sidelined_by`` (:func:`carried_user_state`),
+    which is right for a ``boost install`` but not for ``update`` or
+    ``reinstall`` during a focus or context session: those relinked the skill
+    the session had set aside, dropped the flag, and ``focus --clear`` then
+    counted one restore fewer. The new copy is held aside like the old one, so
+    the refresh lands and the sideline stands. Returns whether it re-sidelined.
+    """
+    by = str((existing or {}).get("sidelined_by") or "")
+    if not by or (existing or {}).get("quarantined"):
+        return False
+    sideline(name, by)
+    # The links this install reported were just taken away again.
+    res.linked = []
+    return True
 
 
 def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,

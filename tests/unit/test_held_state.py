@@ -120,3 +120,49 @@ class TestQuarantineOwnsTheHeldCopy:
         assert "claude-code" in res.linked
         assert _link(installed).is_symlink()
         assert store.skill_store_dir(installed).is_dir()
+
+
+class TestRefreshKeepsTheSideline:
+    """`update` and `reinstall` refresh a sidelined skill's content and keep
+    it aside; a plain `install --force` is still the one that brings it back."""
+
+    @pytest.mark.parametrize("via", ["update", "reinstall"])
+    def test_refresh_lands_in_the_held_copy(self, installed, via):
+        from boost_cli.core import integrity
+        store.sideline(installed, "context")
+        res = store.install(catalog.resolve_one(installed), force=True,
+                            via=via)
+        assert res.linked == []
+        entry = lockfile.get_skill(installed)
+        assert entry["sidelined_by"] == "context"
+        assert entry["agents"] == []
+        assert entry[store.HELD_KEY] == str(store.held_copy_dir(installed))
+        assert not os.path.lexists(_link(installed))
+        assert not os.path.lexists(store.skill_store_dir(installed))
+        assert (store.held_copy_dir(installed) / "SKILL.md").is_file()
+        assert integrity.status(installed, entry) == integrity.STATUS_OK
+
+    def test_a_plain_install_still_relinks(self, installed):
+        store.sideline(installed, "focus")
+        res = store.install(catalog.resolve_one(installed), force=True)
+        assert "claude-code" in res.linked
+        assert "sidelined_by" not in lockfile.get_skill(installed)
+        assert _link(installed).is_symlink()
+
+    def test_keep_sideline_needs_a_sidelined_unquarantined_row(self, installed):
+        res = store.InstallResult(installed, store.skill_store_dir(installed),
+                                  linked=["claude-code"])
+        for existing in (None, {}, {"sidelined_by": ""},
+                         {"sidelined_by": "focus", "quarantined": True}):
+            assert store.keep_sideline(installed, existing, res) is False
+        assert res.linked == ["claude-code"]
+        assert _link(installed).is_symlink()
+        assert store.keep_sideline(installed, {"sidelined_by": "profile"},
+                                   res) is True
+        assert res.linked == []
+        assert lockfile.get_skill(installed)["sidelined_by"] == "profile"
+        assert not os.path.lexists(_link(installed))
+
+    def test_refresh_vias(self):
+        assert frozenset({"update", "reinstall"}) == store.REFRESH_VIAS
+

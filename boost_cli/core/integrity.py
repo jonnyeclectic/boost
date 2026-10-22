@@ -142,7 +142,8 @@ def skill_modified(name: str, entry: dict | None) -> bool:
 
 
 def modified_remedy(name: str, kind: str = "skill",
-                    scope: str | None = None) -> tuple[str, str]:
+                    scope: str | None = None,
+                    entry: dict | None = None) -> tuple[str, str]:
     """``(command, purpose)`` that resolves item ``name`` reading MODIFIED.
 
     Two faults share that status and have different fixes. A store dir with
@@ -159,11 +160,20 @@ def modified_remedy(name: str, kind: str = "skill",
     remedy carries ``--local``: bare ``reinstall`` reads the user lock, so
     with a same-named user install it reinstalls *that* copy, exits 0, and
     leaves the project edit in place.
+
+    A held copy (quarantined or sidelined, :func:`copy_dir`) is never heal's:
+    `heal` leaves a held row alone by design, so naming it answered an edited
+    sidelined skill with "nothing to heal". ``boost reinstall`` refreshes the
+    held copy and keeps it aside. ``entry`` defaults to the lock row.
     """
     if scope == scopes.SCOPE_PROJECT:
         return "boost reinstall %s --local" % name, "to discard local edits"
-    if kind == "skill" and not (_store_dir(name) / "SKILL.md").is_file():
-        return "boost heal", "to restore its missing SKILL.md"
+    if kind == "skill":
+        if entry is None:
+            entry = lockfile.get_skill(name)
+        if (not (entry or {}).get("held_at")
+                and not (_store_dir(name) / "SKILL.md").is_file()):
+            return "boost heal", "to restore its missing SKILL.md"
     return "boost reinstall %s" % name, "to discard local edits"
 
 

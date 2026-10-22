@@ -953,6 +953,27 @@ def test_modified_remedy_for_a_deleted_skill_md_is_heal(installed):
         "boost heal", "to restore its missing SKILL.md")
 
 
+def test_modified_remedy_for_an_edited_held_copy_is_a_reinstall(installed):
+    # Sidelined: the store has no copy at all, but heal leaves a held row
+    # alone and would answer "nothing to heal".
+    store.sideline(installed, "focus")
+    held = store.held_copy_dir(installed)
+    (held / "SKILL.md").write_text("evil\n", encoding="utf-8")
+    assert integrity.status(installed) == integrity.STATUS_MODIFIED
+    assert integrity.modified_remedy(installed) == (
+        "boost reinstall brainstorming", "to discard local edits")
+    # Even with the held SKILL.md gone, heal is not the one that acts.
+    (held / "SKILL.md").unlink()
+    assert integrity.modified_remedy(installed) == (
+        "boost reinstall brainstorming", "to discard local edits")
+    # An explicit entry is used as given: no held_at, no store copy -> heal.
+    assert integrity.modified_remedy(installed, entry={}) == (
+        "boost heal", "to restore its missing SKILL.md")
+    assert integrity.modified_remedy(
+        "other", entry={"held_at": "/h/other"}) == (
+        "boost reinstall other", "to discard local edits")
+
+
 def test_modified_remedy_for_a_project_skill_carries_local(sandbox):
     # No user store copy to probe: even a name with no store SKILL.md is
     # a reinstall, and one that reads this repo's lock.

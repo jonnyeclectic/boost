@@ -4737,3 +4737,50 @@ class TestBundleLineDiagnostics:
         assert "bf:1: nope not found in tap fixture-tap — skipped" in flat
         assert ("bf:2: brainstorming is ambiguous — in fixture-tap, rival-tap; "
                 "qualify it as owner/repo:brainstorming") in flat
+
+
+class TestRefreshDuringFocus:
+    """`update` and `reinstall` of a skill focus set aside keep it aside."""
+
+    def test_update_keeps_a_focus_sideline(self, boost, fixture_tap_src,
+                                           tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "fu-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming", "commit-messages")
+        boost("focus", "brainstorming")
+        _bump(tap_dir, "commit-messages", "1.0.2", "1.0.3")
+        r = boost("update")
+        assert "upgraded commit-messages v1.0.2 → v1.0.3" in r.out
+        lk = _lock()["commit-messages"]
+        assert lk["version"] == "1.0.3"
+        assert lk["sidelined_by"] == "focus"
+        assert lk["agents"] == []
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "commit-messages")
+        assert not os.path.lexists(paths.store_dir() / "commit-messages")
+        held = paths.held_skills_dir() / "commit-messages" / "SKILL.md"
+        assert "version: 1.0.3" in held.read_text(encoding="utf-8")
+        boost("verify", "commit-messages")
+        r = boost("focus", "--clear")
+        assert "focus cleared — 1 skill(s) restored" in r.out
+        assert (paths.home() / ".claude" / "skills" / "commit-messages"
+                ).is_symlink()
+
+    def test_an_edited_held_copy_names_a_remedy_that_works(self, boost,
+                                                           tapped):
+        boost("install", "brainstorming", "commit-messages")
+        boost("focus", "brainstorming")
+        held = paths.held_skills_dir() / "commit-messages" / "SKILL.md"
+        held.write_text(held.read_text(encoding="utf-8") + "evil\n",
+                        encoding="utf-8")
+        r = boost("verify", "commit-messages", expect=1)
+        assert "boost reinstall commit-messages" in r.out + r.err
+        assert "boost heal" not in r.out + r.err
+        r = boost("reinstall", "commit-messages")
+        assert "reinstalled commit-messages" in r.out
+        assert "evil" not in held.read_text(encoding="utf-8")
+        boost("verify", "commit-messages")
+        lk = _lock()["commit-messages"]
+        assert lk["sidelined_by"] == "focus"
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "commit-messages")

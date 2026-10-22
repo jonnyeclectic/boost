@@ -2254,6 +2254,7 @@ def cmd_reinstall(argv: list[str]) -> int:
                 out.warn("%s: %s" % (name, err.message))
                 failed += 1
                 continue
+            store.keep_sideline(name, lk, res)
             out.ok("reinstalled %s (%s)" % (name, how))
             _warn_unwritable(res)
             done += 1
