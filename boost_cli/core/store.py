@@ -1090,10 +1090,105 @@ def scoped_agents(entry: dict, enabled: dict[str, Path]) -> dict[str, Path]:
     agent. That keeps ``boost sync`` doing its other job, which is linking
     already-installed skills into an agent that was enabled afterwards.
     """
-    scope = entry.get("only_agents")
+    scope = effective_scope(entry)
     if not scope:
         return enabled.copy()
     return {a: d for a, d in enabled.items() if a in scope}
+
+
+def unknown_scope_agents(entry: dict) -> list[str]:
+    """The names in ``entry``'s ``only_agents`` that are no agent boost knows.
+
+    A lock carried from another boost version or machine can hold one, and
+    `boost install --agent` refuses the same name as "unknown agent". A
+    disabled agent is still known. In declaration order, once each.
+    """
+    declared = entry.get("only_agents")
+    if not isinstance(declared, list):
+        return []
+    known = agents.known_agents()
+    return list(dict.fromkeys(a for a in declared
+                              if isinstance(a, str) and a not in known))
+
+
+def _recorded_agents(entry: dict) -> list[str]:
+    """The agents ``entry`` records reaching: a skill's linked ``agents``,
+    a rule's or workflow's materialization rows (never the skill copy)."""
+    if "materializations" in entry:
+        names = [m.get("agent") for m in entry.get("materializations") or ()
+                 if isinstance(m, dict) and not lockfile.is_skill_copy(m)]
+    else:
+        names = list(entry.get("agents") or ())
+    return list(dict.fromkeys(a for a in names if isinstance(a, str)))
+
+
+def effective_scope(entry: dict) -> list[str] | None:
+    """``entry``'s ``--agent`` narrowing, less the names no agent has.
+
+    An unknown name narrows to nothing, and a scope of only unknown names
+    read as "linked for no agent": doctor told the user to `boost sync
+    --prune`, which unlinked the skill from every agent. Such a scope falls
+    back to the agents the entry records reaching — what it reaches now
+    stays what it reaches — and to no narrowing when it records none.
+    `boost heal` writes the same answer into the lock
+    (:func:`drop_unknown_scope_agents`), so the two never disagree.
+    """
+    declared = entry.get("only_agents")
+    if not declared:
+        return declared
+    unknown = unknown_scope_agents(entry)
+    if not unknown:
+        return declared
+    kept = [a for a in declared if a not in unknown]
+    if kept:
+        return kept
+    known = agents.known_agents()
+    return [a for a in _recorded_agents(entry) if a in known] or None
+
+
+def unknown_scope_rows() -> list[tuple[str, str, list[str]]]:
+    """``(kind, name, unknown agents)`` for every lock row whose declared
+    scope names an agent boost does not know, kind then name order."""
+    return [(kind, name, bad)
+            for kind, section in lockfile.all_installed().items()
+            for name, entry in sorted(section.items())
+            if isinstance(entry, dict)
+            and (bad := unknown_scope_agents(entry))]
+
+
+def unknown_scope_line(kind: str, name: str, unknown: list[str]) -> str:
+    """doctor's wording for an :func:`unknown_scope_rows` row."""
+    n = len(unknown)
+    return ("%s %s's declared agent scope names %s, %s boost does not know "
+            "— it is ignored; `boost heal` drops %s from the lock"
+            % (kind, name, ", ".join(unknown),
+               "an agent" if n == 1 else "agents",
+               "it" if n == 1 else "them"))
+
+
+def drop_unknown_scope_agents(dry: bool = False) -> list[str]:
+    """Rewrite each :func:`unknown_scope_rows` row's ``only_agents`` to its
+    :func:`effective_scope`; one line per row, worded for ``dry`` or not.
+
+    Converges: the agents an entry reaches are the same before and after, so
+    nothing is linked or unlinked by it, and the next run finds no row.
+    """
+    lines = []
+    for kind, name, unknown in unknown_scope_rows():
+        what = "%s %s's declared agent scope" % (kind, name)
+        gone = ", ".join(unknown)
+        if dry:
+            lines.append("would drop %s from %s" % (gone, what))
+            continue
+
+        def fix(row: dict) -> bool:
+            if not unknown_scope_agents(row):
+                return False
+            row["only_agents"] = effective_scope(row)
+            return True
+        if lockfile.update_entry(kind, name, fix):
+            lines.append("dropped %s from %s" % (gone, what))
+    return lines
 
 
 def unlink_agents(name: str, into: list[str] | None = None) -> list[str]:
@@ -2206,8 +2301,7 @@ def atomic_write_dirs() -> list[Path]:
                 continue
             for m in lockfile._row_paths(entry):
                 p = Path(m["path"])
-                dirs.append(p.parent)
-                dirs.append(Path(os.path.realpath(p)).parent)
+                dirs.extend((p.parent, Path(os.path.realpath(p)).parent))
     def key_of(d: Path) -> str:
         return os.path.normcase(os.path.realpath(d))
     seen: set[str] = {key_of(store)}

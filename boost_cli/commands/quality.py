@@ -994,13 +994,35 @@ def cmd_doctor(argv):
                 "run `boost sync --prune`"
                 % (name, ", ".join(stray), ", ".join(scope)))
             skill_issues += 1
+    # A declared scope naming an agent boost does not know. It used to read
+    # as "linked for no agent", and doctor's remedy (`sync --prune`) then
+    # unlinked the skill everywhere; it is ignored now, and heal drops it.
+    for kind, name, unknown in (store.unknown_scope_rows() if lock_ok else []):
+        bad("%s-scope" % kind, store.unknown_scope_line(kind, name, unknown),
+            wrap=True)
+        if kind == "skill":
+            skill_issues += 1
     active_skills = len(skills) - quarantined_skills
+    # Counted on disk: a skill with no link at all is not one "with agent
+    # links", which is what this line said over one `sync --prune` stranded.
+    # A sidelined skill is unlinked on purpose and counts as it always did.
+    unlinked = sum(
+        1 for name, entry in skills.items()
+        if not entry.get("quarantined") and not entry.get("sidelined_by")
+        and enabled and not any(os.path.islink(d / name)
+                                for d in enabled.values()))
     # "with agent links" is a claim the loop above only checked with agents_ok.
     if skills and not skill_issues and agents_ok:
         # A quarantined skill has no agent links — the check above counts
         # any it could not remove as an issue — so it must not inflate this count into a false
         # "healthy, N skills with agent links" the way it used to.
-        if active_skills:
+        if active_skills and unlinked:
+            rep.ok("skills", "%d skill%s present in store, %d with agent "
+                   "links%s" % (active_skills, _s(active_skills),
+                                active_skills - unlinked,
+                                " (%d quarantined)" % quarantined_skills
+                                if quarantined_skills else ""))
+        elif active_skills:
             rep.ok("skills", "%d skill%s present in store with agent links%s"
                    % (active_skills, _s(active_skills),
                       " (%d quarantined)" % quarantined_skills
@@ -2121,6 +2143,11 @@ def cmd_heal(argv):
         for msg in store.project_sync_apply({"missing": pplan["missing"]}):
             (out.warn if store.is_unrepaired(msg) else out.ok)(msg)
             actions.append(msg)
+    # A declared scope naming an agent this boost does not know: dropped, so
+    # the lock says what boost already does with it (`store.effective_scope`).
+    for line in store.drop_unknown_scope_agents(dry=dry):
+        (out.info if dry else out.ok)(line)
+        actions.append(line)
     # A rule block present twice in one context file: the first copy stays,
     # with its text, and the rest come out.
     not_collapsed: list[Path] = []
