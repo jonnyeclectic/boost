@@ -27,12 +27,14 @@ from . import (
     foreign,
     gitutil,
     journal,
+    jsonstate,
     lockfile,
     paths,
     policy,
     projectlock,
     registry,
     scopes,
+    snapshot,
     util,
 )
 
@@ -2130,7 +2132,43 @@ def stale_temps(now: float | None = None) -> list[tuple[Path, str]]:
             found.append((p, "stale temp file"))
         elif stat.S_ISDIR(st.st_mode) and _temp_token(p.name, ""):
             found.append((p, "stale staging dir"))
+    found += _stale_restore_dirs(root, now)
     return sorted(found)
+
+
+#: :func:`stale_temps`' kind for a ``snapshot restore``'s parked previous
+#: store: the only copy of it once a kill cut the restore short, so `boost
+#: clean` names it and leaves it, and `boost doctor` says what it holds.
+PARKED_STORE = "previous store parked by an interrupted restore"
+
+
+def _stale_restore_dirs(root: Path, now: float) -> list[tuple[Path, str]]:
+    """The dirs a killed `snapshot restore` left beside the store.
+
+    :func:`snapshot.restore` makes them in the store's parent, so a scan of
+    the store alone never saw them: a SIGTERM mid-swap left the previous
+    store in one, and neither doctor nor `clean --dry-run` said a word.
+    """
+    try:
+        entries = list(root.resolve().parent.iterdir())
+    except OSError:
+        return []
+    found = []
+    for p in entries:
+        prefix = next((x for x in snapshot.RESTORE_PREFIXES
+                       if p.name.startswith(x)), None)
+        token = p.name[len(prefix):] if prefix else ""
+        if not (len(token) == 8 and set(token) <= _TEMP_CHARS):
+            continue
+        try:
+            st = p.lstat()
+        except OSError:
+            continue
+        if not stat.S_ISDIR(st.st_mode) or now - st.st_mtime <= STALE_TEMP_AGE:
+            continue
+        found.append((p, PARKED_STORE if prefix == snapshot.PARKED_PREFIX
+                      else "stale restore staging dir"))
+    return found
 
 
 def declared_mcp_servers(skill_dir) -> list[dict]:
@@ -6333,6 +6371,35 @@ def remove_duplicate_discovery(dup: DuplicateDiscovery) -> bool:
     except OSError:
         return False
     return True
+
+
+def snapshot_rehomer(snap_id: str, tar_path: Path):
+    """The ``rehome`` :func:`snapshot.restore` applies to an archived lock.
+
+    Moves its rule/workflow paths onto this ``$HOME`` (:func:`lockfile.rehome`)
+    from the home the snapshot's sidecar records, or — a snapshot saved
+    before it recorded one — from wherever each agent's dotdir appears in
+    the path. A path neither places is refused, before the store is touched:
+    restored as it was, it would point at the other home's files, which
+    `boost uninstall` then deletes.
+    """
+    meta, _err = jsonstate.read_object(
+        tar_path.with_name(snap_id + snapshot.META_SUFFIX))
+    old_home = (meta or {}).get("home")
+    old_home = old_home if isinstance(old_home, str) and old_home else None
+    dirs = {name: spec["dir"] for name, spec in agents.known_agents().items()}
+
+    def rehome(lock: dict) -> bool:
+        moved, unplaced = lockfile.rehome(lock, paths.home(), old_home, dirs)
+        if unplaced:
+            raise BoostError(
+                "snapshot %s cannot be restored: %s %s files outside this "
+                "home that boost cannot place in it"
+                % (snap_id, ", ".join(unplaced),
+                   "records" if len(unplaced) == 1 else "record"),
+                hint=snapshot.UNTOUCHED_HINT)
+        return bool(moved)
+    return rehome
 
 
 def restore_preserve_newer_lock_sections(

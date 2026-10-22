@@ -24,6 +24,7 @@ import sys
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
+from pathlib import Path
 from typing import NamedTuple
 
 from ..errors import BoostError
@@ -433,14 +434,16 @@ class Integrity(NamedTuple):
     version: object = None  # the schema version found, for "schema"/"older"
 
 
-def check() -> Integrity:
+def check(p=None) -> Integrity:
     """Report whether the lock file itself parses as the current schema.
 
     Does not touch the store — a missing lock file with an empty store is a
     fresh install, not a fault; callers that care about that distinction
-    combine this with a store-content check of their own.
+    combine this with a store-content check of their own. ``p`` checks a lock
+    file somewhere else instead: `snapshot restore` asks it of the archived
+    one before that replaces the live store.
     """
-    raw, err = jsonstate.read_object(paths.lockfile_path())
+    raw, err = jsonstate.read_object(p or paths.lockfile_path())
     if err is not None:
         return Integrity(False, "corrupt")
     if raw is None:
@@ -812,6 +815,89 @@ def portable(lock: dict, base=None) -> dict:
                 if isinstance(m, dict) and "path" in m:
                     m["path"] = _portable_path(m["path"], want if local else None)
     return projected
+
+
+def _under(p: str, root) -> bool:
+    """Whether the absolute path ``p`` is ``root`` or sits beneath it, taking
+    ``root`` both as given and resolved (a symlinked or /private home)."""
+    for r in {str(root), os.path.realpath(root)}:
+        r = r.rstrip(os.sep)
+        if p == r or p.startswith(r + os.sep):
+            return True
+    return False
+
+
+def _rehome(p: str, agent, old_home: str | None, home,
+            dirs: dict) -> str | None:
+    """``p`` placed under ``home``; ``p`` itself when it already belongs on
+    this machine; None when nothing says where it would go.
+
+    It belongs when it is relative, under ``home``, or under its agent's own
+    dotdir (an agent dir configured outside ``$HOME``). Otherwise it moves
+    from ``old_home`` when it sits under that, or — for a snapshot that never
+    recorded its home — from wherever its agent's dotdir appears in it, since
+    ``/old/home/.claude/CLAUDE.md`` is ``.claude/CLAUDE.md`` under any home.
+    """
+    adir = dirs.get(agent)
+    dot = adir.parent if adir is not None else None
+    if (not Path(p).is_absolute() or _under(p, home)
+            or (dot is not None and _under(p, dot))):
+        return p
+    if old_home and _under(p, old_home):
+        return os.path.join(str(home), os.path.relpath(p, old_home))
+    if dot is None or not _under(str(dot), home):
+        return None
+    rel = Path(os.path.relpath(dot, home)).parts
+    parts = Path(p).parts
+    for i in range(len(parts) - len(rel), 0, -1):
+        if parts[i:i + len(rel)] == rel:
+            return str(dot.joinpath(*parts[i + len(rel):]))
+    return None
+
+
+def rehome(lock: dict, home, old_home: str | None = None,
+           dirs: dict | None = None) -> tuple[list[str], list[str]]:
+    """Move a user-scope rule/workflow row's absolute paths onto ``home``.
+
+    A snapshot carries the lock of the machine that saved it, whose
+    ``materializations[].path`` and ``foreign[].path`` are absolute under
+    *that* ``$HOME``. Restored as they were, every row pointed at the first
+    home: doctor read the other home's files as this one's and called them
+    fully materialized, and `boost uninstall` deleted them. Rehomed, the row
+    names the file this machine's agent reads, and `boost sync` writes it
+    when it is missing. ``old_home`` is the home the snapshot was saved
+    under, when its sidecar says; ``dirs`` maps an agent to its skills dir
+    here (:func:`agents.known_agents`). A project-scope row is the repo's
+    and is left alone.
+
+    Mutates ``lock``; returns ``(moved, unplaced)`` as ``kind name`` labels
+    — a row with a path neither ``old_home`` nor its agent's dotdir places
+    is unplaced, and keeps the path it had.
+    """
+    from . import scopes
+    moved: list[str] = []
+    unplaced: list[str] = []
+    for kind, section in SECTIONS:
+        if kind == "skill":
+            continue
+        for name, entry in sorted((lock.get(section) or {}).items()):
+            if not isinstance(entry, dict) or entry.get("scope") == scopes.SCOPE_PROJECT:
+                continue
+            label = "%s %s" % (kind, name)
+            for m in (*(entry.get("materializations") or ()),
+                      *(entry.get("foreign") or ())):
+                if not (isinstance(m, dict) and isinstance(m.get("path"), str)):
+                    continue
+                new = _rehome(m["path"], m.get("agent"), old_home, home,
+                              dirs or {})
+                if new is None:
+                    if label not in unplaced:
+                        unplaced.append(label)
+                elif new != m["path"]:
+                    m["path"] = new
+                    if label not in moved:
+                        moved.append(label)
+    return moved, unplaced
 
 
 def _portable_path(p, want: str | None) -> str:

@@ -220,6 +220,15 @@ def cmd_clean(argv) -> int:
     items.extend((pth, "leftover skill copy", util.dir_size(pth))
                  for pth in leftovers)
     temps = store.stale_temps()
+    # The only copy of the previous store, once a kill cut a restore short:
+    # named, never removed — `boost doctor` says what to do with it.
+    for pth, kind in temps:
+        if kind == store.PARKED_STORE:
+            out.warn("left %s alone: it holds the %s — move back what %s is "
+                     "missing, then delete it" % (_tilde(pth), kind,
+                                                 _tilde(paths.store_dir())),
+                     stream=sys.stderr, wrap=True)
+    temps = [t for t in temps if t[1] != store.PARKED_STORE]
     items.extend((pth, kind, util.dir_size(pth) if pth.is_dir()
                   else pth.stat().st_size) for pth, kind in temps)
     leftovers += [pth for pth, _kind in temps if pth.is_dir()]
