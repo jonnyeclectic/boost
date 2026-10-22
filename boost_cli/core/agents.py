@@ -578,6 +578,10 @@ def workflow_agents(base=None) -> dict[str, Path]:
     *rewrites* a Claude `commands/*.md` into a `SKILL.md` on disk rather than
     running it as a command. A Markdown file dropped in `~/.codex/commands/`
     would be installed, reported, and never loaded.
+
+    Windsurf is the second: it documents workflows only under
+    `.windsurf/workflows/` and `~/.codeium/windsurf/global_workflows/`, not
+    the `commands/`/`agents/` slots boost writes (see :data:`config.DEFAULTS`).
     """
     return {n: d for n, d in materializing_agents(base).items()
             if known_agents()[n]["workflows"]}

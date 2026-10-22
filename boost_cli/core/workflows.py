@@ -893,8 +893,8 @@ def sanitize_gemini_agent(name: str, raw: str) -> str:
     - every key outside :data:`GEMINI_AGENT_KEYS` is deleted, span and all,
       because ``localAgentSchema`` is ``.strict()``. This is safe *because it
       is the Gemini copy*: ``store.render`` runs once per enabled agent and
-      writes four separate regular files, so ``~/.gemini/agents/<x>.md`` is
-      read by Gemini and by nothing else. Claude, Cursor and Windsurf still get
+      writes a separate regular file each, so ``~/.gemini/agents/<x>.md`` is
+      read by Gemini and by nothing else. Claude and Cursor still get
       the tap's bytes verbatim, keys boost has never heard of included.
     - ``tools`` is kept when Gemini already accepts it, translated when every
       entry has an exact Gemini counterpart, and otherwise the whole FILE is

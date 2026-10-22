@@ -2374,11 +2374,13 @@ class TestWorkflowInstall:
     def test_command_drops_into_each_agents_commands_dir(self, tap):
         res = store.install(_workflow_entry(tap))
         assert res.kind == "workflow"
-        assert set(res.linked) == {"claude-code", "windsurf", "cursor", "gemini"}
-        for adir in (".claude", ".windsurf", ".cursor"):
+        assert set(res.linked) == {"claude-code", "cursor", "gemini"}
+        for adir in (".claude", ".cursor"):
             f = paths.home() / adir / "commands" / "ship-it.md"
             assert f.is_file()
             assert "Run the release." in f.read_text(encoding="utf-8")  # verbatim drop
+        # Windsurf reads no commands/ dir (config.DEFAULTS), so none is made.
+        assert not (paths.home() / ".windsurf" / "commands").exists()
 
         # Gemini CLI reads slash commands as TOML: a .md drop there is simply
         # never discovered, so the extension AND the content have to change.
@@ -2530,7 +2532,7 @@ class TestWorkflowInstall:
         store.install(_workflow_entry(tap, name="reviewer",
                                       rel="agents/reviewer.md", body=body))
 
-        for adir in (".claude", ".windsurf", ".cursor"):
+        for adir in (".claude", ".cursor"):
             path = paths.home() / adir / "agents" / "reviewer.md"
             assert path.read_text(encoding="utf-8") == body
 
@@ -2543,10 +2545,9 @@ class TestWorkflowInstall:
         store.install(_workflow_entry(tap))
         info = store.uninstall("ship-it")
         assert info["kind"] == "workflow"
-        assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor",
-                                         "gemini"}
+        assert set(info["unlinked"]) == {"claude-code", "cursor", "gemini"}
         assert lockfile.get_workflow("ship-it") is None
-        for adir in (".claude", ".windsurf", ".cursor"):
+        for adir in (".claude", ".cursor"):
             assert not (paths.home() / adir / "commands" / "ship-it.md").exists()
         # The recorded path is the .toml one, so that is what must be removed.
         assert not (paths.home() / ".gemini" / "commands" / "ship-it.toml").exists()
@@ -4356,6 +4357,9 @@ class TestProjectRulesAndWorkflows:
         cfg = config.load()
         cfg["agents"]["windsurf-next"] = {"dir": "~/.windsurf/skills",
                                           "enabled": True}
+        # Windsurf takes no workflows by default; this test needs two agents
+        # writing one commands/ file, which is what turning it back on gives.
+        cfg["agents"]["windsurf"]["workflows"] = True
         config.save(cfg)
         e = (_rule_entry if kind == "rule" else _workflow_entry)(tap)
         repo = self._install(e, tmp_path)
@@ -4976,7 +4980,7 @@ class TestNarrowedRuleAndWorkflowKeepTheirRecords:
         rec = lockfile.get_workflow("ship-it")
         # Every agent, plus the copy in the skill store, which names none.
         assert {m["agent"] for m in rec["materializations"]} == {
-            "claude-code", "windsurf", "cursor", "gemini", None}
+            "claude-code", "cursor", "gemini", None}
 
     def test_uninstall_then_removes_the_orphaned_slash_command(self, tap):
         store.install(_workflow_entry(tap))
@@ -5979,7 +5983,7 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
     # agents.workflow_agents.
     WRITTEN: ClassVar[dict[str, set[str]]] = {
         "rule": {"claude-code", "windsurf", "gemini", "codex"},
-        "workflow": {"claude-code", "windsurf", "gemini"}}
+        "workflow": {"claude-code", "gemini"}}
 
     def _entry(self, tap, kind):
         entry = _rule_entry(tap) if kind == "rule" else _workflow_entry(tap)
@@ -6215,6 +6219,8 @@ class TestTwoAgentsOnOneDotdir:
         cfg = config.load()
         cfg["agents"]["windsurf-next"] = {"dir": dotdir + "/skills",
                                           "enabled": True}
+        # Off by default (config.DEFAULTS); on, so a workflow shares the file.
+        cfg["agents"]["windsurf"]["workflows"] = True
         config.save(cfg)
 
     @pytest.mark.parametrize("how", [
@@ -6271,7 +6277,7 @@ class TestUnwritableAgentDirs:
                                       rel="agents/reviewer.md"))
         home = paths.home()
         dirs = [home / ".cursor" / "skills", home / ".cursor" / "rules",
-                home / ".windsurf" / "commands", home / ".claude" / "agents"]
+                home / ".cursor" / "commands", home / ".claude" / "agents"]
         self._locked(*dirs)
         try:
             found = store.unwritable_agent_dirs()
@@ -6350,7 +6356,7 @@ class TestSomethingInTheWayOfARuleOrWorkflowDir:
     # agents.workflow_agents.
     WRITTEN: ClassVar[dict[str, set[str]]] = {
         "rule": {"claude-code", "windsurf", "gemini", "codex"},
-        "workflow": {"claude-code", "windsurf", "gemini"}}
+        "workflow": {"claude-code", "gemini"}}
 
     def _entry(self, tap, kind):
         entry = _rule_entry(tap) if kind == "rule" else _workflow_entry(tap)
@@ -6876,7 +6882,16 @@ class TestAnUpgradeThatSkipsAnAgentMarksItsCopyStale:
         return next(m for m in self._locked(kind)["materializations"]
                     if m.get("agent") == agent)
 
+    @staticmethod
+    def _windsurf_takes_workflows():
+        # Windsurf takes no workflows by default (config.DEFAULTS); the
+        # carried-row machinery under test is the same for any agent.
+        cfg = config.load()
+        cfg["agents"]["windsurf"]["workflows"] = True
+        config.save(cfg)
+
     def _upgrade_without_windsurf(self, tap, kind):
+        self._windsurf_takes_workflows()
         store.install(self._entry(tap, kind))
         old = self._row(kind, "windsurf")
         _set_enabled("windsurf", False)
@@ -6934,6 +6949,7 @@ class TestAnUpgradeThatSkipsAnAgentMarksItsCopyStale:
                                                                kind):
         # Sync writes only the narrowed agents, so a stale flag on windsurf
         # here was a "run `boost sync`" that sync could never satisfy.
+        self._windsurf_takes_workflows()
         store.install(self._entry(tap, kind))
         store.install(self._entry(tap, kind), force=True,
                       only_agents=["claude-code"])

@@ -211,7 +211,20 @@ class TestCodexTarget:
         assert known["gemini"]["workflows"] is True
         assert known["codex"]["workflows"] is False
         assert set(agents.workflow_agents()) == {
-            "claude-code", "windsurf", "cursor", "gemini"}
+            "claude-code", "cursor", "gemini"}
+
+    def test_windsurf_takes_rules_but_not_workflows(self, sandbox):
+        # Windsurf documents `.windsurf/workflows/` and
+        # `~/.codeium/windsurf/global_workflows/`, never the `commands/` and
+        # `agents/` slots boost writes, so a workflow there was reported as
+        # installed and never loaded.
+        assert agents.known_agents()["windsurf"]["workflows"] is False
+        assert "windsurf" in agents.materializing_agents()
+        assert "windsurf" in agents.materializing_agents("/repo")
+        assert "windsurf" not in agents.workflow_agents()
+        assert "windsurf" not in agents.workflow_agents("/repo")
+        assert agents.materialization_skip_reason(
+            "workflow", None, "windsurf") == agents.REASON_NO_COMMAND_FORMAT
 
     def test_workflows_flag_is_configurable_back_on(self, sandbox):
         cfg = config.load()
@@ -229,7 +242,7 @@ class TestCodexTarget:
         # It must narrow the *scoped* set, not the user-scope one: antigravity
         # is out of project scope entirely, and codex stays in it.
         assert set(agents.workflow_agents("/repo")) == {
-            "claude-code", "windsurf", "cursor", "gemini"}
+            "claude-code", "cursor", "gemini"}
         assert "codex" in agents.project_agents()
 
     def test_the_base_argument_actually_reaches_the_scoped_set(self, sandbox):
