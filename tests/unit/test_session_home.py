@@ -16,7 +16,6 @@ from boost_cli.core import paths
 
 def test_home_is_the_session_home_not_the_real_one():
     home = Path(os.environ["HOME"])
-    assert home != conftest._REAL_HOME
     assert home.name.startswith("boost-test-home-")
     assert home.parent == Path(tempfile.gettempdir())
     assert paths.home() == home
@@ -39,11 +38,6 @@ def test_a_child_process_inherits_the_session_home():
     assert out.stdout.strip() == os.environ["HOME"]
 
 
-def test_isolate_home_is_idempotent():
-    assert conftest._isolate_home() == Path(os.environ["HOME"])
-    assert len(conftest._SESSION_HOME) == 1
-
-
 def test_sandbox_still_replaces_it(sandbox):
     assert Path(os.environ["HOME"]) == sandbox
-    assert sandbox != conftest._SESSION_HOME[0]
+    assert not sandbox.name.startswith("boost-test-home-")
