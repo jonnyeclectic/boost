@@ -12,6 +12,7 @@ import json
 import sys
 from collections.abc import Callable, Collection
 
+from ..errors import BoostError
 from . import config, jsonstate, output, paths, typedvalue, util
 
 # Once per process: install consults the policy several times, and the fault
@@ -301,7 +302,35 @@ def check_install(entry: dict, installed_count: int) -> list[str]:
         v.append("skill has no version (required by policy)")
     if pol["max_skills"] is not None and installed_count >= int(pol["max_skills"]):
         v.append("max_skills limit (%s) reached" % pol["max_skills"])
+    if pol["require_signed_taps"]:
+        v.extend(installed_tap_signing(tap))
     return v
+
+
+def installed_tap_signing(tap: str) -> list[str]:
+    """``require_signed_taps`` violations for content coming from tap ``tap``.
+
+    `boost tap` is not the only door: a tap added before the policy was set
+    stays tapped, and every install, upgrade and repair from it read only
+    the catalog entry — so `boost trust verify` failed a tap that `boost
+    install` went on installing from. This re-checks the clone itself.
+    ``local`` (an import) names no tap; a URL import's source was checked by
+    :func:`check_source` when it was cloned. A tap that cannot be found
+    cannot be verified, so it fails closed, as does one with no clone.
+    """
+    if not tap or tap == "local":
+        return []
+    from . import registry
+    try:
+        found = registry.get(tap)
+    except BoostError:
+        return ["tap %r is not tapped, so its signature cannot be verified, "
+                "and policy requires a trusted signature" % tap]
+    if not found.is_cloned:
+        # Read as "unsigned", which `boost trust add` would not fix.
+        return ["tap %r has no clone here to verify — `boost update %s` "
+                "re-clones it" % (tap, found.name)]
+    return check_tap_signing(found.path, what="tap %r" % tap)
 
 
 def check_installed_version(entry: dict) -> list[str]:

@@ -825,7 +825,8 @@ class TestAReadOnlyStore:
         store_dir.chmod(0o500)
         try:
             healed = boost("heal", expect=1).out
-            synced = boost("sync").out
+            # A repair sync could not make fails it, as it fails heal.
+            synced = boost("sync", expect=1).out
         finally:
             store_dir.chmod(0o700)
         for said in (healed, synced):

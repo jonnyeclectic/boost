@@ -133,7 +133,8 @@ def test_an_edited_file_is_not_blessed(boost, items):
     edited.write_text(edited.read_text(encoding="utf-8") + "mine\n",
                       encoding="utf-8")
     n = len(items[("rules", "house")])
-    r = boost("sync")
+    # A file it cannot vouch for is left unrepaired, so sync fails as heal does.
+    r = boost("sync", expect=1)
     out = r.out + r.err
     assert "recorded the hash of rule house's %s" % _files(n - 1) in out
     assert ("rule house has a file with no recorded hash that boost cannot "

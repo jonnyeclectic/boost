@@ -758,6 +758,8 @@ def cmd_policy(argv) -> int:
     # every per-item row carries both.
     violations: list[tuple[str | None, str | None, str, str]] = []
     not_checked: set[str] = set()
+    # One provenance verdict per tap, not per item installed from it.
+    signing: dict[str, list[str]] = {}
     total = 0
     # `max_skills` caps what `install` counts, which is the user lock.
     skill_count = len(everything.get("skill", {}))
@@ -774,6 +776,12 @@ def cmd_policy(argv) -> int:
         if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
             violations.append((name, kind, label,
                                "tap %s is not on the allowlist" % tap))
+        if pol["require_signed_taps"]:
+            # A tap added before the policy was set is still tapped; `trust
+            # verify` failed it while this check passed what came from it.
+            if tap not in signing:
+                signing[tap] = policy.installed_tap_signing(tap)
+            violations.extend((name, kind, label, msg) for msg in signing[tap])
         if store.is_url_import(entry):
             # `local` is exempt above, but a URL import names its source; the
             # clone is gone, so signing cannot be re-checked here.

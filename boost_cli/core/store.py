@@ -5052,10 +5052,39 @@ def recorded_policy_violations(kind: str, name: str, entry: dict,
     """
     if installed is None:
         installed = lockfile.installed()
-    return policy.check_install(
+    violations = policy.check_install(
         _recorded_policy_entry(kind, name, entry),
         _count_others(installed, name, replaces=name in installed
                       or kind != "skill"))
+    return violations + [m for m in _recorded_capability_violations(
+        kind, name, entry) if m not in violations]
+
+
+def _recorded_capability_violations(kind: str, name: str,
+                                    entry: dict) -> list[str]:
+    """``denied_capabilities`` violations for a recorded item's own content.
+
+    Install runs :func:`_enforce_capability_policy` on the source; a release
+    or restore brings back boost's copy instead, so the copy is what is read:
+    a skill's ``SKILL.md`` (store or held aside), a rule's or workflow's
+    quarantine stash. The stash holds a rule's rendered block, whose
+    frontmatter is gone, so for it only *detected* capabilities can count. A
+    copy that cannot be read is not checked, as in `boost policy check`.
+    """
+    from . import frontmatter
+    if kind == "skill":
+        meta_body = read_skill_meta(name)
+        return ([] if meta_body is None
+                else policy.check_capabilities(*meta_body))
+    found: list[str] = []
+    for m in entry.get("quarantine_stash") or []:
+        content = m.get("content")
+        if not isinstance(content, str):
+            continue
+        meta, body = frontmatter.parse(content)
+        found += [v for v in policy.check_capabilities(meta, body)
+                  if v not in found]
+    return found
 
 
 def refuse_release_by_policy(kind: str, name: str, entry: dict) -> None:

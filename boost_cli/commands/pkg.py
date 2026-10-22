@@ -1339,7 +1339,12 @@ def cmd_sync(argv: list[str]) -> int:
     # doctor and heal call it: this returned 0 over a blocked link, so a CI
     # step running `boost sync` could not tell the repair had been refused.
     # Advisory states (another tool's copies, out-of-scope links) stay 0.
-    rc = 1 if (blocked or stuck or in_way or occupied or lock_bad) else 0
+    # So is a repair sync_apply declined (a policy refusing a restore, a pin
+    # over a moved source): its line said so under a "!" while sync exited 0,
+    # and heal exits 1 on the same line.
+    unrepaired = [a for a in actions if store.is_unrepaired(a)]
+    rc = 1 if (blocked or stuck or in_way or occupied or lock_bad
+               or unrepaired) else 0
     if args.json:
         # `sync --diff --json` above is indent=2; this printed one unindented
         # line, so the two `--json` shapes of the same command disagreed on
@@ -1359,6 +1364,7 @@ def cmd_sync(argv: list[str]) -> int:
                           "blocked_agent_dirs": [[str(d), str(b)]
                                                  for d, b in in_way],
                           "occupied_targets": [str(t) for t in occupied],
+                          "unrepaired": unrepaired,
                           "lock": integ.problem}, indent=2))
         return rc
     for a in actions:

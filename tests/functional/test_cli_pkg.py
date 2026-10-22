@@ -3141,7 +3141,7 @@ class TestSyncJson:
                         "unrecorded_store": [], "out_of_scope_links": [],
                         "blocked_links": [], "unwritable_agent_dirs": [],
                         "blocked_agent_dirs": [], "occupied_targets": [],
-                        "lock": None}
+                        "unrepaired": [], "lock": None}
 
     def test_both_shapes_say_what_the_lock_was(self, boost, installed):
         paths.lockfile_path().unlink()
@@ -4142,7 +4142,8 @@ class TestImportProvenance:
         _commit_all(repo)
         boost("import", _URL)
         shutil.rmtree(paths.store_dir() / "url-skill")
-        r = boost("sync")
+        # Left unrepaired, so the run fails, as heal does over the same line.
+        r = boost("sync", expect=1)
         assert ("`boost reinstall url-skill` clones it again from %s" % _URL
                 in _flat(r.out))
         assert _lock()["url-skill"]["source_url"] == _URL
