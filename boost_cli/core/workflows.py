@@ -200,7 +200,8 @@ _AT_FILE = re.compile(
 # A fenced code block, closed by a fence of the same character at least as
 # long, or running to the end of the body when never closed (CommonMark).
 # Inside one, `@pytest.fixture` and `@app.route` are decorators in an
-# example, not files: converted, each was a missing-file error in Gemini.
+# example, not files (converted, each was a missing-file error in Gemini),
+# and a shown !`git reset --hard` is an example, not a command to run.
 _FENCE = re.compile(
     r"^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]{0,3}\1[`~]*[ \t]*$|\Z)",
     re.MULTILINE | re.DOTALL)
@@ -220,7 +221,10 @@ def _gemini_prompt(body: str) -> str:
     """``body`` with Claude's placeholders in Gemini's spelling."""
     # Commands first: `{{args}}` is legal inside !{...} (Gemini shell-escapes
     # it there), but its braces would stop _BANG_CMD matching the command.
-    out = _BANG_CMD.sub(lambda m: "!{%s}" % m.group(1), body)
+    # Neither is converted inside a fenced block: there each is an example,
+    # and as !{...} Gemini would RUN the example at every invocation.
+    out = _outside_fences(
+        body, lambda part: _BANG_CMD.sub(lambda m: "!{%s}" % m.group(1), part))
     out = _ARGUMENTS.sub("{{args}}", out)
     return _outside_fences(
         out, lambda part: _AT_FILE.sub(lambda m: "@{%s}" % m.group(1), part))

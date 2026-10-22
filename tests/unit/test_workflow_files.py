@@ -292,16 +292,20 @@ class TestGeminiDynamicContent:
         "~~~~\n@src/main.py\n~~~~",
         "  ```\n@a.py\n  ````",
         "```\n@never.closed\n",
+        "```sh\n!`git reset --hard`\n```",
+        "~~~\n!`rm -rf build`\n",
     ])
-    def test_a_fenced_block_keeps_its_at_signs(self, body):
+    def test_a_fenced_block_is_left_as_written(self, body):
         assert workflows.render_gemini_command("x", body) == (
             "prompt = %s\n" % json.dumps(body.strip("\n")))
 
     def test_only_the_fenced_part_is_left_alone(self):
-        body = "@a.py\n```\n@b.py\n~~~\n@c.py\n```\n@d.py tail"
+        body = ("@a.py !`ls`\n```\n@b.py !`ls`\n~~~\n@c.py\n```\n"
+                "@d.py tail !`pwd`")
         assert workflows.render_gemini_command("x", body) == (
             "prompt = %s\n" % json.dumps(
-                "@{a.py}\n```\n@b.py\n~~~\n@c.py\n```\n@{d.py} tail"))
+                "@{a.py} !{ls}\n```\n@b.py !`ls`\n~~~\n@c.py\n```\n"
+                "@{d.py} tail !{pwd}"))
 
     def test_literal_triggers_are_named(self):
         raw = "Run git stash apply stash@{0} then git log @{u}..HEAD\n"
