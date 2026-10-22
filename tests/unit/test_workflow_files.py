@@ -287,6 +287,22 @@ class TestGeminiDynamicContent:
         assert workflows.render_gemini_command("x", body) == (
             "prompt = %s\n" % json.dumps(body))
 
+    @pytest.mark.parametrize("body", [
+        "```python\n@pytest.fixture\ndef x(): ...\n@app.route('/')\n```",
+        "~~~~\n@src/main.py\n~~~~",
+        "  ```\n@a.py\n  ````",
+        "```\n@never.closed\n",
+    ])
+    def test_a_fenced_block_keeps_its_at_signs(self, body):
+        assert workflows.render_gemini_command("x", body) == (
+            "prompt = %s\n" % json.dumps(body.strip("\n")))
+
+    def test_only_the_fenced_part_is_left_alone(self):
+        body = "@a.py\n```\n@b.py\n~~~\n@c.py\n```\n@d.py tail"
+        assert workflows.render_gemini_command("x", body) == (
+            "prompt = %s\n" % json.dumps(
+                "@{a.py}\n```\n@b.py\n~~~\n@c.py\n```\n@{d.py} tail"))
+
     def test_literal_triggers_are_named(self):
         raw = "Run git stash apply stash@{0} then git log @{u}..HEAD\n"
         assert workflows.gemini_command_notes(raw) == [

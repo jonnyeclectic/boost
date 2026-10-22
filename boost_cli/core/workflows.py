@@ -197,6 +197,23 @@ _BANG_CMD_BRACED = re.compile(r"(?<!`)!`([^`\n]*[{}][^`\n]*)`(?!`)")
 # not at a word start) and git's `stash@{0}` are all left as written.
 _AT_FILE = re.compile(
     r"(?<![^\s(\[])@((?:\.{0,2}/|~/)?[\w./-]*\.[A-Za-z]\w*)(?![\w/-])")
+# A fenced code block, closed by a fence of the same character at least as
+# long, or running to the end of the body when never closed (CommonMark).
+# Inside one, `@pytest.fixture` and `@app.route` are decorators in an
+# example, not files: converted, each was a missing-file error in Gemini.
+_FENCE = re.compile(
+    r"^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]{0,3}\1[`~]*[ \t]*$|\Z)",
+    re.MULTILINE | re.DOTALL)
+
+
+def _outside_fences(text: str, fix) -> str:
+    """``text`` with ``fix`` applied to every span outside a fenced block."""
+    out, at = [], 0
+    for m in _FENCE.finditer(text):
+        out += [fix(text[at:m.start()]), m.group(0)]
+        at = m.end()
+    out.append(fix(text[at:]))
+    return "".join(out)
 
 
 def _gemini_prompt(body: str) -> str:
@@ -205,7 +222,8 @@ def _gemini_prompt(body: str) -> str:
     # it there), but its braces would stop _BANG_CMD matching the command.
     out = _BANG_CMD.sub(lambda m: "!{%s}" % m.group(1), body)
     out = _ARGUMENTS.sub("{{args}}", out)
-    return _AT_FILE.sub(lambda m: "@{%s}" % m.group(1), out)
+    return _outside_fences(
+        out, lambda part: _AT_FILE.sub(lambda m: "@{%s}" % m.group(1), part))
 
 
 def gemini_command_notes(raw: str) -> list[str]:
