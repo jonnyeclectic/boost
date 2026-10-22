@@ -769,6 +769,13 @@ def cmd_doctor(argv):
     # What a boost killed mid-write or mid-install left: a temp copy of the
     # lock file, or a staging dir, in the dir agents read skills from.
     temps = store.stale_temps()
+    for pth, kind in temps:
+        if kind == store.PARKED_STORE:
+            bad("store", "%s holds the %s — compare it with %s, move back "
+                "what is missing, then delete it" % (_tilde(pth), kind,
+                                                    _tilde(store_dir)),
+                wrap=True)
+    temps = [t for t in temps if t[1] != store.PARKED_STORE]
     if temps:
         bad("store", "%d stale temp file%s or staging dir%s a killed boost "
             "left in %s (%s) — `boost clean` removes %s"

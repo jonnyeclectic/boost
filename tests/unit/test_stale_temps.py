@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from boost_cli.core import paths, store
+from boost_cli.core import paths, snapshot, store
 
 NOW = 2_000_000_000.0
 OLD = NOW - store.STALE_TEMP_AGE - 1
@@ -86,6 +86,51 @@ class TestStaleTemps:
         assert store.stale_temps() == [(p, "stale temp file")]
 
 
+def _beside(name: str, mtime: float = OLD):
+    """A dir ``name`` in the store's parent, where `snapshot restore` makes
+    its staging, parked and held dirs."""
+    paths.store_dir().mkdir(parents=True, exist_ok=True)
+    p = paths.store_dir().resolve().parent / name
+    p.mkdir()
+    (p / "SKILL.md").write_text("x", encoding="utf-8")
+    os.utime(p, (mtime, mtime))
+    return p
+
+
+class TestRestoreLeftovers:
+    def test_each_restore_dir_is_named_by_what_it_holds(self, sandbox):
+        stage = _beside(snapshot.STAGING_PREFIX + "abcd1234")
+        old = _beside(snapshot.PARKED_PREFIX + "abcd1234")
+        held = _beside(snapshot.HELD_PREFIX + "abcd1234")
+        assert store.stale_temps(NOW) == sorted([
+            (stage, "stale restore staging dir"),
+            (old, store.PARKED_STORE),
+            (held, "stale restore staging dir")])
+        assert store.PARKED_STORE == (
+            "previous store parked by an interrupted restore")
+
+    @pytest.mark.parametrize("name", [
+        snapshot.STAGING_PREFIX + "abcd123",       # 7 chars
+        snapshot.PARKED_PREFIX + "abcd12345",      # 9 chars
+        snapshot.HELD_PREFIX + "ABCD1234",
+        ".boost-restored-abcd1234",
+        "boost-restore-abcd1234"])
+    def test_only_mkdtemps_own_names(self, sandbox, name):
+        _beside(name)
+        assert store.stale_temps(NOW) == []
+
+    def test_young_files_and_links_are_not_one(self, sandbox, tmp_path):
+        _beside(snapshot.PARKED_PREFIX + "abcd1234", mtime=NOW)
+        parent = paths.store_dir().resolve().parent
+        f = parent / (snapshot.STAGING_PREFIX + "abcd1234")
+        f.write_text("x", encoding="utf-8")
+        os.utime(f, (OLD, OLD))
+        assert store.stale_temps(NOW) == []
+        assert store.stale_temps(NOW + store.STALE_TEMP_AGE + 1) == [
+            (parent / (snapshot.PARKED_PREFIX + "abcd1234"),
+             store.PARKED_STORE)]
+
+
 class TestCli:
     def test_doctor_names_them_and_clean_removes_them(self, boost, installed):
         tmp = _make(".boost-lcfrfiee.tmp", mtime=1_000_000_000.0)
@@ -111,3 +156,28 @@ class TestCli:
         assert ("1 stale temp file or staging dir a killed boost left in "
                 "~/.agents/skills (.boost-lcfrfiee.tmp) — `boost clean` removes "
                 "it") in " ".join(r.out.split())
+
+    def test_doctor_names_a_parked_store_and_clean_leaves_it(
+            self, boost, installed):
+        stage = _beside(snapshot.STAGING_PREFIX + "zz99yy88", 1_000_000_000.0)
+        old = _beside(snapshot.PARKED_PREFIX + "zz99yy88", 1_000_000_000.0)
+        r = boost("doctor", expect=1)
+        flat = " ".join(r.out.split())
+        assert ("~/.agents/.boost-restore-old-zz99yy88 holds the previous "
+                "store parked by an interrupted restore — compare it with "
+                "~/.agents/skills, move back what is missing, then delete it"
+                ) in flat
+        assert ("1 stale temp file or staging dir a killed boost left in "
+                "~/.agents/skills (.boost-restore-zz99yy88) — `boost clean` "
+                "removes it") in flat
+        r = boost("clean", "--dry-run")
+        assert ("would remove ~/.agents/.boost-restore-zz99yy88 (stale "
+                "restore staging dir)") in r.out
+        assert "would remove ~/.agents/.boost-restore-old" not in r.out
+        assert ("left ~/.agents/.boost-restore-old-zz99yy88 alone: it holds "
+                "the previous store parked by an interrupted restore — move "
+                "back what ~/.agents/skills is missing, then delete it"
+                ) in " ".join(r.err.split())
+        boost("clean")
+        assert not stage.exists()
+        assert (old / "SKILL.md").read_text(encoding="utf-8") == "x"

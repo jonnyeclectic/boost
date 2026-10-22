@@ -2381,6 +2381,30 @@ class TestSnapshot:
         assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
         assert _lock()["brainstorming"]["version"] == "1.4.0"
 
+    def test_corrupt_archived_lock_rc1_store_and_links_intact(
+            self, boost, installed, tmp_path):
+        # A tarball whose lock is not JSON: restore used to swap it in, sweep
+        # every link as stale, discard the good lock and report success.
+        paths.ensure_dirs()
+        src = tmp_path / "badlock"
+        (src / "foo").mkdir(parents=True)
+        (src / "foo" / "SKILL.md").write_text("# foo\n", encoding="utf-8")
+        (src / ".skill-lock.json").write_text("{not json", encoding="utf-8")
+        with tarfile.open(str(paths.snapshots_dir()
+                              / "snap-20200101-000000.tar.gz"), "w:gz") as tf:
+            for child in sorted(src.iterdir()):
+                tf.add(str(child), arcname=child.name)
+        before = paths.lockfile_path().read_bytes()
+        r = boost("snapshot", "restore", "20200101-000000", "-y", expect=1)
+        assert ("snapshot snap-20200101-000000 cannot be restored: it has a "
+                "corrupt lock file") in r.err
+        assert "the store was left untouched" in r.err
+        assert "removed stale link" not in r.out
+        assert paths.lockfile_path().read_bytes() == before
+        assert not (paths.store_dir() / "foo").exists()
+        assert (paths.home() / ".claude" / "skills" / "brainstorming"
+                / "SKILL.md").is_file()
+
     def test_restore_unknown_rc1(self, boost, sandbox):
         r = boost("snapshot", "restore", "nope", expect=1)
         assert "no snapshot snap-nope" in r.err
@@ -2737,6 +2761,92 @@ class TestKindAwarePkgSurface:
         # CLAUDE.md held only that one managed block, so uninstall deletes it
         # outright rather than leaving an empty file.
         assert not claude.exists()
+
+    @staticmethod
+    def _move_snapshot_home(snap_id, old_home, sidecar, flat=False):
+        """Rewrite the archived lock as another machine's: every rule path
+        under ``old_home`` instead of this HOME. ``sidecar`` records that
+        home in the snapshot's json, as `snapshot save` now does; ``flat``
+        drops the agent dotdir, so nothing in the path says where it goes."""
+        tar = paths.snapshots_dir() / (snap_id + ".tar.gz")
+        home = str(paths.home())
+        with tarfile.open(str(tar), "r:gz") as tf:
+            members = [(m, tf.extractfile(m).read() if m.isfile() else None)
+                       for m in tf.getmembers()]
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode="w:gz") as tf:
+            for m, data in members:
+                if m.name == ".skill-lock.json":
+                    lock = json.loads(data)
+                    for entry in lock["rules"].values():
+                        for row in entry["materializations"]:
+                            assert row["path"].startswith(home)
+                            row["path"] = (
+                                os.path.join(old_home, "CLAUDE.md") if flat
+                                else old_home + row["path"][len(home):])
+                    data = json.dumps(lock).encode("utf-8")
+                    m.size = len(data)
+                tf.addfile(m, io.BytesIO(data) if data is not None else None)
+        tar.write_bytes(out.getvalue())
+        meta = tar.with_name(snap_id + ".json")
+        doc = json.loads(meta.read_text(encoding="utf-8"))
+        assert doc["home"] == home              # what `save` records
+        if sidecar:
+            doc["home"] = old_home
+        else:
+            del doc["home"]                     # a snapshot older than that
+        meta.write_text(json.dumps(doc), encoding="utf-8")
+
+    @pytest.mark.parametrize("sidecar", [True, False])
+    def test_restore_rehomes_rows_saved_under_another_home(
+            self, boost, fixture_tap_src, tmp_path, sidecar):
+        """A snapshot from another HOME: its rule rows pointed at the first
+        home's CLAUDE.md, doctor called them materialized, and uninstall
+        deleted the other home's files. Rehomed, sync writes this one's."""
+        boost("tap", self._tap_with_rule(fixture_tap_src, tmp_path, "home-tap"))
+        boost("install", "brainstorming", "house-style")
+        snap_id = re.search(r"saved (snap-[\w-]+)",
+                            boost("snapshot", "save").out).group(1)
+        claude = paths.home() / ".claude" / "CLAUDE.md"
+        # The first home still has every file the rule wrote: what made the
+        # foreign rows look fully materialized, and what uninstall deleted.
+        other = tmp_path / "first-home"
+        home = paths.home()
+        theirs = {}
+        for m in lockfile.installed_rules()["house-style"]["materializations"]:
+            dst = other / os.path.relpath(m["path"], home)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(m["path"], dst)
+            theirs[dst] = dst.read_bytes()
+        assert other / ".claude" / "CLAUDE.md" in theirs
+        boost("uninstall", "house-style")
+        self._move_snapshot_home(snap_id, str(other), sidecar)
+
+        r = boost("snapshot", "restore", snap_id, "-y")
+        assert "re-materialized rule house-style" in r.out
+        rows = lockfile.installed_rules()["house-style"]["materializations"]
+        assert rows and all(not m["path"].startswith(str(other)) for m in rows)
+        assert str(claude) in [m["path"] for m in rows]
+        assert "boost:rule:house-style start" in claude.read_text(encoding="utf-8")
+        boost("uninstall", "house-style")
+        assert {p: p.read_bytes() for p in theirs} == theirs
+
+    def test_restore_refuses_rows_it_cannot_place(
+            self, boost, fixture_tap_src, tmp_path):
+        boost("tap", self._tap_with_rule(fixture_tap_src, tmp_path, "nohome-tap"))
+        boost("install", "brainstorming", "house-style")
+        snap_id = re.search(r"saved (snap-[\w-]+)",
+                            boost("snapshot", "save").out).group(1)
+        # Recorded home unknown, and a path with no agent dotdir in it.
+        self._move_snapshot_home(snap_id, str(tmp_path / "x"), sidecar=False,
+                                 flat=True)
+        before = paths.lockfile_path().read_bytes()
+        r = boost("snapshot", "restore", snap_id, "-y", expect=1)
+        assert ("snapshot %s cannot be restored: rule house-style records "
+                "files outside this home that boost cannot place in it"
+                % snap_id) in " ".join(r.err.split())
+        assert "the store was left untouched" in r.err
+        assert paths.lockfile_path().read_bytes() == before
 
     def test_restore_rematerializes_a_rule_dropped_after_the_snapshot(
             self, boost, fixture_tap_src, tmp_path):

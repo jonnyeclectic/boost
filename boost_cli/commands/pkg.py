@@ -3146,8 +3146,10 @@ def _snapshot_save(label: str | None) -> int:
     # With the held copies: their lock rows are in the store, they are not.
     arch = snapshot.archive(paths.store_dir(), tar_path, store.held_copies())
     skill_count = len(lockfile.installed())
+    # The home the lock's rule/workflow paths are under, so a restore on
+    # another machine can move them onto its own (lockfile.rehome).
     manifest = {"id": snap_id, "label": label or "", "created": util.now_iso(),
-                "skills": skill_count}
+                "skills": skill_count, "home": str(paths.home())}
     (paths.snapshots_dir() / (snap_id + ".json")).write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     journal.log("snapshot", snap_id, label=label)
@@ -3242,7 +3244,8 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
     pre_skills = set(lockfile.installed())
     # Extracted into a staging dir and swapped in only once that succeeded,
     # so a corrupt or refused snapshot can never leave an emptied store.
-    snapshot.restore(tar_path, root, snap_id, paths.held_skills_dir())
+    snapshot.restore(tar_path, root, snap_id, paths.held_skills_dir(),
+                     rehome=store.snapshot_rehomer(snap_id, tar_path))
     kept = store.restore_preserve_newer_lock_sections(pre_rules, pre_workflows)
     # A snapshot saved before held copies were archived: no copy to hold, so
     # the restore's sync below reinstalls them instead.
