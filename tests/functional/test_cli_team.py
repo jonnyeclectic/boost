@@ -232,7 +232,9 @@ class TestCohort:
         boost("cohort", "create", "pilot", "--percent", "100",
              "--skills", "othertap:brainstorming,tdd-workflow")
         r = boost("cohort", "apply")
-        assert "othertap:brainstorming not found in any tap" in r.out
+        # The tap is what is missing, not the skill — fixture-tap ships it.
+        assert ("! no tap named 'othertap' ('brainstorming' is shipped by: "
+                "fixture-tap) —") in r.out
         assert "installed tdd-workflow" in r.out
         assert "applied: 1 installed, 0 already present, 1 not found" in r.out
 
@@ -401,6 +403,37 @@ class TestCohort:
 
 
 # ---------------------------------------------------------------- profile
+
+class TestRecordedNamesAcrossTaps:
+    """`cohort apply` and `profile use` installed `find()[0]` — the first
+    tap's copy — for a name two taps ship, or whose recorded tap was gone."""
+
+    def test_cohort_apply_skips_an_ambiguous_member(self, boost, rival_tap,
+                                                    monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        boost("cohort", "create", "pilot", "--percent", "100",
+              "--skills", "brainstorming")
+        r = boost("cohort", "apply", expect=1)
+        assert ("! 'brainstorming' exists in multiple taps: fixture-tap, "
+                "rival-tap (qualify it, e.g. `fixture-tap:brainstorming`) — "
+                "skipped") in r.out
+        assert "applied: 0 installed, 0 already present, 1 not found" in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_profile_use_never_swaps_in_another_tap(self, boost, rival_tap,
+                                                    monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        boost("install", "rival-tap:brainstorming")
+        boost("profile", "save", "p1")
+        boost("uninstall", "brainstorming")
+        boost("untap", "rival-tap")
+        r = boost("profile", "use", "p1")
+        assert ("! brainstorming was recorded from tap rival-tap, which is no "
+                "longer tapped (`boost tap` it again, or install it from: "
+                "fixture-tap) — skipped") in r.out
+        assert "tap has moved" not in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
 
 class TestProfile:
     def test_save_show_diff_use_lifecycle(self, boost, tapped):

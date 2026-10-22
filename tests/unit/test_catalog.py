@@ -2188,3 +2188,59 @@ class TestSearchHint:
         monkeypatch.setattr(builtin, "configured_tap_count", lambda: 1)
         assert catalog.search_hint("brainstorming") == \
             "try `boost search brainstorming`"
+
+
+class TestResolveRecorded:
+    """cohort apply / profile use / snapshot rollback took `find()[0]`: an
+    ambiguous name installed whichever tap sorted first, and a profile whose
+    tap was gone came back from another tap, blamed on "its tap has moved"."""
+
+    def _two(self):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]),
+                   ("beta", [_entry("cm", "beta", desc="b"),
+                             _entry("solo", "beta", desc="s")]))
+
+    def test_no_tap_ships_it_is_none(self, sandbox):
+        self._two()
+        assert catalog.resolve_recorded("nope") is None
+        assert catalog.resolve_recorded("nope", "alpha") is None
+
+    def test_an_ambiguous_bare_name_is_refused(self, sandbox):
+        self._two()
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm")
+        assert e.value.message == "'cm' exists in multiple taps: alpha, beta"
+        assert e.value.hint == "qualify it, e.g. `alpha:cm`"
+
+    def test_a_unique_or_qualified_name_resolves(self, sandbox):
+        self._two()
+        assert catalog.resolve_recorded("solo")["tap"] == "beta"
+        assert catalog.resolve_recorded("beta:cm")["description"] == "b"
+
+    def test_the_recorded_tap_wins_over_the_first(self, sandbox):
+        self._two()
+        assert catalog.resolve_recorded("cm", "beta")["description"] == "b"
+        assert catalog.resolve_recorded("cm", "Beta")["description"] == "b"
+
+    def test_an_untapped_recorded_tap_is_never_swapped(self, sandbox):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]))
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm", "beta")
+        assert e.value.message == \
+            "cm was recorded from tap beta, which is no longer tapped"
+        assert e.value.hint == "`boost tap` it again, or install it from: alpha"
+
+    def test_a_local_record_is_not_swapped_for_a_tap_copy(self, sandbox):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]))
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm", "local")
+        assert e.value.message == "cm was installed from a local path, not a tap"
+        assert e.value.hint == \
+            "it is shipped by: alpha — install one by name to switch"
+
+    def test_a_recorded_tap_that_dropped_it(self, sandbox):
+        self._two()
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("solo", "alpha")
+        assert e.value.message == "solo is no longer in tap alpha"
+        assert e.value.hint == "it is shipped by: beta"

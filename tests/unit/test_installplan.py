@@ -12,8 +12,16 @@ import json
 
 import pytest
 
-from boost_cli.core import (catalog, config, deps, installplan, mcp, paths,
-                            prereq, registry)
+from boost_cli.core import (
+    catalog,
+    config,
+    deps,
+    installplan,
+    mcp,
+    paths,
+    prereq,
+    registry,
+)
 from boost_cli.core.resolve import Resolution
 from boost_cli.errors import BoostError
 

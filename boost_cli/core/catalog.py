@@ -1437,6 +1437,44 @@ def resolve_one(name: str, path: str | None = None) -> dict:
     return matches[0]
 
 
+def resolve_recorded(name: str, tap: str | None = None) -> dict | None:
+    """The entry to reinstall for a name some record kept, or None if absent.
+
+    For ``cohort apply``, ``profile use`` and ``snapshot rollback``. None
+    only when no tap ships the name at all; every other way to fail raises
+    :class:`BoostError` naming why, so the caller can skip the item and say
+    so. Both refusals replace a ``find()[0]`` that installed whichever tap
+    sorted first:
+
+    * without ``tap``, the name resolves like ``install`` resolves it
+      (:func:`resolve_one`), so an ambiguous name is refused, not guessed;
+    * with ``tap`` — the tap the record says it came from — only that tap's
+      copy is the answer. A recorded tap that is gone used to bring back
+      another tap's item and blame "its tap has moved".
+    """
+    bare = split_name(name)[1]
+    shipped = find(bare)
+    if not shipped:
+        return None
+    if not tap:
+        return resolve_one(name)
+    others = ", ".join(sorted({str(e.get("tap") or "") for e in shipped}))
+    if not any(tap_matches(t.name, tap) for t in registry.list_taps()):
+        if tap == "local":
+            raise BoostError(
+                "%s was installed from a local path, not a tap" % bare,
+                hint="it is shipped by: %s — install one by name to switch"
+                     % others)
+        raise BoostError(
+            "%s was recorded from tap %s, which is no longer tapped"
+            % (bare, tap),
+            hint="`boost tap` it again, or install it from: %s" % others)
+    if not find("%s:%s" % (tap, bare)):
+        raise BoostError("%s is no longer in tap %s" % (bare, tap),
+                         hint="it is shipped by: %s" % others)
+    return resolve_one("%s:%s" % (tap, bare))
+
+
 def _same_thing(matches: list[dict]) -> dict | None:
     """The copy to install when every candidate is the same content, else None.
 
