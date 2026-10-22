@@ -18,6 +18,14 @@ ROTATE_KEEP = 2500
 
 # Once per process: a command can log more than once, and the fix is the same.
 _WARNED_UNSAVED = False
+# Same for reading: `health` reads the feed several times in one run.
+_WARNED_UNREADABLE = False
+
+# Fields a row's readers treat as text: `pulse` pads `user`, `log` measures
+# it, `trending` sorts on `subject`, `is_new_install` hashes `via`. A row
+# that holds any of them as a non-string (or is not an object at all) is
+# skipped like a torn line, rather than crashing every reader at exit 70.
+_TEXT_FIELDS = ("ts", "user", "action", "subject", "via", "tap")
 
 PULSE_EMPTY = "no activity yet — events appear as you install and manage skills"
 WHO_EMPTY = ("no journal activity yet — expertise builds as people install, "
@@ -82,33 +90,113 @@ def log(action: str, subject: str = "", **fields) -> None:
     _maybe_rotate()
 
 
+def well_formed(row: object) -> bool:
+    """True when `row` is a journal object whose text fields are all text.
+
+    A field may be absent (readers default it); present, it must be a str.
+    """
+    return isinstance(row, dict) and all(
+        isinstance(row[k], str) for k in _TEXT_FIELDS if k in row)
+
+
+def _read() -> tuple[list[dict], int]:
+    """Oldest-first well-formed rows, and how many lines were skipped.
+
+    Raises OSError when the feed exists but cannot be read; a missing feed
+    is simply empty.
+    """
+    try:
+        # errors="replace": one torn append must not make the whole feed
+        # unreadable — the corrupt line simply fails to parse as JSON below.
+        text = paths.pulse_path().read_text(encoding="utf-8",
+                                            errors="replace")
+    except FileNotFoundError:
+        return [], 0
+    rows, skipped = [], 0
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            skipped += 1
+            continue
+        if not well_formed(e):
+            skipped += 1
+            continue
+        rows.append(e)
+    return rows, skipped
+
+
+def _warn_unreadable(err: OSError) -> None:
+    global _WARNED_UNREADABLE
+    if _WARNED_UNREADABLE:
+        return
+    _WARNED_UNREADABLE = True
+    output.warn("could not read the activity feed (%s) — activity is shown "
+                "as empty; make %s readable"
+                % (err.strerror or err, paths.tilde(paths.pulse_path())),
+                stream=sys.stderr, wrap=True)
+
+
 def events(n: int | None = None, action: str | None = None,
            subject: str | None = None) -> list[dict]:
     """Most-recent-first list of journal events; ``n=None`` means all of them.
 
     ``n`` must be >= 0: a negative would become a negative slice and silently
     return every event *but* the oldest ones, so it raises instead.
+
+    The feed is advisory, the way `log` treats it: one that cannot be read
+    (permissions, a directory in its place) warns once and reads as empty,
+    and a row of the wrong shape is skipped (see :func:`well_formed`).
     """
     if n is not None and n < 0:
         raise ValueError("events(n=%d): n must be >= 0" % n)
-    p = paths.pulse_path()
-    if not p.exists():
+    try:
+        rows, _skipped = _read()
+    except OSError as err:
+        _warn_unreadable(err)
         return []
-    out = []
-    # errors="replace": one torn append must not make the whole feed
-    # unreadable — the corrupt line simply fails to parse as JSON below.
-    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            e = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if action and e.get("action") != action:
-            continue
-        if subject and e.get("subject") != subject:
-            continue
-        out.append(e)
+    out = [e for e in rows
+           if (not action or e.get("action") == action)
+           and (not subject or e.get("subject") == subject)]
     out.reverse()
     return out if n is None else out[:n]
+
+
+def read_error() -> str | None:
+    """Why the feed exists but cannot be read, or None when it can (or is
+    absent). For `doctor`/`health`, which must report it, not crash on it."""
+    try:
+        _read()
+    except OSError as err:
+        return str(err.strerror or err)
+    return None
+
+
+def skipped_rows() -> int:
+    """Lines every reader skips: torn, not JSON objects, or mistyped."""
+    try:
+        return _read()[1]
+    except OSError:
+        return 0
+
+
+def activity_counts(evs: Sequence[dict]) -> dict[str, int]:
+    """`boost stats` activity for one item's events.
+
+    An upgrade and a reinstall each journal an "install" (tagged by `via`),
+    so a raw count of install rows read one install and two reinstalls as
+    three installs. `update` rows themselves name a tap or "all", never the
+    item, so per item an update is an install row with ``via="update"``.
+    """
+    installs = [e for e in evs if e.get("action") == "install"]
+    return {
+        "install": sum(1 for e in installs if is_new_install(e)),
+        "update": sum(1 for e in installs if e.get("via") == "update"),
+        "reinstall": sum(1 for e in installs if e.get("via") == "reinstall"),
+        "uninstall": sum(1 for e in evs if e.get("action") == "uninstall"),
+    }
 
 
 def pulse_empty_state(action: str | None, all_events: Sequence[dict]) -> str:
@@ -168,11 +256,16 @@ def _line_count(p) -> int:
 
 
 def rotation_healthy() -> bool:
-    """True when the pulse feed is absent or at most ROTATE_AT lines long."""
+    """True when the pulse feed is absent or at most ROTATE_AT lines long.
+
+    A feed that cannot be read cannot be judged, so it is not called overdue
+    here — :func:`read_error` is the check that names it.
+    """
     p = paths.pulse_path()
-    if not p.exists():
+    try:
+        return _line_count(p) <= ROTATE_AT
+    except OSError:                         # absent, or unreadable
         return True
-    return _line_count(p) <= ROTATE_AT
 
 
 def _maybe_rotate() -> None:

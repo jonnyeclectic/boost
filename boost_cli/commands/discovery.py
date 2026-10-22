@@ -2603,9 +2603,8 @@ def cmd_stats(argv):
         raise BoostError("no skill named %r installed or in any tap" % args.name,
                         hint=catalog.join_hints(catalog.search_hint(name),
                                                 catalog.stale_commit_hint()))
-    acts = {a: len(catalog.events_for_tap(
-                journal.events(action=a, subject=name), qualifier, lock))
-            for a in ("install", "update", "uninstall")}
+    acts = journal.activity_counts(catalog.events_for_tap(
+        journal.events(subject=name), qualifier, lock))
     latest = cat["version"] if cat else None
     upstream = None
     if cat:
@@ -2674,8 +2673,10 @@ def cmd_stats(argv):
         # all, where the qualified spelling just resolved to this one.
         out.info(out.role("not installed — `boost install %s`"
                           % out.plain(args.name), "muted"))
-    out.kv("activity", "%d installs · %d updates · %d uninstalls"
-           % (acts["install"], acts["update"], acts["uninstall"]))
+    out.kv("activity", "%d installs · %d updates · %d reinstalls · "
+           "%d uninstalls" % (acts["install"], acts["update"],
+                              acts["reinstall"], acts["uninstall"]),
+           wrap=True)
     if lock and latest:
         if newer:
             out.kv("latest", "%s %s" % (latest, out.role("(update available)", "warn")))

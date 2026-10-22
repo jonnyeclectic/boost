@@ -494,3 +494,114 @@ class TestIsNewInstall:
 
     def test_refresh_vias_is_exactly_the_two_refresh_paths(self):
         assert frozenset({"update", "reinstall"}) == journal.REFRESH_VIAS
+
+
+def _append_raw(*lines):
+    paths.ensure_dirs()
+    with paths.pulse_path().open("a", encoding="utf-8") as f:
+        for line in lines:
+            f.write(line + "\n")
+
+
+class TestWellFormed:
+    """A row that parses but has the wrong shape crashed every reader at exit
+    70 (`'list' object has no attribute 'get'`, `None.ljust`, a str/int sort)
+    — `events` only skipped rows that were not JSON at all."""
+
+    def test_a_full_row_of_strings_passes(self):
+        assert journal.well_formed({"ts": "t", "user": "u", "action": "a",
+                                    "subject": "s", "via": "v", "tap": "x"})
+
+    def test_absent_fields_pass(self):
+        assert journal.well_formed({}) is True
+
+    @pytest.mark.parametrize("row", [[1, 2], "s", 7, None])
+    def test_a_non_object_fails(self, row):
+        assert journal.well_formed(row) is False
+
+    @pytest.mark.parametrize(
+        "field", ["ts", "user", "action", "subject", "via", "tap"])
+    def test_each_text_field_must_be_text(self, field):
+        assert journal.well_formed({field: None}) is False
+        assert journal.well_formed({field: 7}) is False
+
+    def test_other_fields_may_hold_anything(self):
+        assert journal.well_formed({"version": 3, "detail": None}) is True
+
+
+class TestMalformedRowsAreSkipped:
+    def test_events_skips_and_counts_them(self, sandbox):
+        journal.log("install", "good")
+        _append_raw("[1,2]",
+                    json.dumps({"user": None, "action": "install",
+                                "subject": "zed"}),
+                    json.dumps({"user": "bob", "action": "install",
+                                "subject": 7}),
+                    "not json", "")
+        journal.log("install", "good2")
+        assert [e["subject"] for e in journal.events()] == ["good2", "good"]
+        assert journal.skipped_rows() == 4
+        assert journal.read_error() is None
+
+    def test_a_clean_feed_skips_nothing(self, sandbox):
+        journal.log("install", "a")
+        assert journal.skipped_rows() == 0
+
+    def test_a_missing_feed_skips_nothing(self, sandbox):
+        assert journal.skipped_rows() == 0
+        assert journal.read_error() is None
+
+
+class TestUnreadableFeed:
+    """`events` and `rotation_healthy` raised PermissionError out of doctor,
+    health, pulse, trending, decay and stats, while `log` degraded."""
+
+    pytestmark = _POSIX_MODES
+
+    def test_events_warns_once_and_reads_empty(self, sandbox, capsys):
+        journal.log("install", "x")
+        paths.pulse_path().chmod(0)
+        try:
+            assert journal.events() == []
+            assert journal.events(action="install") == []
+            err = " ".join(capsys.readouterr().err.split())
+            assert journal.read_error() == "Permission denied"
+            assert journal.skipped_rows() == 0
+            assert journal.rotation_healthy() is True
+        finally:
+            paths.pulse_path().chmod(0o644)
+        assert err.count("could not read the activity feed") == 1
+        assert ("could not read the activity feed (Permission denied) — "
+                "activity is shown as empty; make "
+                "~/.boost/state/pulse.jsonl readable") in err
+        assert [e["subject"] for e in journal.events()] == ["x"]
+
+
+class TestFeedIsADirectory:
+    def test_a_directory_in_its_place_reads_empty(self, sandbox, capsys):
+        paths.pulse_path().mkdir(parents=True)
+        assert journal.events() == []
+        assert journal.read_error() is not None
+        assert journal.rotation_healthy() is True
+        assert "could not read the activity feed" in capsys.readouterr().err
+
+
+class TestActivityCounts:
+    """`boost stats` counted every "install" row — reinstalls and upgrades
+    included — and its update bucket keyed on `update` rows whose subject is
+    a tap or "all", so it could never move off 0."""
+
+    def test_each_bucket_counts_its_own_rows(self):
+        evs = [{"action": "install"},
+               {"action": "install", "via": "reinstall"},
+               {"action": "install", "via": "reinstall"},
+               {"action": "install", "via": "update"},
+               {"action": "install", "via": "protocol"},
+               {"action": "uninstall"},
+               {"action": "update", "subject": "all"}]
+        assert journal.activity_counts(evs) == {
+            "install": 2, "update": 1, "reinstall": 2, "uninstall": 1}
+
+    def test_nothing_is_all_zero(self):
+        assert journal.activity_counts([]) == {
+            "install": 0, "update": 0, "reinstall": 0, "uninstall": 0}

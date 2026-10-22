@@ -1441,8 +1441,20 @@ def cmd_doctor(argv):
         bad("agent-dir", "agent dir %s — %s, then `boost sync` writes what "
             "it missed" % store.unwritable_refusal(str(adir)), wrap=True)
 
-    rotation = journal.rotation_healthy()
-    if not rotation:
+    feed_err = journal.read_error()
+    if feed_err:
+        bad("journal", "activity feed %s cannot be read (%s) — make it "
+            "readable; until then pulse, trending and stats show no activity"
+            % (paths.tilde(paths.pulse_path()), feed_err), wrap=True)
+    else:
+        skipped = journal.skipped_rows()
+        if skipped:
+            rep.note("journal", "%d malformed row%s in the activity feed %s "
+                     "skipped by every reader" % (
+                         skipped, _s(skipped),
+                         "is" if skipped == 1 else "are"), wrap=True)
+    rotation = feed_err is None and journal.rotation_healthy()
+    if feed_err is None and not rotation:
         bad("journal", "journal is overdue for rotation — run `boost heal`")
 
     # Which search engine will actually answer a query. Dense retrieval needs
@@ -2652,6 +2664,7 @@ def cmd_health(argv):
                  or drift_counts.get("source-missing", 0) > 0
                  or drift_counts.get("unreachable", 0) > 0
                  or drift_counts.get("stranded", 0) > 0
+                 or journal.read_error() is not None
                  or not journal.rotation_healthy())
     if args.json:
         print(json.dumps(data | {"ok": not attention,

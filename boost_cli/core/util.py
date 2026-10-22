@@ -605,6 +605,11 @@ def rel_time(iso: str) -> str:
     except (ValueError, TypeError):
         return iso or "?"
     secs = (datetime.now(UTC) - then).total_seconds()
+    if secs < 0:
+        # A stamp from a machine whose clock runs ahead (the feed is shared
+        # via `boost onboard`). Floored, it read "1s ago" however far ahead
+        # it was; a minute of skew is "just now", more is said plainly.
+        return "just now" if secs > -60 else "in the future"
     for limit, size, unit in ((60, 1, "s"), (3600, 60, "m"),
                               (86400, 3600, "h"), (604800, 86400, "d")):
         if secs < limit:
