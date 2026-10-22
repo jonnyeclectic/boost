@@ -108,8 +108,11 @@ class TestCliUnderSignal:
             return real(lock)
         monkeypatch.setattr(lockfile, "write", write)
 
-    @pytest.mark.parametrize(("sig", "rc"), [(signal.SIGTERM, 143),
-                                             (signal.SIGHUP, 129)])
+    # Windows has no SIGHUP, and the parameter list is built at collection,
+    # before any skip can apply, so naming it unconditionally fails the module.
+    @pytest.mark.parametrize(("sig", "rc"), [
+        (signal.SIGTERM, 143),
+        *([(signal.SIGHUP, 129)] if hasattr(signal, "SIGHUP") else [])])
     def test_install_rolls_back_and_exits_128_plus_signum(
             self, tap, monkeypatch, sig, rc):
         self._kill_at_lock_write(monkeypatch, sig)

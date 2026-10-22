@@ -23,6 +23,13 @@ import pytest
 
 from boost_cli.core import dense, embed, shards
 
+# Captured at import, before `sandbox` can stand in for it on a Python whose
+# sqlite3 cannot load extensions.
+_extension_error = dense.extension_error
+_loads = pytest.mark.skipif(
+    not hasattr(sqlite3.Connection, "enable_load_extension"),
+    reason="this Python's sqlite3 cannot load extensions")
+
 _GARBAGE = bytes(range(256)) * 12          # 3,072 bytes no SQLite will open
 
 
@@ -273,23 +280,25 @@ class TestOtherSpaceStoreIsKept:
 
 
 class TestExtensionCannotLoad:
+    @_loads
     def test_extension_error_reports_the_refusal(self, sandbox, monkeypatch):
         monkeypatch.setattr(dense, "_load", lambda: _DeniedVec)
-        assert dense.extension_error() == "not authorized"
+        assert _extension_error() == "not authorized"
 
+    @_loads
     def test_extension_error_is_none_when_it_loads(self, sandbox, monkeypatch):
         monkeypatch.setattr(dense, "_load", lambda: _NoopVec)
-        assert dense.extension_error() is None
+        assert _extension_error() is None
 
     def test_extension_error_is_none_without_a_backend(self, sandbox,
                                                        monkeypatch):
         monkeypatch.setattr(dense, "_load", lambda: None)
-        assert dense.extension_error() is None
+        assert _extension_error() is None
 
     def test_extension_error_ignores_a_module_without_load(self, sandbox,
                                                           monkeypatch):
         monkeypatch.setattr(dense, "_load", lambda: object())
-        assert dense.extension_error() is None
+        assert _extension_error() is None
 
     def test_a_sqlite3_without_extension_loading_is_named(self, sandbox,
                                                          monkeypatch):
@@ -298,11 +307,13 @@ class TestExtensionCannotLoad:
                 pass
         monkeypatch.setattr(dense, "_load", lambda: _NoopVec)
         monkeypatch.setattr(dense.sqlite3, "connect", lambda *a, **k: _NoExt())
-        assert dense.extension_error() == (
+        assert _extension_error() == (
             "this Python's sqlite3 was built without extension loading")
 
+    @_loads
     def test_status_reason_and_hint(self, keyed, monkeypatch):
         monkeypatch.setattr(dense, "_load", lambda: _DeniedVec)
+        monkeypatch.setattr(dense, "extension_error", _extension_error)
         st = dense.status()
         assert st["reason"] == "no-extension-load"
         assert st["extension_error"] == "not authorized"
@@ -312,8 +323,10 @@ class TestExtensionCannotLoad:
             "needs — reinstall boost under a Python built with loadable "
             "SQLite extensions, then `boost reindex --dense`")
 
+    @_loads
     def test_it_outranks_a_missing_key(self, sandbox, monkeypatch):
         monkeypatch.setattr(dense, "_load", lambda: _DeniedVec)
+        monkeypatch.setattr(dense, "extension_error", _extension_error)
         monkeypatch.setattr(embed, "provider", lambda: None)
         assert dense.status()["reason"] == "no-extension-load"
 
