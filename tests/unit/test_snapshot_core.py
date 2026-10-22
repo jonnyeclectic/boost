@@ -80,6 +80,27 @@ def test_held_copies_never_land_in_the_store(tmp_path):
                             tmp_path / "snapcore-held") == []
 
 
+def test_a_store_child_named_like_the_held_dir_is_refused(tmp_path):
+    root = _store(tmp_path)
+    (root / snapshot.HELD_ARC).mkdir()
+    tar = tmp_path / "snapcore-reserved.tar.gz"
+    with pytest.raises(BoostError) as ei:
+        snapshot.archive(root, tar)
+    assert ei.value.message == ("cannot snapshot .boost-held: the name is "
+                                "reserved for held copies")
+    assert not tar.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_symlinked_held_copy_is_not_archived(tmp_path):
+    root = _store(tmp_path)
+    real = _held(tmp_path, "beta", "b\n")
+    link = tmp_path / "snapcore-heldlink"
+    link.symlink_to(real)
+    tar = tmp_path / "snapcore-heldlink.tar.gz"
+    assert snapshot.archive(root, tar, {"beta": link}).held == []
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
 def test_archive_dereferences_top_level_links(tmp_path):
     root = _store(tmp_path)

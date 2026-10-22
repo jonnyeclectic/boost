@@ -40,10 +40,10 @@ UNTOUCHED_HINT = ("the store was left untouched — "
                   "see `boost snapshot list` for other snapshots")
 
 
-#: The archive directory held copies go under. A dot name: no skill can
-#: have it (``util.is_safe_component`` allows dots, but the store's own
-#: children are skill names and ``.skill-lock.json``), and restore takes it
-#: out of the staging dir before anything is swapped into the store.
+#: The archive directory held copies go under: a dot name nothing boost
+#: writes into the store uses, and restore takes it out of the staging dir
+#: before anything is swapped into the store. A store child of this name is
+#: refused at save, so it can never be mistaken for the held copies.
 HELD_ARC = ".boost-held"
 
 TAR_SUFFIX = ".tar.gz"
@@ -152,6 +152,11 @@ def archive(root: Path, tar_path: Path,
     try:
         with tarfile.open(str(tar_path), "w:gz") as tf:
             for child in sorted(root.iterdir()):
+                if child.name == HELD_ARC:
+                    raise BoostError(
+                        "cannot snapshot %s: the name is reserved for held "
+                        "copies" % child.name,
+                        hint="move it out of the store, then save again")
                 src = child
                 if child.is_symlink():
                     if not child.exists():
