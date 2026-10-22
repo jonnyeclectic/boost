@@ -201,6 +201,28 @@ def block_span(text: str, name: str) -> tuple[int, int] | None:
     return i, j + len(end)
 
 
+def block_spans(text: str, name: str) -> list[tuple[int, int]]:
+    """Every clean block of rule ``name`` in ``text``, in order.
+
+    The spans :func:`block_span` would find one after another, stopping at
+    the first damaged start (which :func:`require_well_formed` refuses).
+    Two clean blocks are legal — a dotfiles merge or two concatenated
+    context files make them — and every writer has to act on all of them:
+    `boost update` refreshed only the first and left the stale one live,
+    and uninstall stripped only the first and left the second unrecorded.
+    """
+    start, end = markers(name)
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while (i := text.find(start, pos)) != -1:
+        j = text.find(end, i + len(start))
+        if j == -1 or text.find(start, i + len(start), j) != -1:
+            break
+        pos = j + len(end)
+        spans.append((i, pos))
+    return spans
+
+
 def require_well_formed(text: str, name: str,
                         path: Path | None = None) -> None:
     """Raise if any start marker for ``name`` in ``text`` is not a clean block.
@@ -284,10 +306,13 @@ def merge_block(text: str, name: str, body: str) -> str:
              .replace("\n", eol))
     block = start + eol + lines + eol + end
     require_well_formed(text, name)
-    span = block_span(text, name)
-    if span is not None:
-        i, j = span
-        return text[:i] + block + text[j:]
+    spans = block_spans(text, name)
+    if spans:
+        # One block afterwards, in the first one's place: the copies below
+        # it come out the way uninstall takes a block out, so each one's gap
+        # goes with it and the user's text between them stays.
+        i, j = spans[0]
+        return text[:i] + block + strip_block(text[j:], name)
     if not text:
         return block + eol
     if _ends_with_newline(text):
@@ -341,11 +366,17 @@ def strip_block(text: str, name: str) -> str:
     ending and the blank-line gap it introduced come out, and every other
     byte stays as it was — CRLF, a missing final newline, trailing blank
     lines. Install then uninstall leaves the file byte-identical. A file that
-    held only the block collapses to ``""``.
+    held only the block collapses to ``""``. Every clean copy of the block
+    comes out (:func:`block_spans`), not only the first.
     """
-    span = block_span(text, name)
-    if span is None:
-        return text  # absent, or malformed: leave the file untouched
+    while (span := block_span(text, name)) is not None:
+        text = _strip_span(text, span)
+    return text  # absent, or malformed: the rest is left untouched
+
+
+def _strip_span(text: str, span: tuple[int, int]) -> str:
+    """``text`` less the block at ``span``, and the gap it was appended
+    after (see :func:`strip_block`)."""
     i, j = span
     before, after = text[:i], text[j:]
     after, terminated = _cut_leading_newline(after)

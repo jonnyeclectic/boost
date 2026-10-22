@@ -1161,6 +1161,15 @@ def cmd_doctor(argv):
                         wrap=True)
                     mat_issues += 1
                     continue
+                # Two clean copies: the agent reads both, and a refresh that
+                # rewrote one of them left stale instructions live under an
+                # all-clear. `boost heal` keeps the first.
+                count = len(rule_blocks.block_spans(text, name))
+                if count > 1:
+                    bad("rule", store.duplicate_block_line(name, str(p), count),
+                        wrap=True)
+                    mat_issues += 1
+                    continue
             else:
                 # ``os.path``: ``Path.is_file`` raises under a dotdir with no
                 # search bit on Python 3.12 and 3.13.
@@ -2112,6 +2121,24 @@ def cmd_heal(argv):
         for msg in store.project_sync_apply({"missing": pplan["missing"]}):
             (out.warn if store.is_unrepaired(msg) else out.ok)(msg)
             actions.append(msg)
+    # A rule block present twice in one context file: the first copy stays,
+    # with its text, and the rest come out.
+    not_collapsed: list[Path] = []
+    for name, where, count in store.duplicate_rule_blocks():
+        if dry:
+            out.info("would keep one of rule %s's %d blocks in %s"
+                     % (name, count, _tilde(where)))
+        else:
+            try:
+                store.collapse_rule_block(name, where)
+            except (OSError, BoostError) as e:
+                out.warn("rule %s's %d blocks in %s were not collapsed: %s"
+                         % (name, count, _tilde(where), e), wrap=True)
+                not_collapsed.append(Path(where))
+                continue
+            out.ok("kept one of rule %s's %d blocks in %s"
+                   % (name, count, _tilde(where)))
+        actions.append("dedupe %s" % name)
     # A repair heal will not make (a pin over a moved source, a URL import it
     # cannot re-clone) fails the run like any other thing it left: exiting 0
     # over a skill still missing is what kept doctor and heal in a loop.
@@ -2283,6 +2310,7 @@ def cmd_heal(argv):
                  "then `boost sync`" % store.unwritable_refusal(str(adir)),
                  wrap=True)
     stuck.extend(broken_taps)
+    stuck.extend(not_collapsed)
     # The same rule for the cache dir doctor flags, and for any directory a
     # refused mkdir left missing: heal cannot make the parent writable, so it
     # must not answer "nothing to heal" beneath the problem. The preview and

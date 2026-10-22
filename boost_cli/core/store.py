@@ -5355,6 +5355,71 @@ def rule_block_lines(rows: list[tuple[str, str]]) -> list[str]:
             % (paths.tilde(Path(p)), n, n) for n, p in rows]
 
 
+def duplicate_rule_blocks() -> list[tuple[str, str, int]]:
+    """``(rule, context file, count)`` for each written context-file row of
+    an installed rule whose file holds that rule's block more than once.
+
+    A dotfiles merge or two concatenated context files make the shape, and
+    the agent reads every copy. doctor, verify and heal all called it
+    healthy, and a refresh or uninstall that touched only the first copy
+    left the other one live (`rules.merge_block` and `rules.strip_block` act
+    on all of them now). Quarantined rows are skipped: their blocks are
+    gone on purpose. Each file once per rule.
+    """
+    from . import rules
+    found: list[tuple[str, str, int]] = []
+    for name, entry in sorted(lockfile.installed_rules().items()):
+        if entry.get("quarantined"):
+            continue
+        seen: set[str] = set()
+        for m in entry.get("materializations") or ():
+            if (not isinstance(m, dict) or m.get("mode") != rules.MODE_CLAUDE
+                    or m.get("unwritable")
+                    or not materialization_is_written("rule", entry, m)):
+                continue
+            p = m.get("path") or ""
+            key = os.path.realpath(p)
+            if not p or key in seen:
+                continue
+            seen.add(key)
+            try:
+                text = util.read_user_text(Path(p))
+            except (OSError, UnicodeDecodeError):
+                continue
+            n = len(rules.block_spans(text, name))
+            if n > 1:
+                found.append((name, p, n))
+    return found
+
+
+def collapse_rule_block(name: str, path: str) -> bool:
+    """Keep the first of rule ``name``'s blocks in ``path`` and drop the rest.
+
+    The first copy's text is what stays, so a block that still hashes to its
+    lock row keeps doing so. False when there is nothing to collapse any
+    more (one block, or none). Raises what the write raises.
+    """
+    from . import rules
+    p = Path(path)
+    text = util.read_user_text(p)
+    if len(rules.block_spans(text, name)) < 2:
+        return False
+    body = rules.read_block(text, name) or ""
+    # A project row's file stays inside its repo, as at install.
+    entry = lockfile.get_rule(name) or {}
+    base = (entry.get("base") if entry.get("scope") == scopes.SCOPE_PROJECT
+            else None)
+    util.write_user_file(p, rules.merge_block(text, name, body), base=base)
+    return True
+
+
+def duplicate_block_line(name: str, path: str, count: int) -> str:
+    """doctor's, verify's and heal's one wording for a duplicated block."""
+    return ("rule %s's block appears %d times in %s — the agent reads every "
+            "copy; `boost heal` keeps the first" % (name, count,
+                                                    paths.tilde(Path(path))))
+
+
 def skill_copy_owner(name: str) -> str | None:
     """The workflow whose skill copy is the store dir ``name``, or None."""
     for wname, entry in lockfile.installed_workflows().items():

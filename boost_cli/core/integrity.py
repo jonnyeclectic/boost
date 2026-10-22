@@ -305,9 +305,14 @@ def materialized_status(name: str, entry: dict,
         p = Path(m.get("path", ""))
         if m.get("mode") == rules.MODE_CLAUDE:
             try:
-                content = rules.read_block(p.read_text(encoding="utf-8"), name)
+                text = p.read_text(encoding="utf-8")
             except OSError:
-                content = None
+                text = None
+            content = rules.read_block(text, name) if text is not None else None
+            # A second copy of the block is not what boost wrote, whatever the
+            # first one hashes to: the agent reads both, and `verify` said ok.
+            if text is not None and len(rules.block_spans(text, name)) > 1:
+                return STATUS_MODIFIED
         else:
             try:
                 content = p.read_text(encoding="utf-8")
