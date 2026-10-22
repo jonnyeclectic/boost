@@ -209,7 +209,9 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
     **It does not look in a native-store agent's dir.** `unlinking_agents`,
     not `known_agents`: boost never links into `~/.gemini/skills`, so anything
     dangling there belongs to someone else and is none of this command's
-    business. A *disabled* agent's dir is looked in: boost linked there while
+    business -- unless boost recorded linking there before ``links_skills``
+    went false, and then only its own dangling links count, as ours. A
+    *disabled* agent's dir is looked in: boost linked there while
     it was enabled, and a link it left behind still dangles where that agent
     reads.
 
@@ -231,6 +233,15 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
         for link in sorted(adir.iterdir()):
             if link.is_symlink() and not link.exists():
                 (ours if _owned_link(link) else theirs).append(link)
+    # A native-store dir boost once linked into, before that agent's
+    # `links_skills` went false: boost's own dangling links there are its to
+    # remove, and anything else in it is none of this command's business.
+    for _agent, adir in agents.remembered_native_dirs():
+        if not os.path.isdir(adir):  # noqa: FURB146
+            continue
+        ours.extend(link for link in sorted(adir.iterdir())
+                    if link.is_symlink() and not link.exists()
+                    and _owned_link(link))
     return ours, theirs
 
 
@@ -1127,6 +1138,18 @@ def cmd_doctor(argv):
             for m in entry.get("materializations") or []:
                 if not store.materialization_is_written(kind, entry, m):
                     continue  # named once below, not reported as rot
+                belongs = agents.relocated_to(kind, name, entry, m)
+                if belongs is not None:
+                    # Present or not, it is not where the agent now reads:
+                    # its dir was repointed after the write.
+                    bad(kind, "%s %s for %s is at %s, but %s now reads %s — "
+                        "run `boost sync` to move it"
+                        % (kind, name, m.get("agent", "?"),
+                           _tilde(m.get("path", "")),
+                           agents.display_name(m.get("agent", "?")),
+                           _tilde(str(belongs))), wrap=True)
+                    mat_issues += 1
+                    continue
                 if m.get("unwritable"):
                     # Refused at install, so `boost reinstall` would be refused
                     # too until the dir allows it; the agent-dir line below
@@ -1166,6 +1189,8 @@ def cmd_doctor(argv):
                 continue
             if not store.materialization_is_written("rule", entry, m):
                 continue
+            if agents.relocated_to("rule", name, entry, m) is not None:
+                continue  # named above, with the dir it belongs in
             if m.get("mode") == "claude":
                 try:
                     text = p.read_text(encoding="utf-8") if p.exists() else ""
@@ -1215,6 +1240,8 @@ def cmd_doctor(argv):
         for m in entry.get("materializations") or []:
             if not store.materialization_is_written("workflow", entry, m):
                 continue
+            if agents.relocated_to("workflow", name, entry, m) is not None:
+                continue  # named above, with the dir it belongs in
             if not m.get("unwritable") and not os.path.isfile(m.get("path", "")):
                 if lockfile.is_skill_copy(m):
                     bad("workflow", "workflow %s missing its skill copy at %s "

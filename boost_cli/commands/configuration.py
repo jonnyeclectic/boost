@@ -187,8 +187,11 @@ def cmd_clean(argv) -> int:
     # agent's, enabled or not, and the dirs boost linked into before. Never a
     # native-store agent's: boost does not link into ~/.gemini/skills, so
     # what dangles there is another tool's — doctor and heal both say so, and
-    # clean deleted it anyway when it walked `known_agents`.
-    for adir in agents.sweep_dirs():
+    # clean deleted it anyway when it walked `known_agents`. The exception is
+    # a native-store dir boost recorded linking into before that agent's
+    # `links_skills` went false: what dangles into the store there is boost's.
+    for adir in (*agents.sweep_dirs(),
+                 *(d for _a, d in agents.remembered_native_dirs())):
         # ``os.path``: ``Path.is_dir`` raises under a dir with no search bit
         # on Python 3.12 and 3.13.
         if not os.path.isdir(adir):  # noqa: FURB146

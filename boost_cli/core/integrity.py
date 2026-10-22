@@ -302,6 +302,10 @@ def materialized_status(name: str, entry: dict,
         if not agents.materialization_is_written(kind, entry.get("base"),
                                                  m.get("agent")):
             continue
+        # Written where the agent's dir used to be: the file may be intact,
+        # but the agent reads the new dir, so from where it looks it is gone.
+        if agents.relocated_to(kind, name, entry, m) is not None:
+            return STATUS_MISSING
         p = Path(m.get("path", ""))
         if m.get("mode") == rules.MODE_CLAUDE:
             try:

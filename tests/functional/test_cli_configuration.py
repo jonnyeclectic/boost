@@ -1770,7 +1770,9 @@ class TestMcp:
         import hashlib
 
         from boost_cli.core import lockfile
-        rp = paths.home() / ".cursor" / "rules" / "house.mdc"
+        # The rule's own Cursor target: a row anywhere else reads as one
+        # left behind by a repointed agent dir, which doctor flags.
+        rp = paths.home() / ".cursor" / "rules" / "house-style.mdc"
         rp.parent.mkdir(parents=True)
         rp.write_text("rule body", encoding="utf-8")
         lockfile.set_rule("house-style", {
