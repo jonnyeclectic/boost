@@ -213,17 +213,32 @@ class TestSecondsIsTheInverseOfTimeout:
         claim a hook that times out instantly."""
         assert hh.timeout_seconds(hh.CLAUDE, None) is None
 
-    def test_a_value_that_is_not_a_whole_second_floors_to_an_int(self):
-        """A hand-written Gemini block can hold any millisecond count, and the
-        field this feeds is declared in seconds as an integer.
+    def test_a_value_that_is_not_a_whole_second_stays_fractional(self):
+        """A hand-written Gemini block can hold any millisecond count.
 
-        True division answers `10.5` here, which is the more precise number and
-        the wrong type: it reaches `hooks list --json` as a float in a field
-        every other host reports as an int, and a consumer comparing the two
-        hosts is back to comparing different things.
+        Flooring it reported a 500 ms hook as `0` — the instant give-up the
+        `None` rule exists to rule out — and 1500 ms as `1`. An exact multiple
+        stays an `int`, so every value boost wrote reads back unchanged.
         """
-        assert hh.timeout_seconds(hh.GEMINI, 10500) == 10
-        assert isinstance(hh.timeout_seconds(hh.GEMINI, 10500), int)
+        assert hh.timeout_seconds(hh.GEMINI, 500) == 0.5
+        assert hh.timeout_seconds(hh.GEMINI, 1500) == 1.5
+        assert hh.timeout_seconds(hh.GEMINI, 10500) == 10.5
+        ten = hh.timeout_seconds(hh.GEMINI, 10000)
+        assert ten == 10 and type(ten) is int
+        assert hh.timeout_seconds(hh.CLAUDE, 2.5) == 2.5
+        whole = hh.timeout_seconds(hh.CLAUDE, 10.0)
+        assert whole == 10 and type(whole) is int
+        assert hh.timeout_seconds(hh.GEMINI, 0) == 0
+
+    @pytest.mark.parametrize("native", [
+        "ten", "10", True, False, float("inf"), float("-inf"), float("nan"),
+        [10], {"s": 10},
+    ])
+    def test_a_value_that_is_not_a_finite_number_is_none(self, native):
+        """The file has other writers; one odd field crashed `hooks list`
+        with a ValueError (`int("ten")`) or an OverflowError (`1e400`)."""
+        for host in hh.hosts():
+            assert hh.timeout_seconds(host, native) is None
 
 
 class TestContextOutput:

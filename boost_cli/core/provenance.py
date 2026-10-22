@@ -99,7 +99,10 @@ def add_trusted_key(name: str, public_key_text: str) -> dict:
     """Parse ``public_key_text`` (a ``.pub`` file or its base64 line) and store it.
 
     Replaces any existing key of the same ``name`` so re-adding is idempotent.
-    Raises :class:`BoostError` if the key does not parse.
+    Raises :class:`BoostError` if the key does not parse, or if the same key is
+    already trusted under a **different** name: two names for one key made
+    ``trust remove <name>`` report a revocation while the key, still stored
+    under the other name, went on verifying taps.
     """
     name = name.strip()
     if not name:
@@ -115,6 +118,15 @@ def add_trusted_key(name: str, public_key_text: str) -> dict:
         "fingerprint": minisign.key_id_hex(pk.key_id),
         "key": base64.b64encode(pk.key_id + pk.key).decode("ascii"),
     }
+    for k in trusted_keys():
+        if k.get("name") != name and (
+                k.get("key") == record["key"]
+                or k.get("fingerprint") == record["fingerprint"]):
+            raise BoostError(
+                "key %s is already trusted as %s"
+                % (record["fingerprint"], k["name"]),
+                hint="one key, one name: `boost trust remove %s` first to "
+                     "rename it" % k["name"])
     keys = [k for k in trusted_keys() if k.get("name") != name]
     keys.append(record)
     _save(keys)
@@ -187,3 +199,23 @@ def verify_dir(clone: Path) -> Result:
     return Result(UNTRUSTED, fingerprint=minisign.key_id_hex(sig.key_id),
                   trusted_comment=sig.trusted_comment,
                   detail="no trusted key verifies this signature")
+
+
+def verify_commit(clone: Path, commit: str) -> Result:
+    """:func:`verify_dir` for the tree at ``commit`` in the git clone ``clone``.
+
+    The signed files are read from the object store into a scratch directory,
+    so a commit can be judged before the working tree moves onto it.
+    """
+    import tempfile
+
+    from . import gitutil
+    with tempfile.TemporaryDirectory(prefix="boost-verify-") as tmp:
+        root = Path(tmp)
+        for rel in (SIGNED_FILE, SIGNATURE_FILE):
+            data = gitutil.read_blob(clone, commit, rel)
+            if data is not None:
+                dest = root / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(data)
+        return verify_dir(root)

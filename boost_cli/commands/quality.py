@@ -249,7 +249,7 @@ def _drift_status(name: str, entry: dict) -> str:
     """'in-sync' | 'local-edits' | 'upstream-moved' | 'source-missing'
     | 'source-changed'
     | 'store-missing' | 'n/a' (local imports with no tap source)."""
-    sdir = store.skill_store_dir(name)
+    sdir = store.copy_dir(name, entry)
     if sdir.is_dir() and integrity.self_sourced(name, entry):
         # Kept in the store itself: an edit there is the skill, not drift.
         return staleness.NA
@@ -375,7 +375,10 @@ _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
 
 
 def _drift_hint(name: str, status: str, tap: str = "",
-                tap_url: str = "") -> str:
+                tap_url: str = "", scope: str | None = None) -> str:
+    # A reinstall of a project row needs `--local`: bare `reinstall` reads the
+    # user lock and, given a same-named user install, reinstalls that instead.
+    local = " --local" if scope == scopes.SCOPE_PROJECT else ""
     if status == "quarantined":
         return "boost quarantine --release %s to restore" % name
     if status == "upstream-moved":
@@ -383,10 +386,10 @@ def _drift_hint(name: str, status: str, tap: str = "",
     if status == "source-changed":
         # `boost update` holds these back on purpose: the tap's copy of the
         # name is another repository's item, taken only when asked for.
-        return ("boost reinstall %s to take the new source's copy, or re-tap "
-                "the original" % name)
+        return ("boost reinstall %s%s to take the new source's copy, or "
+                "re-tap the original" % (name, local))
     if status == "local-edits":
-        return "boost reinstall %s to discard local edits" % name
+        return "boost reinstall %s%s to discard local edits" % (name, local)
     if status == "source-missing":
         # `boost update` only refreshes configured taps. When the entry's
         # tap has been untapped, that command is a guaranteed no-op — the
@@ -655,6 +658,20 @@ def cmd_doctor(argv):
             "with `boost config set agents.%s.dir <dir>`, or remove the row "
             "with `boost config unset agents.%s`" % (aname, aname, aname),
             wrap=True)
+    for aname, key, value in agents.bad_flags(claim=True):
+        bad("agent-config", "agents.%s.%s is %s, not a boolean, so boost reads "
+            "it as %s — fix it with `boost config set agents.%s.%s "
+            "<true|false>`" % (aname, key, json.dumps(value),
+                               str(agents.flag_default(aname, key)).lower(), aname,
+                               key), wrap=True)
+    if agents_ok:
+        for aname, spec in agents.known_agents().items():
+            if spec["store_alias"]:
+                rep.note("agent-config", "agents.%s.dir (%s) is the canonical "
+                         "store, so %s reads every skill there directly — "
+                         "boost does not link into it"
+                         % (aname, _tilde(spec["dir"]),
+                            agents.display_name(aname)), wrap=True)
     for aname, err in agent_errs:
         key = "agents.%s.dir" % aname
         bad("agent-config", "%s: %s — %s, or set a path with `boost config set "
@@ -711,6 +728,11 @@ def cmd_doctor(argv):
                 wrap=True)
         else:
             tap_ok += 1
+    # With config.json unreadable no tap is listed, so every clone would read
+    # as unlisted; the config row above already names them.
+    for half in [] if cfg_err else registry.unfinished_clones():
+        bad("tap", "%s is a clone that never finished (no tap lists it and it "
+            "has no commit checked out) — delete it" % _tilde(half), wrap=True)
     if taps and cache_block:
         bad("cache", "%s — every command rescans its taps and cannot keep the "
             "result; %s"
@@ -822,8 +844,17 @@ def cmd_doctor(argv):
     covered = store.covered_skills(coverage)
     skill_issues = 0
     quarantined_skills = 0
+    # Withheld by an older boost, which left the copy in the store: no agent
+    # link, so nothing below sees it, but Gemini CLI and Codex read the store.
+    unheld = set(store.unheld_withheld()) if lock_ok else set()
     for name, entry in sorted(skills.items()):
-        sdir = store.skill_store_dir(name)
+        if name in unheld:
+            bad("skill-held", "%s skill %s is still in %s, where Gemini CLI "
+                "and Codex load it — run `boost heal`"
+                % ("quarantined" if entry.get("quarantined") else "sidelined",
+                   name, _tilde(paths.store_dir())), wrap=True)
+            skill_issues += 1
+        sdir = store.copy_dir(name, entry)
         if not sdir.is_dir():
             # A pin over a moved source is a repair heal declines, so naming
             # heal sent the user round doctor -> heal -> doctor. Whether the
@@ -975,7 +1006,8 @@ def cmd_doctor(argv):
             proj_issues += 1
         elif st == integrity.STATUS_MODIFIED:
             bad("project-skill", "project skill %s modified since install — "
-                "run `boost verify`" % name)
+                "run `%s` %s" % (name, *integrity.modified_remedy(
+                    name, scope=scopes.SCOPE_PROJECT)), wrap=True)
             proj_issues += 1
         # An agent enabled after the install has no row, so the status above
         # cannot see it; `boost sync` copies into it, as it does for a rule.
@@ -1761,7 +1793,8 @@ def cmd_drift(argv):
         # (`store.project_sync_plan`), not by heal's user-store repair.
         hint = ("boost sync" if status == staleness.STORE_MISSING
                 else _drift_hint(name, status, entry.get("tap", ""),
-                                 str(entry.get("tap_url") or "")))
+                                 str(entry.get("tap_url") or ""),
+                                 scope=scopes.SCOPE_PROJECT))
         rows.append({"name": name, "kind": "skill",
                      "scope": scopes.SCOPE_PROJECT, "status": status,
                      "hint": hint})
@@ -2123,6 +2156,15 @@ def cmd_heal(argv):
     cache_dir = paths.cache_dir()
     cache_stuck = paths.refuses_writes(cache_dir) is not None
     broken_taps = []
+    # Without git no clone's HEAD can be read, so no cache can be judged
+    # fresh or stale: this used to end heal at the first tap with "git is
+    # required", after it had already created directories. Said once, and
+    # never under an all-clear — doctor counts it as an issue too.
+    no_git = not gitutil.has_git()
+    if no_git:
+        out.warn("git not found on PATH — heal cannot check tap catalogs "
+                 "against their clones; install git, then rerun `boost heal`",
+                 wrap=True)
     for tap in registry.list_taps():
         if not tap.is_cloned:
             out.warn("tap %s not cloned — skipped (run `boost update`)" % tap.name)
@@ -2133,6 +2175,8 @@ def cmd_heal(argv):
             # names it and does not answer "nothing to heal" beneath it.
             broken_taps.append(tap.path)
             out.warn(registry.broken_clone_line(tap.name), wrap=True)
+            continue
+        if no_git:
             continue
         had_cache = tap.cache_file.exists()
         # One HEAD for both freshness questions below, before and after.
@@ -2264,7 +2308,7 @@ def cmd_heal(argv):
                  "`boost sync --prune`"
                  % (len(oos), _s(len(oos)),
                     ", ".join("%s → %s" % (n, a) for n, a in oos)), wrap=True)
-    if not actions and not stuck and not cfg_err:
+    if not actions and not stuck and not cfg_err and not no_git:
         # A duplicate this run declined to prune is something `heal` saw, can
         # fix, and deliberately left. A bare "nothing to heal" printed under
         # the line offering the flag contradicts it.
@@ -2273,7 +2317,7 @@ def cmd_heal(argv):
                else "nothing to heal")
     if actions and not dry:
         journal.log("heal", "%d actions" % len(actions))
-    return 1 if cfg_err or stuck or unrepaired else 0
+    return 1 if cfg_err or stuck or unrepaired or no_git else 0
 
 
 def cmd_conflict(argv):
@@ -2514,15 +2558,17 @@ def cmd_health(argv):
     # called store-missing. Stat the store instead. They are listed even when
     # full, because an agent silently absent from a health report reads as
     # "boost is not wired up for it".
-    store_present = sum(1 for n, _e in expected if store.skill_store_dir(n).is_dir())
-    store_full = store_present == len(expected)
+    # A sidelined skill's copy is held out of the store on purpose.
+    in_store = [n for n, e in expected if not store.is_held(e)]
+    store_present = sum(1 for n in in_store if store.skill_store_dir(n).is_dir())
+    store_full = store_present == len(in_store)
     for agent in agents.native_store_agents():
         coverage_ok = coverage_ok and store_full
         kv(agent, "%d/%d %s (reads the store directly)"
-           % (store_present, len(expected),
+           % (store_present, len(in_store),
               out.role("✓", "success") if store_full
               else out.role("!", "warn")),
-           {"linked": store_present, "expected": len(expected),
+           {"linked": store_present, "expected": len(in_store),
             "ok": store_full, "native_store": True})
 
     drift_counts: dict = {}

@@ -808,6 +808,9 @@ class TestSourceIdentity:
 
     def test_legacy_row_without_tap_url_keeps_old_behaviour(self, boost,
                                                             two_sources):
+        # Only where nothing dates the tap either: a legacy row under a tap
+        # row written before `added_at` cannot be told apart from its source
+        # (TestLegacyRowSource covers a tap dated after the row).
         from boost_cli.core import lockfile
         self._retap_other(boost, two_sources)
         def drop_urls(lock):
@@ -815,9 +818,131 @@ class TestSourceIdentity:
                 for row in lock.get(section, {}).values():
                     row.pop("tap_url", None)
         lockfile.mutate(drop_urls)
+
+        def undate(cfg):
+            for row in cfg["taps"]:
+                row.pop("added_at", None)
+        config.mutate(undate)
         data = json.loads(boost("outdated", "--json").out)
         assert ("brainstorming", staleness.VERSION, "9.0.0") in [
             (d["name"], d["reason"], d["latest"]) for d in data]
+
+
+def _legacy_rows():
+    """Rows as a boost from before `tap_url` wrote them, dated well before
+    any tap this test makes, and the tap rows as one from before `added_at`."""
+    from boost_cli.core import lockfile
+
+    def age(lock):
+        for section in ("skills", "rules"):
+            for row in lock[section].values():
+                row.pop("tap_url", None)
+                row["installed_at"] = row["updated_at"] = "2026-01-01T00:00:00Z"
+    lockfile.mutate(age)
+
+    def undate(cfg):
+        for row in cfg["taps"]:
+            row.pop("added_at", None)
+    config.mutate(undate)
+
+
+def _old_untap(name):
+    """`boost untap` as an older boost ran it: the config row and the clone
+    go, and nothing is recorded on the lock rows first."""
+    def drop(cfg):
+        cfg["taps"] = [t for t in cfg["taps"] if t["name"] != name]
+    config.mutate(drop)
+    util.rmtree(paths.repos_dir() / name)
+
+
+class TestLegacyRowSource:
+    """Lock rows written before `tap_url`: while the tap is configured its URL
+    is in config.json, so sync, heal, update and untap record it; once a
+    later tap took the name, the row reads as a source change."""
+
+    @pytest.fixture()
+    def legacy(self, boost, two_sources):
+        from boost_cli.core import lockfile
+        a, b = two_sources
+        boost("tap", a)
+        boost("install", "brainstorming")
+        boost("install", "house-style")
+        _legacy_rows()
+        assert "tap_url" not in lockfile.get_skill("brainstorming")
+        return a, b
+
+    def _urls(self):
+        from boost_cli.core import lockfile
+        return (lockfile.get_skill("brainstorming").get("tap_url"),
+                lockfile.installed_rules()["house-style"].get("tap_url"))
+
+    def test_sync_records_the_configured_url(self, boost, legacy):
+        a, _b = legacy
+        r = boost("sync", "--diff")
+        assert "would record the tap URL of 2 lock rows" in r.out
+        assert self._urls() == (None, None)
+        r = boost("sync")
+        assert "recorded the tap URL of 2 lock rows" in r.out
+        assert self._urls() == (str(a.resolve()),) * 2
+        assert "tap URL" not in boost("sync").out
+
+    def test_then_a_retap_of_another_repo_is_held_back(self, boost, legacy):
+        from boost_cli.core import store
+        _a, b = legacy
+        boost("heal")
+        boost("untap", "reg", "--force")
+        boost("tap", b)
+        md = store.skill_store_dir("brainstorming") / "SKILL.md"
+        before = md.read_bytes()
+        r = boost("update", "--yes")
+        assert "upgraded" not in r.out
+        assert "2 items held back" in r.out
+        assert md.read_bytes() == before
+
+    def test_untap_records_it_before_the_config_row_goes(self, boost,
+                                                         legacy):
+        a, _b = legacy
+        boost("untap", "reg", "--force")
+        assert self._urls() == (str(a.resolve()),) * 2
+
+    def test_update_records_it_before_comparing(self, boost, legacy):
+        a, _b = legacy
+        boost("update")
+        assert self._urls() == (str(a.resolve()),) * 2
+
+    def test_a_retap_after_an_old_untap_is_a_source_change(self, boost,
+                                                           legacy):
+        from boost_cli.core import store
+        _a, b = legacy
+        _old_untap("reg")
+        boost("tap", b)
+        r = boost("outdated")
+        rows = {l.split()[0]: l for l in r.out.splitlines()
+                if l.startswith(("brainstorming", "house-style"))}
+        assert "source changed" in rows["brainstorming"]
+        assert "9.0.0" not in r.out
+        md = store.skill_store_dir("brainstorming") / "SKILL.md"
+        before = md.read_bytes()
+        r = boost("update", "--yes")
+        flat = " ".join(r.out.split())
+        assert ("brainstorming: not updated — tap reg now points at %s, and "
+                "was tapped again since it was installed, from a source it "
+                "did not record; `boost reinstall brainstorming` takes the "
+                "new source's copy" % paths.tilde(str(b.resolve())) in flat)
+        assert "upgraded" not in r.out
+        assert md.read_bytes() == before
+        # Never stamped with the new tap's URL: that is not where it came from.
+        assert "would record the tap URL" not in boost("sync", "--diff").out
+        assert self._urls() == (None, None)
+
+    def test_a_retap_of_the_same_unmoved_repo_is_not(self, boost, legacy):
+        a, _b = legacy
+        _old_untap("reg")
+        boost("tap", a)
+        r = boost("outdated")
+        assert "source changed" not in r.out
+        boost("sync")
+        assert self._urls() == (str(a.resolve()),) * 2
 
 
 class TestOutdatedNotCloned:

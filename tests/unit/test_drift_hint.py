@@ -77,6 +77,22 @@ class TestDriftHintOtherStatuses:
         assert (quality._drift_hint("x", "local-edits")
                 == "boost reinstall x to discard local edits")
 
+    def test_local_edits_of_a_project_row_carry_local(self):
+        # Bare `reinstall` reads the user lock: beside a same-named user
+        # install it reinstalls that copy and leaves the project edit.
+        assert (quality._drift_hint("x", "local-edits", scope="project")
+                == "boost reinstall x --local to discard local edits")
+        assert (quality._drift_hint("x", "local-edits", scope="user")
+                == "boost reinstall x to discard local edits")
+
+    def test_source_changed_carries_the_rows_scope(self):
+        assert quality._drift_hint("x", "source-changed", scope="project") == (
+            "boost reinstall x --local to take the new source's copy, or "
+            "re-tap the original")
+        assert quality._drift_hint("x", "source-changed") == (
+            "boost reinstall x to take the new source's copy, or re-tap the "
+            "original")
+
     def test_store_missing(self):
         assert quality._drift_hint("x", "store-missing") == "boost heal"
 

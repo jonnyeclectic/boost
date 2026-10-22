@@ -830,10 +830,20 @@ def cmd_uninstall(argv: list[str]) -> int:
                        "user config, then this repo for a name only it has)",
         local_help="remove from this repo (= --scope project)",
         global_help="remove from your user config only (= --scope user)")
+    ap.add_argument("--kind", choices=("skill", "rule", "workflow"),
+                    default=None,
+                    help="which item to remove when a skill, rule or "
+                         "workflow share NAME")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     args = ap.parse_args(argv)
-    args.names = [store.installed_name(n) for n in args.names]
+    args.names = [store.installed_name(n, args.scope) for n in args.names]
+    if (args.kind not in (None, "skill")
+            and args.scope == scopes.SCOPE_PROJECT):
+        raise BoostError("--local removes project skills, not a %s"
+                         % args.kind,
+                         hint="drop --local: a %s installed into a repo is "
+                              "recorded in your user lock" % args.kind)
     # Ask only when someone is there to answer. out.confirm() returns its
     # `default` on a non-TTY, so gating on it unconditionally would turn every
     # scripted `boost uninstall x` — CI step, Makefile, Dockerfile — into a
@@ -842,6 +852,8 @@ def cmd_uninstall(argv: list[str]) -> int:
     if out.stdin_is_tty() and not args.yes:
         what = (args.names[0] if len(args.names) == 1 else
                 "%d skills: %s" % (len(args.names), ", ".join(args.names)))
+        if args.kind and len(args.names) == 1:
+            what = "%s %s" % (args.kind, what)
         if args.scope == scopes.SCOPE_PROJECT:
             from_repo, where = list(args.names), scopes.resolve_base(
                 scopes.SCOPE_PROJECT)
@@ -883,7 +895,8 @@ def cmd_uninstall(argv: list[str]) -> int:
                 # else: falling back to the repo would remove what the
                 # flag said to leave alone.
                 info = store.uninstall(
-                    name, project_fallback=args.scope != scopes.SCOPE_USER)
+                    name, project_fallback=args.scope != scopes.SCOPE_USER,
+                    kind=args.kind)
         except BoostError as err:
             if len(args.names) == 1:
                 raise
@@ -1074,6 +1087,8 @@ def cmd_sync(argv: list[str]) -> int:
         # writes the next `boost sync` made.
         records = ([lockfile.older_line(integ, dry=True)]
                    if integ.problem == "older" else [])
+        records += store.hold_legacy_copies(dry=True)
+        records += store.backfill_tap_urls(dry=True)
         records += store.backfill_row_hashes(dry=True)
         for line in records:
             (out.warn if store.is_unrepaired(line) else out.info)(
@@ -1502,10 +1517,15 @@ def _source_changed_hold(label: str, name: str, lk: dict, tapname: str) -> bool:
         return False
     if not registry.source_changed(lk, tap):
         return False
-    out.warn("%s: not updated — tap %s now points at %s, not %s where it was "
-             "installed; `boost reinstall %s` takes the new source's copy"
-             % (label, tapname, _tilde(tap.url),
-                _tilde(str(lk.get("tap_url"))), name), wrap=True)
+    recorded = str(lk.get("tap_url") or "")
+    # A row older than `tap_url` names no URL to compare: what it knows is
+    # that the tap was added again after it was installed.
+    was = ("not %s where it was installed" % _tilde(recorded) if recorded
+           else "and was tapped again since it was installed, from a source "
+                "it did not record")
+    out.warn("%s: not updated — tap %s now points at %s, %s; `boost "
+             "reinstall %s` takes the new source's copy"
+             % (label, tapname, _tilde(tap.url), was, name), wrap=True)
     return True
 
 
@@ -1926,11 +1946,19 @@ def cmd_update(argv: list[str]) -> int:
     # reads as one line of bad news rather than as the whole command failing.
     for tname, err in failures.items():
         out.warn("%s: %s" % (tname, err))
-    if failures:
+    refused = [t for t, e in failures.items() if registry.POLICY_REFUSAL in e]
+    if refused:
+        out.info(out.role(
+            "%d tap%s refused by provenance policy and left on %s last "
+            "verified commit — `boost trust verify` shows why"
+            % (len(refused), "s" if len(refused) != 1 else "",
+               "their" if len(refused) != 1 else "its"), "muted"))
+    if len(failures) > len(refused):
         out.info(out.role(
             "%d of %d taps could not be refreshed — the rest are up to date. "
             "Drop a dead one with `boost untap <name>`."
-            % (len(failures), len(results) + len(failures)), "muted"))
+            % (len(failures) - len(refused), len(results) + len(failures)),
+            "muted"))
     if pinned_skips:
         out.info(out.role(
             "%d tap%s pinned and left alone — `boost update --force` moves "
@@ -1948,8 +1976,11 @@ def cmd_update(argv: list[str]) -> int:
         # nothing was refreshed at all. This early return predates that rule
         # and kept answering 0 with every tap dead — and a cron'd
         # `boost update --taps-only` exists precisely to notice that morning.
-        return 1 if failures and not results else 0
+        return 1 if refused or (failures and not results) else 0
 
+    # Before any comparison: a row with no `tap_url` is one
+    # `registry.source_changed` cannot protect.
+    store.backfill_tap_urls()
     upgraded = held = pinned_held = quarantined_held = 0
     # Both locks, so a `--local` skill is refreshed in the repo it lives in —
     # the user lock alone left it at its old version under "everything up to
@@ -2008,7 +2039,9 @@ def cmd_update(argv: list[str]) -> int:
     # Non-zero only when nothing was refreshed at all. A partial run did the job
     # it could do, and failing it would put us back to one dead upstream
     # breaking `boost update` for the other 79.
-    return 1 if failures and not results else 0
+    # A tap refused by provenance policy is the exception: that is a security
+    # answer, not a flaky upstream, and a cron'd update must not read it as 0.
+    return 1 if refused or (failures and not results) else 0
 
 
 # ── reinstall ────────────────────────────────────────────────────────────
@@ -2033,8 +2066,7 @@ def _reinstall_project_skill(name: str, lk: dict, pbase: Path) -> bool:
     matches = [e for e in catalog.find(name)
                if e["tap"] == lk.get("tap") and e.get("kind", "skill") == "skill"]
     if not matches:
-        out.warn("%s not found in tap %s — skipped (try `boost update`)"
-                 % (name, lk.get("tap")))
+        out.warn(store.source_missing_message(name, name, lk), wrap=True)
         return False
     entry, warning = catalog.select_lock_source(matches, lk)
     entry = cast(dict, entry)                 # matches is non-empty above
@@ -2070,7 +2102,7 @@ def cmd_reinstall(argv: list[str]) -> int:
         local_help="what is installed in this repo (= --scope project)",
         global_help="what is installed in your user config (= --scope user)")
     args = ap.parse_args(argv)
-    args.names = [store.installed_name(n) for n in args.names]
+    args.names = [store.installed_name(n, args.scope) for n in args.names]
     pbase = None
     if args.scope == scopes.SCOPE_PROJECT:
         pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
@@ -2129,8 +2161,8 @@ def cmd_reinstall(argv: list[str]) -> int:
                        if e["tap"] == lk.get("tap")
                        and e.get("kind", "skill") == kind]
             if not matches:
-                out.warn("%s %s not found in tap %s — skipped (try `boost update`)"
-                         % (kind, name, lk.get("tap")))
+                out.warn(store.source_missing_message(
+                    "%s %s" % (kind, name), name, lk), wrap=True)
                 failed += 1
                 continue
             entry, warning = catalog.select_lock_source(matches, lk)
@@ -2214,8 +2246,7 @@ def cmd_reinstall(argv: list[str]) -> int:
             continue
         matches = [e for e in catalog.find(name) if e["tap"] == lk.get("tap")]
         if not matches:
-            out.warn("%s not found in tap %s — skipped (try `boost update`)"
-                     % (name, lk.get("tap")))
+            out.warn(store.source_missing_message(name, name, lk), wrap=True)
             failed += 1
             continue
         entry, warning = catalog.select_lock_source(matches, lk)
@@ -3104,10 +3135,16 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
     # store.restore_preserve_newer_lock_sections.
     pre_rules = lockfile.installed_rules().copy()
     pre_workflows = lockfile.installed_workflows().copy()
+    pre_skills = set(lockfile.installed())
     # Extracted into a staging dir and swapped in only once that succeeded,
     # so a corrupt or refused snapshot can never leave an emptied store.
     snapshot.restore(tar_path, root, snap_id)
     kept = store.restore_preserve_newer_lock_sections(pre_rules, pre_workflows)
+    # Before anything links: a skill blocklisted since the snapshot was saved
+    # is declined here, as `replay rollback` and `install` decline it.
+    declined = store.decline_restored_by_policy(pre_skills)
+    for line in declined:
+        out.warn(line, wrap=True)
     actions = store.sync_apply(store.sync_plan())
     for action in actions:
         out.ok(action)
@@ -3129,7 +3166,9 @@ def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
         if extra:
             msg += " (%s)" % "; ".join(extra)
         out.warn(msg)
-    return 0
+    # Partial on purpose, and said so in the exit code: a declined skill is
+    # what `replay rollback` and `install` fail on too.
+    return 1 if declined else 0
 
 
 # ── export ───────────────────────────────────────────────────────────────
@@ -3279,10 +3318,13 @@ def _resolve_skill(name: str):
     from_store = p is not None
     if p is None:
         entry = catalog.resolve_one(name)   # raises BoostError if unknown
-        p = registry.get(entry["tap"]).path / entry["skill_md"]
+        tap = registry.get(entry["tap"])
+        p = tap.path / entry["skill_md"]
         if not p.exists():
             raise BoostError("SKILL.md missing for %s" % bare,
                             hint="refresh the tap with `boost update`")
+        # A stale cache may still name a SKILL.md linking out of the clone.
+        store.refuse_escape(tap, p, bare)
     meta, body = frontmatter.parse(p.read_text(encoding="utf-8", errors="replace"))
     # Installed, the lock name is the one boost answers to: an import renamed
     # with `--name` may predate the frontmatter rewrite, and the adapt banner

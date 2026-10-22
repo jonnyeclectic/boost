@@ -3,8 +3,12 @@
 """Unit tests: boost_cli/core/gitutil.py — the stdlib git wrapper."""
 from __future__ import annotations
 
+import os
 import re
+import signal
 import subprocess
+import sys
+import time
 
 import pytest
 
@@ -77,7 +81,7 @@ class TestHasGitAndRun:
         assert "not a git repository" in ei.value.message.lower()
 
     def test_run_check_failure_unknown_error(self, monkeypatch):
-        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+        monkeypatch.setattr("boost_cli.core.gitutil._exec",
                             lambda *a, **k: FakeProc(rc=1))
         with pytest.raises(BoostError) as ei:
             gitutil.run(["status"])
@@ -90,7 +94,7 @@ class TestHasGitAndRun:
     def test_run_timeout_raises(self, monkeypatch):
         def boom(*a, **k):
             raise subprocess.TimeoutExpired(cmd="git", timeout=7)
-        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run", boom)
+        monkeypatch.setattr("boost_cli.core.gitutil._exec", boom)
         with pytest.raises(BoostError) as ei:
             gitutil.run(["fetch"], timeout=7)
         assert ei.value.message == "git fetch timed out after 7s"
@@ -108,12 +112,150 @@ class TestHasGitAndRun:
         def rec(argv, **kw):
             calls.append((argv, kw))
             return FakeProc(rc=0, stdout="ok")
-        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run", rec)
+        monkeypatch.setattr("boost_cli.core.gitutil._exec", rec)
         gitutil.run(["status", "-s"], cwd=None)
         (argv, kw), = calls
         assert argv == ["git", "status", "-s"]     # literal "git", args appended
         assert kw["timeout"] == 300                 # default timeout forwarded
-        assert kw["capture_output"] is True and kw["text"] is True
+        assert kw["cwd"] is None
+
+    def test_timeout_names_the_subcommand_not_a_global_flag(self, monkeypatch):
+        """Every repo-scoped call starts `-C <path>`, so the timeout read
+        `git -C timed out after 120s` — a flag named as the command."""
+        def boom(*a, **k):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=7)
+        monkeypatch.setattr("boost_cli.core.gitutil._exec", boom)
+        for argv, want in (
+                (["-C", "/some/repo", "fetch", "origin"],
+                 "git fetch timed out after 7s"),
+                (["-c", "k=v", "-C", "/r", "pull"], "git pull timed out after 7s"),
+                (["--version"], "git timed out after 7s")):
+            with pytest.raises(BoostError) as ei:
+                gitutil.run(argv, timeout=7)
+            assert ei.value.message == want
+
+
+class TestExecKillsTheTree:
+    """A timeout must take git's helpers with it, not only git."""
+
+    def test_popen_gets_its_own_session_and_pipes(self, monkeypatch):
+        seen = {}
+
+        class P:
+            pid, returncode = 4242, 0
+
+            def __init__(self, argv, **kw):
+                seen["argv"], seen["kw"] = argv, kw
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def communicate(self, timeout=None):
+                seen["timeout"] = timeout
+                return "out", "err"
+        monkeypatch.setattr(gitutil.subprocess, "Popen", P)
+        proc = gitutil._exec(["git", "status"], cwd="/w", timeout=9,
+                             env={"A": "1"})
+        assert (proc.args, proc.returncode, proc.stdout, proc.stderr) == (
+            ["git", "status"], 0, "out", "err")
+        kw = seen["kw"]
+        assert kw["cwd"] == "/w" and kw["env"] == {"A": "1"}
+        assert kw["text"] is True
+        assert kw["stdout"] is subprocess.PIPE
+        assert kw["stderr"] is subprocess.PIPE
+        assert seen["timeout"] == 9
+        assert ("start_new_session" in kw) is (sys.platform != "win32")
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+    def test_timeout_kills_grandchildren(self, tmp_path):
+        pidfile = tmp_path / "pid"
+        with pytest.raises(subprocess.TimeoutExpired):
+            gitutil._exec(["sh", "-c", 'sleep 60 & echo $! > "$1"; wait',
+                           "sh", str(pidfile)],
+                          cwd=None, timeout=1, env=dict(os.environ))
+        pid = int(pidfile.read_text(encoding="utf-8"))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
+        os.kill(pid, signal.SIGKILL)
+        pytest.fail("the grandchild outlived its timed-out parent")
+
+    def test_kill_tree_on_windows_uses_taskkill_then_kill(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(gitutil.sys, "platform", "win32")
+        monkeypatch.setattr(gitutil.subprocess, "run",
+                            lambda argv, **kw: calls.append(argv))
+
+        class P:
+            pid = 77
+
+            def kill(self):
+                calls.append("kill")
+
+            def communicate(self, timeout=None):
+                calls.append(("communicate", timeout))
+                return "", ""
+        gitutil._kill_tree(P())
+        assert calls == [["taskkill", "/F", "/T", "/PID", "77"], "kill",
+                         ("communicate", 5)]
+
+    @pytest.mark.parametrize("exc", [FileNotFoundError("taskkill"),
+                                     subprocess.TimeoutExpired("taskkill", 10)])
+    def test_kill_tree_on_windows_survives_a_failing_taskkill(self, monkeypatch,
+                                                              exc):
+        calls = []
+        monkeypatch.setattr(gitutil.sys, "platform", "win32")
+
+        def run(argv, **kw):
+            calls.append(kw.get("timeout"))
+            raise exc
+        monkeypatch.setattr(gitutil.subprocess, "run", run)
+
+        class P:
+            pid = 76
+
+            def kill(self):
+                calls.append("kill")
+
+            def communicate(self, timeout=None):
+                return "", ""
+        gitutil._kill_tree(P())
+        assert calls == [10, "kill"]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+    def test_kill_tree_on_posix_kills_the_group(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(gitutil.os, "killpg",
+                            lambda pid, sig: calls.append((pid, sig)))
+
+        class P:
+            pid = 78
+
+            def communicate(self, timeout=None):
+                calls.append(("communicate", timeout))
+                return "", ""
+        gitutil._kill_tree(P())
+        assert calls == [(78, signal.SIGKILL), ("communicate", 5)]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+    def test_kill_tree_tolerates_a_group_already_gone(self, monkeypatch):
+        def gone(pid, sig):
+            raise ProcessLookupError(pid)
+        monkeypatch.setattr(gitutil.os, "killpg", gone)
+
+        class P:
+            pid = 79
+
+            def communicate(self, timeout=None):
+                raise subprocess.TimeoutExpired("git", timeout)
+        gitutil._kill_tree(P())     # neither error escapes
 
     def test_run_disables_terminal_credential_prompt(self, monkeypatch):
         # Without GIT_TERMINAL_PROMPT=0, a clone/fetch against a deleted or
@@ -124,14 +266,14 @@ class TestHasGitAndRun:
         def rec(argv, **kw):
             seen.update(kw.get("env") or {})
             return FakeProc(rc=0, stdout="ok")
-        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run", rec)
+        monkeypatch.setattr("boost_cli.core.gitutil._exec", rec)
         gitutil.run(["status"])
         assert seen["GIT_TERMINAL_PROMPT"] == "0"
         assert seen["GIT_LFS_SKIP_SMUDGE"] == "1"
 
     def test_run_failure_prefers_stdout_when_stderr_empty(self, monkeypatch):
         # stderr empty, stdout carries the real error -> it must reach the message
-        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+        monkeypatch.setattr("boost_cli.core.gitutil._exec",
                             lambda *a, **k: FakeProc(rc=1, stdout="fatal: bad object\n"))
         with pytest.raises(BoostError) as ei:
             gitutil.run(["cat-file", "-p", "deadbeef"])
@@ -140,21 +282,21 @@ class TestHasGitAndRun:
     def test_failure_names_the_subcommand_not_a_global_flag(self, monkeypatch):
         """Most calls here are repo-scoped (`-C <path> …`), and taking args[0]
         reported every one of them as `git -C failed` — a flag, not a command."""
-        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+        monkeypatch.setattr("boost_cli.core.gitutil._exec",
                             lambda *a, **k: FakeProc(rc=1, stdout="fatal: nope\n"))
         with pytest.raises(BoostError) as ei:
             gitutil.run(["-C", "/some/repo", "fetch", "--depth", "1", "origin"])
         assert ei.value.message == "git fetch failed: fatal: nope"
 
     def test_failure_skips_dash_c_config_pairs_too(self, monkeypatch):
-        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+        monkeypatch.setattr("boost_cli.core.gitutil._exec",
                             lambda *a, **k: FakeProc(rc=1, stdout="fatal: nope\n"))
         with pytest.raises(BoostError) as ei:
             gitutil.run(["-c", "user.name=x", "commit", "-m", "y"])
         assert ei.value.message == "git commit failed: fatal: nope"
 
     def test_failure_on_an_all_flag_argv_still_says_git(self, monkeypatch):
-        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+        monkeypatch.setattr("boost_cli.core.gitutil._exec",
                             lambda *a, **k: FakeProc(rc=1, stdout="fatal: nope\n"))
         with pytest.raises(BoostError) as ei:
             gitutil.run(["--version"])
@@ -176,6 +318,40 @@ class TestCloneAndInspect:
 
     def test_head_commit_empty_on_non_repo(self, tmp_path):
         assert gitutil.head_commit(tmp_path) == ""
+
+    def test_head_commit_is_a_probe_without_git(self, tmp_path, monkeypatch):
+        """No git on PATH answers "", rather than raising "git is required"
+        out of `boost doctor` before its verdict."""
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+        monkeypatch.setattr(gitutil, "_exec",
+                            lambda *a, **k: pytest.fail("git was run"))
+        assert gitutil.head_commit(tmp_path) == ""
+
+    def test_timed_out_clone_leaves_no_half_clone(self, tmp_path, monkeypatch):
+        dest = tmp_path / "repos" / "o__slow"
+
+        def stall(argv, **kw):
+            (dest / ".git").mkdir(parents=True)
+            raise subprocess.TimeoutExpired(cmd="git", timeout=600)
+        monkeypatch.setattr(gitutil, "has_git", lambda: True)
+        monkeypatch.setattr(gitutil, "_exec", stall)
+        with pytest.raises(BoostError) as ei:
+            gitutil.clone_shallow("https://example.test/o/slow.git", dest)
+        assert ei.value.message == "git clone timed out after 600s"
+        assert not dest.exists()
+        assert dest.parent.is_dir()      # only what the clone made goes
+
+    def test_failed_clone_keeps_a_dir_that_was_already_there(self, tmp_path,
+                                                             monkeypatch):
+        dest = tmp_path / "mine"
+        (dest / "keep.txt").parent.mkdir()
+        (dest / "keep.txt").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(gitutil, "has_git", lambda: True)
+        monkeypatch.setattr(gitutil, "_exec", lambda argv, **kw: FakeProc(
+            rc=128, stderr="fatal: unable to access: timed out\n"))
+        with pytest.raises(BoostError):
+            gitutil.clone_shallow("https://example.test/o/r.git", dest)
+        assert (dest / "keep.txt").read_text(encoding="utf-8") == "x"
 
     def test_remote_url_empty_on_non_repo(self, tmp_path):
         assert gitutil.remote_url(tmp_path) == ""
@@ -276,9 +452,9 @@ class TestPull:
     def test_pull_issues_reset_sequence_and_falls_back_to_fetch_head(
             self, tmp_path, monkeypatch):
         # Drive pull() through a recorder so the exact git argv is asserted.
-        # rev-parse returns the SAME sha before and after the origin/HEAD reset,
-        # which forces the FETCH_HEAD fallback branch; the final rev-parse moves.
-        shas = iter(["a" * 40, "a" * 40, "b" * 40])
+        # origin/HEAD resolves to the SAME sha as HEAD, which forces the
+        # FETCH_HEAD fallback; the clone is then reset to that resolved sha.
+        shas = iter(["a" * 40, "a" * 40, "b" * 40, "b" * 40])
         calls = []
 
         def rec(args, **kw):
@@ -297,12 +473,14 @@ class TestPull:
         # every subcommand targets the given repo, never str(None)
         assert all(a[1] == str(repo) for a in argvs)
         assert ["-C", str(repo), "fetch", "--depth", "1", "--quiet", "origin"] in argvs
-        # the origin/HEAD reset is non-fatal (check=False), exact tokens
-        oh = ["-C", str(repo), "reset", "--hard", "--quiet", "origin/HEAD"]
-        assert oh in argvs
-        assert calls[[a for a, _ in calls].index(oh)][1].get("check") is False
-        # fallback fired: FETCH_HEAD reset must be present
-        assert ["-C", str(repo), "reset", "--hard", "--quiet", "FETCH_HEAD"] in argvs
+        assert ["-C", str(repo), "rev-parse", "--verify", "--quiet",
+                "origin/HEAD^{commit}"] in argvs
+        # fallback fired: FETCH_HEAD resolved, and the reset names its sha
+        assert ["-C", str(repo), "rev-parse", "--verify", "--quiet",
+                "FETCH_HEAD^{commit}"] in argvs
+        resets = [a for a in argvs if "reset" in a]
+        assert resets == [["-C", str(repo), "reset", "--hard", "--quiet",
+                           "b" * 40]]
 
     def test_pull_keeps_a_complete_clone_complete(self, tmp_path, monkeypatch):
         calls = _record_run(monkeypatch, stdout="a" * 40 + "\n")
@@ -311,8 +489,8 @@ class TestPull:
             a for a, _ in calls]
 
     def test_pull_skips_fallback_when_origin_head_moves(self, tmp_path, monkeypatch):
-        # When the origin/HEAD reset already advances HEAD, the FETCH_HEAD
-        # fallback must NOT run (guards the == before condition, not !=).
+        # When origin/HEAD already names a new commit, FETCH_HEAD is never
+        # consulted (guards the == before condition, not !=).
         shas = iter(["a" * 40, "b" * 40, "b" * 40])
         calls = []
 
@@ -322,8 +500,82 @@ class TestPull:
             return FakeProc(rc=0, stdout=out)
         monkeypatch.setattr("boost_cli.core.gitutil.run", rec)
 
-        gitutil.pull(tmp_path / "clone")
-        assert not any("FETCH_HEAD" in a for a in calls)
+        assert gitutil.pull(tmp_path / "clone") == "aaaaaaa → bbbbbbb"
+        assert not any("FETCH_HEAD^{commit}" in a for a in calls)
+        assert ["-C", str(tmp_path / "clone"), "reset", "--hard", "--quiet",
+                "b" * 40] in calls
+
+    def test_verify_sees_the_fetched_commit_before_the_clone_moves(
+            self, tmp_path):
+        origin = _make_repo(tmp_path / "origin")
+        clone = tmp_path / "clone"
+        gitutil.clone_shallow(str(origin), clone)
+        before = gitutil.head_commit(clone)
+        (origin / "b.md").write_text("two\n", encoding="utf-8")
+        _git("add", "-A", cwd=origin)
+        _git("commit", "-qm", "add b", cwd=origin)
+        new = gitutil.head_commit(origin)
+        seen = []
+
+        def refuse(commit):
+            seen.append((commit, gitutil.head_commit(clone),
+                         (clone / "b.md").exists()))
+            raise BoostError("no")
+        with pytest.raises(BoostError, match="no"):
+            gitutil.pull(clone, verify=refuse)
+        assert seen == [(new, before, False)]     # judged before any move
+        assert gitutil.head_commit(clone) == before
+        assert not (clone / "b.md").exists()
+
+        assert gitutil.pull(clone, verify=lambda c: None) == "%s → %s" % (
+            before[:7], new[:7])
+        assert (clone / "b.md").is_file()
+
+    def test_verify_is_not_asked_when_nothing_moved(self, tmp_path):
+        origin = _make_repo(tmp_path / "origin")
+        clone = tmp_path / "clone"
+        gitutil.clone_shallow(str(origin), clone)
+        seen = []
+        assert gitutil.pull(clone, verify=seen.append) == "already up to date"
+        assert seen == []
+
+    def test_checkout_commit_verify_refusal_moves_nothing(self, tmp_path):
+        origin = _make_repo(tmp_path / "origin")
+        first = gitutil.head_commit(origin)
+        (origin / "b.md").write_text("two\n", encoding="utf-8")
+        _git("add", "-A", cwd=origin)
+        _git("commit", "-qm", "add b", cwd=origin)
+        clone = tmp_path / "clone"
+        gitutil.clone_shallow(str(origin), clone)
+        head = gitutil.head_commit(clone)
+        seen = []
+
+        def refuse(commit):
+            seen.append(commit)
+            raise BoostError("no")
+        with pytest.raises(BoostError):
+            gitutil.checkout_commit(clone, first, verify=refuse)
+        assert seen == [first]
+        assert gitutil.head_commit(clone) == head
+        gitutil.checkout_commit(clone, first, verify=seen.append)
+        assert gitutil.head_commit(clone) == first
+
+
+class TestReadBlob:
+    def test_returns_exact_bytes_at_a_commit(self, tmp_path):
+        repo = _make_repo(tmp_path / "repo")
+        (repo / ".boost").mkdir()
+        (repo / ".boost" / "m").write_bytes(b"line\r\nnext\n")
+        _git("-c", "core.autocrlf=false", "add", "-A", cwd=repo)
+        _git("commit", "-qm", "m", cwd=repo)
+        sha = gitutil.head_commit(repo)
+        (repo / ".boost" / "m").write_bytes(b"changed\n")   # tree, not index
+        assert gitutil.read_blob(repo, sha, ".boost/m") == b"line\r\nnext\n"
+
+    def test_missing_path_is_none(self, tmp_path):
+        repo = _make_repo(tmp_path / "repo")
+        assert gitutil.read_blob(repo, gitutil.head_commit(repo),
+                                 ".boost/nope") is None
 
 
 def _git_out(*args, cwd):

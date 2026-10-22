@@ -750,9 +750,8 @@ def test_uninstalling_locally_removes_the_servers_it_added(boost, tapped, repo):
     _declare_mcp(tapped, "brainstorming")
     boost("install", "brainstorming", "--local")
     boost("uninstall", "brainstorming", "--local")
-    servers = json.loads(
-        (repo / mcpdecl.SIDECAR).read_text(encoding="utf-8"))[mcpdecl.SERVERS_KEY]
-    assert "gh" not in servers, \
+    # The install created the file, so nothing of it is left behind.
+    assert not (repo / mcpdecl.SIDECAR).exists(), \
         "a skill removed from the repo must stop launching its server"
 
 
@@ -803,7 +802,8 @@ def test_a_server_two_skills_declare_survives_the_first_uninstall(
     assert servers()["github"][mcpdecl.MARKER_KEY] == "tdd-workflow"
     res = boost("uninstall", "tdd-workflow", "--local")
     assert "removed 1 MCP server from .mcp.json" in res.out
-    assert servers() == {}
+    # brainstorming's install created the file; the last declarer removes it.
+    assert not (repo / mcpdecl.SIDECAR).exists()
 
 
 def test_an_unparseable_sidecar_is_refused_not_overwritten(boost, tapped, repo):

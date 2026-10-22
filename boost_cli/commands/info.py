@@ -55,7 +55,8 @@ def _read(p: Path) -> str:
     try:
         return Path(p).read_text(encoding="utf-8", errors="replace")
     except OSError as e:
-        raise BoostError("cannot read %s: %s" % (_tilde(p), e)) from e
+        # strerror, not the exception: str(OSError) repeats the absolute path.
+        raise BoostError("cannot read %s: %s" % (_tilde(p), e.strerror or e)) from e
 
 
 # Moved to core so the MCP tools resolve a `tap:name` exactly as these do.
@@ -85,7 +86,9 @@ def _resolve_skill_md(name: str):
         if row.dir is not None and (row.dir / "SKILL.md").exists():
             return row.dir / "SKILL.md", lock, None
     entry = catalog.resolve_one(name)
-    return registry.get(entry["tap"]).path / entry["skill_md"], lock, entry
+    # Through store, as install is: a missing clone is re-cloned, a sparse
+    # dir widened, and a file linking out of the clone refused.
+    return store.source_file_for(entry), lock, entry
 
 
 def _materialized_text(name: str, kind: str, entry: dict):
@@ -177,7 +180,7 @@ def _resolve_text(name: str):
         if text is not None:
             return text, kind, lock, None
     cat = catalog.resolve_one(name)
-    return _read(registry.get(cat["tap"]).path / cat["skill_md"]), kind, lock, cat
+    return _read(store.source_file_for(cat)), kind, lock, cat
 
 
 def _as_list(v) -> list:
@@ -205,10 +208,13 @@ def _skill_meta(name: str, project: dict | None = None, pbase=None):
         if not matches:
             return None
         try:
-            p = registry.get(matches[0]["tap"]).path / matches[0]["skill_md"]
+            root = registry.get(matches[0]["tap"]).path
         except BoostError:
             return None
-        if not p.exists():
+        p = root / matches[0]["skill_md"]
+        # Metadata only, so no clone is worth paying for — but a file that
+        # links out of the clone is not this tap's to describe.
+        if not p.exists() or catalog.escapes(root, p):
             return None
     return frontmatter.parse(_read(p))[0]
 
@@ -221,10 +227,15 @@ def _mark(installed: bool) -> str:
 def _print_wrapped(text: str) -> None:
     """Wrap prose to the *real* pane via out.wrap(), not a hardcoded width —
     a fixed textwrap width=76 neither shrank for a narrow terminal nor grew
-    for a wide one, and did not know a backtick span must stay whole."""
+    for a wide one, and did not know a backtick span must stay whole.
+
+    Every caller hands it tap text (a description, or a model's reply to
+    one), so each paragraph goes through out.plain — after the paragraph
+    split, since plain folds the newlines that split reads."""
     paras = [p for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
     for i, para in enumerate(paras):
-        for line in out.wrap(" ".join(para.split()), out.term_width() - 2):
+        for line in out.wrap(out.plain(" ".join(para.split())),
+                             out.term_width() - 2):
             out.info(line)
         if i < len(paras) - 1:
             print()
@@ -796,6 +807,9 @@ def cmd_edit(argv):
             hint="a %s materializes into shared agent files, not a store "
                  "dir you can open; read it with `boost cat %s`"
                  % (kind, args.name))
+    held = store.held_refusal(name, lockfile.get_skill(name))
+    if held is not None:
+        raise held
     sdir = store.skill_store_dir(name)
     path = sdir / "SKILL.md"
     if not path.exists():
@@ -974,7 +988,8 @@ def cmd_explain(argv):
             # it and fall through to the grounded extractive summary below.
             out.warn("AI explanation looked ungrounded (%s) — showing the "
                      "extractive summary instead"
-                     % ", ".join(faithfulness.ungrounded_terms(reply, text)[:4]),
+                     % out.plain(", ".join(
+                         faithfulness.ungrounded_terms(reply, text)[:4])),
                      stream=sys.stderr)
         else:
             # The backend was available but the call itself produced nothing —
@@ -1005,7 +1020,7 @@ def cmd_explain(argv):
         print()
         out.info(out.c("Outline:", out.BOLD))
         for hashes, title in headings[:_OUTLINE_CAP]:
-            out.info("  " * len(hashes) + title)
+            out.info("  " * len(hashes) + out.plain(title))
         if len(headings) > _OUTLINE_CAP:
             more = len(headings) - _OUTLINE_CAP
             out.info(out.role("  … and %d more heading%s"
@@ -1024,7 +1039,7 @@ def cmd_explain(argv):
         print()
         out.info(out.c("Key rules:", out.BOLD))
         for rule in rules[:12]:
-            out.info("  • " + rule)
+            out.info("  • " + out.plain(rule))
     return 0
 
 

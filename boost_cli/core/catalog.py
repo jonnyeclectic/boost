@@ -59,7 +59,11 @@ from . import (
 #   4 -- a non-ASCII name is slugged by `_entry_slug` (accents folded, a
 #        name with no ASCII left takes its directory or a hash) instead of
 #        every CJK/Cyrillic name collapsing to `skill`
-CACHE_FORMAT = 4
+#   5 -- an item file that is a link out of the clone is skipped (see
+#        `escapes`), so a cache that indexed one must be rescanned to drop it
+#   6 -- an item whose files collide by case with another path in the tap
+#        is dropped on a case-insensitive clone (see `drop_case_collisions`)
+CACHE_FORMAT = 6
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -299,11 +303,46 @@ def _classify_workflow(path: Path, meta: dict) -> bool:
                 and (WORKFLOW_META_KEYS & set(meta)))
 
 
-def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list[dict]:
+def escapes(root: Path, path: Path) -> bool:
+    """True when ``path``, links followed, is not inside ``root``.
+
+    Both sides are resolved: on macOS a tempdir under ``/var/folders`` is
+    really ``/private/var/...``, and resolving one side only compares a real
+    path against a nominal one. A path ``realpath`` rejects counts as
+    escaping — refusing it costs one item, serving it costs a file.
+    """
+    try:
+        return not Path(os.path.realpath(path)).is_relative_to(
+            os.path.realpath(root))
+    except ValueError:      # an embedded NUL: not a path at all
+        return True
+
+
+def _escaping(root: Path, path: Path, escaped: list[str] | None) -> bool:
+    """`escapes` for one scanned file, recording it in ``escaped``.
+
+    ``os.walk`` does not follow directory links, so inside one walk the only
+    way out of the clone is the file itself being a link: the cheap
+    ``is_symlink`` gates the two ``realpath`` calls.
+    """
+    if not (path.is_symlink() and escapes(root, path)):
+        return False
+    if escaped is not None:
+        escaped.append(path.relative_to(root).as_posix())
+    return True
+
+
+def scan_dir(root: Path, tap_name: str = "local", curated: bool = False,
+             escaped: list[str] | None = None) -> list[dict]:
     """Walk `root` and index every skill/rule/workflow into entry dicts.
 
     Files inside a SKILL.md dir belong to that skill, never re-indexed;
     output is sorted by (skill_md, name) regardless of walk order.
+
+    An item file that is a link leading out of `root` is skipped, before it
+    is opened, and its path relative to `root` appended to ``escaped``. A tap
+    is somebody else's repo: a ``SKILL.md -> ../../../.ssh/id_rsa`` put the
+    key in the BM25 index, in `boost_search` results and in `boost_read`.
     """
     root = Path(root)
     entries: list[dict] = []
@@ -323,7 +362,13 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
         # A directory holding a SKILL.md is a skill: index it and remember the
         # dir so its other files are not re-indexed as loose rules/workflows.
         if "SKILL.md" in filenames:
-            parsed = _read(here / "SKILL.md")
+            # An escaping SKILL.md still marks its dir a skill dir, so its
+            # sibling .md files are not indexed as loose workflows instead.
+            if _escaping(root, here / "SKILL.md", escaped):
+                skill_dirs.add(here)
+                parsed = None
+            else:
+                parsed = _read(here / "SKILL.md")
             if parsed is not None:
                 meta, body = parsed
                 default = here.name if here != root else root.name
@@ -339,6 +384,8 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
             is_rule = _classify_rule(path)
             is_md = path.suffix.lower() == ".md" and path.name != "SKILL.md"
             if not is_rule and not is_md:
+                continue
+            if _escaping(root, path, escaped):
                 continue
             parsed = _read(path)
             if parsed is None:
@@ -364,6 +411,90 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
 #: Taps whose cache could not be saved this process — warned about once.
 _UNSAVED: set[str] = set()
 
+#: Taps whose escaping links were reported this process — warned about once.
+_ESCAPED: set[str] = set()
+
+
+def _report_escaped(tap_name: str, escaped: list[str]) -> None:
+    """Warn, once per tap per process, about item links out of its clone."""
+    if not escaped or tap_name in _ESCAPED:
+        return
+    _ESCAPED.add(tap_name)
+    n = len(escaped)
+    output.warn("skipped %d item%s in tap %s that link outside its clone: %s"
+                % (n, "" if n == 1 else "s", tap_name, ", ".join(sorted(escaped))),
+                stream=sys.stderr, wrap=True)
+
+
+#: Taps whose case-colliding paths were reported this process — warned once.
+_COLLIDED: set[str] = set()
+
+
+def _fold(path: str) -> str:
+    return unicodedata.normalize("NFC", path).casefold()
+
+
+def drop_case_collisions(entries: list[dict], groups: list[list[str]]
+                         ) -> tuple[list[dict], list[str]]:
+    """``(kept, colliding paths)``: ``entries`` less every item a
+    case-insensitive checkout merged with another.
+
+    ``groups`` is :func:`gitutil.case_collisions`. A tap shipping
+    ``skills/Lint`` and ``skills/lint`` checks out as one directory holding
+    one SKILL.md and *both* skills' scripts: indexed as it stood it counted
+    one item, named the other, and installed a mix of the two that doctor and
+    verify called healthy. An item is dropped when its defining file is one
+    of the colliding paths, or a colliding path sits inside its directory
+    (a skill at the repo root holds them all), or its directory is itself
+    one of a group of colliding dirs (``skills/Lint/`` beside
+    ``skills/lint/``, which merge with no file colliding), since neither
+    spelling can be told from the copy on disk. The second value lists the colliding paths
+    that touched a dropped item, for the warning.
+    """
+    if not groups:
+        return entries, []
+    folded = {_fold(p): g for g in groups for p in g}
+    kept: list[dict] = []
+    hit: set[str] = set()
+    for e in entries:
+        own = _fold(e["skill_md"])
+        if (e.get("kind") or KIND_SKILL) == KIND_SKILL:
+            inside = "" if e["rel_dir"] == "." else _fold(e["rel_dir"]) + "/"
+            # A file key inside the dir, or the dir itself spelled twice; a
+            # dir key nested deeper only merges this skill's own subdirs.
+            touched = [k for k in folded
+                       if (k == inside if k.endswith("/")
+                           else k.startswith(inside))]
+        else:
+            touched = [own] if own in folded else []
+        if touched:
+            for k in touched:
+                hit.update(folded[k])
+        else:
+            kept.append(e)
+    return kept, sorted(hit)
+
+
+def _report_collided(tap_name: str, dropped: int, paths_: list[str]) -> None:
+    """Warn, once per tap per process, about items a case clash dropped."""
+    if not dropped or tap_name in _COLLIDED:
+        return
+    _COLLIDED.add(tap_name)
+    output.warn("skipped %d item%s in tap %s whose paths differ only by case, "
+                "which this filesystem cannot hold apart: %s"
+                % (dropped, "" if dropped == 1 else "s", tap_name,
+                   ", ".join(paths_)),
+                stream=sys.stderr, wrap=True)
+
+
+def _case_collisions(repo: Path) -> list[list[str]]:
+    """:func:`gitutil.case_collisions`, or none where git cannot answer: the
+    scan in hand is still the catalog."""
+    try:
+        return gitutil.case_collisions(repo)
+    except BoostError:
+        return []
+
 
 def rebuild_tap(tap: registry.Tap) -> list[dict]:
     """Rescan a cloned tap and rewrite its JSON cache file -> entries.
@@ -374,7 +505,12 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
     if not tap.is_cloned:
         raise BoostError("tap %s is not cloned" % tap.name,
                         hint="run `boost update %s`" % tap.name)
-    entries = scan_dir(tap.path, tap.name, tap.curated)
+    escaped: list[str] = []
+    scanned = scan_dir(tap.path, tap.name, tap.curated, escaped=escaped)
+    _report_escaped(tap.name, escaped)
+    entries, collided = drop_case_collisions(scanned,
+                                             _case_collisions(tap.path))
+    _report_collided(tap.name, len(scanned) - len(entries), collided)
     if not tap.owns_cache_file:
         # Its cache path is one of boost's own indexes (a tap configured
         # before `add` refused the name): the scan is the answer, and writing
@@ -1213,10 +1349,19 @@ def resolve_one(name: str, path: str | None = None) -> dict:
             # reaching the catalog (see e.g. `_resolve_skill_md`,
             # `_resolve_skill`), so installing one clears the ambiguity for
             # every command that would otherwise hit it again.
-            kind = str(matches[0].get("kind") or "skill")
+            kinds = {str(e.get("kind") or "skill") for e in matches}
+            if len(kinds) == 1:
+                noun = "%ss" % kinds.pop()
+            else:
+                # A skill, a command and a rule are not "3 workflows": name
+                # each match's own kind.
+                noun = "items"
+                paths = ", ".join(sorted(
+                    "%s (%s)" % (e.get("rel_dir", "?"), e.get("kind") or "skill")
+                    for e in matches))
             raise SameTapAmbiguity(
-                "%r matches %d different %ss in %s: %s"
-                % (bare, len(matches), kind, taps[0], paths),
+                "%r matches %d different %s in %s: %s"
+                % (bare, len(matches), noun, taps[0], paths),
                 hint="that registry ships one name twice — install one with "
                      "`boost install %s --path <one of the above>`, then "
                      "retry; raise it with the tap" % bare,

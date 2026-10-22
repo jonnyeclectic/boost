@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from boost_cli.core import config, gitutil, lockfile, paths, registry, util
+from boost_cli.core import config, gitutil, lockfile, paths, projectlock, registry, util
 from boost_cli.errors import BoostError
 
 
@@ -314,9 +314,16 @@ class TestAddRemove:
         assert tap.url == str(fixture_tap_src.resolve())
         assert tap.is_cloned
         assert (tap.path / "skills" / "brainstorming" / "SKILL.md").is_file()
-        assert config.get("taps") == [
+        rows = config.get("taps")
+        # When it was tapped, so a lock row older than `tap_url` and older
+        # than this tap reads as installed from an earlier one.
+        assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ",
+                            rows[0].pop("added_at"))
+        assert rows == [
             {"name": "fixture-tap", "url": str(fixture_tap_src.resolve()),
              "curated": False}]
+        assert registry.list_taps()[0].added_at == config.get(
+            "taps")[0]["added_at"]
 
     def test_add_curated_persisted(self, sandbox, fixture_tap_src):
         registry.add(str(fixture_tap_src), curated=True)
@@ -508,6 +515,31 @@ class TestDependents:
             ("skill", "alpha"), ("skill", "zeta")]
 
 
+class TestProjectDependents:
+    @pytest.fixture
+    def repo(self, sandbox, tmp_path, monkeypatch):
+        d = tmp_path / "proj"
+        (d / ".git").mkdir(parents=True)
+        monkeypatch.chdir(d)
+        return d
+
+    def test_outside_a_repo_is_empty(self, sandbox, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert registry.project_dependents("fixture-tap") == []
+
+    def test_finds_this_repos_skills_from_the_tap_sorted(self, repo):
+        projectlock.set_skill(repo, "zeta", {"tap": "fixture-tap"})
+        projectlock.set_skill(repo, "alpha", {"tap": "fixture-tap"})
+        projectlock.set_skill(repo, "other", {"tap": "other-tap"})
+        assert registry.project_dependents("fixture-tap") == ["alpha", "zeta"]
+
+    def test_user_rows_are_not_project_dependents(self, repo):
+        lockfile.set_skill("brainstorming", {"tap": "fixture-tap"})
+        assert registry.project_dependents("fixture-tap") == []
+        assert registry.dependents("fixture-tap") == [
+            ("skill", "brainstorming")]
+
+
 class TestUpdate:
     def test_update_clones_missing_tap(self, sandbox, tmp_path):
         origin = _make_repo(tmp_path / "pullme")
@@ -678,7 +710,7 @@ class TestUpdateConcurrency:
         state = {"live": 0, "peak": 0}
         lock = threading.Lock()
 
-        def pull(path):
+        def pull(path, verify=None):
             with lock:
                 state["live"] += 1
                 state["peak"] = max(state["peak"], state["live"])
@@ -758,6 +790,10 @@ class TestGitErrorLine:
         assert gitutil._git_error("only line\n\n\n") == "only line"
 
 
+_OLD = {"installed_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-02T00:00:00Z"}
+
+
 class TestSourceChanged:
     """A lock row's recorded `tap_url` against the tap its name resolves to
     now: an untap + re-tap of another repo under the same name used to turn
@@ -785,3 +821,40 @@ class TestSourceChanged:
     def test_row_without_tap_url_keeps_legacy_behaviour(self, lk):
         tap = registry.Tap(name="reg", url="/src/b/reg")
         assert registry.source_changed(lk, tap) is False
+
+    def test_row_older_than_its_tap_is_changed(self, sandbox):
+        tap = registry.Tap(name="reg", url="/src/b/reg",
+                           added_at="2026-01-02T00:00:01Z")
+        assert registry.retapped_since(_OLD, tap) is True
+        assert registry.source_changed(_OLD, tap) is True
+
+    def test_recorded_url_outranks_the_tap_date(self, sandbox):
+        tap = registry.Tap(name="reg", url="/src/b/reg",
+                           added_at="2026-06-01T00:00:00Z")
+        assert registry.source_changed(
+            dict(_OLD, tap_url="/src/b/reg"), tap) is False
+
+    @pytest.mark.parametrize("added", ["", "2026-01-02T00:00:00Z",
+                                       "2026-01-01T12:00:00Z"])
+    def test_tap_not_newer_than_the_row_is_the_same_source(self, added):
+        # Same second as the last write, or before it, or never dated.
+        tap = registry.Tap(name="reg", url="/src/b/reg", added_at=added)
+        assert registry.retapped_since(_OLD, tap) is False
+
+    def test_undated_row_is_not_judged(self):
+        tap = registry.Tap(name="reg", url="/src/b/reg",
+                           added_at="2026-06-01T00:00:00Z")
+        assert registry.retapped_since({}, tap) is False
+
+    def test_clone_at_the_rows_commit_is_the_same_source(self, sandbox,
+                                                         monkeypatch):
+        tap = registry.Tap(name="reg", url="/src/b/reg",
+                           added_at="2026-06-01T00:00:00Z")
+        heads = []
+        monkeypatch.setattr(registry.gitutil, "head_commit",
+                            lambda p: heads.append(p) or "c" * 40)
+        assert registry.retapped_since(dict(_OLD, commit="c" * 40),
+                                       tap) is False
+        assert heads == [tap.path]
+        assert registry.retapped_since(dict(_OLD, commit="d" * 40),
+                                       tap) is True

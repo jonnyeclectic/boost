@@ -1213,6 +1213,22 @@ class TestResolveOneVendoredCopies:
         assert "different workflows in" in excinfo.value.message
         assert "different skills in" not in excinfo.value.message
 
+    def test_the_ambiguity_message_names_each_kind_when_they_differ(
+            self, sandbox):
+        """A skill, a command and a rule sharing a name were reported as
+        "3 different workflows" — the first match's kind for all three."""
+        sk = _entry("dual", "t", desc="a", rel_dir="skills/dual")
+        wf = _entry("dual", "t", desc="b", rel_dir="commands")
+        wf["kind"] = "workflow"
+        ru = _entry("dual", "t", desc="c", rel_dir="rules")
+        ru["kind"] = "rule"
+        _fake_taps(("t", [wf, ru, sk]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("dual")
+        assert excinfo.value.message == (
+            "'dual' matches 3 different items in t: commands (workflow), "
+            "rules (rule), skills/dual (skill)")
+
     def test_the_ambiguity_message_defaults_to_skill_when_kind_is_absent(self, sandbox):
         """A cache written before `kind` was recorded must not crash or claim
         an unknown kind — `skill` is what every entry was before kinds

@@ -17,6 +17,7 @@ from datetime import datetime
 import pytest
 
 from boost_cli.core import agents, lockfile, paths, registry
+from boost_cli.core import logs as boost_logs
 
 
 def _copy_tap(src, dest):
@@ -133,6 +134,56 @@ class TestDoctor:
         r = boost("heal", expect=1)
         assert "nothing to heal" not in r.out
         assert "heal cannot repair it" in r.out.replace("\n    ", " ")
+
+    def test_missing_git_is_an_issue_not_an_abort(self, boost, installed,
+                                                  monkeypatch):
+        # doctor printed its own "git not found" row and then died on the
+        # first cached tap with "git is required" — no verdict, and with
+        # --json not a byte of JSON.
+        from boost_cli.core import gitutil
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+        r = boost("doctor", expect=1)
+        assert "git not found on PATH — install git" in r.out
+        assert "git is required" not in r.out + r.err
+        assert "1 issue needs attention" in r.out
+        d = json.loads(boost("doctor", "--json", expect=1).out)
+        assert d["ok"] is False
+        assert [c["name"] for c in d["checks"]
+                if c["status"] == "issue"] == ["git"]
+
+    @pytest.mark.parametrize("dry", [False, True])
+    def test_heal_without_git_says_so_and_still_repairs(
+            self, boost, installed, monkeypatch, dry):
+        from boost_cli.core import gitutil
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+        logs = paths.boost_home() / "logs"
+        # Windows cannot delete the open boost.log, so detach it first; and
+        # keep the next run from recreating logs/, which is what the last
+        # assert reads as heal's repairs having run.
+        boost_logs.reset()
+        monkeypatch.setattr(boost_logs, "configure", lambda **_: None)
+        shutil.rmtree(logs)
+        r = boost("heal", *(["--dry-run"] if dry else []), expect=1)
+        flat = " ".join(r.out.split())
+        assert ("! git not found on PATH — heal cannot check tap catalogs "
+                "against their clones; install git, then rerun `boost heal`"
+                in flat)
+        assert "nothing to heal" not in flat
+        assert "git is required" not in r.out + r.err
+        assert logs.is_dir() is not dry      # the repairs before it still ran
+
+    def test_doctor_names_a_clone_that_never_finished(self, boost, installed):
+        # A clone killed part-way (a timeout, a ^C) left repos/<x>/.git with
+        # nothing recording it, and doctor said healthy over it.
+        half = paths.repos_dir() / "o__slowtap"
+        (half / ".git").mkdir(parents=True)
+        r = boost("doctor", expect=1)
+        assert ("~/.boost/repos/o__slowtap is a clone that never finished (no "
+                "tap lists it and it has no commit checked out) — delete it"
+                in " ".join(r.out.split()))
+        d = json.loads(boost("doctor", "--json", expect=1).out)
+        assert [c["name"] for c in d["checks"]
+                if c["status"] == "issue"] == ["tap"]
 
     def test_a_config_that_is_not_utf8_is_an_issue_not_a_crash(
             self, boost, installed):
@@ -1671,12 +1722,18 @@ class TestFingerprint:
 class TestQuarantine:
     def test_roundtrip_links_store_lock_doctor(self, boost, installed):
         store = paths.store_dir() / "brainstorming"
+        before = (store / "SKILL.md").read_bytes()
         r = boost("quarantine", "brainstorming")
-        assert "quarantined brainstorming (store intact, links removed)" in r.out
+        assert ("quarantined brainstorming (store copy held aside, links "
+                "removed)") in r.out
         for adir in (".claude", ".windsurf", ".cursor"):
             assert not (paths.home() / adir / "skills" / "brainstorming"
                         ).is_symlink()
-        assert (store / "SKILL.md").is_file()
+        # Out of the store: Gemini CLI and Codex read it with no link.
+        held = paths.held_skills_dir() / "brainstorming"
+        assert not os.path.lexists(store)
+        assert (held / "SKILL.md").read_bytes() == before
+        assert _lock()["brainstorming"]["held_at"] == str(held)
         assert _lock()["brainstorming"]["quarantined"] is True
         # The removed links must not linger in the lock — list/info/doctor
         # all read `agents` to say what's linked.
@@ -1697,7 +1754,10 @@ class TestQuarantine:
                 "(linked: claude-code, windsurf, cursor, antigravity)") in r.out
         link = paths.home() / ".claude" / "skills" / "brainstorming"
         assert link.is_symlink() and link.exists()
+        assert (store / "SKILL.md").read_bytes() == before
+        assert not os.path.lexists(held)
         entry = _lock()["brainstorming"]
+        assert "held_at" not in entry
         assert entry["quarantined"] is False
         assert entry["agents"] == ["claude-code", "windsurf", "cursor",
                                    "antigravity"]
@@ -1760,6 +1820,109 @@ class TestQuarantine:
         assert r.rc == 0
         assert "outside its declared scope" not in r.out
 
+    def test_release_of_a_skill_blocklisted_since_is_refused(self, boost,
+                                                             installed):
+        # `replay rollback` refuses a blocklisted skill; release used to
+        # relink it to every agent with rc 0.
+        boost("quarantine", "brainstorming")
+        boost("policy", "set", "blocked_skills", "brainstorming")
+        r = boost("quarantine", "--release", "brainstorming", expect=1)
+        assert ("policy blocks releasing brainstorming: skill 'brainstorming' "
+                "is on the blocklist — it stays quarantined") in r.err
+        assert "boost uninstall brainstorming" in r.err
+        assert _lock()["brainstorming"]["quarantined"] is True
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "brainstorming")
+        assert (paths.held_skills_dir() / "brainstorming" / "SKILL.md").is_file()
+        boost("policy", "set", "blocked_skills", "")
+        r = boost("quarantine", "--release", "brainstorming")
+        assert "released brainstorming" in r.out
+
+
+def _unhold(name):
+    """What a quarantine or sideline made before either held the copy aside
+    looks like: the row says withheld, the copy is in the store, no held_at."""
+    shutil.move(str(paths.held_skills_dir() / name),
+                str(paths.store_dir() / name))
+
+    def strip(lock):
+        lock["skills"][name].pop("held_at")
+    lockfile.mutate(strip)
+
+
+_HOLD = ("%s %s's store copy out of ~/.agents/skills (it is %s, and Gemini "
+         "CLI and Codex load the store directly)")
+
+
+class TestLegacyWithheldCopy:
+    """A skill quarantined or sidelined by an older boost: its copy stayed in
+    ~/.agents/skills, which Gemini CLI and Codex read directly, while doctor
+    said healthy and sync and heal found nothing to do."""
+
+    def test_doctor_names_it_and_heal_holds_it_aside(self, boost, installed):
+        boost("quarantine", "brainstorming")
+        _unhold("brainstorming")
+        store = paths.store_dir() / "brainstorming"
+        held = paths.held_skills_dir() / "brainstorming"
+        before = (store / "SKILL.md").read_bytes()
+
+        r = boost("doctor", expect=1)
+        assert ("quarantined skill brainstorming is still in ~/.agents/skills,"
+                " where Gemini CLI and Codex load it — run `boost heal`"
+                in " ".join(r.out.split()))
+        assert "healthy" not in r.out.splitlines()[-1]
+
+        r = boost("sync", "--diff")
+        assert (_HOLD % ("would hold", "brainstorming", "quarantined")
+                in " ".join(r.out.split()))
+        assert "everything in sync" not in r.out
+        r = boost("heal", "--dry-run")
+        assert _HOLD % ("would hold", "brainstorming", "quarantined") in r.out
+        assert os.path.isdir(store) and not os.path.lexists(held)
+
+        r = boost("heal")
+        assert _HOLD % ("held", "brainstorming", "quarantined") in r.out
+        assert not os.path.lexists(store)
+        assert (held / "SKILL.md").read_bytes() == before
+        assert _lock()["brainstorming"]["held_at"] == str(held)
+        assert _lock()["brainstorming"]["quarantined"] is True
+
+        # Once: the next run has nothing left to migrate.
+        r = boost("heal")
+        assert "store copy out of" not in r.out
+        r = boost("doctor")
+        assert "still in ~/.agents/skills" not in r.out
+
+        # And release puts back the copy the migration held.
+        boost("quarantine", "--release", "brainstorming")
+        assert (store / "SKILL.md").read_bytes() == before
+        assert "held_at" not in _lock()["brainstorming"]
+
+    def test_sync_holds_a_sidelined_copy(self, boost, installed):
+        boost("install", "tdd-workflow")
+        boost("focus", "tdd-workflow")
+        assert _lock()["brainstorming"]["sidelined_by"] == "focus"
+        _unhold("brainstorming")
+        r = boost("doctor", expect=1)
+        assert ("sidelined skill brainstorming is still in ~/.agents/skills"
+                in " ".join(r.out.split()))
+        r = boost("sync")
+        assert (_HOLD % ("held", "brainstorming", "sidelined by `boost focus`")
+                in " ".join(r.out.split()))
+        held = paths.held_skills_dir() / "brainstorming"
+        assert _lock()["brainstorming"]["held_at"] == str(held)
+        assert not os.path.lexists(paths.store_dir() / "brainstorming")
+        assert "everything in sync" in boost("sync").out
+        boost("focus", "--clear")
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert "held_at" not in _lock()["brainstorming"]
+
+    def test_a_held_copy_is_left_alone(self, boost, installed):
+        boost("quarantine", "brainstorming")
+        r = boost("heal")
+        assert "store copy out of" not in r.out
+        assert "nothing to heal" in r.out
+
 
 class TestQuarantineMaterialized:
     """The CLI round trip for the kinds quarantine used to deny existed."""
@@ -1798,6 +1961,28 @@ class TestQuarantineMaterialized:
         r = boost("quarantine", "--release", "house")
         assert "released rule house" in r.out
         assert cm.read_text(encoding="utf-8") == before
+
+    def test_release_of_a_rule_whose_tap_is_now_blocked_is_refused(
+            self, boost, sandbox):
+        cm = self._seed_claude_rule()
+        boost("quarantine", "house")
+        held = cm.read_text(encoding="utf-8")
+        boost("policy", "set", "blocked_taps", "some-tap")
+        r = boost("quarantine", "--release", "house", expect=1)
+        assert ("policy blocks releasing house: tap 'some-tap' is blocked — "
+                "it stays quarantined") in r.err
+        assert cm.read_text(encoding="utf-8") == held
+        assert lockfile.get_rule("house")["quarantined"] is True
+
+    def test_release_of_a_rule_is_not_refused_for_an_unread_description(
+            self, boost, sandbox):
+        # The lock records no description for a rule; not knowing it is not
+        # evidence it has none.
+        self._seed_claude_rule()
+        boost("quarantine", "house")
+        boost("policy", "set", "require_description", "true")
+        r = boost("quarantine", "--release", "house")
+        assert "released rule house" in r.out
 
     def test_release_of_an_unquarantined_rule_says_so(self, boost, sandbox):
         self._seed_claude_rule()
@@ -2054,7 +2239,8 @@ class TestShadowedNames:
             self, boost, installed):
         self._seed_rule_named("brainstorming")
         r = boost("quarantine", "brainstorming")
-        assert "quarantined brainstorming (store intact, links removed)" in r.out
+        assert ("quarantined brainstorming (store copy held aside, links "
+                "removed)") in r.out
         assert ("a rule named brainstorming is also installed — this "
                 "quarantines the skill only") in r.out
 
@@ -2063,6 +2249,49 @@ class TestShadowedNames:
         r = boost("pin", "brainstorming")
         assert "pinned brainstorming" in r.out
         assert "a rule named brainstorming is also installed" in r.out
+
+    def test_uninstalling_a_shadowed_name_refuses_without_kind(
+            self, boost, installed):
+        # Skill-first resolution used to remove the skill, rc 0, and leave
+        # the rule and workflow of the same name live without a word.
+        from boost_cli.core import lockfile
+        self._seed_rule_named("brainstorming")
+        lockfile.set_workflow("brainstorming", {
+            "kind": "workflow", "version": "1.0.0", "tap": "some-tap",
+            "materializations": []})
+        r = boost("uninstall", "brainstorming", expect=1)
+        assert ("Error: brainstorming is installed as a skill, a rule and "
+                "a workflow") in r.err
+        assert ("say which to remove: `boost uninstall brainstorming --kind "
+                "skill` or `boost uninstall brainstorming --kind rule` or "
+                "`boost uninstall brainstorming --kind workflow`"
+                ) in " ".join(r.err.split())
+        assert lockfile.get_skill("brainstorming") is not None
+        assert lockfile.get_rule("brainstorming") is not None
+        assert lockfile.get_workflow("brainstorming") is not None
+
+    def test_uninstall_kind_removes_only_that_kind(self, boost, installed):
+        from boost_cli.core import lockfile
+        cm = self._seed_rule_named("brainstorming")
+        r = boost("uninstall", "brainstorming", "--kind", "rule")
+        assert "Uninstalled 1 rule" in r.out
+        assert lockfile.get_rule("brainstorming") is None
+        assert "Rule body." not in cm.read_text(encoding="utf-8")
+        assert lockfile.get_skill("brainstorming") is not None
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        # One kind left: no --kind needed any more.
+        r = boost("uninstall", "brainstorming")
+        assert "Uninstalled 1 skill" in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_uninstall_kind_that_is_not_installed_says_what_is(
+            self, boost, installed):
+        r = boost("uninstall", "brainstorming", "--kind", "workflow",
+                  expect=1)
+        assert "Error: no workflow named brainstorming is installed" in r.err
+        assert ("it is installed as a skill — `boost uninstall brainstorming "
+                "--kind skill`") in " ".join(r.err.split())
+        assert (paths.store_dir() / "brainstorming").is_dir()
 
 
 # ── decay ────────────────────────────────────────────────────────────────

@@ -107,6 +107,7 @@ list with no warning at all.
 from __future__ import annotations
 
 import json
+import math
 
 from ..errors import BoostError
 
@@ -372,7 +373,7 @@ def timeout_unit(host: str) -> str:
     return str(_spec(host)["timeout_unit"])
 
 
-def timeout_seconds(host: str, native: int | None) -> int | None:
+def timeout_seconds(host: str, native: object) -> int | float | None:
     """``native`` (a value read from ``host``'s settings) back in seconds.
 
     The inverse of :func:`timeout`, for the readers rather than the writers —
@@ -383,10 +384,24 @@ def timeout_seconds(host: str, native: int | None) -> int | None:
 
     ``None`` in, ``None`` out: a hook block written without a timeout has
     none, and reporting ``0`` would describe a hook that gives up instantly.
+    That is also why a count that does not divide evenly stays fractional
+    rather than flooring — a Gemini ``500`` floored to ``0``, the instant
+    give-up this paragraph exists to rule out. An exact multiple stays an
+    ``int``, so every value boost itself wrote reads back exactly as before.
+
+    Anything that is not a finite number — a hand-edited ``"ten"``, a
+    ``true``, a JSON ``1e400`` (``inf``) — is ``None`` too: the file has other
+    writers, and one odd field used to crash the read-only ``hooks list``
+    with a ``ValueError``. ``bool`` is checked first because it *is* an int.
     """
-    if native is None:
+    if isinstance(native, bool) or not isinstance(native, (int, float)):
         return None
-    return int(native) // int(_spec(host)["timeout_scale"])
+    if not math.isfinite(native):
+        return None
+    scale = int(_spec(host)["timeout_scale"])
+    if native % scale == 0:
+        return int(native // scale)
+    return native / scale
 
 
 def timeout(host: str, seconds: int) -> int:

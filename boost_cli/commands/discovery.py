@@ -2353,7 +2353,9 @@ def _print_categories(entries, categories, by_count=False) -> int:
                               order="count" if by_count else "az")[1:]
     out.heading("%d categories · %s items" % (len(rows),
                                               format(len(unique), ",")))
-    out.table([(c, format(n, ",")) for c, n in rows],
+    # plain(): a category is frontmatter, and its ESC/BEL bytes both reached
+    # the terminal and counted as columns, pushing that row's count out of line.
+    out.table([(out.plain(c), format(n, ",")) for c, n in rows],
               headers=("category", "items"), whole=("category",))
     out.info(out.c("open one with `boost browse --category <name>`", out.DIM))
     return 0
@@ -2500,8 +2502,10 @@ def cmd_trending(argv):
             return 0
         # reserve name/version/kind columns
         descw = max(out.term_width() - 34, 24)
-        out.table([(e["name"], "v" + e["version"], e.get("kind", "skill"),
-                    out.truncate(e["description"], descw))
+        # Sanitised before the truncate, so it clips printable columns.
+        out.table([(out.plain(e["name"]), "v" + out.plain(e["version"]),
+                    out.plain(e.get("kind", "skill")),
+                    out.truncate(out.plain(e["description"]), descw))
                    for e in curated],
                   headers=("name", "version", "kind", "description"),
                   whole=("name",))  # `boost install <name>`
@@ -2528,9 +2532,10 @@ def cmd_trending(argv):
         return 0
     # reserve name/installs/last/kind columns
     descw = max(out.term_width() - 54, 24)
-    out.table([(name, str(rec["count"]), util.rel_time(rec["last"]),
-                entry_for[name].get("kind", "skill"),
-                out.truncate(entry_for[name].get("description", ""), descw))
+    out.table([(out.plain(name), str(rec["count"]), util.rel_time(rec["last"]),
+                out.plain(entry_for[name].get("kind", "skill")),
+                out.truncate(out.plain(entry_for[name].get("description", "")),
+                             descw))
                for name, rec in ranked[:args.limit]],
               headers=("name", "installs", "last", "kind", "description"),
               whole=("name",))  # `boost install <name>`
@@ -2600,6 +2605,14 @@ def cmd_stats(argv):
                          "description": cat["description"],
                          "upstream": upstream} if cat else None)}))
         return 0
+    # Display copies from here on: the lock and catalogue rows, the latest
+    # version and the upstream commit subject are all tap-authored text. The
+    # update check compares the raw versions, before they are sanitised.
+    newer = bool(lock and latest
+                 and util.semver_gt(latest, lock.get("version", "0")))
+    name, lock, cat = out.plain(name), out.plain_fields(lock), out.plain_fields(cat)
+    latest = out.plain(latest) if latest else latest
+    upstream = out.plain(upstream) if upstream else upstream
     out.heading(name if kind == "skill" else "%s (%s)" % (name, kind))
     if lock:
         out.kv("version", lock.get("version", "?"))
@@ -2632,7 +2645,7 @@ def cmd_stats(argv):
     out.kv("activity", "%d installs · %d updates · %d uninstalls"
            % (acts["install"], acts["update"], acts["uninstall"]))
     if lock and latest:
-        if util.semver_gt(latest, lock.get("version", "0")):
+        if newer:
             out.kv("latest", "%s %s" % (latest, out.role("(update available)", "warn")))
         else:
             out.kv("latest", "%s %s" % (latest, out.role("(up to date)", "muted")))

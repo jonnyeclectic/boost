@@ -171,9 +171,17 @@ def _html_comments(text: str):
     comments — enough edge case that a filtering regex reliably gets one wrong,
     which is the whole subject of CodeQL's `bad-tag-filter` query. Scanning for
     the delimiters directly has no such corners and cannot backtrack.
+
+    Bounded by the number of openers rather than ``while True``: each comment
+    consumes at least one ``<!--`` the next search starts past, so the count is
+    an exact cap, not a guess. It is there for the mutant ``i = end + 3`` ->
+    ``i = None``, which restarts every search at 0: unbounded, it yielded the
+    first comment forever into a caller's list (4.9 GB in seconds on a local
+    mutation run, the runner-killing shape seen on #1189); capped, it yields
+    at most one entry per opener and is killed like any other mutant.
     """
     i = 0
-    while True:
+    for _opener in range(text.count("<!--")):
         start = text.find("<!--", i)
         if start == -1:
             return

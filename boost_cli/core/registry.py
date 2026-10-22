@@ -18,7 +18,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, gitutil, lockfile, output, paths, policy, util
+from . import (
+    config,
+    gitutil,
+    lockfile,
+    output,
+    paths,
+    policy,
+    projectlock,
+    scopes,
+    util,
+)
 
 
 @dataclass
@@ -33,6 +43,11 @@ class Tap:
     #: moved the clone to HEAD — silently invalidating any prebuilt vectors
     #: imported for that commit, which is the whole reason the pin exists.
     pin: str = ""
+    #: When this tap was added (``util.now_iso``), or "" for a config row
+    #: written before it was recorded. A lock row with no ``tap_url`` that
+    #: predates it was installed from an earlier tap of the same name
+    #: (:func:`source_changed`).
+    added_at: str = ""
 
     @property
     def safe_name(self) -> str:
@@ -289,7 +304,8 @@ def list_taps() -> list[Tap]:
     if not isinstance(taps, list):
         return []
     return [Tap(name=t["name"], url=t.get("url", ""),
-                curated=bool(t.get("curated")), pin=str(t.get("pin") or ""))
+                curated=bool(t.get("curated")), pin=str(t.get("pin") or ""),
+                added_at=str(t.get("added_at") or ""))
             for t in taps if isinstance(t, dict) and t.get("name")]
 
 
@@ -354,11 +370,34 @@ def source_changed(lk: dict, tap: Tap) -> bool:
     untap `~/a/reg` and tap `~/b/reg`, and the lock rows installed from the
     first now resolve to the second. Comparing versions across that seam
     called an unrelated skill of the same name an upgrade, and `boost update`
-    applied it. The lock's ``tap_url`` (written at install) is the source; a
-    row without one predates the field and keeps the old behaviour.
+    applied it. The lock's ``tap_url`` (written at install) is the source.
+
+    A row without one predates the field. While its tap stays configured
+    :func:`store.backfill_tap_urls` records the URL from config; once it was
+    untapped and the name tapped again, nothing says which repository it came
+    from, so a tap added after the row was last written (``added_at``) is a
+    change unless the clone still sits at the commit the row recorded. A
+    legacy row under a tap row that predates ``added_at`` cannot be told
+    apart and keeps the old behaviour.
     """
     recorded = str(lk.get("tap_url") or "")
-    return bool(recorded) and not same_source(recorded, tap.url)
+    if recorded:
+        return not same_source(recorded, tap.url)
+    return retapped_since(lk, tap)
+
+
+def retapped_since(lk: dict, tap: Tap) -> bool:
+    """Whether ``tap`` was added after lock row ``lk`` was last written.
+
+    Strictly after, so a tap and an install in the same second are one
+    source. A clone still at the row's ``commit`` is the same repository.
+    """
+    written = max(str(lk.get("installed_at") or ""),
+                  str(lk.get("updated_at") or ""))
+    if not (tap.added_at and written and written < tap.added_at):
+        return False
+    commit = str(lk.get("commit") or "")
+    return not (commit and gitutil.head_commit(tap.path) == commit)
 
 
 def _is_local(url: str) -> bool:
@@ -423,6 +462,25 @@ def is_tapped(name: str) -> bool:
     raise on an unrelated ambiguous shorthand.
     """
     return any(t.name == name for t in list_taps())
+
+
+def unfinished_clones() -> list[Path]:
+    """Dirs under `repos/` that no tap lists and whose HEAD does not resolve.
+
+    What a clone killed part-way leaves behind (a timeout, a ^C, a crash):
+    `repos/<name>/.git` and nothing recorded. `boost doctor` called that
+    machine healthy, because it only ever looked at the taps config lists.
+    A listed tap is judged by the tap checks instead, and an unlisted dir
+    with a real HEAD is someone's clone, not debris. Empty without git,
+    which is what answers whether a HEAD resolves.
+    """
+    root = paths.repos_dir()
+    if not root.is_dir() or not gitutil.has_git():
+        return []
+    listed = {t.path for t in list_taps()}
+    return sorted(d for d in root.iterdir()
+                  if d.is_dir() and d not in listed
+                  and not gitutil.head_commit(d))
 
 
 def broken_clone_line(name: str) -> str:
@@ -505,15 +563,7 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     problems = policy.check_tap_signing(tap.path)
     if problems:
         util.rmtree(tap.path)  # leave no half-added tap behind
-        # An unreadable policy.json refuses every tap; trusting a key or
-        # relaxing signing would not repair it, so say what would.
-        hint = ("repair policy.json first — `boost policy` names each "
-                "unreadable value" if policy.unreadable_violation("tap")
-                else "add its key with `boost trust add <name> <key>`, "
-                     "or relax `boost policy set require_signed_taps false`")
-        raise BoostError(
-            "tap %s failed provenance policy: %s" % (name, "; ".join(problems)),
-            hint=hint)
+        raise _signing_refused(name, problems)
     row = _row(name, url, curated, by_user=curated)
     if at:
         row["pin"] = at
@@ -522,6 +572,67 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     start_refresh_clock()
     tap.pin = at or ""
     return tap
+
+
+#: The phrase every provenance refusal carries, so `boost update` can tell a
+#: refused tap (a security answer, worth a non-zero exit) from a dead one.
+POLICY_REFUSAL = "failed provenance policy"
+
+
+def _signing_hint() -> str:
+    """What repairs a provenance refusal.
+
+    An unreadable policy.json refuses every tap; trusting a key or relaxing
+    signing would not repair it, so say what would.
+    """
+    if policy.unreadable_violation("tap"):
+        return ("repair policy.json first — `boost policy` names each "
+                "unreadable value")
+    return ("add its key with `boost trust add <name> <key>`, "
+            "or relax `boost policy set require_signed_taps false`")
+
+
+def _signing_refused(name: str, problems: list[str],
+                     kept: str = "") -> BoostError:
+    """The error for a tap whose tree fails ``require_signed_taps``.
+
+    ``kept`` is the commit the clone stays on when the refused tree was a
+    move rather than a first clone — said, because "refused" alone leaves the
+    reader to wonder whether the tap is now broken.
+    """
+    msg = "tap %s %s: %s" % (name, POLICY_REFUSAL, "; ".join(problems))
+    if kept:
+        msg += " — kept at %s" % kept[:7]
+    return BoostError(msg, hint=_signing_hint())
+
+
+def require_signed_clone(name: str, clone: Path) -> None:
+    """Raise :func:`_signing_refused` when the working tree at ``clone``
+    fails ``require_signed_taps``; a no-op when the policy is off.
+
+    For a caller that downloads a tap afresh outside this module —
+    `boost compact --reclone` — so a fresh download is gated the way
+    `boost tap` gates the first one.
+    """
+    problems = policy.check_tap_signing(clone)
+    if problems:
+        raise _signing_refused(name, problems)
+
+
+def _signing_guard(tap: Tap):
+    """A ``verify`` callback for :func:`gitutil.pull`/``checkout_commit``.
+
+    Called with the fetched commit before the clone moves onto it, so a new
+    upstream commit that drops the signature (or swaps the signer) is refused
+    with the clone still on the tree that passed — `boost tap` checked the
+    first tree only, and every update after it was taken on trust.
+    """
+    def verify(commit: str) -> None:
+        problems = policy.check_tap_signing(tap.path, commit=commit)
+        if problems:
+            raise _signing_refused(tap.name, problems,
+                                   kept=gitutil.head_commit(tap.path))
+    return verify
 
 
 def _append_rows(cfg: dict, rows: list[dict]) -> bool:
@@ -566,7 +677,8 @@ CURATED_BY_USER = "user"
 
 
 def _row(name: str, url: str, curated: bool, by_user: bool) -> dict:
-    row: dict = {"name": name, "url": url, "curated": curated}
+    row: dict = {"name": name, "url": url, "curated": curated,
+                 "added_at": util.now_iso()}
     if curated and by_user:
         row["curated_by"] = CURATED_BY_USER
     return row
@@ -696,6 +808,15 @@ def _reclone(tap: Tap, pin: str | None) -> None:
         gitutil.clone_shallow(tap.url, staging)
         if pin:
             gitutil.checkout_commit(staging, pin)
+        # Checked on the staging tree, before it replaces anything: a
+        # re-clone is a fresh download, so it gets the same provenance gate
+        # `boost tap` applies — or a tap whose clone went missing would come
+        # back from an upstream that dropped its signature.
+        problems = policy.check_tap_signing(staging)
+        if problems:
+            raise _signing_refused(
+                tap.name, problems,
+                kept=gitutil.head_commit(tap.path) if tap.is_cloned else "")
     except BoostError:
         with suppress(OSError):
             util.remove_path(staging)
@@ -991,7 +1112,7 @@ def retarget(name: str, commit: str) -> Tap:
     skipping the tap forever.
     """
     tap = get(name)
-    gitutil.checkout_commit(tap.path, commit)
+    gitutil.checkout_commit(tap.path, commit, verify=_signing_guard(tap))
     return pin(name, commit)
 
 
@@ -1005,6 +1126,21 @@ def dependents(tap_name: str) -> list[tuple[str, str]]:
     return [(kind, n)
             for kind, section in lockfile.all_installed().items()
             for n, e in sorted(section.items())
+            if e.get("tap") == tap_name]
+
+
+def project_dependents(tap_name: str) -> list[str]:
+    """Skills installed ``--local`` in the current repo whose row names `tap_name`.
+
+    Name-sorted. :func:`dependents` reads the user lock only, so untapping the
+    source of a project skill went through with no warning and left a row
+    `drift` reads as source-missing. A project lock records skills only, and
+    only this repo's is reachable: other checkouts are not known to boost.
+    """
+    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
+    if pbase is None:
+        return []
+    return [n for n, e in sorted(projectlock.installed(pbase).items())
             if e.get("tap") == tap_name]
 
 
@@ -1201,11 +1337,13 @@ def update(name: str | None = None,
             # move, so the caller rescans the catalog and resyncs vectors.
             head = off_pin(tap)
             if head:
-                gitutil.checkout_commit(tap.path, tap.pin)
+                gitutil.checkout_commit(tap.path, tap.pin,
+                                        verify=_signing_guard(tap))
                 return ("%s → %s (back on its pin)"
                         % (head[:7], tap.pin[:7]), False)
             return "pinned at %s (skipped)" % tap.pin[:7], False
-        return gitutil.pull(tap.path), bool(tap.pin)
+        return (gitutil.pull(tap.path, verify=_signing_guard(tap)),
+                bool(tap.pin))
 
     to_clear: list[str] = []
 

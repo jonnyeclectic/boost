@@ -632,11 +632,9 @@ def cmd_quarantine(argv):
         if not entry.get("quarantined"):
             out.warn("%s is not quarantined" % name)
             return 0
+        store.refuse_release_by_policy(kind, name, entry)
         if kind == "skill":
-            res = store.link_agents(name, only=entry.get("only_agents"))
-            entry["quarantined"] = False
-            store.record_links(entry, res)
-            lockfile.set_skill(name, entry)
+            res = store.release_skill(name, entry)
             from .pkg import _warn_unwritable
             _warn_unwritable(res)
             journal.log("release", name)
@@ -692,10 +690,11 @@ def cmd_quarantine(argv):
     if kind == "skill":
         _, blocked = store.quarantine_skill(name, entry)
         if blocked:
-            out.ok("quarantined %s (store intact, links removed except: %s)"
-                   % (name, ", ".join(blocked)))
+            out.ok("quarantined %s (store copy held aside, links removed "
+                   "except: %s)" % (name, ", ".join(blocked)))
         else:
-            out.ok("quarantined %s (store intact, links removed)" % name)
+            out.ok("quarantined %s (store copy held aside, links removed)"
+                   % name)
         _warn_still_linked(name, blocked)
     else:
         # A rule/workflow has no store copy to keep — the artifact is stashed

@@ -25,6 +25,47 @@ def test_adding_same_name_replaces_not_duplicates(sandbox, signer):
     assert len(provenance.trusted_keys()) == 1
 
 
+def _inline_key(key_id: bytes, key: bytes) -> str:
+    import base64
+    return base64.b64encode(b"Ed" + key_id + key).decode()
+
+
+def test_same_key_under_a_second_name_is_refused(sandbox, signer):
+    # Two names for one key: `trust remove acme` reported a revocation while
+    # the key, still stored as acme2, went on verifying taps.
+    import pytest
+
+    from boost_cli.errors import BoostError
+    provenance.add_trusted_key("acme", signer.public_key_text())
+    with pytest.raises(BoostError) as exc:
+        provenance.add_trusted_key("acme2", signer.public_key_text())
+    assert exc.value.message == ("key 1122334455667788 is already trusted "
+                                 "as acme")
+    assert exc.value.hint == ("one key, one name: `boost trust remove acme` "
+                              "first to rename it")
+    assert [k["name"] for k in provenance.trusted_keys()] == ["acme"]
+
+
+def test_same_fingerprint_with_other_key_bytes_is_refused(sandbox):
+    # The key id is what `trust list` shows and what a signature names, so a
+    # second key claiming a trusted id is refused even if its bits differ.
+    import pytest
+
+    from boost_cli.errors import BoostError
+    provenance.add_trusted_key("acme", _inline_key(b"\x07" * 8, b"\x01" * 32))
+    with pytest.raises(BoostError, match="already trusted as acme"):
+        provenance.add_trusted_key("acme2",
+                                   _inline_key(b"\x07" * 8, b"\x02" * 32))
+
+
+def test_a_different_key_under_a_second_name_is_kept(sandbox, signer):
+    provenance.add_trusted_key("acme", signer.public_key_text())
+    rec = provenance.add_trusted_key(
+        "bob", _inline_key(b"\x09" * 8, b"\x03" * 32))
+    assert rec["fingerprint"] == "0909090909090909"
+    assert [k["name"] for k in provenance.trusted_keys()] == ["acme", "bob"]
+
+
 def test_parses_as_public_key_accepts_keys_with_a_slash(signer):
     import base64
     slashed = base64.b64encode(b"Ed" + b"\xff" * 8 + b"\x01" * 32).decode()
@@ -176,7 +217,7 @@ def test_add_over_a_corrupt_store_quarantines_it(sandbox, signer, capsys):
 
 def test_add_over_a_valid_store_keeps_no_quarantine(sandbox, signer, capsys):
     provenance.add_trusted_key("acme", signer.public_key_text())
-    provenance.add_trusted_key("beta", signer.public_key_text())
+    provenance.add_trusted_key("beta", _inline_key(b"\x09" * 8, b"\x03" * 32))
     p = paths.trusted_keys_path()
     assert not p.with_name(p.name + ".corrupt").exists()
     assert sorted(k["name"] for k in provenance.trusted_keys()) == [

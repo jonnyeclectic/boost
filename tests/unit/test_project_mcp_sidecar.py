@@ -23,6 +23,7 @@ document must survive both an install and an uninstall.
 from __future__ import annotations
 
 import json
+from typing import ClassVar
 
 import pytest
 
@@ -308,7 +309,9 @@ class TestAServerAnotherSkillDeclaresSurvives:
         store.forget_project_mcp(tmp_path, "alpha")
         projectlock.remove_skill(tmp_path, "beta")
         assert store.forget_project_mcp(tmp_path, "beta") == (["gh"], None)
-        assert _servers(tmp_path) == {}
+        # alpha's install created the file, so the last uninstall removes it.
+        assert not (tmp_path / mcpdecl.SIDECAR).exists()
+        assert store.SIDECAR_CREATED_KEY not in projectlock.read(tmp_path)
 
     def test_a_name_only_declaration_counts(self, tmp_path):
         _project_skill(tmp_path, "beta", frontmatter="mcp: gh\n")
@@ -368,3 +371,93 @@ class TestAServerAnotherSkillDeclaresSurvives:
         store.register_project_mcp(tmp_path, _rows("gh"), "alpha")
         assert store.forget_project_mcp(tmp_path, "alpha") == ([], None)
         assert _servers(tmp_path)["gh"][mcpdecl.MARKER_KEY] == "beta"
+
+
+class TestTheFileKeepsItsOwnStyle:
+    """Finding: a round trip rewrote a committed ``.mcp.json`` sorted, 2-space
+    and ``\\u``-escaped, and left ``{"mcpServers": {}}`` in a repo that had no
+    such file before the install.
+    """
+
+    MINE: ClassVar[dict] = {"mine": {"command": "node", "args": ["srv.js"],
+                     "env": {"NOTE": "café"}}}
+
+    def _lock(self, base):
+        from boost_cli.core import projectlock
+        projectlock.set_skill(base, "sk", {"kind": "skill",
+                                           "materializations": []})
+        projectlock.remove_skill(base, "sk")
+
+    @pytest.mark.parametrize(("text", "want"), [
+        (None, (2, "\n")),
+        ("", (2, "\n")),
+        ('{"a": 1}', (None, "")),
+        ('{"a": 1}\n', (None, "\n")),
+        ('{\n    "a": 1\n}\n', (4, "\n")),
+        ('{\n\t"a": 1\n}', ("\t", "")),
+        ('{\n"a": 1\n}\n', (2, "\n")),
+    ])
+    def test_sidecar_style(self, text, want):
+        assert store.sidecar_style(text) == want
+
+    def test_a_pretty_printed_file_round_trips_byte_identical(self, tmp_path):
+        self._lock(tmp_path)
+        f = tmp_path / mcpdecl.SIDECAR
+        original = json.dumps({mcpdecl.SERVERS_KEY: self.MINE}, indent=4,
+                              ensure_ascii=False) + "\n"
+        f.write_text(original, encoding="utf-8")
+        assert store.register_project_mcp(tmp_path, _rows("gh"), "sk") == ["gh"]
+        text = f.read_text(encoding="utf-8")
+        assert '\n        "gh": {' in text
+        assert "café" in text and "\\u00e9" not in text
+        # Insertion order, not sorted: the user's server stays first.
+        assert text.index('"mine"') < text.index('"gh"')
+        assert text.index('"command": "node"') < text.index('"args"')
+        assert store.unregister_project_mcp(tmp_path, "sk") == ["gh"]
+        assert f.read_text(encoding="utf-8") == original
+
+    def test_a_compact_inner_object_keeps_indent_order_and_text(self, tmp_path):
+        self._lock(tmp_path)
+        f = tmp_path / mcpdecl.SIDECAR
+        f.write_text('{\n    "mcpServers": {\n        "mine": {"command": '
+                     '"node", "args": ["srv.js"], "env": {"NOTE": '
+                     '"café"}}\n    }\n}\n', encoding="utf-8")
+        store.register_project_mcp(tmp_path, _rows("gh"), "sk")
+        store.unregister_project_mcp(tmp_path, "sk")
+        text = f.read_text(encoding="utf-8")
+        assert text == json.dumps({mcpdecl.SERVERS_KEY: self.MINE}, indent=4,
+                                  ensure_ascii=False) + "\n"
+
+    def test_a_file_boost_created_is_removed_when_empty_again(self, tmp_path):
+        from boost_cli.core import projectlock
+        self._lock(tmp_path)
+        store.register_project_mcp(tmp_path, _rows("gh"), "sk")
+        assert projectlock.read(tmp_path)[store.SIDECAR_CREATED_KEY] is True
+        assert store.forget_project_mcp(tmp_path, "sk") == (["gh"], None)
+        assert not (tmp_path / mcpdecl.SIDECAR).exists()
+        assert store.SIDECAR_CREATED_KEY not in projectlock.read(tmp_path)
+
+    def test_a_file_the_user_had_is_kept_when_empty_again(self, tmp_path):
+        from boost_cli.core import projectlock
+        self._lock(tmp_path)
+        f = tmp_path / mcpdecl.SIDECAR
+        f.write_text('{"mcpServers": {}}\n', encoding="utf-8")
+        store.register_project_mcp(tmp_path, _rows("gh"), "sk")
+        assert store.SIDECAR_CREATED_KEY not in projectlock.read(tmp_path)
+        store.forget_project_mcp(tmp_path, "sk")
+        assert f.read_text(encoding="utf-8") == '{"mcpServers": {}}\n'
+
+    def test_a_created_file_with_other_keys_is_kept(self, tmp_path):
+        self._lock(tmp_path)
+        f = tmp_path / mcpdecl.SIDECAR
+        store.register_project_mcp(tmp_path, _rows("gh"), "sk")
+        doc = json.loads(f.read_text(encoding="utf-8"))
+        doc["inputs"] = [1]
+        f.write_text(json.dumps(doc), encoding="utf-8")
+        store.forget_project_mcp(tmp_path, "sk")
+        assert json.loads(f.read_text(encoding="utf-8")) == {
+            "inputs": [1], mcpdecl.SERVERS_KEY: {}}
+
+    def test_no_project_lock_records_no_creation(self, tmp_path):
+        store.register_project_mcp(tmp_path, _rows("gh"), "sk")
+        assert not (tmp_path / ".boost").exists()

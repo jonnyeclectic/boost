@@ -1498,6 +1498,24 @@ class TestPlain:
     def test_a_non_string_is_coerced(self):
         assert output.plain(42) == "42"
 
+    @pytest.mark.parametrize("ch", ["\u202a", "\u202b", "\u202c", "\u202d",
+                                    "\u202e", "\u2066", "\u2067", "\u2068",
+                                    "\u2069", "\u061c", "\u200e", "\u200f"])
+    def test_bidi_overrides_and_isolates_go(self, ch):
+        # An unclosed U+202E renders the rest of the line right to left,
+        # boost's own later columns included.
+        assert output.plain("a%sb" % ch) == "ab"
+
+    def test_the_bidi_range_ends_where_it_should(self):
+        # Neighbours of the ranges are ordinary text: U+2029/U+202F and
+        # U+2065/U+206A are not reordering controls, nor is U+061B, and
+        # U+200D is the zero-width joiner that emoji sequences depend on.
+        raw = "\u2029\u202f\u2065\u206a\u061b\u061d\u200d\u2010"
+        assert output.plain(raw) == raw
+
+    def test_rtl_letters_survive(self):
+        assert output.plain("שלום مرحبا") == "שלום مرحبا"
+
 
 class TestPlainFields:
     """Display copies of whole records, for render paths reading many fields."""

@@ -282,3 +282,29 @@ class TestHiddenFromTheReviewer:
         src = Path(injectscan.__file__).read_text(encoding="utf-8")
         rule = next(r for r in injectscan.RULES if r.id == "invisible-characters")
         assert rule.pattern.search(src) is None
+
+
+class TestHtmlComments:
+    """`_html_comments` loops at most once per ``<!--``: a mutant that resets
+    the search offset used to re-yield the first comment without end."""
+
+    @pytest.mark.parametrize("text, want", [
+        ("", []),
+        ("no comments here", []),
+        ("a<!--x-->b", [(1, "x")]),
+        ("<!--a--><!--b-->", [(0, "a"), (8, "b")]),
+        ("<!---->", [(0, "")]),
+        # an opener inside a comment is body, not a second comment
+        ("<!-- a <!-- b -->c", [(0, " a <!-- b ")]),
+        # the next search starts past the closer: the opener whose "--" the
+        # closer shares is body (kills a resume at `end - 3`)
+        ("<!--<!-->", [(0, "<!")]),
+        # unterminated: the rest of the document is the comment
+        ("x<!--a-->y<!--rest", [(1, "a"), (10, "rest")]),
+    ])
+    def test_each_comment_once_in_order(self, text, want):
+        assert list(injectscan._html_comments(text)) == want
+
+    def test_yields_no_more_than_one_per_opener(self):
+        text = "<!--c-->" * 50
+        assert len(list(injectscan._html_comments(text))) == 50

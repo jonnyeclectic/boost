@@ -5,8 +5,13 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
+import signal
 import subprocess
+import sys
+import unicodedata
+from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -74,9 +79,8 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True,
     """
     require_git()
     try:
-        proc = subprocess.run(
-            ["git", *args], cwd=str(cwd) if cwd else None,
-            capture_output=True, text=True, timeout=timeout,
+        proc = _exec(
+            ["git", *args], cwd=str(cwd) if cwd else None, timeout=timeout,
             # GIT_LFS_SKIP_SMUDGE: taps are indexed for their Markdown, and boost
             # never reads an LFS payload. Without this, tapping a repo that stores
             # large media in LFS downloads all of it on clone — heygen-com/hyperframes
@@ -97,13 +101,66 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True,
                               "GIT_TERMINAL_PROMPT": "0"},
         )
     except subprocess.TimeoutExpired:
-        raise BoostError("git %s timed out after %ds" % (args[0], timeout)) from None
+        name = _subcommand(args)
+        raise BoostError("git%s timed out after %ds"
+                         % (" " + name if name else "", timeout)) from None
     if check and proc.returncode != 0:
         name = _subcommand(args)
         raise BoostError("git%s failed: %s"
                          % (" " + name if name else "",
                             _git_error(proc.stderr or proc.stdout or "")))
     return proc
+
+
+def _exec(argv: list[str], *, cwd: str | None, timeout: float,
+          env: dict[str, str], text: bool = True) -> subprocess.CompletedProcess:
+    """`subprocess.run(argv, capture_output=True, text=True)`, except that a
+    timeout (or an interrupt) kills git's whole process tree, not only git.
+
+    `subprocess.run(timeout=)` SIGKILLs the direct child and nothing else, and
+    git does its network work in children — `git clone`/`fetch` over https run
+    `git remote-http` and `git-remote-http`. Measured against a server that
+    accepts and never answers: after "git clone timed out" both helpers were
+    still running, reparented to PID 1 and holding the connection, long after
+    boost had exited. So git runs as the leader of its own session (POSIX) and
+    the timeout kills the group; on Windows `taskkill /T` walks the tree.
+    """
+    kwargs: dict = {}
+    if sys.platform != "win32":
+        kwargs["start_new_session"] = True
+    if text:
+        # git writes paths and messages as UTF-8 bytes; the locale default
+        # is cp1252 on Windows, which garbled an NFD path out of `ls-files`
+        # so the partial-checkout check matched nothing and passed.
+        kwargs |= {"encoding": "utf-8", "errors": "replace"}
+    with subprocess.Popen(argv, cwd=cwd, env=env, text=text,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          **kwargs) as proc:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except BaseException:
+            # Ctrl-C too: in its own session git no longer gets the
+            # terminal's SIGINT, and Popen's __exit__ would wait on it.
+            _kill_tree(proc)
+            raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill `proc` and every process it started, then reap it."""
+    if sys.platform == "win32":
+        # Best effort, bounded: a taskkill that is missing or hangs must not
+        # replace the timeout being reported with an error of its own.
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, check=False, timeout=10)
+        with contextlib.suppress(OSError):
+            proc.kill()
+    else:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.communicate(timeout=5)
 
 
 def _subcommand(args: list[str]) -> str:
@@ -232,6 +289,25 @@ def clone_shallow(url: str, dest: Path, sparse: bool = True) -> None:
     base = ["clone", "--depth", "1", "--quiet",
             "-c", "core.autocrlf=false", "-c", "core.eol=lf"]
     tail = ["--", url, str(dest)]
+    existed = dest.exists()
+    try:
+        _clone(base, tail, url, dest, sparse)
+    except BaseException:
+        # A clone that failed or timed out part-way leaves `dest/.git` behind:
+        # not a tap (nothing recorded it), yet a directory under repos/ that
+        # every later look at the disk takes for one. Only a dir this call
+        # created is removed — a caller's existing tree is not ours to delete.
+        if not existed:
+            # util.remove_path, not shutil.rmtree(ignore_errors=True): git
+            # writes its objects read-only, which Windows will not unlink.
+            with contextlib.suppress(OSError):
+                util.remove_path(dest)
+        raise
+
+
+def _clone(base: list[str], tail: list[str], url: str, dest: Path,
+           sparse: bool) -> None:
+    """The body of :func:`clone_shallow`, which owns cleanup on failure."""
     if not sparse:
         _clone_or_translate([*base, *tail], url)
         _refuse_empty(dest, url)
@@ -406,13 +482,67 @@ def materialize(repo: Path, rel_dir: str) -> None:
     rel = rel_dir.strip("/")
     if not rel or rel == ".":
         return
-    pattern = "/%s/*" % sparse_escape(rel)
+    patterns = ["/%s/*" % sparse_escape(form) for form in _spellings(rel)]
     have = _sparse_list(repo)
-    if have is not None and pattern in have:
+    if have is not None and all(p in have for p in patterns):
         return
     if not is_sparse(Path(repo)):
         return
-    _sparse_add(Path(repo), [pattern], rel)
+    _sparse_add(Path(repo), patterns, rel)
+    _require_checked_out(Path(repo), rel)
+
+
+#: Passed to every git call that writes or reads a sparse pattern or an index
+#: path. macOS git defaults ``core.precomposeunicode`` to true and rewrites its
+#: *argv* to NFC, so a pattern for a path the index holds in NFD (a repo
+#: authored on Linux: ``cafe\u0301``) was stored precomposed and matched
+#: nothing. The skill's ``scripts/`` stayed skip-worktree and installed as
+#: nothing, while doctor, drift and verify all called the copy healthy.
+_RAW_PATHS = ["-c", "core.precomposeunicode=false"]
+
+
+def _spellings(rel: str) -> list[str]:
+    """``rel`` in NFC and NFD, deduplicated (one entry for plain ASCII).
+
+    The name boost holds comes from a directory walk, and which form that
+    returns depends on the filesystem (HFS+ decomposes, APFS keeps what git
+    wrote), not on what the index records. A pattern in each form matches
+    whichever one the index holds.
+    """
+    return list(dict.fromkeys(unicodedata.normalize(f, rel)
+                              for f in ("NFC", "NFD")))
+
+
+def _fold(path: str) -> str:
+    """``path`` as a case- and normalization-insensitive filesystem sees it."""
+    return unicodedata.normalize("NFC", path).casefold()
+
+
+def _require_checked_out(repo: Path, rel: str) -> None:
+    """Refuse when a file under ``rel`` is still outside the sparse checkout.
+
+    Run once, right after the cone was widened for ``rel``: a pattern git
+    stored but did not match leaves the files skip-worktree, and the copy
+    that follows would install the half that exists and report success.
+    """
+    proc = run([*_RAW_PATHS, "-C", str(repo), "ls-files", "-t", "-z"],
+               check=False)
+    # Normalization only, never case: on a case-sensitive clone
+    # ``skills/Lint`` is another skill, rightly left outside the checkout
+    # that widened ``skills/lint``.
+    want = unicodedata.normalize("NFC", rel) + "/"
+    skipped = [rec[2:] for rec in (proc.stdout or "").split("\0")
+               if rec.startswith("S ")
+               and unicodedata.normalize("NFC", rec[2:]).startswith(want)]
+    if skipped:
+        raise BoostError(
+            "could not check out %d file%s of %s from the %s tap (%s), so "
+            "installing it would copy a partial skill"
+            % (len(skipped), "" if len(skipped) == 1 else "s", rel, repo.name,
+               ", ".join(sorted(skipped)[:5])),
+            hint="`boost update %s` and try again; if it persists, the tap's "
+                 "sparse checkout cannot match this path" % repo.name,
+            wrap=True)
 
 
 def materialize_paths(repo: Path, rels: list[str]) -> None:
@@ -429,13 +559,62 @@ def materialize_paths(repo: Path, rels: list[str]) -> None:
     for rel in rels:
         rel = rel.strip("/")
         if rel and rel != ".":
-            rel = sparse_escape(rel)
-            patterns += ["/%s" % rel, "/%s/*" % rel]
+            for form in _spellings(rel):
+                form = sparse_escape(form)
+                patterns += ["/%s" % form, "/%s/*" % form]
     have = _sparse_list(repo) or set()
     patterns = [p for p in dict.fromkeys(patterns) if p not in have]
     if not patterns or not is_sparse(Path(repo)):
         return
     _sparse_add(Path(repo), patterns, ", ".join(rels))
+
+
+_CORE_IGNORECASE = re.compile(
+    r"^\[core\][^\[]*?^\s*ignorecase\s*=\s*(true|yes|on|1)\s*$",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL)
+
+
+def _ignorecase(repo: Path) -> bool:
+    """Whether the clone records ``core.ignorecase = true``, read from
+    ``.git/config`` as a file: `rebuild_tap` asks once per tap, and a git
+    subprocess each time is ~40 ms over hundreds of taps."""
+    try:
+        text = (repo / ".git" / "config").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return _CORE_IGNORECASE.search(text) is not None
+
+
+def case_collisions(repo: Path) -> list[list[str]]:
+    """Index paths of ``repo`` that its checkout cannot hold apart.
+
+    Each group is two or more paths that differ only by case (or Unicode
+    normalization), sorted, e.g. ``["skills/Lint/SKILL.md",
+    "skills/lint/SKILL.md"]``. On a case-insensitive filesystem git checks
+    out one file for the lot, and every other file of each spelling lands in
+    the same directory: `git clone` warns "the following paths have
+    collided", which boost captures and never shows. Empty unless the clone
+    records ``core.ignorecase`` (git sets it per clone after probing the
+    filesystem), because on a case-sensitive one each path is its own file.
+
+    Directories are grouped too, each spelling with a trailing ``/``
+    (``["skills/Lint/", "skills/lint/"]``): two dirs that share no file name
+    still check out as one, so ``skills/Lint`` holds ``skills/lint``'s
+    scripts without any file colliding.
+    """
+    if not _ignorecase(Path(repo)):
+        return []
+    proc = run([*_RAW_PATHS, "-C", str(repo), "ls-files", "-z"], check=False)
+    groups: dict[str, set[str]] = {}
+    for path in (proc.stdout or "").split("\0"):
+        if not path:
+            continue
+        groups.setdefault(_fold(path), set()).add(path)
+        parts = path.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            spelled = "/".join(parts[:i]) + "/"
+            groups.setdefault(_fold(spelled), set()).add(spelled)
+    return sorted(sorted(g) for g in groups.values() if len(g) > 1)
 
 
 #: Words in a git failure that mean the promisor fetch could not reach the
@@ -501,7 +680,7 @@ def _sparse_add(repo: Path, patterns: list[str], what: str) -> None:
         todo = [p for p in patterns if p not in have]
         if not todo:
             return
-        argv = ["-C", str(repo), "sparse-checkout", "add", *todo]
+        argv = [*_RAW_PATHS, "-C", str(repo), "sparse-checkout", "add", *todo]
         try:
             try:
                 run(argv)
@@ -581,9 +760,43 @@ def follow_default_branch(repo: Path) -> str:
     return branch
 
 
-def pull(repo: Path) -> str:
+def read_blob(repo: Path, rev: str, path: str) -> bytes | None:
+    """The exact bytes of ``path`` at commit ``rev``, or ``None`` if absent.
+
+    Read from the object store, not the working tree, so a fetched commit can
+    be inspected before the clone moves onto it. Bytes, not text: a signature
+    covers the manifest's bytes, and text mode would translate its newlines.
+    A blobless clone fetches the blob on demand; a blob it cannot fetch reads
+    as absent, which a signature check treats as unsigned — failing closed.
+    """
+    require_git()
+    try:
+        proc = _exec(["git", "-C", str(repo), "cat-file", "blob",
+                      "%s:%s" % (rev, path)], cwd=None, timeout=300,
+                     env=os.environ | {"GIT_TERMINAL_PROMPT": "0"}, text=False)
+    except subprocess.TimeoutExpired:
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _rev(repo: Path, ref: str) -> str:
+    """``ref`` resolved to a commit hash in ``repo``, or "" if it does not."""
+    proc = run(["-C", str(repo), "rev-parse", "--verify", "--quiet",
+                ref + "^{commit}"], check=False)
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def pull(repo: Path, verify: Callable[[str], None] | None = None) -> str:
     """Update a clone to the remote's current default branch, keeping it as
-    shallow as it is. Returns a one-line summary."""
+    shallow as it is. Returns a one-line summary.
+
+    ``verify`` is called with the fetched commit **before** the clone moves
+    onto it; raising from it leaves the working tree and HEAD exactly where
+    they were. It is how a tap's provenance is checked on update: resetting
+    first and checking after would put an unverified tree on disk, scannable
+    and installable, for as long as the check took — or for good, if it
+    crashed.
+    """
     before = head_commit(repo)
     branch = follow_default_branch(repo)
     proc = run(["-C", str(repo), "fetch", *_depth(repo), "--quiet", "origin"],
@@ -596,31 +809,45 @@ def pull(repo: Path) -> str:
         # reset below lands on what was just fetched, not on the old branch.
         run(["-C", str(repo), "symbolic-ref", "refs/remotes/origin/HEAD",
              "refs/remotes/origin/" + branch], check=False)
-    run(["-C", str(repo), "reset", "--hard", "--quiet", "origin/HEAD"], check=False)
     # origin/HEAD may be unset on old git; fall back to the fetched head
-    if head_commit(repo) == before:
-        # An upstream with no commits fetches nothing, and resetting to the
-        # FETCH_HEAD it never wrote surfaced as git's "ambiguous argument
-        # 'FETCH_HEAD'" — true, and no help to anyone holding a tap.
-        if not before and run(["-C", str(repo), "rev-parse", "--verify",
-                               "--quiet", "FETCH_HEAD"],
-                              check=False).returncode != 0:
+    target = _rev(repo, "origin/HEAD")
+    if not target or target == before:
+        fetched = _rev(repo, "FETCH_HEAD")
+        if not fetched and not before:
+            # An upstream with no commits fetches nothing, and resetting to the
+            # FETCH_HEAD it never wrote surfaced as git's "ambiguous argument
+            # 'FETCH_HEAD'" — true, and no help to anyone holding a tap.
             raise BoostError(
                 "%s has no commits" % (remote_url(repo) or repo),
                 hint="commit to it first — a tap indexes committed content only")
-        run(["-C", str(repo), "reset", "--hard", "--quiet", "FETCH_HEAD"])
+        target = fetched or target
+    if target:
+        if verify is not None and target != before:
+            verify(target)
+        # Reset even when nothing moved: it is also what puts a hand-edited
+        # clone back to the commit it claims to be at.
+        run(["-C", str(repo), "reset", "--hard", "--quiet", target])
     after = head_commit(repo)
     return "already up to date" if before == after else "%s → %s" % (
         before[:7] or "(no commits)", after[:7])
 
 
 def head_commit(repo: Path) -> str:
-    """Return the full HEAD commit hash of `repo`, or "" if unresolvable."""
+    """Return the full HEAD commit hash of `repo`, or "" if unresolvable.
+
+    "" with no git on PATH as well: this is a probe, and `run` would raise the
+    "git is required" error from inside it — which ended `boost doctor` (and
+    its `--json`) at the first cached tap, before its verdict, on the one
+    machine where doctor's own "git not found" row was the useful line.
+    """
+    if not has_git():
+        return ""
     proc = run(["-C", str(repo), "rev-parse", "HEAD"], check=False)
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def checkout_commit(repo: Path, sha: str) -> None:
+def checkout_commit(repo: Path, sha: str,
+                    verify: Callable[[str], None] | None = None) -> None:
     """Detach `repo` at `sha`, fetching that commit first if it is absent.
 
     A tap is cloned `--depth 1`, so the commit a published shard was built from
@@ -642,6 +869,10 @@ def checkout_commit(repo: Path, sha: str) -> None:
     if have.returncode != 0:
         run(["-C", str(repo), "fetch", "--quiet", *_depth(repo),
              "--filter=blob:none", "origin", sha])
+    if verify is not None:
+        # As in `pull`: the commit is checked while the tree is still on the
+        # old one, so a refusal moves nothing.
+        verify(sha)
     run(["-C", str(repo), "checkout", "--quiet", "--detach", sha])
     # A detached checkout leaves the sparse cone as it was, but re-applying is
     # cheap and keeps a pinned clone byte-identical to a freshly cloned one.
