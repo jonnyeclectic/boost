@@ -2409,7 +2409,7 @@ class TestStats:
         assert "no" in lines["pinned"]
         sdir = paths.store_dir() / "brainstorming"
         assert util.human_size(util.dir_size(sdir)) in lines["size"]
-        assert "1 installs · 0 updates · 0 uninstalls" in lines["activity"]
+        assert "1 installs · 0 updates · 0 reinstalls · 0 uninstalls" in lines["activity"]
         assert "1.4.0 (up to date)" in lines["latest"]
         assert "fixture skills" in lines["upstream"]  # fixture commit subject
 
@@ -2436,7 +2436,7 @@ class TestStats:
         assert "not installed — `boost install jira-integration`" in r.out
         assert "2.1.0" in r.out
         assert "Sync commits and PRs to Jira tickets" in r.out
-        assert "0 installs · 0 updates · 0 uninstalls" in r.out
+        assert "0 installs · 0 updates · 0 reinstalls · 0 uninstalls" in r.out
 
     def test_installed_but_no_longer_in_any_tap(self, boost, installed):
         # The asymmetric case: `lock` exists, `cat` is None. cmd_stats guards
@@ -2485,7 +2485,7 @@ class TestStats:
         assert "cursor" in lines["agents"]
         assert "yes" in lines["pinned"]
         assert ("a" * 12) in lines["sha256"]
-        assert "0 installs · 0 updates · 0 uninstalls" in lines["activity"]
+        assert "0 installs · 0 updates · 0 reinstalls · 0 uninstalls" in lines["activity"]
         data = json.loads(boost("stats", "house-style", "--json").out)
         assert data["kind"] == "rule"
         assert data["installed"] is True
@@ -2563,12 +2563,14 @@ class TestStats:
         data = json.loads(
             boost("stats", "fixture-tap:brainstorming", "--json").out)
         assert data["installed"] is False
-        assert data["activity"] == {"install": 0, "update": 0, "uninstall": 0}
+        assert data["activity"] == {"install": 0, "update": 0, "reinstall": 0,
+                                    "uninstall": 0}
         assert data["catalog"]["latest"] == "1.4.0"
         own = json.loads(
             boost("stats", "other-tap:brainstorming", "--json").out)
         assert own["installed"] is True
-        assert own["activity"] == {"install": 1, "update": 0, "uninstall": 0}
+        assert own["activity"] == {"install": 1, "update": 0, "reinstall": 0,
+                                   "uninstall": 0}
 
     def test_json_purity(self, boost, installed):
         r = boost("stats", "brainstorming", "--json")
@@ -2577,10 +2579,34 @@ class TestStats:
         assert data["name"] == "brainstorming"
         assert data["installed"] is True
         assert data["lock"]["version"] == "1.4.0"
-        assert data["activity"] == {"install": 1, "update": 0, "uninstall": 0}
+        assert data["activity"] == {"install": 1, "update": 0, "reinstall": 0,
+                                    "uninstall": 0}
         assert data["catalog"]["latest"] == "1.4.0"
         assert data["catalog"]["tap"] == "fixture-tap"
         assert data["size"] > 0
+
+    def test_activity_tells_installs_reinstalls_and_upgrades_apart(
+            self, boost, fixture_tap_src, tmp_path):
+        # One install, two reinstalls and one upgrade read as "4 installs ·
+        # 0 updates" while `trending` said 1 for the same item.
+        tap_dir = tmp_path / "stats-tap"
+        shutil.copytree(fixture_tap_src, tap_dir)
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        boost("reinstall", "brainstorming")
+        boost("reinstall", "brainstorming")
+        md = tap_dir / "skills" / "brainstorming" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8").replace("1.4.0", "1.5.0"),
+                      encoding="utf-8")
+        _git(tap_dir, "commit", "-qam", "bump")
+        assert "upgraded brainstorming" in boost("update").out
+        data = json.loads(boost("stats", "brainstorming", "--json").out)
+        assert data["activity"] == {"install": 1, "update": 1, "reinstall": 2,
+                                    "uninstall": 0}
+        r = boost("stats", "brainstorming")
+        lines = {l.split()[0]: l for l in r.out.splitlines() if l.strip()}
+        assert ("1 installs · 1 updates · 2 reinstalls · 0 uninstalls"
+                in lines["activity"])
 
     def test_qualified_name_installed_from_that_tap(self, boost, installed,
                                                      rival_tap):
