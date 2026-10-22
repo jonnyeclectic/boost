@@ -4142,7 +4142,7 @@ class TestImportProvenance:
         _commit_all(repo)
         boost("import", _URL)
         shutil.rmtree(paths.store_dir() / "url-skill")
-        r = boost("sync")
+        r = boost("sync", expect=1)      # declined, so not a clean exit
         assert ("`boost reinstall url-skill` clones it again from %s" % _URL
                 in _flat(r.out))
         assert _lock()["url-skill"]["source_url"] == _URL

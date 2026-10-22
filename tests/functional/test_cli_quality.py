@@ -3374,8 +3374,10 @@ class TestSyncSaysWhyARuleWasNotRematerialized:
         store = paths.store_dir()
         store.chmod(0o500)
         try:
-            text = self._flat(boost("sync").out)
-            actions = json.loads(boost("sync", "--json").out)["actions"]
+            # A repair it did not make: sync fails over it, as heal does.
+            text = self._flat(boost("sync", expect=1).out)
+            actions = json.loads(boost("sync", "--json", expect=1).out)[
+                "actions"]
         finally:
             store.chmod(0o700)
         cause = ("rule team-conventions was not re-materialized: cannot "

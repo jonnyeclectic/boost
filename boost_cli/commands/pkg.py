@@ -1318,8 +1318,12 @@ def cmd_sync(argv: list[str]) -> int:
     # A repair sync set out to make and could not is a failure, the same as
     # doctor and heal call it: this returned 0 over a blocked link, so a CI
     # step running `boost sync` could not tell the repair had been refused.
-    # Advisory states (another tool's copies, out-of-scope links) stay 0.
-    rc = 1 if (blocked or stuck or in_way or occupied or lock_bad) else 0
+    # Advisory states (another tool's copies, out-of-scope links) stay 0. A
+    # declined repair is a refusal too: exiting 0 over one is what let doctor
+    # go on prescribing this command for a skill still missing.
+    unrepaired = any(store.is_unrepaired(a) for a in actions)
+    rc = 1 if (blocked or stuck or in_way or occupied or lock_bad
+               or unrepaired) else 0
     if args.json:
         # `sync --diff --json` above is indent=2; this printed one unindented
         # line, so the two `--json` shapes of the same command disagreed on

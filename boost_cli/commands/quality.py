@@ -651,6 +651,21 @@ def _drifted(kind: str, name: str, entry: dict, bad) -> int:
     return 1
 
 
+def _project_moved_line(name: str, gone: list[str], base) -> str:
+    """Doctor's line for a missing project skill whose tap has moved."""
+    tracked = bool(gone) and all(gitutil.tracks(Path(base), g) for g in gone)
+    restore = ("`git -C %s checkout -- %s` restores the committed cop%s, or "
+               % (util.shell_arg(str(base)),
+                  " ".join(util.shell_arg(g) for g in gone),
+                  "y" if len(gone) == 1 else "ies")) if tracked else ""
+    return ("project skill %s is missing %s, and its tap has moved since the "
+            "project lock was written, so `boost heal` restores it only if "
+            "this skill's files did not change — `boost heal --dry-run` says "
+            "which; otherwise %s`boost install --local %s --force` moves every "
+            "copy and the lock to the tap's new version"
+            % (name, ", ".join(gone), restore, name))
+
+
 def cmd_doctor(argv):
     ap = cliparse.parser(
         prog="boost doctor", description="Check installation health & report issues")
@@ -1149,7 +1164,17 @@ def cmd_doctor(argv):
         st = integrity.project_status(entry, pbase)
         if st == integrity.STATUS_MISSING:
             gone = integrity.project_missing_rows(entry, pbase)
-            if integrity.project_skill_dirs(entry, pbase):
+            if (store.project_intact_copy(entry, pbase) is None
+                    and store.project_source_moved(name, entry)):
+                # heal/sync restore from an intact copy, or from a tap still
+                # at the locked content; past a moved tap they may decline,
+                # and naming them sent the user round doctor -> heal ->
+                # doctor. Whether the skill's files moved too is a hash of
+                # the source (a clone widen, maybe a fetch), so doctor names
+                # the preview that answers, and the two ways out.
+                bad("project-skill", _project_moved_line(name, gone, pbase),
+                    wrap=True)
+            elif integrity.project_skill_dirs(entry, pbase):
                 # Some copies stand: name the agents' copies that do not, or
                 # "its files are gone" reads false over an intact .claude/.
                 bad("project-skill", "project skill %s is missing %s — run "
