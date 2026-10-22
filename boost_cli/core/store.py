@@ -19,7 +19,7 @@ from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from ..errors import BoostError
+from ..errors import BoostError, NotUTF8Error
 from . import (
     agents,
     catalog,
@@ -4723,7 +4723,7 @@ def _note_prior(undo: list[tuple[Path, str | None, bool]], path: Path,
     """
     try:
         prior = util.read_user_text(path) if os.path.lexists(path) else None
-    except (OSError, UnicodeDecodeError):
+    except (OSError, NotUTF8Error):
         return
     undo.append((path, prior, user_file))
 
@@ -4737,7 +4737,7 @@ def _undo_writes(undo: list[tuple[Path, str | None, bool]]) -> None:
     which a cleanup failure must not replace.
     """
     for path, prior, user_file in reversed(undo):
-        with contextlib.suppress(OSError, UnicodeDecodeError):
+        with contextlib.suppress(OSError, NotUTF8Error):
             if prior is None:
                 path.unlink(missing_ok=True)
             elif util.read_user_text(path) != prior:
@@ -4871,6 +4871,15 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
                     # dropping the row anyway reported the rule removed while
                     # its text stayed live and no command could reach it.
                     rules.require_well_formed(text, name, path)
+                    # A block edited since boost wrote it is the user's text
+                    # now, as an edited rules-dir file is below: left in
+                    # place and named. Stripping it deleted their edit with
+                    # no warning, though `verify` had called it modified.
+                    if m.get("sha256") and any(
+                            _text_sha(body) != m["sha256"]
+                            for body in rules.block_bodies(text, name)):
+                        kept.append(str(path))
+                        continue
                     stripped = rules.strip_block(text, name)
                     # No block of ours (a refused write): no rewrite. An
                     # empty result is deleted only when the row says boost
@@ -5114,6 +5123,11 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
                 # needs it to restore the block at its original position
                 # rather than re-appending at end-of-file.
                 full_text = util.read_user_text(path)
+                # A damaged block reads as no block, so the removal below
+                # skipped it and quarantine reported the rule withheld with
+                # its text still live. Refused here, before the stash is
+                # persisted, as uninstall refuses it.
+                rules.require_well_formed(full_text, name, path)
                 content = rules.read_block(full_text, name)
                 if content is not None:
                     # A file the removal will rewrite is checked against the
@@ -5172,7 +5186,7 @@ def stale_quarantine_artifacts(name: str, entry: dict) -> bool:
                 if p.exists() and rules.read_block(
                         p.read_text(encoding="utf-8"), name) is not None:
                     return True
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
         elif p.is_file():
             return True
@@ -5762,6 +5776,40 @@ def duplicate_rule_blocks() -> list[tuple[str, str, int]]:
     """
     from . import rules
     found: list[tuple[str, str, int]] = []
+    for name, p in _written_context_rows():
+        try:
+            text = util.read_user_text(Path(p))
+        except (OSError, NotUTF8Error):
+            continue
+        n = len(rules.block_spans(text, name))
+        if n > 1:
+            found.append((name, p, n))
+    return found
+
+
+def unreadable_context_files() -> list[tuple[str, str]]:
+    """``(rule, context file)`` for each written context-file row of an
+    installed rule whose file is not UTF-8.
+
+    The rows :func:`duplicate_rule_blocks` reads, and what `boost verify`
+    names: such a file reads as modified, and the reinstall that remedy
+    names refuses it (`util.NotUTF8Error`), so the line has to say why.
+    """
+    found: list[tuple[str, str]] = []
+    for name, p in _written_context_rows():
+        try:
+            util.read_user_text(Path(p))
+        except NotUTF8Error:
+            found.append((name, p))
+        except OSError:
+            continue
+    return found
+
+
+def _written_context_rows() -> Iterator[tuple[str, str]]:
+    """``(rule, path)`` for every written, unquarantined context-file row of
+    an installed rule, each file once per rule."""
+    from . import rules
     for name, entry in sorted(lockfile.installed_rules().items()):
         if entry.get("quarantined"):
             continue
@@ -5776,14 +5824,7 @@ def duplicate_rule_blocks() -> list[tuple[str, str, int]]:
             if not p or key in seen:
                 continue
             seen.add(key)
-            try:
-                text = util.read_user_text(Path(p))
-            except (OSError, UnicodeDecodeError):
-                continue
-            n = len(rules.block_spans(text, name))
-            if n > 1:
-                found.append((name, p, n))
-    return found
+            yield name, p
 
 
 def collapse_rule_block(name: str, path: str) -> bool:

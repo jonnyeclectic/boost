@@ -1271,6 +1271,15 @@ def cmd_doctor(argv):
                     text = p.read_text(encoding="utf-8") if p.exists() else ""
                 except OSError:
                     text = ""
+                except UnicodeDecodeError:
+                    # Every command that edits the file refuses it the same
+                    # way (`util.read_user_text`); doctor names it instead of
+                    # crashing before it could report anything.
+                    bad("rule", "rule %s's block in %s cannot be read: the "
+                        "file is not UTF-8 — save it as UTF-8, then run "
+                        "`boost doctor` again" % (name, _tilde(p)), wrap=True)
+                    mat_issues += 1
+                    continue
                 present = ("boost:rule:%s start" % name) in text
                 # The start marker alone counted as present, while `verify`
                 # reads the same block as missing and the next write appends
@@ -1280,6 +1289,18 @@ def cmd_doctor(argv):
                         "no end marker — restore its `%s` line or delete the "
                         "orphaned block, then run `boost reinstall %s`"
                         % (name, _tilde(p), rule_blocks.markers(name)[1], name),
+                        wrap=True)
+                    mat_issues += 1
+                    continue
+                # The mirror: the start marker deleted, the end left. It read
+                # as missing, and the reinstall that remedy named appended a
+                # second block under the remnant (`rules.orphan_end`).
+                if rule_blocks.orphan_end(text, name):
+                    bad("rule", "rule %s's block in %s has an end marker and "
+                        "no start marker — restore its `%s` line above the "
+                        "rule's text, or delete that text and the end marker, "
+                        "then run `boost reinstall %s`"
+                        % (name, _tilde(p), rule_blocks.markers(name)[0], name),
                         wrap=True)
                     mat_issues += 1
                     continue

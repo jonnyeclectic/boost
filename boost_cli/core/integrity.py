@@ -326,6 +326,12 @@ def materialized_status(name: str, entry: dict,
                 text = p.read_text(encoding="utf-8")
             except OSError:
                 text = None
+            except UnicodeDecodeError:
+                # Bytes that are not UTF-8 are not the text boost wrote, and
+                # the one remedy `verify` names for MODIFIED, a reinstall,
+                # stops at the file with the reason (`util.NotUTF8Error`)
+                # rather than rewriting it. A crash said neither.
+                return STATUS_MODIFIED
             content = rules.read_block(text, name) if text is not None else None
             # A second copy of the block is not what boost wrote, whatever the
             # first one hashes to: the agent reads both, and `verify` said ok.
@@ -393,6 +399,8 @@ def locally_edited(kind: str, name: str, entry: dict, base=None) -> bool:
             text = Path(m.get("path", "")).read_text(encoding="utf-8")
         except OSError:
             continue
+        except UnicodeDecodeError:
+            return True  # not what boost wrote: an update must not rewrite it
         content = (rules.read_block(text, name)
                    if m.get("mode") == rules.MODE_CLAUDE else text)
         if content is not None and hashlib.sha256(
