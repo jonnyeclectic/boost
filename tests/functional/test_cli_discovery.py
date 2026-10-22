@@ -1780,7 +1780,8 @@ class TestBrowse:
         from boost_cli.commands import discovery
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",
-                            types.SimpleNamespace(stdin=tty, stdout=tty))
+                            types.SimpleNamespace(stdin=tty, stdout=tty,
+                                                  stderr=sys.stderr))
         monkeypatch.setattr(
             discovery, "_browse_tui",
             lambda curses, entries, **_kw: [next(e for e in entries
@@ -1794,7 +1795,8 @@ class TestBrowse:
         from boost_cli.commands import discovery
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",
-                            types.SimpleNamespace(stdin=tty, stdout=tty))
+                            types.SimpleNamespace(stdin=tty, stdout=tty,
+                                                  stderr=sys.stderr))
         monkeypatch.setattr(discovery, "_browse_tui",
                             lambda curses, entries, **_kw: None)
         r = boost("browse")
@@ -1811,7 +1813,8 @@ class TestBrowse:
         from boost_cli.commands import discovery
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",
-                            types.SimpleNamespace(stdin=tty, stdout=tty))
+                            types.SimpleNamespace(stdin=tty, stdout=tty,
+                                                  stderr=sys.stderr))
         workflow = {"name": "AGENT-playbook", "kind": "workflow",
                     "version": "1.0", "tap": "fixture-tap"}
         monkeypatch.setattr(discovery, "_browse_tui",
