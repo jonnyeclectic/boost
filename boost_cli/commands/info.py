@@ -1557,6 +1557,18 @@ def cmd_deps(argv):
     return 1
 
 
+def _split_at_double_dash(argv: list[str]) -> tuple[list[str], list[str]]:
+    """``(before, after)`` around the first ``--`` in ``argv``.
+
+    ``after`` holds every token past the separator verbatim, ``--x`` included;
+    the separator itself is in neither half.
+    """
+    if "--" not in argv:
+        return argv.copy(), []
+    i = argv.index("--")
+    return argv[:i], argv[i + 1:]
+
+
 def cmd_tag(argv):
     ap = cliparse.parser(prog="boost tag",
                                  description="Custom labels for organizing skills")
@@ -1571,17 +1583,22 @@ def cmd_tag(argv):
     # their exact argv order with no re-walk, so `-x +x` still nets differently
     # from `+x -x`.
     flag_strings = {"--list", "--json", "-h", "--help"}
-    flags = [t for t in argv if t in flag_strings]
+    # Everything after the first `--` is an operand, the POSIX convention
+    # argparse itself follows: `tag NAME -- --zz` used to drop `--zz` (and
+    # the `--`) as if neither were there and exit 0 having done nothing.
+    head, tail = _split_at_double_dash(argv)
+    flags = [t for t in head if t in flag_strings]
     # A long option this command does not know must not silently fall through
     # as an operand: `tag brainstorming --verbose` used to read as removing
     # the tag `-verbose`, and `tag --verbose` as `--verbose is not installed`
     # — every sibling command instead rejects an unrecognized `--flag` with
     # exit 2. Handing the untouched argv to argparse here raises that same
     # "unrecognized arguments" error rather than the misleading ones above.
-    unknown_long = [t for t in argv if t.startswith("--") and t not in flag_strings]
+    unknown_long = [t for t in head if t.startswith("--") and t not in flag_strings]
     if unknown_long:
-        ap.parse_args(argv)
-    operands = [t for t in argv if t not in flag_strings and not t.startswith("--")]
+        ap.parse_args(head)
+    operands = [t for t in head if t not in flag_strings and not t.startswith("--")]
+    operands += tail
     args = ap.parse_args(flags)
     args.name = operands[0] if operands else None
     if args.name is not None and not args.name.strip():
