@@ -135,6 +135,20 @@ def test_an_agent_whose_skills_sit_in_home_does_not_refuse_home(sandbox):
         "~/skills is inside an agent's user skills directory (~/skills)")
 
 
+def test_an_agent_whose_config_root_is_above_home_refuses_nothing_by_it(
+        sandbox):
+    # A skills dir one level above $HOME makes its parent an ancestor of
+    # $HOME, which as a refused root would refuse every project on the box.
+    from boost_cli.core import config
+    above = paths.home().resolve().parent
+    cfg = config.load()
+    cfg["agents"] = {"wide": {"dir": str(above / "skills")}}
+    config.save(cfg)
+    proj = paths.home() / "code" / "proj"
+    (proj / ".git").mkdir(parents=True)
+    assert scopes.managed_by_boost(proj) is None
+
+
 def test_a_sibling_named_like_an_agent_root_is_allowed(sandbox):
     sib = paths.home() / ".gemini-old"
     sib.mkdir()
