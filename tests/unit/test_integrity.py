@@ -989,8 +989,9 @@ def test_modified_remedy_for_a_quarantined_copy_never_names_reinstall(installed)
         entry["quarantined"] = True
     lockfile.update_skill(installed, quarantine)
     cmd, why = integrity.modified_remedy(installed)
-    assert cmd == "boost quarantine --list"
-    assert "quarantined" in why
+    assert (cmd, why) == ("boost quarantine --list",
+                          "to review it — it is quarantined, so a reinstall "
+                          "waits for `boost quarantine --release`")
     assert "reinstall" not in cmd and cmd != "boost heal"
     # Quarantine outranks held_at and a missing store SKILL.md alike.
     held = {"quarantined": True, "held_at": "/h/x"}
