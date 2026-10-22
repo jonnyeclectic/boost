@@ -1358,3 +1358,116 @@ class TestClaudeDialectGrantKeysAreHonouredNotDeleted:
                "allowedTools: [Read, Bash]\n---\nbody\n")
         once = workflows.sanitize_gemini_agent("x", raw)
         assert workflows.sanitize_gemini_agent("x", once) == once
+
+
+class TestWhatTheRepairCannotFixIsNamed:
+    """``gemini_agent_problem`` over the sanitizer's OUTPUT, for the five
+    shapes a tap ships that used to be written verbatim and rejected by
+    Gemini at every session. Each reason below was checked against the
+    shipped ``parseAgentMarkdown`` (Gemini CLI bundle, chunk-5FZXKDXH.js):
+    every file answered None here loads there, and every one with a reason
+    fails there with the matching error."""
+
+    def test_a_bom_is_stripped_and_the_rest_repaired(self):
+        raw = "\ufeff---\nname: bom\ndescription: BOM agent\ncolor: red\n---\nBody\n"
+        out = workflows.sanitize_gemini_agent("bom", raw)
+        assert out == "---\nname: bom\ndescription: BOM agent\n---\nBody\n"
+        assert workflows.gemini_agent_problem(out) is None
+
+    def test_a_bom_alone_is_still_stripped(self):
+        raw = "\ufeff---\nname: ok\ndescription: d\n---\nBody\n"
+        assert workflows.sanitize_gemini_agent("ok", raw) == raw[1:]
+
+    @pytest.mark.parametrize("value", ["", " ~", " null", " # none yet"])
+    def test_an_empty_tools_is_still_refused_and_now_named(self, value):
+        # Ambiguous ("no tools" or "fill this in", see the tools tests
+        # above), so the repair still declines — and the decline now has a
+        # reason, which is what keeps the file from being written for Gemini.
+        raw = "---\nname: e\ndescription: d\ntools:%s\n---\nBody\n" % value
+        assert workflows.sanitize_gemini_agent("e", raw) == raw
+        assert workflows.gemini_agent_problem(raw) == (
+            "has an empty `tools`, which Gemini reads as null")
+
+    def test_a_description_with_colon_space_is_quoted(self):
+        raw = ('---\nname: escaped\ndescription: Use this agent when you need '
+               'X.\\n\\n<example>\\nContext: foo\\nuser: "bar"\\n</example>\n'
+               '---\nBody\n')
+        out = workflows.sanitize_gemini_agent("escaped", raw)
+        assert out == (
+            '---\nname: escaped\ndescription: "Use this agent when you need '
+            'X.\\\\n\\\\n<example>\\\\nContext: foo\\\\nuser: \\"bar\\"\\\\n'
+            '</example>"\n---\nBody\n')
+        assert workflows.gemini_agent_problem(out) is None
+        assert workflows.gemini_agent_problem(raw) == (
+            "has an unquoted `: ` in `description`, which is not valid YAML")
+
+    def test_a_quoted_description_is_left_alone(self):
+        raw = '---\nname: q\ndescription: "a: b"\n---\nBody\n'
+        assert workflows.sanitize_gemini_agent("q", raw) == raw
+        assert workflows.gemini_agent_problem(raw) is None
+
+    def test_an_untranslatable_tool_is_declined_with_its_reason(self):
+        raw = ("---\nname: mcp\ndescription: d\n"
+               "tools: Read, mcp__github__create_issue\n---\nBody\n")
+        out = workflows.sanitize_gemini_agent("mcp", raw)
+        assert out == raw
+        assert workflows.gemini_agent_problem(out) == (
+            "has `tools` as a string, where Gemini requires a list")
+
+    def test_a_list_naming_an_unknown_tool_says_which(self):
+        raw = "---\nname: l\ndescription: d\ntools: [read_file, Frob]\n---\nB\n"
+        assert workflows.gemini_agent_problem(raw) == (
+            "grants `Frob`, which Gemini has no tool for")
+
+    def test_no_frontmatter(self):
+        assert workflows.sanitize_gemini_agent("n", "Just a body\n") == (
+            "Just a body\n")
+        assert workflows.gemini_agent_problem("Just a body\n") == (
+            "has no YAML frontmatter, which Gemini requires")
+
+    def test_an_unclosed_block(self):
+        assert workflows.gemini_agent_problem("---\nname: x\n") == (
+            "has a frontmatter block that is never closed")
+
+    def test_a_fence_boost_and_gemini_disagree_on_is_not_judged(self):
+        assert workflows.gemini_agent_problem(
+            "---\nname: x\ndescription: d\n---8<---\nB\n") is None
+
+    @pytest.mark.parametrize("raw, why", [
+        ("---\nname: x\n---\nB\n", "has no `description`, which Gemini requires"),
+        ("---\nname: x\ndescription:\n---\nB\n",
+         "has no `description`, which Gemini requires"),
+        ("---\ndescription: d\n---\nB\n", "has no `name`, which Gemini requires"),
+        ("---\nname: Big Name\ndescription: d\n---\nB\n",
+         "is named 'Big Name', which is not a Gemini agent name"),
+        ("---\nname: 2024\ndescription: d\n---\nB\n",
+         "is named '2024', which is not a Gemini agent name"),
+        ("---\nname: x\ndescription: d\ncolor: red\n---\nB\n",
+         "carries `color`, which Gemini's agent schema does not allow"),
+        ("---\nname: x\nname: y\ndescription: d\n---\nB\n",
+         "repeats a frontmatter key, which Gemini's YAML parser refuses"),
+        ("---\nname: x\ndescription: d\ntools:\n---\nB\n",
+         "has an empty `tools`, which Gemini reads as null"),
+    ])
+    def test_each_definite_rejection(self, raw, why):
+        assert workflows.gemini_agent_problem(raw) == why
+
+    @pytest.mark.parametrize("raw", [
+        '---\nname: "2024"\ndescription: d\n---\nB\n',
+        "---\nname: x\ndescription: >\n  folded\n---\nB\n",
+        "---\nname: x\ndescription: d\ntools: [read_file, mcp_gh_issue]\n---\nB\n",
+        "---\nname: x\ndescription: d\ntools: &a [read_file]\n---\nB\n",
+        "---\nname: x\nkind: remote\nagent_card_url: u\n---\nB\n",
+        "---\n  indented: x\n---\nB\n",
+    ])
+    def test_loadable_or_unreadable_is_not_refused(self, raw):
+        assert workflows.gemini_agent_problem(raw) is None
+
+    def test_render_problem_judges_only_gemini_agents(self):
+        bad = "Just a body\n"
+        assert workflows.render_problem("gemini", workflows.SLOT_AGENTS,
+                                        bad) is not None
+        assert workflows.render_problem("gemini", workflows.SLOT_COMMANDS,
+                                        bad) is None
+        assert workflows.render_problem("claude-code", workflows.SLOT_AGENTS,
+                                        bad) is None

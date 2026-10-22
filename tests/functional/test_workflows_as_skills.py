@@ -204,9 +204,11 @@ class TestCollision:
         r = boost("import", src, expect=1)
         assert "as the skill copy of workflow reviewer" in _flat(r.err)
         assert _copy().read_text(encoding="utf-8") == WANT
-        assert ("`boost install reviewer --force --no-as-skill` takes the "
-                "copy out of the store") in _flat(r.err)
-        boost("install", "reviewer", "--force", "--no-as-skill")
+        assert ("`boost install wf-tap:reviewer --path agents --force "
+                "--no-as-skill` takes the copy out of the store") in _flat(r.err)
+        # the hint is the command to run, so run exactly it
+        boost("install", "wf-tap:reviewer", "--path", "agents", "--force",
+              "--no-as-skill")
         boost("import", src)
         assert lockfile.get_skill("reviewer") is not None
         assert _copy().read_text(encoding="utf-8").endswith("mine\n")
@@ -602,3 +604,39 @@ class TestBlockerClaimsAnIdenticalCopy:
         assert store.skill_copy_blocker("wf", None) is not None
         (d / "extra.txt").write_text("x", encoding="utf-8")
         assert store.skill_copy_blocker("wf", None, "T") is not None
+
+
+class TestASkillAndAWorkflowShareAName:
+    """One tap ships both ``skills/reviewer/SKILL.md`` and
+    ``agents/reviewer.md``. Bare ``reviewer`` names two items, so every
+    command a refusal hands back must be the qualified one, and running it
+    verbatim must work."""
+
+    SKILL = ("---\nname: reviewer\ndescription: the skill one\n---\n\n"
+             "skill body\n")
+
+    @pytest.fixture
+    def both(self, boost, wf_tap):
+        _commit(wf_tap, "skills/reviewer/SKILL.md", self.SKILL, "add skill")
+        boost("update")
+        return wf_tap
+
+    def test_the_refusal_hint_is_a_command_that_runs(self, boost, both):
+        boost("install", "wf-tap:reviewer", "--path", "agents")
+        assert _copy().read_text(encoding="utf-8") == WANT
+        r = boost("install", "wf-tap:reviewer", "--path", "skills/reviewer",
+                  expect=1)
+        assert ("hint: `boost install wf-tap:reviewer --path skills/reviewer "
+                "--force` replaces it; the workflow keeps its own files"
+                in _flat(r.err))
+        # bare, the name is ambiguous — which is why the hint is qualified
+        boost("install", "reviewer", "--force", expect=1)
+        r = boost("install", "wf-tap:reviewer", "--path", "skills/reviewer",
+                  "--force")
+        assert r.rc == 0
+        assert _copy().read_text(encoding="utf-8") == self.SKILL
+        assert lockfile.get_skill("reviewer")["tap"] == "wf-tap"
+        # the workflow lost only its copy; its agent file is untouched
+        assert not any(m["slot"] == "skill" for m in _rows())
+        assert (paths.home() / ".claude" / "agents" / "reviewer.md").read_text(
+            encoding="utf-8") == AGENT

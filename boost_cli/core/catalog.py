@@ -43,6 +43,7 @@ from . import (
     paths,
     registry,
     util,
+    workflows,
 )
 
 # Bumped whenever a scan starts recording something the previous scan did not,
@@ -66,7 +67,10 @@ from . import (
 #   7 -- `frontmatter` folds an indented continuation carrying ": " into
 #        the plain scalar above it instead of dropping it and every line
 #        after, so a truncated description is restored on rescan
-CACHE_FORMAT = 7
+#   8 -- a slash command is named by its file, not its frontmatter `name`,
+#        and keeps its namespace dir (`commands/frontend/test.md` is
+#        `frontend/test`), as Claude Code and Gemini CLI name it
+CACHE_FORMAT = 8
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -267,14 +271,32 @@ def _entry_slug(name: str, default_name: str) -> str:
     return "skill-" + digest
 
 
+def command_name(rel: str) -> str | None:
+    """The catalog name of the slash command at ``rel``, or None if ``rel``
+    is not one (a subagent).
+
+    The file name, never the frontmatter ``name``: Claude Code names a command
+    after its "File name without extension" and supports a skill's
+    frontmatter on it "except ``name``", so a tap's ``commands/review.md``
+    carrying ``name: Code Review Helper`` is ``/review`` — and installing it
+    as ``code-review-helper`` made the command the tap documents not exist.
+    Its namespace dirs are kept (:func:`workflows.command_namespace`), each
+    part slugged on its own so the ``/`` survives.
+    """
+    if workflows.detect_slot(rel) != workflows.SLOT_COMMANDS:
+        return None
+    parts = (*workflows.command_namespace(rel), Path(rel).stem)
+    return workflows.NAMESPACE_SEP.join(_entry_slug(p, p) for p in parts)
+
+
 def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
                 tap_name: str, curated: bool, meta: dict, body: str,
-                tap_category: str = "") -> dict:
+                tap_category: str = "", fixed_name: str | None = None) -> dict:
     name = _text(meta, "name") or default_name
     # Slugify anything that is not already a safe path component, not just names
     # containing a space: this name becomes a rule/workflow filename, so
     # `../../..` has to be neutralized at index time too, not only at the sinks.
-    slug = _entry_slug(name, default_name)
+    slug = fixed_name or _entry_slug(name, default_name)
     description = _description(meta, body)
     item_dir = defining_file.parent
     return {
@@ -415,8 +437,11 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False,
                 default = path.parent.name if path.parent != root else root.name
             else:
                 default = path.stem
+            fixed = (command_name(path.relative_to(root).as_posix())
+                     if kind == KIND_WORKFLOW else None)
             entries.append(_make_entry(root, path, kind, default,
-                                       tap_name, curated, meta, body, tap_category))
+                                       tap_name, curated, meta, body, tap_category,
+                                       fixed_name=fixed))
 
     entries.sort(key=operator.itemgetter("skill_md", "name"))
     return entries
@@ -1348,7 +1373,11 @@ def resolve_one(name: str, path: str | None = None) -> dict:
         matches = narrowed
     if not matches:
         qualifier, bare = split_name(name)
-        if qualifier is not None and "/" in bare:
+        # Only when the last segment alone is a name there: `frontend/test`
+        # is how a namespaced command is spelled (`command_name`), so a typo
+        # in one is a miss, not the path grammar misread.
+        if qualifier is not None and "/" in bare and find(
+                bare.rsplit("/", 1)[-1], tap=qualifier):
             # `tap:skill` selects a *registry*, so a path-shaped tail is the
             # grammar being misread rather than a missing skill — and the
             # fuzzy hint below cannot say so. Name the confusion and hand back

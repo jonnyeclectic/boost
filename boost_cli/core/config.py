@@ -16,7 +16,17 @@ from . import jsonstate, output, paths, typedvalue, util
 DEFAULTS = {
     "agents": {
         "claude-code": {"dir": "~/.claude/skills", "enabled": True},
-        "windsurf": {"dir": "~/.windsurf/skills", "enabled": True},
+        # `workflows: False` — Windsurf reads no `commands/` or `agents/` dir.
+        # Its docs (docs.windsurf.com/windsurf/cascade/workflows, redirecting
+        # to docs.devin.ai/desktop/cascade/workflows, read 2026-10-22) name
+        # `.windsurf/workflows/` (or `.devin/workflows/`) in a workspace and
+        # `~/.codeium/windsurf/global_workflows/` for the user, and no
+        # subagent directory at all. Those paths are documented, not verified
+        # against a real install, so boost writes nowhere rather than into
+        # `~/.windsurf/{commands,agents}`, which install reported as written
+        # and Windsurf never loaded. Rules and skills are unaffected.
+        "windsurf": {"dir": "~/.windsurf/skills", "enabled": True,
+                     "workflows": False},
         "cursor": {"dir": "~/.cursor/skills", "enabled": True},
         # Gemini CLI discovers boost's canonical store directly: its user tier
         # reads `~/.gemini/skills` **or the `~/.agents/skills` alias**, and that

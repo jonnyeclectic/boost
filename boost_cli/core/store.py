@@ -80,6 +80,14 @@ class InstallResult:
     # boost did not write (no lock row records the path). Left alone, and recorded apart from the
     # materializations, in the entry's ``foreign``: see :func:`foreign_rows`.
     foreign: list[str] = field(default_factory=list)
+    # ``(agent, why)`` for a workflow file boost rendered and did not write
+    # because that agent would reject it at load (:func:`workflows.
+    # render_problem`) — a Gemini subagent the sanitizer could not repair.
+    # No row is recorded: there is no file, and nothing for sync to retry.
+    declined: list[tuple[str, str]] = field(default_factory=list)
+    # What a written workflow file could not carry over for one agent
+    # (:func:`workflows.render_notes`), worded by core, printed by the command.
+    render_notes: list[str] = field(default_factory=list)
     score: int = 0
     upgraded: bool = False
     kind: str = "skill"
@@ -1802,7 +1810,7 @@ def unmaterialized_agents(kind: str, entry: dict) -> list[str]:
               else agents.materializing_agents(base))
     declared = entry.get("only_agents")
     have = {m.get("agent") for m in rows} | {
-        r["agent"] for r in foreign_rows(entry)}
+        r["agent"] for r in (*foreign_rows(entry), *declined_rows(entry))}
     return [a for a in writes
             if a not in have and (not declared or a in declared)]
 
@@ -3007,8 +3015,9 @@ def refuse_copy_case_collision(name: str) -> None:
                 "%s at %s; on a case-insensitive filesystem they would share "
                 "one store dir" % (name, held, wname,
                                    paths.tilde(skill_store_dir(held))),
-                hint="`boost install %s --force --no-as-skill` takes the copy "
-                     "out of the store, then re-run this install" % wname,
+                hint="`%s --force --no-as-skill` takes the copy out of the "
+                     "store, then re-run this install" % _workflow_spelling(
+                         wname),
                 wrap=True)
 
 
@@ -3136,6 +3145,31 @@ def _require_writable(name: str) -> None:
                          hint="%s, then re-run" % paths.write_remedy(block))
 
 
+def install_spelling(tap: str | None, name: str,
+                     rel_dir: str | None = None) -> str:
+    """The `boost install` command that names exactly this one item.
+
+    Qualified with its tap and, when it has one, its directory — the spelling
+    a hint has to use, because a name that is a skill AND a workflow in one
+    tap, or ships twice, is ambiguous bare: `boost install ship --force`
+    answered "'ship' matches 2 different items", for the user who had just
+    typed the qualified form that works.
+    """
+    spelled = "boost install %s" % ("%s:%s" % (tap, name) if tap else name)
+    if rel_dir and rel_dir != ".":
+        spelled += " --path %s" % rel_dir
+    return spelled
+
+
+def _workflow_spelling(name: str) -> str:
+    """:func:`install_spelling` for the installed workflow ``name``."""
+    entry = lockfile.get_workflow(name) or {}
+    source = str(entry.get("source_file") or "")
+    tap = entry.get("tap")
+    return install_spelling(tap if isinstance(tap, str) else None, name,
+                            source.rpartition("/")[0] or None)
+
+
 def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
                        retry: str | None = None) -> str | None:
     """Refuse to copy over a store dir the lock file does not record.
@@ -3165,8 +3199,8 @@ def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
                              skill_store_dir(name)), owner),
                          hint=("%s replaces it; the workflow keeps its own "
                                "files" % retry if retry else
-                               "`boost install %s --force --no-as-skill` takes "
-                               "the copy out of the store" % owner),
+                               "`%s --force --no-as-skill` takes the copy out "
+                               "of the store" % _workflow_spelling(owner)),
                          wrap=True)
     if existing or force:
         return None
@@ -3456,7 +3490,9 @@ def install(entry: dict, force: bool = False,
     refuse_by_policy(entry, lockfile.installed())
 
     disowned = _refuse_unrecorded(name, existing, force,
-                                  retry="`boost install %s --force`" % name)
+                                  retry="`%s --force`" % install_spelling(
+                                      entry.get("tap"), name,
+                                      entry.get("rel_dir")))
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
     dest = skill_store_dir(name)
@@ -5397,6 +5433,21 @@ def _foreign_target(path: Path, rendered: str, owned: set) -> bool:
     return path.is_symlink() or _file_sha(path) != _text_sha(rendered)
 
 
+def declined_rows(entry: dict | None) -> list[dict]:
+    """A workflow entry's ``declined`` record, as ``{agent, slot, reason}``:
+    the agents boost rendered it for and did not write, because that agent
+    would reject the file at load (:func:`workflows.render_problem`).
+
+    No path, because there is no file — nothing for uninstall to remove or
+    `boost verify` to hash. The record exists so the agent still reads as
+    decided: without it :func:`unmaterialized_agents` called the workflow
+    "never written for gemini" and sent the user to a `boost sync` that
+    declines again. A reinstall decides each agent afresh.
+    """
+    return [r for r in (entry or {}).get("declined") or ()
+            if isinstance(r, dict) and r.get("agent")]
+
+
 def foreign_rows(entry: dict | None) -> list[dict]:
     """A workflow entry's ``foreign`` record: the agents it did not write
     because the user's own file held the path, as ``{agent, slot, path}``.
@@ -5543,6 +5594,8 @@ def _install_workflow(entry: dict, force: bool = False,
     refused: list[dict] = []
     foreign: list[str] = []
     foreign_record: list[dict] = []
+    declined: list[tuple[str, str]] = []
+    render_notes: list[str] = []
     # From ``materializations`` only: a ``foreign`` row names the user's file.
     owned = {m.get("path") for m in (existing or {}).get("materializations")
              or () if not lockfile.is_skill_copy(m)}
@@ -5559,8 +5612,11 @@ def _install_workflow(entry: dict, force: bool = False,
     # `uninstall` could act on.
     undo: list[tuple[Path, str | None, bool]] = []
     record: dict | None = None
-    copy_dir = skill_store_dir(name)
-    copy_dir_existed = os.path.lexists(copy_dir)
+    # A namespaced command (`frontend/test`) has no store dir: a skill name
+    # is one path component, and `_skill_copy` says so.
+    copy_dir = (skill_store_dir(name) if util.is_safe_component(name)
+                else None)
+    copy_dir_existed = copy_dir is not None and os.path.lexists(copy_dir)
     try:
         for agent, skills_dir in targets.items():
             path = workflows.workflow_target(
@@ -5572,6 +5628,16 @@ def _install_workflow(entry: dict, force: bool = False,
             if resolved_base is not None:
                 scopes.ensure_in_base(resolved_base, path)
             rendered = workflows.render(agent, slot, name, raw)
+            problem = workflows.render_problem(agent, slot, rendered)
+            if problem is not None:
+                # Written, it was a load error at every session for a file
+                # install, verify and doctor all called fine. A copy an
+                # earlier install wrote is ours to take back with it.
+                declined.append((agent, problem))
+                if str(path) in owned and path.is_file():
+                    _note_prior(undo, path)
+                    path.unlink()
+                continue
             if _foreign_target(path, rendered, owned):
                 foreign.append(str(path))
                 foreign_record.append({"agent": agent, "slot": slot,
@@ -5592,6 +5658,8 @@ def _install_workflow(entry: dict, force: bool = False,
                 "agent": agent, "slot": slot, "path": str(path),
                 "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest()})
             linked.append(agent)
+            render_notes += ["%s: %s" % (agent, note) for note in
+                             workflows.render_notes(agent, slot, raw)]
 
         # A path this run no longer writes for an agent it did write (the source
         # moved from commands/ to agents/): the old file is a live slash command
@@ -5601,20 +5669,26 @@ def _install_workflow(entry: dict, force: bool = False,
                                               base=resolved_base))
         # As for rules: an unrecorded materialization is a live slash command that
         # `_uninstall_workflow` — driven by this list — can never remove.
+        # A declined agent was decided this run, so its old row goes too.
         materializations.extend(_refused_materializations(
-            existing, linked, refused,
+            existing, linked + [agent for agent, _why in declined], refused,
             source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
             declared=declared_agent_scope(
                 only_agents if explicit_agents else None, existing)))
         # An agent this run did not try (a narrowed `--agent`) keeps its foreign
         # row, as it keeps its materialization; one it tried is decided afresh.
         tried = {*linked, *(r["agent"] for r in refused),
-                 *(r["agent"] for r in foreign_record)}
+                 *(r["agent"] for r in foreign_record),
+                 *(agent for agent, _why in declined)}
         foreign_record += [r for r in foreign_rows(existing)
                            if r["agent"] not in tried]
+        declined_record = [{"agent": agent, "slot": slot, "reason": why}
+                           for agent, why in declined]
+        declined_record += [r for r in declined_rows(existing)
+                            if r["agent"] not in tried]
         # Last, always: `boost info` and update's risk diff read the first
         # readable row as "the" installed text, and that is an agent's file.
-        if copy_dir_existed:
+        if copy_dir is not None and copy_dir_existed:
             _note_prior(undo, copy_dir / "SKILL.md")
         copy_row, copy_note = _skill_copy(name, slot, raw, existing, as_skill,
                                           scope)
@@ -5658,12 +5732,13 @@ def _install_workflow(entry: dict, force: bool = False,
                if existing and isinstance(existing.get("as_skill"), bool)
                else {}),
             **({"foreign": foreign_record} if foreign_record else {}),
+            **({"declined": declined_record} if declined_record else {}),
         }
         lockfile.set_workflow(name, record)
     except BaseException:
         if not _row_landed(lockfile.get_workflow, name, record):
             _undo_writes(undo)
-            if not copy_dir_existed:
+            if copy_dir is not None and not copy_dir_existed:
                 with contextlib.suppress(OSError):
                     util.remove_path(copy_dir)
         raise
@@ -5678,6 +5753,8 @@ def _install_workflow(entry: dict, force: bool = False,
     res.blocked = blocked
     res.conflicts = conflicts
     res.foreign = foreign
+    res.declined = declined
+    res.render_notes = render_notes
     res.upgraded = existing is not None
     res.scope = scope
     res.skill_copy = Path(copy_row["path"]).parent if copy_row else None
@@ -6062,6 +6139,12 @@ def _skill_copy(name: str, slot: str, raw: str, existing: dict | None,
     """
     from . import frontmatter, workflows
     own = _copy_row(existing)
+    if not util.is_safe_component(name):
+        # `frontend/test` would nest a dir in the store no skill host reads.
+        return None, ("not written to the skill store: a namespaced command "
+                      "has no single-word skill name"
+                      if existing is None and wants_skill_copy(as_skill, existing)
+                      else None)
     if scope == scopes.SCOPE_PROJECT:
         return None, ("not written to the skill store: --as-skill is user "
                       "scope only" if as_skill else None)
@@ -6489,6 +6572,14 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
     for m in copies:
         if m.get("path") not in kept:
             _rmdir_quietly(Path(m.get("path", "")).parent)
+    # A namespaced command's file sat in `commands/<ns>/`, which install made:
+    # an emptied namespace dir goes with it, innermost first. A dir holding
+    # anything else (another namespace's command, the user's file) stays.
+    depth = name.count("/")
+    for path, _text in plan if depth else ():
+        for parent in path.parents[:depth]:
+            with contextlib.suppress(OSError):   # not empty: someone's file
+                parent.rmdir()
     lockfile.remove_workflow(name)
     journal.log("uninstall", name)
     res = _materialized_result(name, removed, workflow, "workflow", gone)

@@ -353,6 +353,9 @@ def _warn_unwritable(res, stream=None) -> None:
     note = getattr(res, "skill_note", None)
     if note:
         out.info(note, stream=stream, wrap=True)
+    # Written, but not everything in the source survived the conversion.
+    for line in getattr(res, "render_notes", None) or ():
+        out.warn("%s: %s" % (res.name, line), stream=stream, wrap=True)
     # A link in the skill the copy left out: the rest installed, and this
     # names the file the skill may still expect.
     for line in getattr(res, "skipped_links", None) or ():
@@ -413,6 +416,11 @@ def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
                 "alone; move it aside, then `boost sync` writes it"
                 % _tilde(path)
                 for path in getattr(res, "foreign", None) or ()]
+    # Rendered and withheld: that agent rejects the file at load, so writing
+    # it would report a workflow the agent never runs. The source is the fix.
+    refused += ["not written for %s: %s %s — fix it in the tap, then "
+                "`boost reinstall %s`" % (agent, res.name, why, res.name)
+                for agent, why in getattr(res, "declined", None) or ()]
     return conflicts, refused
 
 

@@ -498,7 +498,7 @@ class TestUninstall:
     def test_workflow_uninstall_says_removed_from_not_unlinked(
             self, boost, fixture_tap_src, tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "un-wf-tap")
-        _add_and_commit(tap_dir, "commands/ship.md",
+        _add_and_commit(tap_dir, "commands/ship-it.md",
                         "---\nname: ship-it\nversion: 1.0.0\ndescription: d\n"
                         "allowed-tools: Bash\n---\n\ngo\n", "add wf")
         boost("tap", tap_dir)
@@ -1097,12 +1097,12 @@ class TestUpdate:
     def test_upgrades_workflow_on_version_bump(self, boost, fixture_tap_src,
                                                tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "wf-tap")
-        _add_and_commit(tap_dir, "commands/ship.md",
+        _add_and_commit(tap_dir, "commands/ship-it.md",
                         "---\nname: ship-it\nversion: 1.0.0\ndescription: d\n"
                         "allowed-tools: Bash\n---\n\ngo\n", "add wf")
         boost("tap", tap_dir)
         boost("install", "ship-it")
-        _add_and_commit(tap_dir, "commands/ship.md",
+        _add_and_commit(tap_dir, "commands/ship-it.md",
                         "---\nname: ship-it\nversion: 1.1.0\ndescription: d\n"
                         "allowed-tools: Bash\n---\n\ngo v2\n", "bump wf")
         r = boost("update")
@@ -1788,7 +1788,7 @@ class TestMaterializedGovernance:
 
     def test_a_workflow_pins_too(self, boost, fixture_tap_src, tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "wf-tap")
-        _add_and_commit(tap_dir, "commands/ship.md",
+        _add_and_commit(tap_dir, "commands/ship-it.md",
                         "---\nname: ship-it\nversion: 1.0.0\n---\n\nRun the release.\n",
                         "add workflow")
         boost("tap", tap_dir)
@@ -2768,7 +2768,7 @@ class TestKindAwarePkgSurface:
     def test_reinstall_all_covers_every_kind(self, boost, fixture_tap_src,
                                              tmp_path):
         tap_dir = self._tap_with_rule(fixture_tap_src, tmp_path, "all-tap")
-        _add_and_commit(tap_dir, "commands/ship.md",
+        _add_and_commit(tap_dir, "commands/ship-it.md",
                         "---\nname: ship-it\nversion: 1.0.0\n---\n\n"
                         "Run the release.\n", "add workflow")
         boost("tap", tap_dir)
@@ -3585,7 +3585,7 @@ class TestBundleAuditFindings:
         ("rule", "rules/house.mdc",
          "---\nname: house-style\nversion: 1.0.0\n---\n\nTabs.\n",
          "house-style"),
-        ("workflow", "commands/ship.md",
+        ("workflow", "commands/ship-it.md",
          "---\nname: ship-it\nversion: 1.0.0\ndescription: d\n"
          "allowed-tools: Bash\n---\n\ngo\n", "ship-it"),
     ], ids=["rule", "workflow"])
