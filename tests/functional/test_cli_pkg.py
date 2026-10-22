@@ -4688,12 +4688,15 @@ class TestUnmetPrerequisites:
                            check=True, capture_output=True)
             return str(root)
 
-        boost("tap", tap("amb-a", [("rooted", "requires: [shared]\n"),
-                                   ("shared", "")]))
+        # The declaring tap ships no `shared` of its own: with one there, the
+        # resolver takes it (same tap first) and nothing is ambiguous.
+        boost("tap", tap("amb-r", [("rooted", "requires: [shared]\n")]))
+        boost("tap", tap("amb-a", [("shared", "")]))
         boost("tap", tap("amb-b", [("shared", "")]))
         r = boost("install", "rooted")
         out = " ".join((r.out + r.err).split())
         assert "is in no tap" not in out
+        assert "pulling in" not in out    # skipped, so never announced
         assert "'shared' matches 2 catalog entries" in out
         assert "amb-a:shared" in out and "amb-b:shared" in out
 

@@ -21,7 +21,7 @@ does, so the two can never disagree again.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Container, Sequence
 from dataclasses import dataclass
 
 
@@ -71,7 +71,8 @@ def conflict_names(meta: dict | None) -> list[str]:
     return as_list((meta or {}).get("conflicts"))
 
 
-def requirement_row(name: str, have: set, sub_names: Sequence[str] = ()) -> dict:
+def requirement_row(name: str, have: Container[str],
+                    sub_names: Sequence[str] = ()) -> dict:
     """One ``{name, installed, requires}`` record.
 
     The shape both ``boost deps <name>`` (top level and nested, one level
@@ -82,12 +83,17 @@ def requirement_row(name: str, have: set, sub_names: Sequence[str] = ()) -> dict
     invisibly to any JSON consumer. ``requires`` is always present (``[]``
     when ``sub_names`` is empty) rather than omitted, matching the envelope
     shape this command already committed to.
+
+    ``have`` is only asked ``name in have``, so a ``tap:name`` requirement is
+    judged by whatever membership the caller's container implements —
+    :class:`boost_cli.core.prereq.InstalledSet` holds it against the tap the
+    lock recorded.
     """
     return {"name": name, "installed": name in have,
             "requires": [requirement_row(n, have) for n in sub_names]}
 
 
-def conflict_row(name: str, have: set) -> dict:
+def conflict_row(name: str, have: Container[str]) -> dict:
     """One ``{name, installed}`` conflict record."""
     return {"name": name, "installed": name in have}
 

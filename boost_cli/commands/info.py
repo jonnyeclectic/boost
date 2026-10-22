@@ -29,6 +29,7 @@ from ..core import (
     gitutil,
     imperative,
     installedview,
+    installplan,
     integrity,
     journal,
     lockfile,
@@ -193,31 +194,50 @@ def _as_list(v) -> list:
     return [s.strip() for s in str(v).split(",") if s.strip()]
 
 
-def _skill_meta(name: str, project: dict | None = None, pbase=None):
+def _skill_meta(name: str, project: dict | None = None, pbase=None,
+                declaring_tap: str | None = None):
     """Frontmatter for a named skill — installed copy preferred, else tap.
 
     ``project``/``pbase`` are the current repo's lock and base: a project-only
     skill has no store dir, so its copy in the repo is the installed one.
+    ``name`` may be a ``tap:name`` requirement as written: the store and the
+    project lock are keyed by the bare name, and handing the qualified token
+    to ``skill_store_dir`` raised "invalid skill name". ``declaring_tap``
+    picks the catalog copy the same way the install resolver does (same tap
+    first).
     """
-    p = store.skill_store_dir(name) / "SKILL.md"
-    if not p.exists() and project and name in project:
-        pdir = integrity.project_skill_dir(project[name], pbase)
+    _qualifier, bare = catalog.split_name(name)
+    try:
+        p = store.skill_store_dir(bare) / "SKILL.md"
+    except BoostError:
+        return None
+    if not p.exists() and project and bare in project:
+        pdir = integrity.project_skill_dir(project[bare], pbase)
         if pdir is not None:
             p = pdir / "SKILL.md"
     if not p.exists():
-        matches = catalog.find(name)
-        if not matches:
+        entry = (installplan.pick_dependency(name, declaring_tap)
+                 or next(iter(catalog.find(name)), None))
+        if entry is None:
             return None
         try:
-            root = registry.get(matches[0]["tap"]).path
+            root = registry.get(entry["tap"]).path
         except BoostError:
             return None
-        p = root / matches[0]["skill_md"]
+        p = root / entry["skill_md"]
         # Metadata only, so no clone is worth paying for — but a file that
         # links out of the clone is not this tap's to describe.
         if not p.exists() or catalog.escapes(root, p):
             return None
     return frontmatter.parse(_read(p))[0]
+
+
+def _install_hint(specs) -> str:
+    """The warning line naming one command that meets every unmet requirement."""
+    missing = sorted(set(specs))
+    return ("`boost install %s` to satisfy %d unmet requirement%s"
+            % (" ".join(missing), len(missing),
+               "" if len(missing) == 1 else "s"))
 
 
 def _mark(installed: bool) -> str:
@@ -1380,17 +1400,32 @@ def cmd_deps(argv):
     # its dependent is met, and the old hint to `boost install` it again would
     # have added a second, user-scope copy.
     pbase, project = integrity.project_skills()
-    have = set(prereq.installed_names(pbase))
+    # Tap aware, and deliberately not copied into a plain set: `requires:
+    # [alpha:base]` is met by `base` installed from alpha, which a set of bare
+    # names never answered — the row read "✗ not installed" forever.
+    have = prereq.installed_set(pbase)
 
     if args.name:
-        text, _kind, _lock, _cat = _resolve_text(args.name)
+        text, _kind, lock, cat = _resolve_text(args.name)
         meta = frontmatter.parse(text)[0]
         requires = deps.requirement_names(meta)
         conflicts = deps.conflict_names(meta)
-        req_rows = [deps.requirement_row(
-                        r, have, deps.requirement_names(
-                            _skill_meta(r, project, pbase) or {}))
-                    for r in requires]
+        own_tap = str((lock or {}).get("tap") or (cat or {}).get("tap") or "")
+        # What to hand `boost install` for each unmet name: resolved the way
+        # install resolves it (same tap first), qualified when ambiguous — a
+        # bare `newdep` two taps ship is a hint that fails.
+        specs: dict[str, str] = {}
+        req_rows = []
+        for req in requires:
+            dep = installplan.pick_dependency(req, own_tap)
+            specs.setdefault(req, installplan.dependency_label(dep)
+                             if dep is not None else req)
+            dep_tap = str(dep["tap"]) if dep is not None else None
+            subs = deps.requirement_names(
+                _skill_meta(req, project, pbase, own_tap) or {})
+            for sub in subs:
+                specs.setdefault(sub, installplan.install_spec(sub, dep_tap))
+            req_rows.append(deps.requirement_row(req, have, subs))
         conflict_rows = [deps.conflict_row(c, have) for c in conflicts]
         _qualifier, bare = catalog.split_name(args.name)
         mcp_rows = _mcp_requirement_rows(_skill_dir_for_deps(bare))
@@ -1425,22 +1460,22 @@ def cmd_deps(argv):
         if problems:
             missing = deps.unmet_names(req_rows)
             if missing:
-                out.warn("`boost install %s` to satisfy %d unmet requirement%s"
-                         % (" ".join(missing), len(missing),
-                            "" if len(missing) == 1 else "s"))
+                out.warn(_install_hint(specs.get(n, n) for n in missing))
         return 1 if problems else 0
 
     unmet: list[dict] = []
     pairs: list[dict] = []
     seen: set = set()
     names = sorted(set(inst) | set(project))
+    hint_specs: list[str] = []
     for name in names:
         meta = _skill_meta(name, project, pbase) or {}
-        unmet.extend(
-            {"skill": name, "requires": deps.requirement_row(r, have)}
-            for r in deps.requirement_names(meta)
-            if r not in have
-        )
+        tap = str((inst.get(name) or project.get(name) or {}).get("tap") or "")
+        for req in deps.requirement_names(meta):
+            if req not in have:
+                unmet.append({"skill": name,
+                              "requires": deps.requirement_row(req, have)})
+                hint_specs.append(installplan.install_spec(req, tap))
         for c_name in deps.conflict_names(meta):
             if c_name in have:
                 key = tuple(sorted((name, c_name)))
@@ -1466,10 +1501,7 @@ def cmd_deps(argv):
                % (len(names), "" if len(names) == 1 else "s"))
         return 0
     if unmet:
-        missing = sorted({u["requires"]["name"] for u in unmet})
-        out.warn("`boost install %s` to satisfy %d unmet requirement%s"
-                 % (" ".join(missing), len(missing),
-                    "" if len(missing) == 1 else "s"))
+        out.warn(_install_hint(hint_specs))
     return 1
 
 
