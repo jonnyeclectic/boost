@@ -1090,10 +1090,105 @@ def scoped_agents(entry: dict, enabled: dict[str, Path]) -> dict[str, Path]:
     agent. That keeps ``boost sync`` doing its other job, which is linking
     already-installed skills into an agent that was enabled afterwards.
     """
-    scope = entry.get("only_agents")
+    scope = effective_scope(entry)
     if not scope:
         return enabled.copy()
     return {a: d for a, d in enabled.items() if a in scope}
+
+
+def unknown_scope_agents(entry: dict) -> list[str]:
+    """The names in ``entry``'s ``only_agents`` that are no agent boost knows.
+
+    A lock carried from another boost version or machine can hold one, and
+    `boost install --agent` refuses the same name as "unknown agent". A
+    disabled agent is still known. In declaration order, once each.
+    """
+    declared = entry.get("only_agents")
+    if not isinstance(declared, list):
+        return []
+    known = agents.known_agents()
+    return list(dict.fromkeys(a for a in declared
+                              if isinstance(a, str) and a not in known))
+
+
+def _recorded_agents(entry: dict) -> list[str]:
+    """The agents ``entry`` records reaching: a skill's linked ``agents``,
+    a rule's or workflow's materialization rows (never the skill copy)."""
+    if "materializations" in entry:
+        names = [m.get("agent") for m in entry.get("materializations") or ()
+                 if isinstance(m, dict) and not lockfile.is_skill_copy(m)]
+    else:
+        names = list(entry.get("agents") or ())
+    return list(dict.fromkeys(a for a in names if isinstance(a, str)))
+
+
+def effective_scope(entry: dict) -> list[str] | None:
+    """``entry``'s ``--agent`` narrowing, less the names no agent has.
+
+    An unknown name narrows to nothing, and a scope of only unknown names
+    read as "linked for no agent": doctor told the user to `boost sync
+    --prune`, which unlinked the skill from every agent. Such a scope falls
+    back to the agents the entry records reaching — what it reaches now
+    stays what it reaches — and to no narrowing when it records none.
+    `boost heal` writes the same answer into the lock
+    (:func:`drop_unknown_scope_agents`), so the two never disagree.
+    """
+    declared = entry.get("only_agents")
+    if not declared:
+        return declared
+    unknown = unknown_scope_agents(entry)
+    if not unknown:
+        return declared
+    kept = [a for a in declared if a not in unknown]
+    if kept:
+        return kept
+    known = agents.known_agents()
+    return [a for a in _recorded_agents(entry) if a in known] or None
+
+
+def unknown_scope_rows() -> list[tuple[str, str, list[str]]]:
+    """``(kind, name, unknown agents)`` for every lock row whose declared
+    scope names an agent boost does not know, kind then name order."""
+    return [(kind, name, bad)
+            for kind, section in lockfile.all_installed().items()
+            for name, entry in sorted(section.items())
+            if isinstance(entry, dict)
+            and (bad := unknown_scope_agents(entry))]
+
+
+def unknown_scope_line(kind: str, name: str, unknown: list[str]) -> str:
+    """doctor's wording for an :func:`unknown_scope_rows` row."""
+    n = len(unknown)
+    return ("%s %s's declared agent scope names %s, %s boost does not know "
+            "— it is ignored; `boost heal` drops %s from the lock"
+            % (kind, name, ", ".join(unknown),
+               "an agent" if n == 1 else "agents",
+               "it" if n == 1 else "them"))
+
+
+def drop_unknown_scope_agents(dry: bool = False) -> list[str]:
+    """Rewrite each :func:`unknown_scope_rows` row's ``only_agents`` to its
+    :func:`effective_scope`; one line per row, worded for ``dry`` or not.
+
+    Converges: the agents an entry reaches are the same before and after, so
+    nothing is linked or unlinked by it, and the next run finds no row.
+    """
+    lines = []
+    for kind, name, unknown in unknown_scope_rows():
+        what = "%s %s's declared agent scope" % (kind, name)
+        gone = ", ".join(unknown)
+        if dry:
+            lines.append("would drop %s from %s" % (gone, what))
+            continue
+
+        def fix(row: dict) -> bool:
+            if not unknown_scope_agents(row):
+                return False
+            row["only_agents"] = effective_scope(row)
+            return True
+        if lockfile.update_entry(kind, name, fix):
+            lines.append("dropped %s from %s" % (gone, what))
+    return lines
 
 
 def unlink_agents(name: str, into: list[str] | None = None) -> list[str]:
@@ -2116,6 +2211,10 @@ def stale_temps(now: float | None = None) -> list[tuple[Path, str]]:
     names (:func:`leftover_copies` has the ``.old``/``.new`` ones) and only
     older than :data:`STALE_TEMP_AGE`, since a younger one may be a write or
     install in progress. A symlink is never one.
+
+    Beyond the store, the same ``.tmp`` files in every other dir boost writes
+    atomically into (:func:`atomic_write_dirs`): beside ``config.json``, the
+    tap caches, and each rule's or workflow's file in an agent's dotdir.
     """
     root = paths.store_dir()
     now = time.time() if now is None else now
@@ -2123,7 +2222,7 @@ def stale_temps(now: float | None = None) -> list[tuple[Path, str]]:
     try:
         entries = list(root.iterdir())
     except OSError:
-        return []
+        entries = []    # no store: the other dirs below may still hold one
     for p in entries:
         try:
             st = p.lstat()
@@ -2132,11 +2231,116 @@ def stale_temps(now: float | None = None) -> list[tuple[Path, str]]:
         if now - st.st_mtime <= STALE_TEMP_AGE:
             continue
         if stat.S_ISREG(st.st_mode) and _temp_token(p.name, ".tmp"):
-            found.append((p, "stale temp file"))
+            found.append((p, STALE_TEMP_FILE))
         elif stat.S_ISDIR(st.st_mode) and _temp_token(p.name, ""):
             found.append((p, "stale staging dir"))
     found += _stale_restore_dirs(root, now)
+    found += _stale_write_temps(now)
     return sorted(found)
+
+
+def recorded_store_dirs() -> list[Path]:
+    """The store dirs the lock claims: each skill's, and each workflow's
+    skill copy. Sorted, once each, only names a store dir could have."""
+    lock = lockfile.read()
+    store = paths.store_dir()
+    found = {store / n for n in (lock.get("skills") or {})
+             if util.is_safe_component(n)}
+    for entry in (lock.get("workflows") or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        for m in entry.get("materializations") or ():
+            if (isinstance(m, dict) and lockfile.is_skill_copy(m)
+                    and isinstance(m.get("path"), str)):
+                d = Path(m["path"]).parent
+                if d.parent == store:
+                    found.add(d)
+    return sorted(found)
+
+
+def hygiene_candidates() -> list[Path]:
+    """What `boost clean` may sweep for ``__pycache__``/``.DS_Store``.
+
+    The store's own top level, then everything under a dir the lock records
+    (:func:`recorded_store_dirs`), sorted. Not the rest of the store: a dir
+    there that no lock row claims is one `boost sync` and `boost heal` name
+    and leave alone as not boost's, and clean used to reach inside it.
+    """
+    store = paths.store_dir()
+    if not os.path.isdir(store):  # noqa: FURB146
+        return []
+    found = [p for p in store.iterdir() if p.name in (".DS_Store", "__pycache__")]
+    for d in recorded_store_dirs():
+        if os.path.isdir(d) and not os.path.islink(d):  # noqa: FURB146
+            found.extend(d.rglob("*"))
+    return sorted(found)
+
+
+#: :func:`stale_temps`' kind for an ``atomic_write_text`` temp file.
+STALE_TEMP_FILE = "stale temp file"
+
+
+def atomic_write_dirs() -> list[Path]:
+    """The dirs besides the store that boost writes files into atomically.
+
+    ``util._replace_atomically`` makes its ``.boost-XXXXXXXX.tmp`` beside the
+    target, so a kill leaves one next to ``config.json``, a tap cache, or a
+    user's ``CLAUDE.md`` — and a scan of the store alone said "healthy" over
+    a 0600 copy of that ``CLAUDE.md``. boost's own dirs, then the dir of
+    every rule or workflow file the lock records (project-scope rows too:
+    the temp sits in the repo just the same), nominal and resolved, since
+    ``write_user_file`` writes through a symlink and makes its temp beside
+    the real file. Each once, in order, the store left out.
+    """
+    store = paths.store_dir()
+    dirs = [d for d in paths.boost_dirs() if d != store]
+    lock = lockfile.read()
+    for _kind, section in lockfile.SECTIONS[1:]:
+        for entry in (lock.get(section) or {}).values():
+            if not isinstance(entry, dict):
+                continue
+            for m in lockfile._row_paths(entry):
+                p = Path(m["path"])
+                # Only an absolute row names a dir: ``""`` or a relative
+                # path has ``.`` for a parent, and `boost clean` would then
+                # delete from wherever it was run.
+                if not p.is_absolute():
+                    continue
+                dirs.extend((p.parent, Path(os.path.realpath(p)).parent))
+    def key_of(d: Path) -> str:
+        return os.path.normcase(os.path.realpath(d))
+    seen: set[str] = {key_of(store)}
+    out_: list[Path] = []
+    for d in dirs:
+        key = key_of(d)
+        if key not in seen:
+            seen.add(key)
+            out_.append(d)
+    return out_
+
+
+def _stale_write_temps(now: float) -> list[tuple[Path, str]]:
+    """The aged ``.boost-XXXXXXXX.tmp`` files in :func:`atomic_write_dirs`.
+
+    Files only: a ``.boost-XXXXXXXX`` dir is a staging dir, and only the
+    store holds those. Never one path twice when two dirs are one on disk.
+    """
+    found: dict[str, Path] = {}
+    for d in atomic_write_dirs():
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            continue
+        for p in entries:
+            if not _temp_token(p.name, ".tmp"):
+                continue
+            try:
+                st = p.lstat()
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode) and now - st.st_mtime > STALE_TEMP_AGE:
+                found.setdefault(os.path.realpath(p), p)
+    return [(p, STALE_TEMP_FILE) for p in found.values()]
 
 
 #: :func:`stale_temps`' kind for a ``snapshot restore``'s parked previous
@@ -5314,6 +5518,71 @@ def rule_block_lines(rows: list[tuple[str, str]]) -> list[str]:
             "— no boost command removes it until `boost install %s` "
             "re-records it, or delete the block by hand"
             % (paths.tilde(Path(p)), n, n) for n, p in rows]
+
+
+def duplicate_rule_blocks() -> list[tuple[str, str, int]]:
+    """``(rule, context file, count)`` for each written context-file row of
+    an installed rule whose file holds that rule's block more than once.
+
+    A dotfiles merge or two concatenated context files make the shape, and
+    the agent reads every copy. doctor, verify and heal all called it
+    healthy, and a refresh or uninstall that touched only the first copy
+    left the other one live (`rules.merge_block` and `rules.strip_block` act
+    on all of them now). Quarantined rows are skipped: their blocks are
+    gone on purpose. Each file once per rule.
+    """
+    from . import rules
+    found: list[tuple[str, str, int]] = []
+    for name, entry in sorted(lockfile.installed_rules().items()):
+        if entry.get("quarantined"):
+            continue
+        seen: set[str] = set()
+        for m in entry.get("materializations") or ():
+            if (not isinstance(m, dict) or m.get("mode") != rules.MODE_CLAUDE
+                    or m.get("unwritable")
+                    or not materialization_is_written("rule", entry, m)):
+                continue
+            p = m.get("path") or ""
+            key = os.path.realpath(p)
+            if not p or key in seen:
+                continue
+            seen.add(key)
+            try:
+                text = util.read_user_text(Path(p))
+            except (OSError, UnicodeDecodeError):
+                continue
+            n = len(rules.block_spans(text, name))
+            if n > 1:
+                found.append((name, p, n))
+    return found
+
+
+def collapse_rule_block(name: str, path: str) -> bool:
+    """Keep the first of rule ``name``'s blocks in ``path`` and drop the rest.
+
+    The first copy's text is what stays, so a block that still hashes to its
+    lock row keeps doing so. False when there is nothing to collapse any
+    more (one block, or none). Raises what the write raises.
+    """
+    from . import rules
+    p = Path(path)
+    text = util.read_user_text(p)
+    if len(rules.block_spans(text, name)) < 2:
+        return False
+    body = rules.read_block(text, name) or ""
+    # A project row's file stays inside its repo, as at install.
+    entry = lockfile.get_rule(name) or {}
+    base = (entry.get("base") if entry.get("scope") == scopes.SCOPE_PROJECT
+            else None)
+    util.write_user_file(p, rules.merge_block(text, name, body), base=base)
+    return True
+
+
+def duplicate_block_line(name: str, path: str, count: int) -> str:
+    """doctor's, verify's and heal's one wording for a duplicated block."""
+    return ("rule %s's block appears %d times in %s — the agent reads every "
+            "copy; `boost heal` keeps the first" % (name, count,
+                                                    paths.tilde(Path(path))))
 
 
 def skill_copy_owner(name: str) -> str | None:

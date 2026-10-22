@@ -776,12 +776,23 @@ def cmd_doctor(argv):
                                                     _tilde(store_dir)),
                 wrap=True)
     temps = [t for t in temps if t[1] != store.PARKED_STORE]
-    if temps:
-        bad("store", "%d stale temp file%s or staging dir%s a killed boost "
-            "left in %s (%s) — `boost clean` removes %s"
-            % (len(temps), _s(len(temps)), _s(len(temps)), _tilde(store_dir),
-               ", ".join(p.name for p, _kind in temps),
-               "it" if len(temps) == 1 else "them"), wrap=True)
+    # One line per dir: the store's (its staging dirs and the restore dirs
+    # beside it included), then each other dir a write left a temp file in —
+    # beside config.json, a tap cache, or the user's CLAUDE.md.
+    by_dir: dict[Path, list[Path]] = {}
+    for pth, kind in temps:
+        where = (pth.parent if kind == store.STALE_TEMP_FILE
+                 and pth.parent != store_dir else store_dir)
+        by_dir.setdefault(where, []).append(pth)
+    for where in sorted(by_dir, key=lambda d: d != store_dir):
+        found = by_dir[where]
+        n = len(found)
+        what = ("stale temp file%s or staging dir%s" % (_s(n), _s(n))
+                if where == store_dir else "stale temp file%s" % _s(n))
+        bad("store", "%d %s a killed boost left in %s (%s) — `boost clean` "
+            "removes %s" % (n, what, _tilde(where),
+                            ", ".join(p.name for p in found),
+                            "it" if n == 1 else "them"), wrap=True)
     if configured and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
                                               "" if cache_block
@@ -983,13 +994,35 @@ def cmd_doctor(argv):
                 "run `boost sync --prune`"
                 % (name, ", ".join(stray), ", ".join(scope)))
             skill_issues += 1
+    # A declared scope naming an agent boost does not know. It used to read
+    # as "linked for no agent", and doctor's remedy (`sync --prune`) then
+    # unlinked the skill everywhere; it is ignored now, and heal drops it.
+    for kind, name, unknown in (store.unknown_scope_rows() if lock_ok else []):
+        bad("%s-scope" % kind, store.unknown_scope_line(kind, name, unknown),
+            wrap=True)
+        if kind == "skill":
+            skill_issues += 1
     active_skills = len(skills) - quarantined_skills
+    # Counted on disk: a skill with no link at all is not one "with agent
+    # links", which is what this line said over one `sync --prune` stranded.
+    # A sidelined skill is unlinked on purpose and counts as it always did.
+    unlinked = sum(
+        1 for name, entry in skills.items()
+        if not entry.get("quarantined") and not entry.get("sidelined_by")
+        and enabled and not any(os.path.islink(d / name)
+                                for d in enabled.values()))
     # "with agent links" is a claim the loop above only checked with agents_ok.
     if skills and not skill_issues and agents_ok:
         # A quarantined skill has no agent links — the check above counts
         # any it could not remove as an issue — so it must not inflate this count into a false
         # "healthy, N skills with agent links" the way it used to.
-        if active_skills:
+        if active_skills and unlinked:
+            rep.ok("skills", "%d skill%s present in store, %d with agent "
+                   "links%s" % (active_skills, _s(active_skills),
+                                active_skills - unlinked,
+                                " (%d quarantined)" % quarantined_skills
+                                if quarantined_skills else ""))
+        elif active_skills:
             rep.ok("skills", "%d skill%s present in store with agent links%s"
                    % (active_skills, _s(active_skills),
                       " (%d quarantined)" % quarantined_skills
@@ -1147,6 +1180,15 @@ def cmd_doctor(argv):
                         "no end marker — restore its `%s` line or delete the "
                         "orphaned block, then run `boost reinstall %s`"
                         % (name, _tilde(p), rule_blocks.markers(name)[1], name),
+                        wrap=True)
+                    mat_issues += 1
+                    continue
+                # Two clean copies: the agent reads both, and a refresh that
+                # rewrote one of them left stale instructions live under an
+                # all-clear. `boost heal` keeps the first.
+                count = len(rule_blocks.block_spans(text, name))
+                if count > 1:
+                    bad("rule", store.duplicate_block_line(name, str(p), count),
                         wrap=True)
                     mat_issues += 1
                     continue
@@ -2113,6 +2155,29 @@ def cmd_heal(argv):
         for msg in store.project_sync_apply({"missing": pplan["missing"]}):
             (out.warn if store.is_unrepaired(msg) else out.ok)(msg)
             actions.append(msg)
+    # A declared scope naming an agent this boost does not know: dropped, so
+    # the lock says what boost already does with it (`store.effective_scope`).
+    for line in store.drop_unknown_scope_agents(dry=dry):
+        (out.info if dry else out.ok)(line)
+        actions.append(line)
+    # A rule block present twice in one context file: the first copy stays,
+    # with its text, and the rest come out.
+    not_collapsed: list[Path] = []
+    for name, where, count in store.duplicate_rule_blocks():
+        if dry:
+            out.info("would keep one of rule %s's %d blocks in %s"
+                     % (name, count, _tilde(where)))
+        else:
+            try:
+                store.collapse_rule_block(name, where)
+            except (OSError, BoostError) as e:
+                out.warn("rule %s's %d blocks in %s were not collapsed: %s"
+                         % (name, count, _tilde(where), e), wrap=True)
+                not_collapsed.append(Path(where))
+                continue
+            out.ok("kept one of rule %s's %d blocks in %s"
+                   % (name, count, _tilde(where)))
+        actions.append("dedupe %s" % name)
     # A repair heal will not make (a pin over a moved source, a URL import it
     # cannot re-clone) fails the run like any other thing it left: exiting 0
     # over a skill still missing is what kept doctor and heal in a loop.
@@ -2284,6 +2349,7 @@ def cmd_heal(argv):
                  "then `boost sync`" % store.unwritable_refusal(str(adir)),
                  wrap=True)
     stuck.extend(broken_taps)
+    stuck.extend(not_collapsed)
     # The same rule for the cache dir doctor flags, and for any directory a
     # refused mkdir left missing: heal cannot make the parent writable, so it
     # must not answer "nothing to heal" beneath the problem. The preview and
@@ -2357,12 +2423,23 @@ def cmd_heal(argv):
                  "`boost sync --prune`"
                  % (len(oos), _s(len(oos)),
                     ", ".join("%s → %s" % (n, a) for n, a in oos)), wrap=True)
+    # What a killed boost left beside a file it was writing. Removing it is
+    # `boost clean`'s job (it already decides what is safe to delete there),
+    # so heal names it rather than answer "nothing to heal" over it.
+    temps = [pth for pth, kind in store.stale_temps()
+             if kind != store.PARKED_STORE]
+    if temps:
+        out.warn("%d stale temp file%s or staging dir%s a killed boost left "
+                 "(%s) — `boost clean` removes %s"
+                 % (len(temps), _s(len(temps)), _s(len(temps)),
+                    ", ".join(_tilde(p) for p in temps),
+                    "it" if len(temps) == 1 else "them"), wrap=True)
     if not actions and not stuck and not cfg_err and not no_git:
         # A duplicate this run declined to prune is something `heal` saw, can
         # fix, and deliberately left. A bare "nothing to heal" printed under
         # the line offering the flag contradicts it.
         out.ok("nothing to heal automatically"
-               if declined_duplicates or declined_copies or oos
+               if declined_duplicates or declined_copies or oos or temps
                else "nothing to heal")
     if actions and not dry:
         journal.log("heal", "%d actions" % len(actions))

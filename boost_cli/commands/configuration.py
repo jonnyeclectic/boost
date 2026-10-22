@@ -183,9 +183,15 @@ def cmd_clean(argv) -> int:
         return {"path": str(pth), "kind": kind, "bytes": size}
 
     items: list[tuple[Path, str, int]] = []  # (path, kind, bytes)
-    for spec in agents.known_agents().values():
-        adir = spec["dir"]
-        if not adir.is_dir():
+    # The dirs `boost heal` sweeps (`agents.sweep_dirs`): each linking
+    # agent's, enabled or not, and the dirs boost linked into before. Never a
+    # native-store agent's: boost does not link into ~/.gemini/skills, so
+    # what dangles there is another tool's — doctor and heal both say so, and
+    # clean deleted it anyway when it walked `known_agents`.
+    for adir in agents.sweep_dirs():
+        # ``os.path``: ``Path.is_dir`` raises under a dir with no search bit
+        # on Python 3.12 and 3.13.
+        if not os.path.isdir(adir):  # noqa: FURB146
             continue
         # Same ownership rule as `boost sync`: a broken symlink is only ours to
         # remove if it pointed into the canonical store. A user's own dangling
@@ -232,14 +238,17 @@ def cmd_clean(argv) -> int:
     items.extend((pth, kind, util.dir_size(pth) if pth.is_dir()
                   else pth.stat().st_size) for pth, kind in temps)
     leftovers += [pth for pth, _kind in temps if pth.is_dir()]
-    if paths.store_dir().is_dir():
-        for pth in sorted(paths.store_dir().rglob("*")):
-            if any(pth.is_relative_to(d) for d in leftovers):
-                continue    # removed whole, above
-            if pth.name == "__pycache__" and pth.is_dir():
-                items.append((pth, "__pycache__", util.dir_size(pth)))
-            elif pth.name == ".DS_Store" and pth.is_file():
-                items.append((pth, ".DS_Store", pth.stat().st_size))
+    # Only inside the store dirs the lock records (and the store's own
+    # top level): a dir sync and heal call not boost's — `notskill/`, a name
+    # no skill could have — is left alone by them, so clean leaves what is
+    # inside it alone too.
+    for pth in store.hygiene_candidates():
+        if any(pth.is_relative_to(d) for d in leftovers):
+            continue    # removed whole, above
+        if pth.name == "__pycache__" and pth.is_dir():
+            items.append((pth, "__pycache__", util.dir_size(pth)))
+        elif pth.name == ".DS_Store" and pth.is_file():
+            items.append((pth, ".DS_Store", pth.stat().st_size))
 
     declined = False
     old_snaps: list[snapshot.Unit] = []

@@ -457,6 +457,7 @@ def cmd_verify(argv):
                   if lockfile.find_any(n) is not None]
 
     results: list[dict[str, Any]] = []
+    duplicates = store.duplicate_rule_blocks()
     for kind, name, entry in _iter_installed_all(
             user_names or (None if not args.names else [])):
         missing_fields = [f for f in ("version", "tap", "sha256", "installed_at")
@@ -486,6 +487,11 @@ def cmd_verify(argv):
         if wrong:
             row["misdirected_links"] = [
                 {"agent": a, "target": paths.tilde(t)} for a, t in wrong]
+        if kind == "rule":
+            dupes = [(p, n) for r, p, n in duplicates if r == name]
+            if dupes:
+                row["duplicate_blocks"] = [
+                    {"path": paths.tilde(Path(p)), "count": n} for p, n in dupes]
         # A rule or workflow installed `--local` is recorded here, in the
         # user lock, and graded from wherever verify runs -- its rows are
         # absolute paths. Saying "user" for it is the one claim about the
@@ -546,11 +552,16 @@ def cmd_verify(argv):
         bits.extend("linked for %s to %s — `boost heal` relinks it"
                     % (m["agent"], m["target"])
                     for m in r.get("misdirected_links", []))
+        bits.extend("block appears %d times in %s — `boost heal` keeps the "
+                    "first" % (d["count"], d["path"])
+                    for d in r.get("duplicate_blocks", []))
         # The next step, not just the verdict: verify was where doctor sent a
         # modified skill, and it stopped at "modified" with rc 1.
         # Not a vendored project skill: its copy is the repo's, not a
         # reinstall's.
+        # A duplicated block reads modified too; its remedy is named above.
         if (r["status"] == integrity.STATUS_MODIFIED
+                and not r.get("duplicate_blocks")
                 and not (r["kind"] == "skill" and r["scope"] == "project")):
             bits.append("`%s` %s" % integrity.modified_remedy(r["name"],
                                                              r["kind"]))
