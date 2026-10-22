@@ -20,6 +20,7 @@ from ..core import (
     cohort,
     complete,
     dialog,
+    integrity,
     journal,
     jsonstate,
     lockfile,
@@ -973,6 +974,9 @@ def cmd_replay(argv) -> int:
     p.add_argument("id", nargs="?", help="history entry id (from `boost replay list`)")
     p.add_argument("-y", "--yes", action="store_true",
                    help="`rollback` without the confirmation prompt")
+    p.add_argument("--discard-edits", action="store_true",
+                   help="`rollback` even where it uninstalls a skill with "
+                        "local edits, deleting them")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
@@ -1060,16 +1064,25 @@ def cmd_replay(argv) -> int:
                    "in %s" % (args.id, backup))
     now_all = lockfile.all_installed()
     # Per-kind diff: snapshots carry all three sections, so a rule that
-    # appeared since the snapshot is a real difference, labeled as one.
+    # appeared since the snapshot is a real difference, labeled as one. A
+    # row in both states is compared field by field (lockfile.row_differences):
+    # by version alone, a pin flip or a same-version content change read as
+    # "matches this snapshot".
     diffs = {}
+    row_diffs: dict[str, dict[str, dict]] = {}
     for kind, section in lockfile.SECTIONS:
         snap = snapshot.get(section, {})
         cur = now_all[kind]
+        row_diffs[kind] = {}
+        for n in sorted(cur):
+            if n in snap:
+                d = lockfile.row_differences(snap[n], cur[n])
+                if d:
+                    row_diffs[kind][n] = d
         diffs[kind] = (
             sorted(n for n in cur if n not in snap),
             sorted(n for n in snap if n not in cur),
-            sorted(n for n in cur if n in snap and
-                   str(cur[n].get("version")) != str(snap[n].get("version"))))
+            sorted(row_diffs[kind]))
     snap_skills = snapshot.get("skills", {})
     current = now_all["skill"]
     added, removed, changed = diffs["skill"]
@@ -1079,6 +1092,10 @@ def cmd_replay(argv) -> int:
         if args.json:
             payload: dict = {"added": added, "removed": removed,
                              "changed": changed}
+            if row_diffs["skill"]:
+                payload["differences"] = {
+                    n: {f: list(v) for f, v in d.items()}
+                    for n, d in row_diffs["skill"].items()}
             for kind in ("rule", "workflow"):
                 a, r, c = diffs[kind]
                 payload[kind + "s"] = {"added": a, "removed": r, "changed": c}
@@ -1099,11 +1116,9 @@ def cmd_replay(argv) -> int:
             for n in r:
                 out.info(out.role("- %s%s" % (n, label), "danger")
                          + out.role("  removed since", "muted"))
-            snap = snapshot.get(_section, {})
             for n in c:
-                out.info(out.role("~ %s%s  %s → %s"
-                                  % (n, label, snap[n].get("version"),
-                                     now_all[kind][n].get("version")), "warn"))
+                out.info(out.role("~ %s%s  %s" % (
+                    n, label, _row_diff_line(row_diffs[kind][n])), "warn"))
         return 0
 
     # rollback — skills only; rule/workflow differences are named, never
@@ -1129,6 +1144,23 @@ def cmd_replay(argv) -> int:
         for n in only:
             out.info("kept %s: the store holds its only copy — `boost "
                      "uninstall %s` deletes it" % (n, n))
+    # An edited store copy is in no history entry and no tap: uninstalling
+    # it deleted the edits for good, and rolling forward again brought back
+    # the tap's copy. Refused before anything changes, as `update` holds an
+    # edited item, unless the user says to discard them.
+    edited = [n for n in added
+              if integrity.locally_edited("skill", n, current[n])]
+    if edited and not args.discard_edits:
+        if args.json:
+            print(json.dumps({"id": args.id, "refused": "local-edits",
+                              "edited": edited}, indent=2))
+            return 1
+        out.warn("not rolled back: it would uninstall %s, which %s local "
+                 "edits nothing else holds — copy %s aside, or `boost replay "
+                 "rollback %s --discard-edits` deletes them"
+                 % (", ".join(edited), "has" if len(edited) == 1 else "have",
+                    "it" if len(edited) == 1 else "them", args.id), wrap=True)
+        return 1
     lookups = {n: _resolve_entry(n, prefer_tap=snap_skills[n].get("tap"),
                                   kind=catalog.KIND_SKILL)
                for n in removed}
@@ -1159,7 +1191,7 @@ def cmd_replay(argv) -> int:
                if mat_diff else "already at this snapshot — nothing to do")
         return 0
     if not args.json:
-        out.info("rollback to %s will: uninstall %d, install %d, revisit %d version change(s)"
+        out.info("rollback to %s will: uninstall %d, install %d, revisit %d changed skill(s)"
                  % (args.id, len(added), len(restorable), len(changed)))
     if not (args.yes or out.confirm("proceed?", quiet=args.json)):
         if args.json:
@@ -1168,6 +1200,18 @@ def cmd_replay(argv) -> int:
         out.info("cancelled")
         return 1
     uninstalled, restored, version_diffs = [], [], []
+    holds_restored: list[str] = []
+
+    def _left(n: str, want: dict, row: dict | None) -> dict:
+        """The content differences rollback could not undo for ``n``."""
+        left = {f: v for f, v in lockfile.row_differences(want, row or {}).items()
+                if f in lockfile.CONTENT_FIELDS}
+        if left:
+            version_diffs.append({"skill": n, "snapshot": want.get("version"),
+                                  "current": (row or {}).get("version"),
+                                  "fields": sorted(left)})
+        return left
+
     for n in added:  # in current, not in snapshot
         store.uninstall(n, kind="skill")
         if not args.json:
@@ -1189,36 +1233,78 @@ def cmd_replay(argv) -> int:
                      % (n, str(want.get("commit_pin"))[:12],
                         str((lockfile.get_skill(n) or {}).get("commit") or "?")[:12]),
                      wrap=True)
-        if str(entry.get("version")) != str(want.get("version")):
-            if not args.json:
-                out.warn("restored %s v%s from current tap state (snapshot had v%s)"
-                         % (n, entry.get("version"), want.get("version")))
-        elif not args.json:
-            out.ok("restored %s → %s" % (n, " · ".join(res.linked)))
+        # ...and set aside again, if the snapshot recorded it set aside: an
+        # install resets both flags, which brought a quarantined skill back
+        # linked into every agent.
+        aside = store.reapply_recorded_aside(n, want)
+        left = _left(n, want, lockfile.get_skill(n))
         if not args.json:
+            if left:
+                out.warn("restored %s from current tap state, which differs "
+                         "from the snapshot: %s" % (n, _row_diff_line(left)),
+                         wrap=True)
+            elif aside:
+                out.ok("restored %s (%s, as the snapshot recorded)"
+                       % (n, aside))
+            else:
+                out.ok("restored %s → %s" % (n, " · ".join(res.linked)))
             _warn_unwritable(res)
         restored.append(n)
-    for n in changed:
-        if not args.json:
-            out.warn("%s version differs from snapshot (%s → %s) — taps only carry "
+    for n in changed:  # in both, recorded differently
+        want = snap_skills[n]
+        fields = store.restore_recorded_holds(n, want)
+        if fields:
+            holds_restored.append(n)
+            if not args.json:
+                out.ok("restored %s's %s as the snapshot recorded"
+                       % (n, ", ".join(fields)))
+        left = _left(n, want, lockfile.get_skill(n))
+        if left and not args.json:
+            out.warn("%s differs from the snapshot: %s — taps only carry "
                      "their current state; `boost pin` prevents future drift"
-                     % (n, snap_skills[n].get("version"), current[n].get("version")))
-        version_diffs.append({"skill": n, "snapshot": snap_skills[n].get("version"),
-                              "current": current[n].get("version")})
+                     % (n, _row_diff_line(left)), wrap=True)
     journal.log("replay", args.id, op="rollback")
     if args.json:
         print(json.dumps({"id": args.id, "uninstalled": uninstalled,
                           "restored": restored, "unrestorable": gone,
                           "version_diffs": version_diffs,
                           "not_rolled_back": mat_diff,
+                          **({"holds_restored": holds_restored}
+                             if holds_restored else {}),
                           **({"only_copies": only} if only else {})}, indent=2))
-        return 1 if gone else 0
-    if gone:
-        out.warn("finished with %d skill%s not restored: %s"
-                 % (len(gone), _s(len(gone)), ", ".join(gone)))
+        return 1 if gone or version_diffs else 0
+    if gone or version_diffs:
+        parts = []
+        if gone:
+            parts.append("%d skill%s not restored: %s"
+                         % (len(gone), _s(len(gone)), ", ".join(gone)))
+        if version_diffs:
+            names = [str(d["skill"]) for d in version_diffs]
+            parts.append("%d skill%s still differing from the snapshot: %s"
+                         % (len(names), _s(len(names)), ", ".join(names)))
+        out.warn("finished with %s" % "; ".join(parts), wrap=True)
         return 1
     out.ok("rollback to %s complete" % args.id)
     return 0
+
+
+def _row_value_text(field: str, value) -> str:
+    """One side of a :func:`lockfile.row_differences` pair, for a person."""
+    if field == "pinned":
+        return "yes" if value else "no"
+    if value is None:
+        return "none"
+    if field == "only_agents":
+        return ",".join(value)
+    text = out.plain(str(value))
+    return text[:12] if field in ("commit", "sha256", "commit_pin") else text
+
+
+def _row_diff_line(diff: dict) -> str:
+    """``version 1.0 → 1.1 · pinned no → yes`` for a row's differences."""
+    return " · ".join("%s %s → %s" % (f, _row_value_text(f, want),
+                                      _row_value_text(f, have))
+                      for f, (want, have) in diff.items())
 
 
 # ---------------------------------------------------------------- who

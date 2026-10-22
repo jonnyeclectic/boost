@@ -2944,6 +2944,72 @@ def reapply_recorded_holds(name: str, want: dict) -> bool:
     return bool(commit_pin) and row.get("commit") != commit_pin
 
 
+def reapply_recorded_aside(name: str, want: dict) -> str | None:
+    """Set a freshly reinstalled skill aside again, if ``want`` recorded it so.
+
+    An install resets ``quarantined`` and ``sidelined_by``
+    (:func:`carried_user_state`), so ``replay rollback`` brought a skill the
+    snapshot recorded as quarantined back linked into every agent. This puts
+    it back the way the row says: quarantined (held aside, unlinked) or
+    sidelined by the mechanism it names. Returns how it was set aside, or
+    None when the row recorded neither.
+    """
+    if want.get("quarantined"):
+        row = lockfile.get_skill(name)
+        if row is None:
+            return None
+        quarantine_skill(name, row)
+        return "quarantined"
+    by = str(want.get("sidelined_by") or "")
+    if not by or lockfile.get_skill(name) is None:
+        return None
+    sideline(name, by)
+    return "sidelined by `boost %s`" % by
+
+
+def restore_recorded_holds(name: str, want: dict) -> list[str]:
+    """Put a present skill row's holds back as ``want`` recorded them.
+
+    For ``replay rollback`` over a skill both states have: the fields of
+    :data:`lockfile.HOLD_FIELDS` that differ are set, or cleared, to the
+    recorded value — a pin the snapshot lacked is released, and a changed
+    agent scope is relinked into the recorded agents. A held (quarantined or
+    sidelined) skill only has its scope recorded, since nothing of it is
+    linked; whatever relinks it reads the scope. Returns the fields changed.
+    """
+    row = lockfile.get_skill(name)
+    if row is None:
+        return []
+    diffs = lockfile.row_differences(want, row)
+    changed = [f for f in lockfile.HOLD_FIELDS if f in diffs]
+    if not changed:
+        return []
+    scope = list(want.get("only_agents") or []) or None
+    res = None
+    # A held copy is only ever a withheld one, so the two flags are the test.
+    if ("only_agents" in changed and not row.get("quarantined")
+            and not row.get("sidelined_by")):
+        unlink_agents(name)
+        res = link_agents(name, scope)
+
+    def put_back(entry: dict) -> None:
+        for f in ("pinned", "commit_pin"):
+            if f in changed:
+                if want.get(f):
+                    entry[f] = want[f]
+                else:
+                    entry.pop(f, None)
+        if "only_agents" in changed:
+            if scope:
+                entry["only_agents"] = scope
+            else:
+                entry.pop("only_agents", None)
+            if res is not None:
+                record_links(entry, res)
+    lockfile.update_skill(name, put_back)
+    return changed
+
+
 def install(entry: dict, force: bool = False,
             only_agents: list[str] | None = None,
             scope: str = "user", base=None,

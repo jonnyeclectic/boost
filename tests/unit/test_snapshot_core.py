@@ -396,26 +396,51 @@ def test_an_older_schema_lock_restores(tmp_path):
     assert _tree(root) == [".skill-lock.json", "foo", "foo/SKILL.md"]
 
 
-def test_rehome_rewrites_the_staged_lock_only_when_it_says_so(tmp_path):
+def test_rehome_rewrites_the_staged_lock_and_restamps_it(tmp_path,
+                                                       monkeypatch):
+    # The restored lock is stamped `updated` now, whatever `rehome` says: the
+    # archive's own stamp put the restored state into lock history under an
+    # id that collided with, and sorted above, entries written after it.
+    monkeypatch.setattr(util, "now_iso", lambda: "2026-10-22T05:00:00Z")
     root = _store(tmp_path)
-    tar = _tar_with(tmp_path, "snapcore-rh", '{"version": 3, "rules": {}}')
+    tar = _tar_with(tmp_path, "snapcore-rh",
+                    '{"version": 3, "rules": {}, '
+                    '"updated": "2026-01-01T00:00:00Z"}')
     seen = []
 
     def unchanged(lock):
-        seen.append(lock)
+        seen.append(dict(lock))
         return False
     snapshot.restore(tar, root, "snap-rh", rehome=unchanged)
-    assert seen == [{"version": 3, "rules": {}}]
-    assert (root / ".skill-lock.json").read_text(
-        encoding="utf-8") == '{"version": 3, "rules": {}}'
+    assert seen == [{"version": 3, "rules": {},
+                     "updated": "2026-01-01T00:00:00Z"}]
+    assert (root / ".skill-lock.json").read_text(encoding="utf-8") == (
+        '{\n  "version": 3,\n  "rules": {},\n'
+        '  "updated": "2026-10-22T05:00:00Z"\n}\n')
 
     def changed(lock):
         lock["rules"]["r"] = {"x": 1}
         return True
     snapshot.restore(tar, root, "snap-rh", rehome=changed)
-    assert (root / ".skill-lock.json").read_text(encoding="utf-8") == (
-        '{\n  "version": 3,\n  "rules": {\n    "r": {\n      "x": 1\n'
-        '    }\n  }\n}\n')
+    assert json.loads((root / ".skill-lock.json").read_text(
+        encoding="utf-8")) == {"version": 3, "rules": {"r": {"x": 1}},
+                               "updated": "2026-10-22T05:00:00Z"}
+
+
+def test_before_swap_runs_once_the_archive_is_vetted(tmp_path):
+    # It is where `snapshot restore` keeps the live lock in history: run
+    # while the store still holds it, and never for an archive refused.
+    root = _store(tmp_path)
+    tar = _tar_with(tmp_path, "snapcore-bs", '{"version": 3}')
+    seen = []
+    snapshot.restore(tar, root, "snap-bs", before_swap=lambda: seen.append(
+        (root / ".skill-lock.json").read_text(encoding="utf-8")))
+    assert seen == ["{}\n"]
+    bad = _tar_with(tmp_path, "snapcore-bsx", "not json")
+    with pytest.raises(BoostError):
+        snapshot.restore(bad, root, "snap-bsx",
+                         before_swap=lambda: seen.append("ran"))
+    assert seen == ["{}\n"]
 
 
 def test_a_rehome_refusal_leaves_the_store_untouched(tmp_path):
@@ -498,3 +523,89 @@ def test_project_skills(sandbox, tmp_path, monkeypatch):
     assert skills["snapcore-p"]["version"] == "2.0.0"
     monkeypatch.chdir(sandbox)
     assert store.project_skills() == (None, {})
+
+
+def _linked_skill(name, only=None):
+    from boost_cli.core import paths
+    d = paths.store_dir() / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("# %s\n" % name, encoding="utf-8")
+    res = store.link_agents(name, only)
+    row = {"version": "1.0.0", "commit": "c1", "agents": res.linked}
+    if only:
+        row["only_agents"] = list(only)
+    lockfile.set_skill(name, row)
+    return row
+
+
+def test_restore_recorded_holds_sets_and_clears(sandbox):
+    _linked_skill("snapcore-h")
+    assert store.restore_recorded_holds("snapcore-missing", {}) == []
+    assert store.restore_recorded_holds(
+        "snapcore-h", {"version": "1.0.0"}) == []
+    assert store.restore_recorded_holds(
+        "snapcore-h", {"pinned": True, "commit_pin": "c0"}) == [
+            "pinned", "commit_pin"]
+    row = lockfile.get_skill("snapcore-h")
+    assert row["pinned"] is True and row["commit_pin"] == "c0"
+    assert store.restore_recorded_holds("snapcore-h", {}) == [
+        "pinned", "commit_pin"]
+    row = lockfile.get_skill("snapcore-h")
+    assert "pinned" not in row and "commit_pin" not in row
+
+
+def test_restore_recorded_holds_relinks_a_changed_scope(sandbox):
+    from boost_cli.core import agents
+    every = sorted(agents.linking_agents())
+    _linked_skill("snapcore-s")
+    assert sorted(lockfile.get_skill("snapcore-s")["agents"]) == every
+    assert store.restore_recorded_holds(
+        "snapcore-s", {"only_agents": ["cursor"]}) == ["only_agents"]
+    row = lockfile.get_skill("snapcore-s")
+    assert row["only_agents"] == ["cursor"] and row["agents"] == ["cursor"]
+    assert store.linked_agents("snapcore-s") == ["cursor"]
+    assert store.restore_recorded_holds("snapcore-s", {}) == ["only_agents"]
+    row = lockfile.get_skill("snapcore-s")
+    assert "only_agents" not in row and sorted(row["agents"]) == every
+    assert sorted(store.linked_agents("snapcore-s")) == every
+
+
+def test_restore_recorded_holds_only_records_a_held_skill_s_scope(sandbox):
+    _linked_skill("snapcore-q")
+    store.quarantine_skill("snapcore-q", lockfile.get_skill("snapcore-q"))
+    assert store.restore_recorded_holds(
+        "snapcore-q", {"only_agents": ["cursor"]}) == ["only_agents"]
+    row = lockfile.get_skill("snapcore-q")
+    assert row["only_agents"] == ["cursor"] and row["agents"] == []
+    assert store.linked_agents("snapcore-q") == []
+
+
+def test_reapply_recorded_aside(sandbox):
+    _linked_skill("snapcore-r")
+    assert store.reapply_recorded_aside("snapcore-r", {}) is None
+    assert store.reapply_recorded_aside("snapcore-gone",
+                                        {"quarantined": True}) is None
+    assert store.reapply_recorded_aside("snapcore-gone",
+                                        {"sidelined_by": "focus"}) is None
+    assert store.reapply_recorded_aside(
+        "snapcore-r", {"sidelined_by": "focus"}) == (
+            "sidelined by `boost focus`")
+    row = lockfile.get_skill("snapcore-r")
+    assert row["sidelined_by"] == "focus" and row["agents"] == []
+    assert store.linked_agents("snapcore-r") == []
+    assert store.reapply_recorded_aside(
+        "snapcore-r", {"quarantined": True, "sidelined_by": "focus"}) == (
+            "quarantined")
+    row = lockfile.get_skill("snapcore-r")
+    assert row["quarantined"] is True and "sidelined_by" not in row
+    assert store.is_held(row)
+
+
+def test_restore_recorded_holds_only_records_a_sidelined_skill_s_scope(sandbox):
+    _linked_skill("snapcore-f")
+    store.sideline("snapcore-f", "focus")
+    assert store.restore_recorded_holds(
+        "snapcore-f", {"only_agents": ["cursor"]}) == ["only_agents"]
+    row = lockfile.get_skill("snapcore-f")
+    assert row["only_agents"] == ["cursor"] and row["agents"] == []
+    assert store.linked_agents("snapcore-f") == []
