@@ -13,6 +13,7 @@ Three ways the lifecycle used to change things it had no business changing:
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -309,6 +310,46 @@ class TestProjectSyncKeepsTheLock:
         assert store._sibling_policy_violations(
             repo, "brainstorming", rec, claude_copy) == [
             "skill 'brainstorming' is on the blocklist"]
+        # The run itself declines, and writes nothing from the sibling.
+        cursor_copy = repo / ".cursor" / "skills" / "brainstorming"
+        shutil.rmtree(cursor_copy)
+        plan = store.project_sync_plan(base=str(repo))
+        assert store.project_sync_apply(plan, base=str(repo)) == [
+            store._project_gone("brainstorming")]
+        assert not cursor_copy.exists()
+
+    def test_a_denied_capability_is_not_restored_from_a_sibling(
+            self, tap, entry, tmp_path):
+        from boost_cli.core import policy
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        claude_copy = repo / ".claude" / "skills" / "brainstorming"
+        md = claude_copy / "SKILL.md"
+        md.write_text("---\nname: brainstorming\ndescription: d\n"
+                      "capabilities: [network]\n---\nbody\n", encoding="utf-8")
+        rec["sha256"] = util.sha256_dir(claude_copy)
+        assert store._sibling_policy_violations(
+            repo, "brainstorming", rec, claude_copy) == []
+        pol = policy.load()
+        pol["denied_capabilities"] = ["network"]
+        policy.save(pol)
+        violations = store._sibling_policy_violations(
+            repo, "brainstorming", rec, claude_copy)
+        assert violations and "policy blocks installing brainstorming" in \
+            violations[-1]
+
+    @pytest.mark.skipif(os.name == "nt", reason="Windows has no exec bit")
+    def test_a_copy_whose_exec_bits_drifted_is_not_a_source(
+            self, tap, entry, tmp_path):
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        claude_copy = repo / ".claude" / "skills" / "brainstorming"
+        assert store.project_intact_copy(rec, repo) == claude_copy
+        script = claude_copy / "SKILL.md"
+        script.chmod(script.stat().st_mode | 0o100)
+        assert util.sha256_dir(claude_copy) == rec["sha256"]  # mode only
+        assert store.project_intact_copy(rec, repo) == (
+            repo / ".cursor" / "skills" / "brainstorming")
 
     def test_moved_source_with_no_copy_left_is_declined_and_nothing_is_written(
             self, tap, entry, tmp_path):
