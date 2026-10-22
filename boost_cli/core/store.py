@@ -4871,6 +4871,15 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
                     # dropping the row anyway reported the rule removed while
                     # its text stayed live and no command could reach it.
                     rules.require_well_formed(text, name, path)
+                    # A block edited since boost wrote it is the user's text
+                    # now, as an edited rules-dir file is below: left in
+                    # place and named. Stripping it deleted their edit with
+                    # no warning, though `verify` had called it modified.
+                    if m.get("sha256") and any(
+                            _text_sha(body) != m["sha256"]
+                            for body in rules.block_bodies(text, name)):
+                        kept.append(str(path))
+                        continue
                     stripped = rules.strip_block(text, name)
                     # No block of ours (a refused write): no rewrite. An
                     # empty result is deleted only when the row says boost

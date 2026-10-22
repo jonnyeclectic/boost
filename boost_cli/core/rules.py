@@ -337,6 +337,20 @@ def read_block(text: str, name: str) -> str | None:
     span = block_span(text, name)
     if span is None:
         return None
+    return _span_body(text, name, span)
+
+
+def block_bodies(text: str, name: str) -> list[str]:
+    """The body of every clean block of rule ``name`` (:func:`block_spans`),
+    each read as :func:`read_block` reads the first.
+
+    What uninstall hashes before it strips: a second copy edited by hand is
+    as much the user's text as an edited first one.
+    """
+    return [_span_body(text, name, span) for span in block_spans(text, name)]
+
+
+def _span_body(text: str, name: str, span: tuple[int, int]) -> str:
     start, end = markers(name)
     i, j = span
     # LF whatever the file uses: the hash `boost verify` compares against was

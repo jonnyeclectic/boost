@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.commands import quality, safety
-from boost_cli.core import integrity, lockfile, paths, store, util
+from boost_cli.commands import pkg, quality, safety
+from boost_cli.core import integrity, lockfile, paths, rules, store, util
 from boost_cli.errors import BoostError, NotUTF8Error
 
 BODY = "---\nname: %s\n---\n\nAlways %s.\n"
@@ -52,6 +52,82 @@ def _claude_md() -> Path:
 
 def _flat(captured) -> str:
     return " ".join((captured.out + captured.err).split())
+
+
+class TestEditedContextBlockIsKept:
+    def test_an_edited_block_survives_uninstall_and_is_named(self, tap):
+        md = _claude_md()
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text("# My notes\n\nKeep this.\n", encoding="utf-8")
+        store.install(_rule(tap, "ed"))
+        edited = md.read_text(encoding="utf-8").replace("Always test first.",
+                                                        "EDITED")
+        md.write_text(edited, encoding="utf-8")
+        res = store.uninstall("ed")
+        assert res["kept"] == [str(md)]
+        assert "claude-code" not in res["unlinked"]
+        assert "cursor" in res["unlinked"]
+        assert md.read_text(encoding="utf-8") == edited
+        assert lockfile.get_rule("ed") is None
+
+    def test_an_edited_second_copy_is_kept_too(self, tap):
+        store.install(_rule(tap, "two"))
+        md = _claude_md()
+        text = md.read_text(encoding="utf-8")
+        start, end = rules.markers("two")
+        doubled = text + "\n" + start + "\nMINE\n" + end + "\n"
+        md.write_text(doubled, encoding="utf-8")
+        res = store.uninstall("two")
+        assert res["kept"] == [str(md)]
+        assert md.read_text(encoding="utf-8") == doubled
+
+    def test_an_unedited_block_is_stripped_and_nothing_kept(self, tap):
+        md = _claude_md()
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text("mine\n", encoding="utf-8")
+        store.install(_rule(tap, "plain"))
+        res = store.uninstall("plain")
+        assert "kept" not in res
+        assert "claude-code" in res["unlinked"]
+        assert md.read_text(encoding="utf-8") == "mine\n"
+
+    def test_a_row_with_no_digest_is_stripped_as_before(self, tap):
+        md = _claude_md()
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text("mine\n", encoding="utf-8")
+        store.install(_rule(tap, "old"))
+        row = lockfile.get_rule("old")
+        assert row is not None
+        for m in row["materializations"]:
+            m.pop("sha256", None)
+        lockfile.set_entry("rule", "old", row)
+        md.write_text(md.read_text(encoding="utf-8").replace(
+            "Always test first.", "EDITED"), encoding="utf-8")
+        res = store.uninstall("old")
+        assert "kept" not in res
+        assert md.read_text(encoding="utf-8") == "mine\n"
+
+    def test_the_cli_names_the_kept_context_file(self, tap, capsys):
+        store.install(_rule(tap, "cli"))
+        md = _claude_md()
+        md.write_text(md.read_text(encoding="utf-8").replace(
+            "Always test first.", "EDITED"), encoding="utf-8")
+        capsys.readouterr()
+        assert pkg.cmd_uninstall(["cli"]) == 0
+        assert ("left %s in place: it was edited since boost wrote it"
+                % paths.tilde(md)) in _flat(capsys.readouterr())
+        assert "EDITED" in md.read_text(encoding="utf-8")
+
+
+class TestBlockBodies:
+    def test_every_clean_block_is_read_like_the_first(self):
+        text = rules.merge_block("", "r", "A")
+        start, end = rules.markers("r")
+        text += "x\r\n" + start + "\r\n\nB\r\n" + end + "\n"
+        assert rules.block_bodies(text, "r") == ["A", "B"]
+
+    def test_no_block_is_no_bodies(self):
+        assert rules.block_bodies("notes\n", "r") == []
 
 
 class TestNotUTF8:
