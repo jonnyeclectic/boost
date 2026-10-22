@@ -911,10 +911,13 @@ def _evolve_ai(name: str, old: str, old_ver: str,
     text = ai.authored_skill(reply, name)
     if text is None:
         return None
-    meta, body = frontmatter.parse(text)
+    meta, _ = frontmatter.parse(text)
     if not util.semver_gt(str(meta.get("version") or ""), old_ver):
-        meta["version"] = _bump_patch(old_ver)
-        text = frontmatter.dump(meta) + "\n\n" + body.strip() + "\n"
+        # Only the version line: a parse -> dump round trip here folded a
+        # `description: |` block to one line and flattened a `hooks:`
+        # list-of-maps to `- "matcher: Edit"`, dropping its `command:`.
+        text = frontmatter.set_field(text, "version", _bump_patch(old_ver))
+        text = text.rstrip("\n") + "\n"
     return text
 
 

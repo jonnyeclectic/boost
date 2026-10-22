@@ -786,6 +786,24 @@ class TestEvolve:
         assert "Never exceed 5 ideas." in text
         assert frontmatter.parse(text)[0]["version"] == "1.4.1"
 
+    def test_ai_reply_without_bump_changes_only_the_version_line(
+            self, boost, installed, ai_on):
+        # Bug: the forced bump re-dumped the whole frontmatter, folding the
+        # `|` description to one line and turning the hooks list-of-maps
+        # into `- "matcher: Edit"` with its `command:` gone.
+        front = ("---\nname: brainstorming\ndescription: |\n"
+                 "  Run the linter after edits.\n"
+                 "  Use when touching Python files.\n"
+                 "version: 1.4.0\nhooks:\n  PostToolUse:\n"
+                 "    - matcher: Edit\n      command: ruff check --fix\n---\n")
+        ai_on(ask_author=front + "\n# Lint guard\n\n- Never ignore E501.\n")
+        r = boost("evolve", "brainstorming", "--apply", "--feedback", "E501")
+        assert "evolved brainstorming → v1.4.1" in r.out
+        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert text == (front.replace("version: 1.4.0", "version: 1.4.1")
+                        + "\n# Lint guard\n\n- Never ignore E501.\n")
+
     # ---- the 2026-08 CLI audit: feedback input, pin on apply, info wording
 
     def _lock_entry(self):
