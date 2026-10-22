@@ -2693,8 +2693,8 @@ def cmd_trust(argv) -> int:
 
     if args.action == "add":
         if not args.name or not args.key:
-            raise BoostError("trust add requires NAME and KEY",
-                             hint="`boost trust add acme ./acme.pub`")
+            p.error("trust add requires NAME and KEY",
+                    hint="`boost trust add acme ./acme.pub`")
         key_path = paths.expand(args.key)
         if key_path.is_file():
             key_text = key_path.read_text(encoding="utf-8")
@@ -2727,7 +2727,8 @@ def cmd_trust(argv) -> int:
 
     if args.action == "remove":
         if not args.name:
-            raise BoostError("trust remove requires a NAME")
+            p.error("trust remove requires a NAME",
+                    hint="see the names with `boost trust list`")
         if not provenance.remove_trusted_key(args.name):
             raise BoostError("no trusted key named %r" % args.name)
         journal.log("trust", args.name, op="remove-key")

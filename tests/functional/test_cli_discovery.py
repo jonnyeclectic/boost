@@ -1694,7 +1694,12 @@ class _FakeCurses:
 class TestBrowse:
     def test_non_tty_prints_full_catalog(self, boost, tapped):
         r = boost("browse")
-        assert "interactive mode needs a TTY — showing the full catalog" in r.out
+        # The notice is chrome on stderr: piping is browse's only scripted
+        # use, so stdout's first line is the table header.
+        assert (r.err
+                == "  ! interactive mode needs a TTY — showing the full catalog\n")
+        assert "needs a TTY" not in r.out
+        assert r.out.splitlines()[0].split() == ["name", "version", "tap", "kind"]
         for name in ("brainstorming", "commit-messages", "cowboy-coding",
                      "jira-integration", "tdd-workflow"):
             assert name in r.out
@@ -1736,15 +1741,17 @@ class TestBrowse:
         from boost_cli.commands import discovery
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",
-                            types.SimpleNamespace(stdin=tty, stdout=tty))
+                            types.SimpleNamespace(stdin=tty, stdout=tty,
+                                                  stderr=sys.stderr))
 
         def boom(curses, entries, **_kw):
             raise real_curses.error("nocbreak() returned ERR")
 
         monkeypatch.setattr(discovery, "_browse_tui", boom)
         r = boost("browse")
-        assert "the terminal does not support curses (nocbreak() returned ERR)" in r.out
-        assert "showing the full catalog" in r.out
+        assert "the terminal does not support curses (nocbreak() returned ERR)" in r.err
+        assert "showing the full catalog" in r.err
+        assert "showing the full catalog" not in r.out
 
     def test_no_skills(self, boost, sandbox):
         r = boost("browse", expect=1)

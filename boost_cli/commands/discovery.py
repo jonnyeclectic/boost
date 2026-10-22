@@ -1353,7 +1353,9 @@ def cmd_recommend(argv):
 
 
 def _browse_plain(entries, why: str):
-    out.warn(why + " — showing the full catalog")
+    # stderr: piping is the only scripted use of browse, so stdout's first
+    # line must be the table header, not this notice.
+    out.warn(why + " — showing the full catalog", stream=sys.stderr)
     # Same collapse the TUI does: a registry renders one skill into
     # .claude/, .cursor/, .gemini/ and a plugin root, and this fallback used
     # to list every copy with nothing to tell them apart.

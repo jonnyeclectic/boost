@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import NoReturn
 
 from .core import output as out
 
@@ -71,9 +72,15 @@ class BoostArgumentParser(argparse.ArgumentParser):
             kwargs.setdefault("color", False)
         super().__init__(*args, **kwargs)
 
-    def error(self, message: str):
-        """Print a branded error + dimmed usage, then exit 2 (argparse's code)."""
-        out.err(message)
+    def error(self, message: str, hint: str | None = None) -> NoReturn:
+        """Print a branded error + dimmed usage, then exit 2 (argparse's code).
+
+        The one exit for "you called it wrong". ``hint`` carries the example
+        a hand-rolled required-argument check used to attach to a
+        ``BoostError`` — which exits 1, the code for "the operation failed",
+        so a script could not tell a missing KEY from a refused write.
+        """
+        out.err(message, hint=hint)
         sys.stderr.write(out.c(self.format_usage(), out.DIM,
                                stream=sys.stderr))
         self.exit(2)

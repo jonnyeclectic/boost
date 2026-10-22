@@ -1801,7 +1801,7 @@ class TestQuarantine:
         assert "brainstorming is not quarantined" in r.out
         r = boost("quarantine", "ghost", expect=1)
         assert "ghost is not installed" in r.err
-        r = boost("quarantine", expect=1)
+        r = boost("quarantine", expect=2)            # usage error
         assert ("specify a skill to quarantine, --release NAME, or --list"
                 in r.err)
 

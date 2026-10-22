@@ -92,11 +92,11 @@ def cmd_config(argv) -> int:
     if args.action == "list" and (args.key or args.value is not None):
         p.error("config list takes no KEY/VALUE")
     if args.action in ("get", "set", "unset") and not args.key:
-        raise BoostError("config %s requires a KEY" % args.action,
-                        hint="e.g. `boost config %s ai.enabled`" % args.action)
+        p.error("config %s requires a KEY" % args.action,
+                hint="e.g. `boost config %s ai.enabled`" % args.action)
     if args.action == "set" and args.value is None:
-        raise BoostError("config set requires a VALUE",
-                        hint="e.g. `boost config set ai.enabled false`")
+        p.error("config set requires a VALUE",
+                hint="e.g. `boost config set ai.enabled false`")
     if args.action in ("get", "unset") and args.value is not None:
         p.error("config %s takes no VALUE" % args.action)
 
@@ -674,8 +674,8 @@ def cmd_policy(argv) -> int:
 
     if args.action in ("set", "unset"):
         if not args.key:
-            raise BoostError("policy %s requires a KEY" % args.action,
-                            hint="keys: " + ", ".join(sorted(policy.DEFAULTS)))
+            p.error("policy %s requires a KEY" % args.action,
+                    hint="keys: " + ", ".join(sorted(policy.DEFAULTS)))
         if args.key not in policy.DEFAULTS:
             raise BoostError("unknown policy key %r" % args.key,
                             hint="keys: " + ", ".join(sorted(policy.DEFAULTS)))
@@ -698,8 +698,8 @@ def cmd_policy(argv) -> int:
 
     if args.action == "set":
         if args.value is None:
-            raise BoostError("policy set requires a VALUE",
-                            hint="e.g. `boost policy set min_quality_score 60`")
+            p.error("policy set requires a VALUE",
+                    hint="e.g. `boost policy set min_quality_score 60`")
         value = _parse_policy_value(args.key, args.value)
         policy.set_key(args.key, value)
         journal.log("policy", args.key, op="set")

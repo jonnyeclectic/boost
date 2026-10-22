@@ -198,7 +198,9 @@ class TestInstall:
 
     def test_multi_with_one_unknown_rc1_installs_known(self, boost, tapped):
         r = boost("install", "brainstorming", "nope", expect=1)
-        assert "nope: no skill named 'nope' in any tap" in r.out
+        # The reason for rc 1 goes to stderr, as it does for a single name.
+        assert "  ! nope: no skill named 'nope' in any tap\n" in r.err
+        assert "no skill named" not in r.out
         assert "brainstorming v1.4.0 (fixture-tap)" in r.out   # heading
         assert "Installed 1 new skill; quality score 95/100" in r.out
         assert "brainstorming" in _lock()
@@ -371,7 +373,8 @@ class TestUninstall:
         boost("install", "brainstorming", "commit-messages")
         r = boost("uninstall", "brainstorming", "commit-messages", "nope",
                  expect=1)
-        assert "nope: nope is not installed" in r.out
+        assert "  ! nope: nope is not installed" in r.err
+        assert "nope is not installed" not in r.out
         assert "unlinked ← claude-code · windsurf · cursor" in r.out
         assert "Uninstalled 2 skills" in r.out
         assert "╭─ removed" in r.out               # D13: framed summary card
@@ -2822,8 +2825,9 @@ class TestInstallEdges:
         (paths.state_dir() / "policy.json").write_text(
             json.dumps({"blocked_skills": ["cowboy-coding"]}), encoding="utf-8")
         r = boost("install", "brainstorming", "cowboy-coding", expect=1)
-        assert "cowboy-coding: policy blocks installing cowboy-coding" in r.out
-        assert "is on the blocklist" in r.out
+        assert "cowboy-coding: policy blocks installing cowboy-coding" in r.err
+        assert "is on the blocklist" in r.err
+        assert "policy blocks" not in r.out
         assert "Installed 1 new skill" in r.out
         assert "brainstorming" in _lock()
         assert "cowboy-coding" not in _lock()
@@ -2957,7 +2961,7 @@ class TestUpdateEdges:
         assert _lock()["brainstorming"]["version"] == "1.4.0"
         r = boost("reinstall", "brainstorming", expect=1)
         assert ("brainstorming not found in tap gone-tap — skipped "
-                "(try `boost update`)") in r.out
+                "(try `boost update`)") in r.err
 
     def test_reinstall_after_untap_names_the_missing_tap(
             self, boost, fixture_tap_src, tmp_path):
@@ -2968,13 +2972,13 @@ class TestUpdateEdges:
         boost("install", "brainstorming")
         boost("untap", "gone-tap", "-f")
         r = boost("reinstall", "brainstorming", expect=1)
-        flat = " ".join(r.out.split())
+        flat = " ".join(r.err.split())
         assert ("brainstorming: source missing — tap gone-tap is no longer "
                 "tapped and `boost update` can't restore it; re-tap it with "
                 "`boost tap %s`, or `boost uninstall brainstorming`"
                 % paths.tilde(str(tap_dir))) in flat
         assert "try `boost update`" not in flat
-        assert "Reinstalled 0 skills" in flat
+        assert "Reinstalled 0 skills" in r.out    # the tally stays on stdout
 
 
 class TestUpdateKeepsTheChosenCopy:
@@ -3083,7 +3087,8 @@ class TestUpdateKeepsTheChosenCopy:
 class TestReinstallEdges:
     def test_multi_skips_missing(self, boost, installed):
         r = boost("reinstall", "brainstorming", "ghost", expect=1)
-        assert "ghost is not installed — skipped" in r.out
+        assert r.err == "  ! ghost is not installed — skipped\n"
+        assert "ghost" not in r.out
         assert "reinstalled brainstorming v1.4.0" in r.out
         assert "Reinstalled 1 skill" in r.out
 
@@ -3094,8 +3099,9 @@ class TestReinstallEdges:
         assert "reinstalled loc-skill (local, from" in r.out
         shutil.rmtree(d)
         r = boost("reinstall", "loc-skill", expect=1)
-        assert "local source" in r.out
-        assert "is gone — skipped" in r.out
+        assert "local source" in r.err
+        assert "is gone — skipped" in r.err
+        assert "is gone" not in r.out
         assert "Reinstalled 0 skills" in r.out
 
 
@@ -3681,7 +3687,7 @@ class TestImportProvenance:
         shutil.rmtree(repo / "url-skill")
         _commit_all(repo, "drop url-skill")
         r = boost("reinstall", "url-skill", expect=1)
-        assert "url-skill: %s has no SKILL.md at url-skill" % _URL in r.out
+        assert "url-skill: %s has no SKILL.md at url-skill" % _URL in r.err
         assert "Reinstalled 0 skills" in r.out
         assert _lock()["url-skill"]["source_url"] == _URL
 
@@ -3700,7 +3706,7 @@ class TestImportProvenance:
         lock["skills"]["url-skill"]["source_dir"] = "../../escape"
         paths.lockfile_path().write_text(json.dumps(lock), encoding="utf-8")
         r = boost("reinstall", "url-skill", expect=1)
-        assert "has no SKILL.md at ../../escape" in r.out
+        assert "has no SKILL.md at ../../escape" in r.err
         assert _lock()["url-skill"]["version"] == "0.1.0"
 
     def test_url_import_all_records_each_skills_path(self, boost, sandbox,
@@ -3992,8 +3998,8 @@ class TestErrorFollowsItsTable:
 
 
 class TestSnapshotEdges:
-    def test_restore_without_id_rc1(self, boost, sandbox):
-        r = boost("snapshot", "restore", expect=1)
+    def test_restore_without_id_is_a_usage_error(self, boost, sandbox):
+        r = boost("snapshot", "restore", expect=2)
         assert "restore needs a snapshot id" in r.err
         assert "boost snapshot list" in r.err
 

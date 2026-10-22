@@ -75,8 +75,22 @@ def cmd_hooks(argv) -> int:
 
     if args.action == "list":
         return _list(args.scope, args.host, args.event, args.as_json)
+    # Missing arguments are usage errors (exit 2), so they are checked here,
+    # where the parser is, rather than in _add/_remove.
     if args.action == "add":
+        if not args.event:
+            p.error("hooks add needs an EVENT",
+                    hint="e.g. boost hooks add SessionStart -c '<cmd>' -n <name>")
+        if not args.command:
+            p.error("hooks add needs --command",
+                    hint="the shell command Claude should run for this hook")
+        if not args.name:
+            p.error("hooks add needs --name",
+                    hint="a stable name so the hook can be removed later")
         return _add(args)
+    if not args.name:
+        p.error("hooks remove needs --name",
+                hint="the name you gave the hook when adding it")
     return _remove(args)
 
 
@@ -178,15 +192,6 @@ def _native_event(host: str, event: str) -> str:
 
 
 def _add(args) -> int:
-    if not args.event:
-        raise BoostError("hooks add needs an EVENT",
-                         hint="e.g. boost hooks add SessionStart -c '<cmd>' -n <name>")
-    if not args.command:
-        raise BoostError("hooks add needs --command",
-                         hint="the shell command Claude should run for this hook")
-    if not args.name:
-        raise BoostError("hooks add needs --name",
-                         hint="a stable name so the hook can be removed later")
     scope = args.scope or "project"
     host = _write_host(args.host)
     event = _native_event(host, args.event)
@@ -228,9 +233,6 @@ def _after_add(host: str, scope: str) -> list[str]:
 
 
 def _remove(args) -> int:
-    if not args.name:
-        raise BoostError("hooks remove needs --name",
-                         hint="the name you gave the hook when adding it")
     scope = args.scope or "project"
     host = _write_host(args.host)
     event = _native_event(host, args.event) if args.event else None

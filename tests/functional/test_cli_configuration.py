@@ -90,7 +90,7 @@ class TestConfig:
         assert json.loads(r.out) == {"port": 8787}
         r = boost("config", "get", "no.such.key", expect=1)
         assert "no config key 'no.such.key'" in r.err
-        r = boost("config", "get", expect=1)
+        r = boost("config", "get", expect=2)     # usage error
         assert "config get requires a KEY" in r.err
 
     def test_set_with_a_typo_warns_and_names_the_meant_key(self, boost, sandbox):
@@ -114,7 +114,7 @@ class TestConfig:
         on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
         assert on_disk["serve"]["port"] == 9999
         assert boost("config", "get", "serve.port", "--json").out.strip() == "9999"
-        r = boost("config", "set", "serve.port", expect=1)
+        r = boost("config", "set", "serve.port", expect=2)   # usage error
         assert "config set requires a VALUE" in r.err
 
     def test_set_through_scalar_fails_cleanly(self, boost, sandbox):
@@ -447,7 +447,7 @@ class TestPolicy:
         r = boost("policy", "set", "nope", "1", expect=1)
         assert "unknown policy key 'nope'" in r.err
         assert "blocked_skills" in r.err  # hint lists valid keys
-        r = boost("policy", "set", "pin_only", expect=1)
+        r = boost("policy", "set", "pin_only", expect=2)     # usage error
         assert "policy set requires a VALUE" in r.err
 
     def test_check_clean_vs_violations(self, boost, installed):
