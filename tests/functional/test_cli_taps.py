@@ -157,8 +157,9 @@ class TestTap:
 
         monkeypatch.setattr("boost_cli.core.gitutil.clone_shallow", boom)
         r = boost("tap", "--defaults", expect=1)
-        assert "could not tap anthropics/skills: network down" in r.out
-        assert "could not tap obra/superpowers: network down" in r.out
+        assert "  ! could not tap anthropics/skills: network down\n" in r.err
+        assert "  ! could not tap obra/superpowers: network down\n" in r.err
+        assert "could not tap" not in r.out
         assert registry.list_taps() == []   # nothing half-added
 
     def test_defaults_success_then_already_tapped(self, boost, sandbox,
@@ -300,7 +301,9 @@ class TestTapCatalog:
 class TestUntap:
     def test_unknown_rc1(self, boost, sandbox):
         r = boost("untap", "nope", expect=1)
-        assert "could not untap nope: no such tap: nope" in r.out
+        # The reason for rc 1 is on stderr, where a script looks for it.
+        assert r.err == "  ! could not untap nope: no such tap: nope\n"
+        assert "could not untap" not in r.out
 
     def test_dependents_declined_keeps_tap(self, boost, installed, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")

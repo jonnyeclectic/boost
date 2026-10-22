@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from contextlib import suppress
 from pathlib import Path
 from typing import cast
@@ -120,14 +121,16 @@ def _tap_all(urls: list[str], jobs: int | None,
             out.info(out.role("%s already tapped" % name, "muted"))
             continue
         if not res.get("ok"):
-            out.warn("could not tap %s: %s" % (name, res.get("error", "")))
+            out.warn("could not tap %s: %s" % (name, res.get("error", "")),
+                     stream=sys.stderr)
             rc = 1
             continue
         tap = res["tap"]
         try:
             entries = catalog.rebuild_tap(tap)
         except BoostError as err:
-            out.warn("could not index %s: %s" % (name, err.message))
+            out.warn("could not index %s: %s" % (name, err.message),
+                     stream=sys.stderr)
             rc = 1
             continue
         journal.log("tap", tap.name)
@@ -282,7 +285,8 @@ def _untap_one(name: str, force: bool) -> int:
     try:
         tap = registry.get(name)
     except BoostError as exc:
-        out.warn("could not untap %s: %s" % (name, exc.message))
+        out.warn("could not untap %s: %s" % (name, exc.message),
+                 stream=sys.stderr)
         return 1
     labels = [n if kind == "skill" else "%s (%s)" % (n, kind)
               for kind, n in registry.dependents(tap.name)]

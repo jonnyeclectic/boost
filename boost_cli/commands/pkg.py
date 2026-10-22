@@ -570,7 +570,7 @@ def cmd_install(argv: list[str]) -> int:
         except BoostError as err:
             if not multi:
                 raise
-            out.warn("%s: %s" % (n, err.message))
+            out.warn("%s: %s" % (n, err.message), stream=sys.stderr)
             failed += 1
 
     _warn_confusions(entries)
@@ -731,7 +731,7 @@ def cmd_install(argv: list[str]) -> int:
             except BoostError as err:
                 if not multi:
                     raise
-                out.warn("%s: %s" % (e["name"], err.message))
+                out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
                 failed += 1
                 continue
         _report_prerequisites(entries, pbase=pbase, would=True)
@@ -752,7 +752,7 @@ def cmd_install(argv: list[str]) -> int:
         except BoostError as err:
             if not multi:
                 raise
-            out.warn("%s: %s" % (e["name"], err.message))
+            out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
             failed += 1
             continue
         _report_result(res, no_mcp=args.no_mcp)
@@ -902,7 +902,7 @@ def cmd_uninstall(argv: list[str]) -> int:
         except BoostError as err:
             if len(args.names) == 1:
                 raise
-            out.warn("%s: %s" % (name, err.message))
+            out.warn("%s: %s" % (name, err.message), stream=sys.stderr)
             failed += 1
             continue
         kind = info.get("kind", "skill")
@@ -1645,7 +1645,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                 scope=lk.get("scope", "user"), base=lk.get("base"),
                 via="update"))
         except BoostError as err:
-            out.warn("%s: %s" % (name, err.message))
+            out.warn("%s: %s" % (name, err.message), stream=sys.stderr)
             held += 1
             continue
         out.ok(_refresh_line("%s %s" % (kind, name), old_v,
@@ -2072,7 +2072,7 @@ def _reinstall_held(kind: str, name: str, lk: dict, **source) -> bool:
         return False
     label = name if kind == "skill" else "%s %s" % (kind, name)
     out.warn("%s: not reinstalled — %s; `boost unpin %s` first to take the "
-             "new content" % (label, why, name), wrap=True)
+             "new content" % (label, why, name), wrap=True, stream=sys.stderr)
     return True
 
 
@@ -2081,7 +2081,7 @@ def _reinstall_project_skill(name: str, lk: dict, pbase: Path) -> bool:
     matches = [e for e in catalog.find(name)
                if e["tap"] == lk.get("tap") and e.get("kind", "skill") == "skill"]
     if not matches:
-        out.warn(store.source_missing_message(name, name, lk), wrap=True)
+        out.warn(store.source_missing_message(name, name, lk), wrap=True, stream=sys.stderr)
         return False
     entry, warning = catalog.select_lock_source(matches, lk)
     entry = cast(dict, entry)                 # matches is non-empty above
@@ -2095,7 +2095,7 @@ def _reinstall_project_skill(name: str, lk: dict, pbase: Path) -> bool:
     except BoostError as err:
         out.warn("%s: %s%s" % (name, err.message,
                                " — %s" % err.hint if err.hint else ""),
-                 wrap=True)
+                 wrap=True, stream=sys.stderr)
         return False
     out.ok("reinstalled %s v%s (this repo)"
            % (name, out.plain(entry.get("version", "0.0.0"))))
@@ -2160,7 +2160,7 @@ def cmd_reinstall(argv: list[str]) -> int:
                 if len(args.names) == 1:
                     raise BoostError("%s is not installed%s" % (name, where),
                                     hint="see what is with `boost list`")
-                out.warn("%s is not installed%s — skipped" % (name, where))
+                out.warn("%s is not installed%s — skipped" % (name, where), stream=sys.stderr)
                 failed += 1
                 continue
             items.append((found[0], name, found[1]))
@@ -2177,7 +2177,7 @@ def cmd_reinstall(argv: list[str]) -> int:
                        and e.get("kind", "skill") == kind]
             if not matches:
                 out.warn(store.source_missing_message(
-                    "%s %s" % (kind, name), name, lk), wrap=True)
+                    "%s %s" % (kind, name), name, lk), wrap=True, stream=sys.stderr)
                 failed += 1
                 continue
             entry, warning = catalog.select_lock_source(matches, lk)
@@ -2196,7 +2196,7 @@ def cmd_reinstall(argv: list[str]) -> int:
                 # useful with the `boost uninstall` that clears it.
                 out.warn("%s: %s%s" % (name, err.message,
                                        " — %s" % err.hint if err.hint else ""),
-                         wrap=True)
+                         wrap=True, stream=sys.stderr)
                 failed += 1
                 continue
             # Success first, then what it skipped: the same order as every
@@ -2228,7 +2228,7 @@ def cmd_reinstall(argv: list[str]) -> int:
             url = str(lk.get("source_url") or "")
             if src is None and not url:
                 out.warn("%s: local source %s is gone — skipped"
-                         % (name, _tilde(str(lk.get("source_dir") or ""))))
+                         % (name, _tilde(str(lk.get("source_dir") or ""))), stream=sys.stderr)
                 failed += 1
                 continue
             if src is not None and _reinstall_held("skill", name, lk, src=src):
@@ -2251,7 +2251,7 @@ def cmd_reinstall(argv: list[str]) -> int:
                     how = ("from %s at %s" % (url, commit[:7]) if commit
                            else "from %s" % url)
             except BoostError as err:
-                out.warn("%s: %s" % (name, err.message))
+                out.warn("%s: %s" % (name, err.message), stream=sys.stderr)
                 failed += 1
                 continue
             out.ok("reinstalled %s (%s)" % (name, how))
@@ -2261,7 +2261,7 @@ def cmd_reinstall(argv: list[str]) -> int:
             continue
         matches = [e for e in catalog.find(name) if e["tap"] == lk.get("tap")]
         if not matches:
-            out.warn(store.source_missing_message(name, name, lk), wrap=True)
+            out.warn(store.source_missing_message(name, name, lk), wrap=True, stream=sys.stderr)
             failed += 1
             continue
         entry, warning = catalog.select_lock_source(matches, lk)
@@ -2276,7 +2276,7 @@ def cmd_reinstall(argv: list[str]) -> int:
         except BoostError as err:
             out.warn("%s: %s%s" % (name, err.message,
                                    " — %s" % err.hint if err.hint else ""),
-                     wrap=True)
+                     wrap=True, stream=sys.stderr)
             failed += 1
             continue
         out.ok("reinstalled %s v%s"
