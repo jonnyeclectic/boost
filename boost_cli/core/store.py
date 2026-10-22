@@ -80,6 +80,11 @@ class InstallResult:
     # boost did not write (no lock row records the path). Left alone, and recorded apart from the
     # materializations, in the entry's ``foreign``: see :func:`foreign_rows`.
     foreign: list[str] = field(default_factory=list)
+    # ``(agent, why)`` for a workflow file boost rendered and did not write
+    # because that agent would reject it at load (:func:`workflows.
+    # render_problem`) — a Gemini subagent the sanitizer could not repair.
+    # No row is recorded: there is no file, and nothing for sync to retry.
+    declined: list[tuple[str, str]] = field(default_factory=list)
     score: int = 0
     upgraded: bool = False
     kind: str = "skill"
@@ -1802,7 +1807,7 @@ def unmaterialized_agents(kind: str, entry: dict) -> list[str]:
               else agents.materializing_agents(base))
     declared = entry.get("only_agents")
     have = {m.get("agent") for m in rows} | {
-        r["agent"] for r in foreign_rows(entry)}
+        r["agent"] for r in (*foreign_rows(entry), *declined_rows(entry))}
     return [a for a in writes
             if a not in have and (not declared or a in declared)]
 
@@ -5338,6 +5343,21 @@ def _foreign_target(path: Path, rendered: str, owned: set) -> bool:
     return path.is_symlink() or _file_sha(path) != _text_sha(rendered)
 
 
+def declined_rows(entry: dict | None) -> list[dict]:
+    """A workflow entry's ``declined`` record, as ``{agent, slot, reason}``:
+    the agents boost rendered it for and did not write, because that agent
+    would reject the file at load (:func:`workflows.render_problem`).
+
+    No path, because there is no file — nothing for uninstall to remove or
+    `boost verify` to hash. The record exists so the agent still reads as
+    decided: without it :func:`unmaterialized_agents` called the workflow
+    "never written for gemini" and sent the user to a `boost sync` that
+    declines again. A reinstall decides each agent afresh.
+    """
+    return [r for r in (entry or {}).get("declined") or ()
+            if isinstance(r, dict) and r.get("agent")]
+
+
 def foreign_rows(entry: dict | None) -> list[dict]:
     """A workflow entry's ``foreign`` record: the agents it did not write
     because the user's own file held the path, as ``{agent, slot, path}``.
@@ -5487,6 +5507,7 @@ def _install_workflow(entry: dict, force: bool = False,
     refused: list[dict] = []
     foreign: list[str] = []
     foreign_record: list[dict] = []
+    declined: list[tuple[str, str]] = []
     # From ``materializations`` only: a ``foreign`` row names the user's file.
     owned = {m.get("path") for m in (existing or {}).get("materializations")
              or () if not lockfile.is_skill_copy(m)}
@@ -5516,6 +5537,16 @@ def _install_workflow(entry: dict, force: bool = False,
             if resolved_base is not None:
                 scopes.ensure_in_base(resolved_base, path)
             rendered = workflows.render(agent, slot, name, raw)
+            problem = workflows.render_problem(agent, slot, rendered)
+            if problem is not None:
+                # Written, it was a load error at every session for a file
+                # install, verify and doctor all called fine. A copy an
+                # earlier install wrote is ours to take back with it.
+                declined.append((agent, problem))
+                if str(path) in owned and path.is_file():
+                    _note_prior(undo, path)
+                    path.unlink()
+                continue
             if _foreign_target(path, rendered, owned):
                 foreign.append(str(path))
                 foreign_record.append({"agent": agent, "slot": slot,
@@ -5545,17 +5576,23 @@ def _install_workflow(entry: dict, force: bool = False,
                                               base=resolved_base))
         # As for rules: an unrecorded materialization is a live slash command that
         # `_uninstall_workflow` — driven by this list — can never remove.
+        # A declined agent was decided this run, so its old row goes too.
         materializations.extend(_refused_materializations(
-            existing, linked, refused,
+            existing, linked + [agent for agent, _why in declined], refused,
             source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
             declared=declared_agent_scope(
                 only_agents if explicit_agents else None, existing)))
         # An agent this run did not try (a narrowed `--agent`) keeps its foreign
         # row, as it keeps its materialization; one it tried is decided afresh.
         tried = {*linked, *(r["agent"] for r in refused),
-                 *(r["agent"] for r in foreign_record)}
+                 *(r["agent"] for r in foreign_record),
+                 *(agent for agent, _why in declined)}
         foreign_record += [r for r in foreign_rows(existing)
                            if r["agent"] not in tried]
+        declined_record = [{"agent": agent, "slot": slot, "reason": why}
+                           for agent, why in declined]
+        declined_record += [r for r in declined_rows(existing)
+                            if r["agent"] not in tried]
         # Last, always: `boost info` and update's risk diff read the first
         # readable row as "the" installed text, and that is an agent's file.
         if copy_dir_existed:
@@ -5602,6 +5639,7 @@ def _install_workflow(entry: dict, force: bool = False,
                if existing and isinstance(existing.get("as_skill"), bool)
                else {}),
             **({"foreign": foreign_record} if foreign_record else {}),
+            **({"declined": declined_record} if declined_record else {}),
         }
         lockfile.set_workflow(name, record)
     except BaseException:
@@ -5622,6 +5660,7 @@ def _install_workflow(entry: dict, force: bool = False,
     res.blocked = blocked
     res.conflicts = conflicts
     res.foreign = foreign
+    res.declined = declined
     res.upgraded = existing is not None
     res.scope = scope
     res.skill_copy = Path(copy_row["path"]).parent if copy_row else None

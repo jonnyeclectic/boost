@@ -7305,3 +7305,77 @@ class TestRestoreCarryNames:
 
     def test_no_store_carries_nothing(self, sandbox):
         assert store.restore_carry_names({}) == ([], [])
+
+
+class TestAGeminiAgentTheRepairCannotFixIsNotWritten:
+    """A subagent ``workflows.render_problem`` says Gemini rejects is withheld
+    from ``~/.gemini/agents``: written verbatim it was a validation error at
+    every Gemini session, while install said "→ gemini", verify said ok and
+    doctor said healthy."""
+
+    BODY = ("---\nname: mcp\ndescription: d\n"
+            "tools: Read, mcp__github__create_issue\n---\n\nBody.\n")
+    WHY = "has `tools` as a string, where Gemini requires a list"
+
+    def _entry(self, tap, body=None):
+        return _workflow_entry(tap, name="mcp", rel="agents/mcp.md",
+                               body=body or self.BODY)
+
+    def test_gemini_is_skipped_and_the_reason_returned(self, tap):
+        res = store.install(self._entry(tap))
+        assert set(res.linked) == {"claude-code", "cursor"}
+        assert res.declined == [("gemini", self.WHY)]
+        assert not (paths.home() / ".gemini" / "agents" / "mcp.md").exists()
+        # The other agents still get the tap's bytes.
+        assert (paths.home() / ".claude" / "agents" / "mcp.md").read_text(
+            encoding="utf-8") == self.BODY
+        rec = lockfile.get_workflow("mcp")
+        assert "gemini" not in {m["agent"] for m in rec["materializations"]}
+        assert rec["declined"] == [{"agent": "gemini", "slot": "agents",
+                                    "reason": self.WHY}]
+
+    def test_a_declined_agent_is_not_a_gap_sync_could_fill(self, tap):
+        store.install(self._entry(tap))
+        rec = lockfile.get_workflow("mcp")
+        assert store.unmaterialized_agents("workflow", rec) == []
+        assert store.sync_plan()["missing_materializations"] == []
+
+    def test_a_reinstall_takes_back_the_copy_an_older_install_wrote(self, tap):
+        # The pre-fix shape: the verbatim file, recorded as a gemini row.
+        good = ("---\nname: mcp\ndescription: d\ntools: [read_file]\n"
+                "---\n\nBody.\n")
+        store.install(self._entry(tap, body=good))
+        gem = paths.home() / ".gemini" / "agents" / "mcp.md"
+        assert gem.is_file()
+        res = store.install(self._entry(tap), force=True)
+        assert res.declined == [("gemini", self.WHY)]
+        assert not gem.exists()
+        rec = lockfile.get_workflow("mcp")
+        assert "gemini" not in {m["agent"] for m in rec["materializations"]}
+
+    def test_a_user_file_at_the_path_is_never_removed(self, tap):
+        gem = paths.home() / ".gemini" / "agents" / "mcp.md"
+        gem.parent.mkdir(parents=True, exist_ok=True)
+        gem.write_text("mine\n", encoding="utf-8")
+        store.install(self._entry(tap))
+        assert gem.read_text(encoding="utf-8") == "mine\n"
+
+    def test_fixed_upstream_it_is_written_again(self, tap):
+        store.install(self._entry(tap))
+        good = ("---\nname: mcp\ndescription: d\ntools: Read\n---\n\nBody.\n")
+        res = store.install(self._entry(tap, body=good), force=True)
+        assert res.declined == []
+        assert "gemini" in res.linked
+        assert "declined" not in lockfile.get_workflow("mcp")
+
+    def test_a_narrowed_reinstall_keeps_the_declined_record(self, tap):
+        store.install(self._entry(tap))
+        store.install(self._entry(tap), force=True, only_agents=["cursor"])
+        assert lockfile.get_workflow("mcp")["declined"] == [
+            {"agent": "gemini", "slot": "agents", "reason": self.WHY}]
+
+    def test_uninstall_after_a_decline(self, tap):
+        store.install(self._entry(tap))
+        info = store.uninstall("mcp")
+        assert set(info["unlinked"]) == {"claude-code", "cursor"}
+        assert lockfile.get_workflow("mcp") is None

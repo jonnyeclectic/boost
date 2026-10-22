@@ -394,3 +394,12 @@ def test_portable_contracts_foreign_paths(sandbox):
     assert out["foreign"][1] == "junk"
     assert out["materializations"][0]["path"] == "~/.cursor/w.md"
     assert lock["workflows"]["w"]["foreign"][0]["path"].startswith(str(home))
+
+
+def test_a_declined_agent_is_named_with_its_reason_and_remedy():
+    res = store.InstallResult(name="mcp", dest=Path("."), kind="workflow")
+    res.declined = [("gemini", "has no `description`, which Gemini requires")]
+    _c, refused = pkg._skipped_agent_lines(res)
+    assert refused == [
+        "not written for gemini: mcp has no `description`, which Gemini "
+        "requires — fix it in the tap, then `boost reinstall mcp`"]

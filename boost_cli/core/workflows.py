@@ -691,6 +691,27 @@ def _tools_verdict(lines: list[tuple[str, str]],
     return _REWRITE, out
 
 
+_NULL_TEXTS = ("", "~", "null")
+
+
+def _is_empty_value(lines: list[tuple[str, str]], key: _Key) -> bool:
+    """Whether ``key`` holds YAML null (or an empty string): no value at all."""
+    shape, text, _items = _read_value(lines, key)
+    return shape == _SCALAR and text.lower() in _NULL_TEXTS
+
+
+def _plain_scalar_needs_quotes(lines: list[tuple[str, str]], key: _Key) -> bool:
+    """Whether ``key``'s one-line plain scalar is invalid YAML as written.
+
+    Only the shape js-yaml refuses that a quote cures: ``": "`` inside an
+    unquoted value. A quoted value, a list, or anything :func:`_read_value`
+    cannot read is left alone.
+    """
+    shape, text, _items = _read_value(lines, key)
+    return (shape == _SCALAR and not _is_quoted(_strip_comment(key.value))
+            and ": " in text)
+
+
 def _plan(install: str, lines: list[tuple[str, str]],
           keys: list[_Key]) -> _Plan | None:
     """The edit to make, or None for "hand this file back untouched"."""
@@ -751,6 +772,17 @@ def _plan(install: str, lines: list[tuple[str, str]],
             drop -= {tools_key.start}
             drop |= set(range(tools_key.start + 1, tools_key.end))
             values["tools"] = tools
+
+    # A plain scalar holding ": " is a YAML error ("bad indentation of a
+    # mapping entry"), and it is the common Claude-corpus description: one
+    # line of `Use this agent when...\n\n<example>\nContext: ...`. Claude
+    # reads the line as text; quoting it gives Gemini that same text.
+    for text_key in ("description", "display_name"):
+        key = seen.get(text_key)
+        if key is not None and _plain_scalar_needs_quotes(lines, key):
+            value = _read_value(lines, key)[1]
+            replace[key.start] = "%s: %s" % (text_key, _yaml_str(value))
+            values[text_key] = value
 
     name_key = seen.get("name")
     declared = ""
@@ -916,6 +948,8 @@ def sanitize_gemini_agent(name: str, raw: str) -> str:
     fails at load. Those files are returned byte-identical (6 of 5,005 in the
     tapped corpus), as are remote agents, duplicated keys, and every construct
     :func:`_scan_keys` and :func:`_read_value` decline to interpret.
+    Returned, not written: ``store`` asks :func:`gemini_agent_problem` of
+    the result and withholds a file Gemini would reject, with the reason.
 
     The result is verified before it is returned (:func:`_verify_output`) and
     then required to be a fixed point — ``sanitize(sanitize(x)) ==
@@ -923,10 +957,82 @@ def sanitize_gemini_agent(name: str, raw: str) -> str:
     refused instead. A renderer that does not settle makes ``boost sync``
     rewrite files that never changed.
     """
+    # Gemini's FRONTMATTER_REGEX is anchored at `---` on a plain utf-8 read,
+    # so a leading BOM is "Missing mandatory YAML frontmatter". boost's own
+    # frontmatter.parse strips one, which is why the catalog never saw it.
+    raw = raw.removeprefix("\ufeff")
     out = _sanitize_once(name, raw)
     if out == raw:
         return raw
     return out if _sanitize_once(name, out) == out else raw
+
+
+def gemini_agent_problem(text: str) -> str | None:
+    """Why Gemini would reject the agent file ``text``, or None.
+
+    Asked of :func:`sanitize_gemini_agent`'s OUTPUT, so it answers for what
+    the repair could not fix — a description that is missing, a ``tools``
+    list with a name that has no Gemini counterpart, a file with no
+    frontmatter. ``store`` does not write such a file: written, it was a
+    validation error at every Gemini session for a file boost reported as
+    installed and `boost verify` called ok.
+
+    Only definite rejections, each one a rule of ``localAgentSchema`` or of
+    ``parseAgentMarkdown``. A construct this module cannot read (a block
+    scalar, a nested mapping, a remote agent) answers None: refusing a file
+    Gemini might load is the worse error, and it keeps the pre-existing
+    behaviour for exactly the shapes nothing here can judge.
+    """
+    if not text.startswith(("---\n", "---\r\n")):
+        return "has no YAML frontmatter, which Gemini requires"
+    span = _locate_frontmatter(text)
+    if span is None:
+        return None if "\n---" in text[3:] else (
+            "has a frontmatter block that is never closed")
+    lines = _lines_of(text[span[0]:span[1]])
+    keys = _scan_keys(lines)
+    if keys is None:
+        return None
+    seen = {key.name: key for key in keys}
+    if len(seen) != len(keys):
+        return "repeats a frontmatter key, which Gemini's YAML parser refuses"
+    if not GEMINI_REMOTE_KEYS.isdisjoint(seen):
+        return None
+    unknown = [key.name for key in keys if key.name not in GEMINI_AGENT_KEYS]
+    if unknown:
+        return "carries %s, which Gemini's agent schema does not allow" % (
+            ", ".join("`%s`" % k for k in unknown))
+    for name in ("name", "description"):
+        if name not in seen or _is_empty_value(lines, seen[name]):
+            return "has no `%s`, which Gemini requires" % name
+    for key in keys:
+        if _plain_scalar_needs_quotes(lines, key):
+            return "has an unquoted `: ` in `%s`, which is not valid YAML" % (
+                key.name)
+    shape, declared, _items = _read_value(lines, seen["name"])
+    if shape == _SCALAR and (not GEMINI_NAME_RE.match(declared) or (
+            not _is_quoted(_strip_comment(seen["name"].value))
+            and _NON_STRING_RE.match(declared))):
+        return "is named %r, which is not a Gemini agent name" % declared
+    if "tools" in seen:
+        return _tools_problem(lines, seen["tools"])
+    return None
+
+
+def _tools_problem(lines: list[tuple[str, str]], key: _Key) -> str | None:
+    """Why Gemini would reject this ``tools`` value, or None."""
+    shape, text, items = _read_value(lines, key)
+    if shape == _OTHER:
+        return None
+    if shape == _SCALAR:
+        return ("has an empty `tools`, which Gemini reads as null"
+                if text.lower() in _NULL_TEXTS else
+                "has `tools` as a string, where Gemini requires a list")
+    bad = [t for t in items if not _valid_gemini_tool(t)]
+    if bad:
+        return "grants %s, which Gemini has no tool for" % ", ".join(
+            "`%s`" % t for t in bad)
+    return None
 
 
 def skill_description(slot: str, meta: dict) -> str | None:
@@ -983,6 +1089,19 @@ def render_skill(name: str, description: str, raw: str) -> str:
     """
     head = frontmatter.dump({"name": name, "description": description})
     return "%s\n\n%s" % (head, _skill_body(raw))
+
+
+def render_problem(agent: str | None, slot: str, text: str) -> str | None:
+    """Why ``agent`` would reject ``text`` (what :func:`render` produced for
+    it in ``slot``), or None when nothing says it would.
+
+    Only Gemini's subagent slot is judged (:func:`gemini_agent_problem`): it
+    is the one target with a strict load-time schema, and the one whose repair
+    can decline. A caller that gets a reason does not write the file.
+    """
+    if agent in TOML_COMMAND_AGENTS and slot == SLOT_AGENTS:
+        return gemini_agent_problem(text)
+    return None
 
 
 def render(agent: str | None, slot: str, name: str, raw: str) -> str:

@@ -413,6 +413,11 @@ def _skipped_agent_lines(res) -> tuple[list[str], list[str]]:
                 "alone; move it aside, then `boost sync` writes it"
                 % _tilde(path)
                 for path in getattr(res, "foreign", None) or ()]
+    # Rendered and withheld: that agent rejects the file at load, so writing
+    # it would report a workflow the agent never runs. The source is the fix.
+    refused += ["not written for %s: %s %s — fix it in the tap, then "
+                "`boost reinstall %s`" % (agent, res.name, why, res.name)
+                for agent, why in getattr(res, "declined", None) or ()]
     return conflicts, refused
 
 
