@@ -256,6 +256,18 @@ class TestBesideAtomicWrites:
         assert dirs == [d for d in paths.boost_dirs()
                         if d != paths.store_dir()] + [claude_md.parent]
 
+    @pytest.mark.parametrize("recorded", ["", "CLAUDE.md"])
+    def test_a_relative_row_names_no_dir(self, sandbox, recorded,
+                                         monkeypatch):
+        # Its parent is ``.``: clean would delete from wherever it ran.
+        cwd = paths.home() / "somewhere"
+        tmp = _write_temp(cwd)
+        monkeypatch.chdir(cwd)
+        _record_rule(recorded)
+        assert store.atomic_write_dirs() == [
+            d for d in paths.boost_dirs() if d != paths.store_dir()]
+        assert tmp not in [p for p, _kind in store.stale_temps(NOW)]
+
 
 class TestBesideAtomicWritesCli:
     def test_doctor_names_each_dir_heal_names_them_clean_removes_them(

@@ -2301,6 +2301,11 @@ def atomic_write_dirs() -> list[Path]:
                 continue
             for m in lockfile._row_paths(entry):
                 p = Path(m["path"])
+                # Only an absolute row names a dir: ``""`` or a relative
+                # path has ``.`` for a parent, and `boost clean` would then
+                # delete from wherever it was run.
+                if not p.is_absolute():
+                    continue
                 dirs.extend((p.parent, Path(os.path.realpath(p)).parent))
     def key_of(d: Path) -> str:
         return os.path.normcase(os.path.realpath(d))
