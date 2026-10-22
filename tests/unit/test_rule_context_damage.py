@@ -194,7 +194,10 @@ class TestNotUTF8:
         assert integrity.locally_edited("rule", "vd", entry) is True
         capsys.readouterr()
         assert safety.cmd_verify(["vd"]) == 1
-        assert "vd modified" in _flat(capsys.readouterr())
+        verified = _flat(capsys.readouterr())
+        assert ("vd modified rule · %s is not UTF-8 — save it as UTF-8"
+                % paths.tilde(md)) in verified
+        assert "discard local edits" not in verified
         assert quality.cmd_doctor([]) == 1
         assert ("rule vd's block in %s cannot be read: the file is not "
                 "UTF-8 — save it as UTF-8, then run `boost doctor` again"
@@ -202,8 +205,22 @@ class TestNotUTF8:
         assert md.read_bytes() == raw
 
     def test_the_duplicate_scan_skips_it(self, tap):
-        self._installed_then_latin1(tap, "dup")
+        md, _ = self._installed_then_latin1(tap, "dup")
         assert store.duplicate_rule_blocks() == []
+        assert store.unreadable_context_files() == [("dup", str(md))]
+
+    def test_a_readable_file_is_not_unreadable(self, tap):
+        store.install(_rule(tap, "fine"))
+        assert store.unreadable_context_files() == []
+
+    def test_verify_json_lists_the_file(self, tap, capsys):
+        import json
+        md, _ = self._installed_then_latin1(tap, "vj")
+        capsys.readouterr()
+        assert safety.cmd_verify(["vj", "--json"]) == 1
+        row = json.loads(capsys.readouterr().out)["skills"][0]
+        assert row["unreadable"] == [paths.tilde(md)]
+        assert row["status"] == integrity.STATUS_MODIFIED
 
     def test_note_prior_skips_an_unreadable_file(self, sandbox, tmp_path):
         p = tmp_path / "CLAUDE.md"
@@ -269,6 +286,8 @@ class TestOrphanEnd:
         md.parent.mkdir(parents=True, exist_ok=True)
         md.write_text("Mine\n", encoding="utf-8")
         store.install(_rule(tap, name))
+        from boost_cli.core import catalog
+        catalog.rebuild_tap(tap)  # heal re-reads the rule from its tap
         start, _end = rules.markers(name)
         damaged = md.read_text(encoding="utf-8").replace(start + "\n", "")
         md.write_text(damaged, encoding="utf-8")
@@ -295,6 +314,12 @@ class TestOrphanEnd:
 
     def test_heal_does_not_append_a_second_copy(self, tap, capsys):
         md, damaged = self._installed_then_unstarted(tap, "oh")
+        capsys.readouterr()
         quality.cmd_heal([])
+        out = _flat(capsys.readouterr())
         assert md.read_text(encoding="utf-8") == damaged
-        assert "re-materialized rule oh" not in _flat(capsys.readouterr())
+        assert "re-materialized rule oh" not in out
+        assert ("rule oh was not re-materialized: rule oh's managed block in "
+                "%s has an end marker with no start marker above it"
+                % paths.tilde(md)) in out
+        assert lockfile.get_rule("oh") is not None

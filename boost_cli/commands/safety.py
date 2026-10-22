@@ -458,6 +458,7 @@ def cmd_verify(argv):
 
     results: list[dict[str, Any]] = []
     duplicates = store.duplicate_rule_blocks()
+    unreadable = store.unreadable_context_files()
     for kind, name, entry in _iter_installed_all(
             user_names or (None if not args.names else [])):
         missing_fields = [f for f in ("version", "tap", "sha256", "installed_at")
@@ -496,6 +497,10 @@ def cmd_verify(argv):
             if dupes:
                 row["duplicate_blocks"] = [
                     {"path": paths.tilde(Path(p)), "count": n} for p, n in dupes]
+            undecodable = [paths.tilde(Path(p)) for r, p in unreadable
+                           if r == name]
+            if undecodable:
+                row["unreadable"] = undecodable
         # A rule or workflow installed `--local` is recorded here, in the
         # user lock, and graded from wherever verify runs -- its rows are
         # absolute paths. Saying "user" for it is the one claim about the
@@ -568,6 +573,10 @@ def cmd_verify(argv):
         bits.extend("block appears %d times in %s — `boost heal` keeps the "
                     "first" % (d["count"], d["path"])
                     for d in r.get("duplicate_blocks", []))
+        # Not UTF-8: a reinstall refuses the file, so "discard local edits"
+        # would send the user to a refusal. The fix is a re-save.
+        bits.extend("%s is not UTF-8 — save it as UTF-8" % p
+                    for p in r.get("unreadable", []))
         # The next step, not just the verdict: verify was where doctor sent a
         # modified skill, and it stopped at "modified" with rc 1.
         # Not a vendored project skill: its copy is the repo's, not a
@@ -575,6 +584,7 @@ def cmd_verify(argv):
         # A duplicated block reads modified too; its remedy is named above.
         if (r["status"] == integrity.STATUS_MODIFIED
                 and not r.get("duplicate_blocks")
+                and not r.get("unreadable")
                 and not (r["kind"] == "skill" and r["scope"] == "project")):
             bits.append("`%s` %s" % integrity.modified_remedy(r["name"],
                                                              r["kind"]))

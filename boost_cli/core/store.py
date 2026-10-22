@@ -5771,6 +5771,40 @@ def duplicate_rule_blocks() -> list[tuple[str, str, int]]:
     """
     from . import rules
     found: list[tuple[str, str, int]] = []
+    for name, p in _written_context_rows():
+        try:
+            text = util.read_user_text(Path(p))
+        except (OSError, NotUTF8Error):
+            continue
+        n = len(rules.block_spans(text, name))
+        if n > 1:
+            found.append((name, p, n))
+    return found
+
+
+def unreadable_context_files() -> list[tuple[str, str]]:
+    """``(rule, context file)`` for each written context-file row of an
+    installed rule whose file is not UTF-8.
+
+    The rows :func:`duplicate_rule_blocks` reads, and what `boost verify`
+    names: such a file reads as modified, and the reinstall that remedy
+    names refuses it (`util.NotUTF8Error`), so the line has to say why.
+    """
+    found: list[tuple[str, str]] = []
+    for name, p in _written_context_rows():
+        try:
+            util.read_user_text(Path(p))
+        except NotUTF8Error:
+            found.append((name, p))
+        except OSError:
+            continue
+    return found
+
+
+def _written_context_rows() -> Iterator[tuple[str, str]]:
+    """``(rule, path)`` for every written, unquarantined context-file row of
+    an installed rule, each file once per rule."""
+    from . import rules
     for name, entry in sorted(lockfile.installed_rules().items()):
         if entry.get("quarantined"):
             continue
@@ -5785,14 +5819,7 @@ def duplicate_rule_blocks() -> list[tuple[str, str, int]]:
             if not p or key in seen:
                 continue
             seen.add(key)
-            try:
-                text = util.read_user_text(Path(p))
-            except (OSError, NotUTF8Error):
-                continue
-            n = len(rules.block_spans(text, name))
-            if n > 1:
-                found.append((name, p, n))
-    return found
+            yield name, p
 
 
 def collapse_rule_block(name: str, path: str) -> bool:
