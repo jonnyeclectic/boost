@@ -7379,3 +7379,62 @@ class TestAGeminiAgentTheRepairCannotFixIsNotWritten:
         info = store.uninstall("mcp")
         assert set(info["unlinked"]) == {"claude-code", "cursor"}
         assert lockfile.get_workflow("mcp") is None
+
+
+class TestNamespacedCommandsInstallSideBySide:
+    """``commands/frontend/test.md`` and ``commands/backend/test.md`` used to
+    both install as ``test``: the second was refused as "already installed",
+    and with ``--force`` overwrote the first. Each now keeps its namespace."""
+
+    def _both(self, tap):
+        front = _workflow_entry(tap, name="frontend/test",
+                                rel="commands/frontend/test.md",
+                                body="---\ndescription: Front\n---\nFront tests\n")
+        back = _workflow_entry(tap, name="backend/test",
+                               rel="commands/backend/test.md",
+                               body="---\ndescription: Back\n---\nBack tests\n")
+        return store.install(front), store.install(back)
+
+    def test_each_lands_in_its_own_subdir(self, tap):
+        front, back = self._both(tap)
+        home = paths.home()
+        assert set(front.linked) == set(back.linked) == {
+            "claude-code", "cursor", "gemini"}
+        assert (home / ".claude/commands/frontend/test.md").read_text(
+            encoding="utf-8").endswith("Front tests\n")
+        assert (home / ".claude/commands/backend/test.md").read_text(
+            encoding="utf-8").endswith("Back tests\n")
+        assert (home / ".gemini/commands/frontend/test.toml").read_text(
+            encoding="utf-8") == 'description = "Front"\nprompt = "Front tests"\n'
+        assert (home / ".cursor/commands/backend/test.md").is_file()
+        assert not (home / ".claude/commands/test.md").exists()
+        assert set(lockfile.installed_workflows()) >= {"frontend/test",
+                                                       "backend/test"}
+
+    def test_no_skill_copy_and_the_first_install_says_why(self, tap):
+        front, _back = self._both(tap)
+        assert front.skill_copy is None
+        assert front.skill_note == ("not written to the skill store: a "
+                                    "namespaced command has no single-word "
+                                    "skill name")
+        assert not (paths.store_dir() / "frontend").exists()
+        again = store.install(_workflow_entry(
+            tap, name="frontend/test", rel="commands/frontend/test.md",
+            body="---\ndescription: Front\n---\nFront tests\n"), force=True)
+        assert again.skill_note is None
+
+    def test_uninstall_removes_one_and_prunes_only_its_empty_dir(self, tap):
+        self._both(tap)
+        mine = paths.home() / ".claude/commands/frontend/notes.md"
+        mine.write_text("mine\n", encoding="utf-8")
+        info = store.uninstall("backend/test")
+        assert set(info["unlinked"]) == {"claude-code", "cursor", "gemini"}
+        home = paths.home()
+        assert not (home / ".claude/commands/backend").exists()
+        assert not (home / ".gemini/commands/backend").exists()
+        assert (home / ".claude/commands/frontend/test.md").is_file()
+        store.uninstall("frontend/test")
+        # The user's file keeps its dir.
+        assert mine.read_text(encoding="utf-8") == "mine\n"
+        assert not (home / ".gemini/commands/frontend").exists()
+        assert (home / ".claude/commands").is_dir()

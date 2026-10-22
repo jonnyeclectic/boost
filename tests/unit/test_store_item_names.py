@@ -91,6 +91,25 @@ class TestLongNames:
         assert exc.value.hint == ("APFS and ext4 refuse a file or directory "
                                   "name over 255 bytes")
 
+    def test_a_namespaced_workflow_is_checked_part_by_part(self):
+        # `frontend/test` is a dir plus a file: each part a component, and
+        # only the leaf pays for the `.toml` suffix.
+        assert util.check_item_name("frontend/test", "workflow") == "frontend/test"
+        assert util.check_item_name("n" * 255 + "/x", "workflow")
+        with pytest.raises(BoostError) as exc:
+            util.check_item_name("n" * 256 + "/x", "workflow")
+        assert exc.value.message.startswith(
+            "workflow name is too long (256 bytes")
+        with pytest.raises(BoostError):
+            util.check_item_name("x/" + "n" * 251, "workflow")
+        for bad in ("a/../b", "a//b", "/a", "a/"):
+            with pytest.raises(BoostError, match="invalid workflow name"):
+                util.check_item_name(bad, "workflow")
+        # Only a workflow: no other kind is ever namespaced.
+        for kind in ("skill", "rule"):
+            with pytest.raises(BoostError, match="invalid %s name" % kind):
+                util.check_item_name("a/b", kind)
+
     def test_an_unknown_kind_is_held_to_the_longest_suffix(self):
         util.check_item_name("n" * 250, "other")
         with pytest.raises(BoostError):

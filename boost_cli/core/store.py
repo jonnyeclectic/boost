@@ -5528,8 +5528,11 @@ def _install_workflow(entry: dict, force: bool = False,
     # `uninstall` could act on.
     undo: list[tuple[Path, str | None, bool]] = []
     record: dict | None = None
-    copy_dir = skill_store_dir(name)
-    copy_dir_existed = os.path.lexists(copy_dir)
+    # A namespaced command (`frontend/test`) has no store dir: a skill name
+    # is one path component, and `_skill_copy` says so.
+    copy_dir = (skill_store_dir(name) if util.is_safe_component(name)
+                else None)
+    copy_dir_existed = copy_dir is not None and os.path.lexists(copy_dir)
     try:
         for agent, skills_dir in targets.items():
             path = workflows.workflow_target(
@@ -5601,7 +5604,7 @@ def _install_workflow(entry: dict, force: bool = False,
                             if r["agent"] not in tried]
         # Last, always: `boost info` and update's risk diff read the first
         # readable row as "the" installed text, and that is an agent's file.
-        if copy_dir_existed:
+        if copy_dir is not None and copy_dir_existed:
             _note_prior(undo, copy_dir / "SKILL.md")
         copy_row, copy_note = _skill_copy(name, slot, raw, existing, as_skill,
                                           scope)
@@ -5651,7 +5654,7 @@ def _install_workflow(entry: dict, force: bool = False,
     except BaseException:
         if not _row_landed(lockfile.get_workflow, name, record):
             _undo_writes(undo)
-            if not copy_dir_existed:
+            if copy_dir is not None and not copy_dir_existed:
                 with contextlib.suppress(OSError):
                     util.remove_path(copy_dir)
         raise
@@ -6052,6 +6055,12 @@ def _skill_copy(name: str, slot: str, raw: str, existing: dict | None,
     """
     from . import frontmatter, workflows
     own = _copy_row(existing)
+    if not util.is_safe_component(name):
+        # `frontend/test` would nest a dir in the store no skill host reads.
+        return None, ("not written to the skill store: a namespaced command "
+                      "has no single-word skill name"
+                      if existing is None and wants_skill_copy(as_skill, existing)
+                      else None)
     if scope == scopes.SCOPE_PROJECT:
         return None, ("not written to the skill store: --as-skill is user "
                       "scope only" if as_skill else None)
@@ -6479,6 +6488,14 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
     for m in copies:
         if m.get("path") not in kept:
             _rmdir_quietly(Path(m.get("path", "")).parent)
+    # A namespaced command's file sat in `commands/<ns>/`, which install made:
+    # an emptied namespace dir goes with it, innermost first. A dir holding
+    # anything else (another namespace's command, the user's file) stays.
+    depth = name.count("/")
+    for path, _text in plan if depth else ():
+        for parent in path.parents[:depth]:
+            with contextlib.suppress(OSError):   # not empty: someone's file
+                parent.rmdir()
     lockfile.remove_workflow(name)
     journal.log("uninstall", name)
     res = _materialized_result(name, removed, workflow, "workflow", gone)

@@ -775,9 +775,14 @@ def check_item_name(name: str, kind: str = "skill") -> str:
     rather than later as a bare "invalid skill name" from the store, and
     `boost lint` asks the same question through :func:`item_name_error`.
     """
-    if not is_safe_component(name):
+    # A namespaced slash command (`frontend/test`, `workflows.NAMESPACE_SEP`)
+    # is a dir per namespace plus a file, each one a component of its own.
+    *namespace, leaf = name.split("/") if kind == "workflow" else [name]
+    if not all(is_safe_component(part) for part in (*namespace, leaf)):
         raise BoostError("invalid %s name %r" % (kind, name), hint=NAME_RULE_HINT)
-    _check_component(name + _ITEM_SUFFIX.get(kind, ".toml"), "%s name" % kind)
+    for part in namespace:
+        _check_component(part, "%s name" % kind)
+    _check_component(leaf + _ITEM_SUFFIX.get(kind, ".toml"), "%s name" % kind)
     return name
 
 

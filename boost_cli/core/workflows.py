@@ -70,6 +70,44 @@ def detect_slot(source_rel: str) -> str:
     return SLOT_AGENTS if parts & AGENT_DIRS else SLOT_COMMANDS
 
 
+#: Source dirs a slash command's namespace is read under: the subdirectories
+#: between one of these and the file. Claude Code: ``.claude/commands/
+#: frontend/component.md`` is ``/frontend:component``; Gemini's
+#: FileCommandLoader joins the same path segments with ``:``.
+COMMAND_DIRS = {"commands", "workflows"}
+#: How a namespaced command is spelled as a boost name: ``frontend/test``. Not
+#: ``:``, the agents' own separator, because ``tap:name`` already owns it
+#: (``catalog.split_name``) and ``tap:frontend:test`` would split wrongly.
+NAMESPACE_SEP = "/"
+
+
+def command_namespace(source_rel: str) -> tuple[str, ...]:
+    """The namespace dirs of the command at ``source_rel``, outermost first.
+
+    The directories after the LAST :data:`COMMAND_DIRS` segment, so a
+    plugin's ``plugins/x/commands/test.md`` has none and ``commands/
+    frontend/test.md`` has ``("frontend",)``. A file under no such dir (a
+    frontmatter-tagged loose command) has none.
+    """
+    parts = Path(source_rel).parts[:-1]
+    at = [i for i, part in enumerate(parts) if part.lower() in COMMAND_DIRS]
+    return parts[at[-1] + 1:] if at else ()
+
+
+def name_parts(name: str, slot: str) -> list[str]:
+    """``name`` split into its path components, each one validated.
+
+    Only a command may be namespaced. Every component is tap-controlled and
+    about to become a path component, so traversal is refused before any
+    join, as :func:`rules.rule_target` does for a rule.
+    """
+    parts = name.split(NAMESPACE_SEP)
+    if (len(parts) > 1 and slot != SLOT_COMMANDS) or not all(
+            util.is_safe_component(part) for part in parts):
+        raise BoostError("invalid workflow name %r" % name)
+    return parts
+
+
 def target_ext(agent: str | None, slot: str) -> str:
     """The file extension workflow files use for ``agent`` in ``slot``.
 
@@ -104,13 +142,13 @@ def workflow_target(skills_dir: Path, slot: str, name: str,
     same terms. It is passed in rather than looked up here so this module stays
     a pure function of its arguments and needs no config read.
     """
-    # Same guard as rule_target: `name` is tap-controlled and is about to become
-    # a path component, so traversal has to be refused before the join.
-    if not util.is_safe_component(name):
-        raise BoostError("invalid workflow name %r" % name)
+    # A namespaced command (``frontend/test``) keeps its subdirectory, which
+    # is what makes it ``/frontend:test`` rather than a ``/test`` that a
+    # second namespace's ``test`` would overwrite. See :func:`name_parts`.
+    *namespace, leaf = name_parts(name, slot)
     root = (Path(base) / (dotdir or Path(skills_dir).parent.name)) \
         if base is not None else Path(skills_dir).parent
-    return root / slot / (name + target_ext(agent, slot))
+    return root.joinpath(slot, *namespace, leaf + target_ext(agent, slot))
 
 
 def _toml_str(s: str) -> str:
