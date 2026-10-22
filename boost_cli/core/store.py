@@ -1233,6 +1233,40 @@ def missing_from_store(name: str, entry: dict | None) -> bool:
     return not is_held(entry) and not skill_store_dir(name).is_dir()
 
 
+def held_copies() -> dict[str, Path]:
+    """Each recorded skill's held copy, by name: what a snapshot archives
+    beside the store, since the lock rows saying ``held_at`` are inside it."""
+    return {name: held_copy_dir(name)
+            for name, entry in lockfile.installed().items()
+            if is_held(entry) and util.is_safe_component(name)}
+
+
+def unhold_lost_copies() -> list[str]:
+    """Clear the sideline of each sidelined row whose held copy is gone.
+
+    A snapshot saved before held copies were archived restores rows that say
+    ``held_at`` with no copy anywhere: `focus --clear` "restored" them into
+    dangling links and `heal` skipped them as held. Un-held, they read as
+    missing from the store, which the restore's own sync reinstalls. A
+    quarantined row is left alone — bringing its content back is
+    `quarantine --release`'s call. Returns the names cleared.
+    """
+    lost = sorted(name for name, entry in lockfile.installed().items()
+                  if is_held(entry) and not entry.get("quarantined")
+                  and util.is_safe_component(name)
+                  and not os.path.lexists(held_copy_dir(name)))
+
+    def unhold(lock: dict) -> None:
+        for name in lost:
+            entry = lock["skills"].get(name)
+            if entry is not None:
+                entry.pop(HELD_KEY, None)
+                entry.pop("sidelined_by", None)
+    if lost:
+        lockfile.mutate(unhold)
+    return lost
+
+
 def drop_held_copy(name: str) -> None:
     """Remove a held copy no lock row will restore; a leftover is harmless."""
     with contextlib.suppress(OSError):

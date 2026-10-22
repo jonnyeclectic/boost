@@ -12,7 +12,7 @@ import os
 
 import pytest
 
-from boost_cli.core import catalog, lockfile, paths, registry, store
+from boost_cli.core import catalog, lockfile, paths, registry, store, util
 
 
 @pytest.fixture()
@@ -193,3 +193,30 @@ class TestFocusBookkeeping:
             ("c", "quarantined"),
             ("gone", "not installed")]
         assert store.focus_displaced([], inst) == []
+
+
+class TestHeldCopiesForSnapshots:
+    def test_held_copies_names_only_held_rows(self, installed):
+        assert store.held_copies() == {}
+        store.sideline(installed, "focus")
+        assert store.held_copies() == {
+            installed: store.held_copy_dir(installed)}
+
+    def test_unhold_lost_copies(self, installed):
+        assert store.unhold_lost_copies() == []
+        store.sideline(installed, "focus")
+        # Copy present: nothing lost.
+        assert store.unhold_lost_copies() == []
+        assert lockfile.get_skill(installed)["sidelined_by"] == "focus"
+        util.rmtree(store.held_copy_dir(installed))
+        assert store.unhold_lost_copies() == [installed]
+        entry = lockfile.get_skill(installed)
+        assert "sidelined_by" not in entry
+        assert store.HELD_KEY not in entry
+        assert store.missing_from_store(installed, entry) is True
+
+    def test_a_quarantined_row_keeps_its_hold(self, installed):
+        store.quarantine_skill(installed, lockfile.get_skill(installed))
+        util.rmtree(store.held_copy_dir(installed))
+        assert store.unhold_lost_copies() == []
+        assert store.is_held(lockfile.get_skill(installed))
