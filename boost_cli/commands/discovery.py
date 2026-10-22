@@ -730,8 +730,19 @@ def cmd_reindex(argv):
                  wrap=True)
     if args.dense:
         if dense_stats is None:
-            out.warn("dense index skipped — %s" % embed.fallback_note(),
-                     wrap=True)
+            from ..core import dense
+            st = dense.status()
+            # The extra is here and cannot load: "install the extra" would
+            # name the step this machine already took.
+            note = (dense.fix_hint(st["reason"], st)
+                    if st["reason"] == "no-extension-load"
+                    else embed.fallback_note())
+            out.warn("dense index skipped — %s" % note, wrap=True)
+        elif dense_stats.get("refused"):
+            from ..core import dense
+            msg, fix = dense.refusal_text(dense_stats)
+            out.warn(msg, wrap=True)
+            out.dim("hint: %s" % fix, wrap=True, indent=2)
         else:
             failed = dense_stats.get("failed") or []
             model_error = dense_stats.get("model_error")
@@ -865,6 +876,8 @@ def _reindex_dense(force, spinner=None):
     # embeds nothing and would otherwise never touch the model at all.
     embed.retry_local()
     stats = dense.build(force=force, on_progress=_embed_progress(spinner))
+    if isinstance(stats, dict) and stats.get("refused"):
+        return stats            # nothing was written; the caller words it
     if migrated and isinstance(stats, dict):
         stats = stats | {"quantized": migrated["chunks"]}
     if collapsed and isinstance(stats, dict) and collapsed["freed"]:

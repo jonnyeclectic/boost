@@ -160,7 +160,7 @@ class TestQuickstartWithoutTheExtra:
 
         def boom(*_a, **_k):
             raise BoostError("cannot reach the manifest",
-                             hint=shards.LOCAL_EMBED_HINT)
+                             hint=shards.transport_hint())
 
         monkeypatch.setattr(dense, "have_backend", lambda: False)
         monkeypatch.setattr(shards, "fetch_manifest", boom)
@@ -511,7 +511,7 @@ class TestEveryZeroShardReasonNamesItself:
 
     @pytest.mark.parametrize("hint", [
         "a proxy or a dropped connection cut the stream — retry",
-        "LOCAL_EMBED_HINT"])
+        "TRANSPORT_HINT"])
     def test_a_manifest_error_keeps_its_hint_and_names_the_real_cause(
             self, boost, monkeypatch, hint):
         # "no published shards" said the project has none; the cause is
@@ -520,8 +520,9 @@ class TestEveryZeroShardReasonNamesItself:
         # local-embed hint applies, so it is kept too.
         from boost_cli.core import dense, shards
         from boost_cli.errors import BoostError
-        if hint == "LOCAL_EMBED_HINT":
-            hint = shards.LOCAL_EMBED_HINT
+        if hint == "TRANSPORT_HINT":
+            hint = (shards.TRANSPORT_LEAD
+                    + "`boost reindex --dense` embeds them locally instead")
 
         def boom(*_a, **_k):
             raise BoostError("cannot reach the manifest", hint=hint)
