@@ -2604,6 +2604,23 @@ class TestStats:
         assert "rival-tap" in lines["tap"]
         assert "not installed" in r.out
 
+    def test_ambiguous_bare_name_refuses_like_info(self, boost, rival_tap):
+        """With nothing installed, `stats` took `find()[0]` — fixture-tap's
+        row — and suggested `boost install brainstorming`, which refuses the
+        same name as ambiguous. It now refuses the way `info` does."""
+        r = boost("stats", "brainstorming", expect=1)
+        assert r.out == ""
+        assert ("Error: 'brainstorming' exists in multiple taps: "
+                "fixture-tap, rival-tap") in r.err
+        assert "qualify it, e.g. `fixture-tap:brainstorming`" in r.err
+        boost("stats", "brainstorming", "--json", expect=1)
+
+    def test_not_installed_hint_keeps_the_qualifier(self, boost, rival_tap):
+        r = boost("stats", "rival-tap:brainstorming")
+        assert ("not installed — `boost install rival-tap:brainstorming`"
+                in r.out)
+        boost("install", "rival-tap:brainstorming")
+
 
 # ---------------------------------------------------------------- count
 

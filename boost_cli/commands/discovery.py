@@ -2588,7 +2588,14 @@ def cmd_stats(argv):
             kind, lock = "skill", prow.entry
     kind = kind or "skill"
     qualifier, _bare = catalog.split_name(args.name)
-    cat = catalog.for_lock(catalog.find(args.name), lock)
+    matches = catalog.find(args.name)
+    if lock is None and matches:
+        # Nothing installed to narrow by, so the row is picked the way `info`
+        # picks it: `matches[0]` described whichever tap sorted first — and
+        # suggested an install that then refused the same name as ambiguous.
+        cat = catalog.resolve_one(args.name)
+    else:
+        cat = catalog.for_lock(matches, lock)
     if not lock and not cat:
         raise BoostError("no skill named %r installed or in any tap" % args.name,
                         hint=catalog.join_hints(catalog.search_hint(name),
@@ -2660,7 +2667,10 @@ def cmd_stats(argv):
         out.kv("version", cat["version"])
         out.kv("tap", cat["tap"])
         out.kv("description", cat["description"], wrap=True)
-        out.info(out.role("not installed — `boost install %s`" % name, "muted"))
+        # As typed: a bare name can resolve to another tap's copy, or not at
+        # all, where the qualified spelling just resolved to this one.
+        out.info(out.role("not installed — `boost install %s`"
+                          % out.plain(args.name), "muted"))
     out.kv("activity", "%d installs · %d updates · %d uninstalls"
            % (acts["install"], acts["update"], acts["uninstall"]))
     if lock and latest:
