@@ -232,6 +232,38 @@ def _skill_meta(name: str, project: dict | None = None, pbase=None,
     return frontmatter.parse(_read(p))[0]
 
 
+def _deps_walk(project: dict) -> dict[str, tuple[str, dict]]:
+    """``{name: (kind, lock entry)}`` for every installed item `deps` checks.
+
+    All three user-lock sections plus the current project's skills. A name in
+    more than one section is walked once, as the kind `find_any` resolves it
+    to (skill first), which is also the one `deps NAME` would read.
+    """
+    walk: dict[str, tuple[str, dict]] = {}
+    for kind, section in lockfile.all_installed().items():
+        for name, entry in section.items():
+            walk.setdefault(name, (kind, entry if isinstance(entry, dict) else {}))
+    for name, entry in project.items():
+        walk.setdefault(name, ("skill", entry if isinstance(entry, dict) else {}))
+    return walk
+
+
+def _item_meta(name: str, kind: str, project: dict, pbase) -> dict:
+    """Frontmatter for an installed item of any kind, ``{}`` when unreadable.
+
+    A skill reads the way :func:`_skill_meta` does. A rule or workflow reads
+    its materialized artifact through :func:`_resolve_text`, as `deps NAME`
+    does. Unreadable is ``{}`` rather than an error: one item whose source is
+    gone must not abort the whole-environment check.
+    """
+    if kind == "skill":
+        return _skill_meta(name, project, pbase) or {}
+    try:
+        return frontmatter.parse(_resolve_text(name)[0])[0]
+    except BoostError:
+        return {}
+
+
 def _install_hint(specs) -> str:
     """The warning line naming one command that meets every unmet requirement."""
     missing = sorted(set(specs))
@@ -1402,7 +1434,6 @@ def cmd_deps(argv):
     ap.add_argument("name", nargs="?", help="skill to inspect (default: check all installed)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
-    inst = lockfile.installed()
     # `requires:`/`conflicts:` name an installed item, not a kind — a
     # requirement met by an installed rule or workflow is met, and denying it
     # ("✗ not installed" while `boost list` shows it) was the section-blind lie.
@@ -1476,11 +1507,16 @@ def cmd_deps(argv):
     unmet: list[dict] = []
     pairs: list[dict] = []
     seen: set = set()
-    names = sorted(set(inst) | set(project))
+    # Every kind, as `deps NAME` accepts: walking `lockfile.installed()` alone
+    # gave a clean bill of health (rc 0) over an installed workflow whose own
+    # `deps NAME` reported an unmet requirement (rc 1).
+    walk = _deps_walk(project)
+    names = sorted(walk)
     hint_specs: list[str] = []
     for name in names:
-        meta = _skill_meta(name, project, pbase) or {}
-        tap = str((inst.get(name) or project.get(name) or {}).get("tap") or "")
+        kind, entry = walk[name]
+        meta = _item_meta(name, kind, project, pbase)
+        tap = str(entry.get("tap") or "")
         for req in deps.requirement_names(meta):
             if req not in have:
                 unmet.append({"skill": name,
@@ -1507,8 +1543,10 @@ def cmd_deps(argv):
         out.info("%s %s %s" % (out.c(pair["a"], out.BOLD),
                                out.role("conflicts with", "danger"), out.c(pair["b"], out.BOLD)))
     if not unmet and not pairs:
-        out.ok("no unmet requirements or conflicts across %d skill%s"
-               % (len(names), "" if len(names) == 1 else "s"))
+        noun = ("skill" if all(walk[n][0] == "skill" for n in names)
+                else "item")
+        out.ok("no unmet requirements or conflicts across %d %s%s"
+               % (len(names), noun, "" if len(names) == 1 else "s"))
         return 0
     if unmet:
         out.warn(_install_hint(hint_specs))
