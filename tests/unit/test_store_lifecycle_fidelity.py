@@ -13,6 +13,7 @@ Three ways the lifecycle used to change things it had no business changing:
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -219,14 +220,147 @@ class TestProjectSyncKeepsTheLock:
         _git(tap.path, "commit", "-q", "-m", "advance")
         catalog.rebuild_tap(tap)
 
-    def test_moved_source_is_declined_and_nothing_is_written(
+    def test_moved_source_with_an_intact_copy_restores_from_that_copy(
             self, tap, entry, tmp_path):
+        # The decline below was right for the tap and wrong for the repo: the
+        # .claude copy still held the locked bytes, and doctor -> heal ->
+        # doctor looped over a repair that needed no tap at all.
         repo = self._install(entry, tmp_path)
         before = self._lock_bytes(repo)
         claude_copy = repo / ".claude" / "skills" / "brainstorming"
         claude_sha = util.sha256_dir(claude_copy)
         self._advance(tap, entry, touch_skill=True)
+        cursor_copy = repo / ".cursor" / "skills" / "brainstorming"
+        shutil.rmtree(cursor_copy)
+
+        plan = store.project_sync_plan(base=str(repo))
+        assert store.project_sync_preview(plan, base=str(repo)) == [
+            "would re-materialize project skill brainstorming → cursor from "
+            "its .claude/skills/brainstorming copy"]
+        assert not cursor_copy.exists()             # the preview wrote nothing
+        assert store.project_sync_apply(plan, base=str(repo)) == [
+            "re-materialized brainstorming from its .claude/skills/"
+            "brainstorming copy"]
+        assert util.sha256_dir(cursor_copy) == claude_sha
+        assert "UPSTREAM CHANGE" not in (cursor_copy / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert util.sha256_dir(claude_copy) == claude_sha
+        assert self._lock_bytes(repo) == before
+        assert store.project_sync_plan(base=str(repo))["missing"] == []
+
+    def test_an_edited_copy_is_not_a_source(self, tap, entry, tmp_path):
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        claude_copy = repo / ".claude" / "skills" / "brainstorming"
+        assert store.project_intact_copy(rec, repo) == claude_copy
+        (claude_copy / "SKILL.md").write_text("edited\n", encoding="utf-8")
+        cursor_copy = repo / ".cursor" / "skills" / "brainstorming"
+        assert store.project_intact_copy(rec, repo) == cursor_copy
+        shutil.rmtree(cursor_copy)
+        assert store.project_intact_copy(rec, repo) is None
+        rec.pop("sha256")
+        shutil.rmtree(claude_copy)
+        assert store.project_intact_copy(rec, repo) is None
+
+    def test_source_moved_reads_the_lock_commit_only(self, tap, entry,
+                                                     tmp_path):
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        assert not store.project_source_moved("brainstorming", rec)
+        # No recorded commit: nothing says the tap is where the lock was.
+        assert store.project_source_moved(
+            "brainstorming", {k: v for k, v in rec.items() if k != "commit"})
+        # No tap source to judge at all.
+        assert not store.project_source_moved("brainstorming",
+                                              rec | {"tap": "local"})
+        assert not store.project_source_moved("brainstorming",
+                                              rec | {"tap": "no-such-tap"})
+
+    def test_an_unreadable_sibling_is_not_restored_from(self, tap, entry,
+                                                        tmp_path):
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        claude_copy = repo / ".claude" / "skills" / "brainstorming"
+        md = claude_copy / "SKILL.md"
+        # An unclosed fence: every field would read as absent.
+        md.write_text("---\nname: brainstorming\n", encoding="utf-8")
+        rec["sha256"] = util.sha256_dir(claude_copy)
+        rec.pop("exec", None)
+        projectlock.set_skill(repo, "brainstorming", rec)
+        assert store.project_intact_copy(rec, repo) == claude_copy
+        assert store._sibling_policy_violations(
+            repo, "brainstorming", rec, claude_copy) is None
         shutil.rmtree(repo / ".cursor" / "skills" / "brainstorming")
+        plan = store.project_sync_plan(base=str(repo))
+        # Falls through to the tap, which still sits on the locked commit.
+        assert store.project_sync_apply(plan, base=str(repo)) == [
+            "re-materialized brainstorming from %s" % tap.name]
+
+    def test_a_blocklisted_skill_is_not_restored_from_a_sibling(
+            self, tap, entry, tmp_path):
+        from boost_cli.core import policy
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        claude_copy = repo / ".claude" / "skills" / "brainstorming"
+        assert store._sibling_policy_violations(
+            repo, "brainstorming", rec, claude_copy) == []
+        pol = policy.load()
+        pol["blocked_skills"] = ["brainstorming"]
+        policy.save(pol)
+        assert store._sibling_policy_violations(
+            repo, "brainstorming", rec, claude_copy) == [
+            "skill 'brainstorming' is on the blocklist"]
+        # The run itself declines, and writes nothing from the sibling.
+        cursor_copy = repo / ".cursor" / "skills" / "brainstorming"
+        shutil.rmtree(cursor_copy)
+        plan = store.project_sync_plan(base=str(repo))
+        assert store.project_sync_apply(plan, base=str(repo)) == [
+            store._project_gone("brainstorming")]
+        assert not cursor_copy.exists()
+
+    def test_a_denied_capability_is_not_restored_from_a_sibling(
+            self, tap, entry, tmp_path):
+        from boost_cli.core import policy
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        claude_copy = repo / ".claude" / "skills" / "brainstorming"
+        md = claude_copy / "SKILL.md"
+        md.write_text("---\nname: brainstorming\ndescription: d\n"
+                      "capabilities: [network]\n---\nbody\n", encoding="utf-8")
+        rec["sha256"] = util.sha256_dir(claude_copy)
+        assert store._sibling_policy_violations(
+            repo, "brainstorming", rec, claude_copy) == []
+        pol = policy.load()
+        pol["denied_capabilities"] = ["network"]
+        policy.save(pol)
+        violations = store._sibling_policy_violations(
+            repo, "brainstorming", rec, claude_copy)
+        assert violations and "policy blocks installing brainstorming" in \
+            violations[-1]
+
+    @pytest.mark.skipif(os.name == "nt", reason="Windows has no exec bit")
+    def test_a_copy_whose_exec_bits_drifted_is_not_a_source(
+            self, tap, entry, tmp_path):
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        claude_copy = repo / ".claude" / "skills" / "brainstorming"
+        assert store.project_intact_copy(rec, repo) == claude_copy
+        script = claude_copy / "SKILL.md"
+        script.chmod(script.stat().st_mode | 0o100)
+        assert util.sha256_dir(claude_copy) == rec["sha256"]  # mode only
+        assert store.project_intact_copy(rec, repo) == (
+            repo / ".cursor" / "skills" / "brainstorming")
+
+    def test_moved_source_with_no_copy_left_is_declined_and_nothing_is_written(
+            self, tap, entry, tmp_path):
+        repo = self._install(entry, tmp_path)
+        before = self._lock_bytes(repo)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        assert not store.project_source_moved("brainstorming", rec)
+        self._advance(tap, entry, touch_skill=True)
+        assert store.project_source_moved("brainstorming", rec)
+        for agent_dir in (".claude", ".cursor"):
+            shutil.rmtree(repo / agent_dir / "skills" / "brainstorming")
 
         plan = store.project_sync_plan(base=str(repo))
         line = ("brainstorming's tap source has moved since the project lock "
@@ -237,7 +371,7 @@ class TestProjectSyncKeepsTheLock:
         assert store.project_sync_apply(plan, base=str(repo)) == [line]
         assert store.is_unrepaired(line)
         assert not (repo / ".cursor" / "skills" / "brainstorming").exists()
-        assert util.sha256_dir(claude_copy) == claude_sha
+        assert not (repo / ".claude" / "skills" / "brainstorming").exists()
         assert self._lock_bytes(repo) == before
 
     def test_tap_moved_but_skill_unchanged_restores_without_a_lock_write(
@@ -247,6 +381,8 @@ class TestProjectSyncKeepsTheLock:
         self._advance(tap, entry, touch_skill=False)
         cursor_copy = repo / ".cursor" / "skills" / "brainstorming"
         shutil.rmtree(cursor_copy)
+        # No intact copy left, so the repair has to come from the tap.
+        shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
 
         plan = store.project_sync_plan(base=str(repo))
         assert store.project_sync_apply(plan, base=str(repo)) == [
@@ -260,10 +396,13 @@ class TestProjectSyncKeepsTheLock:
         before = self._lock_bytes(repo)
         cursor_copy = repo / ".cursor" / "skills" / "brainstorming"
         shutil.rmtree(cursor_copy)
+        shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
         plan = store.project_sync_plan(base=str(repo))
         assert store.project_sync_apply(plan, base=str(repo)) == [
             "re-materialized brainstorming from %s" % tap.name]
         assert (cursor_copy / "SKILL.md").is_file()
+        assert (repo / ".claude" / "skills" / "brainstorming"
+                / "SKILL.md").is_file()
         assert self._lock_bytes(repo) == before
 
     def test_no_recorded_sha_and_a_moved_commit_is_declined(

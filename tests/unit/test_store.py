@@ -3909,7 +3909,9 @@ class TestProjectSkills:
 
     def test_sync_apply_reports_when_the_source_is_gone(self, entry, tmp_path):
         from boost_cli.core import projectlock
-        repo, _ = self._install(entry, tmp_path)
+        # One agent: an intact sibling copy would be restored from instead
+        # (`store.project_intact_copy`), and this is about the tap path.
+        repo, _ = self._install(entry, tmp_path, only_agents=["claude-code"])
         shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
         rec = projectlock.get_skill(repo, "brainstorming")
         rec["tap"] = "local"          # nothing to re-fetch from
@@ -3924,7 +3926,9 @@ class TestProjectSkills:
 
     def test_sync_preview_names_a_restorable_copy_and_writes_nothing(
             self, entry, tmp_path):
-        repo, _ = self._install(entry, tmp_path)
+        # One agent: an intact sibling copy would be restored from instead
+        # (`store.project_intact_copy`), and this is about the tap path.
+        repo, _ = self._install(entry, tmp_path, only_agents=["claude-code"])
         gone = repo / ".claude" / "skills" / "brainstorming"
         shutil.rmtree(gone)
         lines = store.project_sync_preview(
@@ -3939,7 +3943,9 @@ class TestProjectSkills:
             self, entry, tmp_path):
         """The preview and the run must agree on an unrestorable copy."""
         from boost_cli.core import projectlock
-        repo, _ = self._install(entry, tmp_path)
+        # One agent: an intact sibling copy would be restored from instead
+        # (`store.project_intact_copy`), and this is about the tap path.
+        repo, _ = self._install(entry, tmp_path, only_agents=["claude-code"])
         shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
         rec = projectlock.get_skill(repo, "brainstorming")
         rec["tap"] = "no-such-tap-preview"
@@ -3953,7 +3959,9 @@ class TestProjectSkills:
 
     def test_sync_preview_treats_a_local_row_as_gone(self, entry, tmp_path):
         from boost_cli.core import projectlock
-        repo, _ = self._install(entry, tmp_path)
+        # One agent: an intact sibling copy would be restored from instead
+        # (`store.project_intact_copy`), and this is about the tap path.
+        repo, _ = self._install(entry, tmp_path, only_agents=["claude-code"])
         shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
         rec = projectlock.get_skill(repo, "brainstorming")
         rec["tap"] = "local"

@@ -697,14 +697,6 @@ class TestCheckReportsTheRawState:
         err = config.check()
         assert err.startswith(str(paths.config_path()) + ": not valid UTF-8")
 
-    def test_unlisted_clones_are_the_directories_under_repos(self, sandbox):
-        assert config.unlisted_clones() == []           # no repos/ at all
-        paths.ensure_dirs()
-        for name in ("b__two", "a__one"):
-            (paths.repos_dir() / name).mkdir()
-        (paths.repos_dir() / "stray.txt").write_text("x", encoding="utf-8")
-        assert config.unlisted_clones() == ["a__one", "b__two"]
-
 
 # `boost tap` appends to `taps`, and crashed with AttributeError on every one of
 # these. Meanwhile `first_run` read the truthy ones as a configured machine and

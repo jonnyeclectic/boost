@@ -428,7 +428,6 @@
       "set_value": 7897,
       "spec_for": 1786,
       "unknown_key_warning": 17471,
-      "unlisted_clones": 640,
       "unset": 3434
     },
     "dense.py": {
@@ -1052,7 +1051,6 @@
       "_row": 169418,
       "_same_file": 1367,
       "_shared": 2115,
-      "_shell_arg": 2173,
       "_source_key": 71511,
       "_taken": 4853,
       "add": 5061092,
@@ -1935,7 +1933,6 @@
       "set_value": 29,
       "spec_for": 8,
       "unknown_key_warning": 98,
-      "unlisted_clones": 4,
       "unset": 19
     },
     "dense.py": {
@@ -2560,7 +2557,6 @@
       "_row": 11,
       "_same_file": 5,
       "_shared": 9,
-      "_shell_arg": 10,
       "_source_key": 75,
       "_taken": 10,
       "add": 93,

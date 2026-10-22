@@ -4205,6 +4205,28 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
     for name in sorted(wanted):
         entry = projectlock.get_skill(resolved_base, name) or {}
         tap_name = entry.get("tap")
+        # A copy still at the locked hash is the locked content, so it is
+        # restored from with no tap read at all: a moved tap declined this,
+        # and doctor went on prescribing the heal that declined it.
+        sibling = project_intact_copy(entry, resolved_base)
+        blocked = (None if sibling is None else
+                   _sibling_policy_violations(resolved_base, name, entry,
+                                              sibling))
+        if sibling is not None and blocked is not None:
+            if not blocked:
+                try:  # noqa: FURB107 - per-item resilience in a loop
+                    _write_project_copies(
+                        resolved_base, name, sibling, sibling,
+                        *_project_dests(resolved_base, name, entry,
+                                        wanted[name]))
+                    actions.append("re-materialized %s from its %s copy"
+                                   % (name, scopes.relative_to_base(
+                                       resolved_base, sibling)))
+                    continue
+                except BoostError:
+                    pass
+            actions.append(_project_gone(name))
+            continue
         cat_entry, warning = _project_source(name, entry)
         if warning:
             actions.append(warning)
@@ -4229,6 +4251,65 @@ def _project_moved(name: str) -> str:
     return ("%s's tap source has moved since the project lock was written%s"
             "(`boost install --local %s --force` takes the new content and "
             "updates the lock)" % (name, _DECLINED_MARK, name))
+
+
+def project_intact_copy(entry: dict, base) -> Path | None:
+    """A copy of a project skill on disk that still holds the locked content.
+
+    Hashed as :func:`integrity.project_status` hashes, so "intact" means what
+    verify means by it. None for a row with no recorded ``sha256``: nothing
+    says which copy, if any, is the locked one.
+    """
+    from . import integrity
+    recorded = entry.get("sha256")
+    if not recorded:
+        return None
+    for copy in integrity.project_skill_dirs(entry, base):
+        if (util.sha256_dir(copy) == recorded
+                and not integrity.exec_drifted(copy, entry)):
+            return copy
+    return None
+
+
+def _sibling_policy_violations(resolved_base: Path, name: str, entry: dict,
+                               sibling: Path) -> list[str] | None:
+    """The install policy gate for a repair copied from ``sibling``.
+
+    A blocklisted skill must not come back through a sibling any more than
+    through its tap. The entry gated is the lock row with the copy's own
+    description; None when the copy's SKILL.md cannot be read honestly, so
+    the caller does not restore from it.
+    """
+    meta = read_skill_meta(name, sibling)
+    if meta is None:
+        return None
+    violations = policy.check_install(
+        {"name": name, "tap": entry.get("tap", ""),
+         "version": entry.get("version"),
+         "description": util.frontmatter_text(meta[0], "description")},
+        _count_others(projectlock.installed(resolved_base), name))
+    try:
+        _enforce_capability_policy(name, sibling / "SKILL.md")
+    except BoostError as e:
+        violations.append(e.message)
+    return violations
+
+
+def project_source_moved(name: str, entry: dict) -> bool:
+    """Whether a project skill's tap has left the commit its lock records.
+
+    Read-only and offline (one HEAD read), for `boost doctor`: when it has,
+    a repair from the tap goes ahead only if this skill's files did not
+    change, and answering that means hashing the source, which can widen a
+    sparse clone and fetch. False when there is no tap source to judge.
+    """
+    from . import gitutil
+    cat_entry, _warning = _project_source(name, entry)
+    if cat_entry is None:
+        return False
+    locked = entry.get("commit")
+    return not locked or gitutil.head_commit(
+        registry.get(cat_entry["tap"]).path) != locked
 
 
 def _project_restorable(entry: dict, cat_entry: dict) -> bool:
@@ -4283,6 +4364,19 @@ def _restore_project_copies(resolved_base: Path, name: str, entry: dict,
                          % (name, "; ".join(violations)))
     src = source_dir_for(cat_entry)
     _enforce_capability_policy(name, src / "SKILL.md")
+    _write_project_copies(resolved_base, name, src,
+                          registry.get(cat_entry["tap"]).path,
+                          *_project_dests(resolved_base, name, entry, missing))
+
+
+def _project_dests(resolved_base: Path, name: str, entry: dict,
+                   missing: list) -> tuple[list[Path], list[dict]]:
+    """Where a repair of ``missing`` writes, and the lock rows it adds.
+
+    The recorded rows of the agents named, plus a target and a new row for
+    an agent that never had one; each checked as a project install checks it.
+    Raises :class:`BoostError` when there is nothing it may write.
+    """
     dests: list[Path] = []
     for m in entry.get("materializations") or []:
         if m.get("agent", "?") not in missing:
@@ -4308,7 +4402,13 @@ def _restore_project_copies(resolved_base: Path, name: str, entry: dict,
             resolved_base, target)})
     if not dests:
         raise BoostError("no recorded copy of %s to restore" % name)
-    within = registry.get(cat_entry["tap"]).path
+    return dests, new_rows
+
+
+def _write_project_copies(resolved_base: Path, name: str, src: Path,
+                          within: Path, dests: list[Path],
+                          new_rows: list[dict]) -> None:
+    """Copy ``src`` to each of ``dests`` and record ``new_rows`` in the lock."""
     for dest in dests:
         _copy_skill(src, dest, within=within)
     if new_rows:
@@ -4362,6 +4462,17 @@ def project_sync_preview(plan: dict[str, list], base=None) -> list[str]:
         wanted.setdefault(name, []).append(agent)
     for name in sorted(wanted):
         entry = projectlock.get_skill(resolved_base, name) or {}
+        sibling = project_intact_copy(entry, resolved_base)
+        blocked = (None if sibling is None else
+                   _sibling_policy_violations(resolved_base, name, entry,
+                                              sibling))
+        if sibling is not None and blocked is not None:
+            lines.append(_project_gone(name) if blocked else
+                         "would re-materialize project skill %s → %s from its "
+                         "%s copy" % (name, ", ".join(wanted[name]),
+                                      scopes.relative_to_base(resolved_base,
+                                                              sibling)))
+            continue
         cat_entry, warning = _project_source(name, entry)
         if warning:
             lines.append(warning)

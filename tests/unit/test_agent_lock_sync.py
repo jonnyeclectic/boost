@@ -145,7 +145,9 @@ class TestProjectSkillReachesNewAgent:
         assert ("project skill tdd-workflow was never written for cursor "
                 "— run `boost sync`") in doc.out
         res = boost("sync")
-        assert "re-materialized tdd-workflow from fixture" in res.out
+        # From the intact .claude copy, which is the locked content.
+        assert ("re-materialized tdd-workflow from its "
+                ".claude/skills/tdd-workflow copy") in res.out
         assert (repo / ".cursor" / "skills" / "tdd-workflow" / "SKILL.md").is_file()
         entry = projectlock.get_skill(repo, "tdd-workflow")
         before = [m["agent"] for m in entry["materializations"]
