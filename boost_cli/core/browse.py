@@ -17,7 +17,7 @@ and every token must match somewhere in the scope. Tab took over selection.
 from __future__ import annotations
 
 import difflib
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 #: Search scopes, in cycle order. `all` first because it is the useful default:
 #: one token can come from the name and another from the description.
@@ -1539,6 +1539,35 @@ def session_summary(status) -> tuple[str, str] | None:
     if n_ok:
         return ("ok_line", "✓ %d installed" % n_ok)
     return None
+
+
+@dataclass
+class InstallSession:
+    """What the browser's in-place installs did, handed back when it exits.
+
+    The pane is the only report an in-place install gets while the browser is
+    open, and it is gone the moment the browser closes. So everything the
+    caller must say afterwards rides here: what landed (with its install
+    result, which carries the scan and MCP facts the exit report needs), what
+    was refused and why, what an interrupt cancelled, and the plan's notes.
+    """
+    installed: list = field(default_factory=list)   # [(entry, InstallResult)]
+    failed: list = field(default_factory=list)      # [(entry, message, hint)]
+    cancelled: list = field(default_factory=list)   # [entry]
+    notes: list = field(default_factory=list)       # [(role, text)]
+    interrupted: BaseException | None = None
+
+    def landed(self) -> list[dict]:
+        """The entries that installed, in install order."""
+        return [e for e, _res in self.installed]
+
+    def requested(self) -> bool:
+        """True once anything was asked for — a quit with no Enter is None."""
+        return bool(self.installed or self.failed or self.cancelled)
+
+    def exit_code(self) -> int:
+        """``boost install``'s answer: 1 when any requested install failed."""
+        return 1 if self.failed else 0
 
 
 def install_target(entry: dict, targets) -> str:

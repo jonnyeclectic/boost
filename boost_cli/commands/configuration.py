@@ -1914,13 +1914,10 @@ def _tool_install(args: dict):
     # The requested item's own refusal ("already installed", "is pinned")
     # first, so a refused call changes nothing — not its dependencies either.
     store.check_existing(entry)
-    warnings = installplan.confusion_lines([entry])
-    entries, dep_res = installplan.expand_dependencies([entry])
-    warnings.extend(installplan.dependency_warnings(dep_res))
-    lines: list[str] = []
-    added = installplan.added_line(dep_res)
-    if added:
-        lines.append(added)
+    the_plan = installplan.plan([entry])
+    entries = the_plan.entries
+    warnings = [*the_plan.confusions, *the_plan.dep_warnings]
+    lines: list[str] = [the_plan.added] if the_plan.added else []
     done: list[dict] = []
     for e in entries:
         try:

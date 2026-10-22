@@ -327,3 +327,51 @@ class TestSameTapAmbiguity:
             "install dup:twin --path <one of the above>`, then retry; raise "
             "it "
             "with the tap")
+
+
+class TestPlan:
+    """`plan` is the one install plan: `boost install`, MCP and browse."""
+
+    def _fake(self, monkeypatch, *, confusions=(), added=(), unresolved=()):
+        calls = []
+        monkeypatch.setattr(installplan, "confusion_lines",
+                            lambda roots: list(confusions))
+
+        def expand(roots, pbase=None):
+            calls.append(pbase)
+            return ([{"name": "dep"}, *roots],
+                    Resolution(order=[], added=list(added),
+                               unresolved=list(unresolved)))
+
+        monkeypatch.setattr(installplan, "expand_dependencies", expand)
+        monkeypatch.setattr(catalog, "find", lambda n: [])
+        monkeypatch.setattr(catalog, "distinct_candidates", lambda rows: rows)
+        return calls
+
+    def test_the_closure_and_every_note_in_print_order(self, monkeypatch):
+        calls = self._fake(monkeypatch, confusions=["look-alike"],
+                           added=["dep"], unresolved=["ghost"])
+        p = installplan.plan([{"name": "root"}], pbase="BASE")
+        assert calls == ["BASE"]
+        assert p.entries == [{"name": "dep"}, {"name": "root"}]
+        assert p.confusions == ["look-alike"]
+        assert p.added == ("pulling in 1 dependency required by your "
+                           "selection: dep")
+        assert p.notes() == [
+            ("warn", "look-alike"),
+            ("info", "pulling in 1 dependency required by your selection: dep"),
+            ("warn", "required skill 'ghost' is in no tap — skipped (install "
+                     "it manually or `boost tap` its source)")]
+
+    def test_no_deps_keeps_the_request_and_still_warns(self, monkeypatch):
+        calls = self._fake(monkeypatch, confusions=["look-alike"])
+        p = installplan.plan([{"name": "root"}], deps=False)
+        assert calls == []
+        assert p == installplan.InstallPlan([{"name": "root"}],
+                                            ["look-alike"], None, [])
+        assert p.notes() == [("warn", "look-alike")]
+
+    def test_an_empty_request_plans_nothing(self, monkeypatch):
+        calls = self._fake(monkeypatch)
+        assert installplan.plan([]) == installplan.InstallPlan([], [], None, [])
+        assert calls == []

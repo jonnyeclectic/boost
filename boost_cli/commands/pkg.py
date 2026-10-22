@@ -57,10 +57,24 @@ def _plural(n: int, word: str) -> str:
 
 def _warn_confusions(entries: list[dict]) -> None:
     """Warn when a skill about to be installed is confusable with one from a
-    *different* tap — the typosquat / owner-confusion guard. The words live in
-    ``core.installplan`` so ``boost_install`` over MCP says the same thing."""
+    *different* tap — the typosquat / owner-confusion guard."""
     for line in installplan.confusion_lines(entries):
         out.warn(line)
+
+
+def _print_plan(the_plan: installplan.InstallPlan) -> None:
+    """Say what :func:`installplan.plan` found, in ``boost install``'s words.
+
+    A look-alike from a *different* tap (the typosquat / owner-confusion
+    guard), the dependencies pulled in, and the requirements left out. The
+    words live in ``core.installplan`` so MCP ``boost_install`` and ``boost
+    browse`` say the same thing."""
+    for line in the_plan.confusions:
+        out.warn(line)
+    if the_plan.added:
+        out.info(the_plan.added)
+    for line in the_plan.dep_warnings:
+        out.warn(line, wrap=True)
 
 
 def _check_agents(names: list[str] | None) -> list[str] | None:
@@ -573,23 +587,17 @@ def cmd_install(argv: list[str]) -> int:
             out.warn("%s: %s" % (n, err.message), stream=sys.stderr)
             failed += 1
 
-    _warn_confusions(entries)
-
     # Grow the request into its `requires:` closure (deps installed first),
     # unless the caller opted out. Only skills carry dependency frontmatter;
-    # rules/workflows pass through unchanged.
-    if not args.no_deps and entries:
-        entries, dep_res = installplan.expand_dependencies(entries,
-                                                           pbase=pbase)
-        added = installplan.added_line(dep_res)
-        if added:
-            out.info(added)
-        for line in installplan.dependency_warnings(dep_res):
-            out.warn(line, wrap=True)
-        # Pulling in dependencies can turn a single-name request into a multi-item
-        # install (per-item headings); it must never *lower* multi (e.g. when an
-        # unknown co-requested name was dropped), so OR rather than reassign.
-        multi = multi or len(entries) > 1
+    # rules/workflows pass through unchanged. `installplan.plan` is the one
+    # plan — `boost browse` and MCP `boost_install` take theirs from it too.
+    the_plan = installplan.plan(entries, pbase=pbase, deps=not args.no_deps)
+    _print_plan(the_plan)
+    entries = the_plan.entries
+    # Pulling in dependencies can turn a single-name request into a multi-item
+    # install (per-item headings); it must never *lower* multi (e.g. when an
+    # unknown co-requested name was dropped), so OR rather than reassign.
+    multi = multi or len(entries) > 1
 
     if args.dry_run:
         from ..core import mcpdecl, mcphost

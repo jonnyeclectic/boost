@@ -2251,3 +2251,25 @@ class TestWideTextFitsThePane:
         assert browse.clip_spans(line, 3) == [("a", "全")]
         assert browse.clip_spans(line, 5) == [("a", "全角")]
         assert browse.clip_spans(line, 6) == [("a", "全角"), ("b", "文")]
+
+
+class TestInstallSession:
+    def test_an_empty_session_asked_for_nothing(self):
+        s = browse.InstallSession()
+        assert (s.requested(), s.exit_code(), s.landed()) == (False, 0, [])
+        assert s.interrupted is None
+
+    def test_landed_is_the_installed_entries_in_order(self):
+        a, b = _e("a"), _e("b")
+        s = browse.InstallSession(installed=[(a, "res-a"), (b, "res-b")])
+        assert s.landed() == [a, b]
+        assert (s.requested(), s.exit_code()) == (True, 0)
+
+    def test_a_failure_is_exit_1_and_a_cancel_is_still_a_request(self):
+        assert browse.InstallSession(
+            failed=[(_e("a"), "no", "")]).exit_code() == 1
+        cancelled = browse.InstallSession(cancelled=[_e("a")])
+        assert (cancelled.requested(), cancelled.exit_code()) == (True, 0)
+        # Sessions never share their lists.
+        assert browse.InstallSession().cancelled is not \
+            browse.InstallSession().cancelled

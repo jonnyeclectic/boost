@@ -14,6 +14,8 @@ callers is what stops that drifting again.
 """
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from ..errors import BoostError
 from . import catalog, deps, prereq, resolve, typosquat
 
@@ -175,6 +177,42 @@ def dependency_warnings(res: resolve.Resolution) -> list[str]:
     lines.extend("%s declares a conflict with %s (also present)" % pair
                  for pair in res.conflicts)
     return lines
+
+
+class InstallPlan(NamedTuple):
+    """What installing ``roots`` means, before anything is written.
+
+    ``entries`` is the dependency-first install order; the rest are the words
+    every front end says about it, in the order ``boost install`` says them.
+    """
+    entries: list[dict]
+    confusions: list[str]
+    added: str | None
+    dep_warnings: list[str]
+
+    def notes(self) -> list[tuple[str, str]]:
+        """``(role, text)`` pairs — ``warn`` or ``info`` — in print order, for
+        a surface that renders them itself (the browse pane, an MCP reply)."""
+        return ([("warn", line) for line in self.confusions]
+                + ([("info", self.added)] if self.added else [])
+                + [("warn", line) for line in self.dep_warnings])
+
+
+def plan(roots: list[dict], *, pbase=None, deps: bool = True) -> InstallPlan:
+    """The one install plan: look-alike warnings, then the ``requires:``
+    closure (unless ``deps`` is off), then what the closure left out.
+
+    ``boost install``, the MCP ``boost_install`` tool and the browse TUI all
+    call this. The TUI used to call ``store.install`` on the highlighted row
+    alone, so a skill whose `requires:` the CLI pulled in installed without
+    its prerequisite, and no look-alike warning was ever shown.
+    """
+    confusions = confusion_lines(roots)
+    if not deps or not roots:
+        return InstallPlan(roots.copy(), confusions, None, [])
+    entries, res = expand_dependencies(roots, pbase=pbase)
+    return InstallPlan(entries, confusions, added_line(res),
+                       dependency_warnings(res))
 
 
 def prerequisite_lines(entries: list[dict], *, pbase=None,
