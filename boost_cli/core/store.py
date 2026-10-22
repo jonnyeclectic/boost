@@ -615,6 +615,10 @@ def _materialize_link_targets(repo: Path, src: Path) -> None:
     A directory a link leads to is walked in turn once it is on disk, since
     :func:`_copy_tree` copies it as its target and its own links obey the
     same rule. Each path is fetched once, so a cycle of links ends.
+
+    Only a directory that resolves inside ``repo`` is walked: ``os.walk``
+    follows its top, so a tap path that is itself a link to ``/`` (lexically
+    in the tap, so named above) walked the whole filesystem on install.
     """
     seen: set[str] = set()
     todo = [src]
@@ -625,7 +629,8 @@ def _materialize_link_targets(repo: Path, src: Path) -> None:
             continue
         seen.update(new)
         gitutil.materialize_paths(repo, new)
-        todo += [repo / t for t in new if (repo / t).is_dir()]
+        todo += [repo / t for t in new if (repo / t).is_dir()
+                 and not catalog.escapes(repo, repo / t)]
 
 
 def copy_view_sha(src: Path, within: Path | None) -> str:

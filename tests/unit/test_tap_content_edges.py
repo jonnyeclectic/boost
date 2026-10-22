@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -165,6 +166,35 @@ class TestALinkToAnotherSkillIsOrderIndependent:
         (skill / "loop").symlink_to("..")
         (skill / "root").symlink_to("../..")
         assert store.link_targets_to_fetch(repo, skill) == ["other"]
+
+    def test_a_target_dir_that_leaves_the_tap_is_not_walked(
+            self, tmp_path, monkeypatch):
+        """``skills/b -> <outside>`` is lexically in the tap, so it is named,
+        but walking it would read whatever it leads to (``/`` included)."""
+        repo = tmp_path / "repo"
+        skill = repo / "skills" / "a"
+        skill.mkdir(parents=True)
+        (repo / "inside" / "deep").mkdir(parents=True)
+        (repo / "inside" / "deep" / "f").write_text("f", encoding="utf-8")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "hop").symlink_to(repo / "inside")
+        (repo / "skills" / "b").symlink_to(outside)
+        (repo / "skills" / "c").symlink_to("../inside")
+        (skill / "peer").symlink_to("../b")
+        (skill / "ok").symlink_to("../c")
+        walked: list[str] = []
+        real = store.link_targets_to_fetch
+
+        def spy(r, src, own=None):
+            walked.append(Path(src).relative_to(repo).as_posix())
+            return real(r, src, own)
+        monkeypatch.setattr(store, "link_targets_to_fetch", spy)
+        monkeypatch.setattr(gitutil, "materialize_paths", lambda r, p: None)
+
+        store._materialize_link_targets(repo, skill)
+
+        assert sorted(walked) == ["skills/a", "skills/c"]
 
 
 class TestASubmoduleIsNamedNotShippedAsComplete:
