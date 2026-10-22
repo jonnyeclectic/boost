@@ -324,6 +324,14 @@ class TestInstalledTapSigning:
             "tap 'nope' is not tapped, so its signature cannot be verified, "
             "and policy requires a trusted signature"]
 
+    def test_a_missing_clone_is_not_called_unsigned(self, two):
+        tap = registry.get(lockfile.get_skill("brainstorming")["tap"])
+        _require_signed()
+        util.rmtree(tap.path)
+        assert policy.installed_tap_signing(tap.name) == [
+            "tap %r has no clone here to verify — `boost update %s` "
+            "re-clones it" % (tap.name, tap.name)]
+
     def test_master_switch_bypasses(self, two):
         from boost_cli.core import config
         _require_signed()

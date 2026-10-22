@@ -316,17 +316,21 @@ def installed_tap_signing(tap: str) -> list[str]:
     install` went on installing from. This re-checks the clone itself.
     ``local`` (an import) names no tap; a URL import's source was checked by
     :func:`check_source` when it was cloned. A tap that cannot be found
-    cannot be verified, so it fails closed.
+    cannot be verified, so it fails closed, as does one with no clone.
     """
     if not tap or tap == "local":
         return []
     from . import registry
     try:
-        clone = registry.get(tap).path
+        found = registry.get(tap)
     except BoostError:
         return ["tap %r is not tapped, so its signature cannot be verified, "
                 "and policy requires a trusted signature" % tap]
-    return check_tap_signing(clone, what="tap %r" % tap)
+    if not found.is_cloned:
+        # Read as "unsigned", which `boost trust add` would not fix.
+        return ["tap %r has no clone here to verify — `boost update %s` "
+                "re-clones it" % (tap, found.name)]
+    return check_tap_signing(found.path, what="tap %r" % tap)
 
 
 def check_installed_version(entry: dict) -> list[str]:
