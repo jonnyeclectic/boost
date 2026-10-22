@@ -15,7 +15,7 @@ import shutil
 import stat
 import tempfile
 import time
-from collections.abc import Collection, Iterator
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -7117,42 +7117,82 @@ def snapshot_rehomer(snap_id: str, tar_path: Path):
 
 def restore_preserve_newer_lock_sections(
         pre_rules: dict, pre_workflows: dict) -> dict[str, list[str]]:
-    """After a lock file has been replaced wholesale (snapshot restore),
-    re-add rule/workflow entries that were installed live but are absent from
-    the just-restored lock.
+    """After a lock file has been replaced wholesale (snapshot restore), put
+    back every rule/workflow row the live lock held before it.
 
     A snapshot only archives the skill store (which is where the lock file
     itself lives), never the agent context files a rule's or workflow's
     materialization writes into (``CLAUDE.md``, a rendered slash command,
-    ...). Restoring an *older* snapshot therefore drops any rule/workflow
-    installed since — its lock entry vanishes with the rest of the archived
-    lock, but its materialized file is untouched on disk, so the block
-    becomes orphaned: still present, no longer traceable, and impossible to
-    ``boost uninstall``.
+    ...). Those files are left as they were, so the rows describing them must
+    be too:
 
-    Filling the gap rather than overwriting the section outright preserves
-    the other, already-correct direction: an entry the snapshot *did* carry
-    that was later uninstalled comes back through the normal archived lock
-    contents, and :func:`sync_plan`/:func:`sync_apply` re-materializes it
-    from its tap same as any other missing materialization. Only names
-    genuinely absent from the restored lock are filled in here.
+    * a rule/workflow installed after the snapshot vanished from the lock
+      while its block stayed on disk — orphaned, untraceable, impossible to
+      ``boost uninstall``;
+    * one upgraded after the snapshot got the snapshot's older row back over
+      the newer block still on disk, and `verify`, `doctor` and `drift`
+      called boost's own content the user's local edits.
+
+    An entry the snapshot carried that was later uninstalled is not in
+    ``pre_*``: it comes back through the archived lock, and
+    :func:`sync_plan`/:func:`sync_apply` re-materializes it from its tap.
 
     ``pre_rules``/``pre_workflows`` must be captured by the caller *before*
-    the store is emptied for extraction. Returns the names actually kept, per
-    section, so the caller can report what changed; writes the lock only when
-    there is something to add back.
+    the store is swapped. Returns, per section, the names that were absent
+    from the restored lock, and under ``"live"`` the names whose restored row
+    differed and was replaced by the live one; writes the lock only when
+    either holds something.
     """
-    kept: dict[str, list[str]] = {"rules": [], "workflows": []}
+    kept: dict[str, list[str]] = {"rules": [], "workflows": [], "live": []}
 
     def keep(lock: dict) -> bool:
         for section, pre in (("rules", pre_rules), ("workflows", pre_workflows)):
             for name, entry in pre.items():
                 if name not in lock[section]:
-                    lock[section][name] = entry
                     kept[section].append(name)
-        return bool(kept["rules"] or kept["workflows"])
+                elif lock[section][name] != entry:
+                    kept["live"].append(name)
+                else:
+                    continue
+                lock[section][name] = entry
+        return any(kept.values())
     lockfile.mutate(keep)
     return kept
+
+
+def restore_carry_names(recorded: Mapping[str, dict]
+                        ) -> tuple[list[str], list[str]]:
+    """The store children a snapshot restore keeps: ``(carry, set_aside)``.
+
+    Everything but the lock file, its ``.lock`` sibling and the skill dirs
+    ``recorded`` (the live lock's skills section, name -> row) — those are
+    what a snapshot replaces. The rest is boost's or the user's, never a
+    snapshot's to drop: the lock's ``.corrupt`` backups `boost list` points
+    the user at, a dir added by hand or by another tool, a workflow's skill
+    copy, an edited copy `boost uninstall` kept. They are carried across the
+    swap. So is a recorded skill that is its own only copy
+    (:func:`only_copy`): a hand-made dir `boost sync` adopted is still the
+    user's, and a restore — whose own sync adopts any carried dir — made the
+    first restore record it and the second delete it.
+
+    While the lock cannot vouch for the store (:func:`lock_vouches`),
+    ``recorded`` is empty and any dir may be one boost installed: carried
+    into the restored store, `boost sync` would record it as a local skill.
+    So dirs are ``set_aside`` instead, for the restore to move to a named
+    backup; dot entries are still carried.
+    """
+    lock = paths.lockfile_path()
+    own = {lock.name, lock.name + ".lock"}
+    try:
+        names = sorted(os.listdir(paths.store_dir()))
+    except OSError:
+        return [], []
+    replaced = {n for n, e in recorded.items() if not only_copy(n, e)}
+    keep = [n for n in names if n not in own and n not in replaced]
+    if lock_vouches():
+        return keep, []
+    return ([n for n in keep if n.startswith(".")],
+            [n for n in keep if not n.startswith(".")])
 
 
 def lock_vouches(integ: lockfile.Integrity | None = None) -> bool:

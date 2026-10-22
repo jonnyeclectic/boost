@@ -2463,6 +2463,127 @@ class TestSnapshot:
         r = boost("snapshot", "restore", "nope", expect=1)
         assert "no snapshot snap-nope" in r.err
 
+    def test_restore_keeps_rule_and_workflow_rows_at_the_installed_version(
+            self, boost, fixture_tap_src, tmp_path):
+        # Restore leaves CLAUDE.md and the rendered command as they are, and
+        # put the snapshot's older rows back over them: verify, doctor and
+        # drift then called boost's own v2 content the user's local edits.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "snapver-tap")
+        _add_and_commit(tap_dir, "rules/test-first.mdc",
+                        "---\nname: test-first\nversion: 1.0.0\n---\n\n"
+                        "Write tests before code.\n", "add rule")
+        _add_and_commit(tap_dir, "commands/review-diff.md",
+                        "---\ndescription: Review the diff\nversion: 1.0.0\n"
+                        "---\nReview the diff carefully.\n", "add workflow")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming", "test-first", "review-diff")
+        snap_id = re.search(r"saved (snap-[\w-]+)",
+                            boost("snapshot", "save").out).group(1)
+        for rel, old, new in (
+                ("rules/test-first.mdc", "Write tests before code.",
+                 "Write tests before code. V2 text."),
+                ("commands/review-diff.md", "Review the diff carefully.",
+                 "Review the diff carefully. V2 text.")):
+            f = tap_dir / rel
+            f.write_text(f.read_text(encoding="utf-8").replace(
+                "version: 1.0.0", "version: 2.0.0").replace(old, new),
+                encoding="utf-8")
+        subprocess.run(["git", "-C", str(tap_dir), "commit", "-aqm", "v2"],
+                       check=True, capture_output=True)
+        boost("update")
+        live = (lockfile.installed_rules()["test-first"],
+                lockfile.installed_workflows()["review-diff"])
+        assert [row["version"] for row in live] == ["2.0.0", "2.0.0"]
+
+        r = boost("snapshot", "restore", snap_id, "-y")
+        assert ("1 rule and 1 workflow untouched — snapshots cover the skill "
+                "store only (2 entries kept at the installed version, not the "
+                "snapshot's)") in " ".join(r.out.split())
+        assert (lockfile.installed_rules()["test-first"],
+                lockfile.installed_workflows()["review-diff"]) == live
+        assert "V2 text." in (paths.home() / ".claude" / "CLAUDE.md").read_text(
+            encoding="utf-8")
+        r = boost("verify")
+        assert "local edits" not in r.out
+        assert "failed verification" not in r.out
+
+    def test_a_second_restore_keeps_a_hand_made_dir_the_first_adopted(
+            self, boost, installed):
+        # The first restore's sync records a carried hand-made dir as a local
+        # skill; the second then treated it as one the snapshot replaces and
+        # deleted the only copy.
+        snap_id = re.search(r"saved (snap-[\w-]+)",
+                            boost("snapshot", "save").out).group(1)
+        mine = paths.store_dir() / "my-own"
+        mine.mkdir()
+        (mine / "SKILL.md").write_text("---\nname: my-own\n---\n# mine\n",
+                                       encoding="utf-8")
+        boost("snapshot", "restore", snap_id, "-y")
+        assert "my-own" in lockfile.installed()
+        r = boost("snapshot", "restore", snap_id, "-y")
+        assert "kept 1 store item the snapshot does not cover: my-own" in r.out
+        assert (mine / "SKILL.md").read_text(encoding="utf-8").endswith(
+            "# mine\n")
+        assert "my-own" in lockfile.installed()
+
+    def test_restore_keeps_the_corrupt_lock_backup_and_a_hand_made_dir(
+            self, boost, installed):
+        # Restore swapped the whole store and deleted what the archive did not
+        # hold: the .corrupt backup `boost list` had just pointed the user at,
+        # with no copy anywhere, and a skill dir the lock never recorded.
+        snap_id = re.search(r"saved (snap-[\w-]+)",
+                            boost("snapshot", "save").out).group(1)
+        mine = paths.store_dir() / "my-own"
+        mine.mkdir()
+        (mine / "SKILL.md").write_text("---\nname: my-own\n---\n# mine\n",
+                                       encoding="utf-8")
+        r = boost("snapshot", "restore", snap_id, "-y")
+        assert "kept 1 store item the snapshot does not cover: my-own" in r.out
+        assert (mine / "SKILL.md").read_text(encoding="utf-8").endswith(
+            "# mine\n")
+
+        paths.lockfile_path().write_text('{"version": 3, "skills": {UNIQMARK',
+                                         encoding="utf-8")
+        boost("list")
+        backup = paths.store_dir() / ".skill-lock.json.corrupt"
+        assert "UNIQMARK" in backup.read_text(encoding="utf-8")
+        r = boost("snapshot", "restore", snap_id, "-y")
+        out = " ".join(r.out.split())
+        assert ("kept 1 store item the snapshot does not cover: "
+                ".skill-lock.json.corrupt") in out
+        assert "UNIQMARK" in backup.read_text(encoding="utf-8")
+        # With the lock unreadable boost cannot tell whose a dir is, so each
+        # one goes to a named backup rather than into the restored store.
+        m = re.search(r"moved 2 store items the live lock did not record as "
+                      r"installed to (\S+): brainstorming, my-own", out)
+        assert m, out
+        kept_dir = paths.state_dir() / "restore-kept"
+        [run] = list(kept_dir.iterdir())
+        assert run.name.startswith(snap_id + "-")
+        assert (run / "my-own" / "SKILL.md").read_text(
+            encoding="utf-8").endswith("# mine\n")
+        assert (run / "brainstorming" / "SKILL.md").is_file()
+        assert not (paths.store_dir() / "my-own").exists()
+        assert sorted(_lock()) == ["brainstorming"]
+
+    def test_save_refuses_a_store_restore_would_refuse(self, boost, installed):
+        # Save said "saved" and how to restore it; restore then refused it.
+        lock = paths.lockfile_path()
+        good = lock.read_bytes()
+        lock.write_text('{"version": 3, "skills": {', encoding="utf-8")
+        r = boost("snapshot", "save", "corrupt-lock", expect=1)
+        assert "cannot snapshot the store: it has a corrupt lock file" in r.err
+        assert "then save again" in " ".join(r.err.split())
+        assert "restore with" not in r.out
+        assert list(paths.snapshots_dir().glob("snap-*")) == []
+        lock.unlink()
+        r = boost("snapshot", "save", "no-lock", expect=1)
+        assert ("cannot snapshot the store: it holds skills but no lock file "
+                "to say which are installed") in " ".join(r.err.split())
+        assert list(paths.snapshots_dir().glob("snap-*")) == []
+        lock.write_bytes(good)
+        boost("snapshot", "save", "ok")
+
 
 # ── export ───────────────────────────────────────────────────────────────
 
