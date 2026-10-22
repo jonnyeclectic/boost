@@ -899,6 +899,31 @@ def head_commit(repo: Path) -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
+#: git's words, lowercased, for a fetch by SHA of a commit the remote does not
+#: serve: `upload-pack` over file/ssh ("not our ref"), the smart-HTTP protocol
+#: ("unadvertised object") and a protocol-v2 server ("couldn't find remote
+#: ref"). After a force-push and gc upstream, a pinned commit is simply gone.
+_MISSING_COMMIT = ("not our ref", "unadvertised object",
+                   "couldn't find remote ref")
+
+
+class CommitNotUpstream(BoostError):
+    """A commit asked for by SHA is not on the remote any more (or never was).
+
+    Its own type so a caller that knows *why* it wanted the commit -- a tap's
+    pin -- can say so and name the remedy that works, rather than relaying
+    git's "fatal: git upload-pack: not our ref <sha>".
+    """
+
+    def __init__(self, sha: str, url: str):
+        self.sha, self.url = sha, url
+        super().__init__(
+            "commit %s is not on %s (history rewritten upstream?)"
+            % (sha[:7], url),
+            hint="pin a commit that exists there, or tap without `--at` to "
+                 "follow its default branch", wrap=True)
+
+
 def checkout_commit(repo: Path, sha: str,
                     verify: Callable[[str], None] | None = None) -> None:
     """Detach `repo` at `sha`, fetching that commit first if it is absent.
@@ -920,8 +945,13 @@ def checkout_commit(repo: Path, sha: str,
     have = run(["-C", str(repo), "cat-file", "-e", sha + "^{commit}"],
                check=False)
     if have.returncode != 0:
-        run(["-C", str(repo), "fetch", "--quiet", *_depth(repo),
-             "--filter=blob:none", "origin", sha])
+        fetched = run(["-C", str(repo), "fetch", "--quiet", *_depth(repo),
+                       "--filter=blob:none", "origin", sha], check=False)
+        if fetched.returncode != 0:
+            text = fetched.stderr or fetched.stdout or ""
+            if any(m in text.lower() for m in _MISSING_COMMIT):
+                raise CommitNotUpstream(sha, remote_url(repo) or "its remote")
+            raise BoostError("git fetch failed: %s" % _git_error(text))
     if verify is not None:
         # As in `pull`: the commit is checked while the tree is still on the
         # old one, so a refusal moves nothing.
@@ -1092,3 +1122,27 @@ def log_entries(repo: Path, rel_path: str = ".", n: int = 20) -> list[dict]:
 def is_repo(path: Path) -> bool:
     """Return True when `path` contains a `.git` entry."""
     return (Path(path) / ".git").exists()
+
+
+def is_repo_root(path: Path) -> bool:
+    """True when `path` is itself a git repository, bare or with a worktree.
+
+    :func:`is_repo` asks for a ``.git`` entry, which every bare repository
+    (``git clone --bare``, the usual shape of a local or self-hosted remote)
+    lacks — so `boost tap <dir>.git` called a valid repo "not a git
+    repository" and suggested `git init` on it. ``rev-parse --git-dir`` alone
+    over-accepts: run from a subdirectory of a repo it answers with the
+    parent's git dir, and that subdirectory is not something git can clone.
+    So the git dir must be ``path`` itself (bare) or ``path/.git``. Both sides
+    are resolved: on macOS a ``/var/folders`` path resolves to ``/private/var``.
+    """
+    p = Path(path)
+    if (p / ".git").exists():
+        return True
+    proc = run(["-C", str(p), "rev-parse", "--absolute-git-dir"], check=False)
+    if proc.returncode != 0:
+        return False
+    try:
+        return Path(proc.stdout.strip()).resolve() == p.resolve()
+    except OSError:
+        return False

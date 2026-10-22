@@ -2060,17 +2060,23 @@ def cmd_update(argv: list[str]) -> int:
     for tname, err in failures.items():
         out.warn("%s: %s" % (tname, err))
     refused = [t for t, e in failures.items() if registry.POLICY_REFUSAL in e]
+    # A pin whose commit is gone upstream is a live tap: `untap` is the wrong
+    # advice, and `--force` (which works) is the advice.
+    unpinnable = [t for t, e in failures.items() if registry.PIN_MISSING in e]
+    for tname in unpinnable:
+        out.info(out.role(registry.pin_missing_remedy(tname), "muted"))
     if refused:
         out.info(out.role(
             "%d tap%s refused by provenance policy and left on %s last "
             "verified commit — `boost trust verify` shows why"
             % (len(refused), "s" if len(refused) != 1 else "",
                "their" if len(refused) != 1 else "its"), "muted"))
-    if len(failures) > len(refused):
+    if len(failures) > len(refused) + len(unpinnable):
         out.info(out.role(
             "%d of %d taps could not be refreshed — the rest are up to date. "
             "Drop a dead one with `boost untap <name>`."
-            % (len(failures) - len(refused), len(results) + len(failures)),
+            % (len(failures) - len(refused) - len(unpinnable),
+               len(results) + len(failures)),
             "muted"))
     if pinned_skips:
         out.info(out.role(

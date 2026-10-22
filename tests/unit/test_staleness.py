@@ -373,3 +373,46 @@ class TestSourceChangedAndNotCloned:
             "2 outdated · 1 source missing (re-tap or `boost uninstall`) · "
             "1 source changed (the tap now points at another repo; `boost "
             "reinstall` takes its copy)")
+
+
+class TestRewound:
+    """`outdated` and `drift` must agree with update's downgrade hold."""
+
+    def test_a_content_change_to_an_older_version_is_a_downgrade(self):
+        assert staleness.rewound(staleness.CONTENT, "1.5.0", "1.4.0") == (
+            staleness.DOWNGRADE)
+        assert staleness.DOWNGRADE == "downgrade"
+
+    def test_same_or_newer_or_undeclared_version_stays_content(self):
+        assert staleness.rewound(staleness.CONTENT, "1.4.0", "1.4.0") == (
+            staleness.CONTENT)
+        assert staleness.rewound(staleness.CONTENT, "1.4.0", "1.5.0") == (
+            staleness.CONTENT)
+        assert staleness.rewound(staleness.CONTENT, "1.5.0", "") == (
+            staleness.CONTENT)
+        assert staleness.rewound(staleness.CONTENT, "1.5.0", None) == (
+            staleness.CONTENT)
+
+    def test_a_pinned_item_is_held_by_its_pin_not_a_downgrade(self):
+        assert staleness.rewound(staleness.CONTENT, "1.4.1", "1.4.0",
+                                 pinned=True) == staleness.CONTENT
+        assert staleness.rewound(staleness.CONTENT, "1.4.1", "1.4.0",
+                                 pinned=False) == staleness.DOWNGRADE
+
+    def test_other_reasons_pass_through(self):
+        assert staleness.rewound(staleness.VERSION, "1.5.0", "1.4.0") == (
+            staleness.VERSION)
+        assert staleness.rewound(None, "1.5.0", "1.4.0") is None
+        assert staleness.rewound(staleness.SOURCE_MISSING, "1.5.0",
+                                 "1.4.0") == staleness.SOURCE_MISSING
+
+    def test_footer_all_rewound_never_offers_plain_update(self):
+        assert staleness.outdated_footer(1, 0, downgrade=1) == (
+            "1 outdated · 1 rewound upstream (older than installed; "
+            "`boost update --allow-downgrade` follows it)")
+
+    def test_footer_counts_rewound_rows_apart_from_upgradable(self):
+        assert staleness.outdated_footer(3, 0, downgrade=2) == (
+            "3 outdated · 1 upstream (`boost update` upgrades, pinned and "
+            "quarantined items stay put) · 2 rewound upstream (older than "
+            "installed; `boost update --allow-downgrade` follows it)")

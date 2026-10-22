@@ -99,6 +99,36 @@ def update_hold(locally_modified: bool, installed_version: str,
     return None
 
 
+#: The `boost outdated` reason and the `boost drift` status for an item whose
+#: tap moved *back*: its source changed and now advertises a lower version
+#: than the installed one. `boost update` holds these (:data:`HOLD_DOWNGRADE`),
+#: so neither command may count one as something plain `boost update` takes.
+DOWNGRADE = HOLD_DOWNGRADE
+UPSTREAM_REWOUND = "upstream-rewound"
+#: The one command that follows a rewound tap, for every surface that names it.
+DOWNGRADE_REMEDY = "boost update --allow-downgrade"
+
+
+def rewound(reason: str | None, installed_version: str,
+            latest_version: str | None, pinned: bool = False) -> str | None:
+    """``reason``, or :data:`DOWNGRADE` when it is a content change to a
+    version older than the installed one.
+
+    `upstream_reason` stays as `boost update` reads it -- a rewind *is* a
+    source change, and update's own hold (`update_hold`) is what refuses it.
+    `outdated` and `drift` ask this instead, so they stop sending the user to
+    an update that answers "update skipped" every time. A ``pinned`` item
+    is left as it was: `boost update` skips it for the pin before the
+    downgrade hold is asked, so ``--allow-downgrade`` would not move it
+    either (an `evolve --apply` revision is pinned *and* ahead of its tap).
+    """
+    if (reason == CONTENT and not pinned
+            and catalog_relation(installed_version, latest_version or "")
+            == AHEAD):
+        return DOWNGRADE
+    return reason
+
+
 # ── drift_state: how an installed skill's store copy relates to lock+tap ───
 IN_SYNC = "in-sync"
 LOCAL_EDITS = "local-edits"
@@ -195,7 +225,8 @@ def kind_changed_message(label: str, name: str, tap: str,
 
 
 def outdated_footer(total: int, source_missing: int, removed: int = 0,
-                    source_changed: int = 0, not_cloned: int = 0) -> str:
+                    source_changed: int = 0, not_cloned: int = 0,
+                    downgrade: int = 0) -> str:
     """Summary line for `boost outdated`, worded so it never promises
     `boost update` can fix a row whose source is gone.
 
@@ -208,8 +239,10 @@ def outdated_footer(total: int, source_missing: int, removed: int = 0,
     ``source_changed`` and ``not_cloned`` count rows `boost update` will not
     upgrade either: one names another repository than the install came from,
     the other has no clone to compare against (`boost update` clones it).
+    ``downgrade`` counts rows whose tap rewound to an older version, which
+    `boost update` holds back unless given ``--allow-downgrade``.
     """
-    held = source_changed + not_cloned
+    held = source_changed + not_cloned + downgrade
     if source_missing == held == 0:
         return ("%d outdated · `boost update` upgrades "
                 "(pinned and quarantined items stay put)" % total)
@@ -240,4 +273,7 @@ def outdated_footer(total: int, source_missing: int, removed: int = 0,
     if not_cloned:
         parts.append("%d not cloned (`boost update` clones the tap)"
                      % not_cloned)
+    if downgrade:
+        parts.append("%d rewound upstream (older than installed; `%s` "
+                     "follows it)" % (downgrade, DOWNGRADE_REMEDY))
     return " · ".join(parts)

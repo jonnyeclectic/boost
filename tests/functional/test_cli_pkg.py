@@ -1349,6 +1349,29 @@ class TestUpdateKeepsWhatItCannotGetBack:
         assert "`boost update --allow-downgrade` downgrades" in r.out
         assert "--force" not in r.out
 
+    def test_outdated_and_drift_name_allow_downgrade_for_a_rewind(
+            self, boost, fixture_tap_src, tmp_path):
+        """They sent the user to plain `boost update`, which holds a rewind
+        back ("update skipped") on every run."""
+        self._rewound(fixture_tap_src, tmp_path, "rewind-tap-od", boost)
+        assert "update skipped" in boost("update").out   # the hold, held
+        r = boost("outdated")
+        assert "1.4.0 (older than installed)" in r.out
+        assert ("1 outdated · 1 rewound upstream (older than installed; "
+                "`boost update --allow-downgrade` follows it)") in r.out
+        assert "`boost update` upgrades" not in r.out
+        rows = json.loads(boost("outdated", "--json").out)
+        assert [(x["name"], x["installed"], x["latest"], x["reason"])
+                for x in rows] == [("brainstorming", "1.5.0", "1.4.0",
+                                    "downgrade")]
+        drift = json.loads(boost("drift", "--json").out)["skills"]
+        assert [(x["name"], x["status"], x["hint"]) for x in drift] == [
+            ("brainstorming", "upstream-rewound",
+             "boost update --allow-downgrade to follow it, or keep your "
+             "newer copy")]
+        r = boost("drift")
+        assert "upstream-rewound" in r.out
+
     def test_allow_downgrade_downgrades_and_says_which_way(
             self, boost, fixture_tap_src, tmp_path):
         self._rewound(fixture_tap_src, tmp_path, "rewind-tap2", boost)
@@ -1372,6 +1395,14 @@ class TestUpdateKeepsWhatItCannotGetBack:
         assert "Use tabs." in claude.read_text(encoding="utf-8")
         assert ("rule house-style: upstream is at v1.0.0, behind your v1.1.0"
                 in r.out)
+        rows = json.loads(boost("outdated", "--json").out)
+        assert [(x["name"], x["reason"]) for x in rows] == [
+            ("house-style", "downgrade")]
+        drift = json.loads(boost("drift", "--json").out)["skills"]
+        assert [(x["status"], x["hint"]) for x in drift
+                if x["name"] == "house-style"] == [
+            ("upstream-rewound", "boost update --allow-downgrade to follow "
+             "it, or keep your newer copy")]
         r = boost("update", "--allow-downgrade")
         assert "downgraded rule house-style v1.1.0 → v1.0.0" in r.out
         assert "two-space" in claude.read_text(encoding="utf-8")

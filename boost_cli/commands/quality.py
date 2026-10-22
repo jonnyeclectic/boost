@@ -257,8 +257,8 @@ def _read_skill(skill_dir: Path) -> tuple[dict, str]:
 
 
 def _drift_status(name: str, entry: dict) -> str:
-    """'in-sync' | 'local-edits' | 'upstream-moved' | 'source-missing'
-    | 'source-changed'
+    """'in-sync' | 'local-edits' | 'upstream-moved' | 'upstream-rewound'
+    | 'source-missing' | 'source-changed'
     | 'store-missing' | 'n/a' (local imports with no tap source)."""
     sdir = store.copy_dir(name, entry)
     if sdir.is_dir() and integrity.self_sourced(name, entry):
@@ -292,9 +292,33 @@ def _drift_from_copy(name: str, entry: dict, copy_sha: str | None,
                 source_sha = None
             if source_sha is not None:
                 exec_changed = store.source_exec_changed(cat, entry, copy)
-    return staleness.drift_state(copy_sha, lock_sha, is_local, source_sha,
-                                 source_changed=changed,
-                                 exec_changed=exec_changed)
+    return _rewound_or(staleness.drift_state(
+        copy_sha, lock_sha, is_local, source_sha, source_changed=changed,
+        exec_changed=exec_changed), "skill", name, entry)
+
+
+def _rewound_or(status: str, kind: str, name: str, entry: dict) -> str:
+    """``status``, or ``upstream-rewound`` for a move to an older version.
+
+    A tap force-pushed back to an earlier release reads as upstream-moved,
+    whose hint is `boost update` -- which holds it ("update skipped") on
+    every run. The catalog version is read only for an unpinned
+    upstream-moved row, and only from the item's own tap: a pinned one is
+    held by its pin, which ``--allow-downgrade`` does not release.
+    """
+    if status != staleness.UPSTREAM_MOVED or entry.get("pinned"):
+        return status
+    try:
+        entries = catalog.load_tap(registry.get(str(entry.get("tap", ""))))
+    except BoostError:
+        return status
+    row = catalog.installed_row([e for e in entries if e.get("name") == name],
+                                kind, entry)
+    latest = str(row.get("version") or "") if row else ""
+    if staleness.rewound(staleness.CONTENT, str(entry.get("version") or ""),
+                         latest) == staleness.DOWNGRADE:
+        return staleness.UPSTREAM_REWOUND
+    return status
 
 
 def _tap_source_changed(entry: dict) -> bool:
@@ -367,7 +391,7 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
     except (OSError, BoostError):
         return "source-missing"
     if hashlib.sha256(raw.encode("utf-8")).hexdigest() != entry.get("sha256"):
-        return "upstream-moved"
+        return _rewound_or(staleness.UPSTREAM_MOVED, kind, name, entry)
     return "in-sync"
 
 
@@ -377,7 +401,8 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
 #: mis-painting one cell. `test_drift_vocabulary_is_covered` pins the two
 #: against each other.
 _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
-               "upstream-moved": "accent", "source-missing": "danger",
+               "upstream-moved": "accent", "upstream-rewound": "warn",
+               "source-missing": "danger",
                "source-changed": "warn",
                "store-missing": "danger", "n/a": "muted",
                "quarantined": "muted", "unreachable": "warn",
@@ -394,6 +419,11 @@ def _drift_hint(name: str, status: str, tap: str = "",
         return "boost quarantine --release %s to restore" % name
     if status == "upstream-moved":
         return "boost update"
+    if status == staleness.UPSTREAM_REWOUND:
+        # `boost update` holds a rewind back on every run; only the flag
+        # that releases that hold follows it.
+        return "%s to follow it, or keep your newer copy" % (
+            staleness.DOWNGRADE_REMEDY)
     if status == "source-changed":
         # `boost update` holds these back on purpose: the tap's copy of the
         # name is another repository's item, taken only when asked for.
@@ -712,7 +742,15 @@ def cmd_doctor(argv):
     configured = builtin.configured_tap_count()
     tap_ok = 0
     for tap in taps:
-        if not tap.is_cloned:
+        if not tap.is_cloned and tap.pin:
+            # Doctor reads no network, so it cannot know the pin is gone
+            # upstream -- but `boost update` alone failed forever when it
+            # was, and this line used to send the user straight back to it.
+            bad("tap", "tap %s not cloned — run `boost update %s` to clone it "
+                "at its pin %s; if that commit is gone upstream, %s"
+                % (tap.name, tap.name, tap.pin[:7],
+                   registry.pin_missing_remedy(tap.name)), wrap=True)
+        elif not tap.is_cloned:
             bad("tap", "tap %s not cloned — run `boost update`" % tap.name)
         elif tap.is_broken_clone:
             bad("tap", registry.broken_clone_line(tap.name), wrap=True)
