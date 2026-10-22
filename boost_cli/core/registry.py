@@ -148,6 +148,15 @@ def parse_spec(spec: str):
     Accepts: owner/repo | full git URL | existing local path.
     """
     spec = spec.strip().rstrip("/")
+    # An empty spec is Path(""), which is the current directory: `boost tap
+    # "$REPO"` with REPO unset tapped whatever repo the script ran in, rc 0.
+    # The CLI refuses "" at parse time; this covers every other caller
+    # (add_many, a Boostfile line), and the whitespace-only and bare-"/"
+    # spellings that strip down to nothing here.
+    if not spec:
+        raise BoostError(
+            "tap spec is empty",
+            hint="use owner/repo, a git URL, or a local directory")
     # Reject control characters HERE, at the parse boundary, rather than letting
     # them travel. A NUL cannot appear in a GitHub owner/repo, a git URL or a
     # usable directory name, so nothing legitimate is turned away — but accepted,

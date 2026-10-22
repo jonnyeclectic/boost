@@ -84,7 +84,7 @@ def cmd_config(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=("list", "get", "set", "unset"),
                    help="what to do (default: list)")
-    p.add_argument("key", nargs="?", help="dotted key, e.g. ai.enabled")
+    p.add_argument("key", type=util.nonempty_str, nargs="?", help="dotted key, e.g. ai.enabled")
     p.add_argument("value", nargs="?", help="new value (JSON or string)")
     p.add_argument("--json", action="store_true",
                    help="machine-readable output")
@@ -350,7 +350,7 @@ def cmd_compact(argv) -> int:
     p = cliparse.parser(
         prog="boost compact",
         description="Shrink tap clones to the files boost indexes")
-    p.add_argument("tap", nargs="*",
+    p.add_argument("tap", type=util.nonempty_str, nargs="*",
                    help="taps to compact (default: all cloned taps)")
     p.add_argument("--dry-run", action="store_true",
                    help="show what would be reclaimed without touching anything")
@@ -582,10 +582,10 @@ def cmd_create(argv) -> int:
     p = cliparse.parser(
         prog="boost create",
         description="Scaffold a new skill from a template")
-    p.add_argument("name", help="skill name (slugified)")
-    p.add_argument("--description", default=None,
+    p.add_argument("name", type=util.nonempty_str, help="skill name (slugified)")
+    p.add_argument("--description", type=util.nonempty_str, default=None,
                    help="one-line trigger description for the frontmatter")
-    p.add_argument("--dir", default=None,
+    p.add_argument("--dir", type=util.nonempty_str, default=None,
                    help="parent directory (default: current directory)")
     p.add_argument("--install", action="store_true",
                    help="install the new skill immediately")
@@ -683,7 +683,7 @@ def cmd_policy(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=("list", "set", "unset", "check"),
                    help="what to do (default: list)")
-    p.add_argument("key", nargs="?",
+    p.add_argument("key", type=util.nonempty_str, nargs="?",
                    help="policy key: " + ", ".join(sorted(policy.DEFAULTS)))
     p.add_argument("value", nargs="?", help="new value (JSON, comma list, or string)")
     p.add_argument("--json", action="store_true",
@@ -989,7 +989,7 @@ def cmd_onboard(argv) -> int:
     p = cliparse.parser(
         prog="boost onboard",
         description="Add skill-tracker telemetry to a repo (optionally open a PR with --pr)")
-    p.add_argument("--repo", default=None,
+    p.add_argument("--repo", type=util.nonempty_str, default=None,
                    help="repository directory (default: the enclosing "
                         "project root)")
     p.add_argument("--pr", action="store_true",
@@ -1529,7 +1529,7 @@ def cmd_serve(argv) -> int:
         description="Browse the catalogue in a browser: search, facets and a tap graph")
     p.add_argument("--port", type=util.port_number, default=None,
                    help="port to listen on (default: config serve.port)")
-    p.add_argument("--host", default="127.0.0.1",
+    p.add_argument("--host", type=util.nonempty_str, default="127.0.0.1",
                    help="address to bind (default: 127.0.0.1)")
     args = p.parse_args(argv)
     port = args.port
@@ -2692,7 +2692,7 @@ def cmd_mcp(argv) -> int:
     p.add_argument("action", nargs="?", default="register",
                    choices=("register", "unregister"),
                    help="what to do (default: register)")
-    p.add_argument("--host", metavar="H", default="auto",
+    p.add_argument("--host", type=util.nonempty_str, metavar="H", default="auto",
                    help="agent CLI to (un)register with: %s, `auto` "
                         "(default) for every one that is installed, or "
                         "`all` for every known host regardless of install"

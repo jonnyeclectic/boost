@@ -1837,10 +1837,10 @@ def _print_skipped(skipped: list[dict]) -> None:
 def cmd_lint(argv):
     ap = cliparse.parser(
         prog="boost lint", description="Validate SKILL.md frontmatter & quality")
-    ap.add_argument("names", nargs="*", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="*", metavar="NAME",
                     help="installed skill name(s), or a path to a skill "
                          "directory / its SKILL.md")
-    ap.add_argument("--tap", metavar="TAP", help="lint every skill in a tap's clone")
+    ap.add_argument("--tap", type=util.nonempty_str, metavar="TAP", help="lint every skill in a tap's clone")
     ap.add_argument("--min", type=util.score_int, default=40, dest="min_score", metavar="N",
                     help="minimum passing score, 0-100 (default 40)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
@@ -1937,7 +1937,7 @@ def cmd_drift(argv):
     ap = cliparse.parser(
         prog="boost drift",
         description="Detect installed skills diverging from source")
-    ap.add_argument("names", nargs="*", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="*", metavar="NAME",
                     help="installed skill, rule or workflow (default: all)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
@@ -2022,7 +2022,7 @@ def cmd_test(argv):
         prog="boost test",
         description="Validate installed skills against quality checks "
                     "(exits 1 when any skill fails)")
-    ap.add_argument("names", nargs="*", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="*", metavar="NAME",
                     help="installed skill (default: all)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
@@ -2671,7 +2671,7 @@ def cmd_changelog(argv):
     ap = cliparse.parser(
         prog="boost changelog",
         description="Show an item's upstream change history")
-    ap.add_argument("name", metavar="NAME",
+    ap.add_argument("name", type=util.nonempty_str, metavar="NAME",
                     help="skill, rule or workflow, installed or in a tap")
     ap.add_argument("-n", type=util.positive_int, default=20, metavar="N",
                     help="number of entries (default 20)")
@@ -2892,9 +2892,9 @@ def cmd_trust(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=("list", "add", "remove", "verify"),
                    help="what to do (default: list)")
-    p.add_argument("name", nargs="?",
+    p.add_argument("name", type=util.nonempty_str, nargs="?",
                    help="key name (add/remove) or tap name (verify)")
-    p.add_argument("key", nargs="?",
+    p.add_argument("key", type=util.nonempty_str, nargs="?",
                    help="with add: a minisign .pub file or its base64 line")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)

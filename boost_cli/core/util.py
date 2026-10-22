@@ -553,6 +553,31 @@ def score_int(s: str) -> int:
     return v
 
 
+def nonempty_str(s: str) -> str:
+    """argparse ``type=`` for a NAME, path or value that was given explicitly.
+
+    An empty string is not the same as an omitted argument, but every handler
+    that branches on ``if args.name:`` treats it as one: ``attest --verify ""``
+    verified every skill, ``cohort apply ""`` applied every cohort, ``tap ""``
+    and ``import ""`` read ``Path("")`` as the current directory, and
+    ``export -o ""`` wrote the default filename. ``boost attest "$UNSET"`` in a
+    script is the usual way to get here, and it went green having done the
+    wrong thing. Rejecting it at parse time makes it a usage error (exit 2)
+    naming the argument; an *omitted* optional NAME keeps meaning "all",
+    because argparse never runs ``type=`` on a missing positional.
+
+    The value is returned unchanged -- whitespace inside a real value is the
+    caller's business; only a value that is nothing *but* whitespace is
+    refused. A string ``default=`` is passed through ``type=`` too, so an
+    argument using this must default to ``None``, never ``""``.
+    """
+    import argparse
+
+    if not s.strip():
+        raise argparse.ArgumentTypeError("must not be empty")
+    return s
+
+
 def resolve_exe(argv: list[str]) -> list[str]:
     """``argv`` with ``argv[0]`` swapped for the path ``shutil.which`` finds.
 

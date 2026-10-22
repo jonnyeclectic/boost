@@ -45,7 +45,7 @@ def cmd_hooks(argv) -> int:
                     "settings")
     p.add_argument("action", choices=("add", "remove", "list"),
                    help="add | remove | list")
-    p.add_argument("event", nargs="?",
+    p.add_argument("event", type=util.nonempty_str, nargs="?",
                    help="hook event, e.g. SessionStart "
                         "(required for add; filters remove/list)")
     p.add_argument("--host", metavar="H", default=None,
@@ -53,11 +53,11 @@ def cmd_hooks(argv) -> int:
                    help="agent CLI whose hook settings to manage: %s "
                         "(default: claude for add/remove, all of them for list)"
                         % ", ".join(hookhost.hosts()))
-    p.add_argument("-c", "--command", help="command the hook runs (add)")
-    p.add_argument("-n", "--name", help="stable name used to tag & find the hook")
+    p.add_argument("-c", "--command", type=util.nonempty_str, help="command the hook runs (add)")
+    p.add_argument("-n", "--name", type=util.nonempty_str, help="stable name used to tag & find the hook")
     p.add_argument("-s", "--scope", choices=cs.SCOPES, default=None,
                    help="settings scope (default: project; list shows both)")
-    p.add_argument("-m", "--matcher",
+    p.add_argument("-m", "--matcher", type=util.nonempty_str,
                    help="Claude matcher, e.g. 'startup|resume|clear'")
     p.add_argument("--timeout", type=util.positive_int, default=10,
                    help="hook timeout in seconds (default: 10)")

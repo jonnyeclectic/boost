@@ -163,7 +163,7 @@ def cmd_tap(argv) -> int:
     p = cliparse.parser(
         prog="boost tap",
         description="Add a git URL, GitHub repo, or local directory as a skill registry")
-    p.add_argument("spec", nargs="*",
+    p.add_argument("spec", type=util.nonempty_str, nargs="*",
                    help="owner/repo, a git URL, or a local directory — several "
                         "at once clone in parallel")
     p.add_argument("--defaults", action="store_true",
@@ -172,7 +172,7 @@ def cmd_tap(argv) -> int:
                    help="tap from the bundled curated registry catalog")
     p.add_argument("--type", choices=("skill", "rule", "workflow"),
                    help="with --catalog: restrict to one item type")
-    p.add_argument("--category", help="with --catalog: restrict to one category")
+    p.add_argument("--category", type=util.nonempty_str, help="with --catalog: restrict to one category")
     p.add_argument("--limit", type=util.positive_int, metavar="N",
                    help="with --catalog: only the top N registries by est. size")
     p.add_argument("--include-lists", action="store_true",
@@ -181,7 +181,7 @@ def cmd_tap(argv) -> int:
                    help="print what would be tapped, tap nothing")
     p.add_argument("--curated", action="store_true",
                    help="mark the tap as curated (★ in listings)")
-    p.add_argument("--at", metavar="SHA",
+    p.add_argument("--at", type=util.nonempty_str, metavar="SHA",
                    help="pin the clone to one 40-character commit, as a "
                         "published vector shard requires")
     p.add_argument("--jobs", type=util.positive_int, metavar="N",
@@ -328,7 +328,7 @@ def cmd_untap(argv) -> int:
     p = cliparse.parser(
         prog="boost untap",
         description="Remove a registry tap")
-    p.add_argument("name", nargs="+",
+    p.add_argument("name", type=util.nonempty_str, nargs="+",
                    help="tap name(s) (owner/repo or short alias) — several "
                         "at once remove one invocation per tap")
     p.add_argument("-f", "--force", action="store_true",
@@ -682,11 +682,11 @@ def cmd_catalog(argv) -> int:
         prog="boost catalog",
         description="Share the tapped catalogue so others skip the clone")
     mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--export", metavar="FILE",
+    mode.add_argument("--export", type=util.nonempty_str, metavar="FILE",
                       help="write every tapped registry's catalogue to FILE")
-    mode.add_argument("--import", metavar="FILE", dest="import_",
+    mode.add_argument("--import", type=util.nonempty_str, metavar="FILE", dest="import_",
                       help="merge a catalogue bundle into this machine")
-    mode.add_argument("--show", metavar="FILE",
+    mode.add_argument("--show", type=util.nonempty_str, metavar="FILE",
                       help="describe a bundle without importing it")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")

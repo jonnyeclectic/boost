@@ -558,15 +558,15 @@ def _preview_skill_copy(e: dict, seen: dict | None, as_skill: bool | None,
 def cmd_install(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost install",
                                  description="Install a skill from a tap registry")
-    ap.add_argument("names", nargs="+", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="+", metavar="NAME",
                     help="skill name, optionally qualified as tap:skill")
     ap.add_argument("--force", action="store_true",
                     help="reinstall even if already installed or pinned")
-    ap.add_argument("--path", metavar="P", default=None,
+    ap.add_argument("--path", type=util.nonempty_str, metavar="P", default=None,
                     help="pick which copy to install when one registry ships "
                          "the name more than once (see the paths that error "
                          "lists); may be a trailing path segment")
-    ap.add_argument("--agent", action="append", metavar="A",
+    ap.add_argument("--agent", type=util.nonempty_str, action="append", metavar="A",
                     help="link only into this agent (repeatable)")
     cliparse.add_scope_flags(
         ap, scope_help="install into your user config (default) or the "
@@ -892,7 +892,7 @@ def cmd_uninstall(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost uninstall",
         description="Remove an installed skill, rule, or workflow")
-    ap.add_argument("names", nargs="+", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="+", metavar="NAME",
                     help="installed skill, rule or workflow (several allowed)")
     cliparse.add_scope_flags(
         ap, scope_help="remove from your user config or this repo (default: "
@@ -1995,7 +1995,7 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
 def cmd_update(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost update",
                                  description="Sync taps or update installed skills")
-    ap.add_argument("tap", nargs="?", metavar="TAP", help="refresh only this tap")
+    ap.add_argument("tap", type=util.nonempty_str, nargs="?", metavar="TAP", help="refresh only this tap")
     ap.add_argument("--taps-only", action="store_true",
                     help="refresh tap clones & catalogs without touching skills")
     # Declared because this command *advertises* it: a skipped risky update
@@ -2211,7 +2211,7 @@ def cmd_reinstall(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost reinstall",
                                  description="Reinstall an installed skill, "
                                              "rule or workflow (force)")
-    ap.add_argument("names", nargs="*", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="*", metavar="NAME",
                     help="installed skill, rule or workflow (or pass --all)")
     ap.add_argument("--all", action="store_true",
                     help="reinstall every installed skill, rule and workflow")
@@ -2440,7 +2440,7 @@ def cmd_bundle(argv: list[str]) -> int:
     ap.add_argument("action", choices=("dump", "install"),
                     help="dump installed skills to a Boostfile, or install "
                          "from one")
-    ap.add_argument("file", nargs="?", metavar="FILE",
+    ap.add_argument("file", type=util.nonempty_str, nargs="?", metavar="FILE",
                     help="Boostfile (dump: default stdout; "
                          "install: default ./Boostfile, '-' = stdin)")
     ap.add_argument("--dry-run", action="store_true",
@@ -2908,13 +2908,13 @@ def cmd_import(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost import",
         description="Import skills from a GitHub URL or local path")
-    ap.add_argument("source", metavar="URL_OR_PATH",
+    ap.add_argument("source", type=util.nonempty_str, metavar="URL_OR_PATH",
                     help="git URL (http(s)://, git@, ssh://) or a local directory")
     group = ap.add_mutually_exclusive_group()
-    group.add_argument("--name", metavar="N",
+    group.add_argument("--name", type=util.nonempty_str, metavar="N",
                        help="skill to pick when several are found (or a rename)")
     group.add_argument("--all", action="store_true", help="import every skill found")
-    ap.add_argument("--agent", action="append", metavar="A",
+    ap.add_argument("--agent", type=util.nonempty_str, action="append", metavar="A",
                     help="link only into this agent (repeatable)")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the replace-the-only-copy confirmation prompt")
@@ -3058,7 +3058,7 @@ def _import_root(root: Path, name: str | None, do_all: bool,
 def cmd_pin(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost pin",
                                  description="Pin a skill, rule or workflow to its current version")
-    ap.add_argument("name", metavar="NAME",
+    ap.add_argument("name", type=util.nonempty_str, metavar="NAME",
                     help="installed skill, rule or workflow")
     ap.add_argument("--commit", action="store_true",
                     help="also freeze the exact source commit (integrity pin)")
@@ -3092,7 +3092,7 @@ def cmd_pin(argv: list[str]) -> int:
 def cmd_unpin(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost unpin",
                                  description="Allow a pinned skill, rule or workflow to update again")
-    ap.add_argument("name", metavar="NAME",
+    ap.add_argument("name", type=util.nonempty_str, metavar="NAME",
                     help="pinned skill, rule or workflow")
     _add_pin_scope(ap, "unpin")
     args = ap.parse_args(argv)
@@ -3231,7 +3231,7 @@ def cmd_snapshot(argv: list[str]) -> int:
     ap.add_argument("action", choices=("save", "list", "restore"),
                     help="save the current environment, list snapshots, or "
                          "restore one")
-    ap.add_argument("arg", nargs="?", metavar="LABEL|ID",
+    ap.add_argument("arg", type=util.nonempty_str, nargs="?", metavar="LABEL|ID",
                     help="label for save, snapshot id for restore")
     ap.add_argument("--json", action="store_true",
                     help="machine-readable output (list)")
@@ -3412,9 +3412,9 @@ def cmd_export(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost export",
         description="Package skills as shareable zip/tar archives")
-    ap.add_argument("names", nargs="*", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="*", metavar="NAME",
                     help="skills to export (default: all installed)")
-    ap.add_argument("-o", "--output", "--out", dest="out", metavar="OUT",
+    ap.add_argument("-o", "--output", "--out", type=util.nonempty_str, dest="out", metavar="OUT",
                     help="output archive path")
     ap.add_argument("--zip", action="store_true",
                     help="build a .zip instead of .tar.gz")
@@ -3580,13 +3580,13 @@ def cmd_adapt(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost adapt",
         description="Render a skill as another agent framework's native source")
-    ap.add_argument("name", help="skill to adapt")
-    ap.add_argument("--to", metavar="FRAMEWORK", required=True,
+    ap.add_argument("name", type=util.nonempty_str, help="skill to adapt")
+    ap.add_argument("--to", type=util.nonempty_str, metavar="FRAMEWORK", required=True,
                     help="target framework: %s" % ", ".join(adapters.formats()))
-    ap.add_argument("--model", metavar="M", default=None,
+    ap.add_argument("--model", type=util.nonempty_str, metavar="M", default=None,
                     help="LLM the exported agent runs on (default: boost's "
                          "ai.model; pass 'none' for the framework's own default)")
-    ap.add_argument("-o", "--output", "--out", dest="out", metavar="FILE",
+    ap.add_argument("-o", "--output", "--out", type=util.nonempty_str, dest="out", metavar="FILE",
                     help="write to FILE instead of stdout")
     args = ap.parse_args(argv)
     if args.to not in adapters.FORMATS:
