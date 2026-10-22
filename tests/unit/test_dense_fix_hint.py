@@ -33,7 +33,9 @@ def _table(reason: str) -> str:
 ALL_REASONS = [
     "disabled",
     "no-backend",
+    "no-extension-load",
     "no-key",
+    "corrupt",
     "no-store",
     "version-changed",
     "provider-changed",

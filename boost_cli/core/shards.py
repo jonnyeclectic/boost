@@ -77,10 +77,44 @@ def manifest_url() -> str:
     return os.environ.get(MANIFEST_ENV) or DEFAULT_MANIFEST_URL
 
 
-# The one manifest hint that needs the [rag] extra: quickstart without it
-# read the manifest for its pins alone, and names the extra itself.
-LOCAL_EMBED_HINT = ("shards are optional — `boost reindex --dense` embeds "
-                    "locally instead")
+#: How every transport-failure hint opens. Quickstart without the extra read
+#: the manifest for its pins alone and names the extra itself, so it matches
+#: on this lead to drop the hint rather than say the same thing twice.
+TRANSPORT_LEAD = "shards are optional — "
+
+#: Reasons a plain `boost reindex --dense` cannot answer: it cannot run, or
+#: it refuses a store it would have to destroy. `dense.fix_hint` words each.
+_UNBUILDABLE = frozenset({"disabled", "no-backend", "no-extension-load",
+                          "no-key", "corrupt", "provider-changed",
+                          "model-changed", "dim-changed"})
+_CANNOT_RUN = frozenset({"disabled", "no-backend", "no-extension-load",
+                         "no-key"})
+
+
+def _how(prov: str | None) -> str:
+    """Where `boost reindex --dense` would embed under `prov`, cost included."""
+    return ("through %s's paid API" % prov) if prov in embed.KEY_ENV else "locally"
+
+
+def transport_hint() -> str:
+    """The hint for a manifest or shard that could not be fetched.
+
+    It used to be a constant, "`boost reindex --dense` embeds locally
+    instead", which was wrong twice over: without the extra that command only
+    says it needs the extra, and with a key in force it embeds through the
+    paid API — the bill :func:`remedy` exists to name. So it reads the same
+    ``dense.status()`` doctor and search read, and answers from the same table.
+    """
+    from . import dense
+    st = dense.status()
+    reason = st.get("reason") or ""
+    prov = st.get("provider")
+    if prov is None or reason in _UNBUILDABLE:
+        lead = ("to embed on this machine instead, "
+                if prov is None or reason in _CANNOT_RUN else "")
+        return TRANSPORT_LEAD + lead + dense.fix_hint(reason, st)
+    return (TRANSPORT_LEAD + "`boost reindex --dense` embeds them %s instead"
+            % _how(prov))
 
 
 def _open(url: str, timeout: float):
@@ -98,7 +132,7 @@ def _open(url: str, timeout: float):
         return urllib.request.urlopen(url, timeout=timeout)  # noqa: S310  scheme checked above
     except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         raise BoostError("cannot reach %s: %s" % (url, exc),
-                         hint=LOCAL_EMBED_HINT) from exc
+                         hint=transport_hint()) from exc
 
 
 def _read(resp, n: int, url: str) -> bytes:
@@ -117,7 +151,7 @@ def _read(resp, n: int, url: str) -> bytes:
     except (OSError, http.client.HTTPException) as exc:
         raise BoostError("cannot read %s: %s"
                          % (url, str(exc) or type(exc).__name__),
-                         hint=LOCAL_EMBED_HINT) from exc
+                         hint=transport_hint()) from exc
 
 
 def _read_capped(resp, cap: int, url: str) -> bytes:
@@ -296,8 +330,7 @@ def remedy(manifest: dict) -> str:
     st = dense.status()
     if prov is None:
         return dense.fix_hint(st.get("reason") or "", st)
-    paid = prov in embed.KEY_ENV
-    how = ("through %s's paid API" % prov) if paid else "locally"
+    how = _how(prov)
     built = st.get("built_provider")
     if built and (built, st.get("built_model"), st.get("built_dim")) != (
             manifest.get("provider"), manifest.get("model"),

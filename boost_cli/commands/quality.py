@@ -1592,6 +1592,14 @@ def _report_search_engine(rep) -> None:
         return
 
     fix = dense.fix_hint(st["reason"], st)
+    if st["reason"] == "corrupt":
+        # Its own line: there is no chunk count or build to describe, and
+        # "not configured" — what this used to say — named the wrong fault.
+        rep.issue("search-engine",
+                  "semantic search silently off — %s is not a readable "
+                  "SQLite database; searches are using BM25 — %s"
+                  % (dense.db_path().as_posix(), fix), hint=fix, wrap=True)
+        return
     if st["degraded"]:
         # The store was built and is now dead weight: say what it holds, what
         # changed, and that search has silently been on BM25 the whole time.
