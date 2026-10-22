@@ -260,7 +260,15 @@ def skill_store_dir(name: str) -> Path:
     Raises BoostError unless the name is a safe path component.
     """
     if not util.is_safe_component(name):
-        raise BoostError("invalid skill name %r" % name)
+        # Name the slug it would have, when it has one: a tap's `c++-helper`
+        # is catalogued (and installed) as `c--helper`, and a bare refusal
+        # left the user nothing to type instead.
+        slug = util.slugify(name)
+        hint = ("a name is a-z, A-Z, 0-9, '.', '_' and '-' — did you mean "
+                "%r?" % slug
+                if not set(name) & set("/\\:") and slug != "skill"
+                else None)
+        raise BoostError("invalid skill name %r" % name, hint=hint)
     return paths.store_dir() / name
 
 
@@ -320,6 +328,7 @@ def resolve_lock_entry(name: str) -> tuple[str, str | None, dict | None]:
     "not installed", same as a bare miss.
     """
     qualifier, bare = catalog.split_name(name)
+    bare = catalog.addressable_name(bare)
     found = lockfile.find_any(bare)
     if found is None:
         return bare, None, None
@@ -355,8 +364,9 @@ def installed_name(name: str, scope: str | None = None) -> str:
     second remove or reinstall tap B's copy.
     """
     qualifier, bare = catalog.split_name(name)
+    bare = catalog.addressable_name(bare)
     if qualifier is None:
-        return name
+        return bare
     held: list[tuple[str, dict]] = []
     if scope != scopes.SCOPE_PROJECT:
         held = [(kind, section[bare])
