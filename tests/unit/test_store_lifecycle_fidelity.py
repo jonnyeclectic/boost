@@ -261,6 +261,55 @@ class TestProjectSyncKeepsTheLock:
         shutil.rmtree(claude_copy)
         assert store.project_intact_copy(rec, repo) is None
 
+    def test_source_moved_reads_the_lock_commit_only(self, tap, entry,
+                                                     tmp_path):
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        assert not store.project_source_moved("brainstorming", rec)
+        # No recorded commit: nothing says the tap is where the lock was.
+        assert store.project_source_moved(
+            "brainstorming", {k: v for k, v in rec.items() if k != "commit"})
+        # No tap source to judge at all.
+        assert not store.project_source_moved("brainstorming",
+                                              rec | {"tap": "local"})
+        assert not store.project_source_moved("brainstorming",
+                                              rec | {"tap": "no-such-tap"})
+
+    def test_an_unreadable_sibling_is_not_restored_from(self, tap, entry,
+                                                        tmp_path):
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        claude_copy = repo / ".claude" / "skills" / "brainstorming"
+        md = claude_copy / "SKILL.md"
+        # An unclosed fence: every field would read as absent.
+        md.write_text("---\nname: brainstorming\n", encoding="utf-8")
+        rec["sha256"] = util.sha256_dir(claude_copy)
+        rec.pop("exec", None)
+        projectlock.set_skill(repo, "brainstorming", rec)
+        assert store.project_intact_copy(rec, repo) == claude_copy
+        assert store._sibling_policy_violations(
+            repo, "brainstorming", rec, claude_copy) is None
+        shutil.rmtree(repo / ".cursor" / "skills" / "brainstorming")
+        plan = store.project_sync_plan(base=str(repo))
+        # Falls through to the tap, which still sits on the locked commit.
+        assert store.project_sync_apply(plan, base=str(repo)) == [
+            "re-materialized brainstorming from %s" % tap.name]
+
+    def test_a_blocklisted_skill_is_not_restored_from_a_sibling(
+            self, tap, entry, tmp_path):
+        from boost_cli.core import policy
+        repo = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        claude_copy = repo / ".claude" / "skills" / "brainstorming"
+        assert store._sibling_policy_violations(
+            repo, "brainstorming", rec, claude_copy) == []
+        pol = policy.load()
+        pol["blocked_skills"] = ["brainstorming"]
+        policy.save(pol)
+        assert store._sibling_policy_violations(
+            repo, "brainstorming", rec, claude_copy) == [
+            "skill 'brainstorming' is on the blocklist"]
+
     def test_moved_source_with_no_copy_left_is_declined_and_nothing_is_written(
             self, tap, entry, tmp_path):
         repo = self._install(entry, tmp_path)
