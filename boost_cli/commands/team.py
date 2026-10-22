@@ -36,16 +36,20 @@ from .pkg import _report_result, _warn_unwritable
 _tilde = paths.tilde
 
 
-def _resolve_entry(name: str, prefer_tap: str | None = None):
-    """Find a catalog entry by name, preferring a specific tap. None if absent."""
-    matches = catalog.find(name)
-    if not matches:
-        return None
-    if prefer_tap:
-        tapped = [e for e in matches if e["tap"] == prefer_tap]
-        if tapped:
-            return tapped[0]
-    return matches[0]
+def _resolve_entry(name: str, prefer_tap: str | None = None,
+                   kind: str | None = None
+                   ) -> tuple[dict | None, str | None]:
+    """``(entry, why_not)`` for a recorded name (:func:`catalog.resolve_recorded`).
+
+    ``(None, None)`` when no tap ships it; ``(None, reason)`` when one does
+    but it cannot be the answer — ambiguous, or its recorded tap is gone —
+    with the reason as one printable line.
+    """
+    try:
+        return catalog.resolve_recorded(name, prefer_tap, kind), None
+    except BoostError as e:
+        return None, ("%s (%s)" % (e.message, e.hint) if e.hint
+                      else e.message)
 
 
 # ---------------------------------------------------------------- cohort
@@ -216,10 +220,12 @@ def cmd_cohort(argv) -> int:
                     present_here.append(skill)
                     skipped += 1
                     continue
-                entry = _resolve_entry(skill)
+                entry, why = _resolve_entry(skill)
                 if entry is None:
                     if not args.json:
-                        out.warn("%s not found in any tap — skipped" % skill)
+                        out.warn("%s — skipped" % why if why else
+                                 "%s not found in any tap — skipped" % skill,
+                                 wrap=True)
                     missing_here.append(skill)
                     continue
                 res = store.install(entry)
@@ -562,10 +568,13 @@ def cmd_profile(argv) -> int:
                      "leaving it as-is" % (n, kind))
     installed_now, not_found = [], []
     for n in missing:
-        entry = _resolve_entry(n, prefer_tap=want[n].get("tap"))
+        entry, why = _resolve_entry(n, prefer_tap=want[n].get("tap"),
+                                   kind=catalog.KIND_SKILL)
         if entry is None:
             if not args.json:
-                out.warn("%s is in the profile but not in any tap — skipped" % n)
+                out.warn("%s — skipped" % why if why else
+                         "%s is in the profile but not in any tap — skipped"
+                         % n, wrap=True)
             not_found.append(n)
             continue
         saved = want[n]
@@ -1102,10 +1111,18 @@ def cmd_replay(argv) -> int:
         for n in only:
             out.info("kept %s: the store holds its only copy — `boost "
                      "uninstall %s` deletes it" % (n, n))
-    resolved = {n: _resolve_entry(n, prefer_tap=snap_skills[n].get("tap"))
+    lookups = {n: _resolve_entry(n, prefer_tap=snap_skills[n].get("tap"),
+                                  kind=catalog.KIND_SKILL)
                for n in removed}
-    restorable = [n for n in removed if resolved[n] is not None]
-    gone = [n for n in removed if resolved[n] is None]
+    resolved = {n: entry for n, (entry, _why) in lookups.items()
+                if entry is not None}
+    restorable = [n for n in removed if n in resolved]
+    gone = [n for n in removed if n not in resolved]
+
+    def _gone_line(n: str) -> str:
+        why = lookups[n][1]
+        return ("%s — cannot restore" % why if why
+                else "%s is gone from every tap — cannot restore" % n)
 
     if not (added or restorable or changed):
         if args.json:
@@ -1118,7 +1135,7 @@ def cmd_replay(argv) -> int:
                              indent=2))
             return 0
         for n in gone:
-            out.warn("%s is gone from every tap — cannot restore" % n)
+            out.warn(_gone_line(n), wrap=True)
         out.ok("nothing else to roll back" if only else
                "skills already match this snapshot — nothing to do"
                if mat_diff else "already at this snapshot — nothing to do")
@@ -1140,7 +1157,7 @@ def cmd_replay(argv) -> int:
         uninstalled.append(n)
     for n in gone:
         if not args.json:
-            out.warn("%s is gone from every tap — cannot restore" % n)
+            out.warn(_gone_line(n), wrap=True)
     for n in restorable:  # in snapshot, missing now, resolvable
         want = snap_skills[n]
         entry = resolved[n]

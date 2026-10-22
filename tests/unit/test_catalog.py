@@ -670,6 +670,54 @@ class TestTapMatches:
         # ("" tap) would satisfy an empty qualifier by string equality.
         assert catalog.tap_matches("", "") is False
 
+    def test_case_folded_spelling_selects_the_tap(self):
+        # `boost update Beta` acts on tap `beta` (registry.get's last tier),
+        # so `Beta:x` must select it too.
+        assert catalog.tap_matches("beta", "Beta") is True
+        assert catalog.tap_matches("Obra/Superpowers", "obra/superpowers") \
+            is True
+
+    def test_safe_name_selects_the_tap(self):
+        assert catalog.tap_matches("acme/fix", "acme__fix") is True
+
+    def test_case_fold_does_not_widen_the_tail(self):
+        # registry.get folds the full name only; `Skills` is not a tail tier.
+        assert catalog.tap_matches("trailofbits/skills", "Skills") is False
+
+
+class TestFindTapTiers:
+    def test_case_variant_qualifier_finds_the_tap(self, sandbox):
+        _fake_taps(("beta", [_entry("x", "beta", desc="b")]))
+        assert [e["tap"] for e in catalog.find("Beta:x")] == ["beta"]
+        assert catalog.resolve_one("Beta:x")["tap"] == "beta"
+
+    # A corpus passed in directly: two taps that differ only by case or by
+    # `/` vs `__` share one cache file on disk, so they cannot both be faked.
+    def test_exact_spelling_beats_a_case_variant(self):
+        pool = [_entry("x", "beta", desc="lower"),
+                _entry("x", "Beta", desc="upper")]
+        assert [e["description"] for e in catalog.find("Beta:x", entries=pool)] \
+            == ["upper"]
+        assert [e["description"] for e in catalog.find("beta:x", entries=pool)] \
+            == ["lower"]
+
+    def test_safe_name_beats_a_tail_and_a_fold(self):
+        pool = [_entry("x", "other/acme__fix", desc="tail"),
+                _entry("x", "acme/fix", desc="safe"),
+                _entry("x", "ACME__FIX", desc="fold")]
+        assert [e["description"]
+                for e in catalog.find("acme__fix:x", entries=pool)] == ["safe"]
+
+    def test_tail_beats_a_fold(self):
+        pool = [_entry("x", "Fix", desc="fold"),
+                _entry("x", "acme/fix", desc="tail")]
+        assert [e["description"] for e in catalog.find("fix:x", entries=pool)] \
+            == ["tail"]
+
+    def test_unmatched_qualifier_finds_nothing(self, sandbox):
+        _fake_taps(("beta", [_entry("x", "beta", desc="b")]))
+        assert catalog.find("gamma:x") == []
+
 
 _A = {"name": "x", "tap": "acme/fix", "version": "1.0.2"}
 _B = {"name": "x", "tap": "other", "version": "9.0.0"}
@@ -1197,7 +1245,25 @@ class TestResolveOneVendoredCopies:
         with pytest.raises(BoostError) as excinfo:
             catalog.resolve_one("dbg")
         hint = excinfo.value.hint or ""
-        assert "boost install dbg --path" in hint
+        assert "boost install t:dbg --path" in hint
+
+    def test_the_hinted_command_resolves_when_another_tap_ships_it(self, sandbox):
+        """The hint dropped the qualifier, so with the name in a second tap
+        the suggested `install dbg --path a/dbg` failed with the cross-tap
+        error and pointed at the wrong tap. Following it now resolves."""
+        _fake_taps(("alpha", [_entry("dbg", "alpha", desc="alpha's",
+                                     rel_dir="a/dbg")]),
+                   ("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(catalog.SameTapAmbiguity) as excinfo:
+            catalog.resolve_one("t:dbg")
+        assert excinfo.value.hint == (
+            "that registry ships one name twice — install one with `boost "
+            "install t:dbg --path <one of the above>`, then retry; raise it "
+            "with the tap")
+        assert excinfo.value.qualified == "t:dbg"
+        got = catalog.resolve_one(excinfo.value.qualified, path="a/dbg")
+        assert (got["tap"], got["description"]) == ("t", "python")
 
     def test_the_ambiguity_message_names_the_entry_s_own_kind(self, sandbox):
         """A workflow sharing a name inside one tap was still reported as
@@ -2122,3 +2188,95 @@ class TestSearchHint:
         monkeypatch.setattr(builtin, "configured_tap_count", lambda: 1)
         assert catalog.search_hint("brainstorming") == \
             "try `boost search brainstorming`"
+
+
+class TestResolveRecorded:
+    """cohort apply / profile use / snapshot rollback took `find()[0]`: an
+    ambiguous name installed whichever tap sorted first, and a profile whose
+    tap was gone came back from another tap, blamed on "its tap has moved"."""
+
+    def _two(self):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]),
+                   ("beta", [_entry("cm", "beta", desc="b"),
+                             _entry("solo", "beta", desc="s")]))
+
+    def test_no_tap_ships_it_is_none(self, sandbox):
+        self._two()
+        assert catalog.resolve_recorded("nope") is None
+        assert catalog.resolve_recorded("nope", "alpha") is None
+
+    def test_an_ambiguous_bare_name_is_refused(self, sandbox):
+        self._two()
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm")
+        assert e.value.message == "'cm' exists in multiple taps: alpha, beta"
+        assert e.value.hint == "qualify it, e.g. `alpha:cm`"
+
+    def test_a_unique_or_qualified_name_resolves(self, sandbox):
+        self._two()
+        assert catalog.resolve_recorded("solo")["tap"] == "beta"
+        assert catalog.resolve_recorded("beta:cm")["description"] == "b"
+
+    def test_the_recorded_tap_wins_over_the_first(self, sandbox):
+        self._two()
+        assert catalog.resolve_recorded("cm", "beta")["description"] == "b"
+        assert catalog.resolve_recorded("cm", "Beta")["description"] == "b"
+
+    def test_an_untapped_recorded_tap_is_never_swapped(self, sandbox):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]))
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm", "beta")
+        assert e.value.message == \
+            "cm was recorded from tap beta, which is no longer tapped"
+        assert e.value.hint == "`boost tap` it again, or install it from: alpha"
+
+    def test_a_local_record_is_not_swapped_for_a_tap_copy(self, sandbox):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]))
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm", "local")
+        assert e.value.message == "cm was installed from a local path, not a tap"
+        assert e.value.hint == \
+            "it is shipped by: alpha — install one by name to switch"
+
+    def test_a_recorded_tap_that_dropped_it(self, sandbox):
+        self._two()
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("solo", "alpha")
+        assert e.value.message == "solo is no longer in tap alpha"
+        assert e.value.hint == "it is shipped by: beta"
+
+    @staticmethod
+    def _skill_and_workflow():
+        wf = dict(_entry("tdd", "beta", desc="cmd", rel_dir="commands"),
+                  kind="workflow")
+        _fake_taps(("beta", [_entry("tdd", "beta", desc="skill",
+                                    rel_dir="skills/tdd"), wf]))
+
+    def test_a_skill_record_takes_the_skill_beside_a_workflow(self, sandbox):
+        # A profile/snapshot keeps skills only; `find()[0]` restored the
+        # tap's same-named workflow, and resolve_one alone refuses the pair.
+        self._skill_and_workflow()
+        for tap in ("beta", None):
+            got = catalog.resolve_recorded("tdd", tap, kind="skill")
+            assert (got["description"], got["rel_dir"]) == ("skill",
+                                                            "skills/tdd")
+            with pytest.raises(catalog.SameTapAmbiguity):
+                catalog.resolve_recorded("tdd", tap)
+
+    def test_a_skill_record_never_takes_another_kind(self, sandbox):
+        wf = dict(_entry("tdd", "beta", desc="cmd", rel_dir="commands"),
+                  kind="workflow")
+        _fake_taps(("beta", [wf]))
+        for tap in ("beta", None):
+            with pytest.raises(BoostError) as e:
+                catalog.resolve_recorded("tdd", tap, kind="skill")
+            assert e.value.message == "tdd is no longer shipped as a skill"
+            assert e.value.hint == "what answers to it now: beta (workflow)"
+        assert catalog.resolve_recorded("tdd", "beta")["kind"] == "workflow"
+
+    def test_two_skills_of_the_kind_still_go_through_resolve_one(self, sandbox):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]),
+                   ("beta", [_entry("cm", "beta", desc="b")]))
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm", kind="skill")
+        assert e.value.message == "'cm' exists in multiple taps: alpha, beta"

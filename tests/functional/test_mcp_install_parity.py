@@ -171,7 +171,14 @@ class TestOneTapShippingANameTwice:
             assert text == ("Error: 'twin' matches 2 different skills in dup: "
                             "a/twin, b/twin\nhint: call again with \"path\" "
                             "set to one of the above, e.g. {\"name\": "
-                            "\"twin\", \"path\": \"a/twin\"}"), tool
+                            "\"dup:twin\", \"path\": \"a/twin\"}"), tool
+
+    def test_the_hinted_call_resolves(self, twin_tap):
+        """The hint's name is tap-qualified, so following it to the letter
+        works — the bare name could resolve to another tap's copy."""
+        text, is_err = _call("boost_info", name="dup:twin", path="a/twin")
+        assert is_err is False, text
+        assert "first copy of twin" in text
 
     def test_read_shows_either_copy(self, twin_tap):
         a, err_a = _tool("boost_read", name="twin", path="a/twin")

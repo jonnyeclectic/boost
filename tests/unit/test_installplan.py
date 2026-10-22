@@ -8,9 +8,20 @@ checks a substring would not notice the drift it exists to stop.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from boost_cli.core import catalog, deps, installplan, mcp, prereq
+from boost_cli.core import (
+    catalog,
+    config,
+    deps,
+    installplan,
+    mcp,
+    paths,
+    prereq,
+    registry,
+)
 from boost_cli.core.resolve import Resolution
 from boost_cli.errors import BoostError
 
@@ -107,6 +118,66 @@ class TestExpandDependencies:
         ordered, res = installplan.expand_dependencies([by["app"]])
         assert [e["name"] for e in ordered] == ["app"]
         assert res.unresolved == ["lib"]
+
+
+class TestEntryRelations:
+    def test_reads_the_entry_given_not_a_namesake(self):
+        meta = {"requires": ["helper"], "conflicts": "rival, other"}
+        assert installplan.entry_relations({"meta": meta}, "requires") == \
+            ["helper"]
+        assert installplan.entry_relations({"meta": meta}, "conflicts") == \
+            ["rival", "other"]
+        assert installplan.entry_relations({}, "requires") == []
+
+
+def _entry(name, tap, desc="", meta=None):
+    return {"name": name, "description": desc, "version": "1.0.0", "tap": tap,
+            "rel_dir": name, "skill_md": name + "/SKILL.md",
+            "meta": meta or {}, "content": "%s/%s/%s" % (tap, name, desc)}
+
+
+def _fake_taps(*specs):
+    """Configured taps with pre-baked caches and no clone."""
+    paths.ensure_dirs()
+    cfg = config.load()
+    cfg["taps"] = [{"name": n, "url": "https://example.test/" + n}
+                   for n, _ in specs]
+    config.save(cfg)
+    for n, rows in specs:
+        registry.Tap(name=n, url="").cache_file.write_text(
+            json.dumps({"skills": rows}), encoding="utf-8")
+
+
+class TestExpandDependenciesAcrossTaps:
+    """`install beta:x` walked alpha's `requires:` — `skill_relations(n)`
+    read `catalog.find(n)[0]`, whichever tap sorted first."""
+
+    def _taps(self, sandbox):
+        a = _entry("jira", "alpha", desc="a", meta={"requires": ["commit-msg"]})
+        b = _entry("jira", "beta", desc="b", meta={"requires": ["node-tips"]})
+        _fake_taps(("alpha", [a, _entry("commit-msg", "alpha", desc="c")]),
+                   ("beta", [b, _entry("commit-msg", "beta", desc="d"),
+                             _entry("node-tips", "beta", desc="n",
+                                    meta={"requires": ["deep"]}),
+                             _entry("deep", "beta", desc="deep")]))
+
+    def test_the_chosen_tap_s_requires_are_planned(self, sandbox):
+        self._taps(sandbox)
+        root = catalog.resolve_one("beta:jira")
+        ordered, res = installplan.expand_dependencies([root])
+        assert [(e["name"], e["tap"]) for e in ordered] == [
+            ("deep", "beta"), ("node-tips", "beta"), ("jira", "beta")]
+        assert res.added == ["deep", "node-tips"]
+        assert res.unresolved == []
+
+    def test_the_other_tap_s_root_keeps_its_own(self, sandbox):
+        self._taps(sandbox)
+        root = catalog.resolve_one("alpha:jira")
+        ordered, res = installplan.expand_dependencies([root])
+        # commit-msg is in both taps and differs: reported, never guessed.
+        assert [(e["name"], e["tap"]) for e in ordered] == [("jira", "alpha")]
+        assert res.added == ["commit-msg"]
+        assert res.unresolved == ["commit-msg"]
 
 
 class TestAddedLine:
@@ -247,10 +318,12 @@ class TestSameTapAmbiguity:
         with pytest.raises(catalog.SameTapAmbiguity) as e:
             catalog.resolve_one("dup:twin")
         assert e.value.bare == "twin"
+        assert e.value.qualified == "dup:twin"
         assert e.value.paths == ["a/twin", "b/twin"]
         assert e.value.message == ("'twin' matches 2 different skills in "
                                    "dup: a/twin, b/twin")
         assert e.value.hint == (
             "that registry ships one name twice — install one with `boost "
-            "install twin --path <one of the above>`, then retry; raise it "
+            "install dup:twin --path <one of the above>`, then retry; raise "
+            "it "
             "with the tap")
