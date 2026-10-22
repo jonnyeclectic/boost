@@ -91,6 +91,8 @@ ALL_CLEAR = (
     ("health", ("health",), ("rules", "workflows", "3 in-sync")),
     ("audit", ("audit",),
      ("safety audit — 3 items", "no safety findings across 3 items")),
+    ("deps", ("deps",),
+     ("no unmet requirements or conflicts across 3 items",)),
     ("fingerprint", ("fingerprint", "--verbose"),
      (SKILL, "rule/" + RULE, "workflow/" + WORKFLOW)),
 )

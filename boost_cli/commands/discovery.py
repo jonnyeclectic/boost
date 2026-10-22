@@ -36,6 +36,7 @@ from ..core import (
     journal,
     lockfile,
     paths,
+    prereq,
     rag,
     registry,
     rules,
@@ -1301,7 +1302,15 @@ def cmd_recommend(argv):
     for rec in agg.values():
         if rec["entry"].get("curated"):
             rec["score"] += 10
-    ranked = sorted(agg.values(),
+    # What is already installed is not a suggestion, and leaving it in spent
+    # --limit slots on it: excluded by name across every kind and both scopes
+    # (the project being the one --path names), the match search's installed
+    # dot makes. A lock problem must not take recommend down with it.
+    have: frozenset[str] = frozenset()
+    with contextlib.suppress(Exception):
+        have = prereq.installed_names(
+            scopes.resolve_base(scopes.SCOPE_PROJECT, start=target))
+    ranked = sorted((r for r in agg.values() if r["entry"]["name"] not in have),
                     key=lambda r: (-r["score"], r["entry"]["name"]))
     # The shown set (curated fallback included) is computed once, before the
     # --json/text split, so both modes report the same recommendations — the
@@ -1315,7 +1324,7 @@ def cmd_recommend(argv):
         # read below an error about indexing `object`.
         curated: list[dict[str, Any]] = [
             {"entry": e, "score": 0, "because": {"curated"}}
-            for e in catalog.curated_entries(entries)]
+            for e in catalog.curated_entries(entries) if e["name"] not in have]
         shown = curated[:args.limit]
     if args.as_json:
         print(json.dumps({"stack": stack, "recommendations": [

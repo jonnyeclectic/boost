@@ -53,7 +53,6 @@ from ..core import output as out
 from ..core import rules as rule_blocks
 from ..errors import BoostError
 from ._common import (
-    _iter_installed,
     _iter_installed_all,
     _iter_installed_rows,
     _require_lock_integrity,
@@ -487,7 +486,11 @@ def _fingerprint() -> tuple[str, list[str], list[str]]:
     Deterministic: the same lock file and tap commits always produce the same
     hash. An uncloned tap hashes as an empty commit rather than being skipped
     silently — its name is returned separately so callers can say the digest
-    is incomplete instead of passing it off as a real measurement."""
+    is incomplete instead of passing it off as a real measurement.
+
+    The current project's skills count too: a skill vendored into the repo
+    is loaded by every agent run there, so the digest depends on the lock
+    of the project the command runs in, as `list` and `doctor` already do."""
     comps = sorted("%s:%s%s" % (n, e.get("sha256", ""), _q_suffix(e))
                    for n, e in lockfile.installed().items())
     # Rules and workflows are part of the environment the agent runs on —
@@ -496,6 +499,10 @@ def _fingerprint() -> tuple[str, list[str], list[str]]:
     comps += sorted("%s/%s:%s%s" % (kind, n, e.get("sha256", ""), _q_suffix(e))
                     for kind, section in lockfile.all_installed().items()
                     if kind != "skill" for n, e in section.items())
+    # Scope-prefixed for the same reason: outside a project there are no
+    # such lines and a user-only environment hashes exactly as before.
+    comps += sorted("project/%s:%s%s" % (n, e.get("sha256", ""), _q_suffix(e))
+                    for n, e in integrity.project_skills()[1].items())
     uncloned = []
     tap_lines = []
     for t in registry.list_taps():
@@ -534,7 +541,11 @@ def _stack_keywords(cwd: Path) -> set:
 
 
 def _decay_rows(cwd: Path) -> list[dict]:
-    """Relevance/recency verdict per installed skill (shared by decay/health)."""
+    """Relevance/recency verdict per installed skill (shared by decay/health).
+
+    Both scopes: a skill installed ``--local`` is read from the repo's copy
+    and judged like any other, with ``scope`` saying which install a row is
+    (a name in both scopes is two rows)."""
     kws = _stack_keywords(cwd)
     last_by: dict = {}
     for e in journal.events():
@@ -543,8 +554,9 @@ def _decay_rows(cwd: Path) -> list[dict]:
             last_by[subj] = ts
     cutoff = datetime.now(UTC) - timedelta(days=30)
     rows = []
-    for name, _entry in _iter_installed():
-        meta, _ = _read_skill(store.skill_store_dir(name))
+    for row in _iter_installed_rows():
+        name = row.name
+        meta, _ = _read_skill(row_dir(row))
         toks = {_norm_token(t) for t in re.split(r"[-_/\s]+", name)}
         toks |= {_norm_token(w) for w in
                  re.findall(r"[A-Za-z0-9]+", str(meta.get("description") or ""))}
@@ -565,7 +577,7 @@ def _decay_rows(cwd: Path) -> list[dict]:
             verdict = "review"
         else:
             verdict = "ok"
-        rows.append({"name": name, "relevance": relevance,
+        rows.append({"name": name, "scope": row.scope, "relevance": relevance,
                      "last_activity": last_iso, "verdict": verdict})
     return rows
 
@@ -2081,7 +2093,10 @@ def cmd_decay(argv):
     verdicts = {"decay": out.role("decay candidate", "danger"),
                 "review": out.role("review", "warn"),
                 "ok": out.role("ok", "success")}
-    out.table([(r["name"], out.role(r["relevance"], rel_role[r["relevance"]]),
+    # `(project)` as `outdated` words it: a name can be two rows.
+    out.table([(r["name"] + (" (project)" if r["scope"] == scopes.SCOPE_PROJECT
+                            else ""),
+                out.role(r["relevance"], rel_role[r["relevance"]]),
                 util.rel_time(r["last_activity"]) if r["last_activity"] else "never",
                 verdicts[r["verdict"]]) for r in rows],
               headers=("SKILL", "RELEVANCE", "LAST ACTIVITY", "VERDICT"),
