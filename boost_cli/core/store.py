@@ -256,7 +256,10 @@ def source_missing_message(label: str, name: str, lk: dict) -> str:
         return ("%s not found in tap %s — skipped (try `boost update`)"
                 % (label, tap))
     url = lk.get("tap_url")
-    how = " with `boost tap %s`" % paths.tilde(str(url)) if url else ""
+    # `retap_hint` quotes the URL; a `~`-tilded path would be one the shell
+    # no longer expands once it is quoted.
+    retap = registry.retap_hint(str(tap or ""), str(url)) if url else ""
+    how = " with `%s`" % retap if retap.startswith("boost tap ") else ""
     return ("%s: source missing — tap %s is no longer tapped and `boost "
             "update` can't restore it; re-tap it%s, or `boost uninstall %s`"
             % (label, tap, how, name))
@@ -524,7 +527,8 @@ def refuse_escape(tap: registry.Tap, path: Path, name: str) -> None:
         raise BoostError(
             "refusing %s from tap %s: its file links outside the clone"
             % (name, tap.name),
-            hint="run `boost update %s` to rescan the tap" % tap.name)
+            hint="run `boost update %s` to rescan the tap"
+                 % util.shell_arg(tap.name))
 
 
 def source_file_for(entry: dict) -> Path:
@@ -545,7 +549,7 @@ def source_file_for(entry: dict) -> Path:
     if not path.is_file():
         raise BoostError("source for %s %s vanished from tap %s"
                          % (kind, entry["name"], tap.name),
-                         hint="run `boost update %s`" % tap.name)
+                         hint="run `boost update %s`" % util.shell_arg(tap.name))
     refuse_escape(tap, path, entry["name"])
     return path
 
@@ -588,7 +592,7 @@ def source_dir_for(entry: dict) -> Path:
     gitutil.materialize(tap.path, entry["rel_dir"])
     if not (src / "SKILL.md").exists():
         raise BoostError("source for %s vanished from tap %s" % (entry["name"], tap.name),
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
     refuse_escape(tap, src / "SKILL.md", entry["name"])
     _materialize_link_targets(tap.path, src)
     return src
@@ -3078,8 +3082,9 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                     "%s is already installed in this project (v%s) from %s, "
                     "not %s" % (name, existing.get("version"), other,
                                 entry.get("tap")),
-                    hint="`boost install %s:%s --local --force` to replace it"
-                         % (entry.get("tap"), name), wrap=True)
+                    hint="`boost install %s --local --force` to replace it"
+                         % util.shell_arg("%s:%s" % (entry.get("tap"), name)),
+                    wrap=True)
             # `reinstall --local` reads this repo's lock, so it reaches the
             # recorded tap even where a bare `install x` would stop at "exists
             # in multiple taps".
@@ -3104,8 +3109,9 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
             raise BoostError(
                 "%s is already installed (v%s) from %s, not %s"
                 % (name, existing.get("version"), other, entry.get("tap")),
-                hint="`boost install %s:%s --force` to replace it"
-                     % (entry.get("tap"), name), wrap=True)
+                hint="`boost install %s --force` to replace it"
+                     % util.shell_arg("%s:%s" % (entry.get("tap"), name)),
+                wrap=True)
         raise BoostError("%s is already installed (v%s)" % (name, existing.get("version")),
                         hint="`boost reinstall %s` to force, `boost update` to upgrade" % name)
     return existing
@@ -4724,7 +4730,7 @@ def _install_rule(entry: dict, force: bool = False,
     src = tap.path / entry.get("skill_md", "")
     if not src.is_file():
         raise BoostError("source for rule %s vanished from tap %s" % (name, tap.name),
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
     refuse_escape(tap, src, name)
     _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
@@ -5688,7 +5694,7 @@ def _install_workflow(entry: dict, force: bool = False,
     src = tap.path / source_rel
     if not src.is_file():
         raise BoostError("source for workflow %s vanished from tap %s" % (name, tap.name),
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
     refuse_escape(tap, src, name)
     _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")

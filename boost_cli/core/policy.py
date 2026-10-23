@@ -329,7 +329,7 @@ def installed_tap_signing(tap: str) -> list[str]:
     if not found.is_cloned:
         # Read as "unsigned", which `boost trust add` would not fix.
         return ["tap %r has no clone here to verify — `boost update %s` "
-                "re-clones it" % (tap, found.name)]
+                "re-clones it" % (tap, util.shell_arg(found.name))]
     return check_tap_signing(found.path, what="tap %r" % tap)
 
 

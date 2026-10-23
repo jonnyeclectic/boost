@@ -797,7 +797,7 @@ def cmd_doctor(argv):
             # was, and this line used to send the user straight back to it.
             bad("tap", "tap %s not cloned — run `boost update %s` to clone it "
                 "at its pin %s; if that commit is gone upstream, %s"
-                % (tap.name, tap.name, tap.pin[:7],
+                % (tap.name, util.shell_arg(tap.name), tap.pin[:7],
                    registry.pin_missing_remedy(tap.name)), wrap=True)
         elif not tap.is_cloned:
             bad("tap", "tap %s not cloned — run `boost update`" % tap.name)
@@ -811,11 +811,12 @@ def cmd_doctor(argv):
             bad("tap", "tap %s is pinned at %s but its clone is at %s — run "
                 "`boost update %s` to return it, or `boost update --force %s` "
                 "to follow its default branch"
-                % (tap.name, tap.pin[:7], head[:7], tap.name, tap.name),
+                % (tap.name, tap.pin[:7], head[:7], util.shell_arg(tap.name),
+                   util.shell_arg(tap.name)),
                 wrap=True)
         elif not tap.cache_file.exists():
             bad("tap", "tap %s has no catalog cache — run `boost update %s`%s"
-                % (tap.name, tap.name, " once %s is %s"
+                % (tap.name, util.shell_arg(tap.name), " once %s is %s"
                    % (_tilde(cache_block), "moved aside" if cache_moved
                       else "writable") if cache_block else ""), wrap=True)
         elif (moved := catalog.stale_commit(tap)) is not None:
@@ -1916,7 +1917,7 @@ def cmd_lint(argv):
         tap = registry.get(args.tap)
         if not tap.is_cloned:
             raise BoostError("tap %s is not cloned" % tap.name,
-                            hint="run `boost update %s`" % tap.name)
+                            hint="run `boost update %s`" % util.shell_arg(tap.name))
         targets, skipped = catalog.lint_targets(
             catalog.load_tap(tap), tap.path, args.names or None)
     else:
@@ -2763,7 +2764,7 @@ def cmd_changelog(argv):
     tap = registry.get(tap_name)
     if not tap.is_cloned:
         raise BoostError("tap %s is not cloned" % tap.name,
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
     if args.json:
         # `log_entries` parses on an ASCII unit separator rather than
         # re-splitting the display format, whose two-space column gap a commit
@@ -3027,7 +3028,7 @@ def cmd_trust(argv) -> int:
             tap = registry.get(args.name)
             if not tap.is_cloned:
                 raise BoostError("tap %s is not cloned" % tap.name,
-                                 hint="`boost update %s`" % tap.name)
+                                 hint="`boost update %s`" % util.shell_arg(tap.name))
             results = [(tap.name, provenance.verify_dir(tap.path))]
         else:
             results = _tap_provenance_rows()

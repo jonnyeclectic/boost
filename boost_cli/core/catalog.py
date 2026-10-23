@@ -543,7 +543,7 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
     """
     if not tap.is_cloned:
         raise BoostError("tap %s is not cloned" % tap.name,
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
     escaped: list[str] = []
     scanned = scan_dir(tap.path, tap.name, tap.curated, escaped=escaped)
     _report_escaped(tap.name, escaped)
@@ -1392,8 +1392,10 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 "no skill named %r — after ':' boost expects a skill name, "
                 "not a path" % bare,
                 hint="`tap:skill` picks the registry; to pick a copy inside "
-                     "one, use --path: `boost install %s:%s --path %s`"
-                     % (qualifier, bare.rsplit("/", 1)[-1], bare))
+                     "one, use --path: `boost install %s --path %s`"
+                     % (util.shell_arg("%s:%s" % (qualifier,
+                                                  bare.rsplit("/", 1)[-1])),
+                        util.shell_arg(bare)))
         # A qualified miss searches the BARE name, restricted to the taps the
         # qualifier actually selects — never the whole `tap:skill` string.
         # Scoring the full string lets the tap's own tokens dominate (a typo'd
@@ -1482,8 +1484,9 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 # the wrong tap — or, for identical copies, quietly installed
                 # the other registry's.
                 hint="that registry ships one name twice — install one with "
-                     "`boost install %s:%s --path <one of the above>`, then "
-                     "retry; raise it with the tap" % (taps[0], bare),
+                     "`boost install %s --path <one of the above>`, then "
+                     "retry; raise it with the tap"
+                     % util.shell_arg("%s:%s" % (taps[0], bare)),
                 bare=bare, qualified="%s:%s" % (taps[0], bare),
                 paths=sorted(str(e.get("rel_dir", "?")) for e in matches))
         # Several taps, one thing. Registries mirror each other constantly, so

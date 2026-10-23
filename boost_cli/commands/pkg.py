@@ -925,6 +925,15 @@ def _project_fallback(names: list[str]) -> tuple[list[str], Path | None]:
     return here, (base if here else None)
 
 
+def _rm_target(base, row: str) -> str:
+    """``base/row`` as one shell word for an `rm -rf` hint.
+
+    The real path, not the `~`-tilded one the prose uses: once quoted, a `~`
+    no longer expands, and a repo path with a space split in two unquoted.
+    """
+    return util.shell_arg("%s/%s" % (base, row) if base else row)
+
+
 def cmd_uninstall(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost uninstall",
@@ -1069,8 +1078,10 @@ def cmd_uninstall(argv: list[str]) -> int:
                 out.warn("left alone: the lock names %s, but a symlink inside "
                          "the repo redirects the path to it. boost will not "
                          "delete through a symlink it did not create; "
-                         "`rm -rf %s/%s` removes it if it is yours."
-                         % (out.plain(row), at, out.plain(row)), wrap=True)
+                         "`rm -rf %s` removes it if it is yours."
+                         % (out.plain(row), _rm_target(info.get("base"),
+                                                        out.plain(row))),
+                         wrap=True)
             if refused:
                 # The derived set, not a `<repo>/<dotdir>/skills/<name>`
                 # shape: the leaf comes from the agent's `dir`, so the shape
@@ -2997,8 +3008,9 @@ def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
     if res.replaced_tap:
         out.warn("%s was installed from %s — it is a local import now, so "
                  "`boost update` will not refresh it "
-                 "(`boost install %s:%s --force` puts the tap's copy back)"
-                 % (res.name, res.replaced_tap, res.replaced_tap, res.name),
+                 "(`boost install %s --force` puts the tap's copy back)"
+                 % (res.name, res.replaced_tap,
+                    util.shell_arg("%s:%s" % (res.replaced_tap, res.name))),
                  wrap=True)
     if res.out_of_scope:
         out.warn("%s is still linked into %s, outside the --agent scope %s "

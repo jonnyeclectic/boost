@@ -24,7 +24,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from ..errors import BoostError
-from . import catalog, embed, paths
+from . import catalog, embed, paths, util
 from .rag import Hit, chunk, entry_key, read_body
 
 # 3 -- `chunks.digest` carries each row's entry content digest, which is what
@@ -632,9 +632,11 @@ def install_extra() -> str:
     because the wrong manager is not a style problem: under pipx, `pip install`
     lands the extra in some other Python, and boost goes on without it.
 
-    Double quotes, as README and docs/semantic-search.md print it: they stop
-    the glob in every POSIX shell and PowerShell, and cmd.exe strips them where
-    it would pass single quotes through to pip.
+    Double quotes around the requirement, as README and docs/semantic-search.md
+    print it: they stop the glob in every POSIX shell and PowerShell, and
+    cmd.exe strips them where it would pass single quotes through to pip. A
+    *path* (the interpreter, a checkout's editable target) is a different
+    case — see :func:`_shell_word`.
 
     The same holds for every manager :func:`selfupdate.detect` can name: a uv
     tool venv has no pip at all, so it is reinstalled with the extra; a
@@ -660,18 +662,24 @@ def install_extra() -> str:
                                                     EXTRA_SPEC)
     if method == selfupdate.GIT:
         extra = EXTRA_SPEC[len(selfupdate.DIST):]
-        return '%s -m pip install -e "%s%s"' % (
-            _shell_word(sys.executable), paths.repo_root(), extra)
+        return '%s -m pip install -e %s' % (
+            _shell_word(sys.executable),
+            _shell_word("%s%s" % (paths.repo_root(), extra), always=True))
     return 'pip install "%s"' % EXTRA_SPEC
 
 
-def _shell_word(word: str) -> str:
-    """``word`` as one shell word: double-quoted only when it needs to be.
+def _shell_word(word: str, always: bool = False) -> str:
+    """``word`` (a path) as one shell word.
 
-    Double quotes for the reason the docstring above gives — they mean the
-    same thing to POSIX shells, PowerShell and cmd.exe.
+    POSIX gets ``shlex.quote``: quoting only on whitespace left an apostrophe
+    in the interpreter path (``/x/o'brien/venv/bin/python``) as an unmatched
+    quote, and double quotes still expand a ``$`` or backtick in a checkout
+    path. Windows keeps double quotes, as :func:`util.shell_arg` does — when
+    the word has whitespace, or ``always`` for one that carries ``[rag]``.
     """
-    return '"%s"' % word if any(ch.isspace() for ch in word) else word
+    if always and sys.platform == "win32":
+        return '"%s"' % word
+    return util.shell_arg(word)
 
 
 # Why dense retrieval isn't serving, keyed by the `reason` status() returns.

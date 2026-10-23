@@ -16,7 +16,7 @@ import zipfile
 
 import pytest
 
-from boost_cli.core import frontmatter, lockfile, paths
+from boost_cli.core import frontmatter, lockfile, paths, util
 
 
 def _copy_tap(src, dest):
@@ -3261,7 +3261,7 @@ class TestUpdateEdges:
         assert ("brainstorming: source missing — tap gone-tap is no longer "
                 "tapped and `boost update` can't restore it; re-tap it with "
                 "`boost tap %s`, or `boost uninstall brainstorming`"
-                % paths.tilde(str(tap_dir))) in flat
+                % util.shell_arg(str(tap_dir))) in flat
         assert "try `boost update`" not in flat
         assert "Reinstalled 0 skills" in r.out    # the tally stays on stdout
 

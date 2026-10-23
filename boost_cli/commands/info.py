@@ -1315,7 +1315,7 @@ def cmd_log(argv):
                 hint="re-tap it with `boost tap`, or see `boost taps`") from None
         if not tap.is_cloned:
             raise BoostError("tap %s is not cloned" % tap.name,
-                            hint="run `boost update %s`" % tap.name)
+                            hint="run `boost update %s`" % util.shell_arg(tap.name))
         if args.as_json:
             # `log_entries`, not a re-split of the display format: the columns
             # there are two-space separated and an author or subject may
