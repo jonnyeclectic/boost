@@ -18,7 +18,7 @@ import sys
 import pytest
 
 from boost_cli.commands import taps as taps_cmd
-from boost_cli.core import config, gitutil, paths, registry
+from boost_cli.core import config, gitutil, paths, registry, util
 from boost_cli.errors import BoostError
 
 SHA = "a" * 40
@@ -108,7 +108,9 @@ class TestAddRefusesACaseVariant:
         assert ei.value.message == (
             "tap name idcase-local is already used by %s"
             % str(first.resolve()))
-        assert ei.value.hint.startswith("`boost untap idcase-local` first")
+        assert ei.value.hint == (
+            "`boost untap idcase-local`, then `boost tap %s` to tap it in its "
+            "place" % util.shell_arg(str(other)))
         assert [t["name"] for t in config.get("taps")] == ["idcase-local"]
         assert (tap.path / "skills" / "a" / "SKILL.md").is_file()
 
