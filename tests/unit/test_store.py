@@ -5021,7 +5021,7 @@ class TestDamagedRuleBlockRefuses:
         claude_md, before = self._damage(tap)
         with pytest.raises(BoostError) as ei:
             store.uninstall("team-conventions")
-        assert str(claude_md) in ei.value.message
+        assert paths.tilde(claude_md) in ei.value.message
         assert lockfile.get_rule("team-conventions") is not None
         assert claude_md.read_text(encoding="utf-8") == before
         # all-or-nothing: the other agents' files are still there too
@@ -5047,7 +5047,7 @@ class TestDamagedRuleBlockRefuses:
                              "# My own notes\n", encoding="utf-8")
         with pytest.raises(BoostError) as ei:
             store.install(_rule_entry(tap))
-        assert str(gemini_md) in ei.value.message
+        assert paths.tilde(gemini_md) in ei.value.message
         assert not (paths.home() / ".cursor" / "rules"
                     / "team-conventions.mdc").exists()
         assert not (paths.home() / ".claude" / "CLAUDE.md").exists()
@@ -5076,7 +5076,7 @@ class TestDamagedRuleBlockRefusesEverywhere:
         before = claude_md.read_text(encoding="utf-8")
         with pytest.raises(BoostError) as ei:
             store.uninstall("team-conventions")
-        assert str(claude_md) in ei.value.message
+        assert paths.tilde(claude_md) in ei.value.message
         assert claude_md.read_text(encoding="utf-8") == before
         assert lockfile.get_rule("team-conventions") is not None
         assert (paths.home() / ".windsurf" / "rules"
@@ -5097,7 +5097,7 @@ class TestDamagedRuleBlockRefusesEverywhere:
             store.release_materialized(
                 "rule", "team-conventions",
                 lockfile.get_rule("team-conventions"))
-        assert str(gemini_md) in ei.value.message
+        assert paths.tilde(gemini_md) in ei.value.message
         assert not claude_md.exists()
         assert gemini_md.read_text(encoding="utf-8") == self.STRAY
         lk = lockfile.get_rule("team-conventions")

@@ -47,6 +47,11 @@ def moved(boost, tmp_path, monkeypatch):
     repo = tmp_path / "mvproj"
     repo.mkdir()
     _git(repo, "init", "-q")
+    # Committed copies are compared by `sha256_dir` over raw bytes, and a
+    # core.autocrlf checkout (Git for Windows' default) restores them CRLF:
+    # a hash the lock never recorded. Pinned off here so the test is about
+    # the printed command; the CRLF case itself is a separate open question.
+    _git(repo, "config", "core.autocrlf", "false")
     monkeypatch.chdir(repo)
     boost("install", "--local", "movey")
     md.write_text(_md("v2"), encoding="utf-8")

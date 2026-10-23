@@ -100,5 +100,7 @@ def test_doctor_from_a_subdir_prints_a_checkout_that_restores_the_lock(
                             % util.shell_arg(str(root)))
     subprocess.run(["git", "-C", str(root), "checkout", "--",
                     ".boost/skill-lock.json"], cwd=deep, check=True)
-    assert p.read_bytes() == good
+    # Parsed, not bytes: core.autocrlf (Git for Windows' default) restores
+    # it with CRLF, which is whitespace to the JSON reader.
+    assert json.loads(p.read_bytes()) == json.loads(good)
     boost("doctor")

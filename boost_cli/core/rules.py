@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..errors import BoostError
-from . import util
+from . import paths, util
 
 # Name-scoped managed-block markers for CLAUDE.md. Stable + per-rule so install
 # is idempotent (a re-install replaces the block) and uninstall strips exactly
@@ -243,7 +243,10 @@ def require_well_formed(text: str, name: str,
             damaged = True
             break
         pos = j + len(end)
-    where = " in %s" % path if path is not None else ""
+    # Shown the way every other path in boost's output is (`paths.tilde`):
+    # the raw WindowsPath printed `~\.claude\CLAUDE.md` in `boost heal`
+    # beside doctor's `~/.claude/CLAUDE.md` for the same file.
+    where = " in %s" % paths.tilde(path) if path is not None else ""
     if damaged:
         raise BoostError(
             "rule %s's managed block%s has no matching end marker, so boost "

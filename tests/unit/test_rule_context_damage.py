@@ -264,12 +264,20 @@ class TestOrphanEnd:
         assert ei.value.message == (
             "rule r's managed block in %s has an end marker with no start "
             "marker above it, so boost cannot tell where its text begins and "
-            "yours ends" % Path("/x/CLAUDE.md"))
+            "yours ends" % "/x/CLAUDE.md")
         assert ei.value.hint == (
             "restore `<!-- boost:rule:r start -->` above the rule's text (or "
             "delete the rule's text and `<!-- boost:rule:r end -->`), then "
             "run the command again")
         assert ei.value.wrap is True
+
+    def test_the_file_is_named_the_way_doctor_names_it(self):
+        md = paths.home() / ".claude" / "CLAUDE.md"
+        for text in (self.ORPHAN, self.START + "\nx\n"):
+            with pytest.raises(BoostError) as ei:
+                rules.require_well_formed(text, "r", md)
+            assert " in ~/.claude/CLAUDE.md " in ei.value.message
+            assert str(md) not in ei.value.message
 
     def test_merge_refuses_rather_than_append_a_second_copy(self):
         with pytest.raises(BoostError):

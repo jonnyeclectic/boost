@@ -244,7 +244,10 @@ class TestRecoverHint:
         subprocess.run(["git", "-C", str(repo), "checkout", "--",
                         ".boost/skill-lock.json"], cwd=deep, check=True,
                        capture_output=True)
-        assert projectlock.lock_path(repo).read_bytes() == good
+        # Compared parsed: under core.autocrlf (Git for Windows' default) the
+        # checkout writes CRLF, which is whitespace to the JSON reader.
+        assert json.loads(projectlock.lock_path(repo).read_bytes()) == \
+            json.loads(good)
 
     def test_without_git_nothing_is_offered(self, tmp_path, monkeypatch):
         _git(tmp_path, "init", "-q")

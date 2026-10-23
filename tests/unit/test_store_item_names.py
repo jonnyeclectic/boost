@@ -126,6 +126,7 @@ class TestLongNames:
         assert lockfile.get_skill(skill) is not None
         assert lockfile.get_workflow(wf) is not None
 
+    @long_path  # the 254-byte command file cannot even be `git add`ed
     def test_a_name_that_cannot_fit_is_refused_before_any_write(
             self, sandbox, tmp_path, boost):
         wf = "w" * 251
