@@ -630,7 +630,7 @@ def inventory(names: Iterable[str] | None = None) -> dict[str, list[Counterpart]
 
 
 def same_content(a: Path, b: Path) -> bool:
-    """True when two skill dirs hold the same files, byte for byte.
+    """True when two skill dirs hold the same files, CRLF and LF alike.
 
     :func:`util.sha256_dir` on both sides — the hash the lock file records —
     so "identical" means what ``boost verify`` means by it. Unreadable is not

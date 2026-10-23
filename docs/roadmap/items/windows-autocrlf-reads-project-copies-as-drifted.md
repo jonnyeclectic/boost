@@ -1,8 +1,8 @@
 ---
 id: windows-autocrlf-reads-project-copies-as-drifted
 board: code
-section: planned
-status: planned
+section: shipped
+status: shipped
 category: Robustness · Bug
 complexity: M
 impact: Medium

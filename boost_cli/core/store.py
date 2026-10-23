@@ -4265,7 +4265,7 @@ def project_intact_copy(entry: dict, base) -> Path | None:
     if not recorded:
         return None
     for copy in integrity.project_skill_dirs(entry, base):
-        if (util.sha256_dir(copy) == recorded
+        if (util.sha256_matches(copy, recorded)
                 and not integrity.exec_drifted(copy, entry)):
             return copy
     return None

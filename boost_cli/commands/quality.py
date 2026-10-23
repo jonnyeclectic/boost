@@ -287,6 +287,12 @@ def _drift_from_copy(name: str, entry: dict, copy_sha: str | None,
     """
     is_local = entry.get("tap") == "local"
     lock_sha = entry.get("sha256", "")
+    if (copy_sha is not None and copy is not None and copy_sha != lock_sha
+            and util.sha256_matches(copy, lock_sha)):
+        # A row recorded before the hash folded CRLF, whose copy held some:
+        # the copy is intact, so compare it and the source in today's digest
+        # rather than call it local edits or upstream-moved.
+        lock_sha = copy_sha
     source_sha = None
     changed = exec_changed = False
     if copy_sha is not None and copy_sha == lock_sha and not is_local:
@@ -352,8 +358,7 @@ def _drift_status_project(name: str, entry: dict, base: Path) -> str:
     if st == integrity.STATUS_MODIFIED:
         return staleness.LOCAL_EDITS
     d = integrity.project_skill_dir(entry, base)
-    copy_sha = (entry.get("sha256", "") if st == integrity.STATUS_OK
-                else util.sha256_dir(d) if d is not None else None)
+    copy_sha = util.sha256_dir(d) if d is not None else None
     return _drift_from_copy(name, entry, copy_sha, d)
 
 
@@ -2103,7 +2108,7 @@ def cmd_test(argv):
         if util.lint_failed(sdir, score, min_score=40):
             failed.append("lint")
         if not sdir.is_dir() or (not integrity.self_sourced(name, entry)
-                                 and util.sha256_dir(sdir) != entry.get("sha256")):
+                                 and not util.sha256_matches(sdir, entry.get("sha256"))):
             failed.append("verify")
         if len(body.encode("utf-8")) > 64 * 1024:
             failed.append("size")

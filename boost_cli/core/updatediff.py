@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import injectscan
-from .util import IGNORED
+from .util import BINARY_SNIFF, IGNORED
 
 # Added lines that look like something a machine would *execute*, not prose.
 # Kept intentionally broad — a false positive only costs one confirmation, a
@@ -101,7 +101,7 @@ class TreeFile(NamedTuple):
 
 
 #: How many leading bytes decide whether a file is binary — git's window.
-_SNIFF = 8000
+_SNIFF = BINARY_SNIFF
 
 
 def _as_file(value: str | TreeFile | None) -> TreeFile | None:
