@@ -406,18 +406,18 @@ _QUERY_NAME = re.compile(r"[?&][^=&#?\s]*=")
 _QUERY_VALUE = re.compile(r"[^&#\s]*")
 #: A parameter name that says it carries a credential (``?token=``,
 #: ``&api_key=``, ``&X-Amz-Signature=``).
-_SECRET_PARAM = re.compile(r"key|token|secret|password|passwd|auth|sig",
+_MASKED_NAME = re.compile(r"key|token|secret|password|passwd|auth|sig",
                            re.IGNORECASE)
 
 
-def _mask_query_secrets(value: str) -> str:
+def _mask_query_params(value: str) -> str:
     """``value`` with the value of every credential-named query parameter
     withheld. A secret's value runs to the next ``&``, ``#`` or space, and a
     parameter that starts inside it is part of what was withheld."""
     parts: list[str] = []
     pos = 0
     for m in _QUERY_NAME.finditer(value):
-        if m.start() < pos or not _SECRET_PARAM.search(m.group()):
+        if m.start() < pos or not _MASKED_NAME.search(m.group()):
             continue
         end = _QUERY_VALUE.match(value, m.end())
         parts += [value[pos:m.end()], REDACTED]
@@ -434,7 +434,7 @@ def redact_url(value: str) -> str:
     over every argv token, and a token is whatever the user typed.
     """
     value = _URL_USERINFO.sub(r"\1" + REDACTED + "@", value)
-    return _mask_query_secrets(value)
+    return _mask_query_params(value)
 
 
 def redact_argv(argv: list[str]) -> list[str]:
