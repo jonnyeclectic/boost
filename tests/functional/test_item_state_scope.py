@@ -229,6 +229,22 @@ class TestPinScope:
         assert lockfile.get_skill("cowboy-coding")["pinned"] is False
         assert _project_pinned(repo) is None
 
+    def test_both_scopes_commit_pin_hint_keeps_commit(self, boost, both,
+                                                       repo):
+        # The hint dropped --commit, so running it set a version pin and no
+        # commit pin. --local is not offered: --commit is refused there.
+        r = boost("pin", "cowboy-coding", "--commit", expect=1)
+        assert _said(r) == (
+            "Error: cowboy-coding is installed in your user config and in "
+            "this repo — say which to pin hint: `boost pin cowboy-coding "
+            "--commit --global` — --commit applies to user-scope installs")
+        assert lockfile.get_skill("cowboy-coding")["pinned"] is False
+        boost("pin", "cowboy-coding", "--commit", "--global")
+        row = lockfile.get_skill("cowboy-coding")
+        assert row["pinned"] is True
+        assert row["commit_pin"] == row["commit"]
+        assert _project_pinned(repo) is None
+
     def test_local_pins_the_project_row_only(self, boost, both, repo, src):
         r = boost("pin", "cowboy-coding", "--local")
         assert ("pinned cowboy-coding (project) at v0.1.0 — `boost update` "

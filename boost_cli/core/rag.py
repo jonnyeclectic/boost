@@ -959,13 +959,14 @@ def _unsaved(e: OSError) -> BoostError:
     ~/.boost names ~/.boost. `reindex` only gets here in that state because
     catalog.rebuild_tap tolerates the same refused mkdir while loading taps.
     chmod is offered only for a permission error, since it cannot help a full
-    or read-only disk.
+    or read-only disk, and it is :func:`paths.chmod_command`'s: a cache dir at
+    ``0o600`` lacks the search bit, which ``chmod u+w`` leaves exactly as
+    stuck — the hint used to repeat itself after being followed.
     """
-    where = paths.tilde(Path(e.filename).parent if e.filename
-                        else paths.cache_dir())
+    d = Path(e.filename).parent if e.filename else paths.cache_dir()
     return BoostError("could not save the search index in %s (%s)"
-                      % (where, e.strerror or e),
-                      hint=("run `chmod u+w %s`" % where
+                      % (paths.tilde(d), e.strerror or e),
+                      hint=("run `%s`" % paths.chmod_command(d)
                             if isinstance(e, PermissionError) else None))
 
 
