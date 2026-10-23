@@ -168,10 +168,9 @@ def _install_generated(name: str, text: str, yes: bool = False) -> bool:
         src = Path(td) / name
         src.mkdir()
         # newline="\n": install_from_path copies this into the canonical
-        # store and records util.sha256_dir over it, which hashes read_bytes.
-        # Every comparison against that hash is local today, so this is
-        # latent rather than live — but the digest it stamps into the lock
-        # would otherwise depend on which OS generated the skill.
+        # store and records util.sha256_dir over it. That hash folds CRLF
+        # now, but the copy itself would still carry whichever line endings
+        # the generating OS wrote.
         (src / "SKILL.md").write_text(text, encoding="utf-8", newline="\n")
         try:
             res = store.install_from_path(src, name=name, tap_label="local")

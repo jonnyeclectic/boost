@@ -1176,8 +1176,12 @@ def _skill_body(raw: str) -> str:
     The same fences :func:`frontmatter.split` accepts (``---`` or ``...`` to
     close), but sliced from the original text rather than re-joined from
     ``splitlines()``, which drops the final newline and turns CRLF into LF —
-    the body is the procedure, and the copy promises it unchanged.
+    the body is the procedure, and the copy promises it unchanged. A UTF-8
+    BOM is dropped first, as :func:`frontmatter.split` drops it: it is not
+    whitespace, so the fence check missed it and the source's whole
+    frontmatter became the copy's body, behind boost's own.
     """
+    raw = raw.removeprefix(frontmatter.BOM)
     lines = raw.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
         return raw

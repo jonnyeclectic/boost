@@ -464,6 +464,32 @@ class TestRenderSkill:
         raw = "---\ndescription: d\n...\nBody\n"
         assert workflows.render_skill("r", "d", raw).endswith("---\n\nBody\n")
 
+    def test_a_bom_is_dropped_before_the_fence(self):
+        from boost_cli.core import frontmatter
+        raw = "---\nname: x\ndescription: d\n---\nBody\n"
+        assert (workflows.render_skill("r", "d", frontmatter.BOM + raw)
+                == workflows.render_skill("r", "d", raw)
+                == "---\nname: r\ndescription: d\n---\n\nBody\n")
+
+    def test_a_bom_crlf_source_keeps_its_crlf_body_once(self):
+        from boost_cli.core import frontmatter
+        raw = frontmatter.BOM + "---\r\nname: x\r\n---\r\nBody\r\nTwo\r\n"
+        out = workflows.render_skill("r", "d", raw)
+        assert out == "---\nname: r\ndescription: d\n---\n\nBody\r\nTwo\r\n"
+        assert frontmatter.BOM not in out
+
+    def test_a_bom_without_frontmatter_is_not_kept(self):
+        from boost_cli.core import frontmatter
+        assert workflows.render_skill("r", "d", frontmatter.BOM + "text\n") == (
+            "---\nname: r\ndescription: d\n---\n\ntext\n")
+
+    def test_the_body_matches_frontmatter_split_modulo_line_endings(self):
+        from boost_cli.core import frontmatter
+        raw = frontmatter.BOM + "---\r\nname: x\r\n---\r\n\r\nBody\r\nTwo\r\n"
+        body = workflows._skill_body(raw)
+        assert body == "Body\r\nTwo\r\n"
+        assert body.replace("\r\n", "\n").strip() == frontmatter.split(raw)[1].strip()
+
     def test_render_dispatches_the_skill_slot_for_any_agent(self):
         want = workflows.render_skill("reviewer", "Reviews a diff for bugs",
                                       SUBAGENT)

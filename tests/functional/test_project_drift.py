@@ -14,7 +14,7 @@ import subprocess
 
 import pytest
 
-from boost_cli.core import integrity, projectlock
+from boost_cli.core import integrity, lockfile, paths, projectlock, util
 
 
 def _git(cwd, *args):
@@ -72,6 +72,48 @@ class TestDriftSeesProjectSkills:
         r = boost("drift")
         assert "brainstorming (project)" in r.out
         assert "1 local-edits" in _said(r)
+
+    @staticmethod
+    def _crlf_copies(repo, name):
+        entry = projectlock.get_skill(repo, name)
+        for m in entry["materializations"]:
+            md = repo / m["path"] / "SKILL.md"
+            md.write_bytes(md.read_bytes().replace(b"\n", b"\r\n"))
+        return entry
+
+    def test_a_crlf_copy_is_in_sync(self, boost, tapped, repo):
+        # A core.autocrlf checkout: not an edit, and the tap has not moved.
+        boost("install", "--local", "brainstorming")
+        self._crlf_copies(repo, "brainstorming")
+        data = json.loads(boost("drift", "--json", "brainstorming").out)
+        assert data["skills"] == [{
+            "name": "brainstorming", "kind": "skill", "scope": "project",
+            "status": "in-sync", "hint": ""}]
+
+    def test_a_raw_digest_an_older_row_recorded_is_in_sync(self, boost,
+                                                            tapped, repo):
+        # Recorded over the CRLF bytes before the hash folded them: the copy
+        # matches its row, and the LF tap source is the same skill.
+        boost("install", "--local", "brainstorming")
+        entry = self._crlf_copies(repo, "brainstorming")
+        first = repo / entry["materializations"][0]["path"]
+        projectlock.set_skill(repo, "brainstorming", dict(
+            entry, sha256=util.sha256_dir(first, raw=True)))
+        data = json.loads(boost("drift", "--json", "brainstorming").out)
+        assert [r["status"] for r in data["skills"]] == ["in-sync"]
+        boost("verify")
+
+    def test_a_raw_digest_row_on_user_scope_is_in_sync(self, boost, tapped):
+        boost("install", "brainstorming")
+        sdir = paths.store_dir() / "brainstorming"
+        md = sdir / "SKILL.md"
+        md.write_bytes(md.read_bytes().replace(b"\n", b"\r\n"))
+        lockfile.set_skill("brainstorming", dict(
+            lockfile.get_skill("brainstorming"),
+            sha256=util.sha256_dir(sdir, raw=True)))
+        data = json.loads(boost("drift", "--json", "brainstorming").out)
+        assert [r["status"] for r in data["skills"]] == ["in-sync"]
+        boost("verify")
 
     def test_naming_a_project_skill_resolves_it(self, boost, tapped, repo):
         boost("install", "--local", "brainstorming")

@@ -106,7 +106,7 @@ def status(name: str, entry: dict | None = None) -> str:
         return STATUS_UNLOCKED
     if self_sourced(name, entry):
         return STATUS_OK
-    if util.sha256_dir(sdir) != recorded or exec_drifted(sdir, entry):
+    if not util.sha256_matches(sdir, recorded) or exec_drifted(sdir, entry):
         return STATUS_MODIFIED
     return STATUS_OK
 
@@ -434,7 +434,7 @@ def project_status(entry: dict, base) -> str:
     present = project_skill_dirs(entry, base)
     if not present:
         return STATUS_MISSING
-    if recorded and any(util.sha256_dir(p) != recorded
+    if recorded and any(not util.sha256_matches(p, recorded)
                         or exec_drifted(p, entry) for p in present):
         return STATUS_MODIFIED
     if rows:

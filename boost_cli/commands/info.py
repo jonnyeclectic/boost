@@ -962,7 +962,7 @@ def cmd_edit(argv):
         # lock, hiding the edit from `boost drift` (which would then fall
         # through to UPSTREAM_MOVED instead of LOCAL_EDITS). The journal is
         # the record of the edit; drift/attest compare honestly instead.
-        if util.sha256_dir(sdir) == row.get("sha256"):
+        if util.sha256_matches(sdir, row.get("sha256")):
             return False
         row["updated_at"] = util.now_iso()
         return True
