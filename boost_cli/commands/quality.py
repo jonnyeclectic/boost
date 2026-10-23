@@ -309,7 +309,7 @@ def _rewound_or(status: str, kind: str, name: str, entry: dict) -> str:
     """``status``, or ``upstream-rewound`` for a move to an older version.
 
     A tap force-pushed back to an earlier release reads as upstream-moved,
-    whose hint is `boost update` -- which holds it ("update skipped") on
+    whose unpinned hint is `boost update` -- which holds it ("update skipped") on
     every run. The catalog version is read only for an unpinned
     upstream-moved row, and only from the item's own tap: a pinned one is
     held by its pin, which ``--allow-downgrade`` does not release.
@@ -419,13 +419,23 @@ _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
 
 
 def _drift_hint(name: str, status: str, tap: str = "",
-                tap_url: str = "", scope: str | None = None) -> str:
+                tap_url: str = "", scope: str | None = None,
+                pinned: bool = False, unpin_flag: str = "") -> str:
     # A reinstall of a project row needs `--local`: bare `reinstall` reads the
     # user lock and, given a same-named user install, reinstalls that instead.
     local = " --local" if scope == scopes.SCOPE_PROJECT else ""
     if status == "quarantined":
         return "boost quarantine --release %s to restore" % name
     if status == "upstream-moved":
+        # `boost update` holds a pinned row back on every run ("pinned item
+        # has an update held back"), so naming it alone looped. The pin is
+        # released first -- `--local` for a project row, which unscoped
+        # `unpin` refuses when both scopes hold the name (``unpin_flag``
+        # carries `--global` for that user row). A pin on a rewound tap
+        # also needs `--allow-downgrade` once released (not judged here).
+        if pinned:
+            return ("pinned — boost unpin %s%s, then boost update"
+                    % (name, local or unpin_flag))
         return "boost update"
     if status == staleness.UPSTREAM_REWOUND:
         # `boost update` holds a rewind back on every run; only the flag
@@ -2039,7 +2049,10 @@ def cmd_drift(argv):
                 if (kind == "skill" and status == staleness.STORE_MISSING
                     and store.is_held(entry))
                 else _drift_hint(name, status, entry.get("tap", ""),
-                                 str(entry.get("tap_url") or "")))
+                                 str(entry.get("tap_url") or ""),
+                                 pinned=bool(entry.get("pinned")),
+                                 unpin_flag=(" --global" if name in pskills
+                                             else "")))
         rows.append({"name": name, "kind": kind, "scope": scope,
                      "status": status, "hint": hint})
     for name, entry in sorted(pskills.items()):
@@ -2051,7 +2064,8 @@ def cmd_drift(argv):
         hint = ("boost sync" if status == staleness.STORE_MISSING
                 else _drift_hint(name, status, entry.get("tap", ""),
                                  str(entry.get("tap_url") or ""),
-                                 scope=scopes.SCOPE_PROJECT))
+                                 scope=scopes.SCOPE_PROJECT,
+                                 pinned=bool(entry.get("pinned"))))
         rows.append({"name": name, "kind": "skill",
                      "scope": scopes.SCOPE_PROJECT, "status": status,
                      "hint": hint})
