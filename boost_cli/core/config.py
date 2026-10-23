@@ -273,7 +273,7 @@ def self_installing_command(tap: str, url: str = "") -> str | None:
         if tap == name:
             return cmd
         if url:
-            from . import registry   # registry imports config
+            from . import registry  # registry imports config
             if registry.same_source(url, "https://github.com/%s" % name):
                 return cmd
     return None
