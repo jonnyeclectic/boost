@@ -632,9 +632,11 @@ def install_extra() -> str:
     because the wrong manager is not a style problem: under pipx, `pip install`
     lands the extra in some other Python, and boost goes on without it.
 
-    Double quotes, as README and docs/semantic-search.md print it: they stop
-    the glob in every POSIX shell and PowerShell, and cmd.exe strips them where
-    it would pass single quotes through to pip.
+    Double quotes around the requirement, as README and docs/semantic-search.md
+    print it: they stop the glob in every POSIX shell and PowerShell, and
+    cmd.exe strips them where it would pass single quotes through to pip. A
+    *path* (the interpreter, a checkout's editable target) is a different
+    case — see :func:`_shell_word`.
 
     The same holds for every manager :func:`selfupdate.detect` can name: a uv
     tool venv has no pip at all, so it is reinstalled with the extra; a

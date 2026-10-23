@@ -313,8 +313,10 @@ class TestInstallerFailureHint:
                 "install", "--yes", "--directory", str(p),
                 "--tools", "claude-code", "--modules", "bmm",
                 "--user-name", "o'b"]
-        assert hint == "run it yourself: " + shlex.join(want)
-        assert shlex.split(hint.split(": ", 1)[1]) == want
+        assert hint == "run it yourself: `%s`" % shlex.join(want)
+        assert shlex.split(hint.split("`")[1]) == want
+        # One span, never folded: the quoted directory stays on one line.
+        assert shlex.quote(str(p)) in r.err
 
     def test_a_global_failure_does_not_name_the_deleted_stage(
             self, boost, sandbox, monkeypatch, proj):

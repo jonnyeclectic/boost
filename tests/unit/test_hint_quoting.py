@@ -185,3 +185,12 @@ class TestPkgHints:
         flat = " ".join((cap.out + cap.err).split())
         assert ("(`boost install %s --force` puts the tap's copy back)"
                 % shlex.quote("%s:a" % NAME)) in flat
+
+    def test_an_unverifiable_clone_names_an_update_that_runs(self, sandbox):
+        from boost_cli.core import config, policy
+        cfg = config.load()
+        cfg["taps"] = [{"name": NAME, "url": "/nowhere", "curated": False}]
+        config.save(cfg)
+        assert policy.installed_tap_signing(NAME) == [
+            "tap %r has no clone here to verify — `boost update %s` "
+            "re-clones it" % (NAME, QUOTED_NAME)]

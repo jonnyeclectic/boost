@@ -609,8 +609,12 @@ def _run_installer(directory: Path, modules: str,
 
 
 def _run_it_yourself(cmd: list[str]) -> str:
-    """The hint naming the installer argv, quoted so it pastes as one command."""
-    return "run it yourself: " + util.shell_join(cmd)
+    """The hint naming the installer argv, quoted so it pastes as one command.
+
+    Backticked because the hint folds to the pane and only a backtick span is
+    atomic: a fold at the space inside `'/h/my proj'` pastes as a dangling quote.
+    """
+    return "run it yourself: `%s`" % util.shell_join(cmd)
 
 
 def _global_retry_hint(modules: str) -> str:
