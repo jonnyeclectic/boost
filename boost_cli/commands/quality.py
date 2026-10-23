@@ -629,7 +629,7 @@ def _mat_remedy(off: list[tuple[str, str, str, str]]) -> str:
                             if r in reasons))
     if reasons & set(agents.CONFIG_REASONS):
         return ("Change that agent's entry in %s and run `boost sync`, or "
-                "%s.%s" % (paths.config_path(), drop, tail))
+                "%s.%s" % (_tilde(paths.config_path()), drop, tail))
     return ("%s, or leave it \u2014 the row is what lets a later uninstall "
             "remove the artifact.%s" % (drop, tail))
 

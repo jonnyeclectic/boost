@@ -2745,10 +2745,16 @@ def cmd_stats(argv):
     size = util.dir_size(sdir) if sdir and lock and sdir.is_dir() else None
     scope = (scopes.SCOPE_PROJECT if prow is not None
              else scopes.SCOPE_USER if lock else None)
+    # Edited since install, by doctor's and verify's own check, as `list`
+    # and `info` report it.
+    edited = (lock is not None and kind == "skill"
+              and integrity.locally_edited(
+                  "skill", name, lock,
+                  base=prow.base if prow is not None else None))
     if args.as_json:
         print(json.dumps({
             "name": name, "kind": kind, "installed": bool(lock), "lock": lock,
-            "scope": scope,
+            "scope": scope, "modified": edited,
             "size": size, "activity": acts,
             "catalog": ({"latest": latest, "tap": cat["tap"],
                          "description": cat["description"],
@@ -2782,6 +2788,9 @@ def cmd_stats(argv):
         if lock.get("quarantined"):
             out.kv("quarantined", "yes")
         out.kv("sha256", str(lock.get("sha256", ""))[:12])
+        if edited:
+            out.kv("modified", out.role("yes", "warn")
+                   + out.role("  (edited since install)", "muted"))
         if size is not None:
             out.kv("size", util.human_size(size))
         if cat and cat.get("description"):

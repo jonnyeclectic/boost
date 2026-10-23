@@ -1824,8 +1824,31 @@ def unwritten_materializations() -> list[tuple[str, str, str, str]]:
     `boost sync` remedy cannot run -- the very failure this list exists to
     end. The ``reason`` is :func:`agents.materialization_skip_reason`, because
     *disabled* is only one of the ways a row stops being written.
+
+    Skills are named too, user scope and the current project's, because
+    :func:`integrity.written_agent_names` drops the same agents from their
+    ``agents`` list: a disabled cursor is gone from `boost list` for a skill as
+    for a rule, and doctor naming only the rule left the skill's links -- still
+    on disk, still read by Cursor -- accounted for nowhere. A quarantined or
+    sidelined skill is left out as a quarantined rule is: its links are
+    removed on purpose.
     """
-    return [(kind, name, m["agent"],
+    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
+    project = projectlock.installed(pbase) if pbase is not None else {}
+    skills: list[tuple[str, dict, str | None]] = [
+        (name, entry, None)
+        for name, entry in sorted(lockfile.installed().items())
+        if not (is_held(entry) or entry.get("quarantined")
+                or entry.get("sidelined_by"))]
+    skills += [(name, entry, scopes.SCOPE_PROJECT)
+               for name, entry in sorted(project.items())]
+    unlinked = [("skill", name, agent,
+                 agents.materialization_skip_reason("skill", base, agent)
+                 or agents.REASON_UNKNOWN)
+                for name, entry, base in skills
+                for agent in lockfile.agent_names("skill", entry)
+                if not agents.materialization_is_written("skill", base, agent)]
+    return unlinked + [(kind, name, m["agent"],
              agents.materialization_skip_reason(kind, entry.get("base"),
                                                 m["agent"])
              or agents.REASON_UNKNOWN)

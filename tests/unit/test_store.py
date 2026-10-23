@@ -25,6 +25,7 @@ from boost_cli.core import (
     lockfile,
     paths,
     policy,
+    projectlock,
     registry,
     scopes,
     store,
@@ -6592,6 +6593,35 @@ class TestARowForADisabledAgentIsNotRot:
         assert store.unwritten_materializations() == [
             ("rule", "team-conventions", "cursor", "is disabled"),
             ("workflow", "ship-it", "cursor", "is disabled")]
+
+    def test_skill_links_are_named_beside_the_rows(self, tap):
+        """A skill drops a disabled agent from its agents line as a rule
+        does, so doctor names its link as it names the rule's row. User
+        scope first, then the current project's; a quarantined, sidelined or
+        held skill's links are gone on purpose."""
+        store.install(_rule_entry(tap))
+        lockfile.set_skill("alpha", {"agents": ["cursor", "claude-code"]})
+        lockfile.set_skill("held", {"agents": ["cursor"], "quarantined": True})
+        lockfile.set_skill("parked", {"agents": ["cursor"],
+                                      "sidelined_by": "bmad"})
+        lockfile.set_skill("away", {"agents": ["cursor"],
+                                    store.HELD_KEY: "x"})
+        base = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        projectlock.set_skill(base, "beta", {
+            "scope": "project", "agents": ["cursor", "gemini"]})
+        assert store.unwritten_materializations() == []
+        self._disable("cursor")
+        assert store.unwritten_materializations() == [
+            ("skill", "alpha", "cursor", "is disabled"),
+            ("skill", "beta", "cursor", "is disabled"),
+            ("rule", "team-conventions", "cursor", "is disabled")]
+
+    def test_a_project_skill_is_judged_by_the_project_set(self, tap):
+        base = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        projectlock.set_skill(base, "beta", {
+            "scope": "project", "agents": ["antigravity", "gemini"]})
+        assert store.unwritten_materializations() == [
+            ("skill", "beta", "antigravity", "has no project scope")]
 
     def test_a_quarantined_entry_is_not_named(self, tap):
         """Its artifacts are deliberately gone and `sync_plan` skips it, so

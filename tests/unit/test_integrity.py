@@ -814,13 +814,37 @@ class TestWrittenAgentNames:
         assert integrity.written_agent_names("rule", e) == \
             ["cursor", "windsurf"]
 
-    def test_a_skill_passes_through_unfiltered(self, sandbox):
-        """A skill records links, not rows -- and no materializations to
-        filter, so treating it as a rule would answer [] for every skill."""
-        self._disable("windsurf")
+    def test_a_skill_drops_a_disabled_agent_like_a_rule(self, sandbox):
+        """A skill records links, not rows, and is filtered by the same
+        predicate: it passed through, so `list` named a disabled cursor for
+        every skill while dropping it for every rule."""
         e = {"agents": ["windsurf", "claude-code"]}
         assert integrity.written_agent_names("skill", e) == \
             ["claude-code", "windsurf"]
+        self._disable("windsurf")
+        assert integrity.written_agent_names("skill", e) == ["claude-code"]
+        # the raw reader still lists the link -- uninstall removes it
+        assert lockfile.agent_names("skill", e) == ["claude-code", "windsurf"]
+
+    def test_a_user_skill_is_judged_against_the_linking_set(self, sandbox):
+        """gemini reads the store itself and is never linked at user scope."""
+        e = {"agents": ["gemini", "claude-code"]}
+        assert integrity.written_agent_names("skill", e) == ["claude-code"]
+
+    @pytest.mark.parametrize("project", [
+        {"scope": "project"},
+        {"materializations": [{"agent": "gemini", "path": ".gemini/x"}]}])
+    def test_a_project_skill_is_judged_against_the_project_set(self, sandbox,
+                                                               project):
+        """A project install copies into gemini and codex; antigravity has
+        no project scope. Either project marker on the row decides it."""
+        e = {"agents": ["antigravity", "codex", "gemini"], **project}
+        assert integrity.skill_base(e) == "project"
+        assert integrity.written_agent_names("skill", e) == ["codex", "gemini"]
+
+    def test_a_user_skill_has_no_base(self, sandbox):
+        assert integrity.skill_base({"agents": ["cursor"]}) is None
+        assert integrity.skill_base({"scope": "user"}) is None
 
     @pytest.mark.parametrize("entry", [None, {}])
     def test_no_entry_names_none(self, sandbox, entry):

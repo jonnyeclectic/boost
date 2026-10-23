@@ -374,6 +374,10 @@ class TestHeldItemsAreMarked:
         assert mcp.state_marks({"pinned": True, "quarantined": True,
                                 "sidelined_by": "focus"}) == (
             " [pinned] [quarantined]")
+        assert mcp.state_marks({}, modified=False) == ""
+        assert mcp.state_marks(None, modified=True) == " [modified]"
+        assert mcp.state_marks({"pinned": True}, True) == (
+            " [modified] [pinned]")
 
     def test_held_line(self):
         assert mcp.held_line("x", None) is None
