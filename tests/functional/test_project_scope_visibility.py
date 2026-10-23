@@ -65,6 +65,7 @@ class TestOutdatedSeesProjectSkills:
                          "installed": "1.0.2", "latest": "1.1.0",
                          "reason": staleness.VERSION, "latest_commit": None,
                          "tap": "psv-outdated-tap", "pinned": False,
+                         "quarantined": False, "local_edits": False,
                          "scope": scopes.SCOPE_PROJECT}]
         r = boost("outdated")
         assert "commit-messages (project)" in r.out

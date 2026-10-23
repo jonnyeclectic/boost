@@ -226,7 +226,8 @@ def kind_changed_message(label: str, name: str, tap: str,
 
 def outdated_footer(total: int, source_missing: int, removed: int = 0,
                     source_changed: int = 0, not_cloned: int = 0,
-                    downgrade: int = 0) -> str:
+                    downgrade: int = 0, quarantined: int = 0,
+                    local_edits: int = 0) -> str:
     """Summary line for `boost outdated`, worded so it never promises
     `boost update` can fix a row whose source is gone.
 
@@ -241,8 +242,12 @@ def outdated_footer(total: int, source_missing: int, removed: int = 0,
     the other has no clone to compare against (`boost update` clones it).
     ``downgrade`` counts rows whose tap rewound to an older version, which
     `boost update` holds back unless given ``--allow-downgrade``.
+    ``quarantined`` and ``local_edits`` count upgradable rows `boost update`
+    skips all the same: one until it is released, the other until its edits
+    are discarded (it prints "has local edits — update skipped").
     """
-    held = source_changed + not_cloned + downgrade
+    held = (source_changed + not_cloned + downgrade + quarantined
+            + local_edits)
     if source_missing == held == 0:
         return ("%d outdated · `boost update` upgrades "
                 "(pinned and quarantined items stay put)" % total)
@@ -276,4 +281,11 @@ def outdated_footer(total: int, source_missing: int, removed: int = 0,
     if downgrade:
         parts.append("%d rewound upstream (older than installed; `%s` "
                      "follows it)" % (downgrade, DOWNGRADE_REMEDY))
+    if quarantined:
+        parts.append("%d quarantined (`boost quarantine --release <name>` "
+                     "lets one update)" % quarantined)
+    if local_edits:
+        parts.append("%d with local edits (`boost update` skips them; "
+                     "`boost update --discard-edits` takes the update)"
+                     % local_edits)
     return " · ".join(parts)
