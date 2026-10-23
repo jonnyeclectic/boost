@@ -877,9 +877,21 @@ jobs:
           # sqlite-vec so dense.py's mutants are covered by the dense tests
           .venv/bin/pip -q install sqlite-vec || true
       - name: mutate shard ${{ matrix.index }} of 24
+        # Under the job's 160 so a stalled shard fails as a step, with a log
+        # the API will serve. The four "runner lost communication" losses on
+        # 2026-10-22 (94-124 min into this step) all 404 on their logs.
+        timeout-minutes: 145
         env:
           SHARD: ${{ matrix.index }}
         run: |
+          # mutmut bounds CPU per mutant and nothing else, and runs four
+          # workers on a 16 GB runner: one mutant that allocates or forks
+          # without bound starves the runner agent itself, which is what
+          # "lost communication" means. These caps are per process and
+          # inherited by every fork, so such a mutant dies alone and counts
+          # as killed, not as a lost job.
+          ulimit -v 4194304
+          ulimit -u 4096
           PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 24 --index "$SHARD")"
           echo "shard $SHARD patterns: $PATTERNS"
           # `mutmut run` with no arguments runs EVERY mutant. An empty plan must
