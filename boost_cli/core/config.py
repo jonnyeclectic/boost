@@ -247,7 +247,7 @@ def registry_categories() -> dict:
             if e.get("category")}
 
 
-def self_installing_command(tap: str) -> str | None:
+def self_installing_command(tap: str, url: str = "") -> str | None:
     """The repo's own install command, when boost must not copy its items.
 
     Some registries are real catalogues of Markdown and some are programs that
@@ -257,8 +257,11 @@ def self_installing_command(tap: str) -> str | None:
     it work is the repo's own build, not a fetch. Returns the upstream command
     so the caller can name it instead of pretending; None for every other tap.
 
-    The tap may be addressed by full ``owner/repo`` or by the bare repo name a
-    clone directory carries, so both resolve.
+    The repo is matched by identity, never by its bare name: ``tap`` equal to
+    the row's full ``owner/repo`` (a name only a remote URL derives), or the
+    tap's configured ``url`` naming that GitHub repository. Matching the bare
+    tail refused every tap whose directory happened to be called ``gstack`` —
+    the user's own local repo included — and told them to clone garrytan's.
     """
     if not tap:
         return None
@@ -267,8 +270,12 @@ def self_installing_command(tap: str) -> str | None:
         if not cmd:
             continue
         name = row.get("name") or ""
-        if tap in (name, name.split("/")[-1]):
+        if tap == name:
             return cmd
+        if url:
+            from . import registry   # registry imports config
+            if registry.same_source(url, "https://github.com/%s" % name):
+                return cmd
     return None
 
 

@@ -3228,7 +3228,11 @@ def _refuse_self_installing(entry: dict) -> None:
     the upstream command is the whole point — a refusal that only says "no"
     leaves the user exactly where `boost install` pretending would have.
     """
-    cmd = config.self_installing_command(entry.get("tap") or "")
+    tap = entry.get("tap") or ""
+    # The configured URL is what says which repository a tap is; its name is
+    # only the URL's tail, and a local `~/work/gstack` is named `gstack` too.
+    url = next((t.url for t in registry.list_taps() if t.name == tap), "")
+    cmd = config.self_installing_command(tap, url)
     if not cmd:
         return
     raise BoostError(
