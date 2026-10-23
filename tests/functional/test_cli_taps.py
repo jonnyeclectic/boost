@@ -567,6 +567,8 @@ class TestOutdated:
                                       "latest_commit": None,
                                       "tap": "bumped-tap",
                                       "pinned": True,
+                                      "quarantined": False,
+                                      "local_edits": False,
                                       "scope": "user"}]
 
     def test_local_import_always_current(self, boost, sandbox, tmp_path):
@@ -598,7 +600,8 @@ class TestOutdated:
                          "installed": "1.4.0", "latest": None,
                          "reason": staleness.SOURCE_MISSING,
                          "latest_commit": None,
-                         "tap": "fixture-tap", "pinned": False, "scope": "user"}]
+                         "tap": "fixture-tap", "pinned": False, "quarantined": False,
+                         "local_edits": False, "scope": "user"}]
 
     def test_mixed_footer_splits_upstream_from_source_missing(
             self, boost, fixture_tap_src, tmp_path):
@@ -676,7 +679,8 @@ class TestOutdated:
         assert data == [{"name": "brainstorming", "kind": "skill",
                          "installed": "1.4.0", "latest": "1.4.0",
                          "reason": "content", "latest_commit": head[:7],
-                         "tap": "fixture-tap", "pinned": False, "scope": "user"}]
+                         "tap": "fixture-tap", "pinned": False, "quarantined": False,
+                         "local_edits": False, "scope": "user"}]
 
     def test_source_vanished_marker(self, boost, installed):
         clone = paths.repos_dir() / "fixture-tap"
@@ -696,7 +700,8 @@ class TestOutdated:
         assert data == [{"name": "brainstorming", "kind": "skill",
                          "installed": "1.4.0", "latest": None,
                          "reason": "source-missing", "latest_commit": None,
-                         "tap": "fixture-tap", "pinned": False, "scope": "user"}]
+                         "tap": "fixture-tap", "pinned": False, "quarantined": False,
+                         "local_edits": False, "scope": "user"}]
 
     def test_changed_rule_source_is_listed_with_kind(self, boost,
                                                      fixture_tap_src, tmp_path):
@@ -725,7 +730,8 @@ class TestOutdated:
         assert data == [{"name": "house-style", "kind": "rule",
                          "installed": "1.0.0", "latest": "1.0.0",
                          "reason": "content", "latest_commit": None,
-                         "tap": "rule-tap", "pinned": False, "scope": "user"}]
+                         "tap": "rule-tap", "pinned": False, "quarantined": False,
+                         "local_edits": False, "scope": "user"}]
 
 
 def _commit_all(repo, msg):

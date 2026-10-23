@@ -114,6 +114,23 @@ class TestOutdatedFooter:
             "3 outdated · `boost update` upgrades (pinned and quarantined items "
             "stay put)")
 
+    def test_quarantined_and_edited_rows_are_not_counted_as_upgrades(self):
+        assert staleness.outdated_footer(4, 0, quarantined=1,
+                                         local_edits=2) == (
+            "4 outdated · 1 upstream (`boost update` upgrades, pinned and "
+            "quarantined items stay put) · 1 quarantined (`boost quarantine "
+            "--release <name>` lets one update) · 2 with local edits (`boost "
+            "update` skips them; `boost update --discard-edits` takes the "
+            "update)")
+
+    def test_only_held_rows_promise_no_upgrade(self):
+        assert staleness.outdated_footer(1, 0, quarantined=1) == (
+            "1 outdated · 1 quarantined (`boost quarantine --release <name>` "
+            "lets one update)")
+        assert staleness.outdated_footer(1, 0, local_edits=1) == (
+            "1 outdated · 1 with local edits (`boost update` skips them; "
+            "`boost update --discard-edits` takes the update)")
+
     def test_all_source_missing_never_mentions_update(self):
         footer = staleness.outdated_footer(2, 2)
         assert "2 outdated" in footer

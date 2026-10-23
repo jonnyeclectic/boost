@@ -100,8 +100,9 @@ class TestUpdateNamesQuarantinedHolds:
         lk = lockfile.get_skill("cowboy-coding")
         assert lk["version"] == "0.1.0"
         assert lk["quarantined"]
-        assert ("`boost update` upgrades (pinned and quarantined items stay "
-                "put)") in _said(boost("outdated"))
+        # Not counted as an upgrade: update just held it, and says why.
+        assert ("1 outdated · 1 quarantined (`boost quarantine --release "
+                "<name>` lets one update)") in _said(boost("outdated"))
 
     def test_quarantined_without_an_update_is_still_up_to_date(
             self, boost, fixture_tap_src, tmp_path):

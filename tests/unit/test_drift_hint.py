@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 from boost_cli.commands import quality
-from boost_cli.core import integrity
+from boost_cli.core import integrity, scopes
 from boost_cli.core import output as out
 
 
@@ -72,6 +72,26 @@ class TestDriftHintOtherStatuses:
 
     def test_upstream_moved(self):
         assert quality._drift_hint("x", "upstream-moved") == "boost update"
+
+    def test_pinned_upstream_moved_names_unpin(self):
+        # `boost update` holds a pinned row back on every run.
+        assert (quality._drift_hint("x", "upstream-moved", pinned=True)
+                == "pinned — boost unpin x, then boost update")
+
+    def test_pinned_project_row_unpins_local(self):
+        assert (quality._drift_hint("x", "upstream-moved", pinned=True,
+                                    scope=scopes.SCOPE_PROJECT,
+                                    unpin_flag=" --global")
+                == "pinned — boost unpin x --local, then boost update")
+
+    def test_pinned_user_row_shadowed_by_project_unpins_global(self):
+        assert (quality._drift_hint("x", "upstream-moved", pinned=True,
+                                    unpin_flag=" --global")
+                == "pinned — boost unpin x --global, then boost update")
+
+    def test_pin_does_not_change_other_statuses(self):
+        assert (quality._drift_hint("x", "quarantined", pinned=True)
+                == "boost quarantine --release x to restore")
 
     def test_local_edits(self):
         assert (quality._drift_hint("x", "local-edits")
