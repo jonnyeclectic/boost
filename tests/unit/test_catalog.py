@@ -190,6 +190,9 @@ class TestScanDir:
         # ... but a safe original is never an alias
         e2 = dict(_entry("y", "t"), original_name="other")
         assert catalog.find("other", entries=[e2]) == []
+        # ... and an empty one is never indexed, so `find("")` stays empty
+        e3 = dict(_entry("z", "t"), original_name="")
+        assert catalog.find("", entries=[e3]) == []
 
     def test_cache_format_moved(self):
         assert catalog.CACHE_FORMAT == 9
