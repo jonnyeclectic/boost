@@ -609,11 +609,22 @@ def materialization_is_written(kind: str, base, agent) -> bool:
     the name there is nothing to test, and reporting a real gap is better than
     silently dropping one. ``base`` is the row's own scope, so a project rule
     is judged against :func:`project_agents` rather than the user-scope set.
+
+    A *skill* is asked too, of the set its install writes: a user-scope skill
+    links into :func:`linking_agents`, a project one copies into
+    :func:`project_agents`. A link left in a disabled agent's dir is kept (it
+    is what an uninstall removes, see :func:`unlinking_agents`), but boost no
+    longer writes it -- the same answer a rule's row gets, so `boost list`
+    stops naming the agent for one kind and not the others.
     """
     if not agent:
         return True
-    writes = (workflow_agents(base) if kind == "workflow"
-              else materializing_agents(base))
+    if kind == "skill":
+        writes = linking_agents() if base is None else project_agents()
+    elif kind == "workflow":
+        writes = workflow_agents(base)
+    else:
+        writes = materializing_agents(base)
     return agent in writes
 
 
@@ -676,7 +687,9 @@ def materialization_skip_reason(kind: str, base, agent) -> str | None:
     spec = known_agents().get(agent)
     if spec is None:
         return REASON_UNCONFIGURED
-    if spec["skills_only"]:
+    # A skill is the one kind a skills-only agent takes, and needs no
+    # command format, so neither rung can be its reason.
+    if kind != "skill" and spec["skills_only"]:
         return REASON_SKILLS_ONLY
     if kind == "workflow" and not spec["workflows"]:
         return REASON_NO_COMMAND_FORMAT

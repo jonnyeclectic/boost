@@ -394,16 +394,19 @@ def str_arg(args: Mapping, key: str) -> str | None:
 READ_LIMIT = 12000
 
 
-def state_marks(entry: dict | None) -> str:
+def state_marks(entry: dict | None, modified: bool = False) -> str:
     """``boost_list``'s trailing markers for one lock row.
 
     ``[pinned]`` holds the version; ``[quarantined]`` and ``[sidelined]``
     mean no agent loads the item at all. Without the last two a quarantined
     item read as installed and "usable this second" under a description that
-    promises exactly that, while CLI `boost list` flagged it.
+    promises exactly that, while CLI `boost list` flagged it. ``[modified]``
+    is the caller's answer from :func:`integrity.locally_edited`: an agent
+    told an edited copy is the tap's procedure reads the wrong one.
     """
     e = entry or {}
-    return "".join((" [pinned]" if e.get("pinned") else "",
+    return "".join((" [modified]" if modified else "",
+                    " [pinned]" if e.get("pinned") else "",
                     " [quarantined]" if e.get("quarantined")
                     else " [sidelined]" if e.get("sidelined_by") else ""))
 
