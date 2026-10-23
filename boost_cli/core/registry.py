@@ -462,7 +462,9 @@ def _taken(name: str, url: str, existing: str) -> BoostError:
     """The error for `name` already belonging to a different repository."""
     return BoostError(
         "tap name %s is already used by %s" % (name, existing),
-        hint="`boost untap %s` first to tap %s in its place"
+        # Both halves backticked: the hint folds to the pane, and only a
+        # backtick span is atomic — a quoted path with a space split at it.
+        hint="`boost untap %s`, then `boost tap %s` to tap it in its place"
              % (util.shell_arg(name), util.shell_arg(url)))
 
 

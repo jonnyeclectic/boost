@@ -79,17 +79,17 @@ class TestRegistryHints:
         assert _commands(ei.value.hint)[1] == ["boost", "import", str(d)]
 
     def test_a_taken_name_quotes_the_path_to_tap(self, sandbox, tmp_path):
-        first = _repo(tmp_path / "a" / "uni-tap")
-        other = _repo(tmp_path / "other dir" / "uni-tap")
+        first = _repo(tmp_path / "a" / "o'tap")
+        other = _repo(tmp_path / "other dir" / "o'tap")
         registry.add(str(first))
         with pytest.raises(BoostError) as ei:
             registry.add(str(other))
         url = str(other.resolve())
         assert ei.value.hint == (
-            "`boost untap uni-tap` first to tap %s in its place"
-            % shlex.quote(url))
-        assert shlex.split(ei.value.hint.split("first to tap ")[1]
-                           .rsplit(" in its place", 1)[0]) == [url]
+            "`boost untap %s`, then `boost tap %s` to tap it in its place"
+            % (shlex.quote("o'tap"), shlex.quote(url)))
+        assert _commands(ei.value.hint) == [
+            ["boost", "untap", "o'tap"], ["boost", "tap", url]]
 
     def test_at_on_a_configured_tap_quotes_spec_and_name(
             self, sandbox, tmp_path):
