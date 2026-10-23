@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>27</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>76</b><span>Planned</span></div>
-      <div class="stat"><b>555</b><span>Loop finds</span></div>
+      <div class="stat"><b>77</b><span>Planned</span></div>
+      <div class="stat"><b>556</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1574,6 +1574,30 @@ NOT ALREADY CARDED, but read the existing card first.
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">Three ways `boost tap` answered for a different repo than the one asked for — a same-basename repo "already tapped", file:// cloned from GitHub, an empty repo tapped as 0 items…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="windows-autocrlf-reads-project-copies-as-drifted">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness · Bug</span></div>
+        <h3>On Windows, a clone of a project's committed skill copies reads as drifted</h3>
+        <p><b>Found while fixing the Windows runs of the 2026-10-22 release train.</b>
+Project-scope copies are checked against the lock with <code>util.sha256_dir</code>, which hashes raw
+bytes. Git for Windows defaults to <code>core.autocrlf=true</code>, so a teammate's clone, or the
+<code>git checkout</code> that <code>boost doctor</code> prints to restore them, writes the copies back with CRLF
+line endings. Their hash no longer matches the one the lock recorded, so boost reports them as drifted.
+<code>tests/functional/test_project_moved_tap_roundtrip.py</code> pins <code>core.autocrlf=false</code> in its fixture
+for exactly this reason.
+
+<b>Fix direction.</b> Choose between two options. One is to have boost write a <code>.gitattributes</code>
+(<code>* -text</code>) beside the project copies it commits, so git leaves their bytes alone. The other is to
+normalise line endings in the hash used for drift checks. The first keeps the hash what it means today and costs
+one file in the user's repo. The second changes what every existing lock row describes, so it needs a lock-format
+step.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">On Windows with core.autocrlf, a teammate's clone of a project's committed skill copies hashes differently from the lock…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
